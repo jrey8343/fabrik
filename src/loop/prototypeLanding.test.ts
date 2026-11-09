@@ -455,7 +455,7 @@ const failureNoticeSaying = (how: string) =>
     "<!-- fabrik:design-turn-failed -->",
     `@jrey The prototype turn on #7 failed: ${how}.`,
     "",
-    "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.",
+    "This is an Infrastructure failure, so the Loop won't retry it. Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.",
     "",
     `[The run](${RUN})`,
   ].join("\n");
@@ -654,9 +654,9 @@ describe("A failed prototype turn", () => {
           issue: 7,
           body: [
             "<!-- fabrik:design-turn-failed -->",
-            `@jrey The prototype turn on #7 failed: it was cancelled, most likely by its ${DEFAULT_KIT_CONFIG.roles.implement.timeoutMinutes}-minute timeout.`,
+            `@jrey The prototype turn on #7 failed: it was cancelled, by its ${DEFAULT_KIT_CONFIG.roles.implement.timeoutMinutes}-minute timeout or by hand.`,
             "",
-            "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.",
+            "This is an Infrastructure failure, so the Loop won't retry it. Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.",
             "",
             `[The run](${RUN})`,
           ].join("\n"),

@@ -9,6 +9,7 @@ import {
   readReplayRequest,
   type ReplayAcceptance,
   replayArms,
+  replayBody,
   type ReplayGates,
   type ReplayHiddenTests,
   type ReplayOutcomes,
@@ -274,6 +275,21 @@ describe("Picking a Replay's Tickets", () => {
     const candidate = aCandidate(12, { records, lastEdited: { ticket: "2026-10-02T09:00:00Z", spec: null } });
 
     expect(pickReplayTickets({ tickets: [12] }, [candidate]).picked).toEqual([{ ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [], steppedUp: false }]);
+  });
+
+  it("replays a Ticket whose first run left an empty diff from the run that built its branch, never the empty one", () => {
+    const emptyBase = "a".repeat(40);
+    const records = [
+      aRunRecord({ runId: 501, issue: 12, pullRequest: null, baseSha: emptyBase, endedAt: "2026-10-01T09:00:00Z", emptyDiff: true }),
+      aRunRecord({ runId: 502, issue: 12, pullRequest: null, retry: 1, baseSha: emptyBase, endedAt: "2026-10-01T10:00:00Z", emptyDiff: true }),
+      // main moved before the second Retry, a fresh run that Stepped up, and built the branch.
+      aRunRecord({ runId: 503, issue: 12, pullRequest: null, retry: 2, stepUp: true, stepUpReason: "retry", baseSha: baseOf(12), endedAt: "2026-10-01T11:00:00Z" }),
+      aRunRecord({ runId: 504, issue: 12, pullRequest: 112, retry: 3, baseSha: "c".repeat(40), endedAt: "2026-10-01T13:00:00Z" }),
+    ];
+
+    expect(pickReplayTickets({ tickets: [12] }, [aCandidate(12, { records })]).picked).toEqual([
+      { ticket: 12, pullRequest: 112, baseSha: baseOf(12), flags: [], steppedUp: true },
+    ]);
   });
 
   it("picks the listed Tickets that are eligible in the order listed, and names each one left out", () => {
@@ -917,6 +933,15 @@ describe("A Replay's next step on the tick", () => {
       expect(nextReplayStep(aTick([twice]))).toEqual({ kind: "start", issue: 140, ticket: 7 });
     });
 
+    // #449: a candidate Kit sha that can't be laid fails the same way every time, so a retry would only spend another run.
+    it("marking a Ticket failed at once, with no retry, when its variant's candidate Kit sha can't be laid", () => {
+      const reason = `the variant arm's candidate Kit sha couldn't be laid (kit-sha-unavailable): ${"c".repeat(40)} isn't a commit in jrey8343/fabrik, so neither arm ran`;
+      const unavailable = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "kit-sha-unavailable", reason });
+
+      expect(replayMarksIn(unavailable.body)?.progress[0]).toEqual({ ticket: 12, state: "failed", run: 9001, reason });
+      expect(nextReplayStep(aTick([unavailable]))).toEqual({ kind: "start", issue: 140, ticket: 7 });
+    });
+
     it("keeping a retried Ticket's one retry through a weekly-limit refusal", () => {
       const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
       const refused = finished(started(once, 12, 9002), 12, 9002, { kind: "weekly-limit" });
@@ -1028,6 +1053,7 @@ describe("A Replay's results", () => {
               }),
             ],
       gates: [{ ticket, arm, run, gates: given.gates ?? "passed", hiddenTests: given.hiddenTests ?? "passed" }],
+      patches: [`replays/owner/product/140/${ticket}-${arm}-${run}.patch`],
     };
   }
 
@@ -1038,6 +1064,7 @@ describe("A Replay's results", () => {
       records: arms.flatMap(({ records }) => records),
       scoreFiles: arms.flatMap(({ scoreFiles }) => scoreFiles),
       gates: arms.flatMap(({ gates }) => gates),
+      patches: arms.flatMap(({ patches }) => patches),
     };
   }
 
@@ -1057,8 +1084,9 @@ describe("A Replay's results", () => {
   /** The results table's rows, one per arm of each Ticket. */
   const rowsOf = (body: string) => visible(body).filter((line) => line.startsWith("| #"));
 
-  /** The store link of arm `arm`'s patch of Ticket `ticket`. */
-  const patchOf = (ticket: number, arm: ReplayArm) => `[patch](https://github.com/jrey8343/fabrik-runs/blob/HEAD/replays/owner/product/140/${ticket}-${arm}.patch)`;
+  /** The store link of arm `arm`'s patch of Ticket `ticket` from run `run`. */
+  const patchOf = (ticket: number, arm: ReplayArm, run: number) =>
+    `[patch](https://github.com/jrey8343/fabrik-runs/blob/HEAD/replays/owner/product/140/${ticket}-${arm}-${run}.patch)`;
 
   it("shows each arm of each Ticket in a row of its own: its gates, Verdict, hidden tests, scores, cost, turns, duration and patch", () => {
     const body = resultsIn(
@@ -1076,11 +1104,36 @@ describe("A Replay's results", () => {
     expect(header).not.toBe(-1);
     expect(shown[header + 1]).toBe("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
     expect(rowsOf(body)).toEqual([
-      `| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline")} | – |`,
-      `| #12 (merged in #112) | variant, effort high | passed | Execution flaw | failed | 0.60 | 0.85 | 0.70 | $1.90 | 24 | 3 min | ${patchOf(12, "variant")} | – |`,
-      `| #7 (merged in #107) | baseline, default effort | tests failed | Design flaw | failed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "baseline")} | – |`,
-      `| #7 (merged in #107) | variant, effort high | passed | pass | passed | – | – | – | $2.00 | 24 | 6 min | ${patchOf(7, "variant")} | – |`,
+      `| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline", 9001)} | – |`,
+      `| #12 (merged in #112) | variant, effort high | passed | Execution flaw | failed | 0.60 | 0.85 | 0.70 | $1.90 | 24 | 3 min | ${patchOf(12, "variant", 9001)} | – |`,
+      `| #7 (merged in #107) | baseline, default effort | tests failed | Design flaw | failed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "baseline", 9002)} | – |`,
+      `| #7 (merged in #107) | variant, effort high | passed | pass | passed | – | – | – | $2.00 | 24 | 6 min | ${patchOf(7, "variant", 9002)} | – |`,
     ]);
+  });
+
+  it("shows a Ticket done in its second run from that run's gates and patch, never the first run's", () => {
+    const first = started(anAcceptedIssue(140), 12, 9001);
+    // The first run's landing failed, so the tick released it, and the Ticket ran again.
+    const again = finished(started(finished(first, 12, 9001, { kind: "infrastructure", reason: "run 9001 never landed" }), 12, 9003), 12, 9003, { kind: "done" });
+    const outcomes = outcomesOf(
+      anArm(12, "baseline", 9001, { gates: "tests-failed" }),
+      anArm(12, "variant", 9001),
+      anArm(12, "baseline", 9003, { hiddenTests: "failed" }),
+      anArm(12, "variant", 9003),
+    );
+
+    expect(rowsOf(resultsIn(again.body, outcomes)).slice(0, 2)).toEqual([
+      `| #12 (merged in #112) | baseline, default effort | passed | pass | failed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline", 9003)} | – |`,
+      `| #12 (merged in #112) | variant, effort high | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "variant", 9003)} | – |`,
+    ]);
+  });
+
+  it("links no patch the store doesn't hold, as when none was written", () => {
+    const unwritten = { ...anArm(12, "variant", 9001), patches: [] };
+    const body = resultsIn(aFinishedReplay().body, outcomesOf(anArm(12, "baseline", 9001), unwritten, anArm(7, "baseline", 9002), anArm(7, "variant", 9002)));
+
+    expect(rowsOf(body)[0]).toContain(`| ${patchOf(12, "baseline", 9001)} |`);
+    expect(rowsOf(body)[1]).toBe("| #12 (merged in #112) | variant, effort high | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | – | – |");
   });
 
   /** The cells of a row with no result, after where its Ticket stands and before its flags. */
@@ -1122,7 +1175,7 @@ describe("A Replay's results", () => {
 
     const rows = rowsOf(resultsIn(started(twelve, 7, 9002).body, outcomes));
 
-    expect(rows[0]).toBe(`| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline")} | – |`);
+    expect(rows[0]).toBe(`| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline", 9001)} | – |`);
     expect(rows.slice(2)).toEqual([
       `| #7 (merged in #107) | baseline, default effort | cancelled | ${NOTHING_YET} | – |`,
       `| #7 (merged in #107) | variant, effort high | cancelled | ${NOTHING_YET} | – |`,
@@ -1170,11 +1223,25 @@ describe("A Replay's results", () => {
       "Over the 2 Tickets done, beside the original: each one's first Implement run and its Review.",
       "| Arm | Gates | Pass Verdicts | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration |",
       "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-      "| baseline | 1/2 | 2/2 | 1/2 | 0.80 | 0.90 | 0.75 | $4.00 | 48 | 6 min |",
-      "| variant | 1/1 | 1/2 | 0/1 | 0.60 | 0.80 | 0.70 | $3.40 | 67 | 6 min |",
+      "| baseline | 1/2 | 2/2 | 1/2 | 0.80 (2/2) | 0.90 (2/2) | 0.75 (2/2) | $4.00 | 48 | 6 min |",
+      "| variant | 1/1 | 1/2 | 0/1 | 0.60 (1/2) | 0.80 (1/2) | 0.70 (1/2) | $3.40 | 67 | 6 min |",
       "| original | – | 1/2 | – | – | – | – | $5.00 | 48 | 9 min |",
       "Baseline vs original: pass Verdicts 2/2 vs 1/2; cost −20%; turns 0%; duration −33%.",
     ]);
+  });
+
+  it("totals each arm's mean score over the Tickets it scored, of the Tickets done, so a mean over fewer Tickets says so", () => {
+    const outcomes = outcomesOf(
+      anArm(12, "baseline", 9001, { scores: [0.5, 0.5, 0.5] }),
+      anArm(12, "variant", 9001, { scores: [0.95, 0.9, 0.85] }),
+      anArm(7, "baseline", 9002, { scores: [0.5, 0.5, 0.5] }),
+      anArm(7, "variant", 9002, { scores: null }),
+    );
+
+    const totals = totalsIn(resultsIn(aFinishedReplay().body, outcomes));
+
+    expect(totals).toContain("| baseline | 2/2 | 2/2 | 2/2 | 0.50 (2/2) | 0.50 (2/2) | 0.50 (2/2) | $4.00 | 48 | 6 min |");
+    expect(totals).toContain("| variant | 2/2 | 2/2 | 2/2 | 0.95 (1/2) | 0.90 (1/2) | 0.85 (1/2) | $4.00 | 48 | 6 min |");
   });
 
   it("compares the baseline with the original's first Implement run and its Review only, never a Retry, nor a past Replay's runs", () => {
@@ -1194,6 +1261,58 @@ describe("A Replay's results", () => {
     expect(totalsIn(body)).toContain("| original | – | 0/2 | – | – | – | – | $4.00 | 48 | 6 min |");
   });
 
+  describe("leaves out an original whose first run had no Review, its checks red", () => {
+    /** Ticket 12's original: its first Implement run sent back by red checks, so a Retry and the Retry's Review came next. */
+    const sentBack = [
+      ...theOriginal(12, { implement: { totalCostUsd: 2 }, review: { endedAt: "2026-10-01T12:00:00Z" } }),
+      aRunRecord({ runId: 612, issue: 12, pullRequest: 112, retry: 1, endedAt: "2026-10-01T11:00:00Z", totalCostUsd: 2 }),
+    ];
+    const arms = () => outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001), anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
+
+    it("from the original row and the baseline's gap, saying why, never taking a later Retry's Review for its", () => {
+      const outcomes = arms();
+
+      const totals = totalsIn(resultsIn(aFinishedReplay().body, { ...outcomes, records: [...outcomes.records, ...sentBack, ...theOriginal(7)] }));
+
+      expect(totals.slice(-3)).toEqual([
+        "| original | – | 1/1 | – | – | – | – | $2.00 | 24 | 3 min |",
+        "The original row and the baseline's gap leave out #12: first run's checks were red; no Review.",
+        "Baseline vs original: pass Verdicts 1/1 vs 1/1; cost 0%; turns 0%; duration 0%.",
+      ]);
+    });
+
+    it("showing no original figure, and no gap, when every Ticket's first run had none", () => {
+      const outcomes = arms();
+      const sentBackToo = [
+        ...theOriginal(7, { review: { endedAt: "2026-10-01T12:00:00Z" } }),
+        aRunRecord({ runId: 607, issue: 7, pullRequest: 107, retry: 1, endedAt: "2026-10-01T11:00:00Z" }),
+      ];
+
+      const body = resultsIn(aFinishedReplay().body, { ...outcomes, records: [...outcomes.records, ...sentBack, ...sentBackToo] });
+
+      expect(totalsIn(body).slice(-3)).toEqual([
+        "| original | – | – | – | – | – | – | – | – | – |",
+        "The original row and the baseline's gap leave out #12 and #7: first run's checks were red; no Review.",
+        "Baseline vs original: nothing to compare, with every Ticket's original left out.",
+      ]);
+      // Kept through a rewrite that reads the results back from the body.
+      expect(totalsIn(replayBody(body, replayMarksIn(body)!))).toEqual(totalsIn(body));
+    });
+  });
+
+  it("compares the baseline with the original run that built the Ticket's branch, never an empty-diff first run before it", () => {
+    const outcomes = outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001), anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
+    const records = [
+      aRunRecord({ runId: 501, issue: 12, pullRequest: null, endedAt: "2026-10-01T08:00:00Z", totalCostUsd: 0.3, emptyDiff: true }),
+      ...theOriginal(12, { implement: { pullRequest: null, retry: 1, totalCostUsd: 4 } }),
+      ...theOriginal(7),
+    ];
+
+    const body = resultsIn(aFinishedReplay().body, { ...outcomes, records: [...outcomes.records, ...records] });
+
+    expect(totalsIn(body)).toContain("| original | – | 2/2 | – | – | – | – | $7.00 | 48 | 6 min |");
+  });
+
   it("never totals a figure the store doesn't hold for every run, nor compares it", () => {
     const unknown = { totalCostUsd: null, turns: null };
     const outcomes = outcomesOf(anArm(12, "baseline", 9001, { review: unknown }), anArm(12, "variant", 9001), anArm(7, "baseline", 9002), anArm(7, "variant", 9002));
@@ -1201,7 +1320,7 @@ describe("A Replay's results", () => {
     const body = resultsIn(aFinishedReplay().body, { ...outcomes, records: [...outcomes.records, ...theOriginal(12), ...theOriginal(7, { implement: unknown })] });
 
     expect(rowsOf(body)[0]).toContain("| 0.75 | – | – | 3 min |");
-    expect(totalsIn(body)).toEqual(expect.arrayContaining(["| baseline | 2/2 | 2/2 | 2/2 | 0.80 | 0.90 | 0.75 | – | – | 6 min |", "| original | – | 2/2 | – | – | – | – | – | – | 6 min |"]));
+    expect(totalsIn(body)).toEqual(expect.arrayContaining(["| baseline | 2/2 | 2/2 | 2/2 | 0.80 (2/2) | 0.90 (2/2) | 0.75 (2/2) | – | – | 6 min |", "| original | – | 2/2 | – | – | – | – | – | – | 6 min |"]));
     expect(visible(body)).toContain("**variant: gates 2/2 vs 2/2; pass Verdicts 2/2 vs 2/2; hidden tests 2/2 vs 2/2; duration 0%**");
     expect(totalsIn(body).at(-1)).toBe("Baseline vs original: pass Verdicts 2/2 vs 2/2; duration 0%.");
   });
@@ -1214,9 +1333,19 @@ describe("A Replay's results", () => {
 
     const body = resultsIn(aFinishedReplay().body, outcomes);
 
-    expect(rowsOf(body)[1]).toBe(`| #12 (merged in #112) | variant, effort high | – | – | – | 0.80 | 0.90 | 0.75 | $1.00 | 12 | 2 min | ${patchOf(12, "variant")} | – |`);
-    expect(totalsIn(body)).toContain("| variant | 1/1 | 1/1 | 1/1 | 0.80 | 0.90 | 0.75 | $3.00 | 36 | 5 min |");
+    expect(rowsOf(body)[1]).toBe(`| #12 (merged in #112) | variant, effort high | – | – | – | 0.80 | 0.90 | 0.75 | $1.00 | 12 | 2 min | ${patchOf(12, "variant", 9001)} | – |`);
+    expect(totalsIn(body)).toContain("| variant | 1/1 | 1/1 | 1/1 | 0.80 (2/2) | 0.90 (2/2) | 0.75 (2/2) | $3.00 | 36 | 5 min |");
     expect(visible(body)).toContain("**variant: gates 1/1 vs 2/2; pass Verdicts 1/1 vs 2/2; hidden tests 1/1 vs 2/2; cost −25%; turns −25%; duration −25%**");
+  });
+
+  it("shows – for a side that measured none of a count, in the headline and the gap from the original alike", () => {
+    const noHiddenTests = (ticket: number) => anArm(ticket, "baseline", ticket === 12 ? 9001 : 9002, { hiddenTests: "no-hidden-tests" });
+    const outcomes = outcomesOf(noHiddenTests(12), anArm(12, "variant", 9001), noHiddenTests(7), anArm(7, "variant", 9002));
+
+    const body = resultsIn(aFinishedReplay().body, outcomes);
+
+    expect(visible(body)).toContain("**variant: gates 2/2 vs 2/2; pass Verdicts 2/2 vs 2/2; hidden tests 2/2 vs –; cost 0%; turns 0%; duration 0%**");
+    expect(totalsIn(body).at(-1)).toBe("Baseline vs original: pass Verdicts 2/2 vs –.");
   });
 
   it("heads the results with one line of the variant's totals against the baseline's", () => {
@@ -1311,8 +1440,8 @@ describe("A Replay's results", () => {
     expect(rows).toEqual([
       `| #12 (merged in #112) | baseline, default effort | pending | ${NOTHING_YET} | Human touches |`,
       `| #12 (merged in #112) | variant, effort high | pending | ${NOTHING_YET} | Human touches |`,
-      `| #7 (merged in #107) | baseline, default effort | passed | pass | no hidden tests | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "baseline")} | edited input, no hidden tests |`,
-      `| #7 (merged in #107) | variant, effort high | passed | pass | no hidden tests | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "variant")} | edited input, no hidden tests |`,
+      `| #7 (merged in #107) | baseline, default effort | passed | pass | no hidden tests | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "baseline", 9001)} | edited input, no hidden tests |`,
+      `| #7 (merged in #107) | variant, effort high | passed | pass | no hidden tests | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(7, "variant", 9001)} | edited input, no hidden tests |`,
     ]);
   });
 });

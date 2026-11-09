@@ -8,10 +8,16 @@ import { GitHubError } from "../github/client.ts";
  * paths it refuses (422) for some other reason. Its 422 for a file already
  * there says nothing of a `sha`: the writer looks rather than reading the text.
  * `held` maps each path to its base64 content (`"earlier"` for a file it held
- * from the start), and `writes` lists every PUT, retries included.
+ * from the start, or what `contents` gives it), which a GET returns, and
+ * `writes` lists every PUT, retries included.
  */
-export function storeWith(options: { private?: boolean; files?: string[]; conflicts?: Record<string, number>; refused?: string[] } = {}) {
-  const held = new Map<string, string>((options.files ?? []).map((path) => [path, "earlier"]));
+export function storeWith(
+  options: { private?: boolean; files?: string[]; contents?: Record<string, string>; conflicts?: Record<string, number>; refused?: string[] } = {},
+) {
+  const held = new Map<string, string>([
+    ...(options.files ?? []).map((path): [string, string] => [path, "earlier"]),
+    ...Object.entries(options.contents ?? {}),
+  ]);
   const conflicts = { ...options.conflicts };
   const writes: string[] = [];
   return {
@@ -23,7 +29,7 @@ export function storeWith(options: { private?: boolean; files?: string[]; confli
       if (method === "GET" && contents !== null) {
         const file = decodeURIComponent(contents[1] ?? "");
         if (!held.has(file)) throw new GitHubError(`GET ${path} failed: 404 Not Found`, 404);
-        return { path: file, sha: "s".repeat(40) };
+        return { path: file, sha: "s".repeat(40), content: held.get(file) };
       }
       const put = contents;
       if (method === "PUT" && put !== null) {

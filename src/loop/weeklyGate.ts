@@ -10,7 +10,7 @@ import type { KitIssueSnapshot, WeeklyIssueSnapshot } from "./types.ts";
 export const DAY = 24 * 60 * 60 * 1000;
 
 /** How many failed runs a week a gate retries before waiting for the next week. */
-const FAILED_RUNS_A_WEEK = 2;
+export const FAILED_RUNS_A_WEEK = 2;
 
 /**
  * The ones among a gate's issues, `fabrik:audit` or `fabrik:retro`, that
@@ -51,19 +51,34 @@ export function heldBack(
   const due = week + WEEK_DAYS.indexOf(day) * DAY;
   if (Date.parse(now) < due) return `The ${name} is due from ${readable(due)}`;
 
-  const thisWeek = issues.filter(({ createdAt }) => Date.parse(createdAt) >= week && Date.parse(createdAt) < week + 7 * DAY);
+  const thisWeek = openedInWeek(issues, week);
   const done = thisWeek.find((issue) => !issue.failed);
   if (done !== undefined) return `#${done.number} is this week's ${name}`;
   const open = issues.find((issue) => issue.open);
   if (open !== undefined) return `${name} #${open.number} is still open`;
   const limit = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   if (limit !== undefined) return `The weekly usage limit is reached, as #${limit.number} says`;
-  const failed = thisWeek.filter((issue) => issue.failed).reverse();
+  const failed = failedInWeek(issues, week);
   if (failed.length >= FAILED_RUNS_A_WEEK) {
     const which = failed.map((issue) => `#${issue.number}`).join(" and ");
     return `${which} failed this week, so the next ${name} waits for next week`;
   }
   return null;
+}
+
+/**
+ * Those of a gate's issues, an Audit's or a Retro's, opened in the week from
+ * `week`, Monday 00:00 UTC in milliseconds, whose runs failed, oldest first:
+ * FAILED_RUNS_A_WEEK of them hold the gate back until the next week.
+ */
+export function failedInWeek<Issue extends Pick<WeeklyIssue, "createdAt" | "failed" | "number">>(issues: readonly Issue[], week: number): Issue[] {
+  return openedInWeek(issues, week)
+    .filter((issue) => issue.failed)
+    .toSorted((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.number - b.number);
+}
+
+function openedInWeek<Issue extends Pick<WeeklyIssue, "createdAt">>(issues: readonly Issue[], week: number): Issue[] {
+  return issues.filter(({ createdAt }) => Date.parse(createdAt) >= week && Date.parse(createdAt) < week + 7 * DAY);
 }
 
 /** Monday 00:00 UTC of the ISO week `now` falls in, in milliseconds. */

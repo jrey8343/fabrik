@@ -53,10 +53,17 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
     expect([...(rebase?.clean ?? []), ...(rebase?.pushed ?? [])].some((action) => action.kind === "start-agent-run" || action.kind === "add-labels")).toBe(false);
   });
 
-  it("when the push's lease refuses it, brings the PR back out of draft and records no attempt, so the next check tries again", () => {
+  it("when the push's lease refuses it, brings the PR back out of draft, saying why, and records no attempt, so the next check tries again", () => {
     const [rebase] = rebasesIn(planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: atMergeGate(), mergeable: false }]), kitConfig()));
 
-    expect(rebase?.refused).toEqual([{ kind: "mark-ready-for-review", pullRequest: 50 }]);
+    expect(rebase?.refused).toEqual([
+      { kind: "mark-ready-for-review", pullRequest: 50 },
+      {
+        kind: "comment",
+        issue: 50,
+        body: "`main` moved to 9999999 and #50 conflicted with it, so the Kit rebased `fabrik/ticket-7` onto it, but the branch moved before the rebase could be pushed, so nothing landed. #50 is back out of draft as it was, and the next conflict check tries again.",
+      },
+    ]);
   });
 
   it("when the rebase conflicts, records the attempt, puts the PR back in draft and starts the conflict-only run through agent:implement", () => {

@@ -2,6 +2,7 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { changedTestsIn } from "../loop/changedTests.ts";
 import {
   INSTRUCTED_ROLES,
   instructionsPath,
@@ -15,6 +16,7 @@ import { storeIsPrivate } from "../kit/runStore.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { heldRunsIn } from "../loop/heldRun.ts";
+import { makesUnusable } from "../loop/subscriptions.ts";
 import {
   AUDIT_LABEL,
   DESIGN_LABEL,
@@ -43,6 +45,7 @@ import type {
   KitIssueSnapshot,
   LabelledTrigger,
   LoopEvent,
+  MergeableSnapshot,
   NamedPullRequestSnapshot,
   ParentIssueSnapshot,
   PullRequestSnapshot,
@@ -426,9 +429,10 @@ interface DesignQueueQueryResult {
 }
 
 /**
- * The name of the Implement job in .github/workflows/loop.yml (a test holds
- * the two together). Called from a Product repo's caller workflow, it shows
- * up as `<caller job> / Implement`.
+ * The name of the Implement job in .github/workflows/loop.yml, which follows
+ * it with ` #<Ticket>`, and a retry's with ` (Retry <n>)` too (#477; a test
+ * holds the two together). Called from a Product repo's caller workflow, it
+ * shows up as `<caller job> / Implement #12 (Retry 1)`.
  */
 export const IMPLEMENT_JOB_NAME = "Implement";
 
@@ -451,8 +455,9 @@ export const PUSH_JOB_NAME = "Push";
 /**
  * The names of the claim job and the two Review jobs in
  * .github/workflows/loop.yml (a test holds them together), which the
- * stuck-trigger sweep reads a run behind a trigger label by (#419). Called
- * from a Product repo's caller workflow, each shows up as `<caller job> / <name>`.
+ * stuck-trigger sweep reads a run behind a trigger label by (#419). The
+ * Review job follows its name with ` PR #<agent PR>` (#477). Called from a
+ * Product repo's caller workflow, each shows up as `<caller job> / <name>`.
  */
 export const CLAIM_JOB_NAME = "Claim the work";
 export const REVIEW_CHECKS_JOB_NAME = "Review checks";
@@ -516,8 +521,23 @@ export async function gatherSnapshot(
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
-  const held = event.kind === "scheduled-tick" ? await gatherHeld(github, repo, kitIssues, appLogin) : null;
+  // The tick resumes held runs once a Subscription is free, and so does whatever may free one (#439).
+  const freesASubscription =
+    event.kind === "scheduled-tick" ||
+    event.kind === "kit-config-changed" ||
+    (event.kind === "issue-closed" && makesUnusable(part?.issue?.labels ?? []));
+  // A weekly-limit issue closed by hand has left kitIssues, yet the runs held on it resume as it closes (#440).
+  const closedWeeklyLimit =
+    event.kind === "issue-closed" && (part?.issue?.labels ?? []).includes(WEEKLY_LIMIT_LABEL)
+      ? await gatherKitIssue(github, repo, event.issue, appLogin)
+      : null;
+  const held = freesASubscription
+    ? await gatherHeld(github, repo, closedWeeklyLimit === null ? kitIssues : [...kitIssues, closedWeeklyLimit], appLogin)
+    : null;
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
+  // A weekly run's failure may give up on the week, which its gate's issues say (#443).
+  const weeklyLabel = WEEKLY_RUN_EVENTS.includes(event.kind) ? weeklyLabelOf(part?.issue?.labels ?? []) : null;
+  const weeklyIssues = weeklyLabel === null ? null : weeklyIssuesOf(await queryWeeklyIssues(github, repo, weeklyLabel), appLogin);
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
   const conflicts =
     event.kind === "main-pushed" || event.kind === "kit-config-changed"
@@ -525,6 +545,8 @@ export async function gatherSnapshot(
       : event.kind === "scheduled-tick"
         ? await gatherConflicts(github, actions, repo, event.now, appLogin, operator ?? owner, wait)
         : null;
+  // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480).
+  const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
@@ -536,8 +558,16 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts, triggers }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, replay, namedPullRequests, held, openMaps, conflicts, triggers };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers };
+}
+
+/** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
+const WEEKLY_RUN_EVENTS: readonly LoopEvent["kind"][] = ["issue-opened", "agent-run-failed", "audit-run-finished", "retro-run-finished"];
+
+/** The weekly gate's label among an issue's labels, `fabrik:audit` or `fabrik:retro`, or null when it has neither. */
+function weeklyLabelOf(labels: readonly string[]): string | null {
+  return [AUDIT_LABEL, RETRO_LABEL].find((label) => labels.includes(label)) ?? null;
 }
 
 /**
@@ -926,19 +956,40 @@ async function gatherEventPart(
 
 type EventPart = Omit<
   Snapshot,
-  "kitIssues" | "spec" | "startingComment" | "audit" | "retro" | "replay" | "namedPullRequests" | "held" | "openMaps" | "conflicts" | "triggers"
+  | "kitIssues"
+  | "spec"
+  | "startingComment"
+  | "audit"
+  | "retro"
+  | "weeklyIssues"
+  | "replay"
+  | "namedPullRequests"
+  | "held"
+  | "closedWeeklyLimit"
+  | "openMaps"
+  | "conflicts"
+  | "mergeable"
+  | "triggers"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
 
-/** How many open Kit-owned issues every snapshot reads, oldest first: an issue past them isn't read. */
+/** How many open Kit-owned issues each page of them holds, oldest first. */
 const KIT_ISSUES_PAGE = 20;
 
+/**
+ * How many pages of open Kit-owned issues a snapshot reads at most: with more
+ * open than they hold, the snapshot fails rather than act without them all (#441).
+ */
+const KIT_ISSUES_PAGES = 10;
+
 const KIT_ISSUES_QUERY = `
-  query ($owner: String!, $name: String!, $labels: [String!]!) {
+  query ($owner: String!, $name: String!, $labels: [String!]!, $after: String) {
     repository(owner: $owner, name: $name) {
       owner { login }
-      issues(states: OPEN, labels: $labels, first: ${KIT_ISSUES_PAGE}, orderBy: { field: CREATED_AT, direction: ASC }) {
+      issues(states: OPEN, labels: $labels, first: ${KIT_ISSUES_PAGE}, after: $after, orderBy: { field: CREATED_AT, direction: ASC }) {
+        totalCount
+        pageInfo { hasNextPage endCursor }
         nodes {
           number
           body
@@ -969,49 +1020,111 @@ interface KitIssueComments {
   nodes: { body: string; author: Actor }[];
 }
 
+interface KitIssueNode {
+  number: number;
+  body: string;
+  author: Actor;
+  labels: { nodes: { name: string }[] };
+  comments: KitIssueComments;
+}
+
 interface KitIssuesQueryResult {
   repository: {
     owner: { login: string };
     issues: {
-      nodes: { number: number; body: string; author: Actor; labels: { nodes: { name: string }[] }; comments: KitIssueComments }[];
+      totalCount?: number;
+      pageInfo?: { hasNextPage: boolean; endCursor: string | null };
+      nodes: KitIssueNode[];
     };
   };
 }
 
 /**
  * The open issues carrying a Kit-owned label (src/loop/kitIssues.ts), which
- * every event's snapshot holds. Their markers steer agent runs (a held marker
+ * every event's snapshot holds, every one of them, a page at a time (#441).
+ * Their markers steer agent runs (a held marker
  * resumes one), so only the App's own text is read (ADR-0007): the body of an
  * issue the App opened, and the App's comments, every one of them, however
- * many pages they take. Anyone else's comment is left out.
+ * many pages they take. Anyone else's comment is left out. With more open than
+ * KIT_ISSUES_PAGES pages hold, it fails, naming how many are open, since a
+ * weekly-limit issue it couldn't see would start runs on a used-up Subscription.
+ * The Weekly summary reads them too (src/github/facts.ts), so its Held runs are
+ * the Loop's.
  */
-async function gatherKitIssues(
-  github: GitHub,
+export async function gatherKitIssues(
+  github: Pick<GitHub, "graphql">,
   repo: Repo,
   appLogin: string | null,
 ): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
-  const data = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
+  const nodes: KitIssueNode[] = [];
+  let owner = "";
+  let after: string | null = null;
+  for (let page = 0; ; page += 1) {
+    const data: KitIssuesQueryResult = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
+      owner: repo.owner,
+      name: repo.name,
+      labels: KIT_ISSUE_LABELS,
+      after,
+    });
+    const { totalCount, pageInfo, nodes: onPage } = data.repository.issues;
+    owner = data.repository.owner.login;
+    nodes.push(...onPage);
+    if (pageInfo?.hasNextPage !== true || pageInfo.endCursor === null) break;
+    if (page + 1 >= KIT_ISSUES_PAGES) {
+      throw new Error(
+        `${totalCount ?? `More than ${nodes.length}`} open issues carry a Kit-owned label, more than the ${KIT_ISSUES_PAGE * KIT_ISSUES_PAGES} the Kit reads, ` +
+          "so it stops rather than act without seeing them all. Close the ones no longer needed.",
+      );
+    }
+    after = pageInfo.endCursor;
+  }
+  const kitIssues = await Promise.all(nodes.map((issue) => kitIssueOf(github, repo, issue, appLogin)));
+  return { owner, kitIssues };
+}
+
+/** A Kit-owned issue as kitIssues holds it: only the App's own text, every comment of it. */
+async function kitIssueOf(github: Pick<GitHub, "graphql">, repo: Repo, issue: KitIssueNode, appLogin: string | null): Promise<KitIssueSnapshot> {
+  const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
+  return {
+    number: issue.number,
+    labels: issue.labels.nodes.map((label) => label.name),
+    body: byAppOf(issue.author, appLogin) ? issue.body : "",
+    comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
+  };
+}
+
+const KIT_ISSUE_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      closedWeeklyLimit: issue(number: $number) {
+        number
+        body
+        author { login __typename }
+        labels(first: 100) { nodes { name } }
+        comments(last: 100) { ${KIT_ISSUE_COMMENTS} }
+      }
+    }
+  }
+`;
+
+/**
+ * One Kit-owned issue by number, open or closed, as kitIssues holds an open
+ * one: for a weekly-limit issue closed by hand, whose held markers kitIssues
+ * no longer reads (#440).
+ */
+async function gatherKitIssue(github: GitHub, repo: Repo, number: number, appLogin: string | null): Promise<KitIssueSnapshot | null> {
+  const data = await github.graphql<{ repository: { closedWeeklyLimit: KitIssueNode | null } }>(KIT_ISSUE_QUERY, {
     owner: repo.owner,
     name: repo.name,
-    labels: KIT_ISSUE_LABELS,
+    number,
   });
-  const kitIssues = await Promise.all(
-    data.repository.issues.nodes.map(async (issue): Promise<KitIssueSnapshot> => {
-      const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
-      return {
-        number: issue.number,
-        labels: issue.labels.nodes.map((label) => label.name),
-        body: byAppOf(issue.author, appLogin) ? issue.body : "",
-        comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
-      };
-    }),
-  );
-  return { owner: data.repository.owner.login, kitIssues };
+  const issue = data.repository.closedWeeklyLimit;
+  return issue === null ? null : kitIssueOf(github, repo, issue, appLogin);
 }
 
 /** The comments before this page, oldest first. */
 async function earlierComments(
-  github: GitHub,
+  github: Pick<GitHub, "graphql">,
   repo: Repo,
   number: number,
   page: KitIssueComments,
@@ -1070,8 +1183,7 @@ const REPLAY_ISSUES_QUERY = `
 /**
  * What the replay step weighs on the scheduled tick at `now` (#156). With
  * no replay issue among the open Kit-owned
- * issues, it reads nothing new, unless that page is full, since one may be
- * past it. Else it reads every open replay issue: its body whole, though the
+ * issues, it reads nothing new. Else it reads every open replay issue: its body whole, though the
  * Operator files it, since the request is the Operator's own text, which the
  * Kit-owned issues leave out (ADR-0007), and the App's comments alone. Only
  * while one is the Operator's does it read what the spare-capacity gate
@@ -1088,8 +1200,7 @@ async function gatherReplaySlice(
   appLogin: string | null,
   store: ReplayStore,
 ): Promise<ReplaySnapshot> {
-  const maybeOpen = kitIssues.length >= KIT_ISSUES_PAGE || kitIssues.some((issue) => issue.labels.includes(REPLAY_LABEL));
-  if (!maybeOpen) return { issues: [], capacity: null, acceptance: null };
+  if (!kitIssues.some((issue) => issue.labels.includes(REPLAY_LABEL))) return { issues: [], capacity: null, acceptance: null };
   const issues = await gatherReplayIssues(github, repo, appLogin);
   if (!issues.some((issue) => isOperatorsReplay(issue, operator))) return { issues, capacity: null, acceptance: null };
   const [dispatch, records] = await Promise.all([gatherDispatchCandidates(github, repo, appLogin), store.records()]);
@@ -1145,10 +1256,10 @@ interface HeldTargetNode {
 const HELD_TARGET_FIELDS = "__typename number state body author { login __typename } labels(first: 100) { nodes { name } }";
 
 /**
- * Each issue or PR a held marker on an open weekly-limit issue names, once,
- * for the scheduled tick to tell a held run still in the state it was held in
- * from one that has moved on (src/loop/resume.ts). A number naming nothing
- * GitHub has is left out.
+ * Each issue or PR a held marker on these weekly-limit issues names, once,
+ * to tell a held run still in the state it was held in from one that has
+ * moved on as it resumes (src/loop/resume.ts): the open ones, and one closed
+ * by hand (#440). A number naming nothing GitHub has is left out.
  */
 async function gatherHeld(
   github: GitHub,
@@ -1355,6 +1466,8 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
+    // Likewise, so nobody else can plant or hide the existing tests its runs changed (#463).
+    changedTests: byAppOf(pullRequest.author, appLogin) ? changedTestsIn(pullRequest.body) : [],
   };
 }
 
@@ -1442,6 +1555,28 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** GitHub's word for whether a PR merges cleanly into the default branch. */
+type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+
+/** Whether a PR merges cleanly, or null while GitHub is still working it out. */
+function mergeableOf(state: MergeableState): boolean | null {
+  return state === "UNKNOWN" ? null : state === "MERGEABLE";
+}
+
+/**
+ * Reads until what it reads is known, MERGEABLE_READS times at most, waiting
+ * MERGEABLE_WAIT_MS between reads: GitHub works `mergeable` out in the
+ * background once asked. The last read is returned either way.
+ */
+async function readUntilKnown<T>(read: () => Promise<T>, known: (value: T) => boolean, wait: (ms: number) => Promise<void>): Promise<T> {
+  let value = await read();
+  for (let attempt = 2; attempt <= MERGEABLE_READS && !known(value); attempt += 1) {
+    await wait(MERGEABLE_WAIT_MS);
+    value = await read();
+  }
+  return value;
+}
+
 // Pages through every open PR: agent PRs are often the newest, behind others' and bots' PRs.
 const CONFLICTS_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
@@ -1460,7 +1595,7 @@ interface ConflictsQueryResult {
     defaultBranchRef: { target: { oid: string } } | null;
     pullRequests: {
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
-      nodes: (PullRequestNode & { mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" })[];
+      nodes: (PullRequestNode & { mergeable: MergeableState })[];
     };
   };
 }
@@ -1486,11 +1621,9 @@ async function gatherConflicts(
   wait: (ms: number) => Promise<void>,
 ): Promise<ConflictSnapshot> {
   type AgentNode = ConflictsQueryResult["repository"]["pullRequests"]["nodes"][number];
-  let agents: { node: AgentNode; mergeable: boolean | null }[] = [];
-  let head: string | null = null;
-  for (let read = 1; read <= MERGEABLE_READS; read += 1) {
-    if (read > 1) await wait(MERGEABLE_WAIT_MS);
-    agents = [];
+  const readAll = async () => {
+    const agents: { node: AgentNode; mergeable: boolean | null }[] = [];
+    let head: string | null = null;
     let after: string | null = null;
     do {
       const data: ConflictsQueryResult = await github.graphql<ConflictsQueryResult>(CONFLICTS_QUERY, { owner: repo.owner, name: repo.name, after });
@@ -1499,13 +1632,14 @@ async function gatherConflicts(
       const { pageInfo, nodes } = data.repository.pullRequests;
       agents.push(
         ...nodes.flatMap((node) =>
-          pullRequestSnapshotOf(node, appLogin).isAgent ? [{ node, mergeable: node.mergeable === "UNKNOWN" ? null : node.mergeable === "MERGEABLE" }] : [],
+          pullRequestSnapshotOf(node, appLogin).isAgent ? [{ node, mergeable: mergeableOf(node.mergeable) }] : [],
         ),
       );
       after = pageInfo.hasNextPage ? pageInfo.endCursor : null;
     } while (after !== null);
-    if (agents.every(({ mergeable }) => mergeable !== null)) break;
-  }
+    return { agents, head };
+  };
+  const { agents, head } = await readUntilKnown(readAll, (read) => read.agents.every(({ mergeable }) => mergeable !== null), wait);
   // Each agent PR's earlier comments are read once, after the last read.
   const pullRequests: ConflictCandidate[] = [];
   for (const { node, mergeable } of agents) {
@@ -1513,6 +1647,36 @@ async function gatherConflicts(
   }
   const implementJobUnderWay = actions === null ? null : await readImplementJobUnderWay(actions, repo);
   return { main: head, now, implementJobUnderWay, pullRequests };
+}
+
+const MERGEABLE_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      defaultBranchRef { target { oid } }
+      pullRequest(number: $number) { mergeable }
+    }
+  }
+`;
+
+interface MergeableQueryResult {
+  repository: {
+    defaultBranchRef: { target: { oid: string } } | null;
+    pullRequest: { mergeable: MergeableState } | null;
+  };
+}
+
+/**
+ * Whether one PR merges cleanly into the default branch, and that branch's
+ * head, read together so both are of the same main (#480). While GitHub is
+ * still working it out, it reads again, as the conflict check does,
+ * MERGEABLE_READS times at most; one still unknown after that is unknown.
+ */
+async function gatherMergeable(github: Pick<GitHub, "graphql">, repo: Repo, number: number, wait: (ms: number) => Promise<void>): Promise<MergeableSnapshot> {
+  const read = async (): Promise<MergeableSnapshot> => {
+    const data = await github.graphql<MergeableQueryResult>(MERGEABLE_QUERY, { owner: repo.owner, name: repo.name, number });
+    return { main: data.repository.defaultBranchRef?.target.oid ?? null, mergeable: mergeableOf(data.repository.pullRequest?.mergeable ?? "UNKNOWN") };
+  };
+  return readUntilKnown(read, ({ mergeable }) => mergeable !== null, wait);
 }
 
 async function gatherDispatch(
@@ -1788,13 +1952,21 @@ export async function countDispatchedRuns(
  */
 function implementJobsUnderWay(jobs: readonly Job[]): Job[] {
   const landed = new Set(jobs.filter(({ name, status }) => status === "completed" && isJobNamed(name, PUSH_JOB_NAME)).map(({ run }) => run));
-  return jobs.filter(({ run, name, conclusion }) => conclusion !== "skipped" && isJobNamed(name, IMPLEMENT_JOB_NAME) && !landed.has(run));
+  return jobs.filter(({ run, name, conclusion }) => conclusion !== "skipped" && IMPLEMENT_JOB.test(name) && !landed.has(run));
 }
 
 /** Whether a job's name is `jobName`, or `<caller job> / <jobName>` when a Product repo's caller workflow ran it. */
 function isJobNamed(name: string, jobName: string): boolean {
   return name === jobName || name.endsWith(` / ${jobName}`);
 }
+
+/**
+ * An Implement job's name, and a Review job's, as a caller workflow shows it or
+ * not: named for what it runs on (#477), or for nothing, as a run of an earlier
+ * Kit release still in flight names it.
+ */
+const IMPLEMENT_JOB = new RegExp(`^(?:.+ / )?${IMPLEMENT_JOB_NAME}(?: #[1-9][0-9]*(?: \\(Retry [1-9][0-9]*\\))?)?$`);
+const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #[1-9][0-9]*)?$`);
 
 /**
  * Whether an Implement job is under way anywhere in the repo (#387), as
@@ -1869,11 +2041,12 @@ async function readRolesUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Prom
     return null;
   }
   const anyJobNamed = (...names: string[]) => jobs.some(({ name }) => names.some((jobName) => isJobNamed(name, jobName)));
+  const anyReviewJob = jobs.some(({ name }) => REVIEW_JOB.test(name));
   const designTurns = new Set(jobs.flatMap((job) => DESIGN_JOB.exec(job.name)?.[1] ?? []).map(Number));
   return {
     implement: implementJobsUnderWay(jobs).length > 0,
     research: anyJobNamed(RESEARCH_JOB_NAME),
-    review: anyJobNamed(REVIEW_CHECKS_JOB_NAME, REVIEW_JOB_NAME),
+    review: anyReviewJob || anyJobNamed(REVIEW_CHECKS_JOB_NAME),
     claim: anyJobNamed(CLAIM_JOB_NAME),
     designTurns: [...designTurns].sort((a, b) => a - b),
   };

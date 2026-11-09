@@ -7,6 +7,7 @@ import { aPullRequest, kitConfig, snapshotOfPullRequest } from "../__fixtures__/
 import { CAPTURED, CAPTURED_SHA } from "../__fixtures__/uiEvidence.ts";
 import type { CaptureFailure, CaptureResult } from "../evidence/uiEvidence.ts";
 import { reviewEventFrom } from "../github/events.ts";
+import { changedTestsSection } from "../loop/changedTests.ts";
 import { verdictMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import { readPullRequest, type Reader } from "./inputs.ts";
@@ -181,6 +182,7 @@ describe("A Review's context", () => {
       runUrl: "https://github.com/jrey8343/penrith/actions/runs/7",
       repoUrl: "https://github.com/jrey8343/penrith",
       failedChecks: [],
+      skippedChecks: [],
       result: readAgentRunResult(artifact),
     });
     const plan = planFor(
@@ -333,7 +335,7 @@ describe("A Review's UI evidence", () => {
   // As when the marker names no artifact, so the Review job downloads nothing: the PR body names the reason, and so does the marker.
   it.each<[CaptureFailure, string]>([
     ["build-failed", "capture failed because `sandbox.build` failed, so there was no build to serve"],
-    ["no-result", "capture failed because it left no result the push job could read"],
+    ["no-result", "capture failed because it left no result the push job could read: the Implement job's log shows why"],
   ])("on a UI PR with nothing downloaded, whose marker records that capture failed with %s, says why, as the PR body does", async (failure, why) => {
     const { productDir, pullRequestFile, specFile } = await inputs(uiPullRequest);
     const nothing = join(await mkdtemp(join(tmpdir(), "fabrik-ui-evidence-")), "never-downloaded");
@@ -367,7 +369,7 @@ describe("A Review's UI evidence", () => {
     expect(parts.slice(parts.indexOf("## UI evidence"))).toEqual(NO_RESULT);
   });
 
-  it("on a UI PR whose download lacks a screenshot names only those it holds, and with none says capture left no result", async () => {
+  it("on a UI PR whose download lacks a screenshot names only those it holds, and with none says they weren't copied", async () => {
     const { productDir, pullRequestFile, specFile } = await inputs(uiPullRequest);
     const dir = await downloaded(CAPTURED);
     await rm(join(dir, "after-mobile-waitlist.png"));
@@ -379,7 +381,10 @@ describe("A Review's UI evidence", () => {
     await rm(join(dir, "after-desktop-waitlist.png"));
     const none = await inputs(uiPullRequest);
     const { parts: without } = await reviewContext(none.productDir, none.pullRequestFile, none.specFile, dir);
-    expect(without.slice(without.indexOf("## UI evidence"))).toEqual(NO_RESULT);
+    expect(without.slice(without.indexOf("## UI evidence"))).toEqual([
+      "## UI evidence",
+      "This pull request changes the Product repo's UI, but the 2 screenshots capture took of this branch at `4f2b9c0` weren't copied for this Review. There are no screenshots, so review the code as usual.",
+    ]);
   });
 
   it("on a UI PR with more than eight screenshots gives the Reviewer the eight that matter most, and only those are in its working directory", async () => {
@@ -440,5 +445,31 @@ describe("A Review's UI evidence", () => {
     expect(parts).toEqual((await reviewContext(productDir, pullRequestFile, specFile)).parts);
     expect(parts.join("\n")).not.toMatch(/UI evidence|screenshot/i);
     expect(await readdir(productDir)).not.toContain("fabrik-ui-evidence");
+  });
+});
+
+describe("A Review of a PR whose Implement runs changed existing tests (#463)", () => {
+  const withSection = (paths: readonly string[]) => ({ ...pullRequest, body: `Adds the parking section.\n\n${changedTestsSection(paths)}\n\nCloses #7` });
+
+  it("lists each changed existing test after the PR, with the rule for judging it", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(withSection(["src/parking.test.ts", "test/setup.ts"]));
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+
+    // The PR's body, in its JSON, carries the section too; the block is a heading of its own, after it.
+    const at = text.indexOf("\n## Changed existing tests\n");
+    const block = text.slice(at);
+    expect(at).toBeGreaterThan(text.indexOf("## The pull request"));
+    expect(block).toContain("- `src/parking.test.ts`\n- `test/setup.ts`\n");
+    expect(block).toContain("Judge each change to an existing test on its merits");
+    expect(block).toContain("An assertion weakened or removed without a reason in the PR body is an `execution-flaw`.");
+  });
+
+  it("says nothing of changed tests on a PR whose runs changed none, so its prompt reads as it always did", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+
+    expect(text).not.toContain("Changed existing tests");
   });
 });

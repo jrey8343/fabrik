@@ -210,7 +210,13 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
           aRunRecord({ repo: "acme/shop", runId: run, role, issue: ticket, verdict: role === "review" ? "pass" : null, replay: { issue: 140, arm, ticket, candidateSha: null } }),
         ),
       );
-    const outcomes = (records = armsOf(12, 9001)) => ({ records, scoreFiles: [], gates: [] });
+    /** What the store holds: these records, and each arm's patch of the Tickets they're of. */
+    const outcomes = (records = armsOf(12, 9001)) => ({
+      records,
+      scoreFiles: [],
+      gates: [],
+      patches: [...new Set(records.flatMap(({ replay, runId }) => (replay == null ? [] : [`replays/acme/shop/140/${replay.ticket}-${replay.arm}-${runId}.patch`])))],
+    });
     const finished = (body: string, end: ReplayTicketEnd = { kind: "done" }, store: ReturnType<typeof outcomes> | null = outcomes()) =>
       planFor({ ...ended(end), outcomes: store }, snapshotOf({ ...running, body }), kitConfig());
     const bodyOf = (plan: Plan) => {
@@ -222,8 +228,8 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
     it("shows the Ticket's results as it finishes, each arm's linking its patch, and posts nothing while another Ticket waits", () => {
       const plan = finished(running.body);
 
-      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-baseline.patch");
-      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-variant.patch");
+      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-baseline-9001.patch");
+      expect(bodyOf(plan)).toContain("replays/acme/shop/140/12-variant-9001.patch");
       expect(commentsOf(plan)).toEqual([]);
     });
 
@@ -235,7 +241,7 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
 
         expect(commentsOf(plan)).toEqual([{ kind: "comment", issue: 140, body: expect.stringContaining("@operator") }]);
         expect(notificationsOf(plan)).toEqual(["mention on #140"]);
-        expect(bodyOf(plan)).toContain("replays/acme/shop/140/7-variant.patch");
+        expect(bodyOf(plan)).toContain("replays/acme/shop/140/7-variant-8001.patch");
       });
 
       it("posts it when the last Ticket fails a second time too, since every Ticket is then done or failed", () => {

@@ -47,7 +47,7 @@ async function main(): Promise<void> {
   await writeFile(ended, `${JSON.stringify(runEnded, null, 2)}\n`);
   const { end } = runEnded;
   await writeOutputs({ ended });
-  console.log(`The replay of #${context.ticket}: ${end.kind === "infrastructure" ? `${end.kind}, ${end.reason}` : end.kind}.`);
+  console.log(`The replay of #${context.ticket}: ${"reason" in end ? `${end.kind}, ${end.reason}` : end.kind}.`);
 
   // The rubrics in this job's Kit checkout, at the Kit job's sha: the pinned release's, never a candidate's.
   const kit = { sha: context.kitSha, rubrics: await loadRubrics() };

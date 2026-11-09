@@ -10,6 +10,7 @@ import {
   RETRO_WINDOW_END,
   snapshotOf,
   tickSnapshot,
+  withoutNotes,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AuditSnapshot, KitConfig, KitIssueSnapshot, Plan, RetroIssueSnapshot } from "./types.ts";
@@ -46,7 +47,7 @@ function tick(
   config: KitConfig = kitConfig(),
 ): Plan {
   const retro = { storeReady, issues, agentPullRequestClosed, escapeFiled };
-  return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ kitIssues, audit: AUDITED, retro }), config);
+  return withoutNotes(planFor({ kind: "scheduled-tick", now }, tickSnapshot({ kitIssues, audit: AUDITED, retro }), config));
 }
 
 /** The Kit's open weekly-limit issue, for a limit that resets at `resetsAt`. */
@@ -364,7 +365,7 @@ describe("A tick's snapshot without the retro slice", () => {
   it("opens nothing and fails nothing while the Retro is off", () => {
     const snapshot = tickSnapshot({ audit: AUDITED, retro: null });
 
-    expect(planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig({ retro: { day: null } }))).toEqual(OPENS_NOTHING);
+    expect(withoutNotes(planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig({ retro: { day: null } })))).toEqual(OPENS_NOTHING);
   });
 });
 
@@ -396,7 +397,7 @@ describe("The scheduled-tick rule", () => {
 
     const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig());
 
-    expect(plan).toEqual({
+    expect(withoutNotes(plan)).toEqual({
       kind: "act",
       actions: [
         expect.objectContaining({ kind: "comment", issue: 41 }),
@@ -414,6 +415,6 @@ describe("The scheduled-tick rule", () => {
 
     const plan = planFor({ kind: "scheduled-tick", now: SATURDAY }, snapshot, kitConfig({ retro: { day: null } }));
 
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
+    expect(withoutNotes(plan)).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
   });
 });

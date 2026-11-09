@@ -10,7 +10,8 @@
 // Reads FABRIK_NEEDS and the agent job's artifacts as src/main.ts does, the
 // transcript from FABRIK_TRANSCRIPT_DIR, and two Fabrik App tokens:
 // FABRIK_PRODUCT_TOKEN, to read the Product's Kit config, and FABRIK_STORE_TOKEN,
-// scoped to the store, empty when it couldn't be minted.
+// scoped to the store, empty when it couldn't be minted. FABRIK_EMPTY_DIFF is
+// "true" when the Loop found the Implement run's branch changed nothing.
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -91,6 +92,7 @@ async function recordRun(): Promise<Recorded> {
     agentResult: await readIfPresent(join(agentDir, AGENT_RESULT_FILE)),
     failureReport: await readIfPresent(join(agentDir, AGENT_FAILURE_FILE)),
     transcript: transcript?.lines ?? null,
+    emptyDiff: process.env["FABRIK_EMPTY_DIFF"] === "true",
   });
   const store = new GitHub(storeToken, apiUrl);
   const write = await writeRunRecord(store, files, transcript?.gzip ?? null, (ms) => sleep(ms));
@@ -106,7 +108,8 @@ async function main(): Promise<void> {
   const kit = { sha: written.kitSha, rubrics: await loadRubrics() };
   const scoring = await scoreRecordedRun(written.store, written, kit, new Date().toISOString(), (ms) => sleep(ms));
   // The judge job runs on these, and the score-record job reads the scored record back from the store by its path.
-  if (scoring.kind === "score") await appendFile(required("GITHUB_OUTPUT"), `score=true\nrecord=${scoring.record}\n`);
+  // With the run's kind, so the judge scores it against what it was asked (#450).
+  if (scoring.kind === "score") await appendFile(required("GITHUB_OUTPUT"), `score=true\nrecord=${scoring.record}\nscored-run=${JSON.stringify(scoring.run)}\n`);
   const line = recordedRunScoringSummary(scoring);
   if (line !== null) await report("Scores", line);
 }

@@ -92,6 +92,9 @@ jobs:
       # For a replay: each arm's settings, as one line of JSON. Its model names come from the replay
       # issue's body, so a job reads it only through an action's inputs, never in a `run:` script.
       replay-arms: ${{ steps.route.outputs.replay-arms }}
+      # For a replay whose variant's candidate Kit sha this job couldn't lay (#449): why, so neither arm runs and the
+      # replay-record job fails the Ticket once, naming it; empty otherwise.
+      replay-kit-sha-unavailable: ${{ steps.route.outputs.replay-kit-sha-unavailable }}
       # For a retry: the agent branch it builds on, which the Implement job checks out.
       branch: ${{ steps.route.outputs.branch }}
       # For a Request-changes run: the Operator's review, its input. It runs as a retry otherwise does.
@@ -377,6 +380,7 @@ jobs:
           FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
           FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
           FABRIK_MAP_FILE: ${{ runner.temp }}/map.json
+          FABRIK_SPEC_TICKETS_FILE: ${{ runner.temp }}/spec-tickets.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
         run: node ../kit/src/agent/run.ts design
 
@@ -689,9 +693,10 @@ jobs:
   # account: the Claude token and this repo's test secrets, which Kit config
   # declares as op:// references, so none of them is named in this file. They
   # are resolved in output mode and reach the Implement step's env only.
-  # Named "Implement" exactly: Dispatch counts jobs by this name (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
+  # Named "Implement #<Ticket>", and a retry's " (Retry <n>)" after it, so the Actions tab says which Ticket
+  # it's on (#477): Dispatch counts jobs by this name (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
   implement:
-    name: Implement
+    name: "Implement #${{ needs.kit.outputs.ticket }}${{ needs.kit.outputs.retry != '0' && needs.kit.outputs.retry != '' && format(' (Retry {0})', needs.kit.outputs.retry) || '' }}"
     needs: kit
     if: needs.kit.outputs.route == 'implement'
     runs-on: ubuntu-latest
@@ -723,6 +728,8 @@ jobs:
       # JSON line, empty when nothing was captured, and the numeric ids of the
       # zipped screenshots-and-result artifact and the unzipped gallery's.
       ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}
+      # "true" when capture's own timeout stopped it before it recorded a result (src/kit/pushJob.ts).
+      ui-capture-timed-out: ${{ steps.capture-time.outputs.timed-out }}
       ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}
       ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
     steps:
@@ -824,6 +831,12 @@ jobs:
       # Kit's CAPTURE_TIMEOUT_MINUTES (src/evidence/capture.ts; a test holds the
       # two together). No secret reaches it, nor the build, server and sign-ins
       # it runs.
+      # So a capture step its own timeout stopped can be told from one that failed for any other reason.
+      - name: Note when capture starts
+        id: capture-started
+        if: success()
+        run: echo "at=$(date +%s)" >>"$GITHUB_OUTPUT"
+
       # Without a ui block it captures nothing and passes out no result, so
       # neither upload below runs; the Kit job's step summary says Visual
       # evidence is off (src/kit/kitJob.ts).
@@ -838,6 +851,20 @@ jobs:
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: node ../kit/src/evidence/capture-main.ts
+
+      # Its own timeout kills capture before it records a result, which the push
+      # job would read as none: note it, so the push job reads it as a timeout.
+      # The Kit's CAPTURE_TIMEOUT_MINUTES, as on the step (a test holds the two together).
+      - name: Note whether capture ran out of time
+        id: capture-time
+        if: steps.capture.outcome == 'failure'
+        env:
+          STARTED_AT: ${{ steps.capture-started.outputs.at }}
+          TIMEOUT_MINUTES: 20
+        run: |
+          if [ "$(( $(date +%s) - STARTED_AT ))" -ge "$(( TIMEOUT_MINUTES * 60 ))" ]; then
+            echo "timed-out=true" >>"$GITHUB_OUTPUT"
+          fi
 
       # The result and the bundle of the Implementer's commits (none if it made none).
       - name: Pass the Implementer's output and commits to the push job
@@ -903,21 +930,27 @@ jobs:
         continue-on-error: true
         run: if [ -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl"; fi
 
+      # With it, for the judge, the brief of what a run on an agent PR was asked beyond the Ticket (#450).
       - name: Keep the agent's transcript
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fabrik-transcript-implement
-          path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+          path: |
+            ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+            ${{ runner.temp }}/fabrik-out/brief.md
           if-no-files-found: ignore
           retention-days: 7
 
   # A Review starts by waiting for the agent PR's required checks on its head.
-  # check_suite events don't fire for Actions CI, so it polls, bounded by the
-  # Review timeout. It holds only a read-only token and no secrets, and reads
-  # the Kit config as data. Red checks go straight to the push job as an
-  # Execution flaw; the Reviewer never runs.
+  # check_suite events don't fire for Actions CI, so it polls, logging what it
+  # waits on, and gives up a few minutes short of the Review timeout. It holds
+  # only a read-only token and no secrets, and reads the Kit config as data.
+  # Red checks go straight to the push job as an Execution flaw; the Reviewer
+  # never runs. Giving up, or an error, fails the job with a failure report
+  # naming why: a gating check that never reported, the checks still running,
+  # or the GitHub request that failed (src/review/wait.ts).
   review-checks:
     name: Review checks
     needs: kit
@@ -939,6 +972,8 @@ jobs:
       checks: ${{ steps.wait.outputs.checks }}
       head-sha: ${{ steps.wait.outputs.head-sha }}
       failed: ${{ steps.wait.outputs.failed }}
+      # The ones among them skipped or reported neutral, which the Verdict says no Retry changes.
+      skipped: ${{ steps.wait.outputs.skipped }}
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -966,15 +1001,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FABRIK_PULL_REQUEST: ${{ needs.kit.outputs.pull-request }}
+          FABRIK_REVIEW_TIMEOUT_MINUTES: ${{ needs.kit.outputs.review-timeout-minutes }}
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
         run: node kit/src/review/wait.ts product
+
+      # src/review/wait.ts writes this when it gives up or fails, for the push job's notice.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The Reviewer (ADR-0002). Read-only: a checkout of the PR's head at the
   # commit its checks passed on, no GitHub write credential, and only the
   # agent service account. It runs none of the PR's code, and passes its
   # Verdict out as an artifact for the push job to post. On a UI PR it also
   # downloads the screenshots its Implement run captured, for the Reviewer to see.
+  # Named "Review PR #<agent PR>", so the Actions tab says which PR it's on (#477): the stuck-trigger
+  # sweep reads a Review under way by this name (REVIEW_JOB_NAME in src/github/snapshot.ts).
   review:
-    name: Review
+    name: "Review PR #${{ needs.kit.outputs.pull-request }}"
     needs: [kit, review-checks]
     if: needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'green'
     runs-on: ubuntu-latest
@@ -1443,11 +1492,13 @@ jobs:
   # the Ticket's baseSha and passes the arm's commits out as a patch, never
   # pushed. Never named `Implement`, so Dispatch's count of Implement runs in
   # flight passes both arms by (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
-  # It runs only on the Ticket this run's claim marked in progress.
+  # It runs only on the Ticket this run's claim marked in progress, and not at all
+  # when the Kit job couldn't lay the variant's candidate Kit sha (#449), so the
+  # baseline spends no run beside a variant that can't run; nor do the jobs after it.
   replay-implement:
     name: "Replay implement (${{ matrix.arm }})"
     needs: [kit, implement-claim]
-    if: needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket
+    if: needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == ''
     runs-on: ubuntu-latest
     # The Implement role's own timeout: a replay arm captures no UI evidence after it.
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
@@ -1495,7 +1546,7 @@ jobs:
   replay-gates:
     name: "Replay gates (${{ matrix.arm }})"
     needs: [kit, implement-claim, replay-implement]
-    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
     # Kit config has no gates timeout; they run what an Implement run's checks would.
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
@@ -1533,7 +1584,7 @@ jobs:
   replay-review:
     name: "Replay review (${{ matrix.arm }})"
     needs: [kit, implement-claim, replay-implement]
-    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
     strategy:
@@ -1575,7 +1626,7 @@ jobs:
   replay-score:
     name: "Replay score (${{ matrix.arm }})"
     needs: [kit, implement-claim, replay-implement]
-    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
     # The Kit's, not Kit config's: JUDGE_TIMEOUT_MINUTES in src/kit/runStore.ts (a test holds the two together).
     timeout-minutes: 15
@@ -1671,10 +1722,12 @@ jobs:
       dispatch: ${{ steps.loop.outputs.dispatch }}
       # "true" when the plan asked for a Design queue check.
       design-queue: ${{ steps.loop.outputs.design-queue }}
-      # "true" when the scoring plan picked the run for the judge job (#149), and
-      # the path of the scored run's Run record in the store, for the score-record job.
+      # "true" when the scoring plan picked the run for the judge job (#149), the
+      # path of the scored run's Run record in the store, for the score-record job,
+      # and the run's kind, as JSON, for the judge (#450).
       score: ${{ steps.record.outputs.score }}
       record: ${{ steps.record.outputs.record }}
+      scored-run: ${{ steps.record.outputs.scored-run }}
     env:
       # How each job ended and what it passed out, none of which the agent can rewrite.
       FABRIK_NEEDS: ${{ toJSON(needs) }}
@@ -1687,8 +1740,9 @@ jobs:
           path: kit
           persist-credentials: false
 
-      # Whatever the agent job left: its result (and bundle), or its failure report.
-      # Red checks and a timeout leave nothing, and src/main.ts expects that.
+      # Whatever the agent job left: its result (and bundle), or its failure report,
+      # or the Review checks job's failure report. Red checks and a timeout leave
+      # nothing, and src/main.ts expects that.
       - name: Take the agent job's artifacts
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1762,6 +1816,7 @@ jobs:
         with:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
           role: ${{ needs.kit.outputs.route }}
+          empty-diff: ${{ steps.loop.outputs.empty-diff }}
 
   # Dispatch (ADR-0001): runs when the push job's plan asked for a check, on a
   # fresh snapshot taken after that plan's labels landed. Like the push job, it
@@ -1859,6 +1914,9 @@ jobs:
       secrets-step: ${{ steps.judge.outputs.secrets-step }}
       model: ${{ steps.judge.outputs.model }}
       effort: ${{ steps.judge.outputs.effort }}
+      # The attempt the judge ran in: a judge re-run after a failed one gets a
+      # Run record of its own, under this attempt, so what both cost counts.
+      attempt: ${{ github.run_attempt }}
     steps:
       # The run-judge action checks nothing out, so this is all the job has.
       - name: Check out the Kit (never the Product repo)
@@ -1876,6 +1934,8 @@ jobs:
           op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
           github-token: ${{ github.token }}
           ticket: ${{ needs.kit.outputs.ticket }}
+          # The scored run's kind, from its Run record, so it's judged against what it was asked (#450).
+          scored-run: ${{ needs.push.outputs.scored-run }}
           # The scored Implement run's Subscription, chosen by this Loop run's Kit job.
           subscription: ${{ needs.kit.outputs.subscription }}
           # With rotation on, the judge is killed on overage, as an agent run is.
@@ -1885,7 +1945,8 @@ jobs:
   # transcript, its Run record (role `score`) and the score file to fabrik-runs.
   # It runs after the judge job whether that succeeded or failed, so a failed
   # judge still leaves its record and a judge-failed score file, unless the run
-  # was cancelled. continue-on-error, so scoring never fails the run.
+  # was cancelled. continue-on-error, so writing the score never fails the run;
+  # a judge that fails does, as the Score job has none, so the run shows red.
   score-record:
     name: Score record
     needs: [kit, push, score]

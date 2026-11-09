@@ -1,7 +1,8 @@
 // What a failed agent job leaves for the push job: which kind of
 // Infrastructure failure it saw, read from the error and the `claude -p`
 // stream, or for its input step, from the GitHub call that failed. A job cancelled by its timeout leaves nothing, and the push job
-// works that out itself (src/loop/failures.ts). Pure, no I/O.
+// works that out itself (src/loop/failures.ts). The Review checks job leaves
+// one too (src/review/wait.ts). Pure, no I/O.
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
 import type { FailedRunCommits, FailureReport, ReportedFailure } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
@@ -137,6 +138,9 @@ const REPORTED: readonly ReportedFailure[] = [
   "metered-billing",
   "usage-credits",
   "unread-inputs",
+  "unread-checks",
+  "unreported-checks",
+  "timeout",
 ];
 
 /** Reads the artifact's text; anything unreadable counts as a crash, so a notice still goes out. */
@@ -153,8 +157,15 @@ export function readFailureReport(text: string): FailureReport {
     detail: typeof detail === "string" ? detail : "",
     ...(typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? { resetsAt } : {}),
     ...(value?.["refused"] === true ? { refused: true as const } : {}),
+    ...withChecks(value?.["checks"]),
     ...withCommits(value?.["commits"]),
   };
+}
+
+/** The checks a Review gave up waiting on, as the report names them; nothing if they aren't a list of names. */
+function withChecks(value: unknown): { checks?: readonly string[] } {
+  if (!Array.isArray(value) || !value.every((name) => typeof name === "string")) return {};
+  return { checks: value };
 }
 
 /** What a run had committed, as the report gives it; nothing if any of it doesn't read. */

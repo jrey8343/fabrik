@@ -9,6 +9,7 @@ import {
   repoSnapshot,
   snapshotOf,
   tickSnapshot,
+  withoutNotes,
 } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
@@ -314,6 +315,6 @@ describe("What triggers a Design queue check", () => {
   it("the hourly scheduled tick, which catches a slot freed by needs-design coming off by hand", () => {
     const plan = planFor({ kind: "scheduled-tick", now: "2026-11-09T04:05:00.000Z" }, tickSnapshot(), kitConfig());
 
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
+    expect(withoutNotes(plan)).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
   });
 });

@@ -15,6 +15,7 @@ import { isObject, parsedJson } from "../agent/stream.ts";
 import { RUN_NAMES } from "../loop/heldRun.ts";
 import { markerJson } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
+import { spelled } from "../loop/readable.ts";
 import type { Verdict } from "../loop/types.ts";
 import { FULL_SHA, shortSha } from "../skills/lock.ts";
 import type { KitConfig } from "./config.ts";
@@ -398,7 +399,12 @@ export type ReplayTicketEnd =
   /** It was refused on a Subscription's weekly limit, which costs the Replay time, never the Ticket. */
   | { readonly kind: "weekly-limit" }
   /** Any other Infrastructure failure, with why. */
-  | { readonly kind: "infrastructure"; readonly reason: string };
+  | { readonly kind: "infrastructure"; readonly reason: string }
+  /**
+   * The Kit job couldn't lay the variant's candidate Kit sha, so neither arm
+   * ran (#449): it would fail the same way again, so the Ticket fails with no retry.
+   */
+  | { readonly kind: "kit-sha-unavailable"; readonly reason: string };
 
 /**
  * The body with Ticket `ticket` marked in progress in run `run` from
@@ -430,6 +436,8 @@ export function withTicketFinished(body: string, ticket: number, run: number, en
         return retrying === null ? { state: "pending" } : { state: "retried", reason: retrying };
       case "infrastructure":
         return retrying === null ? { state: "retried", reason: end.reason } : { state: "failed", run, reason: end.reason };
+      case "kit-sha-unavailable":
+        return { state: "failed", run, reason: end.reason };
     }
   });
 }
@@ -602,6 +610,8 @@ export interface ReplayOutcomes {
   readonly scoreFiles: readonly ScoreFile[];
   /** Each done Ticket's arms' gates. */
   readonly gates: readonly ReplayArmGates[];
+  /** The store paths of the arms' patches it holds, so a patch never written is never linked. */
+  readonly patches: readonly string[];
 }
 
 /**
@@ -652,8 +662,18 @@ interface ArmResult {
   readonly patch: string | null;
 }
 
-/** What a Ticket's original run measured: its first Implement run and that run's Review, which the arms replay. */
-type OriginalResult = Pick<ArmResult, "verdict" | "costUsd" | "turns" | "durationMs">;
+/**
+ * What a Ticket's original run measured: its first Implement run and that
+ * run's Review, which the arms replay. A first run with no Review, as when
+ * CI sent it back with red checks, measured nothing to set beside an arm's.
+ */
+type OriginalResult = RunFigures & {
+  /** Whether its first run had no Review, its checks red: it shows no figure, and the totals and the gap leave it out. */
+  readonly noReview: boolean;
+};
+
+/** A run's Verdict, cost, turns and duration, as an arm's result and an original's both hold them. */
+type RunFigures = Pick<ArmResult, "verdict" | "costUsd" | "turns" | "durationMs">;
 
 /** What a done Ticket's arms measured, in the run they ran in, and what its original run did. */
 interface TicketResult {
@@ -679,27 +699,37 @@ function ticketResultOf(ticket: number, run: number, outcomes: ReplayOutcomes): 
       scores: SCORERS.map((scorer) => scored?.entries?.find((entry) => entry.scorer === scorer)?.score ?? null),
       // A done Ticket's arm with no Review record had none to spend: its patch wasn't laid (endOf in src/kit/replayRecord.ts).
       ...spentBy(review === undefined ? [implement] : [implement, review]),
-      patch: implement?.replay == null ? null : replayPatchPath(implement.repo, implement.replay),
+      // The patch this run wrote, never another run's of the same arm.
+      patch: implement?.replay == null ? null : writtenPatch(replayPatchPath(implement.repo, { ...implement.replay, run: implement.runId })),
     };
   };
+  // Only a patch the store holds: none is written when the arm's patch was empty or the store couldn't be written to.
+  const writtenPatch = (path: string) => (outcomes.patches.includes(path) ? path : null);
   return { ticket, run, arms: { baseline: armResult("baseline"), variant: armResult("variant") }, original: originalOf(ticket, outcomes.records) };
 }
 
 /**
  * What Ticket `ticket`'s original run did: its first Implement run, the one
- * the arms replay, and the first Review after it, never a Retry or a past
- * Replay's runs.
+ * the arms replay, and its Review, the first after it, never a Retry's or a
+ * past Replay's runs. A first run the Ticket's next Implement run came after
+ * with no Review between had none, as when its checks were red, since the
+ * Reviewer runs only on green checks: the next Review is a Retry's.
  */
 function originalOf(ticket: number, records: readonly RunRecord[]): OriginalResult {
   const original = records.filter((record) => isLive(record) && record.issue === ticket);
   const first = firstRunOf(original.filter((record) => record.role === "implement"));
-  const review =
+  const firstAfter = (role: RunRecord["role"]) =>
     first === undefined
       ? undefined
       : original
-          .filter((record) => record.role === "review" && Date.parse(record.endedAt) > Date.parse(first.endedAt))
+          .filter((record) => record.role === role && Date.parse(record.endedAt) > Date.parse(first.endedAt))
           .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))[0];
-  return { verdict: review === undefined ? null : (review.verdict ?? "none"), ...spentBy([first, review]) };
+  const review = firstAfter("review");
+  const next = firstAfter("implement");
+  if (next !== undefined && (review === undefined || Date.parse(next.endedAt) < Date.parse(review.endedAt))) {
+    return { verdict: null, costUsd: null, turns: null, durationMs: null, noReview: true };
+  }
+  return { verdict: review === undefined ? null : (review.verdict ?? "none"), ...spentBy([first, review]), noReview: false };
 }
 
 /** The last of a run's records, by attempt, then by when it ended. */
@@ -757,16 +787,26 @@ function readTicketResult(value: unknown): TicketResult | null {
 }
 
 function readArmResult(value: unknown): ArmResult | null {
-  const original = readOriginalResult(value);
-  if (original === null || !isObject(value)) return null;
+  const figures = readFigures(value);
+  if (figures === null || !isObject(value)) return null;
   const { gates, hiddenTests, scores, patch } = value;
   if (!(gates === null || isKeyOf(GATES_WORDS, gates)) || !(hiddenTests === null || isKeyOf(HIDDEN_TESTS_WORDS, hiddenTests))) return null;
   if (!Array.isArray(scores) || scores.length !== SCORERS.length || !scores.every((score) => score === null || isScore(score))) return null;
   if (!(patch === null || (typeof patch === "string" && PATCH_PATH.test(patch)))) return null;
-  return { ...original, gates, hiddenTests, scores, patch };
+  return { ...figures, gates, hiddenTests, scores, patch };
 }
 
+/** An original's result: one written before the Kit told a first run with no Review apart, with no `noReview`, reads as having had one. */
 function readOriginalResult(value: unknown): OriginalResult | null {
+  const figures = readFigures(value);
+  if (figures === null || !isObject(value)) return null;
+  const { noReview } = value;
+  if (!(noReview === undefined || typeof noReview === "boolean")) return null;
+  return { ...figures, noReview: noReview ?? false };
+}
+
+/** A run's Verdict, cost, turns and duration, read back. */
+function readFigures(value: unknown): RunFigures | null {
   if (!isObject(value)) return null;
   const { verdict, costUsd, turns, durationMs } = value;
   if (!(verdict === null || isKeyOf(VERDICT_WORDS, verdict))) return null;
@@ -783,8 +823,8 @@ function isScore(value: unknown): value is number {
   return typeof value === "number" && value >= 0 && value <= 1;
 }
 
-/** An arm's patch's store path as replayPatchPath gives it, which a link can hold as it is. */
-const PATCH_PATH = /^replays\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/[1-9][0-9]*\/[1-9][0-9]*-(?:baseline|variant)\.patch$/;
+/** An arm's patch's store path as replayPatchPath gives it, or gave it before it named the run, which a link can hold as it is. */
+const PATCH_PATH = /^replays\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/[1-9][0-9]*\/[1-9][0-9]*-(?:baseline|variant)(?:-[1-9][0-9]*)?\.patch$/;
 
 /**
  * The Replay as the Operator reads it: a headline line of the variant's
@@ -810,10 +850,17 @@ function resultsLines({ plan, progress }: ReplayMarks, results: readonly TicketR
     "",
     ...tableHead(["Ticket", "Arm", "Gates", "Verdict", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration", "Patch", "Flags"]),
     ...rows.flatMap(({ planned, state, result }) => REPLAY_ARMS.map((arm) => armRow(planned, arm, variable, result?.arms[arm] ?? null, state, open))),
-    ...(totals === null ? [] : ["", ...totalsLines(totals, done.length)]),
+    ...(totals === null ? [] : ["", ...totalsLines(totals)]),
     ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(leftOutLine)]),
     "",
   ];
+}
+
+/** A mean score over the runs a Scorer scored, `scored` of the `of` Tickets done. */
+interface MeanScore {
+  readonly mean: number;
+  readonly scored: number;
+  readonly of: number;
 }
 
 /** How many of some arms' measures passed, of those measured. */
@@ -822,13 +869,27 @@ interface Tally {
   readonly of: number;
 }
 
+/** Each arm's totals over the Tickets done, and the original runs', with what the baseline's gap from the original is over. */
+interface ReplayTotals {
+  readonly baseline: Totals;
+  readonly variant: Totals;
+  /** The original runs' totals, over the Tickets whose first run had a Review. */
+  readonly original: Totals;
+  /** The baseline's totals over those same Tickets, which its gap from the original compares. */
+  readonly comparedBaseline: Totals;
+  /** The Tickets whose first run had no Review, left out of the original's totals and the gap. */
+  readonly noReviewOriginals: readonly number[];
+  /** How many Tickets are done. */
+  readonly done: number;
+}
+
 /** An arm's totals over the Tickets done, or the original runs': these have no gates, hidden tests or scores. */
 interface Totals {
   readonly gates: Tally | null;
   readonly verdicts: Tally;
   readonly hiddenTests: Tally | null;
-  /** The mean score under each Scorer, in SCORERS' order, over the runs it scored. */
-  readonly scores: readonly (number | null)[] | null;
+  /** The mean score under each Scorer, in SCORERS' order, over the runs it scored, and of how many Tickets done. */
+  readonly scores: readonly (MeanScore | null)[] | null;
   /** What every run spent together, unknown when any run's is. */
   readonly costUsd: number | null;
   readonly turns: number | null;
@@ -840,27 +901,40 @@ interface Totals {
  * Verdict or hidden test counts only where it was measured, so no test
  * command, no hidden tests and a Review with no Verdict are never passes,
  * nor failures. Hidden tests never run because the setup or build failed
- * first count as failed.
+ * first count as failed. An original whose first run had no Review is left
+ * out of the original's totals, and its Ticket out of the baseline's gap.
  */
-function totalsOf(done: readonly TicketResult[]): Readonly<Record<ReplayArm | "original", Totals>> {
-  const verdicts = (each: readonly OriginalResult[]) => tally(each.map(({ verdict }) => verdict), ["pass"], ["none"]);
-  const spent = (each: readonly OriginalResult[]) => ({
-    costUsd: sumOf(each.map(({ costUsd }) => costUsd)),
-    turns: sumOf(each.map(({ turns }) => turns)),
-    durationMs: sumOf(each.map(({ durationMs }) => durationMs)),
-  });
-  const armTotals = (arm: ReplayArm): Totals => {
-    const arms = done.map((result) => result.arms[arm]);
+function totalsOf(done: readonly TicketResult[]): ReplayTotals {
+  const verdicts = (each: readonly RunFigures[]) => tally(each.map(({ verdict }) => verdict), ["pass"], ["none"]);
+  const spent = (each: readonly RunFigures[]) => {
+    // Nothing to total is no figure, never a zero.
+    if (each.length === 0) return { costUsd: null, turns: null, durationMs: null };
+    return {
+      costUsd: sumOf(each.map(({ costUsd }) => costUsd)),
+      turns: sumOf(each.map(({ turns }) => turns)),
+      durationMs: sumOf(each.map(({ durationMs }) => durationMs)),
+    };
+  };
+  const armTotals = (arm: ReplayArm, over: readonly TicketResult[]): Totals => {
+    const arms = over.map((result) => result.arms[arm]);
     return {
       gates: tally(arms.map(({ gates }) => gates), ["passed"], ["no-test-command"]),
       verdicts: verdicts(arms),
       hiddenTests: tally(arms.map(({ hiddenTests }) => hiddenTests), ["passed"], ["no-hidden-tests", "no-test-command"]),
-      scores: SCORERS.map((_, i) => meanOf(arms.flatMap(({ scores }) => scores[i] ?? []))),
+      scores: SCORERS.map((_, i) => meanScoreOf(arms.flatMap(({ scores }) => scores[i] ?? []), arms.length)),
       ...spent(arms),
     };
   };
-  const originals = done.map(({ original }) => original);
-  return { baseline: armTotals("baseline"), variant: armTotals("variant"), original: { gates: null, verdicts: verdicts(originals), hiddenTests: null, scores: null, ...spent(originals) } };
+  const compared = done.filter(({ original }) => !original.noReview);
+  const originals = compared.map(({ original }) => original);
+  return {
+    baseline: armTotals("baseline", done),
+    variant: armTotals("variant", done),
+    original: { gates: null, verdicts: verdicts(originals), hiddenTests: null, scores: null, ...spent(originals) },
+    comparedBaseline: armTotals("baseline", compared),
+    noReviewOriginals: done.flatMap(({ ticket, original }) => (original.noReview ? [ticket] : [])),
+    done: done.length,
+  };
 }
 
 /** How many of `values` are among `passes`, of those that were measured: neither null nor among `unmeasured`. */
@@ -874,24 +948,32 @@ function sumOf(figures: readonly (number | null)[]): number | null {
   return figures.reduce<number | null>((total, figure) => (total === null || figure === null ? null : total + figure), 0);
 }
 
-function meanOf(values: readonly number[]): number | null {
-  return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+/** The mean of the scores of `of` Tickets done, with how many it was scored over, or null when none was scored. */
+function meanScoreOf(scores: readonly number[], of: number): MeanScore | null {
+  return scores.length === 0 ? null : { mean: scores.reduce((sum, score) => sum + score, 0) / scores.length, scored: scores.length, of };
 }
 
-/** The Totals section: a row for each arm and the original runs, then the baseline's gap from the original. */
-function totalsLines(totals: Readonly<Record<ReplayArm | "original", Totals>>, done: number): string[] {
+/** The Totals section: a row for each arm and the original runs, then any original left out and the baseline's gap from the original. */
+function totalsLines(totals: ReplayTotals): string[] {
+  const { done, noReviewOriginals } = totals;
   const row = (name: string, { gates, verdicts, hiddenTests, scores, costUsd, turns, durationMs }: Totals) =>
     tableRow([
       name,
       tallyWords(gates),
       tallyWords(verdicts),
       tallyWords(hiddenTests),
-      ...SCORERS.map((_, i) => orNone(scores?.[i] ?? null, (score) => score.toFixed(2))),
+      ...SCORERS.map((_, i) => meanScoreWords(scores?.[i] ?? null)),
       orNone(costUsd, dollars),
       orNone(turns, String),
       orNone(durationMs, minutes),
     ]);
-  const gap = comparison(totals.baseline, totals.original);
+  const gap = comparison(totals.comparedBaseline, totals.original);
+  const gapWords =
+    noReviewOriginals.length === done
+      ? "nothing to compare, with every Ticket's original left out."
+      : gap.length === 0
+        ? "the store holds nothing of the original runs to compare."
+        : `${gap.join("; ")}.`;
   return [
     "### Totals",
     "",
@@ -902,8 +984,16 @@ function totalsLines(totals: Readonly<Record<ReplayArm | "original", Totals>>, d
     row("variant", totals.variant),
     row("original", totals.original),
     "",
-    `Baseline vs original: ${gap.length === 0 ? "the store holds nothing of the original runs to compare." : `${gap.join("; ")}.`}`,
+    ...(noReviewOriginals.length === 0
+      ? []
+      : [`The original row and the baseline's gap leave out ${spelled(noReviewOriginals.map((ticket) => `#${ticket}`), "and")}: first run's checks were red; no Review.`, ""]),
+    `Baseline vs original: ${gapWords}`,
   ];
+}
+
+/** A mean score with the Tickets it was scored over, of those done: `0.95 (2/5)`. */
+function meanScoreWords(score: MeanScore | null): string {
+  return score === null ? NONE : `${score.mean.toFixed(2)} (${score.scored}/${score.of})`;
 }
 
 function tallyWords(tally: Tally | null): string {
@@ -912,8 +1002,9 @@ function tallyWords(tally: Tally | null): string {
 
 /**
  * How `these` totals compare with `those`, measure by measure, from the
- * totals alone: each count both have measured something of, then each
- * figure's change where both are known.
+ * totals alone: each count both have and either measured something of, a
+ * side that measured none shown as –, then each figure's change where both
+ * are known.
  */
 function comparison(these: Totals, those: Totals): string[] {
   const counts: [string, Tally | null, Tally | null][] = [
@@ -927,7 +1018,7 @@ function comparison(these: Totals, those: Totals): string[] {
     ["duration", these.durationMs, those.durationMs],
   ];
   return [
-    ...counts.flatMap(([name, a, b]) => (a === null || b === null || (a.of === 0 && b.of === 0) ? [] : [`${name} ${a.passed}/${a.of} vs ${b.passed}/${b.of}`])),
+    ...counts.flatMap(([name, a, b]) => (a === null || b === null || (a.of === 0 && b.of === 0) ? [] : [`${name} ${tallyWords(a)} vs ${tallyWords(b)}`])),
     ...figures.flatMap(([name, a, b]) => (a === null || b === null || b === 0 ? [] : [`${name} ${percentChange(a, b)}`])),
   ];
 }

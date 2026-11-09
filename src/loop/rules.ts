@@ -1,6 +1,7 @@
 import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
+import { issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { failureNotice } from "./failures.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { checkConflicts, reviewGraceMinutes } from "./conflicts.ts";
@@ -36,7 +37,7 @@ import { startResearcher } from "./research.ts";
 import { landResearch } from "./researchLanding.ts";
 import { applyPrototypeTurn } from "./prototypeLanding.ts";
 import { startAgentRun } from "./runs.ts";
-import { onChosenSubscription } from "./subscriptions.ts";
+import { makesUnusable, onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { replayGate } from "./replayGate.ts";
@@ -119,27 +120,35 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     // A closed issue may finish its Spec, free a slot or unblock a Ticket, or end a
     // Design session by hand. Merging an agent PR closes its Ticket through
     // `Closes #n`, so it lands here. A closed Ticket's agent draft PR closes
-    // too, and the Dispatch check then sees its slot free (#428).
+    // too, and the Dispatch check then sees its slot free (#428). A closed
+    // usage-credits, token-rotation or weekly-limit issue may free a
+    // Subscription, so the held runs resume first, ahead of any newer Ticket
+    // the Dispatch check would start (#439).
     case "issue-closed":
-      return withIssue(snapshot, ({ issue }) => ({
-        kind: "act",
-        actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
-      }));
+      return withIssue(snapshot, ({ issue }) => {
+        const plan: Plan = {
+          kind: "act",
+          actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
+        };
+        return makesUnusable(issue.labels) ? resumingHeldRuns(plan, snapshot, config, issue.number) : plan;
+      });
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
     case "pull-request-pushed":
       return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, config));
+    // A label that only starts something on an issue comes off a PR, saying where it goes (#479).
     case "pull-request-labeled":
-      return withPullRequest(snapshot, (pullRequest) =>
-        event.label === REVIEW_LABEL
-          ? startReviewOnLabel(pullRequest, config)
-          : event.label === NEEDS_DESIGN
-            ? sendBackToDesign(pullRequest)
-            : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
-      );
+      return withPullRequest(snapshot, (pullRequest) => {
+        if (event.label === REVIEW_LABEL) return startReviewOnLabel(pullRequest, config);
+        if (event.label === NEEDS_DESIGN) return sendBackToDesign(pullRequest);
+        const misplaced = issueLabelOnPullRequest(event.label, pullRequest);
+        return misplaced === null
+          ? { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` }
+          : { kind: "act", actions: misplaced };
+      });
     case "required-checks-finished":
-      return applyRedChecks(event, snapshot);
+      return applyRedChecks(event, snapshot, config);
     case "review-run-finished":
-      return applyReview(event, snapshot);
+      return applyReview(event, snapshot, config);
     case "audit-run-finished":
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
     case "retro-run-finished":
@@ -181,11 +190,16 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return conflictCheck(snapshot, config);
     case "kit-config-changed":
       // max_in_flight or caps.design_sessions may have gone up, or from 0 back
-      // above it, so see what can start now. It's a push to main too.
-      return alongside({ kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] }, conflictCheck(snapshot, config));
+      // above it, so see what can start now. It's a push to main too. A
+      // Subscription newly listed frees one, so the held runs resume first (#439).
+      return resumingHeldRuns(
+        alongside({ kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] }, conflictCheck(snapshot, config)),
+        snapshot,
+        config,
+      );
     case "scheduled-tick":
-      // The tick closes each weekly-limit issue after its reset, resuming the
-      // runs held until then, and opens the week's pending Audit and pending
+      // The tick closes each weekly-limit issue after its reset, and resumes
+      // the held runs whenever a Subscription is free (#439), and opens the week's pending Audit and pending
       // Retro when each is due. It also catches a Design session slot freed by
       // an event the Loop doesn't watch, such as needs-design coming off by hand.
       // It also takes the Replays' next step, and catches an agent PR left
@@ -193,9 +207,14 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // Dispatch check, so a Ticket left waiting while every slot was full, or
       // marked ready by an event the Loop missed, starts within the hour (#418).
       // First of all it sweeps trigger labels with no run behind them (#419),
-      // so a slot it frees can be filled by this tick's queue checks.
+      // so a slot it frees can be filled by this tick's queue checks. Why each
+      // part does nothing is a note, so the step summary says it whatever the
+      // rest of the tick does.
       return thenCheckQueues(
-        alongside(stuckTriggers(event.now, snapshot), scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config)),
+        alongside(
+          withReasonNoted(stuckTriggers(event.now, snapshot)),
+          scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config),
+        ),
       );
   }
 }
@@ -244,16 +263,21 @@ type TickGate = (now: string, snapshot: Snapshot, config: KitConfig) => Plan;
 
 /**
  * The scheduled tick with these gates: closes each weekly-limit issue after
- * its reset, as scheduledTick does, and resumes held runs then, alongside
- * each gate's plan.
+ * its reset, as scheduledTick does, and resumes held runs whenever a
+ * Subscription is free, alongside each gate's plan.
  */
 function scheduledTickWith(gates: readonly TickGate[], now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  // With rotation on, a weekly-limit issue it closes resumes the held runs.
+  // With rotation on, a weekly-limit issue it closes, or a Subscription free already, resumes the held runs.
   const tick = resumingHeldRuns(scheduledTick(now, snapshot, config), snapshot, config);
   // A weekly-limit issue this tick closes after its reset no longer holds a gate back.
   const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));
   const kitIssues = snapshot.kitIssues.filter((issue) => !closing.includes(issue.number));
-  return gates.reduce((plan, gate) => alongside(plan, gate(now, { ...snapshot, kitIssues }, config)), tick);
+  return gates.reduce((plan, gate) => alongside(plan, withReasonNoted(gate(now, { ...snapshot, kitIssues }, config))), withReasonNoted(tick));
+}
+
+/** A part of the tick's plan, its reason for doing nothing kept as a note, which alongside would drop once another part acts. */
+function withReasonNoted(plan: Plan): Plan {
+  return plan.kind === "nothing" ? { kind: "act", actions: [], notes: [plan.reason] } : plan;
 }
 
 /**
@@ -291,8 +315,8 @@ function actionsOf(plan: Plan): readonly Action[] {
 
 /** Decides an issue event, which needs the issue in the snapshot. */
 function withIssue(snapshot: Snapshot, decide: (context: IssueContext) => Plan): Plan {
-  const { issue, operator, kitIssues } = snapshot;
-  return issue === null ? missingFromSnapshot("the issue") : decide({ issue, operator, kitIssues });
+  const { issue, operator, kitIssues, weeklyIssues } = snapshot;
+  return issue === null ? missingFromSnapshot("the issue") : decide({ issue, operator, kitIssues, weeklyIssues });
 }
 
 /** Decides a pull-request event, which needs the pull request in the snapshot. */
@@ -321,6 +345,7 @@ function missingFromSnapshot(what: string): Plan {
  * Implement run; and adding agent:research starts a Researcher run, whether
  * Dispatch added it to release a research Decision or the Operator re-added
  * it by hand; and adding ready-for-agent asks for a Dispatch check.
+ * agent:review, which goes on a PR, comes off with one line saying so.
  */
 function labelAdded(
   issueNumber: number,
@@ -335,6 +360,8 @@ function labelAdded(
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context, replay?.issues ?? null);
   if (label === READY_FOR_AGENT) return checkDispatchWhenReady(issueNumber, context.issue);
+  // agent:review starts a Review only on a PR, so it comes off an issue, saying where it goes (#479).
+  if (label === REVIEW_LABEL) return { kind: "act", actions: reviewLabelOnIssue(issueNumber, context.issue.openPullRequests) };
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }
@@ -353,7 +380,7 @@ function checkDispatchWhenReady(issueNumber: number, issue: IssueSnapshot): Plan
   return { kind: "act", actions: [CHECK_DISPATCH] };
 }
 
-/** Intake: a new issue gets needs-triage unless something has already given it a place. */
+/** Intake: a new issue gets needs-triage unless something has already given it a place, or it's a sub-issue, which gets one line saying which label to add instead. */
 function intake(issueNumber: number, issue: IssueSnapshot): Plan {
   const state = issue.labels.find(isStateLabel);
   if (state !== undefined) {
@@ -367,8 +394,20 @@ function intake(issueNumber: number, issue: IssueSnapshot): Plan {
   if (wayfinder !== undefined) {
     return { kind: "nothing", reason: `#${issueNumber} has the label ${wayfinder}, so a skill made it` };
   }
+  // A skill files a sub-issue with its state, so one with none was likely filed
+  // by hand: it stays out of Triage, but one quiet line says which label to add,
+  // or the Operator sees no Kit activity on it, ever (#478).
   if (issue.parent !== null) {
-    return { kind: "nothing", reason: `#${issueNumber} is a sub-issue of #${issue.parent}, so a skill made it` };
+    return {
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: issueNumber,
+          body: "Fabrik leaves a sub-issue alone, since a skill usually files them with their state. Add `needs-triage` for Triage to look at it, or a state label yourself.",
+        },
+      ],
+    };
   }
   return {
     kind: "act",

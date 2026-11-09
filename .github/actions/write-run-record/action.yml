@@ -31,6 +31,10 @@ inputs:
   role:
     description: The agent role the Kit job routed to (needs.kit.outputs.route), whose transcript the agent job kept.
     required: true
+  empty-diff:
+    description: '"true" when the Loop found the Implement run branch changed nothing, an empty diff (the run-loop empty-diff output), which the record says.'
+    required: false
+    default: ""
 
 outputs:
   score:
@@ -39,6 +43,9 @@ outputs:
   record:
     description: The scored run's Run record's path in the store, for the score-record job.
     value: ${{ steps.record.outputs.record }}
+  scored-run:
+    description: The scored run's kind, from its Run record, as one line of JSON (src/kit/scorer.ts's JudgedRun), for the judge (#450).
+    value: ${{ steps.record.outputs.scored-run }}
 
 runs:
   using: composite
@@ -74,4 +81,5 @@ runs:
         FABRIK_PRODUCT_TOKEN: ${{ steps.tokens.outputs.kit-config-token }}
         FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}
         FABRIK_TRANSCRIPT_DIR: ${{ runner.temp }}/transcript
+        FABRIK_EMPTY_DIFF: ${{ inputs.empty-diff }}
       run: node src/kit/record-main.ts

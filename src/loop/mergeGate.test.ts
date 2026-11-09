@@ -73,8 +73,29 @@ describe("Request changes at the Merge gate", () => {
     expect(notificationsOf(planFor(changesRequested(), snapshotOfPullRequest(atMergeGate), kitConfig()))).toEqual([]);
   });
 
+  // One line, mentioning nobody, so the reviewer isn't left wondering why nothing started (#436).
   it.each([
-    ["someone other than the Operator requested the changes", changesRequested({ reviewer: "someone" }), atMergeGate],
+    ["at the Merge gate", atMergeGate],
+    ["still a draft in the Loop", aPullRequest({ draft: true })],
+  ])("says in one line, mentioning nobody, that only the Operator's reviews start runs, when someone else requests changes on an agent PR %s", (_, pullRequest) => {
+    const plan = planFor(changesRequested({ reviewer: "someone" }), snapshotOfPullRequest(pullRequest), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 50,
+          body: "Only the Operator's reviews start runs on an agent PR, so the Request changes from someone on #50 starts nothing.",
+        },
+      ],
+    });
+    expect(notificationsOf(plan, "someone")).toEqual([]);
+  });
+
+  it.each([
+    ["someone other than the Operator requested the changes on a PR that isn't an agent PR", changesRequested({ reviewer: "someone" }), aPullRequest({ draft: false, isAgent: false })],
+    ["someone other than the Operator requested the changes on a closed PR", changesRequested({ reviewer: "someone" }), aPullRequest({ draft: false, open: false })],
     ["a bot requested the changes", changesRequested({ reviewer: "operator", reviewerIsBot: true }), atMergeGate],
     ["the PR isn't an agent PR", changesRequested(), aPullRequest({ draft: false, isAgent: false })],
     ["the PR is closed", changesRequested(), aPullRequest({ draft: false, open: false })],
@@ -161,7 +182,7 @@ describe("Resuming a Request-changes run after an Infrastructure failure", () =>
       kitConfig(),
     );
 
-    expect(commentsOf(plan)[0]).toContain("Re-add the `agent:implement` label on #7 to run it again.");
+    expect(commentsOf(plan)[0]).toContain("Re-add `agent:implement` on the Ticket (#7) to run it again.");
   });
 });
 

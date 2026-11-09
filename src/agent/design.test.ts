@@ -4,8 +4,17 @@ import { agentRunEventFrom } from "../github/events.ts";
 import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
 import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { planFor } from "../loop/rules.ts";
-import { emptyDiffContext, MAP_CAP_HEADING, mapCapContext, PROTOTYPES_HEADING, prototypeContext, sentBackContext } from "./design.ts";
-import { readMapOffer } from "./inputs.ts";
+import {
+  emptyDiffContext,
+  MAP_CAP_HEADING,
+  mapCapContext,
+  PROTOTYPES_HEADING,
+  prototypeContext,
+  SPEC_TICKETS_HEADING,
+  sentBackContext,
+  specTicketsContext,
+} from "./design.ts";
+import { readIssue, readMapOffer } from "./inputs.ts";
 import { readAgentRunResult } from "./result.ts";
 
 const issue = { number: 7, title: "Add a waitlist", body: "As a patient…", comments: [] };
@@ -255,6 +264,60 @@ describe("What a Design-session turn's prompt says of the Map cap", () => {
       expect(() => mapCapContext(offer)).toThrow("map.json doesn't say whether this turn may offer a Map");
     },
   );
+});
+
+describe("What a Design-session turn on a Ticket under a Spec is told of the Spec's other Tickets (#475)", () => {
+  /** The issue as GraphQL gives it, a Ticket under the Spec #10 with the Tickets #11 to #13, #13 being this one. */
+  const underASpec = {
+    repository: {
+      issue: {
+        number: 13,
+        title: "Send the booking emails",
+        body: "…",
+        author: { login: "operator" },
+        labels: { nodes: [{ name: "needs-design" }] },
+        parent: {
+          number: 10,
+          title: "Bookings",
+          body: "The Spec",
+          subIssues: {
+            nodes: [
+              { number: 11, title: "The booking model", state: "CLOSED", labels: { nodes: [] }, closedByPullRequestsReferences: { nodes: [{ number: 20, state: "MERGED" }] } },
+              { number: 12, title: "The booking confirmation UI", state: "OPEN", labels: { nodes: [{ name: "ready-for-agent" }] }, closedByPullRequestsReferences: { nodes: [{ number: 21, state: "OPEN" }] } },
+              { number: 13, title: "Send the booking emails", state: "OPEN", labels: { nodes: [{ name: "needs-design" }] }, closedByPullRequestsReferences: { nodes: [] } },
+            ],
+          },
+        },
+        comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+      },
+    },
+  };
+  const github = {
+    graphql: async <T>() => underASpec as T,
+    rest: async (): Promise<never> => {
+      throw new Error("unexpected REST call");
+    },
+  };
+
+  it("sets out each sibling, from the file the inputs step writes, with its state, its state label and its PR", async () => {
+    const { otherTickets } = await readIssue(github, { owner: "acme", name: "shop" }, 13, "operator");
+    const parts = specTicketsContext(JSON.parse(JSON.stringify(otherTickets)));
+
+    expect(parts[0]).toBe(`## ${SPEC_TICKETS_HEADING}`);
+    const text = parts.join("\n");
+    expect(text).toContain("- #11 The booking model: closed, PR #20 merged");
+    expect(text).toContain("- #12 The booking confirmation UI: open, `ready-for-agent`, PR #21 open");
+    expect(text).not.toContain("#13");
+    expect(text).toContain("A split must not overlap any of them");
+  });
+
+  it("says so when the Spec has no other Tickets", () => {
+    expect(specTicketsContext([]).join("\n")).toContain("The Spec has no other Tickets.");
+  });
+
+  it.each([null, {}, [{ number: "11" }]])("fails the turn on inputs it can't read: %j", (tickets) => {
+    expect(() => specTicketsContext(tickets)).toThrow("spec-tickets.json doesn't list the Spec's other Tickets");
+  });
 });
 
 describe("What a Design-session turn's prompt says of Prototypes", () => {

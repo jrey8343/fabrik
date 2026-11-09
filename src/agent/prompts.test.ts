@@ -5,6 +5,7 @@ import { CODING_STANDARDS_FILE, KIT_PROMPT_NAMES, kitPromptPath } from "../guard
 import { MAX_AUDIT_CANDIDATES, readAuditOutput } from "../loop/auditOutput.ts";
 import { readDesignTurnOutput, readPrototypeTurnOutput } from "../loop/designOutput.ts";
 import { readPullRequestRunOutput, readRequestChangesRunOutput } from "../loop/implementOutput.ts";
+import { CONFLICT_RUN_MARKER } from "../loop/markers.ts";
 import { readResearchOutput } from "../loop/researchOutput.ts";
 import {
   LOOSENING_STREAK_MINIMUM,
@@ -17,7 +18,7 @@ import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
-import { EMPTY_DIFFS_HEADING, MAP_CAP_HEADING } from "./design.ts";
+import { EMPTY_DIFFS_HEADING, MAP_CAP_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
@@ -101,6 +102,16 @@ describe("The prompts of the runs that read an agent PR", () => {
     expect(examples).toContainEqual(
       expect.objectContaining({ ok: true, verdict: "pass", followUps: [expect.objectContaining({ title: expect.any(String) })] }),
     );
+  });
+
+  it("review leaves a rebased PR unflagged without pointing at the Kit's conflict-run note, which its input never carries", async () => {
+    const text = await prompt("review");
+    expect(text).not.toContain(CONFLICT_RUN_MARKER);
+    expect(text).toContain("don't flag a PR for having been rebased onto `main`");
+  });
+
+  it("implement opens with no slash command, which no installed skill answers to", async () => {
+    expect(await prompt("implement")).not.toMatch(/^\//);
   });
 
   it("implement describes the output field that names the Operator comments it weighed, which its example carries", async () => {
@@ -315,6 +326,16 @@ describe("The Map question in the Design prompt", () => {
 
   it("names the part a Ticket's Implement runs that built nothing arrive under, after the issue (#429)", async () => {
     expect(await prompt("design")).toContain(`"${EMPTY_DIFFS_HEADING}", after the issue, holds what each run said`);
+  });
+
+  it("names the part a Ticket's siblings under its Spec arrive under, after the Spec (#475)", async () => {
+    expect(await prompt("design")).toContain(`that Spec follows the issue at the end of this prompt, with "${SPEC_TICKETS_HEADING}" after it`);
+  });
+
+  it("splits a Ticket only into siblings that overlap none of the Spec's other Tickets, and says which sibling covers what it leaves out (#475)", async () => {
+    const split = lineStarting(section(await prompt("design"), "Your turn"), "- **Finish by splitting the Ticket**");
+    expect(split).toContain(`No sibling Ticket the split files may build what one of "${SPEC_TICKETS_HEADING}" covers`);
+    expect(split).toContain("the closing comment names the sibling that covers it");
   });
 
   it("names the part the Map cap arrives under, after the issue", async () => {

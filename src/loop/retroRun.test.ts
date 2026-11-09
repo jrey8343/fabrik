@@ -121,7 +121,7 @@ describe("A failed Retro run on the pending Retro", () => {
 
 describe("Each way a Retro run fails", () => {
   it.each([
-    ["a timeout", retroFailed({ jobResult: "cancelled", secretsStep: null }), "it was cancelled, most likely by its 45-minute timeout"],
+    ["a timeout", retroFailed({ jobResult: "cancelled", secretsStep: null }), "it was cancelled, by its 45-minute timeout or by hand"],
     ["unreachable 1Password", retroFailed({ secretsStep: "failure" }), "its secrets couldn't be loaded from 1Password"],
     ["a crash of its evidence job, as when the store went away after the tick, or of its agent job", retroFailed(), "it crashed"],
     ["missing output", retroFailed(report("missing-output")), "the agent gave no valid output"],
@@ -145,6 +145,27 @@ describe("Each way a Retro run fails", () => {
       },
       { kind: "close", issue: 120, reason: "not_planned" },
     ]);
+  });
+});
+
+describe("A second failed Retro run in a week", () => {
+  it("@-mentions the Operator on the Retro it closes, with both runs and how each failed", () => {
+    const earlier = aRetroIssue({ number: 119, stateReason: "not_planned", createdAt: "2026-11-07T00:05:00Z", body: retroBody(RETRO_WINDOW_END, "failed") });
+    const pending = aRetroIssue({ number: 120, open: true, stateReason: null, createdAt: "2026-11-07T02:05:00Z", body: retroBody(RETRO_WINDOW_END, "pending") });
+
+    const plan = planFor(retroFailed(), snapshotOf(aRetro(), { weeklyIssues: [pending, earlier, aRetroIssue()] }), kitConfig());
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "comment",
+      issue: 120,
+      body: [
+        "@operator The Retro's run failed twice this week, so the next Retro waits for next week:",
+        "",
+        "- #119: it timed out.",
+        `- #120: it crashed. [The run](${RUN})`,
+      ].join("\n"),
+    });
+    expect(notificationsOf(plan)).toEqual(["mention on #120"]);
   });
 });
 

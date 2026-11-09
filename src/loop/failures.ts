@@ -15,10 +15,11 @@
 // Audit or Retro fails, for the tick to try again.
 import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
-import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, RUN_NAMES } from "./heldRun.ts";
+import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
 import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
+import { readable } from "./readable.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import type { Action, AgentRole, FailedRunCommits, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
@@ -53,6 +54,15 @@ const FAILURE_MARKERS: Partial<Record<AgentRole, string>> = {
 };
 
 /**
+ * What a failure notice calls the issue a role's trigger label goes on, when
+ * that isn't a PR (#479): an "issue" for any role not named here.
+ */
+const LABEL_HOMES: Partial<Record<AgentRole, string>> = {
+  implement: "Ticket",
+  research: "Decision",
+};
+
+/**
  * Which Infrastructure failure this was, from what the agent job left and how
  * it ended. The Run record classifies with it too, so the two never disagree.
  */
@@ -64,8 +74,14 @@ export function infrastructureFailureOf(run: Pick<FailedRun, "secretsStep" | "re
 
 function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: KitConfig): string {
   switch (failure) {
-    case "timeout":
-      return `it was cancelled, most likely by its ${(run.prototype === true ? prototypeRole(config.roles) : config.roles[run.role]).timeoutMinutes}-minute timeout`;
+    case "timeout": {
+      const timeout = `${(run.prototype === true ? prototypeRole(config.roles) : config.roles[run.role]).timeoutMinutes}-minute timeout`;
+      // The Review checks job gives up short of its timeout itself, naming what still ran.
+      const running = run.report?.checks ?? [];
+      if (running.length > 0) return `it stopped waiting for its required checks short of its ${timeout}, with ${checkNames(running)} still running`;
+      // A cancelled job's own result doesn't say who cancelled it (#436).
+      return `it was cancelled, by its ${timeout} or by hand`;
+    }
     case "unreachable-1password":
       return "its secrets couldn't be loaded from 1Password";
     case "crash":
@@ -91,18 +107,46 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
       return run.report?.refused === true
         ? "GitHub refused a request in the Kit's input step, so the agent never started"
         : "a GitHub request failed in the Kit's input step, so the agent never started";
+    case "unread-checks":
+      return "it was still waiting for its required checks when a GitHub request failed";
+    case "unreported-checks": {
+      const unreported = run.report?.checks ?? [];
+      // A report that lost its check names still says what to look for, without naming one.
+      if (unreported.length === 0) return "a required check never reported on this PR; check the gating checks' workflow names and `paths:` filters against `sandbox.checks`";
+      const [checks, its, workflows, names, filters, it] =
+        unreported.length === 1
+          ? (["check", "its", "workflow's", "name", "filter", "it"] as const)
+          : (["checks", "their", "workflows'", "names", "filters", "them"] as const);
+      return `the required ${checks} ${checkNames(unreported)} never reported on this PR; check ${its} ${workflows} ${names} and \`paths:\` ${filters}, or drop ${it} from \`sandbox.checks\``;
+    }
   }
+}
+
+/** Check names as a notice lists them: each in code, joined with commas and a last "and". */
+function checkNames(names: readonly string[]): string {
+  const quoted = names.map((name) => `\`${name.replace(/`/g, "'")}\``);
+  const last = quoted.pop();
+  return quoted.length === 0 ? (last ?? "") : `${quoted.join(", ")} and ${last}`;
 }
 
 /**
  * How the notice says to go on. GitHub refuses a refused input read again
- * each time the run goes again, so for that the Kit needs fixing first; after
- * any other failure, including an input read GitHub failed or never answered,
- * `resume` runs it again.
+ * each time the run goes again, so for that the Kit needs fixing first, and a
+ * required check that never reported needs its workflow or the Kit config
+ * fixing; a run that hit the weekly limit waits for its reset, as the
+ * weekly-limit issue's Steps say (#436); after any other failure, including an
+ * input read GitHub failed or never answered, `resume` runs it again.
  */
 function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: string): string {
+  const resumeMidSentence = `${resume.charAt(0).toLowerCase()}${resume.slice(1)}`;
+  if (failure === "weekly-limit") {
+    const resetsAt = run.report?.resetsAt;
+    return `Once the weekly limit resets${resetsAt === undefined ? "" : ` at ${readable(resetsAt)}`}, ${resumeMidSentence}`;
+  }
+  // A check that never reported won't on a re-run either, until its workflow or the Kit config changes (#454).
+  if (failure === "unreported-checks") return `Re-adding the \`${RESUME_LABELS[run.role]}\` label won't change this. After fixing the workflow or \`sandbox.checks\`, ${resumeMidSentence}`;
   if (failure !== "unread-inputs" || run.report?.refused !== true) return resume;
-  return `GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, ${resume.charAt(0).toLowerCase()}${resume.slice(1)}`;
+  return `GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, ${resumeMidSentence}`;
 }
 
 /**
@@ -136,7 +180,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
   const ranOn = ranOnOf(run, config);
-  const failedRun = run.prototype === true ? `The prototype turn on #${run.issue}` : `The ${RUN_NAMES[run.role]} run on #${run.issue}`;
+  const failedRun = run.prototype === true ? `The prototype turn on #${run.issue}` : `The ${runNamed(run.role)} on #${run.issue}`;
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
@@ -180,12 +224,14 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const target = pullRequest ?? run.issue;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? target : run.issue;
-  const where = labelled === target ? "" : ` on #${labelled}`;
+  // The object the label goes on, by name, so it never lands on the wrong one (#479).
+  const home = labelled === pullRequest ? "PR" : (LABEL_HOMES[run.role] ?? "issue");
+  const where = labelled === target ? `this ${home}` : `the ${home} (#${labelled})`;
   // A Design-session turn has none to re-add: its issue keeps needs-design, and the Operator's reply starts it again.
   const label = run.role === "design" ? null : RESUME_LABELS[run.role];
   const resume =
     label !== null
-      ? `Re-add the \`${label}\` label${where} to run it again.`
+      ? `Re-add \`${label}\` on ${where} to run it again.`
       : run.prototype === true
         ? CARRY_ON_AFTER_PROTOTYPE
         : "Reply on this issue to run the turn again.";
@@ -216,8 +262,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     detail: run.report?.detail ?? "",
     commits: run.report?.commits === undefined ? null : commitsLeft(run.report.commits),
-    // A research Decision has no retries to count against, and Dispatch leaves it alone once its run failed.
-    notRetried: run.role === "research" ? "neither the Loop nor Dispatch runs it again by itself" : NOT_RETRIED,
+    notRetried: notRetried(run.role),
     resume: resumeAfter(failure, run, resume),
     pointer: repoWide?.pointer ?? null,
     runUrl: run.runUrl,
@@ -260,8 +305,19 @@ function commitsLeft({ base, continued, head, kept }: FailedRunCommits): string 
   return `It had made commits before it failed. They weren't pushed, so running it again starts ${from} without them; they're kept for 7 days as \`agent-branch.bundle\` in the run's \`fabrik-agent-failure\` artifact.`;
 }
 
-/** What a failure notice says of retrying a run that isn't a research Decision's. */
-const NOT_RETRIED = "the Loop won't retry it and it doesn't count against the Ticket's retries";
+/**
+ * What a failure notice says of retrying a run of this role. Only an
+ * Implement run or a Review works on a Ticket, so only theirs names its
+ * retries (#436). A research Decision has none to count against, and Dispatch
+ * leaves it alone once its run failed.
+ */
+function notRetried(role: AgentRole): string {
+  if (role === "implement" || role === "review") return "the Loop won't retry it and it doesn't count against the Ticket's retries";
+  return role === "research" ? "neither the Loop nor Dispatch runs it again by itself" : NOT_RETRIED;
+}
+
+/** What a failure notice says of retrying a run on an issue that isn't a Ticket. */
+const NOT_RETRIED = "the Loop won't retry it";
 
 /** How a failed prototype turn's notice says to go on: it ends the session's pending request (src/github/threads.ts), so a reply starts an ordinary turn. */
 const CARRY_ON_AFTER_PROTOTYPE = "Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.";

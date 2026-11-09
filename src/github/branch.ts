@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import type { BuiltBranch } from "../agent/result.ts";
 import { parseNameStatus } from "../guard/changes.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
+import { isTestPath } from "../loop/changedTests.ts";
 import { PROTOTYPE_BRANCH_PREFIX } from "../loop/designOutput.ts";
 import type { BranchChanges } from "../loop/types.ts";
 import type { Repo } from "./client.ts";
@@ -338,11 +339,13 @@ async function cutFromMain(git: Git, url: string, branch: BuiltBranch, bundlePat
   if (!(await isAncestor(git, branch.base.sha, tip))) {
     throw new Error(`${branch.name} doesn't start from ${branch.base.ref} at ${branch.base.sha}`);
   }
+  const commits = await commitsIn(git, `${branch.base.sha}..${tip}`);
   return {
     changes: {
       net: await diff(git, branch.base.sha, tip),
-      commits: await commitsIn(git, `${branch.base.sha}..${tip}`),
+      commits,
       updatedFromMain: false,
+      changedTests: await existingTests(git, commits, [branch.base.sha]),
     },
     head: tip,
     async push(name) {
@@ -484,11 +487,14 @@ async function onItsOwnBranch(
         : main
       : await conflictingMain(git, head, [...(started === null ? [] : [started]), main]);
   const resolved = told === null ? null : (await isAncestor(git, told, tip)) || !(await conflicts(judging, tip, told));
+  // Only the run's own: neither main's nor the PR's commits it landed on, whoever pushed them.
+  const commits = await commitsIn(judging, tip, `^${main}`, `^${head}`);
   return {
     changes: {
       net,
-      // Only the run's own: neither main's nor the PR's commits it landed on, whoever pushed them.
-      commits: await commitsIn(judging, tip, `^${main}`, `^${head}`),
+      commits,
+      // A test is already there when the head the run's commits land on holds it, or main does, for a run that brought main in.
+      changedTests: await existingTests(git, commits, [head, main]),
       updatedFromMain: !(await isAncestor(git, main, head)) && (await isAncestor(git, main, tip)),
       ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
       ...(told === null || resolved === null ? {} : { mainMerge: { main: told, resolved } }),
@@ -501,6 +507,22 @@ async function onItsOwnBranch(
       await git("push", "--quiet", `--force-with-lease=${ref}:${head}`, url, `${ref}:${ref}`);
     },
   };
+}
+
+/**
+ * The test files (isTestPath) these commits changed, deleted or moved away
+ * that one of `bases` already holds (#463), each once, sorted. Pathspecs are
+ * read literally, so no path the agent made up reads as a pattern.
+ */
+async function existingTests(git: Run, commits: readonly ChangedPath[], bases: readonly string[]): Promise<string[]> {
+  const tests = [...new Set(commits.flatMap(({ path, from }) => (from === undefined ? [path] : [path, from])).filter(isTestPath))];
+  if (tests.length === 0) return [];
+  const there = new Set<string>();
+  for (const base of new Set(bases)) {
+    const listed = await git("--literal-pathspecs", "ls-tree", "-r", "--name-only", "-z", base, "--", ...tests);
+    for (const path of listed.split("\0")) if (path !== "") there.add(path);
+  }
+  return tests.filter((path) => there.has(path)).sort();
 }
 
 /** Where the PR's branch is on the remote now, or null if it's gone. */

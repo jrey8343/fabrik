@@ -13,9 +13,10 @@ import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
-import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE } from "../agent/inputs.ts";
+import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
+import { RUN_BRIEF_FILE } from "../agent/transcript.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -117,7 +118,7 @@ describe("The Kit's workflows", () => {
       expect(upload, `${job} has no transcript upload`).toBeDefined();
       expect(upload).toContain("if: always()");
       expect(upload).toContain("continue-on-error: true");
-      expect(upload).toMatch(/path: .*transcript\.jsonl\.gz/);
+      expect(upload).toMatch(/path: (?:\|\n\s+)?.*transcript\.jsonl\.gz/);
       expect(upload).toContain("if-no-files-found: ignore");
       expect(upload).toContain("retention-days: 7");
       expect(body).toMatch(/if: always\(\)\n\s+continue-on-error: true\n\s+run: .*gzip.*transcript\.jsonl/);
@@ -286,6 +287,13 @@ describe("The Kit's workflows", () => {
 
     expect(inputs).toContain("FABRIK_ROLE: ${{ inputs.role }}");
     expect(agent).toContain(`FABRIK_MAP_FILE: \${{ runner.temp }}/${MAP_INPUTS_FILE}`);
+  });
+
+  it("the Design job gives its agent the Spec's other Tickets the agent-inputs step read for its role, and no other agent job does (#475)", () => {
+    const agent = stepsOf(jobIn(loop, "design")).find((step) => step.includes("src/agent/run.ts design"));
+
+    expect(agent).toContain(`FABRIK_SPEC_TICKETS_FILE: \${{ runner.temp }}/${SPEC_TICKETS_FILE}`);
+    expect(loop.split("FABRIK_SPEC_TICKETS_FILE:").length - 1).toBe(1);
   });
 
   it("the Triage job gives its agent the recent issues the agent-inputs step read for its role, and no other agent job does", () => {
@@ -735,6 +743,23 @@ describe("The agent jobs whose input step may read a sent-back Ticket's PR", () 
   });
 });
 
+// #454: the Review checks job gives up short of its timeout, or fails mid-wait,
+// and leaves a failure report naming why, for the push job's notice.
+describe("The Review checks job, when its wait fails", () => {
+  const wait = () => stepsOf(job("review-checks")).find((step) => step.includes("run: node kit/src/review/wait.ts product")) ?? "";
+
+  it("tells the wait its job's timeout, so it gives up short of it", () => {
+    expect(wait()).toContain("FABRIK_REVIEW_TIMEOUT_MINUTES: ${{ needs.kit.outputs.review-timeout-minutes }}\n");
+  });
+
+  it("leaves its failure report where the push job takes the agent jobs' from", () => {
+    expect(wait()).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out\n");
+    const failure = stepsOf(job("review-checks")).find((step) => step.includes("name: fabrik-agent-failure\n")) ?? "";
+    expect(failure).toContain("if: failure()\n");
+    expect(failure).toContain(`path: \${{ runner.temp }}/fabrik-out/${AGENT_FAILURE_FILE}\n`);
+  });
+});
+
 // #431: run.ts bundles a run's commits before checking its reply, so a reply that
 // breaks its contract leaves them; the failure report's upload keeps the bundle, as
 // the notice says (src/loop/failures.ts), though the push job never pushes it.
@@ -1126,6 +1151,19 @@ describe("loop.yml's judge job", () => {
     expect(judge()).toContain("effort: ${{ steps.judge.outputs.effort }}");
     expect(stepsOf(judge()).find((step) => step.includes("uses: ./kit/.github/actions/run-judge"))).toContain("id: judge");
   });
+
+  it("passes out the attempt it ran in, so a judge re-run after a failed one gets a Run record of its own (#451)", () => {
+    expect(judge()).toContain("attempt: ${{ github.run_attempt }}");
+  });
+
+  // #450: a Retry, Request-changes or conflict-only run is judged against what it was asked, not the Ticket alone.
+  it("tells the judge the scored run's kind, from the Run record the push job wrote, and the brief the Implement job kept beside its transcript", () => {
+    expect(job("push")).toContain("scored-run: ${{ steps.record.outputs.scored-run }}");
+    expect(stepsOf(judge()).find((step) => step.includes("uses: ./kit/.github/actions/run-judge"))).toContain("scored-run: ${{ needs.push.outputs.scored-run }}");
+    const kept = stepsOf(job("implement")).find((step) => step.includes("name: fabrik-transcript-implement\n"));
+    expect(kept).toContain("/fabrik-out/transcript.jsonl.gz\n");
+    expect(kept).toContain(`/fabrik-out/${RUN_BRIEF_FILE}\n`);
+  });
 });
 
 describe("loop.yml's score-record job", () => {
@@ -1190,6 +1228,20 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   it("can't fail the job: it goes on when capture fails, and stops at the Kit's capture timeout", () => {
     expect(capture()).toContain("continue-on-error: true");
     expect(capture()).toContain(`timeout-minutes: ${CAPTURE_TIMEOUT_MINUTES}\n`);
+  });
+
+  // Killed before it records a result, capture would read as no-result; the job notes it so the push job reads it as a timeout.
+  it("notes a capture step its own timeout stopped, for the push job (src/kit/pushJob.ts)", () => {
+    const started = stepAt("id: capture-started\n");
+    const timedOut = step("id: capture-time\n");
+
+    expect(started).toBeGreaterThan(stepAt("id: agent\n"));
+    expect(started).toBeLessThan(stepAt("id: capture\n"));
+    expect(stepAt("id: capture-time\n")).toBeGreaterThan(stepAt("id: capture\n"));
+    expect(timedOut).toContain("if: steps.capture.outcome == 'failure'\n");
+    expect(timedOut).toContain("STARTED_AT: ${{ steps.capture-started.outputs.at }}");
+    expect(timedOut).toContain(`TIMEOUT_MINUTES: ${CAPTURE_TIMEOUT_MINUTES}\n`);
+    expect(implement()).toContain("ui-capture-timed-out: ${{ steps.capture-time.outputs.timed-out }}");
   });
 
   it("hands capture no secret: neither the 1Password step's outputs nor any GitHub token", () => {
@@ -1587,6 +1639,11 @@ describe("The judge action", () => {
     expect(ticket).toBeLessThan(step("1password/load-secrets-action@"));
     expect(judge).toContain("id: judge");
     expect(judge).not.toContain("inputs.github-token");
+  });
+
+  it("gives the judge the scored run's kind, which a Replay arm's judge leaves empty, as a first run's (#450)", () => {
+    expect(steps[step("run: node src/kit/judge-main.ts")]).toContain("FABRIK_JUDGED_RUN: ${{ inputs.scored-run }}");
+    expect(action).toMatch(/\n  scored-run:\n(?: {4}.*\n)*? {4}required: false\n {4}default: ""\n/);
   });
 
   it("judges the Implement run's transcript, and a missing one is the judge's failure, not the step's", () => {
@@ -2114,10 +2171,16 @@ describe("loop.yml's replay jobs", () => {
   it("runs the gates, Review and judge of each arm once its Implement job has ended, whatever it came to, unless the run was cancelled", () => {
     for (const name of ["replay-gates", "replay-review", "replay-score"]) {
       expect(needsOf(job(name)), name).toEqual(["kit", "implement-claim", "replay-implement"]);
-      expect(job(name), name).toContain(`\n    if: \${{ !cancelled() && ${CLAIMED} }}\n`);
+      expect(job(name), name).toContain(`\n    if: \${{ !cancelled() && ${CLAIMED} && needs.kit.outputs.replay-kit-sha-unavailable == '' }}\n`);
       // A matrix job's result covers both legs: each action sorts out its own arm.
       expect(job(name), name).not.toContain("needs.replay-implement.result");
     }
+  });
+
+  // #449: a variant whose candidate Kit sha the Kit job couldn't lay can't run, so no arm spends a run on it.
+  it.each(ARM_JOBS)("%s runs no arm when the Kit job couldn't lay the variant's candidate Kit sha, while replay-record still lands the run", (name) => {
+    expect(/\n    if: (.*)\n/.exec(job(name))?.[1]).toContain("needs.kit.outputs.replay-kit-sha-unavailable == ''");
+    expect(job("replay-record")).not.toContain("replay-kit-sha-unavailable");
   });
 
   it.each(REPLAY_JOBS)("%s checks out the Kit alone into kit/, at its pinned commit, before the replay action it runs", (name) => {

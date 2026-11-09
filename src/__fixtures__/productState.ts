@@ -1,5 +1,5 @@
 // Product repo states for the setup planner's tests.
-import { type ProductState, type RunStoreState, type SetupPlan } from "../setup/plan.ts";
+import { type BranchProtection, type ProductState, type RunStoreState, type SetupPlan, UNPROTECTED } from "../setup/plan.ts";
 
 export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductState {
   return {
@@ -13,6 +13,21 @@ export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductSta
     mergeGate: null,
     store: noStore(),
     readyForAgent: 0,
+    ...overrides,
+  };
+}
+
+/** A branch protected with a PR, the given checks and no approving review, every other setting off, then the overrides. */
+export function aProtectedBranch(checks: readonly string[], overrides: Partial<BranchProtection> = {}): BranchProtection {
+  return {
+    ...UNPROTECTED,
+    required_status_checks: { strict: false, checks: checks.map((context) => ({ context })) },
+    required_pull_request_reviews: {
+      required_approving_review_count: 0,
+      dismiss_stale_reviews: true,
+      require_code_owner_reviews: false,
+      require_last_push_approval: false,
+    },
     ...overrides,
   };
 }
@@ -43,14 +58,7 @@ export function afterApplying(state: ProductState, plan: SetupPlan): ProductStat
             : { ...next, store: { ...next.store, secrets: [...next.store.secrets, action.secret] } };
         break;
       case "protect-branch":
-        next = {
-          ...next,
-          protection: {
-            requiredChecks: action.requiredChecks,
-            requiresPullRequest: true,
-            bypassAllowances: [],
-          },
-        };
+        next = { ...next, protection: action.protection };
         break;
       case "restrict-default-branch":
         next = {

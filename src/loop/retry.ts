@@ -6,6 +6,7 @@
 // flight, no other head gets a Verdict, so each flaw starts exactly one
 // Implementer attempt (ADR-0006).
 import { whyNotReviewable } from "./agentPullRequest.ts";
+import { heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_AGENT, STEP_UP_LABEL } from "./labels.ts";
 import { RETRY_ENDED_MARKER, RETRY_RESTARTED_MARKER } from "./markers.ts";
 import type { Action, KitConfig, PullRequestSnapshot, StepUpReason, VerdictRecord } from "./types.ts";
@@ -76,8 +77,9 @@ export interface VerdictNext {
  * or null when its retries are used up, so the flaw counts as a Design flaw.
  * On a Ticket no longer `ready-for-agent`, as when the Operator relabelled it
  * during the Review, it says so and starts nothing, marked `ticketNotReady` (#416).
+ * `held` is the weekly-limit issue a run due now is held on, or null (heldOn).
  */
-export function retryAfterFlaw(pullRequest: PullRequestSnapshot): VerdictNext | null {
+export function retryAfterFlaw(pullRequest: PullRequestSnapshot, held: number | null): VerdictNext | null {
   const { ticket } = pullRequest;
   const retry = retryNumber(pullRequest.verdicts, pullRequest.ticketEmptyDiffs);
   if (retry > MAX_RETRIES || ticket === null) return null;
@@ -85,7 +87,7 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot): VerdictNext | 
     return { line: ticketNotReadyLine(pullRequest.number, ticket), actions: [], ticketNotReady: true };
   }
   return {
-    line: `Retry ${retry} of ${MAX_RETRIES} starts now${stepUpReasonFor(retry, pullRequest.ticketLabels) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.`,
+    line: `Retry ${retry} of ${MAX_RETRIES} ${startsWhen(held)}${stepUpReasonFor(retry, pullRequest.ticketLabels) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.${heldUntilThen(held)}`,
     // A fresh agent:implement on the Ticket resumes the PR's Implement run (src/loop/implement.ts). It notifies nobody.
     actions: [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }],
   };
@@ -228,7 +230,7 @@ export function unstartedRetry(
       issue: number,
       body: [
         RETRY_RESTARTED_MARKER,
-        `${runName(run)} on #${number} never started, so the Kit has added \`agent:implement\` to #${ticket} again to start it. It does this once: if the Retry doesn't push this time, re-add \`agent:implement\` on #${ticket} to resume it, or take #${number} out of draft to take it over.`,
+        `${runName(run)} on #${number} never started, so the Kit has added \`agent:implement\` to #${ticket} again to start it. It does this once: if the Retry doesn't push this time, re-add \`agent:implement\` on the Ticket (#${ticket}) to resume it, or take #${number} out of draft to take it over.`,
       ].join("\n"),
     },
     // A fresh agent:implement on the Ticket resumes the Retry (src/loop/implement.ts). The note notifies nobody.

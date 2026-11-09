@@ -44,12 +44,12 @@ process.exitCode = Number(process.env["STUB_EXIT"] ?? "0");
   return archive;
 }
 
-/** curl serves the stand-in release, or fails as it does on a 404 when STUB_ARCHIVE is empty. */
+/** curl serves the stand-in release, or fails as it does on a 404 when STUB_ARCHIVE is empty, or as STUB_CURL_SAID and STUB_CURL_EXIT say. */
 const FAKE_CURL = `#!/bin/sh
 echo "$@" >> "$STUB_DIR/curl.log"
 [ -n "$STUB_ARCHIVE" ] && exec cat "$STUB_ARCHIVE"
-echo "curl: (22) The requested URL returned error: 404" >&2
-exit 22
+echo "\${STUB_CURL_SAID:-curl: (22) The requested URL returned error: 404}" >&2
+exit "\${STUB_CURL_EXIT:-22}"
 `;
 
 /** gh answers the latest release with STUB_LATEST, or fails as when it's signed out. */
@@ -105,12 +105,14 @@ interface Options {
   readonly latest?: string | null;
   /** curl serves the release. */
   readonly serves?: boolean;
+  /** When curl doesn't serve it, how it fails instead of a 404: what it says and its exit status. */
+  readonly curlFails?: { readonly said: string; readonly exit: number };
   /** The exit status the setup program ends with. */
   readonly exit?: number;
   readonly nodeVersion?: string;
 }
 
-function envFor({ latest = "v1.4.2", serves = true, exit = 0, nodeVersion = "" }: Options): NodeJS.ProcessEnv {
+function envFor({ latest = "v1.4.2", serves = true, curlFails, exit = 0, nodeVersion = "" }: Options): NodeJS.ProcessEnv {
   return {
     PATH: world.path,
     HOME: world.stubs,
@@ -121,6 +123,7 @@ function envFor({ latest = "v1.4.2", serves = true, exit = 0, nodeVersion = "" }
     STUB_LATEST: latest ?? "",
     STUB_EXIT: String(exit),
     STUB_NODE_VERSION: nodeVersion,
+    ...(curlFails === undefined ? {} : { STUB_CURL_SAID: curlFails.said, STUB_CURL_EXIT: String(curlFails.exit) }),
   };
 }
 
@@ -381,13 +384,25 @@ describe("The bootstrap command", { timeout: 30_000 }, () => {
       expect(await readdir(world.tmp)).toEqual([]);
     });
 
-    it("when the download fails, saying so", async () => {
+    it("when the download fails, saying so with what curl said", async () => {
       const { code, stderr, ran } = await bootstrap(["v9.9.9"], { serves: false });
 
       expect(code).toBe(1);
-      expect(stderr).toContain("Downloading Fabrik v9.9.9 failed. Check it's a release at https://github.com/jrey8343/fabrik/releases, then run setup again.");
+      expect(stderr).toContain(
+        "Downloading Fabrik v9.9.9 failed (curl: (22) The requested URL returned error: 404). Check it's a release at https://github.com/jrey8343/fabrik/releases, then run setup again.",
+      );
       expect(ran).toEqual([]);
       expect(await readdir(world.tmp)).toEqual([]);
+    });
+
+    it("when curl can't reach GitHub, as behind a proxy or on a TLS failure, saying so rather than doubting the release", async () => {
+      const said = "curl: (60) SSL certificate problem: unable to get local issuer certificate";
+      const { code, stderr, ran } = await bootstrap(["v1.2.3"], { serves: false, curlFails: { said, exit: 60 } });
+
+      expect(code).toBe(1);
+      expect(stderr).toContain(`Downloading Fabrik v1.2.3 failed (${said}). Check this machine can reach codeload.github.com, through its proxy if it has one, then run setup again.`);
+      expect(stderr).not.toContain("Check it's a release");
+      expect(ran).toEqual([]);
     });
   });
 

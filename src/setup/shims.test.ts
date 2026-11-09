@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { dependabotUpdate, scheduleIn, settingsUpdate, timeZoneIn } from "./shims.ts";
 
 const template = readFileSync(new URL("../../templates/fabrik-runs-caller.yml", import.meta.url), "utf8");
@@ -74,6 +75,56 @@ describe("A Dependabot config and a major Fabrik release", () => {
     const edited = `${dependabotTemplate.replace('update-types: ["version-update:semver-major"]', "update-types:\n          - version-update:semver-major")}${productEntry}`;
 
     expect(dependabotUpdate(edited, dependabotTemplate)).toBeNull();
+  });
+});
+
+// #452: Dependabot rejects a config it can't parse, and every update for the repo stops, the Fabrik pin's included.
+describe("A Product's own Dependabot config with the Fabrik entry merged in", () => {
+  const npmEntry = { "package-ecosystem": "npm", directory: "/", schedule: { interval: "weekly" } };
+  const fabrikEntry = (parse(dependabotTemplate) as { updates: unknown[] }).updates[0];
+  const merged = (existing: string): string => {
+    const update = dependabotUpdate(existing, dependabotTemplate);
+    if (update === null || !("content" in update)) throw new Error(`no content: ${JSON.stringify(update)}`);
+    return update.content;
+  };
+
+  it.each([
+    ["a 4-space list", 'version: 2\nupdates:\n    - package-ecosystem: npm\n      directory: "/"\n      schedule:\n        interval: weekly\n'],
+    ["a column-0 list", 'version: 2\nupdates:\n- package-ecosystem: npm\n  directory: "/"\n  schedule:\n    interval: weekly\n'],
+    ["a comment on updates:", 'version: 2\nupdates: # bumps\n  - package-ecosystem: npm\n    directory: "/"\n    schedule:\n      interval: weekly\n'],
+    ["a list followed by a top-level key", 'updates:\n  - package-ecosystem: npm\n    directory: "/"\n    schedule:\n      interval: weekly\n\n# Then the version\nversion: 2\n'],
+    ["a list and no newline at the end", 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: "/"\n    schedule:\n      interval: weekly'],
+  ])("keeps the Product's entries and parses, from %s", (_shape, existing) => {
+    expect(parse(merged(existing))).toEqual({ version: 2, updates: [npmEntry, fabrikEntry] });
+  });
+
+  it.each([
+    ["updates: []", "version: 2\nupdates: []\n"],
+    ["updates: [] with a comment", "version: 2\nupdates: [] # none yet\n"],
+    ["an updates: with no value", "version: 2\nupdates:\n"],
+    ["no updates: key", "version: 2\n"],
+  ])("adds the Fabrik entry and parses, from %s", (_shape, existing) => {
+    expect(parse(merged(existing))).toEqual({ version: 2, updates: [fabrikEntry] });
+  });
+
+  it("keeps the comment on updates: and every line of the Product's own", () => {
+    const existing = "# Our bumps\nversion: 2\nupdates: [] # none yet\n";
+
+    expect(merged(existing)).toMatch(/^# Our bumps\nversion: 2\nupdates: # none yet\n {2}- package-ecosystem: github-actions\n/);
+  });
+
+  it("adds an updates: key after the Product's own keys when the file has none", () => {
+    expect(merged("version: 2\n")).toMatch(/^version: 2\nupdates:\n {2}- package-ecosystem: github-actions\n/);
+  });
+
+  it.each([
+    ["a list indented less than its first entry", 'version: 2\nupdates:\n    - package-ecosystem: npm\n      directory: "/"\n  - package-ecosystem: pip\n'],
+    ["a mapping for updates:", "version: 2\nupdates:\n  npm: weekly\n"],
+    ["a flow list with entries", 'version: 2\nupdates: [{ package-ecosystem: npm, directory: "/" }]\n'],
+    ["tab indentation", "version: 2\nupdates:\n\t- package-ecosystem: npm\n"],
+    ["two updates: keys", "version: 2\nupdates:\n  - package-ecosystem: npm\nupdates: []\n"],
+  ])("isn't written when the file doesn't parse, and the plan says so: %s", (_shape, existing) => {
+    expect(dependabotUpdate(existing, dependabotTemplate)).toEqual({ note: expect.stringMatching(/^\.github\/dependabot\.yml doesn't parse.*line \d/) });
   });
 });
 

@@ -76,7 +76,7 @@ function waiting(snapshot: DesignQueueSnapshot, held: readonly number[]): Design
  * progress, once the Kit has posted a round in it, and after a turn fails,
  * whose failure notice is the Operator's move. A turn held while every
  * Subscription is used up (`held`, src/loop/heldRun.ts) keeps its slot too,
- * though its agent:design came off, until the scheduled tick resumes it.
+ * though its agent:design came off, until it resumes once a Subscription is free.
  */
 export function holdsSlot(issue: DesignQueueIssue, snapshot: DesignQueueSnapshot, held: readonly number[] = []): boolean {
   return (

@@ -90,7 +90,7 @@ function refuse({ issue, runUrl }: ResearchRunFinished, operator: string, why: s
     `@${operator} ${why}`,
     ...(paths.length === 0 ? [] : ["", ...paths.map((path) => `- \`${path}\``)]),
     "",
-    `The Decision stays open. Re-add the \`${RESEARCH_LABEL}\` label to run it again.`,
+    `The Decision stays open. Re-add \`${RESEARCH_LABEL}\` on this Decision to run it again.`,
     "",
     `[The run](${runUrl})`,
   ].join("\n");

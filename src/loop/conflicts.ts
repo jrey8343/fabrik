@@ -7,13 +7,15 @@
 // loop is bounded: only the Operator merges to main, and neither attempt ever
 // changes main, only the PR's own branch. A draft whose push GitHub never
 // reviewed, because the draft conflicts with main, takes the same path (#389,
-// ADR-0016): nothing else would move it on.
+// ADR-0016): nothing else would move it on. So does a draft whose Review passed
+// while it conflicts with main, before the Merge gate opens (#480).
 import { agentBranchFor } from "./agentPullRequest.ts";
+import { heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, requestChangesRunEndedMarker } from "./markers.ts";
 import { runInFlight, runName, unstartedRetry } from "./retry.ts";
 import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
-import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, PullRequestSnapshot } from "./types.ts";
+import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, MergeableSnapshot, Plan, PullRequestSnapshot } from "./types.ts";
 
 /**
  * The conflict check, on a push to the default branch or the scheduled tick:
@@ -28,7 +30,7 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, Plan, Pull
 export function checkConflicts(
   conflicts: ConflictSnapshot,
   operator: string,
-  held: number | null = null,
+  held: number | null,
   runMinutes: number | undefined,
   reviewMinutes: number,
   heldTickets: readonly number[],
@@ -54,7 +56,7 @@ export function checkConflicts(
     }
     const why = whyNotRebased(candidate, main, operator, now, reviewMinutes);
     if (why !== null) reasons.push(why);
-    else actions.push(rebaseOntoMain(candidate.pullRequest, main));
+    else actions.push(rebaseOntoMain(candidate.pullRequest, main, held));
   }
   if (actions.length > 0) return { kind: "act", actions };
   return { kind: "nothing", reason: reasons.length === 0 ? "No agent PR is open, so none conflicts with main" : reasons.join("; ") };
@@ -126,12 +128,69 @@ function whyNotUnreviewedDraft(pullRequest: PullRequestSnapshot, mergeable: bool
 }
 
 /**
+ * Where an agent PR stands when the Kit brings it up to date with main: at
+ * the Merge gate, a draft whose push GitHub never reviewed (#389, ADR-0016),
+ * or a draft its Review just passed while it conflicts with main (#480).
+ */
+type Stance = "merge-gate" | "unreviewed-draft" | "passed-draft";
+
+/** What bringing a PR up to date says and does, for where it stands. */
+interface StanceNotes {
+  /** Why the Kit is bringing it up to date. */
+  why: string;
+  /** What follows "so the Kit rebased the branch onto it". */
+  rebasedTail: string;
+  /** What happens next after a clean rebase is pushed. */
+  pushed: string;
+  /** What the conflict-only run counts as, and what happens next. */
+  conflicted: string;
+  /** Whether it's at the Merge gate: it goes back to draft, and back out of it on a refused lease. */
+  atMergeGate: boolean;
+  /** Whether its markers say it was a draft GitHub never reviewed. */
+  unreviewedDraft: boolean;
+}
+
+function stanceNotes(stance: Stance, number: number, head: string): StanceNotes {
+  const executionFlaw = "It uses no retry, but an Execution flaw on its push calls for one like any other.";
+  switch (stance) {
+    case "merge-gate":
+      return {
+        why: `\`main\` moved to ${head} and #${number} conflicted with it`,
+        rebasedTail: "",
+        pushed: "The PR is back in draft, and Review runs again on the rebased head; a pass brings it back to you.",
+        conflicted: `${executionFlaw} The PR is back in draft, and Review runs again on the run's push.`,
+        atMergeGate: true,
+        unreviewedDraft: false,
+      };
+    case "unreviewed-draft":
+      return {
+        why: `#${number} is a draft that conflicts with \`main\` at ${head}, so GitHub started no Review of its last push`,
+        rebasedTail: "",
+        pushed: "The PR stays in draft, and Review runs on the rebased head.",
+        conflicted: "The run uses no retry, but the Verdict on its push counts as one on the unreviewed push would have. The PR stays in draft, and Review runs on the run's push.",
+        atMergeGate: false,
+        unreviewedDraft: true,
+      };
+    case "passed-draft":
+      return {
+        why: `#${number} passed its Review but conflicts with \`main\` at ${head}`,
+        rebasedTail: " before asking for your review",
+        pushed: "The PR stays in draft, and Review runs again on the rebased head; a pass brings it to you.",
+        conflicted: `${executionFlaw} The PR stays in draft, and Review runs again on the run's push; a pass brings it to you.`,
+        atMergeGate: false,
+        unreviewedDraft: false,
+      };
+  }
+}
+
+/**
  * The mechanical rebase of the PR's branch onto main, and what follows it.
  * Either way a PR at the Merge gate goes back to draft first, so the push that
  * follows starts a full Review of the combined head, whose pass brings the PR
  * back to the Merge gate. A clean rebase is pushed, using no retry, and the
  * attempt is recorded once it has landed; if its lease refuses it, the PR goes
- * back out of draft with no attempt recorded, for the next check. A conflicting one
+ * back out of draft, with a comment saying why, and no attempt recorded, for
+ * the next check. A conflicting one
  * records the attempt, pushes nothing and starts the
  * conflict-only run through agent:implement on the Ticket, which resumes the
  * run now in flight on its open PR (src/loop/implement.ts).
@@ -141,18 +200,22 @@ function whyNotUnreviewedDraft(pullRequest: PullRequestSnapshot, mergeable: bool
  * for the next check, where a PR at the Merge gate goes back to it. Its notes
  * say that GitHub started no Review, and their markers say it was a draft, so
  * the Verdict that follows is marked as the unreviewed push's own would have
- * been, never as a conflict-only run's.
+ * been, never as a conflict-only run's. A draft its Review passed
+ * (upToDateBeforeMergeGate) stays in draft too, but its notes are a Merge-gate
+ * PR's: its push was judged, so a conflict-only run's Verdict is marked as one.
  */
-function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string): Action {
-  const { number, draft } = pullRequest;
+function rebaseOntoMain(
+  pullRequest: PullRequestSnapshot,
+  main: string,
+  held: number | null,
+  stance: Stance = pullRequest.draft ? "unreviewed-draft" : "merge-gate",
+): Action {
+  const { number } = pullRequest;
   const ticket = pullRequest.ticket as number;
-  const head = main.slice(0, 7);
   const branch = agentBranchFor(ticket);
-  const unreviewedDraft = draft ? { unreviewedDraft: true as const } : {};
-  const why = draft
-    ? `#${number} is a draft that conflicts with \`main\` at ${head}, so GitHub started no Review of its last push`
-    : `\`main\` moved to ${head} and #${number} conflicted with it`;
-  const toDraft: Action[] = draft ? [] : [{ kind: "convert-to-draft", pullRequest: number }];
+  const notes = stanceNotes(stance, number, main.slice(0, 7));
+  const unreviewedDraft = notes.unreviewedDraft ? { unreviewedDraft: true as const } : {};
+  const toDraft: Action[] = notes.atMergeGate ? [{ kind: "convert-to-draft", pullRequest: number }] : [];
   return {
     kind: "rebase-onto-main",
     pullRequest: number,
@@ -165,27 +228,33 @@ function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string): Action 
         issue: number,
         body: [
           conflictAttemptMarker({ main, outcome: "rebased", ...unreviewedDraft }),
-          `${why}, so the Kit rebased \`${branch}\` onto it. The rebase was clean, so no agent ran and no retry was used.`,
+          `${notes.why}, so the Kit rebased \`${branch}\` onto it${notes.rebasedTail}. The rebase was clean, so no agent ran and no retry was used.`,
           "",
-          draft
-            ? "The PR stays in draft, and Review runs on the rebased head."
-            : "The PR is back in draft, and Review runs again on the rebased head; a pass brings it back to you.",
+          notes.pushed,
         ].join("\n"),
       },
     ],
-    // The branch moved between the rebase and its push: nothing landed, so nothing is recorded. A draft stays one.
-    refused: draft ? [] : [{ kind: "mark-ready-for-review", pullRequest: number }],
+    // The branch moved between the rebase and its push: nothing landed, so nothing is recorded. A draft stays one, and
+    // a PR put in draft for the push says why it's back out (#436). Unmarked, so the next check tries again.
+    refused: notes.atMergeGate
+      ? [
+          { kind: "mark-ready-for-review", pullRequest: number },
+          {
+            kind: "comment",
+            issue: number,
+            body: `${notes.why}, so the Kit rebased \`${branch}\` onto it, but the branch moved before the rebase could be pushed, so nothing landed. #${number} is back out of draft as it was, and the next conflict check tries again.`,
+          },
+        ]
+      : [],
     conflicted: [
       {
         kind: "comment",
         issue: number,
         body: [
           conflictAttemptMarker({ main, outcome: "conflict-run", ...unreviewedDraft }),
-          `${why}, and rebasing \`${branch}\` onto it conflicts too.`,
+          `${notes.why}, and rebasing \`${branch}\` onto it conflicts too.`,
           "",
-          draft
-            ? "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. The run uses no retry, but the Verdict on its push counts as one on the unreviewed push would have. The PR stays in draft, and Review runs on the run's push."
-            : "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry, but an Execution flaw on its push calls for one like any other. The PR is back in draft, and Review runs again on the run's push.",
+          `A conflict-only Implementer run ${startsWhen(held)}, on the Step-up model: it rebases the branch onto \`main\`, resolves the conflicts and changes nothing else. ${notes.conflicted}${heldUntilThen(held)}`,
         ].join("\n"),
       },
       ...toDraft,
@@ -193,6 +262,24 @@ function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string): Action 
       { kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] },
     ],
   };
+}
+
+/**
+ * What a pass on an agent draft PR that conflicts with main does in place of
+ * opening the Merge gate (#480): the rebase onto main, or the conflict-only
+ * run, as at the Merge gate, with the PR kept in draft, so the pass on the
+ * up-to-date head is what asks for the Operator's review. Null when it
+ * doesn't conflict, GitHub hadn't worked that out, or the Kit already tried
+ * against this head of main: one attempt per head, as for the conflict check.
+ */
+export function upToDateBeforeMergeGate(
+  pullRequest: PullRequestSnapshot,
+  mergeable: MergeableSnapshot | null,
+  held: number | null,
+): Action | null {
+  if (mergeable === null || mergeable.main === null || mergeable.mergeable !== false) return null;
+  if (pullRequest.ticket === null || pullRequest.conflictAttempts.includes(mergeable.main)) return null;
+  return rebaseOntoMain(pullRequest, mergeable.main, held, "passed-draft");
 }
 
 /**

@@ -119,6 +119,7 @@ describe("Red main", () => {
           "<!-- fabrik:monitor-green -->",
           `Green at [\`600dc0d\`](${commitUrl(GREEN)}): its gating checks passed, so the default branch is no longer red and the Monitor closes this issue as completed.`,
         ].join("\n"),
+        because: "the default branch is green again.",
       },
     ]);
   });

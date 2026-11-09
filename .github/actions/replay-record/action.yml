@@ -7,7 +7,7 @@
 #
 # From both arms' artifacts, src/kit/replay-record-main.ts writes each arm's
 # Implement and Review runs' Run records and transcripts, its patch at
-# replays/<owner>/<repo>/<replay-issue>/<ticket>-<arm>.patch and its gates
+# replays/<owner>/<repo>/<replay-issue>/<ticket>-<arm>-<run>.patch and its gates
 # beside it, and the judge's record and score file, every one create-only
 # with the record writer's conflict retry. Before it touches the store it
 # leaves how the run ended in a file. Then it checks out this repo's paths in

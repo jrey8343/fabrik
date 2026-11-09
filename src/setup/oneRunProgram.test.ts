@@ -282,6 +282,46 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/1");
   });
 
+  it("on a protected default branch, changes only the protection settings setup owns, names each change, and keeps the rest as GitHub has them", async () => {
+    const world = aWorld();
+    world.protection = {
+      required_status_checks: { strict: true, contexts: ["ci"], checks: [{ context: "ci", app_id: 15368 }] },
+      enforce_admins: { enabled: true },
+      required_linear_history: { enabled: true },
+      required_conversation_resolution: { enabled: true },
+      allow_force_pushes: { enabled: false },
+      allow_deletions: { enabled: false },
+      block_creations: { enabled: false },
+      lock_branch: { enabled: false },
+      allow_fork_syncing: { enabled: true },
+    };
+
+    const { calls, said } = await setupOnce(world);
+
+    const puts = calls.filter((call) => call.line.startsWith("gh api --method PUT repos/acme/clinic/branches/main/protection "));
+    expect(puts.map((call) => JSON.parse(call.input ?? ""))).toEqual([
+      {
+        required_status_checks: { strict: true, checks: [{ context: "ci", app_id: 15368 }] },
+        enforce_admins: true,
+        required_pull_request_reviews: {
+          dismiss_stale_reviews: true,
+          require_code_owner_reviews: false,
+          require_last_push_approval: false,
+          required_approving_review_count: 0,
+        },
+        restrictions: null,
+        required_linear_history: true,
+        allow_force_pushes: false,
+        allow_deletions: false,
+        block_creations: false,
+        required_conversation_resolution: true,
+        lock_branch: false,
+        allow_fork_syncing: true,
+      },
+    ]);
+    expect(said).toContain("- protect main: a pull request: not required → required; every other setting stays as it is");
+  });
+
   it("asks the Operator's yes to the plan, naming the branch, before it changes anything", async () => {
     const { questions, log } = await setupOnce(aWorld());
 

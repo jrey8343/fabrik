@@ -3,10 +3,12 @@
 // Setup turns Actions notifications off, so a red job alone tells the
 // Operator nothing; this writes the step summary and the comment on the run's
 // issue or PR that say what the Kit was doing, what failed and how to recover.
+// Any other job that fails, such as the scheduled tick, says in its step
+// summary which action failed and what landed before it (#438).
 // Pure, no I/O: src/main.ts writes and posts what it returns.
 import { PlanNotApplied, ReplayTicketTaken } from "../github/apply.ts";
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
-import { describeAction } from "../github/describePlan.ts";
+import { actionPhrase, describeAction } from "../github/describePlan.ts";
 import type { Action, AgentRole } from "../loop/types.ts";
 import type { PushJobInput } from "./pushJob.ts";
 
@@ -102,19 +104,51 @@ export function landingFailureReport(
   operator: string | null = null,
 ): { readonly summary: string; readonly comment: LandingFailureComment | null } {
   const headline = `The ${landing.job} job failed landing ${landing.doing}.`;
-  const cause = failure.kind === "error" && failure.error instanceof PlanNotApplied ? failure.error.cause : failure.kind === "error" ? failure.error : null;
+  const { cause, lists } = failure.kind === "error" ? unwrapped(failure.error) : { cause: null, lists: [] };
   if (cause instanceof ReplayTicketTaken) {
     return { summary: `${headline}\n\nAnother run claimed #${cause.ticket} on replay #${cause.issue} first, so this run leaves it to that one.`, comment: null };
   }
   const what = failure.kind === "fail" ? `The Loop wouldn't land it (an Infrastructure failure): ${failure.reason}` : whatFailed(cause);
-  const partial = failure.kind === "error" && failure.error instanceof PlanNotApplied ? actionLists(failure.error) : [];
   const recovery = landing.agentWork
     ? `The agent's finished work waits in this run's \`fabrik-agent-result\` artifact, which Actions keeps for ${AGENT_RESULT_DAYS} days. ${RE_RUN} before then to land it.`
     : `${RE_RUN} to try it again.`;
-  const rest = [`**What failed:** ${what}`, ...partial, `**To recover:** ${recovery}`];
+  const rest = [`**What failed:** ${what}`, ...lists, `**To recover:** ${recovery}`];
   const mention = operator === null ? "" : `@${operator} `;
   const body = [`${mention}**The Kit couldn't land ${landing.doing}.** The [${landing.job} job](${landing.runUrl}) failed.`, ...rest].join("\n\n");
   return { summary: [headline, ...rest].join("\n\n"), comment: landing.target === null ? null : { issue: landing.target, body } };
+}
+
+/** What a job that lands no run says when it fails, such as the scheduled tick (#438). */
+export interface JobFailureReport {
+  /** Its step summary. */
+  readonly summary: string;
+  /** Its `::error` annotation's one line: the action that failed, when its plan failed partway, and the first line of why. */
+  readonly annotation: string;
+}
+
+/**
+ * The step summary and `::error` line a job that lands no run writes when it
+ * fails, such as the scheduled tick (#438): what failed and, when its plan
+ * failed partway, the action that failed, those already applied and those
+ * never applied. It comments nowhere: such a job has no run's issue or PR to
+ * say it on.
+ */
+export function jobFailureReport(error: unknown): JobFailureReport {
+  const partial = error instanceof PlanNotApplied ? error : null;
+  const { cause, lists } = unwrapped(error);
+  const what = whatFailed(cause);
+  const headline = partial === null ? "The Loop failed." : "The Loop failed partway through its plan.";
+  // One line, as the landing's own `::error` is: a newline would end the workflow command there.
+  const firstLine = what.split("\n")[0] ?? what;
+  return {
+    summary: [headline, `**What failed:** ${what}`, ...lists].join("\n\n"),
+    annotation: partial === null ? firstLine : `It failed to ${actionPhrase(partial.failed)}: ${firstLine}`,
+  };
+}
+
+/** What an error failed on, a plan's own failure for one that failed partway, and the lists of that plan's actions. */
+function unwrapped(error: unknown): { readonly cause: unknown; readonly lists: string[] } {
+  return error instanceof PlanNotApplied ? { cause: error.cause, lists: actionLists(error) } : { cause: error, lists: [] };
 }
 
 function actionLists(error: PlanNotApplied): string[] {
@@ -124,7 +158,7 @@ function actionLists(error: PlanNotApplied): string[] {
 }
 
 /** What failed, told apart as GitHub's refusal, GitHub's own failure, a file that wasn't there or the Kit's own failure. */
-function whatFailed(cause: unknown): string {
+export function whatFailed(cause: unknown): string {
   if (cause instanceof GitHubError) {
     const request = cause.request === "" ? "a call" : `\`${cause.request}\``;
     const said = gitHubMessageOf(cause);

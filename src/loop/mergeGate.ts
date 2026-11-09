@@ -25,7 +25,11 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the pull request" };
   }
   if (event.reviewerIsBot || event.reviewer !== operator) {
-    return { kind: "nothing", reason: `${event.reviewer} isn't the Operator, so their review on #${pullRequest.number} starts nothing` };
+    const reason = `${event.reviewer} isn't the Operator, so their review on #${pullRequest.number} starts nothing`;
+    // A person's on an open agent PR gets one line saying so, mentioning nobody (#436); a bot's, or one on any other PR, gets none.
+    if (event.reviewerIsBot || !pullRequest.isAgent || !pullRequest.open) return { kind: "nothing", reason };
+    const body = `Only the Operator's reviews start runs on an agent PR, so the Request changes from ${event.reviewer} on #${pullRequest.number} starts nothing.`;
+    return { kind: "act", actions: [{ kind: "comment", issue: pullRequest.number, body }] };
   }
   if (pullRequest.deferredChangesRequests.includes(event.review)) return deferredDuringRetry(pullRequest, event.review);
   const why = whyNotAtMergeGate(pullRequest);

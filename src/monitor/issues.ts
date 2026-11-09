@@ -40,11 +40,13 @@ export interface MonitorPlan {
 }
 
 export interface IssueToOpen {
-  /** The Sentry group it's filed for, whose latest event the body shows once read; null for red main's. */
+  /** The Sentry group it's filed for, whose latest event the body shows once read; null for red main's and the Sentry token's. */
   readonly sentryGroup: string | null;
   readonly title: string;
   readonly body: string;
   readonly labels: readonly Label[];
+  /** Who it's assigned to as it's filed, whom GitHub notifies; none when absent. */
+  readonly assignees?: readonly string[];
 }
 
 /** A Monitor issue's body rewritten in place, with the step summary's line saying what changed. */
@@ -71,12 +73,15 @@ interface RewriteOf<Kind extends string> {
 export interface IssueToClose {
   readonly issue: number;
   readonly comment: string;
+  /** Why it's closed, ending the step summary's "Closed #n as completed: …" line once it's applied. */
+  readonly because: string;
 }
 
-/** The newest of the Fabrik App's issues for each Sentry group, by the group's id, and for red main. */
+/** The newest of the Fabrik App's issues for each Sentry group, by the group's id, for red main, and for the Sentry token. */
 export interface NewestByMarker {
   readonly byGroup: ReadonlyMap<string, MonitorIssue>;
   readonly redMain: MonitorIssue | null;
+  readonly sentryToken: MonitorIssue | null;
 }
 
 /**
@@ -88,6 +93,7 @@ export interface NewestByMarker {
 export function newestByMarker(issues: readonly MonitorIssue[]): NewestByMarker {
   const byGroup = new Map<string, MonitorIssue>();
   let redMain: MonitorIssue | null = null;
+  let sentryToken: MonitorIssue | null = null;
   for (const issue of issues) {
     const marker = issue.byApp ? monitorMarkerIn(issue.body) : null;
     if (marker?.kind === "sentry") {
@@ -95,9 +101,11 @@ export function newestByMarker(issues: readonly MonitorIssue[]): NewestByMarker 
       if (seen === undefined || issue.number > seen.number) byGroup.set(marker.group, issue);
     } else if (marker?.kind === "red-main" && (redMain === null || issue.number > redMain.number)) {
       redMain = issue;
+    } else if (marker?.kind === "sentry-token" && (sentryToken === null || issue.number > sentryToken.number)) {
+      sentryToken = issue;
     }
   }
-  return { byGroup, redMain };
+  return { byGroup, redMain, sentryToken };
 }
 
 // The Monitor block: hidden opening and closing markers, each on a line of its

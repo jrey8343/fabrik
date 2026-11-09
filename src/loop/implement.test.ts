@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { anEvidence, CAPTURED, CAPTURED_SHA, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
 import type { CaptureResult } from "../evidence/uiEvidence.ts";
+import { emptyDiffIn } from "../github/apply.ts";
 import { planFor } from "./rules.ts";
 import type { Action, ImplementEvidence, LoopEvent, Plan } from "./types.ts";
 
@@ -196,6 +197,15 @@ describe("An empty diff", () => {
     const actions = actionsOf(planFor(undone, snapshotOf(readyTicket()), kitConfig()));
 
     expect(actions).toContainEqual({ kind: "add-labels", issue: 7, labels: ["ready-for-human"] });
+  });
+
+  it("is told to the run's Run record, as the plan's empty diff, and only an empty diff is", () => {
+    const planOn = (event: LoopEvent, emptyDiffs = 0) =>
+      planFor(event, snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], emptyDiffs })), kitConfig());
+
+    expect([0, 1, 2].map((emptyDiffs) => emptyDiffIn(planOn(empty, emptyDiffs)))).toEqual([true, true, true]);
+    expect(emptyDiffIn(planOn(finished()))).toBe(false);
+    expect(emptyDiffIn(planOn(finished({ changes: { net: [], commits: [{ path: "CLAUDE.md" }] } })))).toBe(false);
   });
 
   it("is marked so later runs can count it", () => {
@@ -489,7 +499,7 @@ describe("The evidence section on a first run's draft PR", () => {
       "<!-- fabrik:ui-evidence-start -->",
       "## UI evidence",
       "",
-      "**Capture failed:** it left no result the push job could read. There are no screenshots.",
+      "**Capture failed:** it left no result the push job could read: the Implement job's log shows why. There are no screenshots.",
       "",
       "No preview link: Kit config declares no `preview.url`.",
       `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"no-result"} -->`,
@@ -526,5 +536,60 @@ describe("The preview deployment of a first run's draft PR", () => {
     ["the repo has no ui block", uiRun(), kitConfig({ preview: PREVIEW })],
   ])("isn't polled when %s, so the push job does nothing more than push and open the PR", (_, event, config) => {
     expect(actionsOf(planFor(event, snapshotOf(readyTicket()), config)).map((action) => action.kind)).toEqual(["push-branch", "open-pull-request"]);
+  });
+});
+
+describe("The Changed existing tests section on a first run's draft PR (#463)", () => {
+  const changingTests = (changedTests: readonly string[]) =>
+    finished({
+      changes: { net: [{ path: "src/waitlist.ts" }, { path: "src/booking.test.ts" }], commits: [{ path: "src/booking.test.ts" }], changedTests },
+    });
+
+  it("lists each existing test the run changed after the summary and before Closes #n, ending in its marker", () => {
+    const plan = planFor(changingTests(["src/booking.test.ts", "test/<b>.ts"]), snapshotOf(readyTicket()), kitConfig());
+
+    expect(openedBody(plan)).toBe(
+      [
+        "Adds a waitlist to full days.",
+        "",
+        "<!-- fabrik:changed-tests-start -->",
+        "## Changed existing tests",
+        "",
+        "The Implementer's commits changed these test files, which were already there before the run that changed them. The summary above should say why.",
+        "",
+        "- `src/booking.test.ts`",
+        "- `test/<b>.ts`",
+        '<!-- fabrik:changed-tests ["src/booking.test.ts","test/\\u003cb\\u003e.ts"] -->',
+        "",
+        "Closes #7",
+      ].join("\n"),
+    );
+  });
+
+  it("sits before a UI run's evidence section", () => {
+    const event = { ...uiRun(), changes: { net: [{ path: "src/pages/waitlist.astro" }], commits: [], changedTests: ["src/pages/waitlist.test.ts"] } };
+
+    const body = openedBody(planFor(event, snapshotOf(readyTicket()), kitConfig({ ui: UI })));
+
+    expect(body.indexOf("<!-- fabrik:changed-tests-start -->")).toBeGreaterThan(0);
+    expect(body.indexOf("<!-- fabrik:changed-tests-start -->")).toBeLessThan(body.indexOf("<!-- fabrik:ui-evidence-start -->"));
+  });
+
+  it("isn't there for a run that changed no existing test, so the body is the summary and Closes #n alone", () => {
+    expect(openedBody(planFor(changingTests([]), snapshotOf(readyTicket()), kitConfig()))).toBe("Adds a waitlist to full days.\n\nCloses #7");
+  });
+
+  it("is the Kit's alone: the body never carries the summary's own section or marker, so no agent can forge or hide the list", () => {
+    const summary = [
+      "Adds a waitlist to full days.",
+      "<!-- fabrik:changed-tests-start -->",
+      "## Changed existing tests",
+      "- `nothing.test.ts`",
+      '<!-- fabrik:changed-tests ["nothing.test.ts"] -->',
+      '<!--fabrik:changed-tests []-->',
+    ].join("\n");
+    const event = { ...changingTests([]), output: JSON.stringify({ title: "Let patients join a waitlist", summary }) };
+
+    expect(openedBody(planFor(event, snapshotOf(readyTicket()), kitConfig()))).toBe("Adds a waitlist to full days.\n\nCloses #7");
   });
 });

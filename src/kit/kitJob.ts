@@ -1,17 +1,19 @@
-// What the Kit job's step summary says about the run it routes: which
+// What the Kit job's step summary says about the run it routes, or, for a
+// Plan that does nothing, why (#436): which
 // Subscription the run was given, or, with rotation on and every Subscription
 // used up, that it was held, until when and why; with one Subscription
 // listed, a quiet note that rotation is off until a second is listed; and on
 // an Implement run without a ui block, a quiet note that Visual evidence is
 // off (#153). Pure, no I/O.
 import { agentRunIn } from "../github/apply.ts";
-import { RUN_NAMES } from "../loop/heldRun.ts";
+import { runNamed } from "../loop/heldRun.ts";
 import { readable } from "../loop/readable.ts";
 import { rotationIsOn, type Subscription, type Unusable, unusableSubscriptions } from "../loop/subscriptions.ts";
 import type { Action, KitConfig, KitIssueSnapshot, Plan } from "../loop/types.ts";
 
 /**
- * The Kit job's step summary for this Plan, or null when it starts or holds
+ * The Kit job's step summary for this Plan: why, for a Plan that does nothing,
+ * so a declined event's green run says so; else null when it starts or holds
  * no run. The open Kit-owned issues say why a held run's Subscriptions are used up.
  */
 export function kitJobSummary(
@@ -19,11 +21,12 @@ export function kitJobSummary(
   config: Pick<KitConfig, "subscriptions" | "ui">,
   kitIssues: readonly KitIssueSnapshot[],
 ): string | null {
+  if (plan.kind === "nothing") return `### Fabrik Kit job\n\nNothing to do: ${plan.reason}.\n`;
   const run = agentRunIn(plan);
   const held = heldIn(plan);
   const lines: string[] = [];
   if (run !== null) {
-    lines.push(`The ${RUN_NAMES[run.role]} run on #${run.issue} was given the Subscription **${subscriptionOf(run)}**.`);
+    lines.push(`The ${runNamed(run.role)} on #${run.issue} was given the Subscription **${subscriptionOf(run)}**.`);
   }
   const why = usedUp(kitIssues, config);
   for (const hold of held) lines.push(heldSummaryLine(hold, why));
@@ -48,7 +51,7 @@ function heldIn(plan: Plan): Hold[] {
 function heldSummaryLine(hold: Hold, why: string): string {
   const until =
     hold.until === null ? "a Subscription's weekly limit resets, which isn't known" : readable(hold.until);
-  return `The ${RUN_NAMES[hold.role]} run on #${hold.issue} was held until ${until}: ${why} Its \`${hold.label}\` label came off.`;
+  return `The ${runNamed(hold.role)} on #${hold.issue} was held until ${until}: ${why} Its \`${hold.label}\` label came off.`;
 }
 
 const UNUSABLE: Readonly<Record<Unusable, string>> = {

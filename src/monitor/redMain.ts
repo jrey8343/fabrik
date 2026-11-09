@@ -83,7 +83,9 @@ export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: RedMa
   const { commit } = state;
   const issue = newestByMarker(issues).redMain;
   if (state.kind === "green") {
-    if (issue?.open === true) return { ...nothing, close: [{ issue: issue.number, comment: greenNoteFor(commit) }] };
+    if (issue?.open === true) {
+      return { ...nothing, close: [{ issue: issue.number, comment: greenNoteFor(commit), because: "the default branch is green again." }] };
+    }
     return { ...nothing, summary: [`Red main: the default branch is green at ${shortSha(commit)}.`] };
   }
   if (issue?.open === true) {

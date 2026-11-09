@@ -5,7 +5,7 @@
 // programs and the Scorers' rubrics stay the pinned release (ADR-0003's addendum).
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { allPages, type GitHub, GitHubError } from "../github/client.ts";
+import { type GitHub, GitHubError } from "../github/client.ts";
 import { KIT_PROMPT_NAMES, kitPromptPath } from "../guard/trust-root.ts";
 import { FULL_SHA, readSkillsLock, SKILLS_LOCK_PATH } from "../skills/lock.ts";
 import { KIT_REPO } from "./caller.ts";
@@ -29,37 +29,46 @@ const [owner = "", name = ""] = KIT_REPO.split("/");
 const KIT = { owner, name };
 
 /**
- * Whether `sha` is a commit on a branch of the Fabrik repo: some branch's head
- * is it or descends from it. GitHub serves a fork's commits through the
- * repo it forked too, so a commit GitHub finds there may belong to anyone's
- * fork; only one a branch holds is the Fabrik repo's own.
+ * Whether `sha` is a commit in the Fabrik repo, read by sha, whether or not a
+ * branch still holds it: a squash-merged Retro proposal's commit outlives its
+ * deleted branch (#449). GitHub serves a fork's commits through the repo it
+ * forked too, so this reads one of those as the Fabrik repo's; the Operator,
+ * who alone starts a Replay, names the sha.
  */
 export async function isKitCommit(github: Pick<GitHub, "rest">, sha: string): Promise<boolean> {
-  const branches = await allPages<{ name: string; commit: { sha: string } }>(github, `/repos/${KIT_REPO}/branches`);
-  if (branches.some((branch) => branch.commit.sha === sha)) return true;
-  for (const branch of branches) {
-    const path = `/repos/${KIT_REPO}/compare/${sha}...${branch.commit.sha}?per_page=1`;
-    const comparison = (await github.rest("GET", path, undefined, { allowNotFound: true }).catch((error: unknown) => {
-      // GitHub answers a sha it has no commit for with a 404, or a 422.
-      if (error instanceof GitHubError && error.status === 422) return null;
-      throw error;
-    })) as { status?: string } | null;
-    if (comparison?.status === "ahead" || comparison?.status === "identical") return true;
-  }
-  return false;
+  const path = `/repos/${KIT_REPO}/commits/${sha}`;
+  const commit = await github.rest("GET", path, undefined, { allowNotFound: true }).catch((error: unknown) => {
+    // GitHub answers a sha it has no commit for with a 422, or a 404.
+    if (error instanceof GitHubError && error.status === 422) return null;
+    throw error;
+  });
+  return commit !== null;
 }
 
 /**
- * Lays the candidate sha's OVERLAID_PATHS, read from the Fabrik repo through
- * a read-only token, over the Kit checkout at `kitDir`. It refuses, changing
- * nothing, a sha that isn't a full commit sha or isn't a commit on a branch of
- * the Fabrik repo, so a replay never loads prompts from anywhere else.
+ * The candidate sha's OVERLAID_PATHS, read from the Fabrik repo through a
+ * read-only token, or why it can't be laid: a sha that isn't a full commit
+ * sha or isn't a commit in the Fabrik repo, so a replay never loads prompts
+ * from anywhere else, or one whose files overlayFiles refuses. The Kit job
+ * reads it before a Replay arm starts, so a variant that can't run spends no
+ * baseline (src/kit/jobs.ts); the overlay lays what it read.
+ */
+export async function readCandidate(
+  sha: string,
+  github: KitReader,
+): Promise<{ readonly ok: true; readonly files: readonly { readonly path: string; readonly text: string }[] } | { readonly ok: false; readonly reason: string }> {
+  if (!FULL_SHA.test(sha)) return { ok: false, reason: `${JSON.stringify(sha)} isn't a full commit sha` };
+  if (!(await isKitCommit(github, sha))) return { ok: false, reason: `${sha} isn't a commit in ${KIT_REPO}` };
+  const read = await Promise.all(OVERLAID_PATHS.map(async (path) => ({ path, text: await github.fileText(KIT, path, sha) })));
+  return overlayFiles(sha, read);
+}
+
+/**
+ * Lays the candidate sha's OVERLAID_PATHS, as readCandidate reads them, over
+ * the Kit checkout at `kitDir`, or refuses it, changing nothing.
  */
 export async function overlayCandidate(kitDir: string, sha: string, github: KitReader): Promise<OverlayResult> {
-  if (!FULL_SHA.test(sha)) return { kind: "refused", reason: `${JSON.stringify(sha)} isn't a full commit sha` };
-  if (!(await isKitCommit(github, sha))) return { kind: "refused", reason: `${sha} isn't a commit on any branch of ${KIT_REPO}` };
-  const read = await Promise.all(OVERLAID_PATHS.map(async (path) => ({ path, text: await github.fileText(KIT, path, sha) })));
-  const files = overlayFiles(sha, read);
+  const files = await readCandidate(sha, github);
   if (!files.ok) return { kind: "refused", reason: files.reason };
   for (const { path, text } of files.files) {
     await mkdir(dirname(join(kitDir, path)), { recursive: true });

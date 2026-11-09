@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSkillsBumpTick, planSkillsBump, planSourceBump, scheduledTickOf, type UpstreamSkills } from "./bump.ts";
+import { isSkillsBumpTick, planSkillsBump, planSourceBump, scheduledTickOf, skillsBumpGate, type UpstreamSkills } from "./bump.ts";
 import type { SkillsSource } from "../kit/config.ts";
 import type { SkillsLock } from "./lock.ts";
 
@@ -375,5 +375,33 @@ describe("finding the scheduled tick a delayed run belongs to", () => {
   it("falls back to when the run was seen when the schedule isn't an hourly cron it can read", () => {
     expect(tick("2026-11-09T04:40:00Z", undefined)).toBe("2026-11-09T04:40:00.000Z");
     expect(tick("2026-11-09T04:40:00Z", "*/15 * * * *")).toBe("2026-11-09T04:40:00.000Z");
+  });
+});
+
+describe("what the weekly gate says in the step summary", () => {
+  it("says a tick that isn't due isn't, and when the next bump tick is", () => {
+    expect(skillsBumpGate(new Date("2026-11-10T09:20:00Z"), "17 * * * *")).toEqual({
+      due: false,
+      summary: "Skills bump: not due (next: 2026-11-16 04:17 UTC)",
+    });
+  });
+
+  it("on the Monday tick just past the 04:00 hour, counts the next bump tick from the week after and says this week's may have been missed", () => {
+    expect(skillsBumpGate(new Date("2026-11-09T05:20:00Z"), "17 * * * *")).toEqual({
+      due: false,
+      summary:
+        "Skills bump: not due (next: 2026-11-16 04:17 UTC). This week's bump tick was 2026-11-09 04:17 UTC: if no run took it as due, GitHub started it more than an hour late or dropped it, and this week's bump was missed",
+    });
+  });
+
+  it("says nothing of a missed week on a later Monday tick", () => {
+    expect(skillsBumpGate(new Date("2026-11-09T06:20:00Z"), "17 * * * *").summary).toBe("Skills bump: not due (next: 2026-11-16 04:17 UTC)");
+  });
+
+  it("says a due tick is the weekly skills bump tick", () => {
+    expect(skillsBumpGate(new Date("2026-11-09T05:10:00Z"), "17 * * * *")).toEqual({
+      due: true,
+      summary: "Skills bump: due, as the tick scheduled for 2026-11-09 04:17 UTC is the weekly skills bump tick",
+    });
   });
 });

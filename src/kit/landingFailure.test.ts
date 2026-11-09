@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PlanNotApplied, ReplayTicketTaken } from "../github/apply.ts";
 import { GitHubError } from "../github/client.ts";
-import { claimLanding, landingFailureReport, pushLanding } from "./landingFailure.ts";
+import { claimLanding, jobFailureReport, landingFailureReport, pushLanding } from "./landingFailure.ts";
 import type { PushJobInput } from "./pushJob.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/9001/attempts/1";
@@ -15,7 +15,7 @@ const implementRetry: PushJobInput = {
   startedBy: null,
 };
 const triage: PushJobInput = { kind: "agent-result", role: "triage", issue: 7, pullRequest: null, review: null, startedBy: null };
-const verdict: PushJobInput = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], withResult: true };
+const verdict: PushJobInput = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], skippedChecks: [], withResult: true };
 const redChecks: PushJobInput = { ...verdict, failedChecks: ["test"], withResult: false };
 const agentFailure: PushJobInput = { kind: "agent-failure", role: "implement", issue: 12, jobResult: "failure", secretsStep: "success" };
 
@@ -140,5 +140,38 @@ describe("The report of a landing that failed (#421)", () => {
 
   it("posts no comment when the landing has no issue or PR", () => {
     expect(landingFailureReport(pushLanding({ kind: "actions-event" }, RUN)!, { kind: "error", error: new Error("boom") }).comment).toBeNull();
+  });
+});
+
+describe("The report of a job that lands no run, such as the scheduled tick, failing (#438)", () => {
+  it("names the action that failed, the ones applied before it and the ones never applied, in the summary and the ::error line", () => {
+    const resumed = { kind: "add-labels", issue: 7, labels: ["needs-triage"] } as const;
+    const review = { kind: "add-labels", issue: 12, labels: ["agent:review"] } as const;
+    const close = { kind: "close", issue: 50, reason: "completed" } as const;
+    const error = new PlanNotApplied(review, [resumed], [close], new GitHubError("Bad Gateway", 502, { request: "POST /repos/acme/shop/issues/12/labels" }));
+
+    const { summary, annotation } = jobFailureReport(error);
+
+    expect(summary).toContain("The Loop failed partway through its plan.");
+    expect(summary).toContain("It failed to:\n\n- add labels on #12: agent:review");
+    expect(summary).toContain("Already applied:\n\n- add labels on #7: needs-triage");
+    expect(summary).toContain("Never applied:\n\n- close #50 as completed");
+    expect(annotation).toBe(
+      "It failed to add labels on #12: agent:review: GitHub failed `POST /repos/acme/shop/issues/12/labels` with a 502, its own failure rather than the Kit's: Bad Gateway",
+    );
+  });
+
+  it("keeps its ::error line to one line when the error's message runs over several", () => {
+    const { summary, annotation } = jobFailureReport(new Error("boom\nat line two"));
+
+    expect(summary).toContain("boom\nat line two");
+    expect(annotation).toBe("The Kit failed: boom");
+  });
+
+  it("says what failed when the job failed before applying any plan", () => {
+    const { summary, annotation } = jobFailureReport(new Error("boom"));
+
+    expect(summary).toBe("The Loop failed.\n\n**What failed:** The Kit failed: boom");
+    expect(annotation).toBe("The Kit failed: boom");
   });
 });

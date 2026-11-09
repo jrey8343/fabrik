@@ -22,6 +22,7 @@
 // run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input. A
 // conflict-only run (#304) is one with FABRIK_CONFLICT_MAIN: the main head it rebases onto.
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
+// for a Ticket under a Spec, the Spec's other Tickets from FABRIK_SPEC_TICKETS_FILE (#475),
 // for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
 // and whether it may offer a Map from FABRIK_MAP_FILE; on a repo with a `ui` block,
 // it is told it may offer a Prototype.
@@ -90,7 +91,7 @@ import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { triageContext } from "./triage.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
-import { emptyDiffContext, mapCapContext, prototypeContext, sentBackContext } from "./design.ts";
+import { emptyDiffContext, mapCapContext, prototypeContext, sentBackContext, specTicketsContext } from "./design.ts";
 import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import {
   claudeArgs,
@@ -106,7 +107,7 @@ import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
 import { missingSkills, runSummary } from "./summary.ts";
-import { TRANSCRIPT_FILE } from "./transcript.ts";
+import { RUN_BRIEF_FILE, TRANSCRIPT_FILE } from "./transcript.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -147,7 +148,8 @@ interface RoleSpec<T> {
   readonly issueHeading?: string;
   /**
    * A Design session weighs the issue's parent Spec, from FABRIK_SPEC_FILE, if
-   * it has one, and the agent PR it came back from, if it did, and is told
+   * it has one, with the Spec's other Tickets, from FABRIK_SPEC_TICKETS_FILE,
+   * and the agent PR it came back from, if it did, and is told
    * whether it may offer a Map, from FABRIK_MAP_FILE, and whether it may offer
    * a Prototype, from the Kit config.
    */
@@ -370,6 +372,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     kind = input.kind;
     given = input.operatorComments;
     mergeMain = "mergeMain" in input ? input.mergeMain : null;
+    // Kept beside the transcript, before the agent runs, so the judge reads what this run was asked even if it times out (#450).
+    if (input.brief !== null) await writeFile(join(outDir, RUN_BRIEF_FILE), `${input.brief}\n`);
   }
   if (prototypeTurn) {
     // The Claude token and the Sandbox's values and test secrets, as the Implementer's, committing as the Fabrik Prototype.
@@ -388,6 +392,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         JSON.stringify(parent, null, 2),
         "```",
       );
+      // Its siblings, so a split never re-creates one's scope (#475).
+      extra.push(...specTicketsContext(JSON.parse(await readFile(required("FABRIK_SPEC_TICKETS_FILE"), "utf8"))));
     }
   }
   // The PR a Ticket came back to design from goes after the issue, set out on its own; only a Design session sees it.

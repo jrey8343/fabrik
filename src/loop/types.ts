@@ -14,7 +14,7 @@ export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" |
 
 export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research"];
 
-/** How an agent job says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
+/** How an agent job, or the Review checks job (src/review/wait.ts), says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
   | "crash"
   | "missing-output"
@@ -25,10 +25,20 @@ export type ReportedFailure =
   /** With rotation on, the stream watch stopped a run whose stream showed overage. */
   | "usage-credits"
   /** The Kit's input step couldn't read the agent's inputs from GitHub, so the agent never started (#328). */
-  | "unread-inputs";
+  | "unread-inputs"
+  /** A GitHub request failed while the Review waited for its required checks. */
+  | "unread-checks"
+  /** The Review gave up waiting on gating checks that never reported on the PR's head, which no re-run fixes. */
+  | "unreported-checks"
+  /**
+   * The job ran out of time: reported by the Review checks job when it gave up
+   * on required checks still running, short of its job's timeout, or inferred
+   * by the push job for any role whose job was cancelled (src/loop/failures.ts).
+   */
+  | "timeout";
 
 /** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
-export type InfrastructureFailure = ReportedFailure | "timeout" | "unreachable-1password";
+export type InfrastructureFailure = ReportedFailure | "unreachable-1password";
 
 /** What a failed agent job left for the push job, when it got far enough to leave anything. */
 export interface FailureReport {
@@ -43,6 +53,11 @@ export interface FailureReport {
    * Absent for a 5xx, a rate limit or a call GitHub never answered.
    */
   readonly refused?: true;
+  /**
+   * For a Review that gave up waiting on its required checks: the gating
+   * checks that never reported, or for a timeout, the ones still running.
+   */
+  readonly checks?: readonly string[];
   /**
    * For a run that cut a branch (#431): what it had committed on it when it
    * failed, so the notice says whether any work was made and whether it was
@@ -103,6 +118,13 @@ export interface BranchChanges {
    * its push lands as the branch's head, which its push note names (pushedHeadMarker).
    */
   readonly pushedHead?: string;
+  /**
+   * For an Implement run with commits: the test files its own commits
+   * changed, deleted or moved that were already there before it (#463), on
+   * the head it built on, or on main for one that brought main in. Absent
+   * for any other branch.
+   */
+  readonly changedTests?: readonly string[];
   /**
    * For a prototype turn's branch (#155) that moved while the turn ran, as a
    * live Design session's push may move it: the head the turn started on
@@ -269,6 +291,8 @@ export type LoopEvent =
       readonly headSha: string;
       /** The required checks that didn't pass; empty when they all did. */
       readonly failed: readonly string[];
+      /** The ones among `failed` that were skipped or reported neutral, which no Retry changes; absent when none were. */
+      readonly skipped?: readonly string[];
       /** The Review run, linked from the Verdict comment. */
       readonly runUrl: string;
     }
@@ -743,6 +767,12 @@ export interface PullRequestSnapshot {
    * App wrote (src/evidence/uiEvidence.ts), or null when it has none: not a UI PR.
    */
   readonly uiEvidenceMarker: EvidenceMarker | null;
+  /**
+   * The existing tests its Implement runs changed (#463), read from the
+   * marker in the body the Fabrik App wrote (src/loop/changedTests.ts), or
+   * none, so a later run's push lists them beside its own.
+   */
+  readonly changedTests: readonly string[];
 }
 
 /** A review requesting changes on an agent PR that no Request-changes run has built yet (#341). */
@@ -916,6 +946,14 @@ export interface Snapshot {
   /** Gathered for a scheduled tick only: what the retro gate weighs. */
   readonly retro: RetroSnapshot | null;
   /**
+   * For an event that may fail a weekly run, on an issue labelled
+   * `fabrik:audit` or `fabrik:retro`: that label's newest issues, open and
+   * closed, the event's own among them, as the gate reads them. A failure that
+   * gives up on the week tells the Operator by them (src/loop/weeklyRuns.ts).
+   * Null for any other event.
+   */
+  readonly weeklyIssues: readonly WeeklyIssueSnapshot[] | null;
+  /**
    * Gathered for a scheduled tick: what the replay step weighs. And for
    * agent:replay added: every open replay issue alone, which a replay
    * Ticket's claim weighs, with no capacity or acceptance read.
@@ -928,12 +966,20 @@ export interface Snapshot {
    */
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
   /**
-   * Gathered for a scheduled tick only: each issue or PR a held marker on an
-   * open weekly-limit issue names, that GitHub has, in any order, so that the
-   * tick resumes only held runs still in the state they were held in
+   * Gathered for a scheduled tick, and for whatever may free a Subscription
+   * (#439): each issue or PR a held marker on an open weekly-limit issue, or
+   * on closedWeeklyLimit, names, that GitHub has, in any order, so that only
+   * held runs still in the state they were held in resume
    * (src/loop/resume.ts). A number naming nothing GitHub has isn't here.
    */
   readonly held: readonly HeldTargetSnapshot[] | null;
+  /**
+   * Gathered for an issue-closed event on a weekly-limit issue only: that
+   * issue, as kitIssues holds an open one, since it has left kitIssues, so
+   * that the runs held on it resume as it closes (#440). Null for any other
+   * event.
+   */
+  readonly closedWeeklyLimit: KitIssueSnapshot | null;
   /**
    * Gathered for a Design-session turn finishing only: the open `wayfinder:map`
    * issues, by number, oldest first, whoever made them, the Kit or the
@@ -945,6 +991,12 @@ export interface Snapshot {
    * the conflict check weighs (src/loop/conflicts.ts, #304).
    */
   readonly conflicts: ConflictSnapshot | null;
+  /**
+   * Gathered for a Reviewer's Verdict only: whether its PR merges cleanly into
+   * the default branch, so a pass on one that conflicts brings it up to date
+   * instead of opening the Merge gate (src/loop/review.ts, #480).
+   */
+  readonly mergeable: MergeableSnapshot | null;
   /**
    * Gathered for a scheduled tick only: what the stuck-trigger sweep weighs
    * (src/loop/triggerSweep.ts, #419).
@@ -1003,6 +1055,14 @@ export interface ConflictSnapshot {
   readonly implementJobUnderWay: boolean | null;
   /** Every open agent PR, with whether GitHub says it merges cleanly into the default branch. */
   readonly pullRequests: readonly ConflictCandidate[];
+}
+
+/** Whether one PR merges cleanly into the default branch, as a Reviewer's Verdict weighs it (#480). */
+export interface MergeableSnapshot {
+  /** The default branch's head commit, or null when it has none. */
+  readonly main: string | null;
+  /** GitHub's `mergeable` for the PR against that head, as ConflictCandidate's: null when GitHub hadn't worked it out. */
+  readonly mergeable: boolean | null;
 }
 
 /** An open agent PR the conflict check weighs. */
@@ -1175,6 +1235,7 @@ export interface IssueContext {
   readonly issue: IssueSnapshot;
   readonly operator: Snapshot["operator"];
   readonly kitIssues: Snapshot["kitIssues"];
+  readonly weeklyIssues: Snapshot["weeklyIssues"];
 }
 
 /** The resolved Kit config, every default filled in (src/kit/config.ts). */

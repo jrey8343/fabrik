@@ -13,6 +13,7 @@ import {
   NOTHING_UNDER_WAY,
   snapshotOf,
   tickSnapshot,
+  withoutNotes,
 } from "../__fixtures__/snapshots.ts";
 import { designTurnFailedIn, implementRunFailedIn, researchRunFailedIn } from "../github/threads.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
@@ -23,7 +24,7 @@ import type { Action, LabelledTrigger, Plan, RolesUnderWay } from "./types.ts";
 const tick = { kind: "scheduled-tick", now: "2026-11-09T04:00:00.000Z" } as const;
 
 function sweep(labelled: readonly LabelledTrigger[], underWay: RolesUnderWay | null = NOTHING_UNDER_WAY): Plan {
-  return planFor(tick, tickSnapshot({ triggers: { underWay, labelled } }), kitConfig());
+  return withoutNotes(planFor(tick, tickSnapshot({ triggers: { underWay, labelled } }), kitConfig()));
 }
 
 describe("The stuck-trigger sweep on the scheduled tick", () => {
@@ -128,12 +129,14 @@ describe("The stuck-trigger sweep on the scheduled tick", () => {
   });
 
   it("leaves every label alone when the Actions API can't be read, saying so in the step summary", () => {
-    const plan = sweep([aLabelledTrigger(), aLabelledTrigger({ number: 8, readded: true })], null);
+    const plan = planFor(tick, tickSnapshot({ triggers: { underWay: null, labelled: [aLabelledTrigger(), aLabelledTrigger({ number: 8, readded: true })] } }), kitConfig());
 
     expect(plan).toEqual({
       kind: "act",
       actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }],
-      notes: ["The stuck-trigger sweep left every trigger label alone: the Actions API couldn't be read, so whether a run is behind one isn't known"],
+      notes: expect.arrayContaining([
+        "The stuck-trigger sweep left every trigger label alone: the Actions API couldn't be read, so whether a run is behind one isn't known",
+      ]),
     });
   });
 
@@ -144,7 +147,7 @@ describe("The stuck-trigger sweep on the scheduled tick", () => {
       kitConfig(),
     );
 
-    expect(plan).toEqual({
+    expect(withoutNotes(plan)).toEqual({
       kind: "act",
       actions: [
         { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
@@ -203,7 +206,7 @@ describe("After the sweep gives up, no check adds the label back by itself", () 
   it("the replay step reads the give-up and starts nothing on that replay issue", () => {
     const plan = planFor({ kind: "scheduled-tick", now: "2026-11-11T04:00:00.000Z" }, tickSnapshot({ replay: replaySlice([aReplayIssue({ gaveUp: true })]) }), kitConfig());
 
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
+    expect(withoutNotes(plan)).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
   });
 });
 

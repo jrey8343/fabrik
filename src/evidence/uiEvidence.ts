@@ -92,10 +92,12 @@ export type CaptureSide = (typeof CAPTURE_SIDES)[number];
  * Why capture failed: `sandbox.build` failed, the server never answered at
  * `ui.url`, capture ran out of time, there was no route to capture, a
  * prototype turn's capture had no variant to capture, a Capture identity's
- * sign-in failed (ADR-0012), or anything else it caught. The push job records the last, `no-result`, itself: a UI pull
- * request whose Implement job passed it no capture result it could read.
+ * sign-in failed (ADR-0012), no page it went to would load, so it took no
+ * screenshot, or anything else it caught. The push job records the last, `no-result`, itself: a UI pull
+ * request whose Implement job passed it no capture result it could read. The capture step's own
+ * timeout, which kills it before it records a result, is `timeout` all the same.
  */
-export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeout", "no-routes", "no-variants", "sign-in-failed", "error", "no-result"] as const;
+export const CAPTURE_FAILURES = ["build-failed", "server-did-not-start", "timeout", "no-routes", "no-variants", "sign-in-failed", "unreachable", "error", "no-result"] as const;
 
 export type CaptureFailure = (typeof CAPTURE_FAILURES)[number];
 
@@ -114,6 +116,24 @@ export interface Capture {
    * was viewed signed out, as every capture written before sign-ins was.
    */
   readonly identity?: CaptureIdentity;
+}
+
+/** Why capture missed a shot of a side and went on to the rest: its page wouldn't load, refused or not found (MissedShot). */
+export type Unreachable = `${CaptureSide}-unreachable`;
+
+/**
+ * A screenshot of a pull request capture meant to take but missed, going on
+ * to the rest: of which route and why, at which viewport, of which side and
+ * URL, and why it missed, with the browser's error code, such as
+ * ERR_CONNECTION_REFUSED when production was down or refused the browser.
+ */
+export interface MissedShot extends ChosenRoute {
+  readonly viewport: Viewport["name"];
+  readonly side: CaptureSide;
+  readonly url: string;
+  /** Always its side's: `before-unreachable` for a Before. */
+  readonly why: Unreachable;
+  readonly error: string;
 }
 
 /** The letters a Prototype's variants go by, in order, one for each up to PROTOTYPE_VARIANT_CAP: A is the first (variantLetter). */
@@ -150,7 +170,8 @@ function sideCaptures(captures: readonly (Capture | VariantCapture)[]): Capture[
  * (#155). A failed capture keeps whatever it took first. A pull request's
  * capture holds only Captures, and a prototype turn's only VariantCaptures,
  * as CaptureResult<Capture> and CaptureResult<VariantCapture> say; a reader
- * takes either.
+ * takes either. A pull request's capture names any shot it missed and went on
+ * past in `missed`, absent when it missed none.
  */
 export type CaptureResult<C extends Capture | VariantCapture = Capture | VariantCapture> =
   | {
@@ -159,12 +180,14 @@ export type CaptureResult<C extends Capture | VariantCapture = Capture | Variant
       readonly headSha: string;
       /** Never empty. */
       readonly captures: readonly C[];
+      readonly missed?: readonly MissedShot[];
     }
   | {
       readonly outcome: "failed";
       readonly reason: CaptureFailure;
       readonly headSha: string;
       readonly captures: readonly C[];
+      readonly missed?: readonly MissedShot[];
     };
 
 export type CaptureResultRead =
@@ -185,7 +208,7 @@ export function parseCaptureResult(text: string): CaptureResultRead {
 /** Checks an already-parsed capture result against the contract, naming every problem. */
 export function readCaptureResult(value: unknown): CaptureResultRead {
   if (!isObject(value)) return { ok: false, errors: ["the capture result must be a JSON object"] };
-  const { outcome, reason, headSha, captures } = value;
+  const { outcome, reason, headSha, captures, missed } = value;
   const errors: string[] = [];
   if (outcome !== "captured" && outcome !== "failed") errors.push(`outcome must be "captured" or "failed"`);
   if (outcome === "failed" && !isOneOf(CAPTURE_FAILURES, reason)) errors.push(`reason must be ${spelled(CAPTURE_FAILURES)}`);
@@ -194,12 +217,15 @@ export function readCaptureResult(value: unknown): CaptureResultRead {
   else if (outcome === "captured" && captures.length === 0) errors.push(`captures can't be empty when the outcome is "captured"`);
   const read = Array.isArray(captures) ? captures.map((capture, at) => readCapture(capture, `captures[${at}]`, errors)) : [];
   errors.push(...repeatedCaptures(read));
+  if (missed !== undefined && !Array.isArray(missed)) errors.push("missed must be a list");
+  const readMissed = Array.isArray(missed) ? missed.map((shot, at) => readMissedShot(shot, `missed[${at}]`, errors)) : [];
   if (errors.length > 0) return { ok: false, errors };
   const checked = read as (Capture | VariantCapture)[];
+  const named = missed === undefined ? {} : { missed: readMissed as MissedShot[] };
   const result: CaptureResult =
     outcome === "captured"
-      ? { outcome, headSha: headSha as string, captures: checked }
-      : { outcome: "failed", reason: reason as CaptureFailure, headSha: headSha as string, captures: checked };
+      ? { outcome, headSha: headSha as string, captures: checked, ...named }
+      : { outcome: "failed", reason: reason as CaptureFailure, headSha: headSha as string, captures: checked, ...named };
   return { ok: true, result };
 }
 
@@ -266,6 +292,28 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
     image: image as string,
     ...signedIn,
   };
+}
+
+/** A browser's error code for a page that wouldn't load, as Chromium names it: ERR_CONNECTION_REFUSED. */
+const BROWSER_ERROR = /^ERR_[A-Z0-9_]+$/;
+
+/** One missed shot, or null after naming its problems in `errors`. */
+function readMissedShot(value: unknown, at: string, errors: string[]): MissedShot | null {
+  if (!isObject(value)) {
+    errors.push(`${at} must be an object`);
+    return null;
+  }
+  const { route, reason, viewport, side, url, why, error } = value;
+  const before = errors.length;
+  if (!isRoute(route)) errors.push(`${at}.route must be a path starting with one /, such as /book`);
+  if (!isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
+  if (!isOneOf(VIEWPORT_NAMES, viewport)) errors.push(`${at}.viewport must be ${spelled(VIEWPORT_NAMES)}`);
+  if (!isOneOf(CAPTURE_SIDES, side)) errors.push(`${at}.side must be ${spelled(CAPTURE_SIDES)}`);
+  else if (why !== `${side}-unreachable`) errors.push(`${at}.why must be ${side}-unreachable, its side's`);
+  if (typeof url !== "string" || !URL.canParse(url)) errors.push(`${at}.url must be the URL capture went to`);
+  if (typeof error !== "string" || !BROWSER_ERROR.test(error)) errors.push(`${at}.error must be a browser error code, such as ERR_CONNECTION_REFUSED`);
+  if (errors.length > before) return null;
+  return { route, reason, viewport, side, url, why, error } as MissedShot;
 }
 
 /** Which shot of its route and viewport a capture is: its side, or its variant. */
@@ -367,8 +415,8 @@ export interface ReviewerEvidence {
 /**
  * The UI evidence block of a UI PR's review prompt: the screenshots it was
  * given, each by route, viewport and side, and what to judge in them; or,
- * when capture failed or left no result, why, and to review the code as
- * usual. Any push to the PR starts a Review with the last Implement run's
+ * when capture failed, left no result, or took screenshots none of which were
+ * copied for the Review, why, and to review the code as usual. Any push to the PR starts a Review with the last Implement run's
  * evidence, so when the PR's head isn't the commit captured, the block says
  * the screenshots are of an earlier one.
  */
@@ -376,7 +424,12 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
   if (result === null || given.length === 0) {
     // With no capture result to read, the marker's reason is the one the PR body gives.
     const failure = result === null ? recorded : result.outcome === "failed" ? result.reason : null;
-    const why = failure === null ? UNREAD : `capture failed because ${FAILURE_WORDS[failure]}`;
+    const why =
+      failure !== null
+        ? `capture failed because ${FAILURE_WORDS[failure]}`
+        : result === null
+          ? UNREAD
+          : `the ${screenshots(result.captures.length)} capture took of this branch at \`${result.headSha.slice(0, 7)}\` weren't copied for this Review`;
     return ["## UI evidence", `${UI_PR}, but ${why}. There are no screenshots, so review the code as usual.`];
   }
   const captured = `\`${result.headSha.slice(0, 7)}\``;
@@ -399,6 +452,7 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
       ...stale,
       "After is this branch, served in the Implement run's Sandbox; Before, where there is one, is the production site.",
       ...(given.some(({ identity }) => identity !== undefined) ? [NO_SIGNED_IN_BEFORE] : []),
+      ...missingSides(result.missed ?? []),
       "Each shows one screen of the page from its top, not the whole page, so content below its bottom edge is out of view rather than cut off.",
       `${where} in \`${REVIEWER_IMAGES_DIR}/\` in your working directory: open each with your Read tool to see it.${of}`,
     ].join(" "),
@@ -415,6 +469,24 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
 
 /** What the Reviewer's block says of a signed-in screenshot's Before, when it's given one. */
 const NO_SIGNED_IN_BEFORE = "A screenshot signed in as a Capture identity, a fake user of the Sandbox's own server, has no Before, since Before is never signed in.";
+
+/** Where each side's page is, and what its missing leaves the Reviewer without, for a route or for several. */
+const MISSING_WORDS: Readonly<Record<CaptureSide, { readonly site: string; readonly without: (several: boolean) => string }>> = {
+  before: { site: "the production site", without: (several) => `so there's no Before to compare ${several ? "their" : "its"} After against` },
+  after: { site: "this branch's page", without: (several) => `so there's no screenshot of ${several ? "them" : "it"}` },
+};
+
+/** For each side capture missed shots of, the routes it's missing for and why, in the Reviewer's block: none when it missed none. */
+function missingSides(missed: readonly MissedShot[]): string[] {
+  return CAPTURE_SIDES.flatMap((side) => {
+    const shots = missed.filter((shot) => shot.side === side);
+    if (shots.length === 0) return [];
+    const routes = [...new Set(shots.map(({ route }) => route))];
+    const errors = [...new Set(shots.map(({ error }) => error))].map(code);
+    const { site, without } = MISSING_WORDS[side];
+    return [`${SIDE_WORDS[side]} is missing for ${spelled(routes.map(code), "and")}, where ${site} wouldn't load (${spelled(errors, "and")}), ${without(routes.length > 1)}.`];
+  });
+}
 
 /** Why the Reviewer has no screenshots when there's no capture result to read, and nothing says why capture failed. */
 const UNREAD = "capture left no result this Review could read: the Implement run kept none, or they have expired";
@@ -490,14 +562,19 @@ const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
  * line and the marker (evidenceMarkerIn): why capture failed, when it did;
  * the gallery link; the preview link, or why there is none; and each
  * captured route with why it was chosen, flagged when it answered a server
- * error. A failed capture keeps the screenshots it took first, so the
- * section shows those too. Its routes may be agent text, so each shows as
- * code on one line and mentions nobody. It never shows a capture of a
+ * error, or naming what of it wasn't captured and why. A failed capture
+ * keeps the screenshots it took first, so the section shows those too. Its
+ * routes may be agent text, so each shows as code on one line and mentions nobody. It never shows a capture of a
  * Prototype's variant: a Ticket's UI evidence gets nothing from a Prototype.
  */
 export function evidenceSection(evidence: UiEvidence): string {
   const { result, gallery, preview } = evidence;
   const captures = sideCaptures(result.captures);
+  const missed = result.missed ?? [];
+  // Each route once, in reason order as routes are chosen, though a route missed outright has no capture to come first by.
+  const routes = onceEach([...captures, ...missed].map(({ route, reason }) => ({ route, reason }))).toSorted(
+    (a, b) => ROUTE_REASONS.indexOf(a.reason) - ROUTE_REASONS.indexOf(b.reason),
+  );
   return [
     SECTION_START,
     "## UI evidence",
@@ -505,7 +582,7 @@ export function evidenceSection(evidence: UiEvidence): string {
     ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result.headSha, captures)]),
     "",
     previewLine(preview),
-    ...(captures.length === 0 ? [] : ["", "Captured routes:", "", ...capturedRoutes(captures).map((chosen) => routeLine(chosen, captures))]),
+    ...(routes.length === 0 ? [] : ["", "Captured routes:", "", ...routes.map((chosen) => routeLine(chosen, captures, missed))]),
     evidenceMarker(evidence),
   ].join("\n");
 }
@@ -525,8 +602,9 @@ export function failureWords(job: string): Readonly<Record<CaptureFailure, strin
     "no-variants": "there was no variant to capture: the prototype turn's output named none",
     "sign-in-failed":
       "signing in failed: a `ui.sign_in` command failed, ran out of time or left no session it could read, or a signed-in page landed on `ui.sign_in_path`, which its log names",
+    unreachable: "no page it went to would load, refused or not found",
     error: `it hit an error the Kit didn't expect, which ${job}'s log shows`,
-    "no-result": "it left no result the push job could read",
+    "no-result": `it left no result the push job could read: ${job}'s log shows why`,
   };
 }
 
@@ -544,17 +622,42 @@ export function screenshots(count: number): string {
   return `${count} screenshot${count === 1 ? "" : "s"}`;
 }
 
-/** A captured route, why it was chosen, and every screenshot of it that shows a server's error page rather than the design. */
-function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[]): string {
+/**
+ * A route capture went to, why it was chosen, what of it wasn't captured and
+ * why, beside what was, and every screenshot of it that shows a server's
+ * error page rather than the design.
+ */
+function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[], missed: readonly MissedShot[]): string {
   // Kit config's rules view a route as one identity, so its first capture names it for all.
   const identity = captures.find((capture) => capture.route === route)?.identity;
   // Its route may be the Implementer's: agent text, which never mentions anyone.
-  const line = `- ${code(withoutMentions(route))}, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, code)}`;
+  const named = `- ${code(withoutMentions(route))}, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, code)}`;
+  const line = named + missedWords(captures.filter((capture) => capture.route === route), missed.filter((shot) => shot.route === route));
   const errors = captures.filter((capture) => capture.route === route && isServerError(capture.status));
   if (errors.length === 0) return line;
   const answered = errors.map(({ status, side, viewport }) => `${status} for ${SIDE_WORDS[side]} at ${viewport}`);
   const shows = errors.length === 1 ? "that screenshot shows" : "those screenshots show";
   return `${line}. **Server error:** it ${serverErrorWords(spelled(answered, "and"), shows)}.`;
+}
+
+/**
+ * What of a route was captured and what wasn't, each side by its viewports,
+ * with why it wasn't: nothing when none of it was missed.
+ */
+function missedWords(captures: readonly Capture[], missed: readonly MissedShot[]): string {
+  if (missed.length === 0) return "";
+  const took = CAPTURE_SIDES.toReversed().flatMap((side) => {
+    const viewports = captures.filter((capture) => capture.side === side).map(({ viewport }) => viewport);
+    return viewports.length === 0 ? [] : [`${SIDE_WORDS[side]} at ${spelled(viewports, "and")}`];
+  });
+  // Each side and error once, where it was first missed, with every viewport it was missed at.
+  const lost = missed
+    .filter((shot, at) => missed.findIndex((other) => other.side === shot.side && other.error === shot.error) === at)
+    .map(({ side, error }) => {
+      const viewports = missed.filter((shot) => shot.side === side && shot.error === error).map(({ viewport }) => viewport);
+      return `${SIDE_WORDS[side]}: unreachable, ${code(error)}, at ${spelled(viewports, "and")}`;
+    });
+  return `. Captured: ${took.length === 0 ? "nothing" : took.join("; ")}. **Not captured:** ${lost.join("; ")}.`;
 }
 
 /** Whether a page answered with a server error, so its screenshot is of an error page. */
@@ -593,11 +696,6 @@ function previewLine(preview: PreviewLink): string {
     case "none":
       return "No preview link: Kit config declares no `preview.url`.";
   }
-}
-
-/** Each captured route once, in the order it was first captured, with its reason. */
-function capturedRoutes(captures: readonly Capture[]): ChosenRoute[] {
-  return onceEach(captures.map(({ route, reason }) => ({ route, reason })));
 }
 
 /** The marker line closing the evidence section, which records how its capture ended. */

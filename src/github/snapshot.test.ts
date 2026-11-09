@@ -1,7 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { GitHub } from "./client.ts";
-import { anIssue, aPullRequest, AUDITED_SHA, auditBody, designQueueSnapshotOf, HEAD_SHA, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import {
+  anIssue,
+  aPullRequest,
+  AUDITED_SHA,
+  auditBody,
+  designQueueSnapshotOf,
+  HEAD_SHA,
+  kitConfig,
+  notificationsOf,
+  RETRO_WINDOW_END,
+  retroBody,
+  snapshotOf,
+  snapshotOfPullRequest,
+} from "../__fixtures__/snapshots.ts";
 import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
@@ -9,6 +22,7 @@ import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import type { RunRecord } from "../kit/runRecord.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
+import { changedTestsSection } from "../loop/changedTests.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -31,7 +45,7 @@ import {
 } from "./snapshot.ts";
 
 /** The conflict check's query (#304), which reads each open PR's mergeable state. */
-const isConflictsQuery = (query: string) => /\bmergeable\b/.test(query);
+const isConflictsQuery = (query: string) => /pullRequests\(states: OPEN[^]*\bmergeable\b/.test(query);
 
 /** Marks a fake GitHub as answering the conflict check's query itself. */
 const ANSWERS_CONFLICTS = Symbol("answers the conflict check's query");
@@ -77,6 +91,19 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
     const actions = actionsWith([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "in_progress" }] }]);
 
     expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 0 });
+  });
+
+  // #477: the job names its Ticket, and a retry its Retry number; a run of an earlier Kit release names neither.
+  it("counts an Implement job named for its Ticket, a retry's named for its Retry too, as it counts one of an earlier Kit release", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement #12", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement #14 (Retry 1)", status: "queued" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "Implement #15", status: "in_progress" }] },
+      { id: 4, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "in_progress" }] },
+      { id: 5, status: "in_progress", jobs: [{ name: "fabrik / Replay implement (baseline)", status: "in_progress" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0 });
   });
 
   it("counts an Implement job still queued or waiting after its claim took agent:implement off the Ticket", async () => {
@@ -143,11 +170,14 @@ describe("Counting the Research runs a Dispatch check sees in flight", () => {
 });
 
 describe("The Implement job's name", () => {
-  it("is the name loop.yml gives the Implement job, which Dispatch counts by", async () => {
+  it("is the name loop.yml gives the Implement job, followed by its Ticket and a retry's Retry number, which Dispatch counts by (#477)", async () => {
     const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
     const implementJob = /^ {2}implement:\n {4}name: (.+)$/m.exec(workflow)?.[1];
 
-    expect(implementJob).toBe(IMPLEMENT_JOB_NAME);
+    // Quoted, since an unquoted ` #` starts a YAML comment.
+    expect(implementJob).toBe(
+      `"${IMPLEMENT_JOB_NAME} #\${{ needs.kit.outputs.ticket }}\${{ needs.kit.outputs.retry != '0' && needs.kit.outputs.retry != '' && format(' (Retry {0})', needs.kit.outputs.retry) || '' }}"`,
+    );
   });
 });
 
@@ -1127,6 +1157,29 @@ describe("Gathering a pull request's UI evidence marker", () => {
   });
 });
 
+describe("Gathering the existing tests a pull request's Implement runs changed (#463)", () => {
+  const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
+  /** An agent PR's body as the push job writes it: the summary, the Changed existing tests section, then Closes. */
+  const body = (paths: readonly string[]) => ["Adds a waitlist to full days.", changedTestsSection(paths), "Closes #7"].join("\n\n");
+
+  async function gathered(text: string, author: { login: string; __typename: string } | null = APP_BOT) {
+    return (await gatherSnapshot(pullRequestGitHub({ author, body: text }), repo, pushed, null, APP_LOGIN)).pullRequest;
+  }
+
+  it("reads back the list the section's marker records, in a body the Fabrik App wrote, a path with <!-- --> in it among them", async () => {
+    expect(await gathered(body(["src/cart.test.ts", "test/a-->b.ts"]))).toMatchObject({ changedTests: ["src/cart.test.ts", "test/a-->b.ts"] });
+  });
+
+  it("finds none on a PR whose body has no marker, or one that doesn't read", async () => {
+    expect(await gathered("Adds a retry to the booking API.\n\nCloses #7")).toMatchObject({ changedTests: [] });
+    expect(await gathered("Adds a retry.\n\n<!-- fabrik:changed-tests [1] -->\n\nCloses #7")).toMatchObject({ changedTests: [] });
+  });
+
+  it("ignores a marker in the body of a PR a person opened, so nobody can plant a list", async () => {
+    expect(await gathered(body(["src/cart.test.ts"]), { login: "fabrik-app", __typename: "User" })).toMatchObject({ changedTests: [] });
+  });
+});
+
 describe("Gathering an issue's Design session", () => {
   async function gatheredIssue(
     comments: { body: string; createdAt?: string; author: { login?: string; __typename: string }; fullDatabaseId?: string }[],
@@ -1536,6 +1589,53 @@ describe("Gathering a Dispatch check's research Decisions", () => {
   });
 });
 
+describe("Gathering a weekly run's gate issues as it fails", () => {
+  const failed = { kind: "agent-run-failed", role: "audit", issue: 98, runUrl: "https://github.com/acme/shop/actions/runs/42", jobResult: "failure", secretsStep: "success", report: null } as const;
+  const EARLIER = { number: 97, title: "Audit: week of 2026-11-02", state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T00:05:00Z", body: `The Auditor's run failed: it crashed.\n\n<!-- fabrik:audit ${AUDITED_SHA} -->\n<!-- fabrik:audit-failed -->`, author: APP_BOT };
+  const PENDING = { number: 98, title: "Audit: week of 2026-11-02", state: "OPEN", stateReason: null, createdAt: "2026-11-08T02:05:00Z", body: auditBody(AUDITED_SHA, "pending"), author: APP_BOT };
+
+  /** The pending Audit #98 as issueGitHub holds it, with these `fabrik:audit` issues, counting the weekly issue reads. */
+  function githubWith(labels: string[], nodes: unknown[]) {
+    const issue = issueGitHub({ author: APP_BOT, body: auditBody(AUDITED_SHA, "pending"), labels });
+    const reads: unknown[] = [];
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("defaultBranchRef")) {
+          reads.push(variables["label"]);
+          return { repository: { defaultBranchRef: null, issues: { nodes: variables["label"] === "fabrik:audit" ? nodes : [] } } };
+        }
+        return issue.graphql(query, variables);
+      },
+    } as unknown as GitHub;
+    return { github, reads };
+  }
+
+  it("holds the Audit's gate issues, so the week's second failure tells the Operator", async () => {
+    const { github } = githubWith(["fabrik:audit"], [PENDING, EARLIER]);
+
+    const snapshot = await gatherSnapshot(github, repo, failed, null, APP_LOGIN);
+
+    expect(snapshot.weeklyIssues?.map(({ number, byApp }) => ({ number, byApp }))).toEqual([
+      { number: 98, byApp: true },
+      { number: 97, byApp: true },
+    ]);
+    expect(notificationsOf(planFor(failed, snapshot, kitConfig()), snapshot.operator)).toEqual(["mention on #98"]);
+  });
+
+  it("reads none for an issue that's neither an Audit nor a Retro, or an event that fails no weekly run", async () => {
+    const other = githubWith(["needs-triage"], [PENDING, EARLIER]);
+    const commented = githubWith(["fabrik:audit"], [PENDING, EARLIER]);
+
+    const snapshots = [
+      await gatherSnapshot(other.github, repo, failed, null, APP_LOGIN),
+      await gatherSnapshot(commented.github, repo, { kind: "label-added", issue: 98, label: "needs-triage" }, null, APP_LOGIN),
+    ];
+
+    expect(snapshots.map((snapshot) => snapshot.weeklyIssues)).toEqual([null, null]);
+    expect([...other.reads, ...commented.reads]).toEqual([]);
+  });
+});
+
 describe("Gathering a scheduled tick's audit slice", () => {
   const HEAD = "c".repeat(40);
 
@@ -1783,16 +1883,42 @@ function nothingNewForTheRetro(query: string): unknown {
   return undefined;
 }
 
-describe("Gathering the issues and PRs held runs are on, for a scheduled tick", () => {
+describe("Gathering the issues and PRs held runs are on, for a scheduled tick and whatever may free a Subscription", () => {
   const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
   const heldMarker = (issue: number, role: string, label: string | null) =>
     `<!-- fabrik:held ${JSON.stringify({ issue, role, label })} -->`;
 
-  /** The read-only API, holding one weekly-limit issue with these comments, and these issues and PRs by number. */
-  function githubWith(comments: string[], targets: Record<number, unknown>) {
+  /**
+   * The read-only API, holding one weekly-limit issue with these comments,
+   * these issues and PRs by number, and a closed issue with `closedLabels`
+   * for an issue-closed event.
+   */
+  function githubWith(comments: string[], targets: Record<number, unknown>, closedLabels: string[] = [], closedComments: string[] = []) {
     const asked: number[][] = [];
     const github = {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("closedWeeklyLimit: issue(number: $number)")) {
+          return {
+            repository: {
+              closedWeeklyLimit: {
+                number: variables["number"],
+                body: "<!-- fabrik:notified -->",
+                author: APP,
+                labels: { nodes: closedLabels.map((name) => ({ name })) },
+                comments: { nodes: [...closedComments.map((body) => ({ body, author: APP })), { body: heldMarker(11, "triage", "needs-triage"), author: { login: "mallory", __typename: "User" } }] },
+              },
+            },
+          };
+        }
+        if (query.includes("issue(number: $number)")) {
+          const data = issueData(variables["number"] as number);
+          return {
+            repository: {
+              ...data.repository,
+              issue: { ...data.repository.issue, state: "CLOSED", labels: { nodes: closedLabels.map((name) => ({ name })) } },
+            },
+          };
+        }
         if (query.includes("issueOrPullRequest")) {
           const numbers = Object.entries(variables).filter(([name]) => /^n\d+$/.test(name)).map(([, value]) => value as number);
           asked.push(numbers);
@@ -1854,12 +1980,61 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick", 
     expect(asked).toEqual([]);
   });
 
-  it("isn't gathered for any other event", async () => {
-    const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], {});
+  const issue7 = { __typename: "Issue", number: 7, state: "OPEN", body: "", author: { login: "jrey", __typename: "User" }, labels: { nodes: [{ name: "bug" }] } };
+  const heldOn7 = [{ number: 7, open: true, labels: ["bug"], draft: null, byApp: false, body: "" }];
+
+  it("is gathered when a usage-credits, token-rotation or weekly-limit issue closes, since that may free a Subscription (#439)", async () => {
+    for (const label of ["fabrik:usage-credits", "fabrik:token-rotation", "fabrik:weekly-limit"]) {
+      const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], { 7: issue7 }, ["ready-for-human", label]);
+
+      const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
+
+      expect(snapshot.held).toEqual(heldOn7);
+    }
+  });
+
+  it("holds a weekly-limit issue closed by hand, with the App's own text, and gathers what its held markers name too (#440)", async () => {
+    const issue8 = { ...issue7, number: 8 };
+    const { github, asked } = githubWith([heldMarker(7, "triage", "needs-triage")], { 7: issue7, 8: issue8 }, ["fabrik:weekly-limit"], [
+      heldMarker(8, "triage", "needs-triage"),
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
+
+    expect(snapshot.closedWeeklyLimit).toEqual({
+      number: 60,
+      labels: ["fabrik:weekly-limit"],
+      body: "<!-- fabrik:notified -->",
+      comments: [heldMarker(8, "triage", "needs-triage")],
+    });
+    expect(asked).toEqual([[7, 8]]);
+    expect(snapshot.held).toEqual([...heldOn7, { ...heldOn7[0], number: 8 }]);
+  });
+
+  it("holds no closed weekly-limit issue for any other issue closing", async () => {
+    const { github } = githubWith([], {}, ["fabrik:usage-credits"]);
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
+
+    expect(snapshot.closedWeeklyLimit).toBeNull();
+  });
+
+  it("is gathered when the Kit config changes, since a Subscription newly listed is free (#439)", async () => {
+    const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], { 7: issue7 });
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]");
 
-    expect(snapshot.held).toBeNull();
+    expect(snapshot.held).toEqual(heldOn7);
+  });
+
+  it("isn't gathered for any other event, a Ticket closing among them", async () => {
+    const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], { 7: issue7 }, ["ready-for-agent"]);
+
+    const closed = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 9 }, null, "fabrik-app[bot]");
+    const pushed = await gatherSnapshot(github, repo, { kind: "main-pushed", head: "f".repeat(40) }, null, "fabrik-app[bot]");
+
+    expect(closed.held).toBeNull();
+    expect(pushed.held).toBeNull();
   });
 });
 
@@ -2195,6 +2370,49 @@ describe("Gathering the Kit-owned issues, whose markers steer agent runs (ADR-00
 
     expect(snapshot.kitIssues[0]?.comments).toEqual(comments.map((comment) => comment.body));
   });
+
+  /**
+   * The read-only API, holding `open` Kit-owned weekly-limit issues, #1 the
+   * oldest, which it serves `first` at a time after the cursor, as GitHub's
+   * `issues(first:, after:)` does. Its `totalCount` is `open`.
+   */
+  function githubHolding(open: number) {
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("issueOrPullRequest")) return { repository: {} };
+        if (query.includes("defaultBranchRef")) return { repository: { defaultBranchRef: null, issues: { nodes: [] } } };
+        const retro = nothingNewForTheRetro(query);
+        if (retro !== undefined) return retro;
+        const first = Number(/issues\(states: OPEN, labels: \$labels, first: (\d+)/.exec(query)?.[1]);
+        const start = typeof variables["after"] === "string" ? Number(variables["after"]) : 0;
+        const end = Math.min(open, start + first);
+        const nodes = Array.from({ length: end - start }, (_, at) => ({
+          number: start + at + 1,
+          body: "",
+          author: APP,
+          labels: { nodes: [{ name: "fabrik:weekly-limit" }] },
+          comments: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes: [] },
+        }));
+        return {
+          repository: {
+            owner: { login: "acme" },
+            issues: { totalCount: open, pageInfo: { hasNextPage: end < open, endCursor: String(end) }, nodes },
+          },
+        };
+      },
+    } as unknown as GitHub;
+    return github;
+  }
+
+  it("reads every open Kit-owned issue, page after page, so the 21st, the newest, isn't cut off (#441)", async () => {
+    const snapshot = await gatherSnapshot(githubHolding(21), repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.kitIssues.map(({ number }) => number)).toEqual(Array.from({ length: 21 }, (_, at) => at + 1));
+  });
+
+  it("fails, naming how many are open, rather than act on some of them when more are open than it reads (#441)", async () => {
+    await expect(gatherSnapshot(githubHolding(250), repo, tick, null, "fabrik-app[bot]")).rejects.toThrow(/250 open issues/);
+  });
 });
 
 describe("Gathering a scheduled tick's replay slice (#156)", () => {
@@ -2267,13 +2485,14 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
     expect(store.reads).toBe(0);
   });
 
-  it("reads the replay issues when the Kit-issue page is full, since one may be past it", async () => {
-    const full = Array.from({ length: 20 }, (_, at) => anIssueNode(41 + at, ["fabrik:audit"]));
-    const { github } = githubWith(full, [anIssueNode(140, ["fabrik:replay"], { body: acceptedBody() })]);
+  it("reads no replay issue when none is among twenty or more open Kit-owned issues, since it reads every one of them (#441)", async () => {
+    const many = Array.from({ length: 20 }, (_, at) => anIssueNode(41 + at, ["fabrik:audit"]));
+    const { github, asked } = githubWith(many, [anIssueNode(140, ["fabrik:replay"], { body: acceptedBody() })]);
 
     const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
 
-    expect(snapshot.replay?.issues.map(({ number }) => number)).toEqual([140]);
+    expect(snapshot.replay).toEqual({ issues: [], capacity: null, acceptance: null });
+    expect(asked.some((query) => query.includes("$replay"))).toBe(false);
   });
 
   describe("with a replay issue open", () => {
@@ -2701,11 +2920,73 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
   });
 });
 
+describe("Gathering whether a Reviewer's Verdict's PR merges cleanly (#480)", () => {
+  const reviewed: LoopEvent = {
+    kind: "review-run-finished",
+    pullRequest: 50,
+    headSha: HEAD_SHA,
+    output: "verdict: pass",
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    repoUrl: "https://github.com/acme/shop",
+  };
+
+  /** The PR GitHub has for the Verdict, whose mergeable state reads as each of `reads` in turn, the last one from then on. */
+  function githubReading(reads: string[]) {
+    let read = 0;
+    const pullRequests = pullRequestGitHub();
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>) {
+        if (!/\bmergeable\b/.test(query)) return pullRequests.graphql(query, variables);
+        expect(variables).toMatchObject({ owner: "acme", name: "shop", number: 50 });
+        const mergeable = reads[Math.min(read, reads.length - 1)];
+        read += 1;
+        return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequest: { mergeable } } };
+      },
+    } as unknown as GitHub;
+    return { github, reads: () => read };
+  }
+
+  it.each([
+    ["CONFLICTING", false],
+    ["MERGEABLE", true],
+  ])("reads %s as mergeable %s, against the default branch's head as GitHub reads it with it", async (state, mergeable) => {
+    const snapshot = await gatherSnapshot(githubReading([state]).github, repo, reviewed, null, APP_LOGIN);
+
+    expect(snapshot.mergeable).toEqual({ main: "d".repeat(40), mergeable });
+    expect(snapshot.pullRequest?.number).toBe(50);
+  });
+
+  it("leaves it unknown after a bounded number of reads while GitHub is still working it out", async () => {
+    const waits: number[] = [];
+    const wait = async (ms: number) => void waits.push(ms);
+    const unknown = githubReading(["UNKNOWN"]);
+
+    const snapshot = await gatherSnapshot(unknown.github, repo, reviewed, null, APP_LOGIN, null, null, null, wait);
+
+    expect(snapshot.mergeable).toEqual({ main: "d".repeat(40), mergeable: null });
+    expect(unknown.reads()).toBe(MERGEABLE_READS);
+    expect(waits).toHaveLength(MERGEABLE_READS - 1);
+  });
+
+  it("reads again while GitHub is still working it out, until it knows", async () => {
+    const snapshot = await gatherSnapshot(githubReading(["UNKNOWN", "CONFLICTING"]).github, repo, reviewed, null, APP_LOGIN);
+
+    expect(snapshot.mergeable?.mergeable).toBe(false);
+  });
+
+  it("isn't read for any other PR event", async () => {
+    const snapshot = await gatherSnapshot(githubReading(["CONFLICTING"]).github, repo, { kind: "pull-request-pushed", pullRequest: 50 }, null, APP_LOGIN);
+
+    expect(snapshot.mergeable).toBeNull();
+  });
+});
+
 describe("The names of the jobs a trigger label's run shows up as (#419)", () => {
   it.each([
     ["implement-claim", () => CLAIM_JOB_NAME],
     ["review-checks", () => REVIEW_CHECKS_JOB_NAME],
-    ["review", () => REVIEW_JOB_NAME],
+    // #477: followed by its agent PR, quoted since an unquoted ` #` starts a YAML comment.
+    ["review", () => `"${REVIEW_JOB_NAME} PR #\${{ needs.kit.outputs.pull-request }}"`],
   ])("is the name loop.yml gives the %s job, which the stuck-trigger sweep reads a run behind a label by", async (job, name) => {
     const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
 
@@ -2784,6 +3065,19 @@ describe("Gathering a scheduled tick's trigger-sweep slice (#419)", () => {
     const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
 
     expect(snapshot.triggers?.underWay).toEqual({ implement: false, research: false, review: true, claim: true, designTurns: [3, 12] });
+  });
+
+  // #477: the Review job names its agent PR; a run of an earlier Kit release names none.
+  it("reads a Review job named for its agent PR as Review under way, and an Implement job named for its Ticket as Implement", async () => {
+    const { github } = githubWith([]);
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Review PR #60", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement #12 (Retry 2)", status: "queued" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.triggers?.underWay).toMatchObject({ implement: true, review: true });
   });
 
   it("reads a Review checks job as Review under way", async () => {

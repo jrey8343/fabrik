@@ -21,14 +21,16 @@ import type {
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
-import { designRoundMarker, fromPullRequestLine, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
-import type { Verdict } from "../loop/types.ts";
+import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, MAP_CAP_REFUSAL_OPENING, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
+import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
+import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
+import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
 import { aMonitorIssueBody } from "./monitor.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
-    schema: 5,
+    schema: 6,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -44,6 +46,7 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     stepUp: false,
     stepUpReason: null,
     requestChanges: false,
+    emptyDiff: false,
     prototype: false,
     replay: null,
     baseSha: "b".repeat(40),
@@ -191,8 +194,11 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     followUpIssues: [],
     openAudits: [],
     openRetros: [],
+    audits: [],
+    retros: [],
     openReplays: [],
     openMaps: [],
+    kitIssues: [],
     ...overrides,
   };
 }
@@ -266,6 +272,19 @@ export function aDesignRound(round: number, at: string): CommentFacts {
   return aComment(`${designRoundMarker(round)}\nWhich of these should it do?`, at);
 }
 
+/** The Fabrik App's failure notice for a Design-session turn, at `at`. */
+export function aDesignTurnFailedNotice(at: string): CommentFacts {
+  return aComment(`${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn on #12 failed: it timed out.\n\nReply on this issue to run the turn again.`, at);
+}
+
+/** The Fabrik App's refusal of a Map the Map cap holds, at `at`. */
+export function aMapCapRefusal(at: string): CommentFacts {
+  return aComment(
+    `${DESIGN_TURN_FAILED_MARKER}\n${MAP_CAP_REFUSAL_OPENING} the Map cap is full: #5 is the open Map, and \`caps.maps\` is 1. The Kit left #21 as it is, and the Design session carries on: reply to finish it another way, or close #5 first and ask for the Map again.`,
+    at,
+  );
+}
+
 /** The Fabrik App's Verdict comment on `headSha` at `at`. */
 export function aVerdictComment(verdict: Verdict, headSha: string, at: string, overrides: Partial<CommentFacts> = {}): CommentFacts {
   return aComment(`${verdictMarker({ verdict, source: "reviewer", requestChanges: false, headSha })}\nVerdict: ${verdict}`, at, overrides);
@@ -277,8 +296,8 @@ export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueF
 }
 
 /**
- * Open agent PR 50, a draft at head `h…h` opened on 2026-10-01, with nothing
- * on it unless a test says so. A commit given only its time is the
+ * Open agent PR 50, a draft for Ticket 7 at head `h…h` opened on 2026-10-01,
+ * with nothing on it unless a test says so. A commit given only its time is the
  * Operator's, as aCommit makes it.
  */
 export function anOpenPullRequest(
@@ -286,6 +305,7 @@ export function anOpenPullRequest(
 ): OpenPullRequestFacts {
   return {
     number: 50,
+    ticket: 7,
     title: "Build the thing",
     draft: true,
     headSha: "h".repeat(40),
@@ -294,6 +314,20 @@ export function anOpenPullRequest(
     reviews: [],
     comments: [],
     labelEvents: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Open weekly-limit issue 20, the Fabrik App's, whose limit resets at
+ * `resetsAt` (none said when null), holding these runs with a held marker each.
+ */
+export function aWeeklyLimitIssue(resetsAt: string | null, held: readonly HeldRun[] = [], overrides: Partial<KitIssueSnapshot> = {}): KitIssueSnapshot {
+  return {
+    number: 20,
+    labels: ["fabrik:weekly-limit"],
+    body: ["The weekly usage limit is reached.", ...(resetsAt === null ? [] : ["", resetsAtMarker(resetsAt)])].join("\n"),
+    comments: held.map((run) => `The run is held.\n\n${heldMarker(run)}`),
     ...overrides,
   };
 }

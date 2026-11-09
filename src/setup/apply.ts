@@ -4,7 +4,16 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { ok, type Run } from "./exec.ts";
 import { storeFile } from "./gather.ts";
-import { ADMIN_BYPASS, MERGE_GATE_RULESET, type ProductState, type SetupAction } from "./plan.ts";
+import {
+  ADMIN_BYPASS,
+  type BranchProtection,
+  bypassAllowances,
+  MERGE_GATE_RULESET,
+  type ProductState,
+  requiredChecks,
+  type SetupAction,
+  UNPROTECTED,
+} from "./plan.ts";
 
 export async function apply(run: Run, action: SetupAction, productDir: string, repo: ProductState["repo"]): Promise<void> {
   const cwd = productDir;
@@ -53,24 +62,8 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
       return;
     }
     case "protect-branch": {
-      const body = {
-        required_status_checks: action.requiredChecks.length === 0 ? null : { strict: false, contexts: action.requiredChecks },
-        enforce_admins: false,
-        // A PR, but no approving review: the Operator can't approve their own PRs.
-        // The Merge gate ruleset is what keeps the Fabrik App from merging.
-        required_pull_request_reviews: {
-          required_approving_review_count: 0,
-          dismiss_stale_reviews: true,
-          // Empty lists take away any bypass. GitHub rejects the field (HTTP 422) on a
-          // personal account's repo, which can't have bypass allowances anyway.
-          ...(repo.inOrganization ? { bypass_pull_request_allowances: { users: [], teams: [], apps: [] } } : {}),
-        },
-        restrictions: null,
-        allow_force_pushes: false,
-        allow_deletions: false,
-      };
       const path = `repos/${repo.owner}/${repo.name}/branches/${action.branch}/protection`;
-      await ok(run, "gh", ["api", "--method", "PUT", path, "--input", "-"], { cwd, input: JSON.stringify(body) });
+      await ok(run, "gh", ["api", "--method", "PUT", path, "--input", "-"], { cwd, input: JSON.stringify(action.protection) });
       return;
     }
     case "restrict-default-branch": {
@@ -104,7 +97,7 @@ export function describeAction(action: SetupAction): string {
     case "create-service-account":
       return `create the read-only service account "${action.name}" (reads ${action.vaults.map((v) => `"${v}"`).join(", ")}) and store it as the Actions secret ${action.secret}${action.repo === undefined ? "" : ` on ${action.repo}`}`;
     case "protect-branch":
-      return `protect ${action.branch}: a PR and ${action.requiredChecks.length === 0 ? "no required checks yet" : `the checks ${action.requiredChecks.join(", ")}`}, no bypass, no approving review`;
+      return `protect ${action.branch}: ${[...protectionChanges(action.found ?? UNPROTECTED, action.protection), "every other setting stays as it is"].join("; ")}`;
     case "restrict-default-branch":
       return `${action.rulesetId === null ? "create" : "repair"} the "${MERGE_GATE_RULESET}" ruleset: only repo admins (you) may update the default branch, so the Fabrik App can't merge`;
     case "create-run-store":
@@ -112,6 +105,20 @@ export function describeAction(action: SetupAction): string {
     case "write-store-file":
       return `write ${action.path} in ${action.repo} (${action.why})`;
   }
+}
+
+/** Each setting Setup owns that the protect-branch step changes, from what to what. */
+function protectionChanges(found: BranchProtection, protection: BranchProtection): string[] {
+  const list = (items: readonly string[]) => (items.length === 0 ? "none" : items.join(", "));
+  const changes: string[] = [];
+  if (found.required_pull_request_reviews === null) changes.push("a pull request: not required → required");
+  const [checksBefore, checksAfter] = [requiredChecks(found), requiredChecks(protection)];
+  if (list(checksBefore) !== list(checksAfter)) changes.push(`required checks: ${list(checksBefore)} → ${list(checksAfter)}`);
+  const [reviewsBefore, reviewsAfter] = [found, protection].map((p) => p.required_pull_request_reviews?.required_approving_review_count ?? 0);
+  if (reviewsBefore !== reviewsAfter) changes.push(`approving reviews: ${reviewsBefore} → ${reviewsAfter}`);
+  const [bypassBefore, bypassAfter] = [bypassAllowances(found), bypassAllowances(protection)];
+  if (list(bypassBefore) !== list(bypassAfter)) changes.push(`bypass allowances: ${list(bypassBefore)} → ${list(bypassAfter)}`);
+  return changes;
 }
 
 /** The files in the Product checkout these steps wrote, as describeAction words them. A step of any other kind names none. */

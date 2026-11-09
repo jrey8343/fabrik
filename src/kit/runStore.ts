@@ -24,7 +24,8 @@ export const JUDGE_MODEL = "claude-sonnet-5-5";
 /**
  * How long the judge job may run, in minutes: a Kit constant, not Kit config.
  * One read of a transcript digest held to its budget (DIGEST_BUDGET in
- * src/kit/scorerPrompt.ts), and at most one retry for a malformed answer.
+ * src/kit/scorerPrompt.ts), never retried: a malformed answer fails the
+ * judge (judgeOutput in src/kit/judgeLaunch.ts).
  */
 export const JUDGE_TIMEOUT_MINUTES = 15;
 

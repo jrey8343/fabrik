@@ -4,7 +4,7 @@
 // step summary's lines; red main's part is in ./redMain.ts. Pure, no I/O: the
 // program (src/monitor/main.ts) gathers the facts and applies the plan.
 import type { KitConfig } from "../kit/config.ts";
-import { MONITOR_LABEL, WONTFIX } from "../loop/labels.ts";
+import { MONITOR_LABEL, READY_FOR_HUMAN, WONTFIX } from "../loop/labels.ts";
 import { monitorMarkerIn, monitorMarkerLine } from "../loop/markers.ts";
 import {
   ascending,
@@ -41,6 +41,8 @@ export interface MonitorInput {
    * up. A repo can only lower it from the Kit default, and 0 pauses new error filings.
    */
   readonly cap: number;
+  /** The Operator's GitHub login, whom the Sentry token's rotation issue is assigned to. */
+  readonly operator: string;
 }
 
 export type SentryRead =
@@ -78,7 +80,7 @@ export function monitorPlanFor(input: MonitorInput): MonitorPlan {
   return {
     open: [...errors.open, ...red.open],
     rewrite: [...errors.rewrite, ...red.rewrite],
-    close: red.close,
+    close: [...errors.close, ...red.close],
     summary: [...errors.summary, ...red.summary],
   };
 }
@@ -113,26 +115,30 @@ const SENTRY_TOKEN_ITEM = "`Sentry token` item in the `Fabrik App` 1Password vau
  * are held: their count shows in the stats block of the newest open error
  * issue and in no other. It never comments on, closes or reopens an error
  * issue. A source that isn't set up, or that Sentry refuses, is a quiet note,
- * never a failure.
+ * never a failure; one that read before and whose token then died also gets
+ * the Sentry token's rotation issue (sentryTokenPlan).
  */
-function productionErrors({ monitor, sentry, issues, cap }: MonitorInput): Pick<MonitorPlan, "open" | "rewrite" | "summary"> {
+function productionErrors(input: MonitorInput): MonitorPlan {
+  const { monitor, sentry, issues, cap } = input;
   if (monitor.errors === null || sentry === null) {
     return {
       open: [],
       rewrite: [],
+      close: [],
       summary: ["Production errors are off: set `monitor.errors` in `.fabrik/config.json` to have the Monitor file Sentry's errors."],
     };
   }
+  const token = sentryTokenPlan(sentry, input);
   switch (sentry.kind) {
     case "no-token":
       return {
-        open: [],
+        ...token,
         rewrite: [],
         summary: [`Production errors are dormant: the ${SENTRY_TOKEN_ITEM} is missing or couldn't be read.`],
       };
     case "token-rejected":
       return {
-        open: [],
+        ...token,
         rewrite: [],
         summary: [
           `Production errors are dormant: Sentry rejected the token (${sentry.status}). Rotate the ${SENTRY_TOKEN_ITEM}, with read access to the org's issues and events.`,
@@ -142,6 +148,7 @@ function productionErrors({ monitor, sentry, issues, cap }: MonitorInput): Pick<
       return {
         open: [],
         rewrite: [],
+        close: [],
         summary: [`Warning: Sentry couldn't be read, so no production errors were filed this tick: ${sentry.error}`],
       };
     case "read":
@@ -203,7 +210,63 @@ function productionErrors({ monitor, sentry, issues, cap }: MonitorInput): Pick<
   } else if (open.length === 0) {
     summary.push("No production error needs a new issue.");
   }
-  return { open, rewrite, summary };
+  return { open, rewrite, close: token.close, summary };
+}
+
+/**
+ * The Sentry token's rotation issue (#444), in the dead Claude token's
+ * issue's shape: ready for the Operator and assigned to them, which is its one
+ * notification. A token Sentry rejects, or a missing or unreadable item,
+ * files it, unless the Fabrik App's issue for it is open already or the
+ * source has never read. The Monitor's only record of a read is an issue it
+ * filed for a Sentry group, or for the token before, so until one exists a
+ * token that isn't there is a setup step not done and stays a quiet note.
+ * The first read closes the open one as completed.
+ */
+function sentryTokenPlan(sentry: SentryRead, { issues, operator }: MonitorInput): Pick<MonitorPlan, "open" | "close"> {
+  const newest = newestByMarker(issues);
+  const open = newest.sentryToken?.open === true ? newest.sentryToken : null;
+  if (sentry.kind === "read") {
+    if (open === null) return { open: [], close: [] };
+    return {
+      open: [],
+      close: [
+        {
+          issue: open.number,
+          comment: "Sentry accepted the token again, so the Monitor reads production errors once more and closes this issue as completed.",
+          because: "Sentry accepted the token again.",
+        },
+      ],
+    };
+  }
+  const everRead = newest.byGroup.size > 0 || newest.sentryToken !== null;
+  if (sentry.kind === "failed" || open !== null || !everRead) return { open: [], close: [] };
+  const what =
+    sentry.kind === "token-rejected"
+      ? `Sentry rejected the token the Monitor reads production errors with (${sentry.status}).`
+      : `The Monitor couldn't load the Sentry token: the ${SENTRY_TOKEN_ITEM} is missing or couldn't be read.`;
+  return {
+    open: [
+      {
+        sentryGroup: null,
+        title: "Rotate the Sentry token",
+        body: [
+          monitorMarkerLine({ kind: "sentry-token" }),
+          `${what} Until it's rotated the Monitor files no production error, and the stats on its open error issues stop updating.`,
+          "",
+          "## Steps",
+          "",
+          "- [ ] Create a Sentry auth token with read access to the org's issues and events.",
+          `- [ ] Save it as the credential of the ${SENTRY_TOKEN_ITEM}.`,
+          "",
+          "The Monitor closes this issue itself on the first hourly tick that reads Sentry with the token. Closing it while the token is still refused or missing has the next tick open a fresh one.",
+        ].join("\n"),
+        labels: [MONITOR_LABEL, READY_FOR_HUMAN],
+        assignees: [operator],
+      },
+    ],
+    close: [],
+  };
 }
 
 /** A qualifying group with no open issue: filed new, or as regressed from its issue numbered `regressedFrom`. */

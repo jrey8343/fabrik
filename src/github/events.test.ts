@@ -212,7 +212,7 @@ describe("A finished Implement run's UI evidence", () => {
     captures: [{ route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book.png" }],
   } as const;
   /** Run 9100's push job, in acme/shop, with what its Implement job passed out. */
-  const pushJob = (capture: CaptureOutputs) => ({ ...capture, run: 9100, repoUrl: "https://github.com/acme/shop" });
+  const pushJob = (capture: Omit<CaptureOutputs, "timedOut"> & { timedOut?: boolean }) => ({ timedOut: false, ...capture, run: 9100, repoUrl: "https://github.com/acme/shop" });
   const RUN = "https://github.com/acme/shop/actions/runs/9100/attempts/1";
 
   it("carries the capture result, the head the run built, and where the push job's own run keeps the images and the gallery", () => {
@@ -237,6 +237,12 @@ describe("A finished Implement run's UI evidence", () => {
 
     expect(event).toMatchObject({ evidence: { headSha: HEAD, run: 9100, artifact: null, gallery: null } });
     expect(event).not.toHaveProperty("evidence.result");
+  });
+
+  it("carries a timeout as the capture result when the capture step's own timeout stopped it before it recorded one", () => {
+    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: null, timedOut: true, artifact: null, galleryArtifact: null }), RUN);
+
+    expect(event).toMatchObject({ evidence: { result: { outcome: "failed", reason: "timeout", headSha: HEAD, captures: [] }, headSha: HEAD } });
   });
 
   it("links no gallery when the run kept no gallery artifact, though it kept the images", () => {
@@ -438,7 +444,7 @@ describe("A finished prototype turn", () => {
     captures: [{ route: "/book", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png" }],
   } as const;
   /** Run 9100's push job, in acme/shop, with what the prototype job passed out. */
-  const pushJob = (capture: CaptureOutputs) => ({ ...capture, run: 9100, repoUrl: REPO });
+  const pushJob = (capture: Omit<CaptureOutputs, "timedOut"> & { timedOut?: boolean }) => ({ timedOut: false, ...capture, run: 9100, repoUrl: REPO });
 
   it("carries the turn's output, unparsed, the request the Kit job built it on, the branch, what it changes and the head the push leaves, what capture recorded, and the gallery in the push job's own run", () => {
     const event = prototypeEventFrom(result, request, { changes, head: HEAD }, pushJob({ result: captured, artifact: null, galleryArtifact: 9201 }), RUN);

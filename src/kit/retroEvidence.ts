@@ -125,6 +125,8 @@ export interface AgentPullRequestFacts {
 /** An open agent PR. */
 export interface OpenPullRequestFacts {
   readonly number: number;
+  /** The Ticket its `Closes #n` names, or null. */
+  readonly ticket: number | null;
   readonly title: string;
   readonly draft: boolean;
   readonly headSha: string;

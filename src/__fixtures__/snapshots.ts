@@ -67,7 +67,7 @@ function parentOf({ parent, parentIssue }: Partial<IssueSnapshot>): Pick<IssueSn
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, triggers: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -108,6 +108,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     leftDraftSinceVerdict: false,
     url: "https://github.com/acme/shop/pull/50",
     uiEvidenceMarker: null,
+    changedTests: [],
     ...overrides,
   };
 }
@@ -115,9 +116,9 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
 /** A snapshot of this pull request. */
 export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
-  overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "conflicts">> = {},
+  overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "conflicts" | "mergeable">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, triggers: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR. */
@@ -172,11 +173,14 @@ export function dispatchSnapshotOf(
     startingComment: null,
     audit: null,
     retro: null,
+    weeklyIssues: null,
     replay: null,
     namedPullRequests: null,
     held: null,
+    closedWeeklyLimit: null,
     openMaps: null,
     conflicts: null,
+    mergeable: null,
     triggers: null,
   };
 }
@@ -210,18 +214,21 @@ export function designQueueSnapshotOf(
     startingComment: null,
     audit: null,
     retro: null,
+    weeklyIssues: null,
     replay: null,
     namedPullRequests: null,
     held: null,
+    closedWeeklyLimit: null,
     openMaps: null,
     conflicts: null,
+    mergeable: null,
     triggers: null,
   };
 }
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
 export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, replay: null, namedPullRequests: null, held: null, openMaps: null, conflicts: null, triggers: null, ...overrides };
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, ...overrides };
 }
 
 /**
@@ -337,6 +344,16 @@ export function auditRunSnapshotOf(
 /** A Retro run's snapshot: by default the App's pending Retro #120, its window ending at RETRO_WINDOW_END. */
 export function retroRunSnapshotOf(retro: Partial<IssueSnapshot> = {}): Snapshot {
   return snapshotOf(anIssue({ number: 120, byApp: true, labels: ["fabrik:retro"], body: retroBody(RETRO_WINDOW_END, "pending"), ...retro }));
+}
+
+/**
+ * A scheduled tick's plan without its notes, which say why each part of the
+ * tick did nothing, for a test about what the tick does.
+ */
+export function withoutNotes(plan: Plan): Plan {
+  if (plan.kind !== "act") return plan;
+  const { notes: _notes, ...acting } = plan;
+  return acting;
 }
 
 /**

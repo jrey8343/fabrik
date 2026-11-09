@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import { READY_FOR_AGENT } from "../loop/labels.ts";
 import { ok, type Run } from "./exec.ts";
-import { FABRIK_VAULT, MERGE_GATE_RULESET, type BranchProtection, type MergeGateRuleset, type ProductState, type RunStoreState } from "./plan.ts";
+import { type Allowances, FABRIK_VAULT, MERGE_GATE_RULESET, type BranchProtection, type MergeGateRuleset, type ProductState, type RunStoreState } from "./plan.ts";
 import { DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
 
 /** Everything planSetup needs, for the repo the checks found. */
@@ -74,13 +74,37 @@ export async function storeFile(run: Run, cwd: string, path: string): Promise<{ 
   return { text: Buffer.from(body.content, "base64").toString("utf8"), sha: body.sha };
 }
 
-interface ProtectionResponse {
-  required_status_checks?: { contexts?: string[]; checks?: { context: string }[] } | null;
-  required_pull_request_reviews?: {
-    bypass_pull_request_allowances?: { users?: { login: string }[]; teams?: { slug: string }[]; apps?: { slug: string }[] };
-  } | null;
+/** Who an allowance in GitHub's protection response names: users by login, teams and apps by slug. */
+interface AllowancesResponse {
+  users?: { login: string }[];
+  teams?: { slug: string }[];
+  apps?: { slug: string }[];
 }
 
+type Enabled = { enabled?: boolean } | undefined;
+
+interface ProtectionResponse {
+  required_status_checks?: { strict?: boolean; contexts?: string[]; checks?: { context: string; app_id?: number | null }[] } | null;
+  enforce_admins?: Enabled;
+  required_pull_request_reviews?: {
+    required_approving_review_count?: number;
+    dismiss_stale_reviews?: boolean;
+    require_code_owner_reviews?: boolean;
+    require_last_push_approval?: boolean;
+    dismissal_restrictions?: AllowancesResponse;
+    bypass_pull_request_allowances?: AllowancesResponse;
+  } | null;
+  restrictions?: AllowancesResponse | null;
+  required_linear_history?: Enabled;
+  allow_force_pushes?: Enabled;
+  allow_deletions?: Enabled;
+  block_creations?: Enabled;
+  required_conversation_resolution?: Enabled;
+  lock_branch?: Enabled;
+  allow_fork_syncing?: Enabled;
+}
+
+/** The default branch's whole protection, every setting the PUT takes, so Setup can write back what it doesn't own as it found it. */
 async function gatherProtection(run: Run, cwd: string, repo: ProductState["repo"]): Promise<BranchProtection | null> {
   const result = await run("gh", ["api", `repos/${repo.owner}/${repo.name}/branches/${repo.defaultBranch}/protection`], { cwd });
   if (result.code !== 0) {
@@ -90,15 +114,47 @@ async function gatherProtection(run: Run, cwd: string, repo: ProductState["repo"
   const body = JSON.parse(result.stdout) as ProtectionResponse;
   const checks = body.required_status_checks;
   const reviews = body.required_pull_request_reviews;
-  const bypass = reviews?.bypass_pull_request_allowances;
+  const on = (setting: Enabled) => setting?.enabled === true;
   return {
-    requiredChecks: checks?.contexts ?? checks?.checks?.map((check) => check.context) ?? [],
-    requiresPullRequest: reviews != null,
-    bypassAllowances: [
-      ...(bypass?.apps ?? []).map((app) => `app:${app.slug}`),
-      ...(bypass?.users ?? []).map((user) => `user:${user.login}`),
-      ...(bypass?.teams ?? []).map((team) => `team:${team.slug}`),
-    ],
+    required_status_checks:
+      checks == null
+        ? null
+        : {
+            strict: checks.strict === true,
+            checks:
+              checks.checks?.map(({ context, app_id }) => (typeof app_id === "number" ? { context, app_id } : { context })) ??
+              (checks.contexts ?? []).map((context) => ({ context })),
+          },
+    enforce_admins: on(body.enforce_admins),
+    required_pull_request_reviews:
+      reviews == null
+        ? null
+        : {
+            required_approving_review_count: reviews.required_approving_review_count ?? 0,
+            dismiss_stale_reviews: reviews.dismiss_stale_reviews === true,
+            require_code_owner_reviews: reviews.require_code_owner_reviews === true,
+            require_last_push_approval: reviews.require_last_push_approval === true,
+            ...(reviews.dismissal_restrictions === undefined ? {} : { dismissal_restrictions: allowances(reviews.dismissal_restrictions) }),
+            ...(reviews.bypass_pull_request_allowances === undefined
+              ? {}
+              : { bypass_pull_request_allowances: allowances(reviews.bypass_pull_request_allowances) }),
+          },
+    restrictions: body.restrictions == null ? null : allowances(body.restrictions),
+    required_linear_history: on(body.required_linear_history),
+    allow_force_pushes: on(body.allow_force_pushes),
+    allow_deletions: on(body.allow_deletions),
+    block_creations: on(body.block_creations),
+    required_conversation_resolution: on(body.required_conversation_resolution),
+    lock_branch: on(body.lock_branch),
+    allow_fork_syncing: on(body.allow_fork_syncing),
+  };
+}
+
+function allowances(response: AllowancesResponse): Allowances {
+  return {
+    users: (response.users ?? []).map((user) => user.login),
+    teams: (response.teams ?? []).map((team) => team.slug),
+    apps: (response.apps ?? []).map((app) => app.slug),
   };
 }
 

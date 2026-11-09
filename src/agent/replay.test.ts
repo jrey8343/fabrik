@@ -192,6 +192,7 @@ describe("A replay arm's Implement input", () => {
     expect(replay.branch).toMatchObject({ name: first.branch.name, base: { sha: baseSha }, head: null });
     expect(await git(replayed, "rev-parse", "--abbrev-ref", "HEAD")).toBe("fabrik/ticket-7");
     expect(replay.operatorComments).toBeNull();
+    expect(replay.brief).toBeNull();
   });
 
   it("refuses a checkout that isn't at baseSha, so an arm never builds from some other commit", async () => {

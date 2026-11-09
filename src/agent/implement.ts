@@ -365,6 +365,13 @@ export interface ImplementInput {
   readonly kind: ImplementRunKind;
   /** For a run on an existing PR, the Operator comments it was given; null for a first run. */
   readonly operatorComments: GivenOperatorComment[] | null;
+  /**
+   * For a run on an existing PR, what its prompt carried about the PR beyond
+   * the Ticket and its context: the findings, the Operator's Request changes
+   * or the rebase it was asked for, kept for the judge (#450). Null for a
+   * first run, whose prompt carried the Ticket alone.
+   */
+  readonly brief: string | null;
   /** For a Request-changes run told to merge main in (#341), the default branch head it was told to merge; otherwise null. */
   readonly mergeMain: string | null;
 }
@@ -400,7 +407,7 @@ export async function implementInput(
   const onPullRequest = files.pullRequest !== "";
   const branch = onPullRequest ? await continueAgentBranch(productDir, ticket) : await startAgentBranch(productDir, ticket);
   const parts = await implementContext(productDir, files.spec, config);
-  if (!onPullRequest) return { branch, parts, kind: "first", operatorComments: null, mergeMain: null };
+  if (!onPullRequest) return { branch, parts, kind: "first", operatorComments: null, mergeMain: null, brief: null };
   const conflict = files.conflict ?? "";
   const merge = conflict === "" && files.review !== "" ? await mainToMerge(productDir, files.defaultBranch || "main") : null;
   const context =
@@ -410,7 +417,14 @@ export async function implementInput(
         ? await retryContext(files.pullRequest)
         : await requestChangesContext(files.pullRequest, files.review, merge);
   const kind = conflict === "" && files.review !== "" ? "request-changes" : "pull-request";
-  return { branch, parts: [...parts, ...context.parts], kind, operatorComments: context.operatorComments, mergeMain: merge?.main ?? null };
+  return {
+    branch,
+    parts: [...parts, ...context.parts],
+    kind,
+    operatorComments: context.operatorComments,
+    mergeMain: merge?.main ?? null,
+    brief: context.parts.join("\n\n"),
+  };
 }
 
 /**

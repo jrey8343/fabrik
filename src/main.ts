@@ -9,7 +9,7 @@ import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agen
 import { type AgentBranchGit, rebaseBranchOntoMain, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
-import { applyPlan, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
+import { applyPlan, emptyDiffIn, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import { describePlan } from "./github/describePlan.ts";
 import {
@@ -25,11 +25,11 @@ import {
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
-import { claimLanding, type Landing, type LandingFailure, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
+import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { readReplayRunEnded } from "./kit/replayRecord.ts";
-import { readStoreReplayGates, readStoreRunRecords, readStoreScoreFiles } from "./kit/storeCheckout.ts";
+import { readStoreReplayGates, readStoreReplayPatches, readStoreRunRecords, readStoreScoreFiles } from "./kit/storeCheckout.ts";
 import type { ReplayStore } from "./github/replaySlice.ts";
 import { planFor } from "./loop/rules.ts";
 import type { KitConfig, LoopEvent } from "./loop/types.ts";
@@ -42,7 +42,8 @@ function required(name: string): string {
   return value;
 }
 
-type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranchGit | null };
+/** The run's Loop event and where it came from; with no event, `why` is a reason the push job's input gave, said as is (#436). */
+type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranchGit | null; why?: string };
 
 /**
  * The Loop event this run applies: in the push job (FABRIK_NEEDS), what the
@@ -84,7 +85,7 @@ async function loopEvent(repo: Repo, config: KitConfig): Promise<EventSource> {
     case "actions-event":
       return actionsEvent;
     case "nothing":
-      return { event: null, source: input.reason, branch: null };
+      return { event: null, source: "the push job's input", branch: null, why: input.reason };
     case "agent-failure":
       return { ...(await failedRunEvent(input, join(agentDir, AGENT_FAILURE_FILE))), branch: null };
     case "review":
@@ -180,7 +181,7 @@ async function agentResultEvent(
     started: input.mainAtStart ?? null,
   });
   // The capture result and artifact ids come from the Implement job's outputs; the core decides whether the run is UI.
-  const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null };
+  const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null, timedOut: false };
   const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
   return { event: agentRunEventFrom(result, branch.changes, retry, null, evidence, thisRunUrl()), source, branch };
 }
@@ -223,9 +224,10 @@ async function replayRunEvent(path: string, config: KitConfig): Promise<EventSou
       ? null
       : {
           // Ticket numbers repeat across Product repos, so only this repo's count.
-          records: Object.values(await readStoreRunRecords(storeDir, config.subscriptions)).filter((record) => record.repo === thisRepo),
+          records: Object.values((await readStoreRunRecords(storeDir, config.subscriptions)).records).filter((record) => record.repo === thisRepo),
           scoreFiles: Object.values(await readStoreScoreFiles(storeDir)).filter((file) => file.repo === thisRepo),
           gates: await readStoreReplayGates(storeDir),
+          patches: await readStoreReplayPatches(storeDir),
         };
   const { resetsAt, ...run } = ended;
   return {
@@ -263,6 +265,7 @@ async function finishedReviewEvent(
     runUrl: thisRunUrl(),
     repoUrl: thisRepoUrl(),
     failedChecks: input.failedChecks,
+    skippedChecks: input.skippedChecks,
     result,
   });
   return {
@@ -278,7 +281,7 @@ async function finishedReviewEvent(
  */
 function storeCheckoutAt(dir: string | undefined, config: KitConfig): ReplayStore {
   return {
-    records: async () => (dir === undefined || dir === "" ? null : Object.values(await readStoreRunRecords(dir, config.subscriptions))),
+    records: async () => (dir === undefined || dir === "" ? null : Object.values((await readStoreRunRecords(dir, config.subscriptions)).records)),
   };
 }
 
@@ -383,9 +386,9 @@ async function main(landing: Landing | null): Promise<void> {
   }
   operator = config.operator;
 
-  const { event, source, branch } = await loopEvent(repo, config);
+  const { event, source, branch, why } = await loopEvent(repo, config);
   if (event === null) {
-    await report(`Nothing to do: the Loop doesn't act on ${source}`);
+    await report(`Nothing to do: ${why ?? `the Loop doesn't act on ${source}`}`);
     return;
   }
 
@@ -409,7 +412,7 @@ async function main(landing: Landing | null): Promise<void> {
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
   const plan = planFor(event, snapshot, config);
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
-  // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304).
+  // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304), as may a Review's pass (#480).
   const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
   const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
   const { preview, readded } = await applyPlan(
@@ -425,6 +428,8 @@ async function main(landing: Landing | null): Promise<void> {
   // The replay jobs run only on the Ticket this run's claim marked in progress, once it has.
   const claimed = replayClaimIn(plan);
   if (claimed !== null) await appendFile(required("GITHUB_OUTPUT"), `replay-ticket=${claimed}\n`);
+  // The push job's Run record says the Implement run left an empty diff, once this plan has counted it (#448).
+  if (emptyDiffIn(plan)) await appendFile(required("GITHUB_OUTPUT"), "empty-diff=true\n");
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
   // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts): a UI
@@ -454,6 +459,13 @@ const landing = await thisLanding();
 if (landing !== null) await report(`The ${landing.job} job is landing ${landing.doing}.`);
 await main(landing).catch(async (error: unknown) => {
   console.error(error instanceof Error ? error.message : error);
-  if (landing !== null) await reportLandingFailure(landing, { kind: "error", error });
+  if (landing !== null) {
+    await reportLandingFailure(landing, { kind: "error", error });
+  } else {
+    // Any other job, the scheduled tick's included (#438), says in its summary which action failed and what landed before it.
+    const { summary, annotation } = jobFailureReport(error);
+    await report(summary);
+    console.log(`::error title=The Loop failed::${annotation}`);
+  }
   process.exitCode = 1;
 });

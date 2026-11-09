@@ -132,6 +132,14 @@ describe("The checks before setup plans anything", () => {
     );
   });
 
+  it("stop when the repo has no default branch on GitHub, as one nothing has been pushed to", async () => {
+    const view = { owner: { login: "acme" }, name: "clinic", defaultBranchRef: null, isInOrganization: false, viewerPermission: "ADMIN" };
+
+    expect(await problem({ [REPO_VIEW]: { stdout: JSON.stringify(view) }, "git branch --show-current": { stdout: "main\n" } })).toBe(
+      "acme/clinic has no default branch on GitHub: nothing has been pushed to it yet. Push a first commit to it, then run setup again.",
+    );
+  });
+
   it("stop with no branch checked out", async () => {
     expect(await problem({ "git branch --show-current": { stdout: "\n" } })).toBe(
       "This clone isn't on a branch. Switch to main with git switch main, then run setup again.",

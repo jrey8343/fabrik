@@ -8,19 +8,36 @@ describe("An agent PR's required checks", () => {
     expect(requiredChecksOutcome([check("build", "pass"), check("test", "pass")], [])).toEqual({ kind: "green" });
   });
 
-  it("are still pending while any one runs", () => {
-    expect(requiredChecksOutcome([check("build", "pass"), check("test", "pending")], [])).toEqual({ kind: "pending" });
+  it("are still pending while any one runs, naming it", () => {
+    expect(requiredChecksOutcome([check("build", "pass"), check("test", "pending")], [])).toEqual({
+      kind: "pending",
+      unreported: [],
+      running: ["test"],
+    });
   });
 
   it("are red as soon as one fails, naming it", () => {
     expect(requiredChecksOutcome([check("build", "fail"), check("test", "pending")], [])).toEqual({
       kind: "red",
       failed: ["build"],
+      skipped: [],
     });
   });
 
-  it.each(["cancel", "skipping"] as const)("count a %s check as not passed", (bucket) => {
-    expect(requiredChecksOutcome([check("build", bucket)], [])).toEqual({ kind: "red", failed: ["build"] });
+  it("count a cancelled check as not passed", () => {
+    expect(requiredChecksOutcome([check("build", "cancel")], [])).toEqual({ kind: "red", failed: ["build"], skipped: [] });
+  });
+
+  it("count a skipped or neutral check as not passed, naming it as skipped too", () => {
+    expect(requiredChecksOutcome([check("build", "fail"), check("e2e", "skipping")], [])).toEqual({
+      kind: "red",
+      failed: ["build", "e2e"],
+      skipped: ["e2e"],
+    });
+  });
+
+  it("never name a check as skipped when another run of it failed", () => {
+    expect(requiredChecksOutcome([check("e2e", "skipping"), check("e2e", "fail")], [])).toEqual({ kind: "red", failed: ["e2e"], skipped: [] });
   });
 
   it("are only the Kit config's gating checks when it lists some", () => {
@@ -29,8 +46,12 @@ describe("An agent PR's required checks", () => {
     expect(requiredChecksOutcome(checks, ["build"])).toEqual({ kind: "green" });
   });
 
-  it("wait for a gating check that hasn't reported yet", () => {
-    expect(requiredChecksOutcome([check("build", "pass")], ["build", "e2e"])).toEqual({ kind: "pending" });
+  it("wait for a gating check that hasn't reported yet, naming it apart from the ones still running", () => {
+    expect(requiredChecksOutcome([check("build", "pending")], ["build", "e2e"])).toEqual({
+      kind: "pending",
+      unreported: ["e2e"],
+      running: ["build"],
+    });
   });
 
   it("are green when nothing gates the PR", () => {

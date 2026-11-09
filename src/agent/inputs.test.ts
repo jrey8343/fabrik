@@ -37,7 +37,7 @@ const issuePage = (comments: string[], next: string | null) => ({
       body: "As a patient…",
       author: { login: "someone" },
       labels: { nodes: [{ name: "ready-for-agent" }] },
-      parent: { number: 3, title: "Bookings", body: "The Spec" },
+      parent: { number: 3, title: "Bookings", body: "The Spec", subIssues: { nodes: [] } },
       comments: {
         pageInfo: { hasNextPage: next !== null, endCursor: next },
         nodes: comments.map((body) => ({ author: { login: "operator" }, body, createdAt: "2026-11-01T00:00:00Z" })),
@@ -65,6 +65,51 @@ describe("An agent job's inputs", () => {
       ],
     });
     expect(spec).toEqual({ number: 3, title: "Bookings", body: "The Spec" });
+  });
+
+  it("reads the Spec's other Tickets, each with its state label, open or closed, and its PR, so a split can see what they cover (#475)", async () => {
+    const ticket = (number: number, title: string, state: string, labels: string[], pullRequests: { number: number; state: string }[]) => ({
+      number,
+      title,
+      state,
+      labels: { nodes: labels.map((name) => ({ name })) },
+      closedByPullRequestsReferences: { nodes: pullRequests },
+    });
+    const page = issuePage([], null);
+    const underASpec = {
+      repository: {
+        issue: {
+          ...page.repository.issue,
+          parent: {
+            ...page.repository.issue.parent,
+            subIssues: {
+              nodes: [
+                ticket(5, "The booking model", "CLOSED", ["enhancement"], [{ number: 20, state: "MERGED" }]),
+                ticket(6, "The booking confirmation UI", "OPEN", ["ready-for-agent", "enhancement"], [{ number: 21, state: "CLOSED" }, { number: 22, state: "OPEN" }]),
+                ticket(7, "Add a waitlist", "OPEN", ["needs-design"], []),
+                ticket(8, "Add the booking emails", "OPEN", ["needs-design"], []),
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const { spec, otherTickets } = await readIssue(graphqlReturning(underASpec), repo, 7, "operator");
+
+    expect(spec).toEqual({ number: 3, title: "Bookings", body: "The Spec" });
+    expect(otherTickets).toEqual([
+      { number: 5, title: "The booking model", stateLabel: null, open: false, pullRequest: { number: 20, state: "merged" } },
+      { number: 6, title: "The booking confirmation UI", stateLabel: "ready-for-agent", open: true, pullRequest: { number: 22, state: "open" } },
+      { number: 8, title: "Add the booking emails", stateLabel: "needs-design", open: true, pullRequest: null },
+    ]);
+  });
+
+  it("reads no other Tickets for an issue with no parent", async () => {
+    const page = issuePage([], null);
+    const alone = { repository: { issue: { ...page.repository.issue, parent: null } } };
+
+    expect(await readIssue(graphqlReturning(alone), repo, 7, "operator")).toMatchObject({ spec: null, otherTickets: [] });
   });
 
   it("names the Operator once, and marks each comment by a bot or by the Operator, so a forged round reads as neither (#426)", async () => {

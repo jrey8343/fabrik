@@ -180,6 +180,21 @@ describe("Review: the Verdict marker", () => {
     expect(actionsOf(plan)[0]).toEqual({ kind: "remove-label", issue: 50, label: "agent:review" });
   });
 
+  // The Kit adds it when a conflict-only or Request-changes run ends without pushing; a later Verdict means the Loop has the PR again (#436).
+  it.each([["a pass", "verdict: pass"], ["an Execution flaw", "verdict: execution-flaw\n\nThe empty-cart case throws."]])(
+    "%s takes ready-for-human off the PR",
+    (_, output) => {
+      const plan = planFor(reviewed(output), snapshotOfPullRequest(aPullRequest({ labels: ["ready-for-human"] })), kitConfig());
+
+      expect(actionsOf(plan)).toContainEqual({ kind: "remove-label", issue: 50, label: "ready-for-human" });
+    },
+  );
+
+  it("leaves a PR without ready-for-human with no label to take off", () => {
+    const plan = planFor(reviewed("verdict: pass"), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    expect(actionsOf(plan).filter((action) => action.kind === "remove-label")).toEqual([]);
+  });
 });
 
 describe("Review: red CI", () => {
@@ -198,6 +213,22 @@ describe("Review: red CI", () => {
     expect(body).toContain("`test`");
     expect(notificationsOf(plan)).toEqual([]);
     expect(body).toContain(`[The run](${RUN})`);
+  });
+
+  it("says a skipped or neutral required check was skipped, which a Retry can't change, apart from the ones that didn't pass", () => {
+    const plan = planFor(redChecks({ failed: ["build", "e2e"], skipped: ["e2e"] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    const [body] = commentsOf(plan);
+    expect(body).toContain("These required checks didn't pass, so the Reviewer didn't run:\n\n- `build`");
+    expect(body).toContain("These required checks were skipped or reported neutral, which a Retry can't change:\n\n- `e2e`");
+  });
+
+  it("says only that the checks were skipped when none failed", () => {
+    const plan = planFor(redChecks({ failed: ["e2e"], skipped: ["e2e"] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    const [body] = commentsOf(plan);
+    expect(body).toContain("These required checks were skipped or reported neutral, so the Reviewer didn't run, and a Retry can't change that:\n\n- `e2e`");
+    expect(body).not.toContain("didn't pass");
   });
 });
 
@@ -229,6 +260,75 @@ describe("Review: the Reviewer's Verdict", () => {
     expect(notificationsOf(plan, "jrey")).toEqual(["review request on #50"]);
     // The Reviewer's findings mention nobody.
     expect(commentsOf(plan)[0]).not.toMatch(/@someone/);
+  });
+
+  describe("a pass on a PR that conflicts with main (#480)", () => {
+    const MAIN = "c".repeat(40);
+    const conflicting = { main: MAIN, mergeable: false };
+
+    it("posts the Verdict and brings the draft up to date with main instead: no Merge gate, no review request", () => {
+      const plan = planFor(reviewed("verdict: pass\n\nLooks good."), snapshotOfPullRequest(aPullRequest(), { operator: "jrey", mergeable: conflicting }), kitConfig());
+
+      const actions = actionsOf(plan);
+      expect(actions.map((action) => action.kind)).toEqual(["comment", "rebase-onto-main"]);
+      expect(verdictsPostedIn(commentsOf(plan))).toEqual([{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }]);
+      expect(notificationsOf(plan, "jrey")).toEqual([]);
+      const rebase = actions[1] as Extract<Action, { kind: "rebase-onto-main" }>;
+      expect(rebase).toMatchObject({ pullRequest: 50, branch: "fabrik/ticket-7", onto: MAIN });
+      // It's in draft already and stays there, so a pass on the up-to-date head brings it to the Merge gate.
+      expect(rebase.clean).toEqual([]);
+      expect(rebase.refused).toEqual([]);
+      expect(rebase.pushed).toEqual([
+        {
+          kind: "comment",
+          issue: 50,
+          body: [
+            `<!-- fabrik:conflict-attempt ${MAIN} rebased -->`,
+            "#50 passed its Review but conflicts with `main` at ccccccc, so the Kit rebased `fabrik/ticket-7` onto it before asking for your review. The rebase was clean, so no agent ran and no retry was used.",
+            "",
+            "The PR stays in draft, and Review runs again on the rebased head; a pass brings it to you.",
+          ].join("\n"),
+        },
+      ]);
+    });
+
+    it("when the rebase conflicts, starts the conflict-only run, whose Verdict is marked as one, and the PR stays in draft", () => {
+      const plan = planFor(reviewed("verdict: pass\n\nLooks good."), snapshotOfPullRequest(aPullRequest(), { mergeable: conflicting }), kitConfig());
+
+      const rebase = actionsOf(plan)[1] as Extract<Action, { kind: "rebase-onto-main" }>;
+      expect(rebase.conflicted).toEqual([
+        {
+          kind: "comment",
+          issue: 50,
+          body: [
+            `<!-- fabrik:conflict-attempt ${MAIN} conflict-run -->`,
+            "#50 passed its Review but conflicts with `main` at ccccccc, and rebasing `fabrik/ticket-7` onto it conflicts too.",
+            "",
+            "A conflict-only Implementer run starts now, on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry, but an Execution flaw on its push calls for one like any other. The PR stays in draft, and Review runs again on the run's push; a pass brings it to you.",
+          ].join("\n"),
+        },
+        { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
+      ]);
+    });
+
+    it.each([
+      ["GitHub hadn't worked out whether it conflicts", { main: MAIN, mergeable: null }, []],
+      ["it doesn't conflict", { main: MAIN, mergeable: true }, []],
+      ["the default branch has no head", { main: null, mergeable: false }, []],
+      // One attempt per main head: one already made there is left to the Operator, as the conflict check leaves it.
+      ["it was already tried against that head of main", conflicting, [MAIN]],
+    ])("takes the PR to the Merge gate as before when %s", (_, mergeable, conflictAttempts) => {
+      const plan = planFor(
+        reviewed("verdict: pass\n\nLooks good."),
+        snapshotOfPullRequest(aPullRequest({ conflictAttempts }), { operator: "jrey", mergeable }),
+        kitConfig(),
+      );
+
+      expect(actionsOf(plan).filter((action) => action.kind !== "comment")).toEqual([
+        { kind: "mark-ready-for-review", pullRequest: 50 },
+        { kind: "request-review", pullRequest: 50, reviewer: "jrey" },
+      ]);
+    });
   });
 
   it("an Execution-flaw Verdict is posted and starts a retry: it doesn't leave draft or notify anyone", () => {

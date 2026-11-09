@@ -238,6 +238,11 @@ export const UNMARKED_RETRY_PUSH = "The Implementer pushed a fix for the Executi
 /** The first line of the Kit's comment on a Ticket whose Implement run changed nothing. */
 export const EMPTY_DIFF_MARKER = "<!-- fabrik:empty-diff -->";
 
+/** Whether a comment body is the Kit's empty-diff comment: what the Loop counts, and what an Implement run's Run record says. */
+export function isEmptyDiffComment(body: string): boolean {
+  return body.startsWith(EMPTY_DIFF_MARKER);
+}
+
 /** A Design-session round's first line. */
 export const DESIGN_ROUND_MARKER = /^<!-- fabrik:design-round (\d+) -->/;
 
@@ -251,6 +256,14 @@ export function designRoundMarker(round: number): string {
  * keeps its slot while that notice is the Operator's move (#147).
  */
 export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
+
+/** The opening of the Kit's refusal of a Map the Map cap holds, on the line under its DESIGN_TURN_FAILED_MARKER. */
+export const MAP_CAP_REFUSAL_OPENING = "This turn ended in a Map, but";
+
+/** Whether a bot's comment is the Kit's refusal of a Map the Map cap holds, rather than a Design-session turn's failure notice. */
+export function refusedByMapCap(body: string): boolean {
+  return body.startsWith(`${DESIGN_TURN_FAILED_MARKER}\n${MAP_CAP_REFUSAL_OPENING}`);
+}
 
 /**
  * The first line of the Kit's failure notice for a Researcher run on a
@@ -420,26 +433,33 @@ export const PROTOTYPE_FAILURE_ROUND_MARKER = "<!-- fabrik:prototype-failed -->"
 /** The heading of a Map's Decisions so far: one line under it per Decision resolved. */
 export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";
 
-/** What a Monitor issue's marker line says it tracks (#148): a Sentry group, or red main. */
-export type MonitorMarker = { readonly kind: "sentry"; readonly group: string } | { readonly kind: "red-main" };
+/**
+ * What a Monitor issue's marker line says it tracks (#148): a Sentry group,
+ * red main, or the dead Sentry token the Operator is asked to rotate (#444).
+ */
+export type MonitorMarker =
+  | { readonly kind: "sentry"; readonly group: string }
+  | { readonly kind: "red-main" }
+  | { readonly kind: "sentry-token" };
 
 /**
- * A Monitor issue's marker line, naming the Sentry group or the red main it
- * tracks. Only the line itself counts, never the Monitor block's markers.
+ * A Monitor issue's marker line, naming the Sentry group, the red main or the
+ * Sentry token it tracks. Only the line itself counts, never the Monitor block's markers.
  */
-const MONITOR_MARKER = /^<!-- fabrik:monitor (?:sentry:(\S+)|red-main) -->$/m;
+const MONITOR_MARKER = /^<!-- fabrik:monitor (?:sentry:(\S+)|(red-main|sentry-token)) -->$/m;
 
 /** The Monitor marker in this body, or null when it has none. */
 export function monitorMarkerIn(body: string): MonitorMarker | null {
   const match = MONITOR_MARKER.exec(body);
   if (match === null) return null;
   const group = match[1];
-  return group === undefined ? { kind: "red-main" } : { kind: "sentry", group };
+  if (group !== undefined) return { kind: "sentry", group };
+  return { kind: match[2] === "sentry-token" ? "sentry-token" : "red-main" };
 }
 
 /** The marker line a Monitor issue's body opens with, for what it tracks. */
 export function monitorMarkerLine(marker: MonitorMarker): string {
-  return marker.kind === "sentry" ? `<!-- fabrik:monitor sentry:${marker.group} -->` : "<!-- fabrik:monitor red-main -->";
+  return marker.kind === "sentry" ? `<!-- fabrik:monitor sentry:${marker.group} -->` : `<!-- fabrik:monitor ${marker.kind} -->`;
 }
 
 /**

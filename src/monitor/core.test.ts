@@ -1193,3 +1193,95 @@ describe("The groups whose latest event the program reads", () => {
     expect([...groupsNeedingLatestEvent(plan)]).toEqual([]);
   });
 });
+
+describe("A dead Sentry token", () => {
+  /** The Monitor's open issue asking the Operator to rotate the Sentry token, number 70. */
+  const rotationIssue = (overrides: Partial<MonitorIssue> = {}): MonitorIssue =>
+    aMonitorIssue({
+      number: 70,
+      labels: ["fabrik:monitor", "ready-for-human"],
+      body: "<!-- fabrik:monitor sentry-token -->\nSentry rejected the token the Monitor reads production errors with.",
+      ...overrides,
+    });
+  /** Evidence the source once read: the Monitor filed an issue for a Sentry group, closed since. */
+  const onceRead = [aClosedMonitorIssue()];
+
+  it.each([
+    ["Sentry rejects the token", { kind: "token-rejected", status: 401 } as const],
+    ["the token's 1Password item is missing", { kind: "no-token" } as const],
+  ])("files one Rotate the Sentry token issue, ready for the Operator and assigned to them, the first tick %s after a read", (_case, sentry) => {
+    const plan = monitorPlanFor(monitorInput([], { sentry, issues: onceRead }));
+
+    expect(plan.open).toHaveLength(1);
+    expect(plan.open[0]).toMatchObject({
+      sentryGroup: null,
+      title: "Rotate the Sentry token",
+      labels: ["fabrik:monitor", "ready-for-human"],
+      assignees: ["operator"],
+    });
+    expect(plan.open[0]?.body.split("\n")[0]).toBe("<!-- fabrik:monitor sentry-token -->");
+    expect(plan.open[0]?.body).toContain("`Sentry token` item in the `Fabrik App` 1Password vault");
+  });
+
+  it("says in the issue that Sentry refused the token, with the status it gave", () => {
+    const plan = monitorPlanFor(monitorInput([], { sentry: { kind: "token-rejected", status: 403 }, issues: onceRead }));
+
+    expect(plan.open[0]?.body).toContain("Sentry rejected the token the Monitor reads production errors with (403)");
+  });
+
+  it("says in the issue that the token's 1Password item is missing or couldn't be read", () => {
+    const plan = monitorPlanFor(monitorInput([], { sentry: { kind: "no-token" }, issues: onceRead }));
+
+    expect(plan.open[0]?.body).toContain(
+      "The Monitor couldn't load the Sentry token: the `Sentry token` item in the `Fabrik App` 1Password vault is missing or couldn't be read.",
+    );
+  });
+
+  it.each([
+    ["Sentry rejects the token", { kind: "token-rejected", status: 401 } as const],
+    ["the token's 1Password item is missing", { kind: "no-token" } as const],
+  ])("files nothing again while its rotation issue is open and %s", (_case, sentry) => {
+    const plan = monitorPlanFor(monitorInput([], { sentry, issues: [...onceRead, rotationIssue()] }));
+
+    expect(plan.open).toEqual([]);
+    expect(plan.close).toEqual([]);
+  });
+
+  it("files nothing while the source has never read, so a setup step not done stays a quiet note", () => {
+    const plan = monitorPlanFor(monitorInput([], { sentry: { kind: "no-token" } }));
+
+    expect(plan.open).toEqual([]);
+  });
+
+  it("goes only by the Fabrik App's issues for evidence the source once read", () => {
+    const plan = monitorPlanFor(monitorInput([], { sentry: { kind: "token-rejected", status: 401 }, issues: [aMonitorIssue({ byApp: false })] }));
+
+    expect(plan.open).toEqual([]);
+  });
+
+  it("files a fresh one when the token dies again after the Monitor closed the last", () => {
+    const closed = rotationIssue({ open: false, stateReason: "completed", closedAt: "2026-11-04T10:00:00Z" });
+
+    const plan = monitorPlanFor(monitorInput([], { sentry: { kind: "token-rejected", status: 401 }, issues: [closed] }));
+
+    expect(plan.open.map((issue) => issue.title)).toEqual(["Rotate the Sentry token"]);
+  });
+
+  it("closes the open rotation issue as completed on the first tick that reads Sentry, with a note", () => {
+    const plan = monitorPlanFor(monitorInput([aGroup({ events24h: 1 })], { issues: [...onceRead, rotationIssue()] }));
+
+    expect(plan.close).toEqual([
+      {
+        issue: 70,
+        comment: "Sentry accepted the token again, so the Monitor reads production errors once more and closes this issue as completed.",
+        because: "Sentry accepted the token again.",
+      },
+    ]);
+  });
+
+  it("leaves the rotation issue open while Sentry can't be read for any other reason", () => {
+    const plan = monitorPlanFor(monitorInput([], { sentry: { kind: "failed", error: "Sentry answered 502" }, issues: [...onceRead, rotationIssue()] }));
+
+    expect(plan.close).toEqual([]);
+  });
+});

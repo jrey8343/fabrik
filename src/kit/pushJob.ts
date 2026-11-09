@@ -28,6 +28,8 @@ export interface CaptureOutputs {
   readonly artifact: number | null;
   /** The id of the unzipped gallery artifact (`ui-gallery-artifact`). */
   readonly galleryArtifact: number | null;
+  /** Whether the capture step's own timeout stopped it (`ui-capture-timed-out`), so it recorded no result. */
+  readonly timedOut: boolean;
 }
 
 export type PushJobInput =
@@ -63,6 +65,8 @@ export type PushJobInput =
       readonly ticket: number;
       readonly headSha: string;
       readonly failedChecks: readonly string[];
+      /** The ones among them that were skipped or reported neutral. */
+      readonly skippedChecks: readonly string[];
       /** Whether green checks let the Reviewer run, so its result is there to apply. */
       readonly withResult: boolean;
     }
@@ -188,9 +192,10 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       const outcome = checks.outputs["checks"];
       const headSha = checks.outputs["head-sha"] ?? "";
       const failedChecks = readNames(checks.outputs["failed"]);
-      if (outcome === "red") return { kind: "review", pullRequest, ticket, headSha, failedChecks, withResult: false };
+      const skippedChecks = readNames(checks.outputs["skipped"]);
+      if (outcome === "red") return { kind: "review", pullRequest, ticket, headSha, failedChecks, skippedChecks, withResult: false };
       if (outcome === "green" && reviewer?.result === "success") {
-        return { kind: "review", pullRequest, ticket, headSha, failedChecks, withResult: true };
+        return { kind: "review", pullRequest, ticket, headSha, failedChecks, skippedChecks, withResult: true };
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };
     }
@@ -220,6 +225,7 @@ function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
     result: read?.ok === true ? read.result : null,
     artifact: numberOr(outputs["ui-evidence-artifact"]),
     galleryArtifact: numberOr(outputs["ui-gallery-artifact"]),
+    timedOut: outputs["ui-capture-timed-out"] === "true",
   };
 }
 
@@ -241,7 +247,7 @@ function numberOr(text: string | undefined): number | null {
 function readNames(text: string | undefined): string[] {
   const value: unknown = JSON.parse(text === undefined || text === "" ? "[]" : text);
   if (!Array.isArray(value) || !value.every((name) => typeof name === "string")) {
-    throw new Error("The Review checks job's failed checks are not a list of names");
+    throw new Error("The Review checks job's failed or skipped checks are not a list of names");
   }
   return value;
 }

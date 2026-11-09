@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "./client.ts";
-import { gatherGitHubFacts, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
+import { gatherEveryRepoFacts, gatherGitHubFacts, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -87,10 +87,16 @@ interface RawRepo {
   openAudits?: unknown[];
   /** The open issues with the fabrik:retro label. */
   openRetros?: unknown[];
+  /** The newest fabrik:audit issues, open and closed, as the audit gate reads them. */
+  audits?: unknown[];
+  /** The newest fabrik:retro issues, open and closed, as the retro gate reads them. */
+  retros?: unknown[];
   /** The open issues with the wayfinder:map label. */
   openMaps?: unknown[];
   /** The open issues with the fabrik:replay label. */
   openReplays?: unknown[];
+  /** The open issues with a Kit-owned label. */
+  kitIssues?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -119,6 +125,16 @@ function repoWith(raw: RawRepo) {
         expect(variables["replay"]).toBe("fabrik:replay");
         expect(query).toContain("issues(states: OPEN, labels: [$replay]");
         return answer({ repository: { issues: page(raw.openReplays) } });
+      }
+      if (query.includes("labels: $labels")) {
+        expect(variables["labels"]).toContain("fabrik:weekly-limit");
+        return answer({ repository: { owner: { login: "jrey8343" }, issues: { nodes: raw.kitIssues ?? [] } } });
+      }
+      if (query.includes("issues(labels: [$label], states: [OPEN, CLOSED]")) {
+        const weekly = (nodes: unknown[] = []) => answer({ repository: { defaultBranchRef: null, issues: { nodes } } });
+        if (variables["label"] === "fabrik:audit") return weekly(raw.audits);
+        if (variables["label"] === "fabrik:retro") return weekly(raw.retros);
+        throw new Error(`Unexpected label: ${String(variables["label"])}`);
       }
       if (query.includes("labels: [$label]")) {
         if (variables["label"] === "fabrik:audit") return answer({ repository: { issues: page(raw.openAudits) } });
@@ -366,7 +382,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
-  it("holds the open agent PRs alone, with their head, draft state, commits, reviews and activity", async () => {
+  it("holds the open agent PRs alone, with their Ticket from Closes #n, head, draft state, commits, reviews and activity", async () => {
     const github = repoWith({
       openPullRequests: [
         {
@@ -377,6 +393,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefName: "fabrik/ticket-7",
           createdAt: "2026-11-01T00:00:00Z",
           author: APP,
+          closingIssuesReferences: { nodes: [{ number: 7 }] },
           commits: { nodes: [aRawCommit("1", "2026-11-02T00:00:00Z", "A fix", { email: "jared@example.com", user: { login: "jrey8343" } })] },
           reviews: { nodes: [{ author: OPERATOR, state: "COMMENTED", submittedAt: "2026-11-02T01:00:00Z", body: "Why here?", comments: { nodes: [] } }] },
           comments: { nodes: [] },
@@ -390,6 +407,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefName: "fabrik/ticket-9",
           createdAt: "2026-11-01T00:00:00Z",
           author: OPERATOR,
+          closingIssuesReferences: { nodes: [{ number: 9 }] },
           commits: { nodes: [] },
           reviews: { nodes: [] },
           comments: { nodes: [] },
@@ -403,6 +421,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.openPullRequests).toEqual([
       {
         number: 50,
+        ticket: 7,
         title: "Build the thing",
         draft: true,
         headSha: "h".repeat(40),
@@ -412,6 +431,29 @@ describe("Gathering a Product repo's GitHub facts", () => {
         comments: [],
         labelEvents: [],
       },
+    ]);
+  });
+
+  it("holds the open Kit-owned issues as the Loop reads them, so Held names the held runs: a bot's body and comments alone", async () => {
+    const held = '<!-- fabrik:held {"issue":7,"role":"implement","label":"agent:implement"} -->';
+    const github = repoWith({
+      kitIssues: [
+        {
+          number: 20,
+          body: "The weekly usage limit is reached.\n<!-- fabrik:resets-at 2026-11-10T22:00:00Z -->",
+          author: APP,
+          labels: { nodes: [{ name: "fabrik:weekly-limit" }] },
+          comments: { nodes: [{ body: held, author: APP }, { body: "Quoting it", author: OPERATOR }] },
+        },
+        { number: 21, body: "Faked", author: OPERATOR, labels: { nodes: [{ name: "fabrik:weekly-limit" }] }, comments: { nodes: [] } },
+      ],
+    });
+
+    const { kitIssues } = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(kitIssues).toEqual([
+      { number: 20, labels: ["fabrik:weekly-limit"], body: "The weekly usage limit is reached.\n<!-- fabrik:resets-at 2026-11-10T22:00:00Z -->", comments: [held] },
+      { number: 21, labels: ["fabrik:weekly-limit"], body: "", comments: [] },
     ]);
   });
 
@@ -535,6 +577,26 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
+  it("holds the fabrik:audit and fabrik:retro issues, open and closed, with who opened them, when, and their bodies, as the gates read them", async () => {
+    const github = repoWith({
+      audits: [
+        { number: 96, title: "Audit: week of 2026-11-02", state: "CLOSED", stateReason: "NOT_PLANNED", createdAt: "2026-11-08T02:05:00Z", body: "failed", author: APP },
+        { number: 95, title: "My own audit", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "mine", author: OPERATOR },
+      ],
+      retros: [{ number: 120, title: "Retro: week of 2026-11-02", state: "OPEN", stateReason: null, createdAt: "2026-11-07T00:05:00Z", body: "pending", author: null }],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect([facts.audits, facts.retros]).toEqual([
+      [
+        { number: 96, title: "Audit: week of 2026-11-02", author: "fabrik-app[bot]", createdAt: "2026-11-08T02:05:00Z", body: "failed" },
+        { number: 95, title: "My own audit", author: "jrey8343", createdAt: "2026-11-08T00:05:00Z", body: "mine" },
+      ],
+      [{ number: 120, title: "Retro: week of 2026-11-02", author: "ghost", createdAt: "2026-11-07T00:05:00Z", body: "pending" }],
+    ]);
+  });
+
   it("holds the open fabrik:replay issues, with who filed them, when, when their body was last edited, and the body", async () => {
     const github = repoWith({
       openReplays: [
@@ -579,6 +641,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(asked).toEqual(["2026-08-03T20:00:00.000Z"]);
   });
 
+  it("reads each issue's and PR's latest 100 label events, so when a label was last added holds on a busy issue (#481)", async () => {
+    const github = repoWith({});
+    const asked: string[] = [];
+    const watched = {
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        asked.push(...(query.match(/timelineItems\([^)]*LABELED_EVENT[^)]*\)/g) ?? []));
+        return github.graphql<T>(query, variables);
+      },
+    };
+
+    await gatherGitHubFacts(watched, repo, NOW, OPERATOR.login);
+
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.filter((window) => !window.includes("last: 100"))).toEqual([]);
+  });
+
   it("holds the default branch's commit messages in the window", async () => {
     const github = repoWith({
       defaultBranchCommits: [{ message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, committedDate: "2026-11-05T00:00:00Z" }],
@@ -589,6 +667,23 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.defaultBranchCommits).toEqual([
       { message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, at: "2026-11-05T00:00:00Z" },
     ]);
+  });
+});
+
+describe("Gathering every Product repo's GitHub facts for the Weekly summary", () => {
+  it("reads the rest when one repo's API call fails, naming that repo and why", async () => {
+    const shop = repoWith({});
+    const github = {
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        if (variables["name"] === "gone") return Promise.reject(new Error("GitHub GraphQL query failed: Bad Gateway"));
+        return shop.graphql<T>(query, variables);
+      },
+    };
+
+    const { facts, unread } = await gatherEveryRepoFacts(github, [{ owner: "jrey8343", name: "gone" }, repo], NOW, OPERATOR.login);
+
+    expect(facts.map((each) => each.repo)).toEqual(["jrey8343/shop"]);
+    expect(unread).toEqual([{ repo: "jrey8343/gone", why: "GitHub GraphQL query failed: Bad Gateway" }]);
   });
 });
 
@@ -673,6 +768,7 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
             headRefName: "fabrik/ticket-9",
             createdAt: "2026-11-01T00:00:00Z",
             author: APP,
+            closingIssuesReferences: { nodes: [{ number: 9 }] },
             commits: { nodes: [aRawCommit("3", "2026-11-04T00:00:00Z", "Add the logo", OPERATOR_COMMIT)] },
             reviews: { nodes: [] },
             comments: { nodes: [] },

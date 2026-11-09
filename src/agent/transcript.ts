@@ -8,6 +8,14 @@ import { constants, gunzipSync, gzipSync } from "node:zlib";
 /** The transcript file's name in FABRIK_OUT_DIR, which loop.yml uploads. */
 export const TRANSCRIPT_FILE = "transcript.jsonl";
 
+/**
+ * The file in FABRIK_OUT_DIR holding what a run on an agent PR was asked
+ * beyond the Ticket (src/agent/implement.ts, ImplementInput's `brief`), which
+ * loop.yml keeps beside the transcript for the judge (#450). A first run
+ * leaves none.
+ */
+export const RUN_BRIEF_FILE = "brief.md";
+
 /** A stream handler that appends each line it's given to the transcript at `path`. */
 export function transcriptWriter(path: string): (line: string) => void {
   return (line) => appendFileSync(path, `${line}\n`);

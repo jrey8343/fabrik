@@ -22,7 +22,7 @@ stop() {
 }
 
 fabrik_setup() {
-  local release="" node_version major rest minor gh_said arg named
+  local release="" node_version major rest minor gh_said curl_exit curl_said arg named
   local flags=()
   # The release comes first, when it's named: every flag is setup's.
   if [[ $# -gt 0 && $1 != -* ]]; then
@@ -77,10 +77,21 @@ fabrik_setup() {
   [[ $release =~ $EXACT_RELEASE ]] ||
     stop "$release isn't an exact Fabrik release tag such as v1.2.3. Name one from $RELEASES, or leave it out for the latest."
 
+  # curl's own error names a 404 apart from a proxy or TLS failure, so it's
+  # kept and quoted; tar's, about an archive that never came, is not.
   mkdir "$kit"
-  curl -fsSL "https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/$release" 2>/dev/null |
-    tar -xzf - -C "$kit" --strip-components=1 2>/dev/null ||
-    stop "Downloading Fabrik $release failed. Check it's a release at $RELEASES, then run setup again."
+  curl -fsSL "https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/$release" 2>"$FABRIK_SETUP_DIR/curl-said" |
+    tar -xzf - -C "$kit" --strip-components=1 2>/dev/null || {
+    curl_exit=${PIPESTATUS[0]}
+    curl_said=$(<"$FABRIK_SETUP_DIR/curl-said")
+    curl_said=${curl_said%%$'\n'*}
+    # 22 is curl -f's HTTP error, as for a tag that isn't a release.
+    case $curl_exit in
+      0) stop "Downloading Fabrik $release failed. Check it's a release at $RELEASES, then run setup again." ;;
+      22) stop "Downloading Fabrik $release failed ($curl_said). Check it's a release at $RELEASES, then run setup again." ;;
+      *) stop "Downloading Fabrik $release failed ($curl_said). Check this machine can reach codeload.github.com, through its proxy if it has one, then run setup again." ;;
+    esac
+  }
   printf 'Running Setup from Fabrik %s.\n' "$release"
 
   # Piped into bash, stdin is this script, so setup reads the terminal instead.

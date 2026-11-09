@@ -80,8 +80,8 @@ describe("The replay-record job's files, for both arms of one replay Ticket's ru
     const armFiles = (arm: ReplayArm) => [
       `transcripts/${month}/9001-1-implement-replay-${arm}.jsonl.gz`,
       `runs/${month}/9001-1-implement-replay-${arm}.json`,
-      `replays/acme/shop/140/12-${arm}.patch`,
-      `replays/acme/shop/140/12-${arm}.gates.json`,
+      `replays/acme/shop/140/12-${arm}-9001.patch`,
+      `replays/acme/shop/140/12-${arm}-9001.gates.json`,
       `transcripts/${month}/9001-1-review-replay-${arm}.jsonl.gz`,
       `runs/${month}/9001-1-review-replay-${arm}.json`,
       `transcripts/${month}/9001-1-score-replay-${arm}.jsonl.gz`,
@@ -98,6 +98,21 @@ describe("The replay-record job's files, for both arms of one replay Ticket's ru
     const store = storeWith({ files: paths });
 
     expect(await writeReplayRun(store, files, noWait)).toEqual({ kind: "written", written: [], existing: paths });
+  });
+
+  it("writes a Ticket's second run's patch and gates beside its first's, as when the first run never landed", async () => {
+    const second = { ...CONTEXT, runId: 9003 };
+    const gates = { gates: line({ ticket: 12, arm: "baseline", run: 9003, gates: "passed", hiddenTests: "failed" }) };
+    const files = replayRunFiles(second, { baseline: armRan("baseline", gates), variant: armRan("variant", { gates: null }) }, KIT, ENDED_AT);
+    const store = storeWith({ files: ["replays/acme/shop/140/12-baseline-9001.patch", "replays/acme/shop/140/12-baseline-9001.gates.json"] });
+
+    await writeReplayRun(store, files, noWait);
+
+    expect(store.writes.filter((path) => path.startsWith("replays/"))).toEqual([
+      "replays/acme/shop/140/12-baseline-9003.patch",
+      "replays/acme/shop/140/12-baseline-9003.gates.json",
+      "replays/acme/shop/140/12-variant-9003.patch",
+    ]);
   });
 
   it("writes nothing to a store others can read", async () => {
@@ -324,6 +339,30 @@ describe("How a replay Ticket's run ended, for the Loop to land on the replay is
     expect(readReplayRunEnded(JSON.stringify(ended))).toEqual(ended);
     expect(() => readReplayRunEnded(JSON.stringify({ ...ended, end: { kind: "infrastructure" } }))).toThrow(/doesn't read/);
     expect(() => readReplayRunEnded("not json")).toThrow(/doesn't read/);
+  });
+
+  // #449: the Kit job read the variant's candidate sha and couldn't lay it, so neither arm's jobs ran.
+  it("fails the Ticket once, naming kit-sha-unavailable and why, when the Kit job couldn't lay the variant's candidate Kit sha, and writes nothing", () => {
+    const why = `${"c".repeat(40)} isn't a commit in jrey8343/fabrik`;
+    const context = replayRunContextOf(
+      {
+        "replay-issue": "140",
+        ticket: "12",
+        "pull-request": "112",
+        "base-sha": BASE_SHA,
+        "replay-arms": JSON.stringify(replayArms(DEFAULT_KIT_CONFIG, { kind: "kit", sha: "c".repeat(40) })),
+        "replay-kit-sha-unavailable": why,
+        subscription: "Claude token",
+        sha: KIT_SHA,
+      },
+      { repo: "acme/shop", runId: 9001, runAttempt: 1 },
+    );
+    const none: ArmArtifacts = { implement: ran({ job: null, transcript: null, transcriptGzip: null }), review: ran({ job: null, transcript: null, transcriptGzip: null }), patch: null, gates: null, judge: { ...ran({ job: null, transcript: null, transcriptGzip: null }), result: null, failure: null } };
+    const files = replayRunFiles(context, { baseline: none, variant: none }, KIT, ENDED_AT);
+
+    expect(files.ended.end).toEqual({ kind: "kit-sha-unavailable", reason: `the variant arm's candidate Kit sha couldn't be laid (kit-sha-unavailable): ${why}, so neither arm ran` });
+    expect(written(files)).toEqual([]);
+    expect(readReplayRunEnded(JSON.stringify(files.ended))).toEqual(files.ended);
   });
 
   it("is done when an arm's Review never started because its Implement run's patch wasn't laid, which writes no Review record", () => {

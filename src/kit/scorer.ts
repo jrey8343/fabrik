@@ -93,6 +93,56 @@ export function inSample(key: string, share: number): boolean {
   return digest.readUInt32BE(0) < share * 2 ** 32;
 }
 
+/**
+ * Which kind of Implement run the judge scores, and so what its prompt asked
+ * of it beyond the Ticket (#450): a first run, the Ticket alone; a Retry, the
+ * latest Verdict's findings; a Request-changes run, the Operator's review,
+ * which amends the Ticket (ADR-0010); a conflict-only run, a rebase onto
+ * `main` and nothing else.
+ */
+export type JudgedRunKind = "first" | "retry" | "request-changes" | "conflict-only";
+
+/** The scored run as the judge is told of it: its kind, its Retry number (0 for none), and whether its timeout stopped it. */
+export interface JudgedRun {
+  readonly kind: JudgedRunKind;
+  readonly retry: number;
+  readonly timedOut: boolean;
+}
+
+/** The scored run's kind, from its Run record, for the judge. */
+export function judgedRunOf(record: RunRecord): JudgedRun {
+  const kind: JudgedRunKind = record.requestChanges
+    ? "request-changes"
+    : record.stepUpReason === "conflict-only"
+      ? "conflict-only"
+      : record.retry > 0
+        ? "retry"
+        : "first";
+  return { kind, retry: record.retry, timedOut: record.infrastructureFailure === "timeout" };
+}
+
+/**
+ * The scored run's kind as a scoring job passes it to the judge job, as one
+ * line of JSON, read back by readJudgedRun. A Replay arm's judge is passed
+ * none: an arm's run is always a first run.
+ */
+export function readJudgedRun(text: string): JudgedRun {
+  if (text === "") return { kind: "first", retry: 0, timedOut: false };
+  const value: unknown = JSON.parse(text);
+  const kinds: readonly unknown[] = ["first", "retry", "request-changes", "conflict-only"] satisfies JudgedRunKind[];
+  if (
+    !isObject(value) ||
+    !kinds.includes(value["kind"]) ||
+    typeof value["retry"] !== "number" ||
+    !Number.isInteger(value["retry"]) ||
+    value["retry"] < 0 ||
+    typeof value["timedOut"] !== "boolean"
+  ) {
+    throw new Error(`Not a judged run: ${text}`);
+  }
+  return value as unknown as JudgedRun;
+}
+
 /** The Kit's rubrics as a scoring job read them from its Kit checkout, and the Kit commit it checked out. */
 export interface KitRubrics {
   readonly sha: string;

@@ -7,10 +7,11 @@ We chose this because of jrey8343/penrith-physiotherapy-sports-centre#59. The Op
 ## Considered options
 
 - **Let an agent judge size, and send a large change to Design.** The Implementer could refuse one, or the Reviewer could give a Design flaw. But agents would be second-guessing how big a change the Operator meant, and the Operator already has Send it back.
-- **Rewrite the Ticket body with each amendment.** That keeps one contract in one place. But the Kit would be editing the Operator's Ticket, and two records could drift apart. Every reader that needs the amendment (Review, Retry, a Design session after Send it back, the Retro) already reads the pull request's reviews.
+- **Rewrite the Ticket body with each amendment.** That keeps one contract in one place. But the Kit would be editing the Operator's Ticket, and two records could drift apart. Every reader that needs the amendment (Review, Retry, a Design session after Send it back, the Retro, and the Scorers' judge model, which is given what a scored run's prompt carried) already reads the pull request's reviews.
 
 ## Consequences
 
 - ADR-0007's "When the comment conflicts with the Ticket, the Ticket wins" applies to Operator comments only, never to a Request changes.
 - A Retry's fix of an Execution flaw can never undo a requested change, because it judges the same amended Ticket the Reviewer does.
+- The Scorers judge a run on the pull request against the same amended Ticket (#450): the judge model is told the run's kind and given what its prompt carried, so a Request-changes run that builds the Operator's review is never scored as scope creep.
 - A Ticket's text no longer tells the whole contract for a pull request that had a Request changes. Readers of a merged PR need its reviews too.

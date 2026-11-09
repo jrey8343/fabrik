@@ -98,6 +98,7 @@ export function rubricSet(rubrics: readonly Pick<Rubric, "name" | "version">[]):
 export const RUBRIC_HASHES: Readonly<Record<string, string>> = {
   "efficiency@1": "b7e376564bd8fa6675f191d09348691cb20447cec6bb213ec22d66c6f6904c54",
   "ticket-compliance@1": "a3a94ba735f65ac3fd5a21985be041a4fca34878d71bfff10c2a741a80f8b1bd",
+  "ticket-compliance@2": "329daa807c4f255c1fa88eb69a635e324050befb95afae3f7da053f8b89800c1",
   "skill-use@1": "37ff8befe470d3c5604614d0ace707540792184811232ac5580680166fbfdf80",
 };
 

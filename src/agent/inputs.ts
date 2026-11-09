@@ -5,7 +5,8 @@
 // Run beside the Product checkout at product/, whose Kit config names the Operator.
 // Env: GH_TOKEN, GITHUB_REPOSITORY, GITHUB_API_URL, and
 //   FABRIK_ROLE                  the agent's role: a Design-session turn's also writes map.json, whether
-//                                it may offer a Map (readMapOffer)
+//                                it may offer a Map (readMapOffer), and spec-tickets.json, its Spec's other
+//                                Tickets (readIssue's otherTickets, #475)
 //   FABRIK_ISSUE                 the issue or Ticket: writes issue.json and spec.json (its parent: a Ticket's Spec, a Decision's Map, or null);
 //                                a Ticket back in design from an agent PR carries that PR in issue.json's sentBack
 //   FABRIK_PULL_REQUEST          optional, a PR: writes pull-request.json, with the Operator's comments on it
@@ -25,6 +26,7 @@ import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
+import { isStateLabel, type StateLabel } from "../loop/labels.ts";
 import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
@@ -46,7 +48,20 @@ const ISSUE_QUERY = `
         body
         author { login }
         labels(first: 100) { nodes { name } }
-        parent { number title body }
+        parent {
+          number
+          title
+          body
+          subIssues(first: 100) {
+            nodes {
+              number
+              title
+              state
+              labels(first: 100) { nodes { name } }
+              closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number state } }
+            }
+          }
+        }
         comments(first: 100, after: $after) {
           pageInfo { hasNextPage endCursor }
           nodes { author { login __typename } body createdAt }
@@ -64,7 +79,20 @@ interface IssueQueryResult {
       body: string;
       author: { login: string } | null;
       labels: { nodes: { name: string }[] };
-      parent: { number: number; title: string; body: string } | null;
+      parent: {
+        number: number;
+        title: string;
+        body: string;
+        subIssues: {
+          nodes: {
+            number: number;
+            title: string;
+            state: "OPEN" | "CLOSED";
+            labels: { nodes: { name: string }[] };
+            closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] };
+          }[];
+        };
+      } | null;
       comments: {
         pageInfo: { hasNextPage: boolean; endCursor: string | null };
         nodes: { author: { login: string; __typename: string } | null; body: string; createdAt: string }[];
@@ -74,8 +102,38 @@ interface IssueQueryResult {
 }
 
 /**
+ * One of the Spec's other Tickets, as a Design session on a Ticket under it is
+ * given them (#475): its state label, if it has one, whether it's open, and
+ * its pull request, if any: the merged one, else the open one, else the
+ * latest closed one.
+ */
+export interface SpecTicket {
+  readonly number: number;
+  readonly title: string;
+  readonly stateLabel: StateLabel | null;
+  readonly open: boolean;
+  readonly pullRequest: { readonly number: number; readonly state: "open" | "closed" | "merged" } | null;
+}
+
+type SubIssue = NonNullable<NonNullable<IssueQueryResult["repository"]["issue"]>["parent"]>["subIssues"]["nodes"][number];
+
+function specTicketOf(ticket: SubIssue): SpecTicket {
+  const pullRequests = ticket.closedByPullRequestsReferences.nodes;
+  const pullRequest =
+    pullRequests.find(({ state }) => state === "MERGED") ?? pullRequests.find(({ state }) => state === "OPEN") ?? pullRequests.at(-1) ?? null;
+  return {
+    number: ticket.number,
+    title: ticket.title,
+    stateLabel: ticket.labels.nodes.map(({ name }) => name).find(isStateLabel) ?? null,
+    open: ticket.state === "OPEN",
+    pullRequest: pullRequest === null ? null : { number: pullRequest.number, state: pullRequest.state === "MERGED" ? "merged" : pullRequest.state === "OPEN" ? "open" : "closed" },
+  };
+}
+
+/**
  * The issue as `gh issue view --json number,title,body,author,labels,comments`
- * shapes it, every comment included, and its parent Spec. It names the
+ * shapes it, every comment included, its parent Spec, and the Spec's other
+ * Tickets, in `otherTickets` (none with no parent). It names the
  * Operator's login once, in `operator`, and each comment carries `byBot` and
  * `isOperator`, so the agent can tell the Kit's comments and the Operator's
  * from anyone else's (#426). When the issue's current Design session follows
@@ -88,7 +146,7 @@ export async function readIssue(
   repo: Repo,
   number: number,
   operator: string,
-): Promise<{ issue: unknown; spec: { number: number; title: string; body: string } | null }> {
+): Promise<{ issue: unknown; spec: { number: number; title: string; body: string } | null; otherTickets: SpecTicket[] }> {
   const comments: IssueComment[] = [];
   let after: string | null = null;
   let issue: NonNullable<IssueQueryResult["repository"]["issue"]>;
@@ -124,7 +182,8 @@ export async function readIssue(
       comments: authoredComments,
       ...(sentBack === null ? {} : { sentBack: await readSentBack(github, repo, sentBack, operator) }),
     },
-    spec: issue.parent,
+    spec: issue.parent === null ? null : { number: issue.parent.number, title: issue.parent.title, body: issue.parent.body },
+    otherTickets: (issue.parent?.subIssues.nodes ?? []).filter((ticket) => ticket.number !== issue.number).map(specTicketOf),
   };
 }
 
@@ -434,6 +493,11 @@ export async function readMapOffer(
   const full = mapCapFull(openMaps.map(({ number }) => number), config);
   return full ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
 }
+
+// --- A Design-session turn's Spec Tickets (#475) ---------------------------
+
+/** Where the inputs step writes a Design-session turn's Spec's other Tickets (readIssue's otherTickets), beside issue.json. */
+export const SPEC_TICKETS_FILE = "spec-tickets.json";
 
 // --- Triage's Recent issues (#363) ------------------------------------------
 
@@ -779,9 +843,10 @@ async function main(outDir: string): Promise<void> {
   // its `operator`, as the Loop's snapshot names them, or else the repo's owner.
   const resolved = await readKitConfigFromCheckout(PRODUCT_DIR);
   const operator = (resolved.ok ? resolved.config.operator : null) ?? owner;
-  const { issue, spec } = await readIssue(github, repo, issueNumber, operator);
+  const { issue, spec, otherTickets } = await readIssue(github, repo, issueNumber, operator);
   await writeFile(join(outDir, "issue.json"), JSON.stringify(issue));
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
+  if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, SPEC_TICKETS_FILE), JSON.stringify(otherTickets));
   // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
   if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
     await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec)));

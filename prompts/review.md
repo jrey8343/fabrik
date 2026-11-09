@@ -72,7 +72,7 @@ follow-ups:
 </review>
 
 - For a flaw, make each finding specific enough to act on: what is wrong, where, and which criterion or standard it breaks.
-- If the fix needs work that has since landed on the base branch, say so and ask for `origin/main` to be merged into the PR's branch. Never ask for a rebase: the Implementer merges, so its earlier commits stay as they were. A PR whose history was rebased onto `main` is expected when the Kit brought it up to date after `main` moved, by a plain rebase or a conflict-only run, whose note on the PR opens `<!-- fabrik:conflict-run -->`: don't flag that rebase, and judge the PR as it now stands.
+- If the fix needs work that has since landed on the base branch, say so and ask for `origin/main` to be merged into the PR's branch. Never ask for a rebase: the Implementer merges, so its earlier commits stay as they were. The Kit itself rebases a PR onto `main` to bring it up to date when `main` moves under it, so don't flag a PR for having been rebased onto `main`: judge the PR as it now stands.
 - For a pass, say briefly what you checked: that's the Checked part of your Verdict.
 - Follow-ups go after your findings and before the `operator comments considered:` line: a line that is exactly `follow-ups:`, then one item per Follow-up. An item is a line `- <title>`, with its body in Markdown on the lines beneath it, each indented by two spaces. Leave the block out if there are none. On a flaw, leave it out: the Kit drops it.
 - Don't @-mention anyone.

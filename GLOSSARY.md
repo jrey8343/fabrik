@@ -111,11 +111,11 @@ Work that only resolves through a live exchange with the Operator speaking for t
 _Avoid_: interactive, manual
 
 **Monitor**:
-The Kit's scheduled check of a Product repo's production errors and default-branch CI that files one issue per problem for Triage, fixing nothing and never reopening what the Operator closed.
+The Kit's scheduled check of a Product repo's production errors and default-branch CI that files one issue per problem for Triage, fixing nothing and never reopening what the Operator closed. When a Sentry token that once read dies, it files a `ready-for-human` issue asking the Operator to rotate it instead.
 _Avoid_: alerting, watcher, monitor agent
 
 **Intake**:
-The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it.
+The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it. A sub-issue with no state gets one quiet line instead, saying which label to add.
 _Avoid_: inbox, new-issue hook
 
 **Triage**:
@@ -239,7 +239,7 @@ The Operator's review asking for changes on an agent pull request at the Merge g
 _Avoid_: change request, revision, feedback
 
 **Conflict-only run**:
-An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, or a draft one whose push GitHub never reviewed because it conflicts with main. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head. An Execution flaw on its push calls for a Retry and counts like any other.
+An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, a draft one whose push GitHub never reviewed because it conflicts with main, or a draft one whose Review passed while it conflicts with main, which stays in draft until the pass on its up-to-date head opens the Merge gate. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head. An Execution flaw on its push calls for a Retry and counts like any other.
 _Avoid_: rebase run, conflict retry
 
 **Send it back**:

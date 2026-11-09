@@ -35,9 +35,16 @@ export interface ReplayRunContext {
   readonly baseSha: string;
   readonly arms: ReplayArms;
   readonly subscription: string;
+  /** Why the Kit job couldn't lay the variant's candidate Kit sha, so neither arm ran (#449); null when it could, or there is none. */
+  readonly kitShaUnavailable: string | null;
 }
 
-/** The Kit job's outputs a replay route gives (`replay-issue`, `ticket`, `pull-request`, `base-sha`, `replay-arms`, `subscription`, `sha`) as a run's context, or a throw naming what's missing. */
+/**
+ * The Kit job's outputs a replay route gives (`replay-issue`, `ticket`,
+ * `pull-request`, `base-sha`, `replay-arms`, `subscription`, `sha`, and
+ * `replay-kit-sha-unavailable`, empty but for a candidate it couldn't lay) as
+ * a run's context, or a throw naming what's missing.
+ */
 export function replayRunContextOf(
   kit: Readonly<Record<string, string>>,
   run: Pick<ReplayRunContext, "repo" | "runId" | "runAttempt">,
@@ -54,6 +61,7 @@ export function replayRunContextOf(
   };
   const arms = readReplayArms(parsedJson(output("replay-arms")));
   if (arms === null) throw new Error("The Kit job's replay-arms don't read as each arm's settings");
+  const unavailable = kit["replay-kit-sha-unavailable"] ?? "";
   return {
     ...run,
     kitSha: output("sha"),
@@ -63,6 +71,7 @@ export function replayRunContextOf(
     baseSha: output("base-sha"),
     arms,
     subscription: output("subscription"),
+    kitShaUnavailable: unavailable === "" ? null : unavailable,
   };
 }
 
@@ -91,7 +100,7 @@ export function readReplayRunEnded(text: string): ReplayRunEnded {
   const ended = isObject(value) ? value : {};
   const { issue, ticket, run, end, subscription, resetsAt } = ended;
   const ids = [issue, ticket, run].every((id) => Number.isSafeInteger(id) && (id as number) > 0);
-  const known = isObject(end) && (end["kind"] === "done" || end["kind"] === "weekly-limit" || (end["kind"] === "infrastructure" && typeof end["reason"] === "string"));
+  const known = isObject(end) && (end["kind"] === "done" || end["kind"] === "weekly-limit" || ((end["kind"] === "infrastructure" || end["kind"] === "kit-sha-unavailable") && typeof end["reason"] === "string"));
   if (!ids || !known || typeof subscription !== "string" || !(resetsAt === null || typeof resetsAt === "string")) {
     throw new Error(`The replay-record job's ${REPLAY_RUN_ENDED_FILE} doesn't read as how a replay Ticket's run ended`);
   }
@@ -118,8 +127,8 @@ export function replayRunFiles(context: ReplayRunContext, arms: Readonly<Record<
   for (const { arm, implement, review } of runs) {
     const artifacts = arms[arm];
     if (implement.kind === "ran") {
-      // Each arm of a Ticket has one patch and one gates file, so only the run the Ticket is done in keeps them.
-      const at = { issue: context.issue, ticket: context.ticket, arm };
+      // Each arm of a Ticket has one patch and one gates file in each run, and only the run the Ticket is done in writes them.
+      const at = { issue: context.issue, ticket: context.ticket, arm, run: context.runId };
       const results: StoreFile[] =
         end.kind !== "done"
           ? []
@@ -157,10 +166,15 @@ function endedOf(context: ReplayRunContext, runs: ArmRuns): ReplayRunEnded {
     issue: context.issue,
     ticket: context.ticket,
     run: context.runId,
-    end: endOf(runs),
+    end: context.kitShaUnavailable === null ? endOf(runs) : kitShaUnavailable(context.kitShaUnavailable),
     subscription: context.subscription,
     resetsAt: refused?.kind === "ran" && refused.failureReport !== null ? (readFailureReport(refused.failureReport).resetsAt ?? null) : null,
   };
+}
+
+/** The end of a run whose variant's candidate Kit sha the Kit job couldn't lay, so neither arm ran (#449). */
+function kitShaUnavailable(why: string): ReplayTicketEnd {
+  return { kind: "kit-sha-unavailable", reason: `the variant arm's candidate Kit sha couldn't be laid (kit-sha-unavailable): ${why}, so neither arm ran` };
 }
 
 /** One of an arm's runs: it ran, with its record and failure report; its job never started it, with why; or its job left no account of it. */
@@ -223,7 +237,7 @@ function unreadInputsDetail(run: ArmRun): string | null {
 function gatesFile(context: ReplayRunContext, arm: ReplayArm, text: string | null): StoreFile[] {
   const gates = text === null ? null : readReplayArmGates(parsedJson(text));
   if (gates === null || gates.ticket !== context.ticket || gates.arm !== arm || gates.run !== context.runId) return [];
-  return [{ path: replayGatesPath(context.repo, { issue: context.issue, ticket: context.ticket, arm }), content: storeJson(gates) }];
+  return [{ path: replayGatesPath(context.repo, { issue: context.issue, ticket: context.ticket, arm, run: context.runId }), content: storeJson(gates) }];
 }
 
 /** A run's transcript, if it left one, then its record. */

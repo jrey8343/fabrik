@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, notificationsOf, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import { anIssue, kitConfig, notificationsOf, snapshotOf, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -299,7 +299,7 @@ describe("The weekly-limit issue", () => {
     const plan = planFor(tick("2026-11-09T04:05:00.000Z"), tickSnapshot({ kitIssues: [openLimitIssue()] }), kitConfig());
 
     expect(notificationsOf(plan)).toEqual([]);
-    expect(plan).toEqual({
+    expect(withoutNotes(plan)).toEqual({
       kind: "act",
       actions: [
         {
@@ -317,7 +317,11 @@ describe("The weekly-limit issue", () => {
   it("a scheduled tick before the reset leaves the issue open, and only asks for its Dispatch and Design queue checks", () => {
     const plan = planFor(tick("2026-11-09T03:55:00.000Z"), tickSnapshot({ kitIssues: [openLimitIssue()] }), kitConfig());
 
-    expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }],
+      notes: expect.arrayContaining(["The weekly limit in #41 resets at 2026-11-09 04:00 UTC"]),
+    });
   });
 
   it("a hit in a new window, before the tick has closed the last window's issue, closes it and opens a fresh one", () => {
@@ -343,7 +347,7 @@ describe("The weekly-limit issue", () => {
   });
 
   it("a scheduled tick with no weekly-limit issue open only asks for its Dispatch and Design queue checks", () => {
-    expect(planFor(tick("2026-11-09T04:05:00.000Z"), tickSnapshot(), kitConfig())).toEqual({
+    expect(withoutNotes(planFor(tick("2026-11-09T04:05:00.000Z"), tickSnapshot(), kitConfig()))).toEqual({
       kind: "act",
       actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }],
     });

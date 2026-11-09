@@ -12,7 +12,8 @@
 // 1 or 2 record, written before prototype turns, as no prototype turn, and a
 // schema 1, 2 or 3 record, written before Replays, as no replay's, and a
 // schema 1 to 4 record, written before Step-ups had reasons, with a null
-// reason, or `retry` if it Stepped up. Pure, no I/O.
+// reason, or `retry` if it Stepped up, and a schema 1 to 5 record, written
+// before empty diffs were recorded, as no empty diff. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
@@ -47,6 +48,8 @@ export interface RunEnd {
   readonly failureReport: string | null;
   /** The transcript's stream-json lines, or null if no transcript survived the run. */
   readonly transcript: readonly string[] | null;
+  /** Whether the Loop found the Implement run's branch changed nothing, an empty diff, as its step output says. */
+  readonly emptyDiff: boolean;
 }
 
 /** One model's share of the run, as its result's `modelUsage` reports it. */
@@ -74,8 +77,8 @@ export interface RateLimitReading {
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
-/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`, 4 added `replay`, 5 added `stepUpReason`. */
-export const RUN_RECORD_SCHEMA = 5;
+/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`. */
+export const RUN_RECORD_SCHEMA = 6;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -122,16 +125,20 @@ export function isLive({ replay }: { readonly replay: ReplayRun | null }): boole
 
 /**
  * A Ticket's first Implement run, the one that cut the branch it merged: the
- * last of its runs that wasn't a Retry, Request-changes or conflict-only run,
- * since a first run that failed for its Subscription is run again as a first
- * run. It is taken by its place in the chain, so a marked Ticket's first run,
- * a Stepped-up start, counts (ADR-0014). Any other Step-up isn't one: a record
- * from before Step-ups had reasons reads as a Retry's.
+ * last of its runs that cut a branch from the default branch and didn't leave
+ * an empty diff. That is a first run, never a Retry, Request-changes or
+ * conflict-only run on its PR, since a first run that failed for its
+ * Subscription is run again as a first run; or the fresh run after an empty
+ * diff, which has no PR to retry on, so carries its Retry number but no PR,
+ * and checks out the default branch afresh. A first run is taken by its place
+ * in the chain, so a marked Ticket's first run, a Stepped-up start, counts
+ * (ADR-0014). Any other Step-up of a run with a PR isn't one: a record from
+ * before Step-ups had reasons reads as a Retry's.
  */
 export function firstRunOf(implementRuns: readonly RunRecord[]): RunRecord | undefined {
-  const first = implementRuns.filter(
-    (record) => record.retry === 0 && !record.requestChanges && (record.stepUpReason === null || record.stepUpReason === "marked"),
-  );
+  const cutItsBranch = (record: RunRecord) =>
+    (record.retry === 0 && (record.stepUpReason === null || record.stepUpReason === "marked")) || record.pullRequest === null;
+  const first = implementRuns.filter((record) => !record.emptyDiff && !record.requestChanges && cutItsBranch(record));
   return first.toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)).at(-1);
 }
 
@@ -169,6 +176,13 @@ export interface RunRecord {
    */
   readonly stepUpReason: StepUpReason | null;
   readonly requestChanges: boolean;
+  /**
+   * Whether the Implement run's branch changed nothing, an empty diff, which
+   * the Loop counts as an Execution flaw; false for every other role. A
+   * schema 1 to 5 record, written before empty diffs were recorded, reads as
+   * false.
+   */
+  readonly emptyDiff: boolean;
   /** Whether the run was a Design session's prototype turn (#155), whose role stays `design`. */
   readonly prototype: boolean;
   /** null for a live run, else the Replay arm the run was. */
@@ -268,6 +282,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
     ...stepUpOf(implement ? kit : {}),
     requestChanges: implement && kit["request-changes"] === "true",
+    emptyDiff: implement && end.emptyDiff,
     prototype: isPrototypeTurn(end.needs, role),
     replay: null,
     baseSha: nonEmpty(agent["base-sha"]),
@@ -280,9 +295,14 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
 
 /** What the score-record job knows when a judge run, scoring a finished run, ends. */
 export interface JudgeRunEnd {
-  /** The scored run's record: the judge run is for its subject, in the same workflow run and attempt. */
+  /** The scored run's record: the judge run is for its subject, in the same workflow run. */
   readonly scored: RunRecord;
-  /** The judge job's `needs.<job>`: how it ended, and the outputs it passed out as an agent job does (`secrets-step`, `model`, `effort`). */
+  /**
+   * The judge job's `needs.<job>`: how it ended, and the outputs it passed out
+   * as an agent job does (`secrets-step`, `model`, `effort`), with the attempt
+   * of the workflow run it ran in (`attempt`), which a re-run of a failed judge
+   * makes later than the scored run's.
+   */
   readonly judge: NeededJob;
   /** The Kit's fixed judge model, which the record names when the judge job passed out none. */
   readonly judgeModel: string;
@@ -299,17 +319,20 @@ export interface JudgeRunEnd {
 /**
  * The judge run's record, in role `score`, and its paths beside the scored
  * run's. Its subject and Replay are the scored run's; what ran, how it ended,
- * the effort it spent, its cost and its weekly-limit reading are its own.
+ * the effort it spent, its cost and its weekly-limit reading are its own, and
+ * so is its attempt, when its job passed one out: a judge re-run after a
+ * failed one gets a record of its own, so what both cost counts (#451).
  */
 export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
   const { scored, judge } = end;
+  const runAttempt = countOf(judge.outputs["attempt"]) ?? scored.runAttempt;
   // In the scored run's month, so the two sit side by side even when the judge ends in the next one.
-  const { recordPath, transcriptPath } = pathsFor({ ...scored, role: "score" }, end.transcript !== null);
+  const { recordPath, transcriptPath } = pathsFor({ ...scored, runAttempt, role: "score" }, end.transcript !== null);
   const facts: RunFacts = {
     kitSha: end.kitSha,
     repo: scored.repo,
     runId: scored.runId,
-    runAttempt: scored.runAttempt,
+    runAttempt,
     role: "score",
     issue: scored.issue,
     pullRequest: scored.pullRequest,
@@ -321,6 +344,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     stepUp: false,
     stepUpReason: null,
     requestChanges: false,
+    emptyDiff: false,
     prototype: false,
     // A Replay arm's judge run is the arm's too, so its cost counts as the Replay's.
     replay: scored.replay,
@@ -387,6 +411,7 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     stepUp: false,
     stepUpReason: null,
     requestChanges: false,
+    emptyDiff: false,
     prototype: false,
     replay,
     baseSha: end.baseSha,
@@ -453,17 +478,20 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * record, which names no Subscription, is read as being on the first listed
  * one, a schema 1 or 2 record, written before there were prototype turns, as
  * no prototype turn, a schema 1, 2 or 3 record, written before there were
- * Replays, as no replay's, and a schema 1 to 4 record, written before Step-ups
+ * Replays, as no replay's, a schema 1 to 4 record, written before Step-ups
  * had reasons, with a null reason, or `retry` if it Stepped up: until then
- * only the second Retry recorded a Step-up. Null for anything that isn't a
- * record of a schema the Kit knows.
+ * only the second Retry recorded a Step-up, and a schema 1 to 5 record,
+ * written before empty diffs were recorded, as no empty diff. Null for
+ * anything that isn't a record of a schema the Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
-  type Schema4 = Omit<RunRecord, "schema" | "stepUpReason">;
-  const record = (fields: Schema4): RunRecord => ({ ...fields, schema: RUN_RECORD_SCHEMA, stepUpReason: fields.stepUp ? "retry" : null });
+  type Schema5 = Omit<RunRecord, "schema" | "emptyDiff">;
+  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false };
+  type Schema4 = Omit<Schema5, "stepUpReason">;
+  const record = (fields: Schema4): RunRecord => ({ ...fields, schema: RUN_RECORD_SCHEMA, stepUpReason: fields.stepUp ? "retry" : null, emptyDiff: false });
   if (schema === 4) return record(stored as Schema4);
   if (schema === 3) return record({ ...(stored as Omit<Schema4, "replay">), replay: null });
   if (schema === 2) return record({ ...(stored as Omit<Schema4, "prototype" | "replay">), prototype: false, replay: null });
@@ -472,6 +500,25 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
     return record({ ...older, subscription: firstSubscription({ subscriptions }), prototype: false, replay: null });
   }
   return null;
+}
+
+/**
+ * The Run records in the store the Kit couldn't read (readRunRecord), which
+ * every figure leaves out: how many, and the newest schema among them when
+ * any is newer than the Kit's, a record a newer Kit wrote than the one
+ * reading it.
+ */
+export interface UnreadableRunRecords {
+  readonly count: number;
+  /** Null when none is of a schema newer than RUN_RECORD_SCHEMA. */
+  readonly newestSchema: number | null;
+}
+
+/** The schema of a stored file that isn't a Run record the Kit can read, when it's newer than the Kit's own: null for any other. */
+export function newerSchemaOf(stored: unknown): number | null {
+  if (typeof stored !== "object" || stored === null) return null;
+  const { schema } = stored as { schema?: unknown };
+  return typeof schema === "number" && Number.isInteger(schema) && schema > RUN_RECORD_SCHEMA ? schema : null;
 }
 
 /**
@@ -559,13 +606,20 @@ export function recordPathOf(run: StoredRun): string {
   return `runs/${runStoreName(run)}.json`;
 }
 
+/** Which arm of which Ticket of which Replay, in which workflow run: what a Replay arm's patch and gates are kept by. */
+export type ReplayArmRun = Pick<ReplayRun, "issue" | "ticket" | "arm"> & {
+  /** The workflow run the arm ran in. */
+  readonly run: number;
+};
+
 /**
  * Where a Replay arm's patch, its diff from the Ticket's `baseSha`, sits in
- * the store: by the Product repo, the replay issue, the Ticket and the arm,
- * so each arm of each Ticket has one.
+ * the store: by the Product repo, the replay issue, the Ticket, the arm and
+ * the workflow run, so each arm of each Ticket has one in each run, and a
+ * Ticket run again, as after a run that never landed, keeps its own.
  */
-export function replayPatchPath(repo: string, { issue, ticket, arm }: Pick<ReplayRun, "issue" | "ticket" | "arm">): string {
-  return `replays/${repo}/${issue}/${ticket}-${arm}.patch`;
+export function replayPatchPath(repo: string, { issue, ticket, arm, run }: ReplayArmRun): string {
+  return `replays/${repo}/${issue}/${ticket}-${arm}-${run}.patch`;
 }
 
 /**
@@ -573,7 +627,7 @@ export function replayPatchPath(repo: string, { issue, ticket, arm }: Pick<Repla
  * Sandbox's setup, build and tests, and the merged PR's tests, went on its
  * diff, which the results read back for every Ticket done (src/kit/replay.ts).
  */
-export function replayGatesPath(repo: string, at: Pick<ReplayRun, "issue" | "ticket" | "arm">): string {
+export function replayGatesPath(repo: string, at: ReplayArmRun): string {
   return replayPatchPath(repo, at).replace(/\.patch$/, ".gates.json");
 }
 

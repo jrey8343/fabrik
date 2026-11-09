@@ -59,7 +59,7 @@ export const RESUME_LABELS = {
   research: RESEARCH_LABEL,
 } as const satisfies Readonly<Record<AgentRole, Label | null>>;
 
-/** How the Kit names each role's run, as in "The Triage run on #7", in its comments and step summaries alike. */
+/** How the Kit names each role's run, as in "The Triage run on #7", in its comments and step summaries alike (runNamed). */
 export const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
   triage: "Triage",
   design: "Design-session turn",
@@ -70,6 +70,11 @@ export const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
   research: "Research",
 };
 
+/** A role's run named in full, as in "The Triage run on #7": a Design session's is "Design-session turn", never "turn run" (#436). */
+export function runNamed(role: AgentRole): string {
+  return role === "design" ? RUN_NAMES.design : `${RUN_NAMES[role]} run`;
+}
+
 /**
  * The run a start-agent-run action would have started, held. A Review's run
  * is on its PR, where agent:review lives; an Implement run's, a Retry's
@@ -79,7 +84,7 @@ export const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
  */
 export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): HoldableRun {
   const label = RESUME_LABELS[start.role];
-  if (label === null) throw new Error(`The ${RUN_NAMES[start.role]} run on #${start.issue} has no trigger label, so it can't be held`);
+  if (label === null) throw new Error(`The ${runNamed(start.role)} on #${start.issue} has no trigger label, so it can't be held`);
   return { role: start.role, issue: start.issue, label };
 }
 

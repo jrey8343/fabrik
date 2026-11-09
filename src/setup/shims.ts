@@ -186,26 +186,128 @@ export function prettierignoreUpdate(existing: string | null, prettierConfigured
 export const DEPENDABOT_PATH = ".github/dependabot.yml";
 
 /**
- * Dependabot reads one config, so the Fabrik entry is appended to the
- * Product's `updates:` list. A config that already updates GitHub Actions at
- * the root can't take a second entry for it, so the Operator merges that one.
+ * Dependabot reads one config, so the Fabrik entry is added to the Product's
+ * `updates:` list, at the list's own indentation, keeping every other line as
+ * it is. A config whose top level Setup can't read is left for the Operator to
+ * fix. A config that already updates GitHub Actions at the root can't take a
+ * second entry for it, so the Operator merges that one.
  */
 export function dependabotUpdate(existing: string | null, template: string): FileUpdate {
   if (existing === null) return { content: template };
   if (existing.includes("jrey8343/fabrik")) return fabrikEntryUpdate(existing, template);
-  const lines = existing.split("\n");
-  const updatesAt = lines.findIndex((line) => /^updates:\s*$/.test(line));
-  if (updatesAt === -1) return { content: template };
+  const eol = existing.includes("\r\n") ? "\r\n" : "\n";
+  const lines = existing.split(eol);
+  const list = updatesList(lines);
+  if ("unreadable" in list) {
+    return {
+      note: `${DEPENDABOT_PATH} doesn't parse as YAML Setup can merge into (${list.unreadable}), so the Fabrik entry wasn't added: fix it and run setup again, or add the github-actions entry from Fabrik's templates/dependabot.yml to its updates: by hand.`,
+    };
+  }
+  if (list.empty) return { content: template };
   const handMerge = `${DEPENDABOT_PATH} already has an entry for GitHub Actions, so the Fabrik one wasn't added: add \`- dependency-name: "jrey8343/fabrik*"\` to that entry's allow list (if it has one), group the Fabrik pins into one PR with \`groups: { fabrik: { patterns: ["jrey8343/fabrik*"] } }\`, ignore a major with \`ignore: [{ dependency-name: "jrey8343/fabrik*", update-types: ["version-update:semver-major"] }]\`, and set its cooldown to 0 days.`;
   if (/package-ecosystem:\s*["']?github-actions/.test(existing)) return { note: handMerge };
-  const laterTopLevelKey = lines.slice(updatesAt + 1).some((line) => /^[A-Za-z]/.test(line));
-  if (laterTopLevelKey) {
-    return { note: `${DEPENDABOT_PATH} has keys after its updates: list, so the Fabrik entry wasn't added: append the github-actions entry from Fabrik's templates/dependabot.yml to updates: by hand.` };
-  }
   const templateLines = template.split("\n");
-  const entry = templateLines.slice(templateLines.findIndex((line) => /^updates:\s*$/.test(line)) + 1).join("\n");
-  const separator = existing.endsWith("\n") ? "" : "\n";
-  return { content: `${existing}${separator}${entry}` };
+  const entry = templateLines
+    .slice(templateLines.findIndex((line) => /^updates:\s*$/.test(line)) + 1)
+    .filter((line) => line !== "")
+    .map((line) => (list.indent >= TEMPLATE_INDENT ? " ".repeat(list.indent - TEMPLATE_INDENT) + line : line.slice(TEMPLATE_INDENT - list.indent)));
+  const merged = [...lines];
+  if (list.rewrite !== undefined) merged[list.rewrite.line] = list.rewrite.text;
+  merged.splice(list.after + 1, 0, ...(list.newKey ? ["updates:"] : []), ...entry);
+  const content = merged.join(eol);
+  return { content: content.endsWith(eol) ? content : `${content}${eol}` };
+}
+
+/** The indentation of the template's `updates:` list. */
+const TEMPLATE_INDENT = 2;
+
+/**
+ * Where the Fabrik entry goes in the Product's config: after line `after`, at
+ * `indent`, under a new `updates:` key when the file has none, with a
+ * `updates: []` line rewritten to start a block list. `empty` for a file of
+ * comments only.
+ */
+type UpdatesList =
+  | {
+      readonly empty: false;
+      readonly after: number;
+      readonly indent: number;
+      readonly newKey?: true;
+      readonly rewrite?: { readonly line: number; readonly text: string };
+    }
+  | { readonly empty: true }
+  | { readonly unreadable: string };
+
+/**
+ * Reads a Dependabot config's top level: its keys at column 0, each holding
+ * the more-indented lines below it, and the `updates:` list, which may sit at
+ * any indentation, column 0 included, or be `[]`. Anything else at the top
+ * level is unreadable, so Setup never writes into a file it misread.
+ */
+function updatesList(lines: readonly string[]): UpdatesList {
+  const isContent = (line: string): boolean => line.trim() !== "" && !line.trimStart().startsWith("#");
+  const indentOf = (line: string): number => line.length - line.trimStart().length;
+  const isEntry = (line: string): boolean => /^-(\s|$)/.test(line.trimStart());
+  let updatesAt = -1;
+  let updatesValue = "";
+  let updatesComment = "";
+  let keySeen = false;
+  let openKey = false; // the last key has no value on its line, so a column-0 list may follow
+  for (const [i, line] of lines.entries()) {
+    if (!isContent(line)) continue;
+    const where = `line ${i + 1}`;
+    if (/^ *\t/.test(line)) return { unreadable: `${where} is indented with a tab` };
+    if (indentOf(line) > 0 || (isEntry(line) && openKey)) {
+      if (!keySeen) return { unreadable: `${where} is indented before any key` };
+      continue;
+    }
+    if (!keySeen && /^---\s*$/.test(line)) continue;
+    const key = /^([A-Za-z_][\w-]*|"[^"]*"|'[^']*')\s*:(?:\s+(.*?))?\s*$/.exec(line);
+    if (key === null) return { unreadable: `${where} isn't a top-level key` };
+    const [value, comment] = splitComment(key[2] ?? "");
+    keySeen = true;
+    openKey = value === "";
+    if (key[1]?.replace(/^(["'])(.*)\1$/, "$2") !== "updates") continue;
+    if (updatesAt !== -1) return { unreadable: `${where} is a second updates: key` };
+    updatesAt = i;
+    updatesValue = value;
+    updatesComment = comment;
+  }
+  if (!keySeen) return { empty: true };
+  if (updatesAt === -1) return { empty: false, after: lines.findLastIndex((line) => line.trim() !== ""), indent: TEMPLATE_INDENT, newKey: true };
+
+  // The updates: list runs to the next key at column 0.
+  let end = lines.length;
+  for (let i = updatesAt + 1; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (isContent(line) && indentOf(line) === 0 && !isEntry(line)) {
+      end = i;
+      break;
+    }
+  }
+  const body = lines.slice(updatesAt + 1, end).flatMap((line, at) => (isContent(line) ? [{ line, i: updatesAt + 1 + at }] : []));
+  if (/^\[\s*\]$/.test(updatesValue)) {
+    const stray = body[0];
+    if (stray !== undefined) return { unreadable: `line ${stray.i + 1} follows updates: [] indented` };
+    const text = `updates:${updatesComment === "" ? "" : ` ${updatesComment}`}`;
+    return { empty: false, after: updatesAt, indent: TEMPLATE_INDENT, rewrite: { line: updatesAt, text } };
+  }
+  if (updatesValue !== "") return { unreadable: `line ${updatesAt + 1}'s updates: isn't a block list` };
+  const first = body[0];
+  if (first === undefined) return { empty: false, after: updatesAt, indent: TEMPLATE_INDENT };
+  if (!isEntry(first.line)) return { unreadable: `line ${first.i + 1}: updates: isn't a list` };
+  const indent = indentOf(first.line);
+  for (const { line, i } of body) {
+    if (indentOf(line) < indent) return { unreadable: `line ${i + 1} is indented less than the updates: list` };
+    if (indentOf(line) === indent && !isEntry(line)) return { unreadable: `line ${i + 1} is in the updates: list but isn't an entry` };
+  }
+  return { empty: false, after: (body.at(-1) ?? first).i, indent };
+}
+
+/** A value and the comment after it, if any. */
+function splitComment(text: string): [string, string] {
+  const at = text.search(/(^|\s)#/);
+  return at === -1 ? [text.trim(), ""] : [text.slice(0, at).trim(), text.slice(at).trim()];
 }
 
 /** A YAML text without its comment lines. */

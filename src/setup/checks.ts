@@ -168,6 +168,10 @@ async function checkBranch(
   const cwd = productDir;
   const { defaultBranch } = repo;
   const ownBranch = setupBranch(release);
+  // GitHub names no default branch for a repo nothing has been pushed to.
+  if (defaultBranch === "") {
+    return `${repo.owner}/${repo.name} has no default branch on GitHub: nothing has been pushed to it yet. Push a first commit to it, then run setup again.`;
+  }
   if (current !== defaultBranch && current !== ownBranch) {
     const where = current === "" ? "This clone isn't on a branch" : `This clone is on ${current}, not ${defaultBranch}`;
     return `${where}. Switch to ${defaultBranch} with git switch ${defaultBranch}, then run setup again.`;

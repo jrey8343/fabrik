@@ -4,14 +4,29 @@
 // model call.
 import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
-import { DECISION_TYPES, decisionLabel, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_AGENT, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
+import {
+  DECISION_TYPES,
+  decisionLabel,
+  type DecisionLabel,
+  MAP_LABEL,
+  NEEDS_DESIGN,
+  NEEDS_INFO,
+  READY_FOR_AGENT,
+  READY_FOR_HUMAN,
+  RESEARCH_LABEL,
+  WEEKLY_LIMIT_LABEL,
+} from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
+import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
+import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
-import { spelled } from "../loop/readable.ts";
+import { auditMarksIn, DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
+import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import { type DesignQueueSnapshot, type InfrastructureFailure, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type AgentRole, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
+import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import {
   type ArchitecturalEscape,
@@ -26,13 +41,24 @@ import {
   type OpenPullRequestFacts,
   requestChangesIn,
   type RequestChangesReview,
+  type ReviewFacts,
   verdictsOn,
   type Window,
   within,
 } from "./retroEvidence.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { firstRunOf, isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import {
+  firstRunOf,
+  isLive,
+  type RateLimitReading,
+  RUN_RECORD_SCHEMA,
+  type RunRecord,
+  runKey,
+  UNKNOWN_COST_BASIS,
+  type UnreadableRunRecords,
+  WEEKLY_LIMIT,
+} from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
@@ -62,7 +88,7 @@ export interface SpecFacts {
 export interface OpenIssueFacts {
   readonly number: number;
   readonly title: string;
-  /** Who opened it: a `needs-info` issue the Fabrik App filed as the Monitor waits on the Operator. */
+  /** Who opened it: a `needs-info` issue the Fabrik App filed as the Monitor, or the Operator filed, waits on the Operator. */
   readonly author: string;
   readonly labels: readonly string[];
   /** ISO 8601. */
@@ -102,6 +128,18 @@ export interface OpenRetroFacts {
   readonly createdAt: string;
 }
 
+/** A `fabrik:audit` or `fabrik:retro` issue, open or closed, as Stuck reads a week's failed runs from it. */
+export interface WeeklyRunIssueFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: only the Fabrik App's Audits and Retros count. */
+  readonly author: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
+  /** Its body, whose markers say whether its run failed. */
+  readonly body: string;
+}
+
 /** An open `fabrik:replay` issue, as Waiting on you reads it. */
 export interface OpenReplayFacts {
   readonly number: number;
@@ -135,17 +173,38 @@ export interface GitHubFacts extends MetricFacts {
   readonly openAudits: readonly OpenAuditFacts[];
   /** The repo's open `fabrik:retro` issues, whoever opened them. */
   readonly openRetros: readonly OpenRetroFacts[];
+  /** The repo's newest `fabrik:audit` issues, open and closed, whoever opened them, as the audit gate reads them. */
+  readonly audits: readonly WeeklyRunIssueFacts[];
+  /** The repo's newest `fabrik:retro` issues, open and closed, whoever opened them, as the retro gate reads them. */
+  readonly retros: readonly WeeklyRunIssueFacts[];
   /** The repo's open `fabrik:replay` issues, whoever filed them. */
   readonly openReplays: readonly OpenReplayFacts[];
   /** The repo's open Maps, by number, oldest first, read as the Map cap reads them: whoever charted them. */
   readonly openMaps: readonly number[];
+  /**
+   * The repo's open Kit-owned issues, read as the Loop's snapshot reads them:
+   * Held names the held runs their weekly-limit issues' held markers name,
+   * and Stuck leaves those runs out, as the Kit resumes them itself.
+   */
+  readonly kitIssues: readonly KitIssueSnapshot[];
+}
+
+/** A Product repo whose GitHub facts couldn't be read this run, and why. */
+export interface UnreadRepo {
+  /** `owner/name`. */
+  readonly repo: string;
+  readonly why: string;
 }
 
 export interface WeeklySummaryInput {
   readonly records: readonly RunRecord[];
+  /** The store's Run records the Kit couldn't read, which no figure counts: the summary says how many and how to read them. */
+  readonly unreadableRecords: UnreadableRunRecords;
   /** The store's score files: a picked run's scores, or why it has none (src/kit/scorer.ts). */
   readonly scoreFiles: readonly ScoreFile[];
   readonly facts: readonly GitHubFacts[];
+  /** The Product repos whose facts couldn't be read: each gets its section, saying so, and no figure counts it. */
+  readonly unread: readonly UnreadRepo[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
   /** The Fabrik App's bot login, its slug with `[bot]`, as label events name it. */
@@ -219,7 +278,11 @@ export interface WeeklySummary {
   readonly humanTouches: WeekOverWeek<number | null>;
   /** The median time from Dispatch to merge of the week's merged agent PRs, in ms, or null with none. */
   readonly cycleTimeMs: WeekOverWeek<number | null>;
-  /** The median time from the last passing Verdict to merge of the week's merged agent PRs, in ms, or null with none. */
+  /**
+   * The median Operator wait of the week's merged agent PRs, in ms, or null
+   * with none: from the last passing Verdict to the Operator's first review
+   * after it, or to the merge if they gave none.
+   */
   readonly operatorWaitMs: WeekOverWeek<number | null>;
   /** Of the agent PRs merged in the 30 days to the week's end, how many were reverted in that window. */
   readonly revertRate: WeekOverWeek<RevertRate>;
@@ -238,7 +301,10 @@ export interface WeeklySummary {
     readonly mergedPullRequests: WeekOverWeek<number>;
     /** Tickets whose Dispatch, their first `agent:implement`, came in the week. */
     readonly ticketsDispatched: WeekOverWeek<number>;
-    /** Implement records with `retry > 0`. */
+    /**
+     * Implement records with `retry > 0` and no Infrastructure failure, so a
+     * Retry refused on the weekly limit and then resumed counts once.
+     */
     readonly retries: WeekOverWeek<number>;
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
@@ -335,6 +401,8 @@ export interface RepoSection {
   readonly stuck: readonly StuckItem[];
   /** The work a cap holds in the repo, or null when it holds nothing. */
   readonly held: Held | null;
+  /** Why the repo's GitHub facts couldn't be read this run, or null when they were: an unread repo has nothing waiting, stuck or held. */
+  readonly unread: string | null;
 }
 
 /** The work a cap holds in one Product repo, by source: null for a source holding nothing. */
@@ -345,6 +413,8 @@ export interface Held {
   readonly monitor: HeldMonitor | null;
   /** The open Maps filling the Map cap (caps.maps), so no Design session offers a new one. */
   readonly maps: HeldMaps | null;
+  /** The Held runs waiting on the open weekly-limit issues while every Subscription is used up. */
+  readonly runs: HeldRuns | null;
 }
 
 export interface HeldDesignSessions {
@@ -368,6 +438,27 @@ export interface HeldMaps {
   readonly open: readonly number[];
 }
 
+export interface HeldRuns {
+  /** Each Held run, in the order the scheduled tick resumes them. */
+  readonly runs: readonly HeldRunItem[];
+  /** Every open weekly-limit issue, oldest first, with when its limit resets. */
+  readonly weeklyLimitIssues: readonly WeeklyLimitIssue[];
+}
+
+export interface HeldRunItem {
+  readonly role: AgentRole;
+  /** The issue or PR its trigger label lives on: a Review's PR, every other role's issue. */
+  readonly issue: number;
+  /** The weekly-limit issues whose held markers hold it. */
+  readonly heldOn: readonly number[];
+}
+
+export interface WeeklyLimitIssue {
+  readonly number: number;
+  /** When its limit resets, ISO 8601, or null when it doesn't say. */
+  readonly resetsAt: string | null;
+}
+
 interface ItemBase {
   readonly number: number;
   readonly title: string;
@@ -382,10 +473,16 @@ interface ItemBase {
 export type WaitingItem =
   /** An open Design session whose last comment is the App's round. */
   | (ItemBase & { readonly kind: "design-round" })
+  /** An open `needs-design` issue whose last comment is the App's failure notice for a Design-session turn, waiting since that notice for the Operator's reply (#473). */
+  | (ItemBase & { readonly kind: "design-turn-failed" })
+  /** An open `needs-design` issue whose last comment is the App's refusal of a Map the Map cap holds, waiting since that refusal for the Operator's reply (#473). */
+  | (ItemBase & { readonly kind: "design-map-cap" })
   /** An open `ready-for-human` issue, waiting since it got the label. */
   | (ItemBase & { readonly kind: "ready-for-human" })
   /** The Fabrik App's open `needs-info` issue, which Triage's question asks the Operator about, unanswered since it got the label (#425). */
   | (ItemBase & { readonly kind: "monitor-needs-info" })
+  /** The Operator's own open `needs-info` issue, which Triage's question asks them about, unanswered since it got the label (#473). */
+  | (ItemBase & { readonly kind: "needs-info" })
   /** The Fabrik App's open Audit, filled or still pending, waiting since it was opened. */
   | (ItemBase & { readonly kind: "audit" })
   /** The Fabrik App's open Retro, filled or still pending, waiting since it was opened. */
@@ -400,12 +497,21 @@ export type WaitingItem =
     })
   /** A research Decision on an open Map whose last run failed, waiting since the Kit's failure notice for the Operator to re-add agent:research. */
   | (ItemBase & { readonly kind: "research-failed" })
-  /** An agent PR out of draft with a passing Verdict at its head, waiting since that Verdict. */
+  /**
+   * An agent PR out of draft with a passing Verdict at its head and no
+   * Operator review since, waiting since that Verdict.
+   */
   | (ItemBase & {
       readonly kind: "merge-gate";
       /** The Operator wait so far: from the passing Verdict to the filing, in milliseconds. */
       readonly operatorWait: number;
-    });
+    })
+  /**
+   * An agent PR out of draft the Kit handed back with `ready-for-human` after
+   * its passing Verdict, as after an empty Request-changes run or a failed
+   * conflict-only run, waiting since it got the label.
+   */
+  | (ItemBase & { readonly kind: "handed-back" });
 
 /** Loop work that hasn't moved in more than 24 hours, since `since`. */
 export type StuckItem =
@@ -413,8 +519,16 @@ export type StuckItem =
   | (ItemBase & { readonly kind: "needs-info-answered" })
   /** A draft agent PR with no commit, comment or label event since `since`. */
   | (ItemBase & { readonly kind: "idle-draft" })
+  /** An agent PR out of draft the Operator reviewed at `since`, after its passing Verdict, that the Kit hasn't acted on. */
+  | (ItemBase & { readonly kind: "reviewed" })
   /** An open Ticket whose latest record, ended at `since`, was an Infrastructure failure or timeout. */
-  | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure });
+  | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure })
+  /**
+   * The Fabrik App's Audits or Retros whose runs failed in one week, enough
+   * of them that the next waits for next week (src/loop/weeklyGate.ts), the
+   * last opened in the summary's week, and is this item, at `since`.
+   */
+  | (ItemBase & { readonly kind: "weekly-runs-failed"; readonly issueName: "Audit" | "Retro"; readonly failed: readonly ItemBase[] });
 
 export interface RevertRate {
   readonly reverted: number;
@@ -497,11 +611,17 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
   const replaySpend = { thisWeek: replaySpendOf(weeks.thisWeek, replays), lastWeek: replaySpendOf(weeks.lastWeek, replays) };
-  const repos = input.facts.map((facts) => repoSectionOf(facts, input));
-  // Held work counts too, so a queue never sits unseen through a week nothing ran.
-  const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
-  // And a week only Replays ran in is no quiet week either, so what they cost still shows.
-  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && replaySpend.thisWeek === null && quiet) return { kind: "skip" };
+  const repos = [
+    ...input.facts.map((facts) => repoSectionOf(facts, input)),
+    ...input.unread.map(({ repo, why }) => ({ repo, waitingOnYou: [], stuck: [], held: null, unread: why })),
+  ];
+  // Held work counts too, so a queue never sits unseen through a week nothing ran,
+  // and so does a repo that couldn't be read, so its failure is never taken for a quiet week.
+  const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null && repo.unread === null);
+  // And a week only Replays ran in is no quiet week either, so what they cost still shows,
+  // and nor is a store with Run records the Kit couldn't read, so a store on an older release is never taken for a quiet one (#474).
+  const unreadable = input.unreadableRecords.count > 0;
+  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && replaySpend.thisWeek === null && quiet && !unreadable) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
     thisWeek: thisWeek[metric],
     lastWeek: lastWeek[metric],
@@ -604,7 +724,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     subscriptions: subscriptionsOf(records),
     humanTouches: mean(merged.map((pullRequest) => pullRequest.humanTouches)),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
-    operatorWaitMs: median(merged.flatMap(({ mergedAt, lastPass }) => (lastPass === null ? [] : [Date.parse(mergedAt) - Date.parse(lastPass)]))),
+    operatorWaitMs: median(merged.flatMap((pullRequest) => operatorWaitOf(pullRequest, input.operator))),
     revertRate: revertRateOf(week, input),
     escapeRate: escapeRateOf(escapeWindow, escapes, input),
     escapesByStrength: escapesByStrengthOf(escapes),
@@ -615,13 +735,32 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       const dispatch = dispatchOf(ticket);
       return dispatch !== null && within(week, dispatch);
     }).length,
-    retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
+    retries: records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null).length,
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
     steppedUpStarts: steppedUpStartsOf(merged, input.records),
     scores: scoresOf(week, input),
     scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
+}
+
+/**
+ * A merged agent PR's Operator wait, in ms: from its last passing Verdict to
+ * the Operator's first review after it, or to the merge if they gave none.
+ * None without a passing Verdict.
+ */
+function operatorWaitOf({ pullRequest, mergedAt, lastPass }: MergedAgentPullRequest, operator: string): number[] {
+  if (lastPass === null) return [];
+  const reviewed = operatorReviewsAfter(pullRequest.reviews, operator, lastPass).at(0) ?? mergedAt;
+  return [Math.min(Date.parse(mergedAt), Date.parse(reviewed)) - Date.parse(lastPass)];
+}
+
+/** When the Operator reviewed a PR after `since`, oldest first. */
+function operatorReviewsAfter(reviews: readonly ReviewFacts[], operator: string, since: string): string[] {
+  return reviews
+    .filter((review) => review.author === operator && Date.parse(review.at) > Date.parse(since))
+    .map(({ at }) => at)
+    .toSorted((a, b) => Date.parse(a) - Date.parse(b));
 }
 
 /** What the summary calls each Step-up reason. */
@@ -891,23 +1030,54 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt }: WeeklySummaryInput): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt, timeZone }: WeeklySummaryInput): RepoSection {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
+  const { thisWeek } = weeksEndingAt(now, timeZone);
   return {
     repo: facts.repo,
     // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst([
-      ...waitingOnYou(facts, appLogin, items),
+      ...waitingOnYou(facts, operator, appLogin, items),
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
       ...finishedReplaysOf(facts, operator, items),
       ...openMapsOf(facts, items),
       ...failedResearchOf(facts, appLogin, items),
     ]),
-    stuck: stuck(facts, records, items, now),
+    // A week given up on is Stuck however recently its last run failed: nothing moves it until the next week.
+    stuck: oldestFirst([
+      ...stuck(facts, records, operator, items, now),
+      ...weekGivenUp("Audit", facts.audits, (body) => auditMarksIn(body).failed, appLogin, thisWeek, items),
+      ...weekGivenUp("Retro", facts.retros, (body) => retroMarksIn(body).failed, appLogin, thisWeek, items),
+    ]),
     held: heldIn(facts, appLogin, now),
+    unread: null,
   };
+}
+
+/**
+ * The Fabrik App's Audits or Retros, by `issueName`, whose runs failed in one
+ * week, UTC Monday to Monday as the gate counts it, enough of them that the
+ * next waits for next week, when the last was opened in the summary's `week`.
+ */
+function weekGivenUp(
+  issueName: "Audit" | "Retro",
+  issues: readonly WeeklyRunIssueFacts[],
+  failed: (body: string) => boolean,
+  appLogin: string,
+  week: Week,
+  items: Items,
+): StuckItem[] {
+  const runs = issues.filter((issue) => issue.author === appLogin).map((issue) => ({ ...issue, failed: failed(issue.body) }));
+  const weeks = new Set(runs.filter(({ createdAt }) => within(week, createdAt)).map(({ createdAt }) => weekStart(createdAt)));
+  return [...weeks].flatMap((start) => {
+    const inWeek = failedInWeek(runs, start);
+    const last = inWeek[FAILED_RUNS_A_WEEK - 1];
+    if (last === undefined || !within(week, last.createdAt)) return [];
+    const givenUp = inWeek.slice(0, FAILED_RUNS_A_WEEK);
+    return [{ kind: "weekly-runs-failed", issueName, ...items.issue(last, last.createdAt), failed: givenUp.map((run) => items.issue(run, run.createdAt)) }];
+  });
 }
 
 /** The Fabrik App's open Audits, aged from when each was opened: a person's `fabrik:audit` issue is no Audit. */
@@ -975,11 +1145,30 @@ function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: 
 }
 
 /** What a cap holds in the repo, or null when nothing is held. */
-function heldIn({ designQueue, monitorIssues, openMaps }: GitHubFacts, appLogin: string, now: number): Held | null {
+function heldIn({ designQueue, monitorIssues, openMaps, kitIssues }: GitHubFacts, appLogin: string, now: number): Held | null {
   const designSessions = heldDesignSessionsOf(designQueue, now);
   const monitor = heldMonitorOf(monitorIssues, appLogin);
   const mapCap = heldMapsOf(openMaps);
-  return designSessions === null && monitor === null && mapCap === null ? null : { designSessions, monitor, maps: mapCap };
+  const runs = heldRunsOf(kitIssues);
+  return designSessions === null && monitor === null && mapCap === null && runs === null ? null : { designSessions, monitor, maps: mapCap, runs };
+}
+
+/**
+ * The Held runs, read by the scheduled tick's own rule (waitingHeldRuns), so
+ * the summary and the resume can't disagree, with the open weekly-limit issues
+ * they wait on. Null while no run is held.
+ */
+function heldRunsOf(kitIssues: readonly KitIssueSnapshot[]): HeldRuns | null {
+  const runs = waitingHeldRuns(kitIssues).map(({ run, markers }) => ({
+    role: run.role,
+    issue: run.issue,
+    heldOn: [...markers].flatMap(([issue, held]) => (held > 0 ? [issue] : [])),
+  }));
+  if (runs.length === 0) return null;
+  const weeklyLimitIssues = kitIssues
+    .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
+    .map((issue) => ({ number: issue.number, resetsAt: resetsAtOf(issue) }));
+  return { runs, weeklyLimitIssues };
 }
 
 /**
@@ -1044,46 +1233,68 @@ function oldestFirst<T extends ItemBase>(items: readonly T[]): T[] {
 }
 
 /**
- * When Triage asked the Operator about a `needs-info` issue the Fabrik App
- * filed as the Monitor, which can't answer itself (#425), or null if it isn't
- * one or someone has answered: from then on Triage or Stuck has it.
+ * When Triage asked about a `needs-info` issue, or null if it isn't one or
+ * someone has answered: from then on Triage or Stuck has it. Only one the
+ * Operator filed, or the Fabrik App filed as the Monitor, which can't answer
+ * itself (#425), asks the Operator: Triage asks anyone else who filed one.
  */
-function monitorQuestionOf(issue: OpenIssueFacts, appLogin: string): string | null {
-  if (issue.author !== appLogin || !issue.labels.includes(NEEDS_INFO) || answerOf(issue) !== null) return null;
+function unansweredQuestionOf(issue: OpenIssueFacts): string | null {
+  if (!issue.labels.includes(NEEDS_INFO) || answerOf(issue) !== null) return null;
   return lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt;
 }
 
-function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
+function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, operator: string, appLogin: string, items: Items): WaitingItem[] {
   const waiting: WaitingItem[] = [];
   for (const issue of openIssues) {
     const round = unansweredRoundOf(issue);
     if (round !== null) waiting.push({ kind: "design-round", ...items.issue(issue, round) });
+    const stopped = stoppedDesignSessionOf(issue);
+    if (stopped !== null) waiting.push({ kind: stopped.kind, ...items.issue(issue, stopped.at) });
     if (issue.labels.includes(READY_FOR_HUMAN)) {
       const since = lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt;
       waiting.push({ kind: "ready-for-human", ...items.issue(issue, since) });
     }
-    const asked = monitorQuestionOf(issue, appLogin);
-    if (asked !== null) waiting.push({ kind: "monitor-needs-info", ...items.issue(issue, asked) });
+    const asked = issue.author === appLogin || issue.author === operator ? unansweredQuestionOf(issue) : null;
+    if (asked !== null) waiting.push({ kind: issue.author === appLogin ? "monitor-needs-info" : "needs-info", ...items.issue(issue, asked) });
   }
   for (const pullRequest of openPullRequests) {
-    const passed = passAtHeadOf(pullRequest);
-    if (pullRequest.draft || passed === null) continue;
-    const item = items.pullRequest(pullRequest, passed);
+    const standing = passedStandingOf(pullRequest, operator);
+    if (standing?.kind === "handed-back") waiting.push({ kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) });
+    if (standing?.kind !== "merge-gate") continue;
+    const item = items.pullRequest(pullRequest, standing.since);
     waiting.push({ kind: "merge-gate", ...item, operatorWait: item.age });
   }
   return oldestFirst(waiting);
 }
 
-function stuck({ repo, openIssues, openPullRequests }: GitHubFacts, records: readonly RunRecord[], items: Items, now: number): StuckItem[] {
+/**
+ * Loop work that hasn't moved in more than 24 hours. A Held run isn't stuck:
+ * the Kit resumes it itself at the reset, and Held names it, so a Ticket or
+ * PR a held marker names is left out, its failed run and its draft alike.
+ */
+function stuck(
+  { repo, openIssues, openPullRequests, kitIssues }: GitHubFacts,
+  records: readonly RunRecord[],
+  operator: string,
+  items: Items,
+  now: number,
+): StuckItem[] {
+  const held = new Set(waitingHeldRuns(kitIssues).map(({ run }) => run.issue));
+  const isHeld = (...numbers: readonly (number | null)[]) => numbers.some((number) => number !== null && held.has(number));
   const found: StuckItem[] = [];
   for (const issue of openIssues) {
     const answered = issue.labels.includes(NEEDS_INFO) ? answerOf(issue) : null;
     if (answered !== null) found.push({ kind: "needs-info-answered", ...items.issue(issue, answered) });
     const failed = failedLastRunOf(issue, repo, records);
-    if (failed !== null) found.push({ kind: "infrastructure-failure", ...items.issue(issue, failed.endedAt), failure: failed.failure });
+    if (failed !== null && !isHeld(issue.number, failed.pullRequest)) {
+      found.push({ kind: "infrastructure-failure", ...items.issue(issue, failed.endedAt), failure: failed.failure });
+    }
   }
   for (const pullRequest of openPullRequests) {
+    if (isHeld(pullRequest.number, pullRequest.ticket)) continue;
     if (pullRequest.draft) found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
+    const standing = passedStandingOf(pullRequest, operator);
+    if (standing?.kind === "reviewed") found.push({ kind: "reviewed", ...items.pullRequest(pullRequest, standing.since) });
   }
   return oldestFirst(found.filter((item) => now - Date.parse(item.since) > STUCK_AFTER_MS));
 }
@@ -1103,20 +1314,20 @@ function answerOf(issue: OpenIssueFacts): string | null {
  * An open Ticket's latest record, if it ended in an Infrastructure failure:
  * the run nothing has picked up again. A judge run's record (role `score`) is
  * left out: scoring a run never picks its Ticket up, and a judge's own failure
- * never leaves the Ticket stuck.
+ * never leaves the Ticket stuck. With the run's PR, where a Review is held.
  */
 function failedLastRunOf(
   issue: OpenIssueFacts,
   repo: string,
   records: readonly RunRecord[],
-): { readonly endedAt: string; readonly failure: InfrastructureFailure } | null {
+): { readonly endedAt: string; readonly failure: InfrastructureFailure; readonly pullRequest: number | null } | null {
   const latest = records
     .filter((record) => record.repo === repo && record.issue === issue.number && record.role !== "score")
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
     .at(-1);
   if (latest === undefined || latest.infrastructureFailure === null) return null;
   if (latest.role !== "implement" && latest.role !== "review") return null;
-  return { endedAt: latest.endedAt, failure: latest.infrastructureFailure };
+  return { endedAt: latest.endedAt, failure: latest.infrastructureFailure, pullRequest: latest.pullRequest };
 }
 
 /** A PR's latest commit, comment or label event, or when it was opened. */
@@ -1129,6 +1340,47 @@ function lastActivityOf(pullRequest: OpenPullRequestFacts): string {
 function unansweredRoundOf(issue: OpenIssueFacts): string | null {
   const last = issue.comments.at(-1);
   return last !== undefined && last.byBot && DESIGN_ROUND_MARKER.test(last.body) ? last.at : null;
+}
+
+/**
+ * A Design session whose last comment is the App's failure notice for its
+ * turn, or its refusal of a Map the Map cap holds, with when it was posted, or
+ * null if its last comment is anything else. Either keeps the session's slot
+ * (holdsSlot) with the Operator's reply as the next move.
+ */
+function stoppedDesignSessionOf(issue: OpenIssueFacts): { readonly kind: "design-turn-failed" | "design-map-cap"; readonly at: string } | null {
+  const last = issue.comments.at(-1);
+  if (!issue.labels.includes(NEEDS_DESIGN) || last === undefined || !last.byBot || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return null;
+  return { kind: refusedByMapCap(last.body) ? "design-map-cap" : "design-turn-failed", at: last.at };
+}
+
+/**
+ * Where an agent PR out of draft with a passing Verdict at its head stands,
+ * and since when. After the pass, the Kit's `ready-for-human`, still on it,
+ * hands it to the Operator (`handed-back`); else the Operator's latest review
+ * since leaves the next move to the Kit (`reviewed`); else it's at the Merge
+ * gate, waiting on the Operator since the pass (`merge-gate`).
+ */
+interface PassedPullRequestStanding {
+  readonly kind: "merge-gate" | "handed-back" | "reviewed";
+  readonly since: string;
+}
+
+/** Where an agent PR with a passing Verdict at its head stands, or null for a draft or one without. */
+function passedStandingOf(pullRequest: OpenPullRequestFacts, operator: string): PassedPullRequestStanding | null {
+  const passed = passAtHeadOf(pullRequest);
+  if (pullRequest.draft || passed === null) return null;
+  const reviewed = operatorReviewsAfter(pullRequest.reviews, operator, passed).at(-1);
+  const handedBack = addedAndStillOn(pullRequest.labelEvents, READY_FOR_HUMAN);
+  if (handedBack !== null && Date.parse(handedBack) > Date.parse(reviewed ?? passed)) return { kind: "handed-back", since: handedBack };
+  if (reviewed !== undefined) return { kind: "reviewed", since: reviewed };
+  return { kind: "merge-gate", since: passed };
+}
+
+/** When `label` was last added, if it's still on: the latest event for it added it. Otherwise null. */
+function addedAndStillOn(events: readonly LabelEvent[], label: string): string | null {
+  const latest = events.filter((event) => event.label === label).toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at)).at(-1);
+  return latest?.action === "labeled" ? latest.at : null;
 }
 
 /** When a PR's latest Verdict on its head was posted, if that Verdict is a pass; otherwise null. */
@@ -1167,34 +1419,6 @@ function weeksEndingAt(now: number, timeZone: string): { thisWeek: Week; lastWee
   return { thisWeek: week(thisMonday - 7 * DAY_MS), lastWeek: week(thisMonday - 14 * DAY_MS) };
 }
 
-interface WallClock {
-  readonly year: number;
-  readonly month: number;
-  readonly day: number;
-  readonly weekday: string;
-  /** The wall-clock time read as if it were UTC. */
-  readonly asUtc: number;
-}
-
-function wallClock(time: number, timeZone: string): WallClock {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric",
-    weekday: "short",
-  }).formatToParts(time);
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
-  const [year, month, day, hour, minute, second] = (["year", "month", "day", "hour", "minute", "second"] as const).map((type) =>
-    Number(part(type)),
-  ) as [number, number, number, number, number, number];
-  return { year, month, day, weekday: part("weekday"), asUtc: Date.UTC(year, month - 1, day, hour, minute, second) };
-}
-
 /** The instant a calendar date (as midnight UTC) begins in the time zone. */
 function midnight(date: number, timeZone: string): number {
   const offsetAt = (time: number) => wallClock(time, timeZone).asUtc - time;
@@ -1202,18 +1426,14 @@ function midnight(date: number, timeZone: string): number {
   return date - offsetAt(guess);
 }
 
-/** `yyyy-mm-dd hh:mm` on the wall clock in the time zone. */
-function localTime(time: number, timeZone: string): string {
-  return new Date(wallClock(time, timeZone).asUtc).toISOString().slice(0, 16).replace("T", " ");
-}
-
 // Rendering. Only shipped features get a section: the Monitor issues add
 // theirs when their Spec ships. The open Retro gets no section, only its line
 // in Waiting on you, and so do an open Map and a failed research Decision.
 // Scores shows only in a week with score files, and never a run's own scores.
-// Held shows what the Design-session, Monitor and Map caps hold.
+// Held shows what the Design-session, Monitor and Map caps hold, and the Held
+// runs waiting on a weekly-limit issue.
 
-function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
+function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords }: WeeklySummaryInput): string {
   const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
   const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
   const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
@@ -1240,6 +1460,8 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     ["spend that never merged", spendNeverMerged],
   ];
   const lines = [
+    // First, since every figure below leaves these records out.
+    ...unreadableLines(unreadableRecords),
     "## Metrics",
     "",
     "| | This week | Last week | Change |",
@@ -1279,7 +1501,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   }
   lines.push(...subscriptionUsageLines(weeklyLimit, summary.subscriptions, timeZone), "");
   lines.push(...scoresLines(summary.scores, summary.scoringCost));
-  lines.push(...heldLines(summary.repos));
+  lines.push(...heldLines(summary.repos, timeZone));
   for (const repo of summary.repos) {
     lines.push(
       ...repoLines(
@@ -1292,6 +1514,17 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(`@${operator}`);
   return `${lines.join("\n")}\n`;
+}
+
+/** The line saying how many of the store's Run records the Kit couldn't read, and how to read them when a newer Kit wrote them, or nothing when it read them all. */
+function unreadableLines({ count, newestSchema }: UnreadableRunRecords): string[] {
+  if (count === 0) return [];
+  const [records, them] = count === 1 ? ["1 Run record", "it"] : [`${count} Run records`, "them"];
+  const line =
+    newestSchema === null
+      ? `${records} in the store ${count === 1 ? "isn't" : "aren't"} of a schema the Kit knows, so this summary leaves ${them} out.`
+      : `${records} ${count === 1 ? "was" : "were"} written by a newer Kit than this store runs (schema ${newestSchema} > ${RUN_RECORD_SCHEMA}), so this summary leaves ${them} out: bump the Kit's pin in \`${STORE_CALLER_PATH}\` to the release the Product repos run.`;
+  return [line, ""];
 }
 
 /** The escapes opened in the 90 days by Strength, naming those with no known Strength only when there are some. */
@@ -1344,7 +1577,7 @@ function scorerName(scorer: string): string {
 }
 
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
-function heldLines(repos: readonly RepoSection[]): string[] {
+function heldLines(repos: readonly RepoSection[], timeZone: string): string[] {
   const lines = repos.flatMap(({ repo, held }) => {
     const shown: string[] = [];
     const design = held?.designSessions ?? null;
@@ -1363,15 +1596,34 @@ function heldLines(repos: readonly RepoSection[]): string[] {
       const open = spelled(maps.open.map((map) => `[#${map}](https://github.com/${repo}/issues/${map})`), "and");
       shown.push(`- ${repo}: the Map cap is full with ${open} open, so Design sessions offer no new Map`);
     }
+    const runs = held?.runs ?? null;
+    if (runs !== null) shown.push(...heldRunsLines(repo, runs, timeZone));
     return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
 }
 
+/** The Held runs, each with its role and the weekly-limit issues holding it, then each open weekly-limit issue with its reset. */
+function heldRunsLines(repo: string, { runs, weeklyLimitIssues }: HeldRuns, timeZone: string): string[] {
+  const link = (number: number) => `[#${number}](https://github.com/${repo}/issues/${number})`;
+  return [
+    `- ${repo}: ${runs.length === 1 ? "1 held run" : `${runs.length} held runs`}, which the Kit resumes itself at the reset:`,
+    ...runs.map(({ role, issue, heldOn }) => `  - the ${runNamed(role)} on ${link(issue)}, held on ${spelled(heldOn.map(link), "and")}`),
+    ...weeklyLimitIssues.map(({ number, resetsAt }) => {
+      const reset = resetsAt === null ? "its reset not known" : `resetting ${readable(resetsAt, timeZone)}`;
+      return `- ${repo}: weekly-limit issue ${link(number)} open, ${reset}`;
+    }),
+  ];
+}
+
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */
 const SHOWN_ITEMS = 10;
 
-function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly EscapeThisWeek[], reviewMisses: readonly ReviewMissThisWeek[]): string[] {
+function repoLines({ repo, waitingOnYou, stuck, unread }: RepoSection, escapes: readonly EscapeThisWeek[], reviewMisses: readonly ReviewMissThisWeek[]): string[] {
+  if (unread !== null) {
+    const line = `The Kit couldn't read this repo on GitHub this run, so what waits on you, what's stuck and what's held there, and its PRs, Tickets and Specs in the metrics, are left out of this summary: ${escapedTitle(unread)}. Re-run the Weekly summary to try it again.`;
+    return [`## ${repo}`, "", line, "", liveLinks(repo), ""];
+  }
   const lines = [`## ${repo}`, "", "### Waiting on you", ""];
   if (waitingOnYou.length === 0) lines.push("Nothing waiting on you.", "");
   else {
@@ -1411,6 +1663,12 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `ready-for-human for ${duration(item.age)}`);
     case "monitor-needs-info":
       return itemLine(item, `Monitor issue's question unanswered for ${duration(item.age)}`);
+    case "needs-info":
+      return itemLine(item, `Triage's question to you unanswered for ${duration(item.age)}`);
+    case "design-turn-failed":
+      return itemLine(item, `Design-session turn failed ${duration(item.age)} ago; reply to run it again`);
+    case "design-map-cap":
+      return itemLine(item, `Design session's Map refused by the Map cap ${duration(item.age)} ago; reply to carry on`);
     case "audit":
       return itemLine(item, `Audit open for ${duration(item.age)}`);
     case "retro":
@@ -1423,6 +1681,8 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `research run failed ${duration(item.age)} ago, waiting for you to re-add ${RESEARCH_LABEL}`);
     case "merge-gate":
       return itemLine(item, `at the Merge gate, Operator wait ${duration(item.operatorWait)}`);
+    case "handed-back":
+      return itemLine(item, `handed to you with \`${READY_FOR_HUMAN}\` ${duration(item.age)} ago`);
   }
 }
 
@@ -1432,8 +1692,12 @@ function stuckLine(item: StuckItem): string {
       return itemLine(item, `needs-info answered ${duration(item.age)} ago, not picked up`);
     case "idle-draft":
       return itemLine(item, `a draft with no activity for ${duration(item.age)}`);
+    case "reviewed":
+      return itemLine(item, `reviewed by you ${duration(item.age)} ago; the Kit hasn't acted`);
     case "infrastructure-failure":
       return itemLine(item, `last run ended in an Infrastructure failure (${item.failure}) ${duration(item.age)} ago`);
+    case "weekly-runs-failed":
+      return `- ${item.issueName} failed ${item.failed.length === 2 ? "twice" : `${item.failed.length} times`} this week (${item.failed.map(({ number, url }) => `[#${number}](${url})`).join(", ")})`;
   }
 }
 
@@ -1499,7 +1763,7 @@ function limitReading({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | nu
   const now = share(thisWeek);
   const before = share(lastWeek);
   const resets =
-    thisWeek === null || thisWeek.resetsAt === null ? "" : `, resetting ${localTime(thisWeek.resetsAt * 1000, timeZone)} (${timeZone})`;
+    thisWeek === null || thisWeek.resetsAt === null ? "" : `, resetting ${readable(thisWeek.resetsAt * 1000, timeZone)}`;
   const usage = now === null ? "no weekly-limit reading this week." : `${now} of the weekly limit${resets}.`;
   return before === null ? usage : `${usage} Last week: ${before}.`;
 }

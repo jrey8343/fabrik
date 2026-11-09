@@ -4,10 +4,12 @@
 // comment with its marker. Routing flaws onward is for later rules.
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
+import { upToDateBeforeMergeGate } from "./conflicts.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { followUpsSection } from "./followUps.ts";
-import { DISPATCH_LABEL, REVIEW_LABEL } from "./labels.ts";
+import { heldOn, heldUntilThen, startsWhen } from "./hold.ts";
+import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
@@ -68,32 +70,46 @@ export function startReviewOnLabel(pullRequest: PullRequestSnapshot, config: Kit
 }
 
 /** Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be counted from the PR alone. */
-export function applyRedChecks(event: RedChecks, snapshot: Snapshot): Plan {
+export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: KitConfig): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
     if (event.failed.length === 0) {
       return { kind: "nothing", reason: `#${pullRequest.number}'s required checks passed, so the Reviewer judges it` };
     }
+    const skipped = event.skipped ?? [];
+    const red = event.failed.filter((name) => !skipped.includes(name));
+    const listed = (heading: string, names: readonly string[]) =>
+      names.length === 0 ? [] : [[heading, "", ...names.map((name) => `- \`${name.replace(/`/g, "'")}\``)].join("\n")];
+    // A skipped or neutral check is no failure a Retry can fix, so the Verdict says so apart from the ones that failed.
     const findings = [
-      "These required checks didn't pass, so the Reviewer didn't run:",
-      "",
-      ...event.failed.map((name) => `- \`${name.replace(/`/g, "'")}\``),
-    ].join("\n");
-    return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }, snapshot.operator) };
+      ...listed("These required checks didn't pass, so the Reviewer didn't run:", red),
+      ...listed(
+        red.length === 0
+          ? "These required checks were skipped or reported neutral, so the Reviewer didn't run, and a Retry can't change that:"
+          : "These required checks were skipped or reported neutral, which a Retry can't change:",
+        skipped,
+      ),
+    ].join("\n\n");
+    const held = heldOn(snapshot.kitIssues, config);
+    return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }, snapshot.operator, held) };
   });
 }
 
 /**
  * The Reviewer's Verdict. A reply that breaks the contract is an
  * Infrastructure failure, never a pass. A pass takes the PR out of draft and
- * requests the Operator's review, the event's one notification.
+ * requests the Operator's review, the event's one notification, unless the
+ * PR conflicts with main: then it stays in draft and is brought up to date,
+ * and the pass on that head opens the Merge gate (#480).
  */
-export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
+export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConfig): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
     const parsed = parseVerdict(event.output);
     if (!parsed.ok) {
       return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
     }
     const findings = withoutMentions(parsed.findings);
+    // A run this Verdict starts is held while every Subscription is used up, and its note says so (#341).
+    const held = heldOn(snapshot.kitIssues, config);
     const actions = verdictActions(event, pullRequest, {
       verdict: parsed.verdict,
       source: "reviewer",
@@ -101,9 +117,12 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
       findings: parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings,
       followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
-    }, snapshot.operator);
+    }, snapshot.operator, held);
     // A pass that gave way to a Request changes deferred during a Retry (#427) keeps the PR in draft for its run.
     if (parsed.verdict !== "pass" || passGivesWay(pullRequest)) return { kind: "act", actions };
+    // One on a PR that conflicts with main brings it up to date first, in draft: the Operator's review couldn't land (#480).
+    const bringUpToDate = upToDateBeforeMergeGate(pullRequest, snapshot.mergeable, held);
+    if (bringUpToDate !== null) return { kind: "act", actions: [...actions, bringUpToDate] };
     return {
       kind: "act",
       actions: [
@@ -161,7 +180,8 @@ export interface AnswerLines {
 
 /**
  * The Verdict comment (it mentions nobody), and agent:review off so re-adding
- * it is a fresh event. An Execution flaw then starts its retry, if one is
+ * it is a fresh event, and ready-for-human off the PR, as the Loop has it
+ * again (#436). An Execution flaw then starts its retry, if one is
  * left; a Design flaw, or an Execution flaw with none left, sends the Ticket
  * back to design. A pass's Follow-ups (src/loop/followUps.ts) follow its
  * findings. A Reviewer's Verdict ends with the Operator comments it
@@ -184,10 +204,11 @@ export function verdictActions(
     readonly considered?: readonly string[];
   },
   operator: string,
+  held: number | null,
 ): Action[] {
   const first =
-    verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator) : verdict === "pass" ? deferredFirst(pullRequest) : null;
-  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest);
+    verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator, held) : verdict === "pass" ? deferredFirst(pullRequest, held) : null;
+  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest, held);
   const record: VerdictRecord = {
     verdict,
     source,
@@ -210,11 +231,13 @@ export function verdictActions(
     `[The run](${event.runUrl})`,
     ...considered,
   ].join("\n");
-  const reviewLabelOff: Action[] = pullRequest.labels.includes(REVIEW_LABEL)
-    ? [{ kind: "remove-label", issue: pullRequest.number, label: REVIEW_LABEL }]
-    : [];
+  // ready-for-human, which the Kit put on the PR when a run it started there ended without pushing, comes off too:
+  // with a Verdict, the PR is back in the Loop.
+  const labelsOff: Action[] = ([REVIEW_LABEL, READY_FOR_HUMAN] as const)
+    .filter((label) => pullRequest.labels.includes(label))
+    .map((label): Action => ({ kind: "remove-label", issue: pullRequest.number, label }));
   return [
-    ...reviewLabelOff,
+    ...labelsOff,
     { kind: "comment", issue: pullRequest.number, body, key: VERDICT_COMMENT.posted },
     ...(next?.actions ?? []),
   ];
@@ -234,6 +257,7 @@ type GaveWay = VerdictNext & { readonly reviews: number[] };
 function requestChangesFirst(
   pullRequest: PullRequestSnapshot,
   operator: string,
+  held: number | null,
 ): GaveWay | null {
   if (pullRequest.ticket === null) return null;
   // Not to the reviews of a Request-changes run in flight.
@@ -243,7 +267,7 @@ function requestChangesFirst(
   if (reviews.length === 0) return null;
   return {
     reviews,
-    line: `The Operator's Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, reviews)}) hasn't been built, so it goes first: its Request-changes run starts now, on the Step-up model, and fixes these findings too. This Execution flaw uses no retry.`,
+    line: `The Operator's Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, reviews)}) hasn't been built, so it goes first: its Request-changes run ${startsWhen(held)}, on the Step-up model, and fixes these findings too. This Execution flaw uses no retry.${heldUntilThen(held)}`,
     // A fresh agent:implement on the Ticket starts the run this Verdict put in flight. It notifies nobody.
     actions: [{ kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] }],
   };
@@ -251,7 +275,7 @@ function requestChangesFirst(
 
 /** Whether a pass on this PR gives way to the Operator's Request changes deferred while a Retry was in flight (#427). */
 function passGivesWay(pullRequest: PullRequestSnapshot): boolean {
-  return deferredFirst(pullRequest) !== null;
+  return deferredFirst(pullRequest, null) !== null;
 }
 
 /**
@@ -262,21 +286,21 @@ function passGivesWay(pullRequest: PullRequestSnapshot): boolean {
  * for it. Its marker names the reviews, so the run is in flight from it. Null
  * when none is deferred.
  */
-function deferredFirst(pullRequest: PullRequestSnapshot): GaveWay | null {
+function deferredFirst(pullRequest: PullRequestSnapshot, held: number | null): GaveWay | null {
   if (pullRequest.ticket === null || pullRequest.deferredChangesRequests.length === 0) return null;
   const reviews = [...pullRequest.deferredChangesRequests];
   return {
     reviews,
-    line: `The Operator's Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, reviews)}) came in while the Retry worked, so this Review judged #${pullRequest.number} against the Ticket without it. Its Request-changes run starts now, on the Step-up model, and uses no retry, and Review runs again on its push.`,
+    line: `The Operator's Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, reviews)}) came in while the Retry worked, so this Review judged #${pullRequest.number} against the Ticket without it. Its Request-changes run ${startsWhen(held)}, on the Step-up model, and uses no retry, and Review runs again on its push.${heldUntilThen(held)}`,
     // A fresh agent:implement on the Ticket starts the run this Verdict put in flight. It notifies nobody.
     actions: [{ kind: "add-labels", issue: pullRequest.ticket, labels: [DISPATCH_LABEL] }],
   };
 }
 
 /** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */
-function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot): VerdictNext | null {
+function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot, held: number | null): VerdictNext | null {
   if (verdict === "pass") return null;
-  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest) : null;
+  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest, held) : null;
   if (retry !== null) return retry;
   const reason = verdict === "design-flaw" ? "design-flaw" : "retries-used-up";
   return { line: backToDesignLine(pullRequest, reason), actions: backToDesignActions(pullRequest, reason, VERDICT_COMMENT) };

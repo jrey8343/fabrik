@@ -49,7 +49,7 @@ import { judgePrompt } from "./scorerPrompt.ts";
 
 /** The digest of `transcript` that the judge reads in its prompt: the body of the prompt's one fenced transcript block. */
 function theJudgesDigestOf(transcript: readonly string[]): string {
-  const { prompt } = judgePrompt({ transcript, ticket: { title: "A Ticket", body: "" }, rubrics: [] });
+  const { prompt } = judgePrompt({ transcript, ticket: { title: "A Ticket", body: "" }, run: { kind: "first", retry: 0, timedOut: false }, brief: null, rubrics: [] });
   const [block] = [...prompt.matchAll(/^(`{3,})text\n([\s\S]*?)\n\1$/gm)];
   if (block?.[2] === undefined) throw new Error("The judge prompt holds no transcript block");
   return block[2];

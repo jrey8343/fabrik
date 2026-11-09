@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aReplayIssue, replaySlice } from "../__fixtures__/replay.ts";
-import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
 
@@ -78,14 +78,31 @@ describe("Intake", () => {
     });
   });
 
-  it("leaves a new sub-issue alone, because a skill made it under its parent", () => {
+  it("leaves a new label-less sub-issue without needs-triage, saying in one quiet line which label to add (#478)", () => {
     const issue = anIssue({ number: 7, parent: 3 });
 
     const plan = planFor({ kind: "issue-opened", issue: 7 }, snapshotOf(issue), kitConfig());
 
     expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: "Fabrik leaves a sub-issue alone, since a skill usually files them with their state. Add `needs-triage` for Triage to look at it, or a state label yourself.",
+        },
+      ],
+    });
+  });
+
+  it("leaves a new sub-issue a skill filed with its state alone, with no comment", () => {
+    const issue = anIssue({ number: 7, parent: 3, labels: ["enhancement", "ready-for-agent"] });
+
+    const plan = planFor({ kind: "issue-opened", issue: 7 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
       kind: "nothing",
-      reason: "#7 is a sub-issue of #3, so a skill made it",
+      reason: "#7 already has the state label ready-for-agent",
     });
   });
 });
@@ -110,7 +127,7 @@ describe("A replay issue (#156)", () => {
   });
 
   it("is taken a step on by the scheduled tick, beside the Audit it opens: the Operator's accepted issue's next Ticket starts", () => {
-    const plan = planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice() }), kitConfig());
+    const plan = withoutNotes(planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice() }), kitConfig()));
 
     expect(plan).toEqual({
       kind: "act",
@@ -124,9 +141,9 @@ describe("A replay issue (#156)", () => {
   });
 
   it("changes nothing the scheduled tick plans when it's someone else's, so nobody but the Operator spends a Subscription on one", () => {
-    const plan = planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice([aReplayIssue({ author: "someone-else" })]) }), kitConfig());
+    const plan = withoutNotes(planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice([aReplayIssue({ author: "someone-else" })]) }), kitConfig()));
 
-    expect(plan).toEqual(planFor(tick, tickSnapshot(), kitConfig()));
+    expect(plan).toEqual(withoutNotes(planFor(tick, tickSnapshot(), kitConfig())));
     expect(plan).toEqual({ kind: "act", actions: expect.arrayContaining([expect.objectContaining({ kind: "open-issue", labels: ["fabrik:audit"] })]) });
   });
 });
@@ -603,5 +620,83 @@ describe("An Operator comment on an agent PR", () => {
     const plan = planFor(commented(), snapshotOfPullRequest(aPullRequest({ isAgent: false, ticket: null })), kitConfig());
 
     expect(plan).toEqual({ kind: "nothing", reason: "#50 isn't an agent PR" });
+  });
+});
+
+describe("A trigger label on the wrong object (#479)", () => {
+  it("takes agent:review off a Ticket and points to its PR", () => {
+    const ticket = anIssue({ number: 7, labels: ["agent:review"], openPullRequests: [50] });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:review" }, snapshotOf(ticket), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:review" },
+        { kind: "comment", issue: 7, body: "`agent:review` goes on the PR, not the Ticket: add it to #50." },
+      ],
+    });
+  });
+
+  it("takes agent:review off an issue with no open PR and says it has none", () => {
+    const issue = anIssue({ number: 7, labels: ["agent:review"] });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:review" }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:review" },
+        { kind: "comment", issue: 7, body: "`agent:review` goes on an agent PR, not an issue, and #7 has no open PR." },
+      ],
+    });
+  });
+
+  it("takes agent:implement off an agent PR and points to its Ticket", () => {
+    const plan = planFor(
+      { kind: "pull-request-labeled", pullRequest: 50, label: "agent:implement" },
+      snapshotOfPullRequest(aPullRequest({ labels: ["agent:implement"] })),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: "agent:implement" },
+        { kind: "comment", issue: 50, body: "`agent:implement` goes on the Ticket, not the PR: add it to #7." },
+      ],
+    });
+  });
+
+  it("takes agent:implement off a PR with no Ticket and says it has none", () => {
+    const plan = planFor(
+      { kind: "pull-request-labeled", pullRequest: 50, label: "agent:implement" },
+      snapshotOfPullRequest(aPullRequest({ isAgent: false, ticket: null })),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: "agent:implement" },
+        { kind: "comment", issue: 50, body: "`agent:implement` goes on a Ticket, not a PR, and #50 isn't on one." },
+      ],
+    });
+  });
+
+  it("takes needs-triage off a PR and says it goes on an issue", () => {
+    const plan = planFor(
+      { kind: "pull-request-labeled", pullRequest: 50, label: "needs-triage" },
+      snapshotOfPullRequest(aPullRequest()),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: "needs-triage" },
+        { kind: "comment", issue: 50, body: "`needs-triage` goes on an issue, not a PR: add it to the issue you want triaged." },
+      ],
+    });
   });
 });

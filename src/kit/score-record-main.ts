@@ -2,7 +2,8 @@
 // judge run's own push job (#149). It builds the judge's Run record, in role
 // `score` (src/kit/runRecord.ts), and the score file (src/kit/scorer.ts) from
 // how the judge ended (src/kit/judge.ts), and writes the judge's transcript,
-// its record and the score file to the store, each create-only
+// its record and the score file to the store, each create-only save that a
+// judge's scores replace a failed judge's skip score file
 // (src/kit/scoreRecord.ts). It runs no agent and no Product code, and writes
 // one step-summary line saying what it scored, or why it didn't.
 //   node src/kit/score-record-main.ts

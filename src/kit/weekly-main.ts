@@ -4,19 +4,22 @@
 // Product repo (src/github/facts.ts), builds the week's summary
 // (src/kit/weeklySummary.ts) and files it in the store
 // (src/kit/weeklyFiling.ts). It writes one step-summary line saying what it did.
+// A Product repo it can't read gets a line in its section; a failed run writes
+// the step summary and an `::error` saying why, and comments on the newest
+// summary (or files a short issue) mentioning the Operator with the run link.
 //   node src/kit/weekly-main.ts
 // Reads two Fabrik App tokens: FABRIK_STORE_TOKEN, with Issues write and
 // Contents read on the store alone, and FABRIK_PRODUCTS_TOKEN, read-only on
 // the Product repos. FABRIK_STORE_DIR is the store's checkout, and
 // FABRIK_APP_SLUG the Fabrik App's slug, which names its label events.
 import { appendFile } from "node:fs/promises";
-import { gatherGitHubFacts, productReposOf } from "../github/facts.ts";
+import { gatherEveryRepoFacts, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError } from "../github/client.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { RUN_STORE } from "./runStore.ts";
 import { readStoreRunRecords, readStoreScoreFiles } from "./storeCheckout.ts";
-import { type SummaryIssue, WEEKLY_SUMMARY_LABEL, type WeeklyFiling, weeklyFilingOf } from "./weeklyFiling.ts";
+import { type SummaryIssue, WEEKLY_SUMMARY_LABEL, type WeeklyFailureFiling, weeklyFailureOf, type WeeklyFiling, weeklyFilingOf } from "./weeklyFiling.ts";
 import { weeklySummary } from "./weeklySummary.ts";
 
 function required(name: string): string {
@@ -85,9 +88,63 @@ function closedNote(closed: readonly number[]): string {
   return closed.length === 0 ? "" : `, closing ${closed.map((issue) => `#${issue}`).join(", ")}`;
 }
 
+/** This Actions run's attempt, in the store, which a failure's comment links to. */
+function thisRunUrl(): string {
+  return `${required("GITHUB_SERVER_URL")}/${required("GITHUB_REPOSITORY")}/actions/runs/${required("GITHUB_RUN_ID")}/attempts/${required("GITHUB_RUN_ATTEMPT")}`;
+}
+
+function storeOf(): GitHub {
+  return new GitHub(required("FABRIK_STORE_TOKEN"), process.env["GITHUB_API_URL"]);
+}
+
+async function fileFailure(store: GitHub, filing: WeeklyFailureFiling): Promise<void> {
+  switch (filing.kind) {
+    case "comment":
+      await store.rest("POST", `${STORE_API}/issues/${filing.issue}/comments`, { body: filing.body });
+      return;
+    case "file":
+      await store.rest("POST", `${STORE_API}/issues`, { title: filing.title, body: filing.body });
+      return;
+  }
+}
+
+/**
+ * Says why the run failed in the step summary and an `::error`, then tells
+ * the Operator with the store token, so a failed run is never taken for a
+ * quiet week. A failure to tell them is a warning: the run is red either way.
+ */
+async function reportFailure(error: unknown): Promise<void> {
+  process.exitCode = 1;
+  const store = (() => {
+    try {
+      return { github: storeOf(), runUrl: thisRunUrl() };
+    } catch {
+      return null;
+    }
+  })();
+  const existing = store === null ? [] : await summaryIssues(store.github).catch(() => []);
+  const failure = weeklyFailureOf(error, existing, store?.runUrl ?? "", RUN_STORE.owner);
+  console.log(`::error title=Weekly summary failed::${annotation(failure.error)}`);
+  await report(failure.summary);
+  if (store === null) {
+    console.log("::warning title=Failure not filed::The store token or the run's environment isn't set, so the Operator wasn't told.");
+    return;
+  }
+  try {
+    await fileFailure(store.github, failure.filing);
+  } catch (filingError) {
+    console.log(`::warning title=Failure not filed::${annotation(filingError instanceof Error ? filingError.message : String(filingError))}`);
+  }
+}
+
+/** `text` as a workflow command's message, its newlines kept. */
+function annotation(text: string): string {
+  return text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+}
+
 async function main(): Promise<string> {
+  const store = storeOf();
   const apiUrl = process.env["GITHUB_API_URL"];
-  const store = new GitHub(required("FABRIK_STORE_TOKEN"), apiUrl);
   const products = new GitHub(required("FABRIK_PRODUCTS_TOKEN"), apiUrl);
   const now = Date.now();
 
@@ -96,16 +153,19 @@ async function main(): Promise<string> {
   const storeDir = required("FABRIK_STORE_DIR");
   // The summary has no Product's Kit config, so a schema 1 record is read as
   // being on the one V1 Subscription, the first a Kit config lists by default.
-  const records = Object.values(await readStoreRunRecords(storeDir, DEFAULT_KIT_CONFIG.subscriptions));
+  const { records, unreadable } = await readStoreRunRecords(storeDir, DEFAULT_KIT_CONFIG.subscriptions);
   // No scores/ until scoring has run.
   const scoreFiles = Object.values(await readStoreScoreFiles(storeDir));
   const repos = await productReposOf(products);
-  const facts = await Promise.all(repos.map((repo) => gatherGitHubFacts(products, repo, now, RUN_STORE.owner)));
+  // One repo's API error costs the summary only that repo's facts, which its section names.
+  const { facts, unread } = await gatherEveryRepoFacts(products, repos, now, RUN_STORE.owner);
 
   const result = weeklySummary({
-    records,
+    records: Object.values(records),
+    unreadableRecords: unreadable,
     scoreFiles,
     facts,
+    unread,
     operator: RUN_STORE.owner,
     appLogin: `${required("FABRIK_APP_SLUG")}[bot]`,
     timeZone,
@@ -114,9 +174,4 @@ async function main(): Promise<string> {
   return file(store, weeklyFilingOf(result, await summaryIssues(store)));
 }
 
-main()
-  .then(report)
-  .catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
+main().then(report).catch(reportFailure);
