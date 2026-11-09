@@ -4,8 +4,10 @@ import {
   aCommit,
   anAnswersComment,
   aDesignRound,
+  aDesignTurnFailedNotice,
   aLabelAdded,
   A_REPLAY,
+  aMapCapRefusal,
   aMergedPullRequest,
   anEscapeMarkerIssue,
   anOpenAudit,
@@ -517,6 +519,76 @@ describe("the Weekly summary", () => {
           url: "https://github.com/owner/product/issues/15",
           since: "2026-11-06T20:00:00Z",
           age: 2 * 24 * HOUR,
+        },
+      ]);
+    });
+
+    it("lists the Operator's own needs-info issue nobody answered, waiting since it got needs-info (#473)", () => {
+      const asked = (overrides: Parameters<typeof anOpenIssue>[0]) =>
+        anOpenIssue({
+          number: 18,
+          title: "Export the report",
+          author: "operator",
+          labels: ["needs-info"],
+          labelEvents: [aLabelAdded("needs-info", "2026-11-06T20:00:00Z")],
+          comments: [aComment("@operator Which format should it export?", "2026-11-06T20:00:00Z", { author: "fabrik-app[bot]", byBot: true })],
+          ...overrides,
+        });
+      const waiting = waitingIn({
+        openIssues: [
+          asked({}),
+          // The Operator answered: Triage has it again, or Stuck lists it.
+          asked({ number: 19, comments: [aComment("CSV.", "2026-11-07T20:00:00Z", { author: "operator", byBot: false })] }),
+          // Not in needs-info: nothing was asked.
+          asked({ number: 20, labels: ["needs-triage"] }),
+        ],
+      });
+      expect(waiting).toEqual([
+        {
+          kind: "needs-info",
+          number: 18,
+          title: "Export the report",
+          url: "https://github.com/owner/product/issues/18",
+          since: "2026-11-06T20:00:00Z",
+          age: 2 * 24 * HOUR,
+        },
+      ]);
+    });
+
+    it("lists a Design session left on a failed-turn notice or a Map-cap refusal, waiting since that comment (#473)", () => {
+      const designSession = (number: number, last: CommentFacts, labels: readonly string[] = ["needs-design"]) =>
+        anOpenIssue({
+          number,
+          title: `Design ${number}`,
+          labels,
+          comments: [aDesignRound(1, "2026-11-02T20:00:00Z"), operatorAnswer("2026-11-03T20:00:00Z"), aDesignRound(2, "2026-11-04T20:00:00Z"), operatorAnswer("2026-11-05T20:00:00Z"), last],
+        });
+      const waiting = waitingIn({
+        openIssues: [
+          designSession(12, aDesignTurnFailedNotice("2026-11-06T20:00:00Z")),
+          designSession(21, aMapCapRefusal("2026-11-07T20:00:00Z")),
+          // The Operator replied to the notice: the next move is the session's.
+          designSession(22, operatorAnswer("2026-11-07T20:00:00Z")),
+          // No longer in needs-design: the session is over.
+          designSession(23, aDesignTurnFailedNotice("2026-11-06T20:00:00Z"), ["ready-for-agent"]),
+        ],
+      });
+      expect(waiting).toEqual([
+        {
+          kind: "design-turn-failed",
+          number: 12,
+          title: "Design 12",
+          url: "https://github.com/owner/product/issues/12",
+          since: "2026-11-06T20:00:00Z",
+          age: 2 * 24 * HOUR,
+        },
+        {
+          kind: "design-map-cap",
+          number: 21,
+          title: "Design 21",
+          url: "https://github.com/owner/product/issues/21",
+          since: "2026-11-07T20:00:00Z",
+          age: 24 * HOUR,
         },
       ]);
     });
@@ -1924,6 +1996,21 @@ describe("the Weekly summary", () => {
         }),
       );
       expect(body).toContain("- [#15](https://github.com/owner/product/issues/15) TypeError in checkout: Monitor issue's question unanswered for 30 hours");
+    });
+
+    it("says the Operator's own needs-info issue waits on their answer, and a Design session waits on their reply after a failed turn or a Map-cap refusal (#473)", () => {
+      const body = bodyOf(
+        factsOf({
+          openIssues: [
+            anOpenIssue({ number: 18, title: "Export the report", author: "operator", labels: ["needs-info"], labelEvents: [aLabelAdded("needs-info", hoursAgo(30))] }),
+            anOpenIssue({ number: 12, title: "Design the thing", labels: ["needs-design"], comments: [aDesignRound(1, hoursAgo(72)), aDesignTurnFailedNotice(hoursAgo(40))] }),
+            anOpenIssue({ number: 21, title: "Chart the thing", labels: ["needs-design"], comments: [aDesignRound(1, hoursAgo(72)), aMapCapRefusal(hoursAgo(26))] }),
+          ],
+        }),
+      );
+      expect(body).toContain("- [#18](https://github.com/owner/product/issues/18) Export the report: Triage's question to you unanswered for 30 hours");
+      expect(body).toContain("- [#12](https://github.com/owner/product/issues/12) Design the thing: Design-session turn failed 40 hours ago; reply to run it again");
+      expect(body).toContain("- [#21](https://github.com/owner/product/issues/21) Chart the thing: Design session's Map refused by the Map cap 26 hours ago; reply to carry on");
     });
 
     it("gives each repo a section listing what waits on the Operator, with its age and any Operator wait", () => {

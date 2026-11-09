@@ -252,6 +252,14 @@ export function designRoundMarker(round: number): string {
  */
 export const DESIGN_TURN_FAILED_MARKER = "<!-- fabrik:design-turn-failed -->";
 
+/** The opening of the Kit's refusal of a Map the Map cap holds, on the line under its DESIGN_TURN_FAILED_MARKER. */
+export const MAP_CAP_REFUSAL_OPENING = "This turn ended in a Map, but";
+
+/** Whether a bot's comment is the Kit's refusal of a Map the Map cap holds, rather than a Design-session turn's failure notice. */
+export function refusedByMapCap(body: string): boolean {
+  return body.startsWith(`${DESIGN_TURN_FAILED_MARKER}\n${MAP_CAP_REFUSAL_OPENING}`);
+}
+
 /**
  * The first line of the Kit's failure notice for a Researcher run on a
  * Decision (#154): while that notice is the Decision's latest run's word,

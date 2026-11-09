@@ -21,7 +21,7 @@ import type {
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
-import { designRoundMarker, fromPullRequestLine, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, MAP_CAP_REFUSAL_OPENING, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
 import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
@@ -267,6 +267,19 @@ export function anAnswersComment(
 /** The Fabrik App's Design round `round` at `at`. */
 export function aDesignRound(round: number, at: string): CommentFacts {
   return aComment(`${designRoundMarker(round)}\nWhich of these should it do?`, at);
+}
+
+/** The Fabrik App's failure notice for a Design-session turn, at `at`. */
+export function aDesignTurnFailedNotice(at: string): CommentFacts {
+  return aComment(`${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn on #12 failed: it timed out.\n\nReply on this issue to run the turn again.`, at);
+}
+
+/** The Fabrik App's refusal of a Map the Map cap holds, at `at`. */
+export function aMapCapRefusal(at: string): CommentFacts {
+  return aComment(
+    `${DESIGN_TURN_FAILED_MARKER}\n${MAP_CAP_REFUSAL_OPENING} the Map cap is full: #5 is the open Map, and \`caps.maps\` is 1. The Kit left #21 as it is, and the Design session carries on: reply to finish it another way, or close #5 first and ask for the Map again.`,
+    at,
+  );
 }
 
 /** The Fabrik App's Verdict comment on `headSha` at `at`. */

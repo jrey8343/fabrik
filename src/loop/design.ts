@@ -31,6 +31,7 @@ import {
   DESIGN_TURN_FAILED_MARKER,
   designRoundMarker,
   LIVE_OUTCOME_MARKER,
+  MAP_CAP_REFUSAL_OPENING,
   type MonitorMarker,
   monitorMarkerIn,
   monitorMarkerLine,
@@ -423,8 +424,8 @@ function heldByMapCap(issueNumber: number, { openMaps, cap }: Extract<MapCap, { 
   const maps = openMaps.map((map) => `#${map}`);
   const said =
     cap === 0
-      ? `This turn ended in a Map, but \`caps.maps\` is 0, so the Kit charts no new Map in this repo. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way.`
-      : `This turn ended in a Map, but the Map cap is full: ${spelled(maps, "and")} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
+      ? `${MAP_CAP_REFUSAL_OPENING} \`caps.maps\` is 0, so the Kit charts no new Map in this repo. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way.`
+      : `${MAP_CAP_REFUSAL_OPENING} the Map cap is full: ${spelled(maps, "and")} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
   return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said].join("\n") }] };
 }
 

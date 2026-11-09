@@ -20,7 +20,7 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { RUN_NAMES, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
+import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, refusedByMapCap } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type AgentRole, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
@@ -86,7 +86,7 @@ export interface SpecFacts {
 export interface OpenIssueFacts {
   readonly number: number;
   readonly title: string;
-  /** Who opened it: a `needs-info` issue the Fabrik App filed as the Monitor waits on the Operator. */
+  /** Who opened it: a `needs-info` issue the Fabrik App filed as the Monitor, or the Operator filed, waits on the Operator. */
   readonly author: string;
   readonly labels: readonly string[];
   /** ISO 8601. */
@@ -448,10 +448,16 @@ interface ItemBase {
 export type WaitingItem =
   /** An open Design session whose last comment is the App's round. */
   | (ItemBase & { readonly kind: "design-round" })
+  /** An open `needs-design` issue whose last comment is the App's failure notice for a Design-session turn, waiting since that notice for the Operator's reply (#473). */
+  | (ItemBase & { readonly kind: "design-turn-failed" })
+  /** An open `needs-design` issue whose last comment is the App's refusal of a Map the Map cap holds, waiting since that refusal for the Operator's reply (#473). */
+  | (ItemBase & { readonly kind: "design-map-cap" })
   /** An open `ready-for-human` issue, waiting since it got the label. */
   | (ItemBase & { readonly kind: "ready-for-human" })
   /** The Fabrik App's open `needs-info` issue, which Triage's question asks the Operator about, unanswered since it got the label (#425). */
   | (ItemBase & { readonly kind: "monitor-needs-info" })
+  /** The Operator's own open `needs-info` issue, which Triage's question asks them about, unanswered since it got the label (#473). */
+  | (ItemBase & { readonly kind: "needs-info" })
   /** The Fabrik App's open Audit, filled or still pending, waiting since it was opened. */
   | (ItemBase & { readonly kind: "audit" })
   /** The Fabrik App's open Retro, filled or still pending, waiting since it was opened. */
@@ -970,7 +976,7 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
     repo: facts.repo,
     // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst([
-      ...waitingOnYou(facts, appLogin, items),
+      ...waitingOnYou(facts, operator, appLogin, items),
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
       ...finishedReplaysOf(facts, operator, items),
@@ -1136,26 +1142,29 @@ function oldestFirst<T extends ItemBase>(items: readonly T[]): T[] {
 }
 
 /**
- * When Triage asked the Operator about a `needs-info` issue the Fabrik App
- * filed as the Monitor, which can't answer itself (#425), or null if it isn't
- * one or someone has answered: from then on Triage or Stuck has it.
+ * When Triage asked about a `needs-info` issue, or null if it isn't one or
+ * someone has answered: from then on Triage or Stuck has it. Only one the
+ * Operator filed, or the Fabrik App filed as the Monitor, which can't answer
+ * itself (#425), asks the Operator: Triage asks anyone else who filed one.
  */
-function monitorQuestionOf(issue: OpenIssueFacts, appLogin: string): string | null {
-  if (issue.author !== appLogin || !issue.labels.includes(NEEDS_INFO) || answerOf(issue) !== null) return null;
+function unansweredQuestionOf(issue: OpenIssueFacts): string | null {
+  if (!issue.labels.includes(NEEDS_INFO) || answerOf(issue) !== null) return null;
   return lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt;
 }
 
-function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
+function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, operator: string, appLogin: string, items: Items): WaitingItem[] {
   const waiting: WaitingItem[] = [];
   for (const issue of openIssues) {
     const round = unansweredRoundOf(issue);
     if (round !== null) waiting.push({ kind: "design-round", ...items.issue(issue, round) });
+    const stopped = stoppedDesignSessionOf(issue);
+    if (stopped !== null) waiting.push({ kind: stopped.kind, ...items.issue(issue, stopped.at) });
     if (issue.labels.includes(READY_FOR_HUMAN)) {
       const since = lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt;
       waiting.push({ kind: "ready-for-human", ...items.issue(issue, since) });
     }
-    const asked = monitorQuestionOf(issue, appLogin);
-    if (asked !== null) waiting.push({ kind: "monitor-needs-info", ...items.issue(issue, asked) });
+    const asked = issue.author === appLogin || issue.author === operator ? unansweredQuestionOf(issue) : null;
+    if (asked !== null) waiting.push({ kind: issue.author === appLogin ? "monitor-needs-info" : "needs-info", ...items.issue(issue, asked) });
   }
   for (const pullRequest of openPullRequests) {
     const passed = passAtHeadOf(pullRequest);
@@ -1232,6 +1241,18 @@ function lastActivityOf(pullRequest: OpenPullRequestFacts): string {
 function unansweredRoundOf(issue: OpenIssueFacts): string | null {
   const last = issue.comments.at(-1);
   return last !== undefined && last.byBot && DESIGN_ROUND_MARKER.test(last.body) ? last.at : null;
+}
+
+/**
+ * A Design session whose last comment is the App's failure notice for its
+ * turn, or its refusal of a Map the Map cap holds, with when it was posted, or
+ * null if its last comment is anything else. Either keeps the session's slot
+ * (holdsSlot) with the Operator's reply as the next move.
+ */
+function stoppedDesignSessionOf(issue: OpenIssueFacts): { readonly kind: "design-turn-failed" | "design-map-cap"; readonly at: string } | null {
+  const last = issue.comments.at(-1);
+  if (!issue.labels.includes(NEEDS_DESIGN) || last === undefined || !last.byBot || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return null;
+  return { kind: refusedByMapCap(last.body) ? "design-map-cap" : "design-turn-failed", at: last.at };
 }
 
 /** When a PR's latest Verdict on its head was posted, if that Verdict is a pass; otherwise null. */
@@ -1547,6 +1568,12 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `ready-for-human for ${duration(item.age)}`);
     case "monitor-needs-info":
       return itemLine(item, `Monitor issue's question unanswered for ${duration(item.age)}`);
+    case "needs-info":
+      return itemLine(item, `Triage's question to you unanswered for ${duration(item.age)}`);
+    case "design-turn-failed":
+      return itemLine(item, `Design-session turn failed ${duration(item.age)} ago; reply to run it again`);
+    case "design-map-cap":
+      return itemLine(item, `Design session's Map refused by the Map cap ${duration(item.age)} ago; reply to carry on`);
     case "audit":
       return itemLine(item, `Audit open for ${duration(item.age)}`);
     case "retro":
