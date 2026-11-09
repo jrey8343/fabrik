@@ -11,7 +11,7 @@ import {
   CONFLICT_RUN_MARKER,
   DESIGN_ROUND_MARKER,
   DESIGN_TURN_FAILED_MARKER,
-  EMPTY_DIFF_MARKER,
+  isEmptyDiffComment,
   LIVE_OUTCOME_MARKER,
   PROTOTYPE_FAILURE_ROUND_MARKER,
   PROTOTYPE_ROUND_MARKER,
@@ -472,7 +472,7 @@ export function countEmptyDiffs(comments: readonly KitComment[]): number {
   let count = 0;
   for (const { body } of kitCommentsIn(comments)) {
     if (isDesignSessionComment(body)) count = 0;
-    else if (body.startsWith(EMPTY_DIFF_MARKER)) count += 1;
+    else if (isEmptyDiffComment(body)) count += 1;
   }
   return count;
 }

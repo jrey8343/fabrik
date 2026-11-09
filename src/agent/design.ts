@@ -8,7 +8,7 @@
 import type { KitConfig } from "../kit/config.ts";
 import { whyNoPrototype } from "../loop/design.ts";
 import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_CAP, prototypeBranchFor } from "../loop/designOutput.ts";
-import { EMPTY_DIFF_MARKER, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "../loop/markers.ts";
+import { EMPTY_DIFF_MARKER, isEmptyDiffComment, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { MAP_INPUTS_FILE, type MapOffer, SPEC_TICKETS_FILE, type SpecTicket } from "./inputs.ts";
@@ -193,7 +193,7 @@ export function emptyDiffContext(issue: unknown): string[] {
     if (comment?.byBot !== true) continue;
     const body = text(comment.body);
     if (body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body)) bodies = [];
-    else if (body.startsWith(EMPTY_DIFF_MARKER)) bodies.push(body.slice(EMPTY_DIFF_MARKER.length).trim());
+    else if (isEmptyDiffComment(body)) bodies.push(body.slice(EMPTY_DIFF_MARKER.length).trim());
   }
   if (bodies.length === 0) return [];
   return [

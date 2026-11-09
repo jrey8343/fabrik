@@ -7,7 +7,7 @@ import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/r
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
-import { EMPTY_DIFF_MARKER, withPrototypeStarted } from "../loop/markers.ts";
+import { isEmptyDiffComment, withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
 import type { GitHub, Repo } from "./client.ts";
@@ -282,7 +282,7 @@ export function replayClaimIn(plan: Plan): number | null {
  * marked as one, as later runs count it.
  */
 export function emptyDiffIn(plan: Plan): boolean {
-  return plan.kind === "act" && plan.actions.some((action) => action.kind === "comment" && action.body.startsWith(EMPTY_DIFF_MARKER));
+  return plan.kind === "act" && plan.actions.some((action) => action.kind === "comment" && isEmptyDiffComment(action.body));
 }
 
 /** Whether the plan asks for a Design queue check, which the Design queue job then runs. */

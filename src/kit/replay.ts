@@ -658,10 +658,13 @@ interface ArmResult {
  * run's Review, which the arms replay. A first run with no Review, as when
  * CI sent it back with red checks, measured nothing to set beside an arm's.
  */
-type OriginalResult = Pick<ArmResult, "verdict" | "costUsd" | "turns" | "durationMs"> & {
+type OriginalResult = RunFigures & {
   /** Whether its first run had no Review, its checks red: it shows no figure, and the totals and the gap leave it out. */
   readonly noReview: boolean;
 };
+
+/** A run's Verdict, cost, turns and duration, as an arm's result and an original's both hold them. */
+type RunFigures = Pick<ArmResult, "verdict" | "costUsd" | "turns" | "durationMs">;
 
 /** What a done Ticket's arms measured, in the run they ran in, and what its original run did. */
 interface TicketResult {
@@ -791,8 +794,8 @@ function readOriginalResult(value: unknown): OriginalResult | null {
   return { ...figures, noReview: noReview ?? false };
 }
 
-/** A run's Verdict, cost, turns and duration, as an arm's result and an original's both hold them. */
-function readFigures(value: unknown): Pick<ArmResult, "verdict" | "costUsd" | "turns" | "durationMs"> | null {
+/** A run's Verdict, cost, turns and duration, read back. */
+function readFigures(value: unknown): RunFigures | null {
   if (!isObject(value)) return null;
   const { verdict, costUsd, turns, durationMs } = value;
   if (!(verdict === null || isKeyOf(VERDICT_WORDS, verdict))) return null;
@@ -864,7 +867,7 @@ interface ReplayTotals {
   /** The baseline's totals over those same Tickets, which its gap from the original compares. */
   readonly comparedBaseline: Totals;
   /** The Tickets whose first run had no Review, left out of the original's totals and the gap. */
-  readonly leftOut: readonly number[];
+  readonly noReviewOriginals: readonly number[];
   /** How many Tickets are done. */
   readonly done: number;
 }
@@ -891,14 +894,16 @@ interface Totals {
  * out of the original's totals, and its Ticket out of the baseline's gap.
  */
 function totalsOf(done: readonly TicketResult[]): ReplayTotals {
-  type Figures = Pick<ArmResult, "verdict" | "costUsd" | "turns" | "durationMs">;
-  const verdicts = (each: readonly Figures[]) => tally(each.map(({ verdict }) => verdict), ["pass"], ["none"]);
-  // Nothing to total is no figure, never a zero.
-  const spent = (each: readonly Figures[]) => ({
-    costUsd: each.length === 0 ? null : sumOf(each.map(({ costUsd }) => costUsd)),
-    turns: each.length === 0 ? null : sumOf(each.map(({ turns }) => turns)),
-    durationMs: each.length === 0 ? null : sumOf(each.map(({ durationMs }) => durationMs)),
-  });
+  const verdicts = (each: readonly RunFigures[]) => tally(each.map(({ verdict }) => verdict), ["pass"], ["none"]);
+  const spent = (each: readonly RunFigures[]) => {
+    // Nothing to total is no figure, never a zero.
+    if (each.length === 0) return { costUsd: null, turns: null, durationMs: null };
+    return {
+      costUsd: sumOf(each.map(({ costUsd }) => costUsd)),
+      turns: sumOf(each.map(({ turns }) => turns)),
+      durationMs: sumOf(each.map(({ durationMs }) => durationMs)),
+    };
+  };
   const armTotals = (arm: ReplayArm, over: readonly TicketResult[]): Totals => {
     const arms = over.map((result) => result.arms[arm]);
     return {
@@ -916,7 +921,7 @@ function totalsOf(done: readonly TicketResult[]): ReplayTotals {
     variant: armTotals("variant", done),
     original: { gates: null, verdicts: verdicts(originals), hiddenTests: null, scores: null, ...spent(originals) },
     comparedBaseline: armTotals("baseline", compared),
-    leftOut: done.flatMap(({ ticket, original }) => (original.noReview ? [ticket] : [])),
+    noReviewOriginals: done.flatMap(({ ticket, original }) => (original.noReview ? [ticket] : [])),
     done: done.length,
   };
 }
@@ -939,7 +944,7 @@ function meanScoreOf(scores: readonly number[], of: number): MeanScore | null {
 
 /** The Totals section: a row for each arm and the original runs, then any original left out and the baseline's gap from the original. */
 function totalsLines(totals: ReplayTotals): string[] {
-  const { done, leftOut } = totals;
+  const { done, noReviewOriginals } = totals;
   const row = (name: string, { gates, verdicts, hiddenTests, scores, costUsd, turns, durationMs }: Totals) =>
     tableRow([
       name,
@@ -953,7 +958,7 @@ function totalsLines(totals: ReplayTotals): string[] {
     ]);
   const gap = comparison(totals.comparedBaseline, totals.original);
   const gapWords =
-    leftOut.length === done
+    noReviewOriginals.length === done
       ? "nothing to compare, with every Ticket's original left out."
       : gap.length === 0
         ? "the store holds nothing of the original runs to compare."
@@ -968,9 +973,9 @@ function totalsLines(totals: ReplayTotals): string[] {
     row("variant", totals.variant),
     row("original", totals.original),
     "",
-    ...(leftOut.length === 0
+    ...(noReviewOriginals.length === 0
       ? []
-      : [`The original row and the baseline's gap leave out ${spelled(leftOut.map((ticket) => `#${ticket}`), "and")}: first run's checks were red; no Review.`, ""]),
+      : [`The original row and the baseline's gap leave out ${spelled(noReviewOriginals.map((ticket) => `#${ticket}`), "and")}: first run's checks were red; no Review.`, ""]),
     `Baseline vs original: ${gapWords}`,
   ];
 }

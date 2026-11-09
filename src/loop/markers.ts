@@ -238,6 +238,11 @@ export const UNMARKED_RETRY_PUSH = "The Implementer pushed a fix for the Executi
 /** The first line of the Kit's comment on a Ticket whose Implement run changed nothing. */
 export const EMPTY_DIFF_MARKER = "<!-- fabrik:empty-diff -->";
 
+/** Whether a comment body is the Kit's empty-diff comment: what the Loop counts, and what an Implement run's Run record says. */
+export function isEmptyDiffComment(body: string): boolean {
+  return body.startsWith(EMPTY_DIFF_MARKER);
+}
+
 /** A Design-session round's first line. */
 export const DESIGN_ROUND_MARKER = /^<!-- fabrik:design-round (\d+) -->/;
 
