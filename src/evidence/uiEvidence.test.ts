@@ -6,6 +6,7 @@ import {
   type CaptureResult,
   evidenceSection,
   isUi,
+  type MissedShot,
   parseCaptureResult,
   reviewerEvidenceBlock,
   reviewerImages,
@@ -227,11 +228,11 @@ describe("The capture result", () => {
     ["a short head SHA", withResult({ headSha: "4f2b9c0" }), "headSha must be a full commit SHA"],
     ["captures that aren't a list", withResult({ captures: { "/book": [] } }), "captures must be a list"],
     ["a capture outcome with no captures", withResult({ captures: [] }), `captures can't be empty when the outcome is "captured"`],
-    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, error or no-result"],
+    ["a failed outcome with no reason", withResult({ outcome: "failed" }), "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, unreachable, error or no-result"],
     [
       "a failed outcome with an unknown reason",
       withResult({ outcome: "failed", reason: "flaky" }),
-      "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, error or no-result",
+      "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, unreachable, error or no-result",
     ],
     ["a capture that isn't an object", withResult({ captures: ["after-mobile-book.png"] }), "captures[0] must be an object"],
     ["a route that isn't a path", withCapture({ route: "book" }), "captures[0].route must be a path starting with one /"],
@@ -286,7 +287,7 @@ describe("The capture result", () => {
     expect(parseCaptureResult(text)).toEqual({
       ok: false,
       errors: [
-        "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, error or no-result",
+        "reason must be build-failed, server-did-not-start, timeout, no-routes, no-variants, sign-in-failed, unreachable, error or no-result",
         "headSha must be a full commit SHA",
         "captures[1].side must be before or after",
         "captures[1].status must be an HTTP status from 100 to 599",
@@ -764,5 +765,109 @@ describe("UI evidence of a route viewed signed in", () => {
     const block = reviewerEvidenceBlock({ result: allCaptured, given: reviewerImages(allCaptured.captures), head: HEAD, recorded: null });
 
     expect(block.join("\n")).not.toMatch(/signed in|Capture identity/);
+  });
+});
+
+describe("UI evidence of a page that wouldn't load", () => {
+  const refused = (route: string, reason: Capture["reason"], viewport: Capture["viewport"], side: Capture["side"] = "before"): MissedShot => ({
+    route,
+    reason,
+    viewport,
+    side,
+    url: `${side === "before" ? "https://www.penrithphysio.com.au" : "http://127.0.0.1:4321"}${route}`,
+    why: `${side}-unreachable`,
+    error: "ERR_CONNECTION_REFUSED",
+  });
+
+  /** Production refused the browser: every After of /book and /book/waitlist taken, and no Before of /book. */
+  const beforeRefused: CaptureResult<Capture> = {
+    outcome: "captured",
+    headSha: HEAD,
+    captures: allCaptured.captures.filter(({ side }) => side === "after"),
+    missed: [refused("/book", "ticket", "mobile"), refused("/book", "ticket", "desktop")],
+  };
+
+  it("reads back with the shots it missed, each with its side, URL and error", () => {
+    expect(parseCaptureResult(JSON.stringify(beforeRefused))).toEqual({ ok: true, result: beforeRefused });
+  });
+
+  it("refuses a missed shot whose reason isn't its side's, or whose error isn't a browser error code", () => {
+    const bad = { ...beforeRefused, missed: [{ ...refused("/book", "ticket", "mobile"), why: "after-unreachable", error: "refused\n<!-- x -->" }] };
+
+    const read = parseCaptureResult(JSON.stringify(bad));
+
+    expect(read.ok).toBe(false);
+    expect(read.ok ? [] : read.errors).toEqual([
+      "missed[0].why must be before-unreachable, its side's",
+      "missed[0].error must be a browser error code, such as ERR_CONNECTION_REFUSED",
+    ]);
+  });
+
+  it("keeps the After set in the evidence section and names the route whose Before was refused, and why", () => {
+    expect(evidenceSection(evidence(beforeRefused)).split("\n").filter((line) => line.startsWith("- "))).toEqual([
+      "- `/book`, named by the Ticket. Captured: After at mobile and desktop. **Not captured:** Before: unreachable, `ERR_CONNECTION_REFUSED`, at mobile and desktop.",
+      "- `/book/waitlist`, named by the Implementer",
+    ]);
+  });
+
+  it("lists a route that has no screenshot at all, and says plainly why capture failed when no page would load", () => {
+    const nothing: CaptureResult<Capture> = {
+      outcome: "failed",
+      reason: "unreachable",
+      headSha: HEAD,
+      captures: [],
+      missed: [refused("/book", "ticket", "mobile", "after"), refused("/book", "ticket", "desktop", "after")],
+    };
+
+    expect(evidenceSection(evidence(nothing, { gallery: null }))).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        "**Capture failed:** no page it went to would load, refused or not found. There are no screenshots.",
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        "",
+        "Captured routes:",
+        "",
+        "- `/book`, named by the Ticket. Captured: nothing. **Not captured:** After: unreachable, `ERR_CONNECTION_REFUSED`, at mobile and desktop.",
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"unreachable"} -->`,
+      ].join("\n"),
+    );
+  });
+
+  it("lists a route whose every After was missed in its place, the Ticket's before the Implementer's", () => {
+    const ticketRefused: CaptureResult<Capture> = {
+      ...allCaptured,
+      captures: allCaptured.captures.filter(({ route }) => route !== "/book"),
+      missed: (["mobile", "desktop"] as const).flatMap((viewport) => [refused("/book", "ticket", viewport, "after"), refused("/book", "ticket", viewport)]),
+    };
+
+    expect(evidenceSection(evidence(ticketRefused)).split("\n").filter((line) => line.startsWith("- "))).toEqual([
+      "- `/book`, named by the Ticket. Captured: nothing. **Not captured:** After: unreachable, `ERR_CONNECTION_REFUSED`, at mobile and desktop; Before: unreachable, `ERR_CONNECTION_REFUSED`, at mobile and desktop.",
+      "- `/book/waitlist`, named by the Implementer",
+    ]);
+  });
+
+  it("tells the Reviewer Before is missing for those routes, rather than that capture failed", () => {
+    const block = reviewerEvidenceBlock({ result: beforeRefused, given: reviewerImages(beforeRefused.captures), head: HEAD, recorded: null });
+
+    expect(block[1]).toContain("so the Kit captured screenshots of this branch");
+    expect(block[1]).not.toContain("capture failed");
+    expect(block[1]).toContain("Before is missing for `/book`, where the production site wouldn't load (`ERR_CONNECTION_REFUSED`), so there's no Before to compare its After against.");
+  });
+
+  it("tells the Reviewer After is missing for a route whose page on this branch wouldn't load", () => {
+    const afterRefused: CaptureResult<Capture> = {
+      ...allCaptured,
+      captures: allCaptured.captures.filter(({ route }) => route !== "/book/waitlist"),
+      missed: [refused("/book/waitlist", "implementer", "mobile", "after"), { ...refused("/book/waitlist", "implementer", "desktop", "after"), error: "ERR_TOO_MANY_REDIRECTS" }],
+    };
+
+    const block = reviewerEvidenceBlock({ result: afterRefused, given: reviewerImages(afterRefused.captures), head: HEAD, recorded: null });
+
+    expect(block[1]).toContain(
+      "After is missing for `/book/waitlist`, where this branch's page wouldn't load (`ERR_CONNECTION_REFUSED` and `ERR_TOO_MANY_REDIRECTS`), so there's no screenshot of it.",
+    );
   });
 });

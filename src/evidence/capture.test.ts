@@ -258,10 +258,74 @@ describe("Capturing UI evidence", () => {
     ]);
   });
 
-  it("records error, keeping the screenshots it took first, when a page fails to load, and logs why", async () => {
+  it("goes on past a Before page that won't load, keeping every After, and names the side, URL and error of each it missed", async () => {
     const { capturer, calls, logs } = runner({
       screenshot: async (shot) => {
-        if (shot.side === "before") throw new Error("net::ERR_NAME_NOT_RESOLVED at https://www.penrithphysio.com.au/book");
+        calls.push(`screenshot ${shot.url} at ${shot.viewport.name}`);
+        return shot.side === "before" ? { unreachable: "ERR_CONNECTION_REFUSED" } : 200;
+      },
+    });
+
+    expect(await captureEvidence(input({ implementerRoutes: ["/"] }), capturer)).toEqual({
+      kind: "recorded",
+      result: {
+        outcome: "captured",
+        headSha: HEAD,
+        captures: [
+          { route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-book.png" },
+          { route: "/book", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-1-book.png" },
+          { route: "/", reason: "implementer", viewport: "mobile", side: "after", status: 200, image: "after-mobile-2-root.png" },
+          { route: "/", reason: "implementer", viewport: "desktop", side: "after", status: 200, image: "after-desktop-2-root.png" },
+        ],
+        missed: [
+          { route: "/book", reason: "ticket", viewport: "mobile", side: "before", url: "https://www.penrithphysio.com.au/book", why: "before-unreachable", error: "ERR_CONNECTION_REFUSED" },
+          { route: "/book", reason: "ticket", viewport: "desktop", side: "before", url: "https://www.penrithphysio.com.au/book", why: "before-unreachable", error: "ERR_CONNECTION_REFUSED" },
+          { route: "/", reason: "implementer", viewport: "mobile", side: "before", url: "https://www.penrithphysio.com.au/", why: "before-unreachable", error: "ERR_CONNECTION_REFUSED" },
+          { route: "/", reason: "implementer", viewport: "desktop", side: "before", url: "https://www.penrithphysio.com.au/", why: "before-unreachable", error: "ERR_CONNECTION_REFUSED" },
+        ],
+      },
+    });
+    // Every Before was tried, not just the first.
+    expect(calls.filter((call) => call.startsWith("screenshot https://www.penrithphysio.com.au"))).toHaveLength(4);
+    expect(logs.join("\n")).toContain("(before-unreachable) https://www.penrithphysio.com.au/book at mobile: ERR_CONNECTION_REFUSED");
+  });
+
+  it("goes on past an After page that won't load to the later routes' screenshots", async () => {
+    const { capturer } = runner({
+      screenshot: async (shot) => (shot.side === "after" && shot.route === "/book" ? { unreachable: "ERR_TOO_MANY_REDIRECTS" } : 200),
+    });
+
+    const outcome = await captureEvidence(input({ implementerRoutes: ["/"] }), capturer);
+
+    expect(outcome).toMatchObject({ result: { outcome: "captured" } });
+    const result = outcome.kind === "recorded" ? outcome.result : null;
+    expect(result?.captures.map(({ route, side, viewport }) => `${side} ${route} ${viewport}`)).toEqual([
+      "after / mobile",
+      "after / desktop",
+      "before /book mobile",
+      "before /book desktop",
+      "before / mobile",
+      "before / desktop",
+    ]);
+    expect(result?.missed?.map(({ why, url, viewport }) => `${why} ${url} ${viewport}`)).toEqual([
+      "after-unreachable http://127.0.0.1:4321/book mobile",
+      "after-unreachable http://127.0.0.1:4321/book desktop",
+    ]);
+  });
+
+  it("records unreachable when no page it went to would load, so it took no screenshot", async () => {
+    const { capturer } = runner({ screenshot: async () => ({ unreachable: "ERR_NAME_NOT_RESOLVED" }) });
+
+    const outcome = await captureEvidence(input(), capturer);
+
+    expect(outcome).toMatchObject({ result: { outcome: "failed", reason: "unreachable", captures: [] } });
+    expect(outcome.kind === "recorded" && outcome.result.missed?.length).toBe(4);
+  });
+
+  it("records error, keeping the screenshots it took first, when loading a page throws what the Kit didn't expect, and logs why", async () => {
+    const { capturer, calls, logs } = runner({
+      screenshot: async (shot) => {
+        if (shot.side === "before") throw new Error("Target page, context or browser has been closed");
         return 200;
       },
     });
@@ -272,7 +336,7 @@ describe("Capturing UI evidence", () => {
         { route: "/book", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-1-book.png" },
       ]),
     );
-    expect(logs.join("\n")).toContain("net::ERR_NAME_NOT_RESOLVED at https://www.penrithphysio.com.au/book");
+    expect(logs.join("\n")).toContain("Target page, context or browser has been closed");
     expect(calls.at(-1)).toBe("stop");
   });
 

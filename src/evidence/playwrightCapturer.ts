@@ -19,6 +19,7 @@ import {
   isOnSignInPath,
   isStorageState,
   ON_SIGN_IN,
+  type PageUnreachable,
   servedAt,
   type Shot,
   type SignInEnd,
@@ -132,11 +133,17 @@ export class PlaywrightCapturer implements Capturer {
     return "signed-in";
   }
 
-  async screenshot(shot: Shot, timeoutMs: number): Promise<number | "timed-out" | typeof ON_SIGN_IN> {
+  async screenshot(shot: Shot, timeoutMs: number): Promise<number | "timed-out" | typeof ON_SIGN_IN | PageUnreachable> {
     const end = Date.now() + timeoutMs;
     const page = await (await this.contextFor(shot.viewport, shot.signedIn)).newPage();
     try {
-      const response = await page.goto(shot.url, { waitUntil: "load", timeout: timeoutMs });
+      const response = await page.goto(shot.url, { waitUntil: "load", timeout: timeoutMs }).catch((error: unknown) => {
+        // A page refused, not found or blocked is one shot missed, not capture's end.
+        const code = browserErrorOf(error);
+        if (code === null) throw error;
+        return { unreachable: code };
+      });
+      if (response !== null && "unreachable" in response) return response;
       if (response === null) throw new Error(`${shot.url} gave no response`);
       // A signed-in page that ends on the sign-in page is a session that didn't take: no image of it is kept.
       if (landedOnSignIn(page, shot.signedIn)) return ON_SIGN_IN;
@@ -272,6 +279,16 @@ export class PlaywrightCapturer implements Capturer {
     this.browser ??= await chromium.launch({ headless: true });
     return this.browser;
   }
+}
+
+/**
+ * The browser's error code a page load failed with, such as
+ * ERR_CONNECTION_REFUSED or ERR_NAME_NOT_RESOLVED, as Chromium names it in
+ * Playwright's `net::ERR_…` message; null for any other error, a timeout among them.
+ */
+export function browserErrorOf(error: unknown): string | null {
+  if (!(error instanceof Error) || error instanceof errors.TimeoutError) return null;
+  return /\bnet::(ERR_[A-Z0-9_]+)\b/.exec(error.message)?.[1] ?? null;
 }
 
 /** Whether a page viewed signed in has ended on its sign-in path; a page viewed signed out never is asked. */

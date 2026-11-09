@@ -15,6 +15,7 @@ import {
   type CaptureSide,
   type ChosenRoute,
   isUi,
+  type MissedShot,
   pageAt,
   routesFor,
   screenshots,
@@ -105,6 +106,11 @@ export type SignInEnd = "signed-in" | "failed" | "timed-out" | "no-state" | "bad
 /** What a signed-in shot or take reports when its page landed on `ui.sign_in_path`, its image thrown away. */
 export const ON_SIGN_IN = "on-sign-in";
 
+/** What a shot reports when its page wouldn't load, refused or not found: the browser's error code, such as ERR_CONNECTION_REFUSED. */
+export interface PageUnreachable {
+  readonly unreachable: string;
+}
+
 /** How a command capture runs to its end ended: it finished, it failed, or it ran past the time it was given. */
 export type Finished = "ok" | "failed" | "timed-out";
 
@@ -129,10 +135,11 @@ export interface Capturer {
   signIn(identity: CaptureIdentity, command: string, timeoutMs: number): Promise<SignInEnd>;
   /**
    * Loads the shot's URL at its viewport, signed in when it says so, and
-   * saves its screenshot: the HTTP status the page answered; or, for a
-   * signed-in shot whose page landed on its sign-in path, ON_SIGN_IN, saving none.
+   * saves its screenshot: the HTTP status the page answered; for a
+   * signed-in shot whose page landed on its sign-in path, ON_SIGN_IN, saving
+   * none; or, when the page wouldn't load at all, PageUnreachable, saving none.
    */
-  screenshot(shot: Shot, timeoutMs: number): Promise<number | "timed-out" | typeof ON_SIGN_IN>;
+  screenshot(shot: Shot, timeoutMs: number): Promise<number | "timed-out" | typeof ON_SIGN_IN | PageUnreachable>;
   /**
    * Loads the take's URL at its viewport, signed in when it says so, saves
    * its screenshot, then scrolls the page down while it records it: the HTTP
@@ -208,8 +215,12 @@ export async function captureEvidence(input: CaptureInput, capturer: Capturer): 
   const routes = routesFor(input.ticketBody, input.implementerRoutes, ui.defaultRoutes);
   if (routes.length === 0) return recorded({ outcome: "failed", reason: "no-routes", headSha, captures: [] });
   const captures: Capture[] = [];
-  const failure = await caught(capturer, () => takeShots(input.build, ui, routes, capturer, captures));
-  return recorded(failure === null ? { outcome: "captured", headSha, captures } : { outcome: "failed", reason: failure, headSha, captures });
+  const missed: MissedShot[] = [];
+  const stoppedFor = await caught(capturer, () => takeShots(input.build, ui, routes, capturer, captures, missed));
+  // Every shot missed, with nothing stopping capture: no page it went to would load.
+  const failure = stoppedFor ?? (captures.length === 0 ? "unreachable" : null);
+  const named = missed.length === 0 ? {} : { missed };
+  return recorded(failure === null ? { outcome: "captured", headSha, captures, ...named } : { outcome: "failed", reason: failure, headSha, captures, ...named });
 }
 
 /** What a prototype turn's capture is given: Kit config's blocks, the branch the turn left, the approved route, and the variants it built. */
@@ -266,7 +277,8 @@ function budget(capturer: Capturer): () => number {
 
 /**
  * Builds and serves the branch, then takes every shot into `captures`, all
- * within capture's budget: null once all are taken, else why capture stopped.
+ * within capture's budget, noting in `missed` each whose page wouldn't load
+ * and going on to the rest: null once all are tried, else why capture stopped.
  */
 async function takeShots(
   build: string | null,
@@ -274,6 +286,7 @@ async function takeShots(
   routes: readonly ChosenRoute[],
   capturer: Capturer,
   captures: Capture[],
+  missed: MissedShot[],
 ): Promise<CaptureFailure | null> {
   const left = budget(capturer);
   const shots = shotsFor(routes, ui);
@@ -284,7 +297,13 @@ async function takeShots(
     const status = await capturer.screenshot(shot, Math.min(PAGE_LOAD_MS, left()));
     if (status === "timed-out") return stopped(capturer, "timeout", `loading ${shot.url} at ${shot.viewport.name}`);
     if (status === ON_SIGN_IN) return signedOut(capturer, shot);
-    const { route, reason, viewport, side, image } = shot;
+    const { route, reason, viewport, side, image, url } = shot;
+    if (typeof status === "object") {
+      const why = `${side}-unreachable` as const;
+      capturer.log(`Capture missed (${why}) ${url} at ${viewport.name}: ${status.unreachable}. It goes on to the rest.`);
+      missed.push({ route, reason, viewport: viewport.name, side, url, why, error: status.unreachable });
+      continue;
+    }
     captures.push({ route, reason, viewport: viewport.name, side, status, image, ...identityOf(shot) });
   }
   return null;

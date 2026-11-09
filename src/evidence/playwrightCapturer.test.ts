@@ -10,12 +10,12 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, relative } from "node:path";
-import { chromium } from "playwright-core";
+import { chromium, errors } from "playwright-core";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import type { UiConfig } from "../kit/config.ts";
 import { buildAndServeEnv, type CaptureInput, captureEvidence, capturePrototype, EVIDENCE_DIR, type Finished } from "./capture.ts";
-import { PlaywrightCapturer, STORAGE_STATE_ENV } from "./playwrightCapturer.ts";
+import { browserErrorOf, PlaywrightCapturer, STORAGE_STATE_ENV } from "./playwrightCapturer.ts";
 
 const HEAD = "d".repeat(40);
 
@@ -73,7 +73,7 @@ class FixtureCapturer extends PlaywrightCapturer {
 }
 
 /** A Product serving the fixture on a port of its own, signing an owner in with `signIn`, and a runner whose env holds a test secret. */
-async function aProduct(signIn: string) {
+async function aProduct(signIn: string, beforeUrl: string | null = null) {
   const product = await tempDir("signed-in-product");
   const out = await tempDir("fabrik-out");
   await writeFile(join(product, "server.mjs"), SERVER);
@@ -83,7 +83,7 @@ async function aProduct(signIn: string) {
     paths: ["src/pages/**"],
     serve: "node server.mjs",
     url: `http://localhost:${port}`,
-    beforeUrl: null,
+    beforeUrl,
     defaultRoutes: [],
     signIn: { owner: signIn },
     signInPath: "/sign-in",
@@ -108,6 +108,19 @@ async function filesUnder(dir: string): Promise<string[]> {
 }
 
 const hasChromium = existsSync(chromium.executablePath());
+
+describe("The browser error a page load failed with", () => {
+  it("is Chromium's code from Playwright's message, such as a refused connection or a name that didn't resolve", () => {
+    expect(browserErrorOf(new Error("page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:9/pricing\nCall log:\n  - navigating"))).toBe("ERR_CONNECTION_REFUSED");
+    expect(browserErrorOf(new Error("page.goto: net::ERR_NAME_NOT_RESOLVED at https://nowhere.invalid/"))).toBe("ERR_NAME_NOT_RESOLVED");
+  });
+
+  it("is none for a timeout or any other error, which capture doesn't go on past", () => {
+    expect(browserErrorOf(new errors.TimeoutError("page.goto: Timeout 60000ms exceeded. net::ERR_ABORTED"))).toBeNull();
+    expect(browserErrorOf(new Error("page.goto: Target page, context or browser has been closed"))).toBeNull();
+    expect(browserErrorOf("net::ERR_CONNECTION_REFUSED")).toBeNull();
+  });
+});
 
 describe.skipIf(!hasChromium && process.env.CI === undefined)("The Playwright capturer, signing in to a local fixture", { timeout: 120_000 }, () => {
   it("loads the sign-in's storage state and captures the gated page as its identity, and the public page signed out", async () => {
@@ -176,6 +189,35 @@ describe.skipIf(!hasChromium && process.env.CI === undefined)("The Playwright ca
       result: { outcome: "failed", reason: "sign-in-failed", headSha: HEAD, captures: [] },
     });
     expect(await filesUnder(evidenceDir)).toEqual([]);
+  });
+
+  it("goes on past a Before that refuses the browser, keeping every After, and names the route, URL and error it missed", async () => {
+    const closed = await freePort();
+    const { evidenceDir, capturer, input } = await aProduct("node sign-in.mjs good", `http://localhost:${closed}`);
+
+    const outcome = await captureEvidence(input, capturer);
+
+    expect(outcome).toMatchObject({ kind: "recorded", result: { outcome: "captured" } });
+    const result = outcome.kind === "recorded" ? outcome.result : null;
+    expect(result?.captures.map(({ image }) => image)).toEqual([
+      "after-mobile-1-today.png",
+      "after-desktop-1-today.png",
+      "after-mobile-2-pricing.png",
+      "after-desktop-2-pricing.png",
+    ]);
+    // /today is viewed signed in, so has no Before; /pricing's Before was refused at both viewports.
+    expect(result?.missed).toEqual(
+      (["mobile", "desktop"] as const).map((viewport) => ({
+        route: "/pricing",
+        reason: "ticket",
+        viewport,
+        side: "before",
+        url: `http://localhost:${closed}/pricing`,
+        why: "before-unreachable",
+        error: "ERR_CONNECTION_REFUSED",
+      })),
+    );
+    expect((await filesUnder(evidenceDir)).every((file) => file.startsWith("after-"))).toBe(true);
   });
 
   it("signs a prototype turn's take in by the same rules, loading the state into the take's own context", async () => {
