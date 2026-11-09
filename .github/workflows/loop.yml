@@ -690,9 +690,10 @@ jobs:
   # account: the Claude token and this repo's test secrets, which Kit config
   # declares as op:// references, so none of them is named in this file. They
   # are resolved in output mode and reach the Implement step's env only.
-  # Named "Implement" exactly: Dispatch counts jobs by this name (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
+  # Named "Implement #<Ticket>", and a retry's " (Retry <n>)" after it, so the Actions tab says which Ticket
+  # it's on (#477): Dispatch counts jobs by this name (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
   implement:
-    name: Implement
+    name: "Implement #${{ needs.kit.outputs.ticket }}${{ needs.kit.outputs.retry != '0' && needs.kit.outputs.retry != '' && format(' (Retry {0})', needs.kit.outputs.retry) || '' }}"
     needs: kit
     if: needs.kit.outputs.route == 'implement'
     runs-on: ubuntu-latest
@@ -974,8 +975,10 @@ jobs:
   # agent service account. It runs none of the PR's code, and passes its
   # Verdict out as an artifact for the push job to post. On a UI PR it also
   # downloads the screenshots its Implement run captured, for the Reviewer to see.
+  # Named "Review PR #<agent PR>", so the Actions tab says which PR it's on (#477): the stuck-trigger
+  # sweep reads a Review under way by this name (REVIEW_JOB_NAME in src/github/snapshot.ts).
   review:
-    name: Review
+    name: "Review PR #${{ needs.kit.outputs.pull-request }}"
     needs: [kit, review-checks]
     if: needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'green'
     runs-on: ubuntu-latest

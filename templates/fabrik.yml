@@ -6,6 +6,38 @@
 # pause only Dispatch.
 name: Fabrik
 
+# What each run shows as on the Actions tab (#477): the run the Kit starts on
+# its event, and on which issue or PR, such as "Implement #12" or "Review PR
+# #60", or the event itself, such as "#87 labeled bug", when that isn't known
+# from the event alone. GitHub names a run from this file only, never from the
+# Kit workflow it calls, and only from the event, before any job runs; the
+# jobs' own names say the rest, such as an Implement run's Retry number. The
+# first case that fits names the run, so the most specific comes first.
+run-name: >-
+  ${{
+  github.event_name == 'schedule' && 'Tick' ||
+  github.event_name == 'push' && format('Push to {0}', github.ref_name) ||
+  github.event_name == 'issues' && github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'fabrik:audit') && format('Audit #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'fabrik:retro') && format('Retro #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.action == 'opened' && (contains(github.event.issue.labels.*.name, 'fabrik:token-rotation') || contains(github.event.issue.labels.*.name, 'fabrik:weekly-limit') || contains(github.event.issue.labels.*.name, 'fabrik:usage-credits') || contains(github.event.issue.labels.*.name, 'fabrik:replay')) && format('Opened #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.action == 'opened' && format('Triage #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.label.name == 'agent:implement' && format('Implement #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.label.name == 'agent:design' && format('Design-session turn #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.label.name == 'agent:research' && format('Research #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.label.name == 'agent:replay' && format('Replay #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.action == 'labeled' && format('#{0} labeled {1}', github.event.issue.number, github.event.label.name) ||
+  github.event_name == 'issues' && format('#{0} {1}', github.event.issue.number, github.event.action) ||
+  github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.issue.labels.*.name, 'needs-design') && format('Design-session turn #{0}', github.event.issue.number) ||
+  github.event_name == 'issue_comment' && format('Comment on #{0}', github.event.issue.number) ||
+  github.event_name == 'pull_request_target' && github.event.label.name == 'agent:review' && format('Review PR #{0}', github.event.pull_request.number) ||
+  github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action) && startsWith(github.event.pull_request.head.ref, 'fabrik/') && format('Review PR #{0}', github.event.pull_request.number) ||
+  github.event_name == 'pull_request_target' && github.event.action == 'labeled' && format('PR #{0} labeled {1}', github.event.pull_request.number, github.event.label.name) ||
+  github.event_name == 'pull_request_target' && format('PR #{0} {1}', github.event.pull_request.number, github.event.action) ||
+  github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested' && format('Request changes PR #{0}', github.event.pull_request.number) ||
+  github.event_name == 'pull_request_review' && format('Comment on PR #{0}', github.event.pull_request.number) ||
+  format('{0} {1}', github.event_name, github.event.action)
+  }}
+
 on:
   issues:
     types: [opened, labeled, closed]

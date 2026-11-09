@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CALLER_JOBS, callerWorkflowPath, checkCallerWorkflow, checkKit } from "./caller.ts";
 import { resolveKitConfig } from "./config.ts";
+import { AUDIT_LABEL, DESIGN_LABEL, DISPATCH_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, RESEARCH_LABEL, REPLAY_TRIGGER_LABEL, RETRO_LABEL, REVIEW_LABEL } from "../loop/labels.ts";
 
 function callerWith(...uses: string[]): string {
   return [
@@ -107,6 +108,67 @@ describe("Caller workflow release check", () => {
     const jobs = template.slice(template.indexOf("\njobs:\n"));
 
     expect([...jobs.matchAll(/^ {2}([a-z][a-z0-9_-]*):$/gm)].map((match) => match[1])).toEqual([...CALLER_JOBS]);
+  });
+
+  // #477: GitHub names a run from the caller workflow alone, never from the reusable workflow it calls.
+  describe("the caller template's run-name, which names each run on the Actions tab for what started it", () => {
+    const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
+    const runName = /^run-name: >-\n((?: {2}.*\n)+)/m.exec(template)?.[1] ?? "";
+    const cases = runName.split("\n").map((line) => line.trim());
+
+    it("is one expression, a case a line, ending in the event itself when no case fits", () => {
+      expect(cases[0]).toBe("${{");
+      expect(cases.at(-2)).toBe("}}");
+      expect(cases.at(-3)).toBe("format('{0} {1}', github.event_name, github.event.action)");
+      expect(cases.slice(1, -3).every((line) => line.endsWith(" ||"))).toBe(true);
+    });
+
+    it("names the hourly tick, and a push for its branch", () => {
+      expect(cases).toContain("github.event_name == 'schedule' && 'Tick' ||");
+      expect(cases).toContain("github.event_name == 'push' && format('Push to {0}', github.ref_name) ||");
+    });
+
+    it.each([
+      [DISPATCH_LABEL, "Implement"],
+      [DESIGN_LABEL, "Design-session turn"],
+      [RESEARCH_LABEL, "Research"],
+      [REPLAY_TRIGGER_LABEL, "Replay"],
+    ])("names the run %s starts on an issue for its role and the issue: %s #<n>", (label, role) => {
+      expect(cases).toContain(
+        `github.event_name == 'issues' && github.event.label.name == '${label}' && format('${role} #{0}', github.event.issue.number) ||`,
+      );
+    });
+
+    it("names the run agent:review starts, and one a push to an agent PR starts, for the Review of the PR", () => {
+      expect(cases).toContain(
+        `github.event_name == 'pull_request_target' && github.event.label.name == '${REVIEW_LABEL}' && format('Review PR #{0}', github.event.pull_request.number) ||`,
+      );
+      expect(cases).toContain(
+        "github.event_name == 'pull_request_target' && contains(fromJSON('[\"opened\", \"synchronize\", \"reopened\"]'), github.event.action) && startsWith(github.event.pull_request.head.ref, 'fabrik/') && format('Review PR #{0}', github.event.pull_request.number) ||",
+      );
+    });
+
+    it("names a new issue's run for Triage, but an Audit's and a Retro's for theirs, and the Kit's other issues' for the opening alone", () => {
+      const opened = "github.event_name == 'issues' && github.event.action == 'opened'";
+      expect(cases).toContain(`${opened} && contains(github.event.issue.labels.*.name, '${AUDIT_LABEL}') && format('Audit #{0}', github.event.issue.number) ||`);
+      expect(cases).toContain(`${opened} && contains(github.event.issue.labels.*.name, '${RETRO_LABEL}') && format('Retro #{0}', github.event.issue.number) ||`);
+      const others = KIT_ISSUE_LABELS.filter((label) => label !== AUDIT_LABEL && label !== RETRO_LABEL);
+      expect(cases).toContain(
+        `${opened} && (${others.map((label) => `contains(github.event.issue.labels.*.name, '${label}')`).join(" || ")}) && format('Opened #{0}', github.event.issue.number) ||`,
+      );
+      expect(cases).toContain(`${opened} && format('Triage #{0}', github.event.issue.number) ||`);
+      // Most specific first: Triage only once no Kit issue's case fits.
+      expect(cases.findIndex((line) => line.includes("'Triage #{0}'"))).toBeGreaterThan(cases.findIndex((line) => line.includes("'Opened #{0}'")));
+    });
+
+    it("names a reply on a needs-design issue for the Design-session turn it starts, and the Operator's Request changes for its PR", () => {
+      expect(cases).toContain(
+        `github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.issue.labels.*.name, '${NEEDS_DESIGN}') && format('Design-session turn #{0}', github.event.issue.number) ||`,
+      );
+      expect(cases).toContain(
+        "github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested' && format('Request changes PR #{0}', github.event.pull_request.number) ||",
+      );
+    });
   });
 
   it("the scheduled Kit workflow ships beside the Loop as a reusable workflow", () => {

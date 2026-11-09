@@ -427,9 +427,10 @@ interface DesignQueueQueryResult {
 }
 
 /**
- * The name of the Implement job in .github/workflows/loop.yml (a test holds
- * the two together). Called from a Product repo's caller workflow, it shows
- * up as `<caller job> / Implement`.
+ * The name of the Implement job in .github/workflows/loop.yml, which follows
+ * it with ` #<Ticket>`, and a retry's with ` (Retry <n>)` too (#477; a test
+ * holds the two together). Called from a Product repo's caller workflow, it
+ * shows up as `<caller job> / Implement #12 (Retry 1)`.
  */
 export const IMPLEMENT_JOB_NAME = "Implement";
 
@@ -452,8 +453,9 @@ export const PUSH_JOB_NAME = "Push";
 /**
  * The names of the claim job and the two Review jobs in
  * .github/workflows/loop.yml (a test holds them together), which the
- * stuck-trigger sweep reads a run behind a trigger label by (#419). Called
- * from a Product repo's caller workflow, each shows up as `<caller job> / <name>`.
+ * stuck-trigger sweep reads a run behind a trigger label by (#419). The
+ * Review job follows its name with ` PR #<agent PR>` (#477). Called from a
+ * Product repo's caller workflow, each shows up as `<caller job> / <name>`.
  */
 export const CLAIM_JOB_NAME = "Claim the work";
 export const REVIEW_CHECKS_JOB_NAME = "Review checks";
@@ -1792,13 +1794,21 @@ export async function countDispatchedRuns(
  */
 function implementJobsUnderWay(jobs: readonly Job[]): Job[] {
   const landed = new Set(jobs.filter(({ name, status }) => status === "completed" && isJobNamed(name, PUSH_JOB_NAME)).map(({ run }) => run));
-  return jobs.filter(({ run, name, conclusion }) => conclusion !== "skipped" && isJobNamed(name, IMPLEMENT_JOB_NAME) && !landed.has(run));
+  return jobs.filter(({ run, name, conclusion }) => conclusion !== "skipped" && IMPLEMENT_JOB.test(name) && !landed.has(run));
 }
 
 /** Whether a job's name is `jobName`, or `<caller job> / <jobName>` when a Product repo's caller workflow ran it. */
 function isJobNamed(name: string, jobName: string): boolean {
   return name === jobName || name.endsWith(` / ${jobName}`);
 }
+
+/**
+ * An Implement job's name, and a Review job's, as a caller workflow shows it or
+ * not: named for what it runs on (#477), or for nothing, as a run of an earlier
+ * Kit release still in flight names it.
+ */
+const IMPLEMENT_JOB = new RegExp(`^(?:.+ / )?${IMPLEMENT_JOB_NAME}(?: #[1-9][0-9]*(?: \\(Retry [1-9][0-9]*\\))?)?$`);
+const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #[1-9][0-9]*)?$`);
 
 /**
  * Whether an Implement job is under way anywhere in the repo (#387), as
@@ -1873,11 +1883,12 @@ async function readRolesUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Prom
     return null;
   }
   const anyJobNamed = (...names: string[]) => jobs.some(({ name }) => names.some((jobName) => isJobNamed(name, jobName)));
+  const anyReviewJob = jobs.some(({ name }) => REVIEW_JOB.test(name));
   const designTurns = new Set(jobs.flatMap((job) => DESIGN_JOB.exec(job.name)?.[1] ?? []).map(Number));
   return {
     implement: implementJobsUnderWay(jobs).length > 0,
     research: anyJobNamed(RESEARCH_JOB_NAME),
-    review: anyJobNamed(REVIEW_CHECKS_JOB_NAME, REVIEW_JOB_NAME),
+    review: anyReviewJob || anyJobNamed(REVIEW_CHECKS_JOB_NAME),
     claim: anyJobNamed(CLAIM_JOB_NAME),
     designTurns: [...designTurns].sort((a, b) => a - b),
   };

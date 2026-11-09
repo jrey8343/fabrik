@@ -80,6 +80,19 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
     expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 0 });
   });
 
+  // #477: the job names its Ticket, and a retry its Retry number; a run of an earlier Kit release names neither.
+  it("counts an Implement job named for its Ticket, a retry's named for its Retry too, as it counts one of an earlier Kit release", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement #12", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement #14 (Retry 1)", status: "queued" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "Implement #15", status: "in_progress" }] },
+      { id: 4, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "in_progress" }] },
+      { id: 5, status: "in_progress", jobs: [{ name: "fabrik / Replay implement (baseline)", status: "in_progress" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0 });
+  });
+
   it("counts an Implement job still queued or waiting after its claim took agent:implement off the Ticket", async () => {
     const actions = actionsWith([
       { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Claim the work", status: "completed" }, { name: "fabrik / Implement", status: "queued" }] },
@@ -144,11 +157,14 @@ describe("Counting the Research runs a Dispatch check sees in flight", () => {
 });
 
 describe("The Implement job's name", () => {
-  it("is the name loop.yml gives the Implement job, which Dispatch counts by", async () => {
+  it("is the name loop.yml gives the Implement job, followed by its Ticket and a retry's Retry number, which Dispatch counts by (#477)", async () => {
     const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
     const implementJob = /^ {2}implement:\n {4}name: (.+)$/m.exec(workflow)?.[1];
 
-    expect(implementJob).toBe(IMPLEMENT_JOB_NAME);
+    // Quoted, since an unquoted ` #` starts a YAML comment.
+    expect(implementJob).toBe(
+      `"${IMPLEMENT_JOB_NAME} #\${{ needs.kit.outputs.ticket }}\${{ needs.kit.outputs.retry != '0' && needs.kit.outputs.retry != '' && format(' (Retry {0})', needs.kit.outputs.retry) || '' }}"`,
+    );
   });
 });
 
@@ -2729,7 +2745,8 @@ describe("The names of the jobs a trigger label's run shows up as (#419)", () =>
   it.each([
     ["implement-claim", () => CLAIM_JOB_NAME],
     ["review-checks", () => REVIEW_CHECKS_JOB_NAME],
-    ["review", () => REVIEW_JOB_NAME],
+    // #477: followed by its agent PR, quoted since an unquoted ` #` starts a YAML comment.
+    ["review", () => `"${REVIEW_JOB_NAME} PR #\${{ needs.kit.outputs.pull-request }}"`],
   ])("is the name loop.yml gives the %s job, which the stuck-trigger sweep reads a run behind a label by", async (job, name) => {
     const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
 
@@ -2808,6 +2825,19 @@ describe("Gathering a scheduled tick's trigger-sweep slice (#419)", () => {
     const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
 
     expect(snapshot.triggers?.underWay).toEqual({ implement: false, research: false, review: true, claim: true, designTurns: [3, 12] });
+  });
+
+  // #477: the Review job names its agent PR; a run of an earlier Kit release names none.
+  it("reads a Review job named for its agent PR as Review under way, and an Implement job named for its Ticket as Implement", async () => {
+    const { github } = githubWith([]);
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Review PR #60", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement #12 (Retry 2)", status: "queued" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.triggers?.underWay).toMatchObject({ implement: true, review: true });
   });
 
   it("reads a Review checks job as Review under way", async () => {
