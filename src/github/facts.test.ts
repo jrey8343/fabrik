@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "./client.ts";
-import { gatherGitHubFacts, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
+import { gatherEveryRepoFacts, gatherGitHubFacts, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -589,6 +589,23 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(facts.defaultBranchCommits).toEqual([
       { message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, at: "2026-11-05T00:00:00Z" },
     ]);
+  });
+});
+
+describe("Gathering every Product repo's GitHub facts for the Weekly summary", () => {
+  it("reads the rest when one repo's API call fails, naming that repo and why", async () => {
+    const shop = repoWith({});
+    const github = {
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        if (variables["name"] === "gone") return Promise.reject(new Error("GitHub GraphQL query failed: Bad Gateway"));
+        return shop.graphql<T>(query, variables);
+      },
+    };
+
+    const { facts, unread } = await gatherEveryRepoFacts(github, [{ owner: "jrey8343", name: "gone" }, repo], NOW, OPERATOR.login);
+
+    expect(facts.map((each) => each.repo)).toEqual(["jrey8343/shop"]);
+    expect(unread).toEqual([{ repo: "jrey8343/gone", why: "GitHub GraphQL query failed: Bad Gateway" }]);
   });
 });
 

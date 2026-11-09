@@ -124,7 +124,7 @@ function actionLists(error: PlanNotApplied): string[] {
 }
 
 /** What failed, told apart as GitHub's refusal, GitHub's own failure, a file that wasn't there or the Kit's own failure. */
-function whatFailed(cause: unknown): string {
+export function whatFailed(cause: unknown): string {
   if (cause instanceof GitHubError) {
     const request = cause.request === "" ? "a call" : `\`${cause.request}\``;
     const said = gitHubMessageOf(cause);

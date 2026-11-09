@@ -296,7 +296,8 @@ The Kit pushes to the Operator's phone only when it is their move, and once a we
 | A run refused on one Subscription's weekly limit, with another free | Silent | That Subscription's weekly-limit issue opens, or is commented on, quietly, and the run is re-run on the next free Subscription with no Ticket comment. |
 | Every Subscription used up | Push, once until the first reset | The weekly-limit issue opened, or refused on, once none is free @-mentions the Operator. Runs due until the reset are held, with no Ticket comment, and the scheduled tick resumes them itself at the reset. |
 | Usage credits spent on a Subscription | Push, once per Subscription | The usage-credits issue (label `fabrik:usage-credits`) assigns the Operator, and the Kit runs nothing on that Subscription until the Operator closes it. |
-| Weekly summary | Push, once a week | The Weekly summary issue in `fabrik-runs` @-mentions the Operator once, for every Product repo, and closes last week's. A week with nothing to report files nothing. |
+| Weekly summary | Push, once a week | The Weekly summary issue in `fabrik-runs` @-mentions the Operator once, for every Product repo, and closes last week's. A week with nothing to report files nothing. A Product repo the run couldn't read on GitHub gets a line in its section saying why. |
+| The Weekly summary run fails | Push | One comment on the newest Weekly summary, or a `Weekly summary failed` issue in `fabrik-runs` when there's none, @-mentions the Operator with the run link and what failed, so a failed run is never taken for a quiet week. |
 | Implement draft PR, Execution-flaw retry, back-to-design note | Silent | The PR and the Verdict are the record. |
 | Fast path, Design session finished, Spec closed, `wontfix` | Silent | |
 | A Ticket closed by hand closes its agent draft PR | Silent | The comment on the PR mentions nobody. An agent PR you close by hand stops its Ticket in `ready-for-human`, whose assignment is the push. |

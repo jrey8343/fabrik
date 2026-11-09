@@ -1,7 +1,9 @@
 // Filing the Weekly summary in the store (ADR-0009): from what the summary
 // module returned and the `fabrik:weekly-summary` issues already there, what
 // to file, update or close. Only one summary is ever open, and a re-run in the
-// same week never files a second. Pure, no I/O.
+// same week never files a second. And what a failed run files instead, so a
+// failed run is never taken for a quiet week (#445). Pure, no I/O.
+import { whatFailed } from "./landingFailure.ts";
 import type { WeeklySummaryResult } from "./weeklySummary.ts";
 
 /** The label on every Weekly summary issue, by which the next week's filing finds it. */
@@ -33,4 +35,35 @@ export function weeklyFilingOf(
   return thisWeek === undefined
     ? { kind: "file", title: result.title, body: result.body, close }
     : { kind: "update", issue: thisWeek.number, body: result.body, close };
+}
+
+/** The title of the issue a failed run files when no Weekly summary was ever filed to comment on. */
+export const WEEKLY_SUMMARY_FAILED_TITLE = "Weekly summary failed";
+
+/** What a failed run files in the store: a comment on the newest summary, or an issue of its own when there's none. */
+export type WeeklyFailureFiling =
+  | { readonly kind: "comment"; readonly issue: number; readonly body: string }
+  | { readonly kind: "file"; readonly title: string; readonly body: string };
+
+/**
+ * What a failed Weekly summary run says: its step summary, its `::error`
+ * line, and what it files with the store token, given the summaries already
+ * filed, newest first. It @-mentions `operator` with the run's link, so no
+ * Monday passes in silence.
+ */
+export function weeklyFailureOf(
+  error: unknown,
+  existing: readonly SummaryIssue[],
+  runUrl: string,
+  operator: string,
+): { readonly summary: string; readonly error: string; readonly filing: WeeklyFailureFiling } {
+  const what = whatFailed(error);
+  const rest = [`**What failed:** ${what}`, "**To recover:** Open the run and choose **Re-run jobs → Re-run failed jobs**, which files this week's summary."];
+  const body = [`@${operator} **The Weekly summary failed**, so this week's summary isn't filed. The [run](${runUrl}) failed.`, ...rest].join("\n\n");
+  const [newest] = existing;
+  return {
+    summary: ["The Weekly summary failed, so this week's summary isn't filed.", ...rest].join("\n\n"),
+    error: `The Weekly summary failed: ${what}`,
+    filing: newest === undefined ? { kind: "file", title: WEEKLY_SUMMARY_FAILED_TITLE, body } : { kind: "comment", issue: newest.number, body },
+  };
 }

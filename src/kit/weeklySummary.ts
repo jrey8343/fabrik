@@ -141,11 +141,20 @@ export interface GitHubFacts extends MetricFacts {
   readonly openMaps: readonly number[];
 }
 
+/** A Product repo whose GitHub facts couldn't be read this run, and why. */
+export interface UnreadRepo {
+  /** `owner/name`. */
+  readonly repo: string;
+  readonly why: string;
+}
+
 export interface WeeklySummaryInput {
   readonly records: readonly RunRecord[];
   /** The store's score files: a picked run's scores, or why it has none (src/kit/scorer.ts). */
   readonly scoreFiles: readonly ScoreFile[];
   readonly facts: readonly GitHubFacts[];
+  /** The Product repos whose facts couldn't be read: each gets its section, saying so, and no figure counts it. */
+  readonly unread: readonly UnreadRepo[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
   /** The Fabrik App's bot login, its slug with `[bot]`, as label events name it. */
@@ -335,6 +344,8 @@ export interface RepoSection {
   readonly stuck: readonly StuckItem[];
   /** The work a cap holds in the repo, or null when it holds nothing. */
   readonly held: Held | null;
+  /** Why the repo's GitHub facts couldn't be read this run, or null when they were: an unread repo has nothing waiting, stuck or held. */
+  readonly unread: string | null;
 }
 
 /** The work a cap holds in one Product repo, by source: null for a source holding nothing. */
@@ -497,9 +508,13 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
   const replaySpend = { thisWeek: replaySpendOf(weeks.thisWeek, replays), lastWeek: replaySpendOf(weeks.lastWeek, replays) };
-  const repos = input.facts.map((facts) => repoSectionOf(facts, input));
-  // Held work counts too, so a queue never sits unseen through a week nothing ran.
-  const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null);
+  const repos = [
+    ...input.facts.map((facts) => repoSectionOf(facts, input)),
+    ...input.unread.map(({ repo, why }) => ({ repo, waitingOnYou: [], stuck: [], held: null, unread: why })),
+  ];
+  // Held work counts too, so a queue never sits unseen through a week nothing ran,
+  // and so does a repo that couldn't be read, so its failure is never taken for a quiet week.
+  const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null && repo.unread === null);
   // And a week only Replays ran in is no quiet week either, so what they cost still shows.
   if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && replaySpend.thisWeek === null && quiet) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
@@ -907,6 +922,7 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
     ]),
     stuck: stuck(facts, records, items, now),
     held: heldIn(facts, appLogin, now),
+    unread: null,
   };
 }
 
@@ -1371,7 +1387,11 @@ function heldLines(repos: readonly RepoSection[]): string[] {
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */
 const SHOWN_ITEMS = 10;
 
-function repoLines({ repo, waitingOnYou, stuck }: RepoSection, escapes: readonly EscapeThisWeek[], reviewMisses: readonly ReviewMissThisWeek[]): string[] {
+function repoLines({ repo, waitingOnYou, stuck, unread }: RepoSection, escapes: readonly EscapeThisWeek[], reviewMisses: readonly ReviewMissThisWeek[]): string[] {
+  if (unread !== null) {
+    const line = `The Kit couldn't read this repo on GitHub this run, so what waits on you, what's stuck and what's held there, and its PRs, Tickets and Specs in the metrics, are left out of this summary: ${escapedTitle(unread)}. Re-run the Weekly summary to try it again.`;
+    return [`## ${repo}`, "", line, "", liveLinks(repo), ""];
+  }
   const lines = [`## ${repo}`, "", "### Waiting on you", ""];
   if (waitingOnYou.length === 0) lines.push("Nothing waiting on you.", "");
   else {

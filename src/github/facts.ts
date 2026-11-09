@@ -23,6 +23,7 @@ import type {
   ReviewFacts,
   SpecFacts,
   TicketFacts,
+  UnreadRepo,
 } from "../kit/weeklySummary.ts";
 import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { AUDIT_LABEL, MONITOR_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
@@ -58,6 +59,33 @@ const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
 export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   return gatherFacts(github, repo, now, operator, now - ESCAPE_WINDOWS_REACH_MS);
+}
+
+/**
+ * The GitHub facts the Weekly summary reads of each Product repo, as of `now`.
+ * A repo whose facts it couldn't read, on a GitHub error or a repo gone since
+ * the listing, is named in `unread`, with why, and the rest are read as
+ * usual, so one repo's failure costs the summary only that repo's facts.
+ */
+export async function gatherEveryRepoFacts(
+  github: Pick<GitHub, "graphql">,
+  repos: readonly Repo[],
+  now: number,
+  operator: string,
+): Promise<{ facts: GitHubFacts[]; unread: UnreadRepo[] }> {
+  const gathered = await Promise.all(
+    repos.map(async (repo) => {
+      try {
+        return { facts: await gatherGitHubFacts(github, repo, now, operator), unread: null };
+      } catch (error) {
+        return { facts: null, unread: { repo: `${repo.owner}/${repo.name}`, why: error instanceof Error ? error.message : String(error) } };
+      }
+    }),
+  );
+  return {
+    facts: gathered.flatMap(({ facts }) => (facts === null ? [] : [facts])),
+    unread: gathered.flatMap(({ unread }) => (unread === null ? [] : [unread])),
+  };
 }
 
 /** The GitHub facts of one Product repo, as of `now`, with its PRs, default-branch commits and the Operator's issues from `reach` on. */

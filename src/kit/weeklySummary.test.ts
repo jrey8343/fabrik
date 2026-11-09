@@ -42,7 +42,7 @@ import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type T
 const NOW = "2026-11-08T20:00:00Z";
 
 function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput {
-  return { records: [], scoreFiles: [], facts: [factsOf()], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
+  return { records: [], scoreFiles: [], facts: [factsOf()], unread: [], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
 }
 
 describe("the Weekly summary", () => {
@@ -55,6 +55,31 @@ describe("the Weekly summary", () => {
     ["something stuck", factsOf({ openPullRequests: [anOpenPullRequest()] })],
   ])("isn't skipped in a week with no records but %s", (_, facts) => {
     expect(weeklySummary(input({ facts: [factsOf({ repo: "owner/quiet" }), facts] })).kind).toBe("summary");
+  });
+
+  it("isn't skipped in a week with no records but a Product repo the Kit couldn't read", () => {
+    expect(weeklySummary(input({ unread: [{ repo: "owner/gone", why: "GitHub GraphQL query failed: Bad Gateway" }] })).kind).toBe("summary");
+  });
+
+  it("gives a Product repo the Kit couldn't read a line in its section saying why, and the other repo its whole section", () => {
+    const result = weeklySummary(
+      input({
+        records: [aRunRecord()],
+        facts: [factsOf({ repo: "owner/product", openIssues: [anOpenIssue({ labels: ["ready-for-human"] })] })],
+        unread: [{ repo: "owner/gone", why: "GitHub GraphQL query failed: Bad Gateway" }],
+      }),
+    );
+    if (result.kind !== "summary") throw new Error("expected a summary");
+
+    expect(result.summary.repos.map(({ repo, unread }) => ({ repo, unread }))).toEqual([
+      { repo: "owner/product", unread: null },
+      { repo: "owner/gone", unread: "GitHub GraphQL query failed: Bad Gateway" },
+    ]);
+    expect(result.summary.repos[0]?.waitingOnYou).toHaveLength(1);
+    expect(result.body).toContain(
+      "## owner/gone\n\nThe Kit couldn't read this repo on GitHub this run, so what waits on you, what's stuck and what's held there, and its PRs, Tickets and Specs in the metrics, are left out of this summary: GitHub GraphQL query failed: Bad Gateway. Re-run the Weekly summary to try it again.",
+    );
+    expect(result.body).toContain("## owner/product\n\n### Waiting on you");
   });
 
   it("isn't skipped in a week with no records but an open Audit", () => {
