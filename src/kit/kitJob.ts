@@ -54,6 +54,7 @@ function heldSummaryLine(hold: Hold, why: string): string {
 const UNUSABLE: Readonly<Record<Unusable, string>> = {
   "weekly-limit": "has hit its weekly limit",
   "usage-credits": "has an open usage-credits issue",
+  "dead-token": "has a dead token, with an open token-rotation issue",
 };
 
 /** Why every listed Subscription is used up, from the open Kit-owned issues that make each unusable. */

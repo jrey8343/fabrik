@@ -126,12 +126,9 @@ describe("The Subscription a started run is given", () => {
     expect(subscriptionsStartedIn(planFor(event, snapshot, TWO_SUBSCRIPTIONS))).toEqual(["Claude token"]);
   });
 
-  it("reads only open weekly-limit issues, not another Kit-owned issue naming a Subscription", () => {
-    const rotation: KitIssueSnapshot = {
-      ...weeklyLimitIssue(42, "Claude token"),
-      labels: ["ready-for-human", "fabrik:token-rotation"],
-    };
-    const [event, snapshot] = STARTS[0]![1]([rotation]);
+  it("reads only the Kit-owned issues that make a Subscription unusable, not another one naming a Subscription", () => {
+    const replay: KitIssueSnapshot = { ...weeklyLimitIssue(42, "Claude token"), labels: ["fabrik:replay"] };
+    const [event, snapshot] = STARTS[0]![1]([replay]);
 
     expect(subscriptionsStartedIn(planFor(event, snapshot, TWO_SUBSCRIPTIONS))).toEqual(["Claude token"]);
   });

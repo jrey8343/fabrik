@@ -125,8 +125,14 @@ describe("The dead-token issue names the Subscription whose vault item needs rot
     expect(issue.body).not.toContain("`Claude token` item");
   });
 
-  it("says in the Ticket's failure comment which Subscription's token was refused", () => {
-    const plan = planFor(onSecond(), snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] })), TWO_SUBSCRIPTIONS);
+  it("says in the Ticket's failure comment, when no other Subscription is free to re-run it on, which Subscription's token was refused", () => {
+    // The first listed Subscription's token is dead too, and no weekly-limit issue is open to hold the run on.
+    const firstDead: KitIssueSnapshot = { number: 39, labels: ["fabrik:token-rotation"], body: "Rotate it.", comments: [] };
+    const plan = planFor(
+      onSecond(),
+      snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] }), { kitIssues: [firstDead] }),
+      TWO_SUBSCRIPTIONS,
+    );
 
     expect(plan).toMatchObject({
       kind: "act",
@@ -145,7 +151,12 @@ describe("The dead-token issue names the Subscription whose vault item needs rot
   });
 
   it("names the Subscription on an open rotation issue it @-mentions on, and on a later quiet comment", () => {
-    const ahead: KitIssueSnapshot = { number: 40, labels: ["fabrik:token-rotation"], body: "Rotating soon.", comments: [] };
+    const ahead: KitIssueSnapshot = {
+      number: 40,
+      labels: ["fabrik:token-rotation"],
+      body: "Rotating soon.\n<!-- fabrik:subscription Claude token 2 -->",
+      comments: [],
+    };
 
     const first = planFor(onSecond(7), snapshotOf(anIssue({ number: 7 }), { kitIssues: [ahead] }), TWO_SUBSCRIPTIONS);
     const mention = first.kind === "act" ? first.actions.find((action) => action.kind === "comment" && action.issue === 40) : undefined;

@@ -86,6 +86,17 @@ describe("The scheduled tick's replay step", () => {
       expect(tick(replaySlice(), [usageCreditsIssue(42, "Claude token 2")], TWO_SUBSCRIPTIONS)).toEqual(STARTS_NOTHING);
     });
 
+    it("by an open token-rotation issue for a dead token on any Subscription", () => {
+      const rotation: KitIssueSnapshot = {
+        number: 43,
+        labels: ["ready-for-human", "fabrik:token-rotation"],
+        body: "Rotate it.\n\n<!-- fabrik:subscription Claude token 2 -->",
+        comments: [],
+      };
+
+      expect(tick(replaySlice(), [rotation], TWO_SUBSCRIPTIONS)).toEqual(STARTS_NOTHING);
+    });
+
     it("but starts one alongside closing a weekly-limit issue whose limit has reset, and leaves that close as it was", () => {
       const plan = tick(replaySlice(), [weeklyLimitIssue(41, "Claude token 2", EARLIER)], TWO_SUBSCRIPTIONS);
 
