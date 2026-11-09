@@ -377,6 +377,7 @@ jobs:
           FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
           FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
           FABRIK_MAP_FILE: ${{ runner.temp }}/map.json
+          FABRIK_SPEC_TICKETS_FILE: ${{ runner.temp }}/spec-tickets.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
         run: node ../kit/src/agent/run.ts design
 

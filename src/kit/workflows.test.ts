@@ -13,7 +13,7 @@ import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
-import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE } from "../agent/inputs.ts";
+import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
@@ -286,6 +286,13 @@ describe("The Kit's workflows", () => {
 
     expect(inputs).toContain("FABRIK_ROLE: ${{ inputs.role }}");
     expect(agent).toContain(`FABRIK_MAP_FILE: \${{ runner.temp }}/${MAP_INPUTS_FILE}`);
+  });
+
+  it("the Design job gives its agent the Spec's other Tickets the agent-inputs step read for its role, and no other agent job does (#475)", () => {
+    const agent = stepsOf(jobIn(loop, "design")).find((step) => step.includes("src/agent/run.ts design"));
+
+    expect(agent).toContain(`FABRIK_SPEC_TICKETS_FILE: \${{ runner.temp }}/${SPEC_TICKETS_FILE}`);
+    expect(loop.split("FABRIK_SPEC_TICKETS_FILE:").length - 1).toBe(1);
   });
 
   it("the Triage job gives its agent the recent issues the agent-inputs step read for its role, and no other agent job does", () => {
