@@ -409,7 +409,7 @@ async function main(landing: Landing | null): Promise<void> {
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
   const plan = planFor(event, snapshot, config);
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
-  // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304).
+  // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304), as may a Review's pass (#480).
   const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
   const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
   const { preview, readded } = await applyPlan(

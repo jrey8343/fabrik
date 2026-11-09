@@ -45,7 +45,7 @@ import {
 } from "./snapshot.ts";
 
 /** The conflict check's query (#304), which reads each open PR's mergeable state. */
-const isConflictsQuery = (query: string) => /\bmergeable\b/.test(query);
+const isConflictsQuery = (query: string) => /pullRequests\(states: OPEN[^]*\bmergeable\b/.test(query);
 
 /** Marks a fake GitHub as answering the conflict check's query itself. */
 const ANSWERS_CONFLICTS = Symbol("answers the conflict check's query");
@@ -2917,6 +2917,67 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
       requestChangesRunInFlight: 101,
       requestChangesRunReviews: [101],
     });
+  });
+});
+
+describe("Gathering whether a Reviewer's Verdict's PR merges cleanly (#480)", () => {
+  const reviewed: LoopEvent = {
+    kind: "review-run-finished",
+    pullRequest: 50,
+    headSha: HEAD_SHA,
+    output: "verdict: pass",
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    repoUrl: "https://github.com/acme/shop",
+  };
+
+  /** The PR GitHub has for the Verdict, whose mergeable state reads as each of `reads` in turn, the last one from then on. */
+  function githubReading(reads: string[]) {
+    let read = 0;
+    const pullRequests = pullRequestGitHub();
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>) {
+        if (!/\bmergeable\b/.test(query)) return pullRequests.graphql(query, variables);
+        expect(variables).toMatchObject({ owner: "acme", name: "shop", number: 50 });
+        const mergeable = reads[Math.min(read, reads.length - 1)];
+        read += 1;
+        return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequest: { mergeable } } };
+      },
+    } as unknown as GitHub;
+    return { github, reads: () => read };
+  }
+
+  it.each([
+    ["CONFLICTING", false],
+    ["MERGEABLE", true],
+  ])("reads %s as mergeable %s, against the default branch's head as GitHub reads it with it", async (state, mergeable) => {
+    const snapshot = await gatherSnapshot(githubReading([state]).github, repo, reviewed, null, APP_LOGIN);
+
+    expect(snapshot.mergeable).toEqual({ main: "d".repeat(40), mergeable });
+    expect(snapshot.pullRequest?.number).toBe(50);
+  });
+
+  it("leaves it unknown after a bounded number of reads while GitHub is still working it out", async () => {
+    const waits: number[] = [];
+    const wait = async (ms: number) => void waits.push(ms);
+    const unknown = githubReading(["UNKNOWN"]);
+
+    const snapshot = await gatherSnapshot(unknown.github, repo, reviewed, null, APP_LOGIN, null, null, null, wait);
+
+    expect(snapshot.mergeable).toEqual({ main: "d".repeat(40), mergeable: null });
+    expect(unknown.reads()).toBe(MERGEABLE_READS);
+    expect(waits).toHaveLength(MERGEABLE_READS - 1);
+  });
+
+  it("reads again while GitHub is still working it out, until it knows", async () => {
+    const snapshot = await gatherSnapshot(githubReading(["UNKNOWN", "CONFLICTING"]).github, repo, reviewed, null, APP_LOGIN);
+
+    expect(snapshot.mergeable?.mergeable).toBe(false);
+  });
+
+  it("isn't read for any other PR event", async () => {
+    const snapshot = await gatherSnapshot(githubReading(["CONFLICTING"]).github, repo, { kind: "pull-request-pushed", pullRequest: 50 }, null, APP_LOGIN);
+
+    expect(snapshot.mergeable).toBeNull();
   });
 });
 

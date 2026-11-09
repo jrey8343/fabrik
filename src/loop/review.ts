@@ -4,6 +4,7 @@
 // comment with its marker. Routing flaws onward is for later rules.
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
+import { upToDateBeforeMergeGate } from "./conflicts.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { followUpsSection } from "./followUps.ts";
@@ -85,7 +86,9 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot): Plan {
 /**
  * The Reviewer's Verdict. A reply that breaks the contract is an
  * Infrastructure failure, never a pass. A pass takes the PR out of draft and
- * requests the Operator's review, the event's one notification.
+ * requests the Operator's review, the event's one notification, unless the
+ * PR conflicts with main: then it stays in draft and is brought up to date,
+ * and the pass on that head opens the Merge gate (#480).
  */
 export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
@@ -104,6 +107,9 @@ export function applyReview(event: Reviewed, snapshot: Snapshot): Plan {
     }, snapshot.operator);
     // A pass that gave way to a Request changes deferred during a Retry (#427) keeps the PR in draft for its run.
     if (parsed.verdict !== "pass" || passGivesWay(pullRequest)) return { kind: "act", actions };
+    // One on a PR that conflicts with main brings it up to date first, in draft: the Operator's review couldn't land (#480).
+    const bringUpToDate = upToDateBeforeMergeGate(pullRequest, snapshot.mergeable);
+    if (bringUpToDate !== null) return { kind: "act", actions: [...actions, bringUpToDate] };
     return {
       kind: "act",
       actions: [

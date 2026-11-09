@@ -45,6 +45,7 @@ import type {
   KitIssueSnapshot,
   LabelledTrigger,
   LoopEvent,
+  MergeableSnapshot,
   NamedPullRequestSnapshot,
   ParentIssueSnapshot,
   PullRequestSnapshot,
@@ -544,6 +545,8 @@ export async function gatherSnapshot(
       : event.kind === "scheduled-tick"
         ? await gatherConflicts(github, actions, repo, event.now, appLogin, operator ?? owner, wait)
         : null;
+  // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480).
+  const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
@@ -555,8 +558,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, triggers }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, triggers };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers }
+    : { ...part, spec, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers };
 }
 
 /** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
@@ -965,6 +968,7 @@ type EventPart = Omit<
   | "closedWeeklyLimit"
   | "openMaps"
   | "conflicts"
+  | "mergeable"
   | "triggers"
 >;
 
@@ -1551,6 +1555,28 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** GitHub's word for whether a PR merges cleanly into the default branch. */
+type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+
+/** Whether a PR merges cleanly, or null while GitHub is still working it out. */
+function mergeableOf(state: MergeableState): boolean | null {
+  return state === "UNKNOWN" ? null : state === "MERGEABLE";
+}
+
+/**
+ * Reads until what it reads is known, MERGEABLE_READS times at most, waiting
+ * MERGEABLE_WAIT_MS between reads: GitHub works `mergeable` out in the
+ * background once asked. The last read is returned either way.
+ */
+async function readUntilKnown<T>(read: () => Promise<T>, known: (value: T) => boolean, wait: (ms: number) => Promise<void>): Promise<T> {
+  let value = await read();
+  for (let attempt = 2; attempt <= MERGEABLE_READS && !known(value); attempt += 1) {
+    await wait(MERGEABLE_WAIT_MS);
+    value = await read();
+  }
+  return value;
+}
+
 // Pages through every open PR: agent PRs are often the newest, behind others' and bots' PRs.
 const CONFLICTS_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
@@ -1569,7 +1595,7 @@ interface ConflictsQueryResult {
     defaultBranchRef: { target: { oid: string } } | null;
     pullRequests: {
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
-      nodes: (PullRequestNode & { mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" })[];
+      nodes: (PullRequestNode & { mergeable: MergeableState })[];
     };
   };
 }
@@ -1595,11 +1621,9 @@ async function gatherConflicts(
   wait: (ms: number) => Promise<void>,
 ): Promise<ConflictSnapshot> {
   type AgentNode = ConflictsQueryResult["repository"]["pullRequests"]["nodes"][number];
-  let agents: { node: AgentNode; mergeable: boolean | null }[] = [];
-  let head: string | null = null;
-  for (let read = 1; read <= MERGEABLE_READS; read += 1) {
-    if (read > 1) await wait(MERGEABLE_WAIT_MS);
-    agents = [];
+  const readAll = async () => {
+    const agents: { node: AgentNode; mergeable: boolean | null }[] = [];
+    let head: string | null = null;
     let after: string | null = null;
     do {
       const data: ConflictsQueryResult = await github.graphql<ConflictsQueryResult>(CONFLICTS_QUERY, { owner: repo.owner, name: repo.name, after });
@@ -1608,13 +1632,14 @@ async function gatherConflicts(
       const { pageInfo, nodes } = data.repository.pullRequests;
       agents.push(
         ...nodes.flatMap((node) =>
-          pullRequestSnapshotOf(node, appLogin).isAgent ? [{ node, mergeable: node.mergeable === "UNKNOWN" ? null : node.mergeable === "MERGEABLE" }] : [],
+          pullRequestSnapshotOf(node, appLogin).isAgent ? [{ node, mergeable: mergeableOf(node.mergeable) }] : [],
         ),
       );
       after = pageInfo.hasNextPage ? pageInfo.endCursor : null;
     } while (after !== null);
-    if (agents.every(({ mergeable }) => mergeable !== null)) break;
-  }
+    return { agents, head };
+  };
+  const { agents, head } = await readUntilKnown(readAll, (read) => read.agents.every(({ mergeable }) => mergeable !== null), wait);
   // Each agent PR's earlier comments are read once, after the last read.
   const pullRequests: ConflictCandidate[] = [];
   for (const { node, mergeable } of agents) {
@@ -1622,6 +1647,36 @@ async function gatherConflicts(
   }
   const implementJobUnderWay = actions === null ? null : await readImplementJobUnderWay(actions, repo);
   return { main: head, now, implementJobUnderWay, pullRequests };
+}
+
+const MERGEABLE_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      defaultBranchRef { target { oid } }
+      pullRequest(number: $number) { mergeable }
+    }
+  }
+`;
+
+interface MergeableQueryResult {
+  repository: {
+    defaultBranchRef: { target: { oid: string } } | null;
+    pullRequest: { mergeable: MergeableState } | null;
+  };
+}
+
+/**
+ * Whether one PR merges cleanly into the default branch, and that branch's
+ * head, read together so both are of the same main (#480). While GitHub is
+ * still working it out, it reads again, as the conflict check does,
+ * MERGEABLE_READS times at most; one still unknown after that is unknown.
+ */
+async function gatherMergeable(github: Pick<GitHub, "graphql">, repo: Repo, number: number, wait: (ms: number) => Promise<void>): Promise<MergeableSnapshot> {
+  const read = async (): Promise<MergeableSnapshot> => {
+    const data = await github.graphql<MergeableQueryResult>(MERGEABLE_QUERY, { owner: repo.owner, name: repo.name, number });
+    return { main: data.repository.defaultBranchRef?.target.oid ?? null, mergeable: mergeableOf(data.repository.pullRequest?.mergeable ?? "UNKNOWN") };
+  };
+  return readUntilKnown(read, ({ mergeable }) => mergeable !== null, wait);
 }
 
 async function gatherDispatch(

@@ -975,6 +975,12 @@ export interface Snapshot {
    */
   readonly conflicts: ConflictSnapshot | null;
   /**
+   * Gathered for a Reviewer's Verdict only: whether its PR merges cleanly into
+   * the default branch, so a pass on one that conflicts brings it up to date
+   * instead of opening the Merge gate (src/loop/review.ts, #480).
+   */
+  readonly mergeable: MergeableSnapshot | null;
+  /**
    * Gathered for a scheduled tick only: what the stuck-trigger sweep weighs
    * (src/loop/triggerSweep.ts, #419).
    */
@@ -1032,6 +1038,14 @@ export interface ConflictSnapshot {
   readonly implementJobUnderWay: boolean | null;
   /** Every open agent PR, with whether GitHub says it merges cleanly into the default branch. */
   readonly pullRequests: readonly ConflictCandidate[];
+}
+
+/** Whether one PR merges cleanly into the default branch, as a Reviewer's Verdict weighs it (#480). */
+export interface MergeableSnapshot {
+  /** The default branch's head commit, or null when it has none. */
+  readonly main: string | null;
+  /** GitHub's `mergeable` for the PR against that head, as ConflictCandidate's: null when GitHub hadn't worked it out. */
+  readonly mergeable: boolean | null;
 }
 
 /** An open agent PR the conflict check weighs. */
