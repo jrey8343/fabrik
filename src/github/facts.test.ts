@@ -611,6 +611,22 @@ describe("Gathering a Product repo's GitHub facts", () => {
     expect(asked).toEqual(["2026-08-03T20:00:00.000Z"]);
   });
 
+  it("reads each issue's and PR's latest 100 label events, so when a label was last added holds on a busy issue (#481)", async () => {
+    const github = repoWith({});
+    const asked: string[] = [];
+    const watched = {
+      graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        asked.push(...(query.match(/timelineItems\([^)]*LABELED_EVENT[^)]*\)/g) ?? []));
+        return github.graphql<T>(query, variables);
+      },
+    };
+
+    await gatherGitHubFacts(watched, repo, NOW, OPERATOR.login);
+
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.filter((window) => !window.includes("last: 100"))).toEqual([]);
+  });
+
   it("holds the default branch's commit messages in the window", async () => {
     const github = repoWith({
       defaultBranchCommits: [{ message: `Revert "Build the thing"\n\nThis reverts commit ${"c".repeat(40)}.`, committedDate: "2026-11-05T00:00:00Z" }],

@@ -271,7 +271,7 @@ async function patchOf(github: Pick<GitHub, "rest">, repo: Repo, sha: string): P
 
 const ACTOR = "{ login __typename }";
 const LABEL_EVENTS = `
-  timelineItems(first: 100, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
+  timelineItems(last: 100, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
     nodes {
       __typename
       ... on LabeledEvent { createdAt actor ${ACTOR} label { name } }

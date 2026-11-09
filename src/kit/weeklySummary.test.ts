@@ -221,8 +221,8 @@ describe("the Weekly summary", () => {
         [
           "Subscription usage:",
           "",
-          "- Claude token: $3.00 API-equivalent cost, 97% of the weekly limit, resetting 2026-11-07 08:20 (Australia/Sydney). Last week: 90%.",
-          "- Claude token 2: $1.75 API-equivalent cost, 12% of the weekly limit, resetting 2026-11-13 03:13 (Australia/Sydney).",
+          "- Claude token: $3.00 API-equivalent cost, 97% of the weekly limit, resetting 2026-11-07 08:20 Australia/Sydney. Last week: 90%.",
+          "- Claude token 2: $1.75 API-equivalent cost, 12% of the weekly limit, resetting 2026-11-13 03:13 Australia/Sydney.",
         ].join("\n"),
       );
     });
@@ -240,7 +240,7 @@ describe("the Weekly summary", () => {
         aRunRecord({ endedAt: "2026-11-05T00:00:00Z", subscription: "Claude token", rateLimit: reading(0.97, 1_794_000_000) }),
         aRunRecord({ endedAt: "2026-10-28T00:00:00Z", subscription: "Claude token 2", rateLimit: reading(0.9, 1_792_000_000) }),
       ]);
-      expect(body).toContain("\nSubscription usage: 97% of the weekly limit, resetting 2026-11-07 08:20 (Australia/Sydney). Last week: 90%.\n");
+      expect(body).toContain("\nSubscription usage: 97% of the weekly limit, resetting 2026-11-07 08:20 Australia/Sydney. Last week: 90%.\n");
       expect(body).not.toContain("- Claude token");
     });
 
@@ -256,7 +256,7 @@ describe("the Weekly summary", () => {
           aRunRecord({ endedAt: "2026-11-06T00:00:00Z", subscription: "Claude token 2", totalCostUsd: 0.5 }),
         ].flatMap((record) => record ?? []),
       );
-      expect(body).toContain("- Claude token: $3.00 API-equivalent cost, 97% of the weekly limit, resetting 2026-11-07 08:20 (Australia/Sydney).");
+      expect(body).toContain("- Claude token: $3.00 API-equivalent cost, 97% of the weekly limit, resetting 2026-11-07 08:20 Australia/Sydney.");
       expect(body).toContain("- Claude token 2: $0.50 API-equivalent cost, no weekly-limit reading this week.");
     });
   });
@@ -353,6 +353,18 @@ describe("the Weekly summary", () => {
       kind: "summary",
       summary: { counts: { retries: { thisWeek: 2, lastWeek: 1 }, stepUps: { thisWeek: 1, lastWeek: 0 } } },
     });
+  });
+
+  it("counts a Retry refused on the weekly limit, then resumed, once (#481)", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", retry: 1, jobResult: "failure", infrastructureFailure: "weekly-limit" }),
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", retry: 1 }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { counts: { retries: { thisWeek: 1, lastWeek: 0 } } } });
   });
 
   it("breaks the week's Step-ups down by reason", () => {
@@ -488,6 +500,56 @@ describe("the Weekly summary", () => {
           age: 24 * HOUR,
           operatorWait: 24 * HOUR,
         },
+      ]);
+    });
+
+    it("doesn't list a PR the Operator reviewed after its pass at the Merge gate: the next move is the Kit's (#481)", () => {
+      const passed = aVerdictComment("pass", head, "2026-11-05T20:00:00Z");
+      const waiting = waitingIn({
+        openPullRequests: [
+          anOpenPullRequest({ number: 60, draft: false, comments: [passed], reviews: [aReview("2026-11-07T06:00:00Z", { state: "approved", body: "Rebase, please." })] }),
+          // The Operator's review came before the pass: the pass answered it.
+          anOpenPullRequest({ number: 61, draft: false, comments: [passed], reviews: [aReview("2026-11-04T20:00:00Z")] }),
+          // Someone else's review doesn't move it off the Operator.
+          anOpenPullRequest({ number: 62, draft: false, comments: [passed], reviews: [aReview("2026-11-07T06:00:00Z", { author: "someone" })] }),
+        ],
+      });
+      expect(waiting).toMatchObject([
+        { kind: "merge-gate", number: 61 },
+        { kind: "merge-gate", number: 62 },
+      ]);
+    });
+
+    it("lists a PR handed back with ready-for-human after its pass as handed to the Operator, waiting since the label (#481)", () => {
+      const passed = aVerdictComment("pass", head, "2026-11-05T20:00:00Z");
+      const handedBack = aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z");
+      const waiting = waitingIn({
+        openPullRequests: [
+          // An empty Request-changes run: the Operator's review, then the Kit hands it back.
+          anOpenPullRequest({ number: 60, draft: false, comments: [passed], reviews: [aReview("2026-11-06T08:00:00Z")], labelEvents: [handedBack] }),
+          // A failed conflict-only run.
+          anOpenPullRequest({ number: 61, draft: false, comments: [passed], labelEvents: [handedBack] }),
+          // Handed back before a later pass: back at the Merge gate.
+          anOpenPullRequest({
+            number: 62,
+            draft: false,
+            comments: [aVerdictComment("pass", head, "2026-11-07T20:00:00Z")],
+            labelEvents: [aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z")],
+          }),
+          // The label came off again.
+          anOpenPullRequest({
+            number: 63,
+            draft: false,
+            comments: [passed],
+            labelEvents: [handedBack, { ...aLabelAdded("ready-for-human", "2026-11-07T08:00:00Z"), action: "unlabeled", actor: "operator" }],
+          }),
+        ],
+      });
+      expect(waiting).toEqual([
+        { kind: "merge-gate", number: 63, title: "Build the thing", url: "https://github.com/owner/product/pull/63", since: "2026-11-05T20:00:00Z", age: 3 * 24 * HOUR, operatorWait: 3 * 24 * HOUR },
+        { kind: "handed-back", number: 60, title: "Build the thing", url: "https://github.com/owner/product/pull/60", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR },
+        { kind: "handed-back", number: 61, title: "Build the thing", url: "https://github.com/owner/product/pull/61", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR },
+        { kind: "merge-gate", number: 62, title: "Build the thing", url: "https://github.com/owner/product/pull/62", since: "2026-11-07T20:00:00Z", age: 24 * HOUR, operatorWait: 24 * HOUR },
       ]);
     });
 
@@ -905,6 +967,19 @@ describe("the Weekly summary", () => {
       ]);
     });
 
+    it.each([
+      [23, []],
+      [38, [{ kind: "reviewed", number: 60, title: "Build the thing", url: "https://github.com/owner/product/pull/60", since: hoursAgo(38), age: 38 * HOUR }]],
+    ])("lists a PR the Operator reviewed %i hours ago, after its pass, only past 24 hours (#481)", (hours, stuck) => {
+      const pullRequest = anOpenPullRequest({
+        number: 60,
+        draft: false,
+        comments: [aVerdictComment("pass", "h".repeat(40), hoursAgo(60))],
+        reviews: [aReview(hoursAgo(50), { state: "commented" }), aReview(hoursAgo(hours), { state: "approved", body: "Rebase, please." })],
+      });
+      expect(stuckIn({ openPullRequests: [pullRequest] })).toEqual(stuck);
+    });
+
     it("doesn't list an agent PR out of draft, however long it has been quiet", () => {
       expect(stuckIn({ openPullRequests: [anOpenPullRequest({ draft: false })] })).toEqual([]);
     });
@@ -1158,6 +1233,27 @@ describe("the Weekly summary", () => {
         }),
       );
       expect(summary.operatorWaitMs).toEqual({ thisWeek: 12 * HOUR, lastWeek: null });
+    });
+
+    it("stops Operator wait at the Operator's first review after the last pass (#481)", () => {
+      const pass = aVerdictComment("pass", "a".repeat(40), "2026-11-03T00:00:00Z");
+      const summary = summaryOf(
+        factsOf({
+          pullRequests: [
+            aMergedPullRequest("2026-11-05T00:00:00Z", {
+              number: 50,
+              comments: [pass],
+              reviews: [
+                aReview("2026-11-02T00:00:00Z"), // before the pass
+                aReview("2026-11-03T04:00:00Z", { author: "someone" }), // not the Operator's
+                aReview("2026-11-03T06:00:00Z", { state: "approved" }), // 6 hours
+                aReview("2026-11-04T00:00:00Z", { state: "commented" }),
+              ],
+            }),
+          ],
+        }),
+      );
+      expect(summary.operatorWaitMs).toEqual({ thisWeek: 6 * HOUR, lastWeek: null });
     });
   });
 
@@ -1909,7 +2005,7 @@ describe("the Weekly summary", () => {
     it("says how many runs the cost leaves out and how close the Subscription came to its weekly limit", () => {
       const { body } = rendered();
       expect(body).toContain("1 run with an unknown cost basis is left out of the cost.");
-      expect(body).toContain("Subscription usage: 62% of the weekly limit, resetting 2026-11-13 10:00 (Australia/Sydney).");
+      expect(body).toContain("Subscription usage: 62% of the weekly limit, resetting 2026-11-13 10:00 Australia/Sydney.");
     });
 
     it("shows each cost figure this week and last week, with the change, and a dash where there's nothing to average", () => {
@@ -2037,6 +2133,21 @@ describe("the Weekly summary", () => {
         ].join("\n"),
       );
       expect(body).toContain(["## owner/other", "", "### Waiting on you", "", "Nothing waiting on you.", ""].join("\n"));
+    });
+
+    it("says a PR handed back with ready-for-human is handed to the Operator, and one they reviewed is Stuck on the Kit (#481)", () => {
+      const passed = aVerdictComment("pass", head, hoursAgo(60));
+      const body = bodyOf(
+        factsOf({
+          openPullRequests: [
+            anOpenPullRequest({ number: 60, draft: false, comments: [passed], labelEvents: [aLabelAdded("ready-for-human", hoursAgo(30))] }),
+            anOpenPullRequest({ number: 61, draft: false, comments: [passed], reviews: [aReview(hoursAgo(38), { state: "approved" })] }),
+          ],
+        }),
+      );
+      expect(body).toContain("- [#60](https://github.com/owner/product/pull/60) Build the thing: handed to you with `ready-for-human` 30 hours ago\n");
+      expect(body).toContain(["### Stuck", "", "- [#61](https://github.com/owner/product/pull/61) Build the thing: reviewed by you 38 hours ago; the Kit hasn't acted"].join("\n"));
+      expect(body).not.toContain("at the Merge gate");
     });
 
     it("lists an open Audit with how long it has been open", () => {
@@ -2420,7 +2531,7 @@ describe("the Weekly summary", () => {
             "- owner/product: 2 held runs, which the Kit resumes itself at the reset:",
             "  - the Implement run on [#7](https://github.com/owner/product/issues/7), held on [#20](https://github.com/owner/product/issues/20)",
             "  - the Review run on [#51](https://github.com/owner/product/issues/51), held on [#20](https://github.com/owner/product/issues/20)",
-            "- owner/product: weekly-limit issue [#20](https://github.com/owner/product/issues/20) open, resetting 2026-11-11 09:00 (Australia/Sydney)",
+            "- owner/product: weekly-limit issue [#20](https://github.com/owner/product/issues/20) open, resetting 2026-11-11 09:00 Australia/Sydney",
             "- owner/product: weekly-limit issue [#21](https://github.com/owner/product/issues/21) open, its reset not known",
             "",
           ].join("\n"),

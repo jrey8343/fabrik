@@ -21,7 +21,7 @@ import { RUN_NAMES, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, refusedByMapCap } from "../loop/markers.ts";
-import { spelled } from "../loop/readable.ts";
+import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type AgentRole, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
@@ -40,6 +40,7 @@ import {
   type OpenPullRequestFacts,
   requestChangesIn,
   type RequestChangesReview,
+  type ReviewFacts,
   verdictsOn,
   type Window,
   within,
@@ -260,7 +261,11 @@ export interface WeeklySummary {
   readonly humanTouches: WeekOverWeek<number | null>;
   /** The median time from Dispatch to merge of the week's merged agent PRs, in ms, or null with none. */
   readonly cycleTimeMs: WeekOverWeek<number | null>;
-  /** The median time from the last passing Verdict to merge of the week's merged agent PRs, in ms, or null with none. */
+  /**
+   * The median Operator wait of the week's merged agent PRs, in ms, or null
+   * with none: from the last passing Verdict to the Operator's first review
+   * after it, or to the merge if they gave none.
+   */
   readonly operatorWaitMs: WeekOverWeek<number | null>;
   /** Of the agent PRs merged in the 30 days to the week's end, how many were reverted in that window. */
   readonly revertRate: WeekOverWeek<RevertRate>;
@@ -279,7 +284,10 @@ export interface WeeklySummary {
     readonly mergedPullRequests: WeekOverWeek<number>;
     /** Tickets whose Dispatch, their first `agent:implement`, came in the week. */
     readonly ticketsDispatched: WeekOverWeek<number>;
-    /** Implement records with `retry > 0`. */
+    /**
+     * Implement records with `retry > 0` and no Infrastructure failure, so a
+     * Retry refused on the weekly limit and then resumed counts once.
+     */
     readonly retries: WeekOverWeek<number>;
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
@@ -472,12 +480,21 @@ export type WaitingItem =
     })
   /** A research Decision on an open Map whose last run failed, waiting since the Kit's failure notice for the Operator to re-add agent:research. */
   | (ItemBase & { readonly kind: "research-failed" })
-  /** An agent PR out of draft with a passing Verdict at its head, waiting since that Verdict. */
+  /**
+   * An agent PR out of draft with a passing Verdict at its head and no
+   * Operator review since, waiting since that Verdict.
+   */
   | (ItemBase & {
       readonly kind: "merge-gate";
       /** The Operator wait so far: from the passing Verdict to the filing, in milliseconds. */
       readonly operatorWait: number;
-    });
+    })
+  /**
+   * An agent PR out of draft the Kit handed back with `ready-for-human` after
+   * its passing Verdict, as after an empty Request-changes run or a failed
+   * conflict-only run, waiting since it got the label.
+   */
+  | (ItemBase & { readonly kind: "handed-back" });
 
 /** Loop work that hasn't moved in more than 24 hours, since `since`. */
 export type StuckItem =
@@ -485,6 +502,8 @@ export type StuckItem =
   | (ItemBase & { readonly kind: "needs-info-answered" })
   /** A draft agent PR with no commit, comment or label event since `since`. */
   | (ItemBase & { readonly kind: "idle-draft" })
+  /** An agent PR out of draft the Operator reviewed at `since`, after its passing Verdict, that the Kit hasn't acted on. */
+  | (ItemBase & { readonly kind: "reviewed" })
   /** An open Ticket whose latest record, ended at `since`, was an Infrastructure failure or timeout. */
   | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure });
 
@@ -682,7 +701,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     subscriptions: subscriptionsOf(records),
     humanTouches: mean(merged.map((pullRequest) => pullRequest.humanTouches)),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
-    operatorWaitMs: median(merged.flatMap(({ mergedAt, lastPass }) => (lastPass === null ? [] : [Date.parse(mergedAt) - Date.parse(lastPass)]))),
+    operatorWaitMs: median(merged.flatMap((pullRequest) => operatorWaitOf(pullRequest, input.operator))),
     revertRate: revertRateOf(week, input),
     escapeRate: escapeRateOf(escapeWindow, escapes, input),
     escapesByStrength: escapesByStrengthOf(escapes),
@@ -693,13 +712,32 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       const dispatch = dispatchOf(ticket);
       return dispatch !== null && within(week, dispatch);
     }).length,
-    retries: records.filter((record) => record.role === "implement" && record.retry > 0).length,
+    retries: records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null).length,
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
     steppedUpStarts: steppedUpStartsOf(merged, input.records),
     scores: scoresOf(week, input),
     scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
+}
+
+/**
+ * A merged agent PR's Operator wait, in ms: from its last passing Verdict to
+ * the Operator's first review after it, or to the merge if they gave none.
+ * None without a passing Verdict.
+ */
+function operatorWaitOf({ pullRequest, mergedAt, lastPass }: MergedAgentPullRequest, operator: string): number[] {
+  if (lastPass === null) return [];
+  const reviewed = operatorReviewsAfter(pullRequest.reviews, operator, lastPass).at(0) ?? mergedAt;
+  return [Math.min(Date.parse(mergedAt), Date.parse(reviewed)) - Date.parse(lastPass)];
+}
+
+/** When the Operator reviewed a PR after `since`, oldest first. */
+function operatorReviewsAfter(reviews: readonly ReviewFacts[], operator: string, since: string): string[] {
+  return reviews
+    .filter((review) => review.author === operator && Date.parse(review.at) > Date.parse(since))
+    .map(({ at }) => at)
+    .toSorted((a, b) => Date.parse(a) - Date.parse(b));
 }
 
 /** What the summary calls each Step-up reason. */
@@ -983,7 +1021,7 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
       ...openMapsOf(facts, items),
       ...failedResearchOf(facts, appLogin, items),
     ]),
-    stuck: stuck(facts, records, items, now),
+    stuck: stuck(facts, records, operator, items, now),
     held: heldIn(facts, appLogin, now),
     unread: null,
   };
@@ -1167,9 +1205,10 @@ function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, operator: s
     if (asked !== null) waiting.push({ kind: issue.author === appLogin ? "monitor-needs-info" : "needs-info", ...items.issue(issue, asked) });
   }
   for (const pullRequest of openPullRequests) {
-    const passed = passAtHeadOf(pullRequest);
-    if (pullRequest.draft || passed === null) continue;
-    const item = items.pullRequest(pullRequest, passed);
+    const standing = passedStandingOf(pullRequest, operator);
+    if (standing?.kind === "handed-back") waiting.push({ kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) });
+    if (standing?.kind !== "merge-gate") continue;
+    const item = items.pullRequest(pullRequest, standing.since);
     waiting.push({ kind: "merge-gate", ...item, operatorWait: item.age });
   }
   return oldestFirst(waiting);
@@ -1180,7 +1219,13 @@ function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, operator: s
  * the Kit resumes it itself at the reset, and Held names it, so a Ticket or
  * PR a held marker names is left out, its failed run and its draft alike.
  */
-function stuck({ repo, openIssues, openPullRequests, kitIssues }: GitHubFacts, records: readonly RunRecord[], items: Items, now: number): StuckItem[] {
+function stuck(
+  { repo, openIssues, openPullRequests, kitIssues }: GitHubFacts,
+  records: readonly RunRecord[],
+  operator: string,
+  items: Items,
+  now: number,
+): StuckItem[] {
   const held = new Set(waitingHeldRuns(kitIssues).map(({ run }) => run.issue));
   const isHeld = (...numbers: readonly (number | null)[]) => numbers.some((number) => number !== null && held.has(number));
   const found: StuckItem[] = [];
@@ -1193,9 +1238,10 @@ function stuck({ repo, openIssues, openPullRequests, kitIssues }: GitHubFacts, r
     }
   }
   for (const pullRequest of openPullRequests) {
-    if (pullRequest.draft && !isHeld(pullRequest.number, pullRequest.ticket)) {
-      found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
-    }
+    if (isHeld(pullRequest.number, pullRequest.ticket)) continue;
+    if (pullRequest.draft) found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
+    const standing = passedStandingOf(pullRequest, operator);
+    if (standing?.kind === "reviewed") found.push({ kind: "reviewed", ...items.pullRequest(pullRequest, standing.since) });
   }
   return oldestFirst(found.filter((item) => now - Date.parse(item.since) > STUCK_AFTER_MS));
 }
@@ -1255,6 +1301,35 @@ function stoppedDesignSessionOf(issue: OpenIssueFacts): { readonly kind: "design
   return { kind: refusedByMapCap(last.body) ? "design-map-cap" : "design-turn-failed", at: last.at };
 }
 
+/**
+ * Where an agent PR out of draft with a passing Verdict at its head stands,
+ * and since when. After the pass, the Kit's `ready-for-human`, still on it,
+ * hands it to the Operator (`handed-back`); else the Operator's latest review
+ * since leaves the next move to the Kit (`reviewed`); else it's at the Merge
+ * gate, waiting on the Operator since the pass (`merge-gate`).
+ */
+interface PassedPullRequestStanding {
+  readonly kind: "merge-gate" | "handed-back" | "reviewed";
+  readonly since: string;
+}
+
+/** Where an agent PR with a passing Verdict at its head stands, or null for a draft or one without. */
+function passedStandingOf(pullRequest: OpenPullRequestFacts, operator: string): PassedPullRequestStanding | null {
+  const passed = passAtHeadOf(pullRequest);
+  if (pullRequest.draft || passed === null) return null;
+  const reviewed = operatorReviewsAfter(pullRequest.reviews, operator, passed).at(-1);
+  const handedBack = addedAndStillOn(pullRequest.labelEvents, READY_FOR_HUMAN);
+  if (handedBack !== null && Date.parse(handedBack) > Date.parse(reviewed ?? passed)) return { kind: "handed-back", since: handedBack };
+  if (reviewed !== undefined) return { kind: "reviewed", since: reviewed };
+  return { kind: "merge-gate", since: passed };
+}
+
+/** When `label` was last added, if it's still on: the latest event for it added it. Otherwise null. */
+function addedAndStillOn(events: readonly LabelEvent[], label: string): string | null {
+  const latest = events.filter((event) => event.label === label).toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at)).at(-1);
+  return latest?.action === "labeled" ? latest.at : null;
+}
+
 /** When a PR's latest Verdict on its head was posted, if that Verdict is a pass; otherwise null. */
 function passAtHeadOf(pullRequest: OpenPullRequestFacts): string | null {
   const latest = verdictsOn(pullRequest.comments).filter(({ record }) => record.headSha === pullRequest.headSha).at(-1);
@@ -1291,44 +1366,11 @@ function weeksEndingAt(now: number, timeZone: string): { thisWeek: Week; lastWee
   return { thisWeek: week(thisMonday - 7 * DAY_MS), lastWeek: week(thisMonday - 14 * DAY_MS) };
 }
 
-interface WallClock {
-  readonly year: number;
-  readonly month: number;
-  readonly day: number;
-  readonly weekday: string;
-  /** The wall-clock time read as if it were UTC. */
-  readonly asUtc: number;
-}
-
-function wallClock(time: number, timeZone: string): WallClock {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric",
-    weekday: "short",
-  }).formatToParts(time);
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
-  const [year, month, day, hour, minute, second] = (["year", "month", "day", "hour", "minute", "second"] as const).map((type) =>
-    Number(part(type)),
-  ) as [number, number, number, number, number, number];
-  return { year, month, day, weekday: part("weekday"), asUtc: Date.UTC(year, month - 1, day, hour, minute, second) };
-}
-
 /** The instant a calendar date (as midnight UTC) begins in the time zone. */
 function midnight(date: number, timeZone: string): number {
   const offsetAt = (time: number) => wallClock(time, timeZone).asUtc - time;
   const guess = date - offsetAt(date);
   return date - offsetAt(guess);
-}
-
-/** `yyyy-mm-dd hh:mm` on the wall clock in the time zone. */
-function localTime(time: number, timeZone: string): string {
-  return new Date(wallClock(time, timeZone).asUtc).toISOString().slice(0, 16).replace("T", " ");
 }
 
 // Rendering. Only shipped features get a section: the Monitor issues add
@@ -1515,7 +1557,7 @@ function heldRunsLines(repo: string, { runs, weeklyLimitIssues }: HeldRuns, time
     `- ${repo}: ${runs.length === 1 ? "1 held run" : `${runs.length} held runs`}, which the Kit resumes itself at the reset:`,
     ...runs.map(({ role, issue, heldOn }) => `  - the ${RUN_NAMES[role]} run on ${link(issue)}, held on ${spelled(heldOn.map(link), "and")}`),
     ...weeklyLimitIssues.map(({ number, resetsAt }) => {
-      const reset = resetsAt === null ? "its reset not known" : `resetting ${localTime(Date.parse(resetsAt), timeZone)} (${timeZone})`;
+      const reset = resetsAt === null ? "its reset not known" : `resetting ${readable(resetsAt, timeZone)}`;
       return `- ${repo}: weekly-limit issue ${link(number)} open, ${reset}`;
     }),
   ];
@@ -1586,6 +1628,8 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `research run failed ${duration(item.age)} ago, waiting for you to re-add ${RESEARCH_LABEL}`);
     case "merge-gate":
       return itemLine(item, `at the Merge gate, Operator wait ${duration(item.operatorWait)}`);
+    case "handed-back":
+      return itemLine(item, `handed to you with \`${READY_FOR_HUMAN}\` ${duration(item.age)} ago`);
   }
 }
 
@@ -1595,6 +1639,8 @@ function stuckLine(item: StuckItem): string {
       return itemLine(item, `needs-info answered ${duration(item.age)} ago, not picked up`);
     case "idle-draft":
       return itemLine(item, `a draft with no activity for ${duration(item.age)}`);
+    case "reviewed":
+      return itemLine(item, `reviewed by you ${duration(item.age)} ago; the Kit hasn't acted`);
     case "infrastructure-failure":
       return itemLine(item, `last run ended in an Infrastructure failure (${item.failure}) ${duration(item.age)} ago`);
   }
@@ -1662,7 +1708,7 @@ function limitReading({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | nu
   const now = share(thisWeek);
   const before = share(lastWeek);
   const resets =
-    thisWeek === null || thisWeek.resetsAt === null ? "" : `, resetting ${localTime(thisWeek.resetsAt * 1000, timeZone)} (${timeZone})`;
+    thisWeek === null || thisWeek.resetsAt === null ? "" : `, resetting ${readable(thisWeek.resetsAt * 1000, timeZone)}`;
   const usage = now === null ? "no weekly-limit reading this week." : `${now} of the weekly limit${resets}.`;
   return before === null ? usage : `${usage} Last week: ${before}.`;
 }
