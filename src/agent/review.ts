@@ -2,8 +2,8 @@
 // checked out at the head its required checks passed on, the Operator's
 // Request changes reviews on it, which amend the Ticket (ADR-0010), and its
 // comments on it (never earlier Verdicts or fix comments), with the Ticket's
-// Spec, the repo's glossary and ADRs, its Coding standards, and on a UI PR its
-// UI evidence. The Reviewer holds no GitHub credential and runs none of the
+// Spec, the repo's glossary and ADRs, its Coding standards, the existing
+// tests its Implement runs changed (#463), and on a UI PR its UI evidence. The Reviewer holds no GitHub credential and runs none of the
 // PR's code.
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -20,6 +20,7 @@ import {
 } from "../evidence/uiEvidence.ts";
 import { CODING_STANDARDS_FILE } from "../guard/trust-root.ts";
 import { readIfPresent } from "../kit/checkout.ts";
+import { changedTestsIn, reviewerChangedTestsBlock } from "../loop/changedTests.ts";
 import { ticketContext, type PullRequestRunContext } from "./implement.ts";
 import { operatorInputSections } from "./operatorComments.ts";
 
@@ -40,6 +41,7 @@ export async function reviewContext(
 ): Promise<PullRequestRunContext> {
   const { operatorComments, requestedChanges, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
+    body?: unknown;
     headRefOid?: unknown;
     operatorComments?: unknown;
     requestedChanges?: unknown;
@@ -55,6 +57,8 @@ export async function reviewContext(
       "```json",
       JSON.stringify(pullRequest, null, 2),
       "```",
+      // The Kit's own list in the body (#463), which no agent can forge: the Kit strips any from the Implementer's summary.
+      ...reviewerChangedTestsBlock(typeof pullRequest.body === "string" ? changedTestsIn(pullRequest.body) : []),
       ...fromOperator.parts,
       ...(await ticketContext(productDir, specFile)),
       ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),

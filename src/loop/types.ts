@@ -104,6 +104,13 @@ export interface BranchChanges {
    */
   readonly pushedHead?: string;
   /**
+   * For an Implement run with commits: the test files its own commits
+   * changed, deleted or moved that were already there before it (#463), on
+   * the head it built on, or on main for one that brought main in. Absent
+   * for any other branch.
+   */
+  readonly changedTests?: readonly string[];
+  /**
    * For a prototype turn's branch (#155) that moved while the turn ran, as a
    * live Design session's push may move it: the head the turn started on
    * (null when it cut the branch afresh, there being none) and where the
@@ -743,6 +750,12 @@ export interface PullRequestSnapshot {
    * App wrote (src/evidence/uiEvidence.ts), or null when it has none: not a UI PR.
    */
   readonly uiEvidenceMarker: EvidenceMarker | null;
+  /**
+   * The existing tests its Implement runs changed (#463), read from the
+   * marker in the body the Fabrik App wrote (src/loop/changedTests.ts), or
+   * none, so a later run's push lists them beside its own.
+   */
+  readonly changedTests: readonly string[];
 }
 
 /** A review requesting changes on an agent PR that no Request-changes run has built yet (#341). */

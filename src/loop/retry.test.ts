@@ -791,3 +791,31 @@ describe("Retries stay silent", () => {
     }
   });
 });
+
+describe("The Changed existing tests section on a retry's PR (#463)", () => {
+  it("lists the tests earlier runs changed, as the PR's marker records them, and then the retry's own", () => {
+    const pullRequest = { ...flawedPullRequest(), changedTests: ["src/cart.test.ts"] };
+    const event = retried({ changes: { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/checkout.test.ts" }], changedTests: ["src/checkout.test.ts", "src/cart.test.ts"] } });
+
+    const actions = actionsOf(planFor(event, retrySnapshot(pullRequest), kitConfig()));
+
+    expect(actions[0]).toMatchObject({ kind: "edit-issue-body" });
+    const body = (actions[0] as Extract<Action, { kind: "edit-issue-body" }>).body;
+    expect(body).toContain("- `src/cart.test.ts`\n- `src/checkout.test.ts`\n");
+    expect(body).toContain('<!-- fabrik:changed-tests ["src/cart.test.ts","src/checkout.test.ts"] -->');
+  });
+
+  it("keeps the list earlier runs changed when the retry changes no existing test", () => {
+    const pullRequest = { ...flawedPullRequest(), changedTests: ["src/cart.test.ts"] };
+
+    const actions = actionsOf(planFor(retried(), retrySnapshot(pullRequest), kitConfig()));
+
+    expect((actions[0] as Extract<Action, { kind: "edit-issue-body" }>).body).toContain('<!-- fabrik:changed-tests ["src/cart.test.ts"] -->');
+  });
+
+  it("isn't on a PR none of whose runs changed an existing test", () => {
+    const actions = actionsOf(planFor(retried(), retrySnapshot(), kitConfig()));
+
+    expect((actions[0] as Extract<Action, { kind: "edit-issue-body" }>).body).not.toContain("fabrik:changed-tests");
+  });
+});

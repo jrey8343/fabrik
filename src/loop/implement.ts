@@ -1,6 +1,7 @@
 // Implementation rules: when an Implementer starts on a Ticket, and how the
 // branch it built lands as one draft PR, or doesn't.
 import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
+import { changedTestsSection, together, withoutChangedTests } from "./changedTests.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
@@ -140,7 +141,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        body: pullRequestBody(summary, issueNumber, evidence),
+        body: pullRequestBody(summary, issueNumber, evidence, changes.changedTests ?? []),
         draft: true,
       },
       ...previewToLink(evidence, config, branch, null),
@@ -290,7 +291,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     actions: [
       // The body says what the PR as a whole now does, so the next Review, which reads the body, never judges a stale one.
       // Its evidence section is this run's, never an earlier run's, so the evidence matches the PR's new head.
-      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(parsed.output.summary, issueNumber, evidence) },
+      {
+        kind: "edit-issue-body",
+        issue: pullRequest.number,
+        body: pullRequestBody(parsed.output.summary, issueNumber, evidence, changedTestsOf(pullRequest, changes)),
+      },
       {
         kind: "comment",
         issue: pullRequest.number,
@@ -410,7 +415,7 @@ function applyConflictRun(
   return {
     kind: "act",
     actions: [
-      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(output.summary, event.issue, evidence) },
+      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(output.summary, event.issue, evidence, changedTestsOf(pullRequest, changes)) },
       {
         kind: "comment",
         issue: pullRequest.number,
@@ -441,14 +446,26 @@ function pushedHead({ pushedHead: head }: BranchChanges): string[] {
 }
 
 /**
- * An agent PR's body: the Implementer's summary, then the evidence section
+ * An agent PR's body: the Implementer's summary, then the Changed existing
+ * tests section when its runs changed any (#463), then the evidence section
  * when the run was UI, then the Closes line, so merging the PR closes the
  * Ticket and starts the next Dispatch check. The summary is agent text, so it
- * keeps no evidence section or marker of its own: only the Kit's says where
- * the evidence is kept.
+ * keeps no section or marker of its own: only the Kit's say which existing
+ * tests changed and where the evidence is kept.
  */
-function pullRequestBody(summary: string, issueNumber: number, evidence: string | null): string {
-  return [withoutEvidence(withoutMentions(summary)), ...(evidence === null ? [] : [evidence]), `Closes #${issueNumber}`].join("\n\n");
+function pullRequestBody(summary: string, issueNumber: number, evidence: string | null, changedTests: readonly string[]): string {
+  const tests = changedTestsSection(changedTests);
+  return [
+    withoutChangedTests(withoutEvidence(withoutMentions(summary))),
+    ...(tests === null ? [] : [tests]),
+    ...(evidence === null ? [] : [evidence]),
+    `Closes #${issueNumber}`,
+  ].join("\n\n");
+}
+
+/** The existing tests a run on its agent PR leaves the body listing: those the PR's marker lists, then the run's own. */
+function changedTestsOf(pullRequest: PullRequestSnapshot, changes: BranchChanges): string[] {
+  return together(pullRequest.changedTests, changes.changedTests ?? []);
 }
 
 /**

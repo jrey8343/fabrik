@@ -6,6 +6,7 @@
 // (src/kit/replay.ts) holds the rest. Pure, no I/O.
 import { isObject } from "../agent/stream.ts";
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
+import { isTestPath } from "../loop/changedTests.ts";
 import { spelled } from "../loop/readable.ts";
 import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
 import { checkCandidateKit, type ReplayRequest, type ReplayVariable, settingOf } from "./replayRequest.ts";
@@ -244,18 +245,6 @@ export interface MergedFile extends ChangedPath {
  */
 export function hiddenTests(files: readonly MergedFile[]): string[] {
   return files.flatMap(({ path, removed }) => (!removed && isTestPath(path) ? [path] : []));
-}
-
-/** The file names a test takes: `*.test.*`, `*.spec.*`, `*_test.*` and `test_*.*`. */
-const TEST_NAMES: readonly RegExp[] = [/^.+\.test\..+$/, /^.+\.spec\..+$/, /^.+_test\..+$/, /^test_.+\..+$/];
-
-/** The folders everything under which is a test's, at any depth. */
-const TEST_FOLDERS: readonly string[] = ["test", "tests", "__tests__"];
-
-function isTestPath(path: string): boolean {
-  const folders = path.split("/");
-  const name = folders.pop() ?? "";
-  return TEST_NAMES.some((pattern) => pattern.test(name)) || folders.some((folder) => TEST_FOLDERS.includes(folder));
 }
 
 /** Every flag, in the order a picked Ticket carries them. */

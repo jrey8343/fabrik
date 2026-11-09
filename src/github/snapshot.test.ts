@@ -9,6 +9,7 @@ import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import type { RunRecord } from "../kit/runRecord.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
+import { changedTestsSection } from "../loop/changedTests.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
 import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -1124,6 +1125,29 @@ describe("Gathering a pull request's UI evidence marker", () => {
     ["shares its line", `See <!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`],
   ])("finds no UI evidence where the marker %s", async (_, marker) => {
     expect(await gathered(`Adds a waitlist.\n\n${marker}\n\nCloses #7`)).toMatchObject({ uiEvidenceMarker: null });
+  });
+});
+
+describe("Gathering the existing tests a pull request's Implement runs changed (#463)", () => {
+  const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
+  /** An agent PR's body as the push job writes it: the summary, the Changed existing tests section, then Closes. */
+  const body = (paths: readonly string[]) => ["Adds a waitlist to full days.", changedTestsSection(paths), "Closes #7"].join("\n\n");
+
+  async function gathered(text: string, author: { login: string; __typename: string } | null = APP_BOT) {
+    return (await gatherSnapshot(pullRequestGitHub({ author, body: text }), repo, pushed, null, APP_LOGIN)).pullRequest;
+  }
+
+  it("reads back the list the section's marker records, in a body the Fabrik App wrote, a path with <!-- --> in it among them", async () => {
+    expect(await gathered(body(["src/cart.test.ts", "test/a-->b.ts"]))).toMatchObject({ changedTests: ["src/cart.test.ts", "test/a-->b.ts"] });
+  });
+
+  it("finds none on a PR whose body has no marker, or one that doesn't read", async () => {
+    expect(await gathered("Adds a retry to the booking API.\n\nCloses #7")).toMatchObject({ changedTests: [] });
+    expect(await gathered("Adds a retry.\n\n<!-- fabrik:changed-tests [1] -->\n\nCloses #7")).toMatchObject({ changedTests: [] });
+  });
+
+  it("ignores a marker in the body of a PR a person opened, so nobody can plant a list", async () => {
+    expect(await gathered(body(["src/cart.test.ts"]), { login: "fabrik-app", __typename: "User" })).toMatchObject({ changedTests: [] });
   });
 });
 

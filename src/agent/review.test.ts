@@ -7,6 +7,7 @@ import { aPullRequest, kitConfig, snapshotOfPullRequest } from "../__fixtures__/
 import { CAPTURED, CAPTURED_SHA } from "../__fixtures__/uiEvidence.ts";
 import type { CaptureFailure, CaptureResult } from "../evidence/uiEvidence.ts";
 import { reviewEventFrom } from "../github/events.ts";
+import { changedTestsSection } from "../loop/changedTests.ts";
 import { verdictMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import { readPullRequest, type Reader } from "./inputs.ts";
@@ -440,5 +441,31 @@ describe("A Review's UI evidence", () => {
     expect(parts).toEqual((await reviewContext(productDir, pullRequestFile, specFile)).parts);
     expect(parts.join("\n")).not.toMatch(/UI evidence|screenshot/i);
     expect(await readdir(productDir)).not.toContain("fabrik-ui-evidence");
+  });
+});
+
+describe("A Review of a PR whose Implement runs changed existing tests (#463)", () => {
+  const withSection = (paths: readonly string[]) => ({ ...pullRequest, body: `Adds the parking section.\n\n${changedTestsSection(paths)}\n\nCloses #7` });
+
+  it("lists each changed existing test after the PR, with the rule for judging it", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(withSection(["src/parking.test.ts", "test/setup.ts"]));
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+
+    // The PR's body, in its JSON, carries the section too; the block is a heading of its own, after it.
+    const at = text.indexOf("\n## Changed existing tests\n");
+    const block = text.slice(at);
+    expect(at).toBeGreaterThan(text.indexOf("## The pull request"));
+    expect(block).toContain("- `src/parking.test.ts`\n- `test/setup.ts`\n");
+    expect(block).toContain("Judge each change to an existing test on its merits");
+    expect(block).toContain("An assertion weakened or removed without a reason in the PR body is an `execution-flaw`.");
+  });
+
+  it("says nothing of changed tests on a PR whose runs changed none, so its prompt reads as it always did", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+
+    expect(text).not.toContain("Changed existing tests");
   });
 });

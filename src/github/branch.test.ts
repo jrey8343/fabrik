@@ -949,3 +949,59 @@ describe("A conflict-only run that rebases its PR onto main (#304)", () => {
     expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toMatchObject({ kind: "refuse", paths: [".github/workflows/ci.yml"] });
   }, 20_000);
 });
+
+describe("The existing tests a run's own commits changed (#463)", () => {
+  /** A first run cut from main at its current head, which holds `src/cart.test.ts` and `test/setup.ts`. */
+  async function firstRun(build: () => Promise<void>) {
+    const other = join(root, "first");
+    await git(root, "clone", "--quiet", remote, other);
+    await commit(other, { "src/cart.test.ts": "expect(total).toBe(3)\n", "test/setup.ts": "setup\n", "README.md": "readme\n" }, "Tests on main");
+    await git(other, "push", "--quiet", "origin", "main");
+    const start = await git(other, "rev-parse", "HEAD");
+    await git(other, "checkout", "--quiet", "-b", "fabrik/ticket-8");
+    clone = other;
+    await build();
+    const tip = await git(other, "rev-parse", "HEAD");
+    const bundle = join(root, "first.bundle");
+    await git(other, "bundle", "create", "--quiet", bundle, "refs/heads/fabrik/ticket-8", `^${start}`);
+    return rebuildAgentBranch({ name: "fabrik/ticket-8", base: { ref: "main", sha: start }, head: tip }, bundle, REMOTE());
+  }
+
+  it("lists a first run's change to a test file main already had, and one it deleted, but not a test it added or a file that isn't a test", async () => {
+    const branch = await firstRun(async () => {
+      await commit(clone, { "src/cart.test.ts": "expect(total).toBe(4)\n", "src/new.test.ts": "new\n", "README.md": "more\n" }, "Build it");
+      await git(clone, "rm", "--quiet", "test/setup.ts");
+      await git(clone, "commit", "--quiet", "-m", "Drop setup");
+    });
+
+    expect(branch.changes.changedTests).toEqual(["src/cart.test.ts", "test/setup.ts"]);
+  });
+
+  it("lists a test a commit changed even when a later commit put it back", async () => {
+    const branch = await firstRun(async () => {
+      await commit(clone, { "src/cart.test.ts": "expect(total).toBe(4)\n" }, "Loosen");
+      await commit(clone, { "src/cart.test.ts": "expect(total).toBe(3)\n", "src/cart.ts": "fixed\n" }, "Put it back");
+    });
+
+    expect(branch.changes.changedTests).toEqual(["src/cart.test.ts"]);
+  });
+
+  it("lists none for a run that changed no test", async () => {
+    const branch = await firstRun(async () => {
+      await commit(clone, { "src/cart.ts": "fixed\n" }, "Build it");
+    });
+
+    expect(branch.changes.changedTests).toEqual([]);
+  });
+
+  it("lists, on a retry, a test the PR's earlier run had added, which was on the head the retry built on", async () => {
+    await commit(clone, { "src/feature.test.ts": "expect(feature).toBe(1)\n" }, "First run's test");
+    await git(clone, "push", "--quiet", "origin", BRANCH);
+    const head = await git(clone, "rev-parse", "HEAD");
+    await commit(clone, { "src/feature.test.ts": "expect(feature).toBeDefined()\n", "src/other.test.ts": "new\n" }, "Retry");
+
+    const branch = await rebuild(head);
+
+    expect(branch.changes.changedTests).toEqual(["src/feature.test.ts"]);
+  });
+});
