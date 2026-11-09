@@ -363,6 +363,16 @@ describe("Labels", () => {
     expect(createdLabels(aCleanProduct()).sort()).toEqual([...LOOP_LABELS].sort());
   });
 
+  // A trigger label still on can then be read as a run that never started (#436).
+  it("describes each trigger label as coming off, in no more than the 100 characters GitHub takes", () => {
+    const created = planSetup(aCleanProduct(), kit).actions.flatMap((a) => (a.kind === "create-label" ? [a] : []));
+    const triggers = created.filter((label) => label.name.startsWith("agent:"));
+
+    expect(triggers.map((label) => label.name).sort()).toEqual(["agent:design", "agent:implement", "agent:replay", "agent:research", "agent:review"]);
+    for (const label of triggers) expect(label.description).toMatch(/\boff\b/);
+    for (const label of created) expect(label.description.length).toBeLessThanOrEqual(100);
+  });
+
   it("creates only the labels the repo lacks, matching names as GitHub does, ignoring case", () => {
     const labels = LOOP_LABELS.filter((l) => l !== "agent:review").map((l) => (l === "bug" ? "Bug" : l));
 

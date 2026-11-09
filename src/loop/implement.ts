@@ -21,6 +21,7 @@ import {
   RETRY_PUSH_MARKER,
   UNMARKED_RETRY_PUSH,
 } from "./markers.ts";
+import { heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
 import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
 import { implementSettings, MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
@@ -110,7 +111,7 @@ function listed(action: Action | null): Action[] | null {
  * branch that touches a trust root goes to the Operator unpushed, one that
  * changes nothing is an Execution flaw, and any other opens one draft PR.
  */
-export function applyImplementation(event: ImplementRunFinished, { issue, operator }: IssueContext, config: KitConfig): Plan {
+export function applyImplementation(event: ImplementRunFinished, { issue, operator, kitIssues }: IssueContext, config: KitConfig): Plan {
   const { issue: issueNumber, changes, branch, base } = event;
   const parsed = parseImplementOutput(event.output);
   if (!parsed.ok) {
@@ -127,7 +128,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") return withStaleDispatchOff(refuse(issueNumber, guard.paths, operator), issueNumber, issue);
   // "Did nothing" never passes, however the commits got there.
-  if (changes.net.length === 0) return withStaleDispatchOff(emptyDiff(issueNumber, issue, parsed.output.summary, event.runUrl), issueNumber, issue);
+  if (changes.net.length === 0) return withStaleDispatchOff(emptyDiff(issueNumber, issue, parsed.output.summary, event.runUrl, heldOn(kitIssues, config)), issueNumber, issue);
 
   const { title, summary } = parsed.output;
   const evidence = evidenceFor(event, config, false);
@@ -171,6 +172,8 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const { issue: issueNumber, changes, branch, fixes } = event;
   const { issue, pullRequest, operator } = snapshot;
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
+  // A run this landing starts is held while every Subscription is used up, and its note says so (#341).
+  const held = heldOn(snapshot.kitIssues, config);
   const parsed = parseImplementOutput(event.output, fixes.review === undefined ? "pull-request" : "request-changes");
   // A conflict-only run that can't land still ends, or it would stay in flight for good, its PR withheld from every Verdict (#304).
   const conflictEnds = (why: string): Plan | null =>
@@ -198,7 +201,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   // A Request-changes run lands only while it's the one in flight (#341): one started twice for the same review,
   // whose run already had its outcome, or left over for a review a later run took over from, pushes nothing over it.
   const inFlight = runInFlight(pullRequest);
-  if (requestChanges && inFlight?.kind !== "request-changes") return requestChangesRunDropped(pullRequest, fixes.review, inFlight, operator);
+  if (requestChanges && inFlight?.kind !== "request-changes") return requestChangesRunDropped(pullRequest, fixes.review, inFlight, operator, held);
   if (requestChanges && fixes.review !== undefined && !pullRequest.requestChangesRunReviews.includes(fixes.review)) {
     return {
       kind: "nothing",
@@ -223,7 +226,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   }
   // The push job rebased the run's own commits if the branch moved (ADR-0006). If the branch moves again,
   // the push's lease refuses it, and the run stays in flight as after an Infrastructure failure.
-  if (changes.rebase?.conflicted === true) return startAgain(event, fixes, pullRequest, changes.rebase.onto);
+  if (changes.rebase?.conflicted === true) return startAgain(event, fixes, pullRequest, changes.rebase.onto, held);
 
   // A Request-changes run its agent job told to merge main in, because the head it started on conflicted with main
   // (#341). One that can't land hands the PR to the Operator, open, as a conflict-only run does (ADR-0011).
@@ -280,6 +283,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           ].join("\n"),
         },
         operator,
+        held,
       ),
     };
   }
@@ -532,6 +536,7 @@ function requestChangesRunDropped(
   review: number | undefined,
   inFlight: RunInFlight | null,
   operator: string,
+  held: number | null,
 ): Plan {
   const nothing: Plan = { kind: "nothing", reason: `#${pullRequest.number} has no Request-changes run in flight, so the run's branch isn't pushed` };
   const dismissed =
@@ -550,7 +555,9 @@ function requestChangesRunDropped(
           issue: pullRequest.number,
           body: [
             requestChangesRunStartedMarker(waiting),
-            `${lead} The Kit is starting the Request-changes run for your Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, waiting)}) instead. It runs on the Step-up model and uses no retry, and Review runs again on its push.`,
+            held === null
+              ? `${lead} The Kit is starting the Request-changes run for your Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, waiting)}) instead. It runs on the Step-up model and uses no retry, and Review runs again on its push.`
+              : `${lead} The Kit has put the Request-changes run for your Request changes on #${pullRequest.number} (${reviewLinks(pullRequest, waiting)}) in flight instead, but ${heldUntilReset(held)}. It runs on the Step-up model and uses no retry, and Review runs again on its push.`,
           ].join("\n"),
         },
         // A fresh agent:implement on the Ticket starts the run the note put in flight. It notifies nobody.
@@ -575,6 +582,7 @@ function startAgain(
   fixes: NonNullable<ImplementRunFinished["fixes"]>,
   pullRequest: PullRequestSnapshot,
   onto: string,
+  held: number | null,
 ): Plan {
   const run = runInFlight(pullRequest);
   if (run === null) {
@@ -584,7 +592,7 @@ function startAgain(
   const body = [
     `\`${branch}\` moved from ${fixes.headSha.slice(0, 7)} to ${head} while the Implementer worked, and its commits couldn't be rebased onto the new head without a conflict, so the Kit discarded them.`,
     "",
-    `${runName(run)} starts again on ${head}, using no retry.`,
+    `${runName(run)} starts again on ${head}${onceReset(held)}, using no retry.${heldUntilThen(held)}`,
   ].join("\n");
   return {
     kind: "act",
@@ -635,7 +643,7 @@ function refuse(issueNumber: number, paths: readonly string[], operator: string,
  * trust-root change, reaches the Operator and the Design session that a
  * third one starts (#429).
  */
-function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, runUrl: string): Plan {
+function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, runUrl: string, held: number | null): Plan {
   const flaw = issue.emptyDiffs + 1;
   const said = implementerSaidAndRun(summary, runUrl);
   if (flaw > MAX_RETRIES) {
@@ -666,7 +674,7 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, r
         issue: issueNumber,
         body: [
           EMPTY_DIFF_MARKER,
-          `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} starts now${stepUpReasonFor(flaw, issue.labels) === null ? "" : ", stepped up"}.`,
+          `The Implementer's branch for #${issueNumber} changed nothing, so the Kit opened no PR. An empty diff is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} ${startsWhen(held)}${stepUpReasonFor(flaw, issue.labels) === null ? "" : ", stepped up"}.${heldUntilThen(held)}`,
           ...said,
         ].join("\n"),
       },

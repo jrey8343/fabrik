@@ -58,6 +58,7 @@ export function aVerdictWithFollowUps(
     aPullRequest({ number: pullRequest }),
     { verdict, source: "reviewer", findings: "### Checked\n\nThe cart totals its lines.", followUps: followUpsSection(followUps, "https://github.com/owner/product", pullRequest) },
     "operator",
+    null,
   );
   const comment = actions.find((action) => action.kind === "comment");
   if (comment === undefined) throw new Error("A Verdict always posts its comment");

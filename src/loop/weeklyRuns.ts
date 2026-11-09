@@ -9,7 +9,7 @@
 // since the tick can't start one at a reset: one due while every Subscription
 // is used up leaves its issue the same way. Pure, no I/O.
 import { auditsIn, isPendingAudit, startAuditorRun } from "./audit.ts";
-import { RUN_NAMES } from "./heldRun.ts";
+import { runNamed } from "./heldRun.ts";
 import { runsDueAreHeld } from "./hold.ts";
 import { repoWideNotice } from "./kitIssues.ts";
 import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn, RETRO_FAILED_MARKER, retroMarker, retroMarksIn } from "./markers.ts";
@@ -126,7 +126,7 @@ export function failWeekly(
   const repoWide =
     ranOn === undefined || runUrl === null
       ? null
-      : repoWideNotice(failure, context, { run: `The ${RUN_NAMES[role]} run on #${issue.number}`, runUrl, resetsAt, ...ranOn });
+      : repoWideNotice(failure, context, { run: `The ${runNamed(role)} on #${issue.number}`, runUrl, resetsAt, ...ranOn });
   const [edit, close] = failedIssue(role, issue, how, runUrl);
   return { kind: "act", actions: [edit, ...givingUpOnTheWeek(role, context, how, runUrl), close, ...(repoWide?.actions ?? [])] };
 }

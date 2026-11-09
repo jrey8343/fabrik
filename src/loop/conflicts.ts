@@ -10,6 +10,7 @@
 // ADR-0016): nothing else would move it on. So does a draft whose Review passed
 // while it conflicts with main, before the Merge gate opens (#480).
 import { agentBranchFor } from "./agentPullRequest.ts";
+import { heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, requestChangesRunEndedMarker } from "./markers.ts";
 import { runInFlight, runName, unstartedRetry } from "./retry.ts";
@@ -29,7 +30,7 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, MergeableS
 export function checkConflicts(
   conflicts: ConflictSnapshot,
   operator: string,
-  held: number | null = null,
+  held: number | null,
   runMinutes: number | undefined,
   reviewMinutes: number,
   heldTickets: readonly number[],
@@ -55,7 +56,7 @@ export function checkConflicts(
     }
     const why = whyNotRebased(candidate, main, operator, now, reviewMinutes);
     if (why !== null) reasons.push(why);
-    else actions.push(rebaseOntoMain(candidate.pullRequest, main));
+    else actions.push(rebaseOntoMain(candidate.pullRequest, main, held));
   }
   if (actions.length > 0) return { kind: "act", actions };
   return { kind: "nothing", reason: reasons.length === 0 ? "No agent PR is open, so none conflicts with main" : reasons.join("; ") };
@@ -188,7 +189,8 @@ function stanceNotes(stance: Stance, number: number, head: string): StanceNotes 
  * follows starts a full Review of the combined head, whose pass brings the PR
  * back to the Merge gate. A clean rebase is pushed, using no retry, and the
  * attempt is recorded once it has landed; if its lease refuses it, the PR goes
- * back out of draft with no attempt recorded, for the next check. A conflicting one
+ * back out of draft, with a comment saying why, and no attempt recorded, for
+ * the next check. A conflicting one
  * records the attempt, pushes nothing and starts the
  * conflict-only run through agent:implement on the Ticket, which resumes the
  * run now in flight on its open PR (src/loop/implement.ts).
@@ -202,7 +204,12 @@ function stanceNotes(stance: Stance, number: number, head: string): StanceNotes 
  * (upToDateBeforeMergeGate) stays in draft too, but its notes are a Merge-gate
  * PR's: its push was judged, so a conflict-only run's Verdict is marked as one.
  */
-function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string, stance: Stance = pullRequest.draft ? "unreviewed-draft" : "merge-gate"): Action {
+function rebaseOntoMain(
+  pullRequest: PullRequestSnapshot,
+  main: string,
+  held: number | null,
+  stance: Stance = pullRequest.draft ? "unreviewed-draft" : "merge-gate",
+): Action {
   const { number } = pullRequest;
   const ticket = pullRequest.ticket as number;
   const branch = agentBranchFor(ticket);
@@ -227,8 +234,18 @@ function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string, stance: 
         ].join("\n"),
       },
     ],
-    // The branch moved between the rebase and its push: nothing landed, so nothing is recorded. A draft stays one.
-    refused: notes.atMergeGate ? [{ kind: "mark-ready-for-review", pullRequest: number }] : [],
+    // The branch moved between the rebase and its push: nothing landed, so nothing is recorded. A draft stays one, and
+    // a PR put in draft for the push says why it's back out (#436). Unmarked, so the next check tries again.
+    refused: notes.atMergeGate
+      ? [
+          { kind: "mark-ready-for-review", pullRequest: number },
+          {
+            kind: "comment",
+            issue: number,
+            body: `${notes.why}, so the Kit rebased \`${branch}\` onto it, but the branch moved before the rebase could be pushed, so nothing landed. #${number} is back out of draft as it was, and the next conflict check tries again.`,
+          },
+        ]
+      : [],
     conflicted: [
       {
         kind: "comment",
@@ -237,7 +254,7 @@ function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string, stance: 
           conflictAttemptMarker({ main, outcome: "conflict-run", ...unreviewedDraft }),
           `${notes.why}, and rebasing \`${branch}\` onto it conflicts too.`,
           "",
-          `A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto \`main\`, resolves the conflicts and changes nothing else. ${notes.conflicted}`,
+          `A conflict-only Implementer run ${startsWhen(held)}, on the Step-up model: it rebases the branch onto \`main\`, resolves the conflicts and changes nothing else. ${notes.conflicted}${heldUntilThen(held)}`,
         ].join("\n"),
       },
       ...toDraft,
@@ -255,10 +272,14 @@ function rebaseOntoMain(pullRequest: PullRequestSnapshot, main: string, stance: 
  * doesn't conflict, GitHub hadn't worked that out, or the Kit already tried
  * against this head of main: one attempt per head, as for the conflict check.
  */
-export function upToDateBeforeMergeGate(pullRequest: PullRequestSnapshot, mergeable: MergeableSnapshot | null): Action | null {
+export function upToDateBeforeMergeGate(
+  pullRequest: PullRequestSnapshot,
+  mergeable: MergeableSnapshot | null,
+  held: number | null,
+): Action | null {
   if (mergeable === null || mergeable.main === null || mergeable.mergeable !== false) return null;
   if (pullRequest.ticket === null || pullRequest.conflictAttempts.includes(mergeable.main)) return null;
-  return rebaseOntoMain(pullRequest, mergeable.main, "passed-draft");
+  return rebaseOntoMain(pullRequest, mergeable.main, held, "passed-draft");
 }
 
 /**

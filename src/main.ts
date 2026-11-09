@@ -42,7 +42,8 @@ function required(name: string): string {
   return value;
 }
 
-type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranchGit | null };
+/** The run's Loop event and where it came from; with no event, `why` is a reason the push job's input gave, said as is (#436). */
+type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranchGit | null; why?: string };
 
 /**
  * The Loop event this run applies: in the push job (FABRIK_NEEDS), what the
@@ -84,7 +85,7 @@ async function loopEvent(repo: Repo, config: KitConfig): Promise<EventSource> {
     case "actions-event":
       return actionsEvent;
     case "nothing":
-      return { event: null, source: input.reason, branch: null };
+      return { event: null, source: "the push job's input", branch: null, why: input.reason };
     case "agent-failure":
       return { ...(await failedRunEvent(input, join(agentDir, AGENT_FAILURE_FILE))), branch: null };
     case "review":
@@ -383,9 +384,9 @@ async function main(landing: Landing | null): Promise<void> {
   }
   operator = config.operator;
 
-  const { event, source, branch } = await loopEvent(repo, config);
+  const { event, source, branch, why } = await loopEvent(repo, config);
   if (event === null) {
-    await report(`Nothing to do: the Loop doesn't act on ${source}`);
+    await report(`Nothing to do: ${why ?? `the Loop doesn't act on ${source}`}`);
     return;
   }
 

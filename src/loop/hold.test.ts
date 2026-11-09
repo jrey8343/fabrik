@@ -58,7 +58,7 @@ const STARTS: readonly (readonly [
 ])[] = [
   [
     "triage",
-    "Triage",
+    "Triage run",
     (kitIssues) => [
       { kind: "label-added", issue: 7, label: "needs-triage" },
       snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] }), { kitIssues }),
@@ -81,7 +81,7 @@ const STARTS: readonly (readonly [
   ],
   [
     "implement",
-    "Implement",
+    "Implement run",
     (kitIssues) => [
       { kind: "label-added", issue: 7, label: "agent:implement" },
       snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"] }), { kitIssues }),
@@ -91,14 +91,14 @@ const STARTS: readonly (readonly [
   ],
   [
     "review",
-    "Review",
+    "Review run",
     (kitIssues) => [{ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(aPullRequest(), { kitIssues })],
     50,
     "agent:review",
   ],
   [
     "research",
-    "Research",
+    "Research run",
     (kitIssues) => [
       { kind: "label-added", issue: 12, label: "agent:research" },
       snapshotOf(
@@ -149,7 +149,7 @@ describe("A run due while every Subscription is used up, with rotation on", () =
       expect(actions).toContainEqual({
         kind: "comment",
         issue: 41,
-        body: expect.stringContaining(`The ${name} run on #${labelled} is held until 2026-11-08 10:00 UTC`),
+        body: expect.stringContaining(`The ${name} on #${labelled} is held until 2026-11-08 10:00 UTC`),
       });
       const removals = actions.filter((action) => action.kind === "remove-label");
       expect(removals).toEqual(label === null ? [] : [{ kind: "remove-label", issue: labelled, label }]);
@@ -592,5 +592,161 @@ describe("A Request-changes run held while every Subscription is used up (#341)"
 
     expect(note).toContain("held on #41");
     expect(note).not.toContain("is starting");
+  });
+});
+
+describe("A note promising a run while every Subscription is used up says it's held, not starting now (#436)", () => {
+  const MOVED = "b".repeat(40);
+  const commentsIn = (plan: Plan, issue: number): string =>
+    (plan.kind === "act" ? plan.actions : []).flatMap((action) => (action.kind === "comment" && action.issue === issue ? [action.body] : [])).join("\n");
+  const flaw: LoopEvent = {
+    kind: "review-run-finished",
+    pullRequest: 50,
+    headSha: "a".repeat(40),
+    output: "verdict: execution-flaw\n\nThe empty-cart case throws.",
+    runUrl: RUN,
+    repoUrl: "https://github.com/acme/shop",
+  };
+  const heldNote = "Every Subscription is used up, so it's held on #41 until then.";
+
+  it("an Execution flaw's Verdict says its Retry starts once the weekly limit resets, naming the issue it's held on", () => {
+    const pullRequest = aPullRequest({ headSha: "a".repeat(40) });
+    const note = commentsIn(planFor(flaw, snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS), 50);
+
+    expect(note).toContain("Retry 1 of 2 starts once the weekly limit resets: the Implementer fixes these findings on the same branch.");
+    expect(note).toContain(heldNote);
+    expect(note).not.toContain("starts now");
+  });
+
+  it("an Execution flaw that gives way to the Operator's unbuilt Request changes says its run is held too", () => {
+    const pullRequest = aPullRequest({
+      headSha: "a".repeat(40),
+      unbuiltChangesRequests: [{ review: 777, reviewer: "operator", reviewerIsBot: false, submittedAt: "2026-11-08T05:00:00.000Z" }],
+    });
+    const note = commentsIn(planFor(flaw, snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS), 50);
+
+    expect(note).toContain("its Request-changes run starts once the weekly limit resets");
+    expect(note).toContain(heldNote);
+    expect(note).not.toContain("starts now");
+  });
+
+  it("a pass that gives way to the Operator's Request changes deferred while the Retry worked says its run is held too", () => {
+    const pass: LoopEvent = { ...flaw, output: "verdict: pass\n\nIt totals the cart." };
+    const pullRequest = aPullRequest({
+      headSha: "a".repeat(40),
+      unbuiltChangesRequests: [{ review: 777, reviewer: "operator", reviewerIsBot: false, submittedAt: "2026-11-08T05:00:00.000Z" }],
+      notedChangesRequests: [777],
+      deferredChangesRequests: [777],
+    });
+    const note = commentsIn(planFor(pass, snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS), 50);
+
+    expect(note).toContain("Its Request-changes run starts once the weekly limit resets, on the Step-up model");
+    expect(note).toContain(heldNote);
+    expect(note).not.toContain("starts now");
+  });
+
+  it("a Request-changes run whose review was dismissed while it worked says the run it hands to the Operator's other review is held", () => {
+    const dropped: LoopEvent = {
+      kind: "implement-run-finished",
+      issue: 7,
+      output: JSON.stringify({ title: "Handle the empty cart", summary: "Shows the empty state.", fix: "Built the banner.", reviewMiss: false, amendsTicket: true }),
+      branch: "fabrik/ticket-7",
+      base: "fabrik/ticket-7",
+      changes: { net: [{ path: "src/cart.ts" }], commits: [] },
+      fixes: { pullRequest: 50, headSha: "a".repeat(40), runUrl: RUN, review: 777 },
+      runUrl: RUN,
+    };
+    const pullRequest = aPullRequest({
+      headSha: "a".repeat(40),
+      notedChangesRequests: [777, 888],
+      unbuiltChangesRequests: [{ review: 888, reviewer: "operator", reviewerIsBot: false, submittedAt: "2026-11-08T05:00:00.000Z" }],
+    });
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] });
+    const snapshot = { ...snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), issue: ticket };
+    const note = commentsIn(planFor(dropped, snapshot, TWO_SUBSCRIPTIONS), 50);
+
+    expect(note).toContain("in flight instead, but every Subscription is used up, so it's held on #41 until the weekly limit resets, and starts then.");
+    expect(note).not.toContain("is starting");
+  });
+
+  it("an empty diff says its retry starts once the weekly limit resets", () => {
+    const empty: LoopEvent = {
+      kind: "implement-run-finished",
+      issue: 7,
+      output: JSON.stringify({ title: "Let patients join a waitlist", summary: "Nothing to do." }),
+      branch: "fabrik/ticket-7",
+      base: "main",
+      changes: { net: [], commits: [] },
+      runUrl: RUN,
+    };
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] });
+    const note = commentsIn(planFor(empty, snapshotOf(ticket, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS), 7);
+
+    expect(note).toContain("retry 1 of 2 starts once the weekly limit resets.");
+    expect(note).toContain(heldNote);
+    expect(note).not.toContain("starts now");
+  });
+
+  it("a Retry that committed nothing gets a Verdict saying the next Retry starts once the weekly limit resets", () => {
+    const empty: LoopEvent = {
+      kind: "implement-run-finished",
+      issue: 7,
+      output: JSON.stringify({ title: "Handle the empty cart", summary: "Nothing to change.", fix: "Nothing to change." }),
+      branch: "fabrik/ticket-7",
+      base: "fabrik/ticket-7",
+      changes: { net: [], commits: [] },
+      fixes: { pullRequest: 50, headSha: "a".repeat(40), runUrl: RUN },
+      runUrl: RUN,
+    };
+    const pullRequest = aPullRequest({
+      headSha: "a".repeat(40),
+      verdicts: [{ verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "a".repeat(40) }],
+    });
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] });
+    const snapshot = { ...snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), issue: ticket };
+    const note = commentsIn(planFor(empty, snapshot, TWO_SUBSCRIPTIONS), 50);
+
+    expect(note).toContain("Retry 2 of 2 starts once the weekly limit resets");
+    expect(note).toContain(heldNote);
+    expect(note).not.toContain("starts now");
+  });
+
+  it("a Retry whose commits conflicted with its moved branch says it starts again once the weekly limit resets", () => {
+    const retried: LoopEvent = {
+      kind: "implement-run-finished",
+      issue: 7,
+      output: JSON.stringify({ title: "Handle the empty cart", summary: "Shows the empty state.", fix: "Guards the empty cart." }),
+      branch: "fabrik/ticket-7",
+      base: "fabrik/ticket-7",
+      changes: { net: [], commits: [], rebase: { onto: MOVED, conflicted: true } },
+      fixes: { pullRequest: 50, headSha: "a".repeat(40), runUrl: RUN },
+      runUrl: RUN,
+    };
+    const pullRequest = aPullRequest({
+      headSha: MOVED,
+      verdicts: [{ verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "a".repeat(40) }],
+    });
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] });
+    const snapshot = { ...snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), issue: ticket };
+    const note = commentsIn(planFor(retried, snapshot, TWO_SUBSCRIPTIONS), 50);
+
+    expect(note).toContain("Retry 1 of 2 starts again on bbbbbbb once the weekly limit resets, using no retry.");
+    expect(note).toContain(heldNote);
+  });
+
+  it("the conflict check's note starting a conflict-only run says it starts once the weekly limit resets", () => {
+    const now = "2026-11-08T06:00:00.000Z";
+    const atMergeGate = aPullRequest({ draft: false, verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: "a".repeat(40) }] });
+    const snapshot = tickSnapshot({
+      kitIssues: BOTH_USED_UP,
+      conflicts: { main: "9".repeat(40), now, implementJobUnderWay: null, pullRequests: [{ pullRequest: atMergeGate, mergeable: false }] },
+    });
+    const plan = planFor({ kind: "scheduled-tick", now }, snapshot, TWO_SUBSCRIPTIONS);
+    const rebase = (plan.kind === "act" ? plan.actions : []).find((action) => action.kind === "rebase-onto-main");
+    const note = rebase?.kind === "rebase-onto-main" ? commentsIn({ kind: "act", actions: [...rebase.conflicted] }, 50) : "";
+
+    expect(note).toContain("A conflict-only Implementer run starts once the weekly limit resets, on the Step-up model:");
+    expect(note).toContain(heldNote);
+    expect(note).not.toContain("starts now");
   });
 });

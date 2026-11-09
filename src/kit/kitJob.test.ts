@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "../loop/rules.ts";
-import type { KitIssueSnapshot } from "../loop/types.ts";
+import type { KitIssueSnapshot, Plan } from "../loop/types.ts";
 import { kitJobSummary } from "./kitJob.ts";
 
 const triage = { kind: "label-added", issue: 7, label: "needs-triage" } as const;
@@ -122,9 +122,17 @@ describe("The Kit job's step summary", () => {
     expect(kitJobSummary(plan, config, [])).not.toContain("Visual evidence");
   });
 
-  it("says nothing when the plan starts no run", () => {
+  // A declined event's green run says why it did nothing, not only in a log line (#436).
+  it("says why when the plan does nothing", () => {
     const config = kitConfig();
     const plan = planFor({ kind: "label-added", issue: 7, label: "docs" }, snapshotOf(ticket), config);
+
+    expect(kitJobSummary(plan, config, [])).toBe("### Fabrik Kit job\n\nNothing to do: The Loop doesn't act on docs being added to #7.\n");
+  });
+
+  it("says nothing when the plan acts but starts no run", () => {
+    const config = kitConfig();
+    const plan: Plan = { kind: "act", actions: [{ kind: "comment", issue: 7, body: "Noted." }] };
 
     expect(kitJobSummary(plan, config, [])).toBeNull();
   });

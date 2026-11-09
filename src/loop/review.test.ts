@@ -180,6 +180,21 @@ describe("Review: the Verdict marker", () => {
     expect(actionsOf(plan)[0]).toEqual({ kind: "remove-label", issue: 50, label: "agent:review" });
   });
 
+  // The Kit adds it when a conflict-only or Request-changes run ends without pushing; a later Verdict means the Loop has the PR again (#436).
+  it.each([["a pass", "verdict: pass"], ["an Execution flaw", "verdict: execution-flaw\n\nThe empty-cart case throws."]])(
+    "%s takes ready-for-human off the PR",
+    (_, output) => {
+      const plan = planFor(reviewed(output), snapshotOfPullRequest(aPullRequest({ labels: ["ready-for-human"] })), kitConfig());
+
+      expect(actionsOf(plan)).toContainEqual({ kind: "remove-label", issue: 50, label: "ready-for-human" });
+    },
+  );
+
+  it("leaves a PR without ready-for-human with no label to take off", () => {
+    const plan = planFor(reviewed("verdict: pass"), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    expect(actionsOf(plan).filter((action) => action.kind === "remove-label")).toEqual([]);
+  });
 });
 
 describe("Review: red CI", () => {
@@ -273,7 +288,7 @@ describe("Review: the Reviewer's Verdict", () => {
             `<!-- fabrik:conflict-attempt ${MAIN} conflict-run -->`,
             "#50 passed its Review but conflicts with `main` at ccccccc, and rebasing `fabrik/ticket-7` onto it conflicts too.",
             "",
-            "A conflict-only Implementer run starts now on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry, but an Execution flaw on its push calls for one like any other. The PR stays in draft, and Review runs again on the run's push; a pass brings it to you.",
+            "A conflict-only Implementer run starts now, on the Step-up model: it rebases the branch onto `main`, resolves the conflicts and changes nothing else. It uses no retry, but an Execution flaw on its push calls for one like any other. The PR stays in draft, and Review runs again on the run's push; a pass brings it to you.",
           ].join("\n"),
         },
         { kind: "add-labels", issue: 7, labels: ["agent:implement"] },

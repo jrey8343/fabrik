@@ -273,7 +273,7 @@ describe("A failed research run", () => {
           issue: 12,
           body: [
             "<!-- fabrik:research-run-failed -->",
-            "@operator The Research run on #12 failed: it was cancelled, most likely by its 30-minute timeout.",
+            "@operator The Research run on #12 failed: it was cancelled, by its 30-minute timeout or by hand.",
             "",
             "This is an Infrastructure failure, so neither the Loop nor Dispatch runs it again by itself. Re-add `agent:research` on this Decision to run it again.",
             "",

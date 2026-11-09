@@ -119,7 +119,7 @@ describe("A failed Auditor run on the pending Audit", () => {
   });
 
   it.each([
-    ["a timeout", auditFailed({ jobResult: "cancelled", secretsStep: null }), "it was cancelled, most likely by its 45-minute timeout"],
+    ["a timeout", auditFailed({ jobResult: "cancelled", secretsStep: null }), "it was cancelled, by its 45-minute timeout or by hand"],
     ["unreachable 1Password", auditFailed({ secretsStep: "failure" }), "its secrets couldn't be loaded from 1Password"],
     ["a crash", auditFailed(), "it crashed"],
     ["missing output", auditFailed(report("missing-output")), "the agent gave no valid output"],

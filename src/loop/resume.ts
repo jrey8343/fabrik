@@ -29,7 +29,7 @@
 // nor dropped: the next tick only leaves its markers.
 // Pure, no I/O.
 import { auditMarksIn } from "./markers.ts";
-import { type HeldRun, RUN_NAMES, resumedMarker, type Waiting, waitingHeldRuns } from "./heldRun.ts";
+import { type HeldRun, resumedMarker, runNamed, type Waiting, waitingHeldRuns } from "./heldRun.ts";
 import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, RESEARCH_DECISION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { freeSubscriptions, rotationIsOn } from "./subscriptions.ts";
 import type { Action, HeldTargetSnapshot, KitConfig, Plan, Snapshot } from "./types.ts";
@@ -113,7 +113,7 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
  * research Decision.
  */
 function movedOn(run: HeldRun, on: HeldTargetSnapshot): string | null {
-  const name = `The ${RUN_NAMES[run.role]} run's`;
+  const name = `The ${runNamed(run.role)}'s`;
   if (!on.open) return `${name} #${on.number} is closed`;
   switch (run.role) {
     case "triage": {

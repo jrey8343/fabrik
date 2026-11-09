@@ -146,9 +146,9 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
           : { kind: "act", actions: misplaced };
       });
     case "required-checks-finished":
-      return applyRedChecks(event, snapshot);
+      return applyRedChecks(event, snapshot, config);
     case "review-run-finished":
-      return applyReview(event, snapshot);
+      return applyReview(event, snapshot, config);
     case "audit-run-finished":
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
     case "retro-run-finished":

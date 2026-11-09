@@ -33,9 +33,9 @@ describe("Failure notices", () => {
           kind: "comment",
           issue: 7,
           body: [
-            "@operator The Triage run on #7 failed: it was cancelled, most likely by its 10-minute timeout.",
+            "@operator The Triage run on #7 failed: it was cancelled, by its 10-minute timeout or by hand.",
             "",
-            "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-add `needs-triage` on this issue to run it again.",
+            "This is an Infrastructure failure, so the Loop won't retry it. Re-add `needs-triage` on this issue to run it again.",
             "",
             `[The run](${RUN})`,
           ].join("\n"),
@@ -52,7 +52,7 @@ describe("Failure notices", () => {
   };
 
   it.each([
-    ["timeout", failed({ jobResult: "cancelled", secretsStep: null }), "it was cancelled, most likely by its 10-minute timeout"],
+    ["timeout", failed({ jobResult: "cancelled", secretsStep: null }), "it was cancelled, by its 10-minute timeout or by hand"],
     ["crash", failed({ jobResult: "failure" }), "it crashed"],
     [
       "unreachable 1Password",
@@ -108,7 +108,7 @@ describe("Failure notices", () => {
       longer,
     );
 
-    expect(commentOf(plan)).toContain("most likely by its 90-minute timeout");
+    expect(commentOf(plan)).toContain("by its 90-minute timeout or by hand");
   });
 
   it("blames 1Password before anything else, since the agent never started", () => {
@@ -288,11 +288,11 @@ describe("Failure notices", () => {
       expect(commentOf(plan)).toBe(
         [
           "<!-- fabrik:design-turn-failed -->",
-          "@operator The Design-session turn run on #7 failed: GitHub refused a request in the Kit's input step, so the agent never started.",
+          "@operator The Design-session turn on #7 failed: GitHub refused a request in the Kit's input step, so the agent never started.",
           "",
           "> GET /repos/acme/shop/pulls/84: 403 Resource not accessible by integration",
           "",
-          "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, reply on this issue to run the turn again.",
+          "This is an Infrastructure failure, so the Loop won't retry it. GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, reply on this issue to run the turn again.",
           "",
           `[The run](${RUN})`,
         ].join("\n"),
@@ -319,7 +319,7 @@ describe("Failure notices", () => {
 
       expect(body).toContain("failed: a GitHub request failed in the Kit's input step, so the agent never started.");
       expect(body).toContain("> GET /repos/acme/shop/pulls/84: 502 Bad Gateway");
-      expect(body).toContain("doesn't count against the Ticket's retries. Reply on this issue to run the turn again.");
+      expect(body).toContain("the Loop won't retry it. Reply on this issue to run the turn again.");
       expect(body).not.toContain("needs fixing");
     });
 
@@ -335,5 +335,33 @@ describe("Failure notices", () => {
     const plan = planFor(failed(), snapshotOf(anIssue({ number: 7 }), { operator: "jrey" }), kitConfig());
 
     expect(commentOf(plan)).toMatch(/^@jrey The Triage run/);
+  });
+});
+
+describe("Failure notices say what fits the run that failed (#436)", () => {
+  const bodyOf = (plan: ReturnType<typeof planFor>): string =>
+    (plan.kind === "act" ? plan.actions : []).flatMap((action) => (action.kind === "comment" ? [action.body] : [])).join("\n");
+
+  it("an Implement run's notice still says it doesn't count against the Ticket's retries", () => {
+    const body = bodyOf(planFor(failed({ role: "implement" }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig()));
+
+    expect(body).toContain("the Loop won't retry it and it doesn't count against the Ticket's retries. Re-add `agent:implement` on this Ticket to run it again.");
+  });
+
+  it("with one Subscription, a run that hit the weekly limit says to re-add its label after the reset", () => {
+    const event = failed({
+      role: "implement",
+      report: { failure: "weekly-limit", detail: "resets at 2026-11-09T04:00:00.000Z", resetsAt: "2026-11-09T04:00:00.000Z" },
+    });
+    const body = bodyOf(planFor(event, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig()));
+
+    expect(body).toContain("Once the weekly limit resets at 2026-11-09 04:00 UTC, re-add `agent:implement` on this Ticket to run it again.");
+  });
+
+  it("says only once the weekly limit resets when it isn't known when", () => {
+    const event = failed({ role: "implement", report: { failure: "weekly-limit", detail: "" } });
+    const body = bodyOf(planFor(event, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig()));
+
+    expect(body).toContain("Once the weekly limit resets, re-add `agent:implement` on this Ticket to run it again.");
   });
 });

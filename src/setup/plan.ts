@@ -577,7 +577,12 @@ function secrets(state: ProductState): SetupAction[] {
   return actions;
 }
 
-/** How Setup creates each label the Loop reads or writes, so no run fails on a missing one. */
+/**
+ * How Setup creates each label the Loop reads or writes, so no run fails on a
+ * missing one. A trigger label's description says when it comes off, so one
+ * still on reads as a run that never started (#436). GitHub takes at most 100
+ * characters.
+ */
 const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly description: string }>> = {
   [NEEDS_TRIAGE]: { color: "fbca04", description: "Fabrik: waiting for Triage" },
   [NEEDS_INFO]: { color: "d876e3", description: "Fabrik: waiting on the reporter for more information" },
@@ -585,11 +590,11 @@ const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly
   [READY_FOR_AGENT]: { color: "0e8a16", description: "Fabrik: fully specified, ready for an Implementer" },
   [READY_FOR_HUMAN]: { color: "1d76db", description: "Fabrik: needs the Operator to build it" },
   [WONTFIX]: { color: "ffffff", description: "Fabrik: will not be actioned" },
-  [DISPATCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes an Implementer (the Kit adds it)" },
-  [DESIGN_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Design session's first turn (the Kit adds it)" },
-  [REVIEW_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes a Review" },
-  [RESEARCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Researcher on a research Decision (the Kit adds it)" },
-  [REPLAY_TRIGGER_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Replay's next Ticket on a replay issue (the Kit adds it)" },
+  [DISPATCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes an Implementer (the Kit adds it; it comes off as the run starts)" },
+  [DESIGN_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Design session's first turn (the Kit adds it; it comes off as the turn starts)" },
+  [REVIEW_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes a Review (it comes off with the Verdict)" },
+  [RESEARCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Researcher on a research Decision (the Kit adds it; off as the run starts)" },
+  [REPLAY_TRIGGER_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Replay's next Ticket (the Kit adds it; it comes off as the run starts)" },
   [BUG]: { color: "d73a4a", description: "Something isn't working" },
   [ENHANCEMENT]: { color: "a2eeef", description: "New feature or request" },
   [TOKEN_ROTATION_LABEL]: { color: "b60205", description: "Fabrik: the Claude token needs rotating" },

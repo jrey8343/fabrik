@@ -121,7 +121,7 @@ describe("A failed Retro run on the pending Retro", () => {
 
 describe("Each way a Retro run fails", () => {
   it.each([
-    ["a timeout", retroFailed({ jobResult: "cancelled", secretsStep: null }), "it was cancelled, most likely by its 45-minute timeout"],
+    ["a timeout", retroFailed({ jobResult: "cancelled", secretsStep: null }), "it was cancelled, by its 45-minute timeout or by hand"],
     ["unreachable 1Password", retroFailed({ secretsStep: "failure" }), "its secrets couldn't be loaded from 1Password"],
     ["a crash of its evidence job, as when the store went away after the tick, or of its agent job", retroFailed(), "it crashed"],
     ["missing output", retroFailed(report("missing-output")), "the agent gave no valid output"],

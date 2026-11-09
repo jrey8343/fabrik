@@ -17,7 +17,7 @@ import {
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { RUN_NAMES, waitingHeldRuns } from "../loop/heldRun.ts";
+import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { auditMarksIn, DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
@@ -1608,7 +1608,7 @@ function heldRunsLines(repo: string, { runs, weeklyLimitIssues }: HeldRuns, time
   const link = (number: number) => `[#${number}](https://github.com/${repo}/issues/${number})`;
   return [
     `- ${repo}: ${runs.length === 1 ? "1 held run" : `${runs.length} held runs`}, which the Kit resumes itself at the reset:`,
-    ...runs.map(({ role, issue, heldOn }) => `  - the ${RUN_NAMES[role]} run on ${link(issue)}, held on ${spelled(heldOn.map(link), "and")}`),
+    ...runs.map(({ role, issue, heldOn }) => `  - the ${runNamed(role)} on ${link(issue)}, held on ${spelled(heldOn.map(link), "and")}`),
     ...weeklyLimitIssues.map(({ number, resetsAt }) => {
       const reset = resetsAt === null ? "its reset not known" : `resetting ${readable(resetsAt, timeZone)}`;
       return `- ${repo}: weekly-limit issue ${link(number)} open, ${reset}`;
