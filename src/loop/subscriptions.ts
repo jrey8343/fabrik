@@ -66,18 +66,11 @@ export function subscriptionNamedBy(issue: KitIssueSnapshot): Subscription | nul
 }
 
 /**
- * The Subscription an open weekly-limit issue is about: the one it names, or
- * the first listed one for a V1 issue, which names none.
+ * The Subscription an open weekly-limit or token-rotation issue is about: the
+ * one it names, or the first listed one for an issue that names none, as a V1
+ * weekly-limit issue, or a rotation issue opened before #433, doesn't.
  */
-export function weeklyLimitSubscriptionOf(issue: KitIssueSnapshot, config: Pick<KitConfig, "subscriptions">): Subscription {
-  return subscriptionNamedBy(issue) ?? firstSubscription(config);
-}
-
-/**
- * The Subscription an open token-rotation issue is about: the one it names, or
- * the first listed one for an issue opened before rotation issues named one.
- */
-export function tokenRotationSubscriptionOf(issue: KitIssueSnapshot, config: Pick<KitConfig, "subscriptions">): Subscription {
+export function kitIssueSubscriptionOf(issue: KitIssueSnapshot, config: Pick<KitConfig, "subscriptions">): Subscription {
   return subscriptionNamedBy(issue) ?? firstSubscription(config);
 }
 
@@ -89,7 +82,8 @@ export type Unusable = "weekly-limit" | "usage-credits" | "dead-token";
 
 /**
  * Each Subscription an open Kit-owned issue makes unusable, and why: its
- * weekly-limit issue first, then its usage-credits issue, when it has several.
+ * weekly-limit issue first, then its usage-credits issue, then its
+ * token-rotation issue, when it has several.
  */
 export function unusableSubscriptions(
   kitIssues: readonly KitIssueSnapshot[],
@@ -97,14 +91,14 @@ export function unusableSubscriptions(
 ): ReadonlyMap<Subscription, Unusable> {
   const unusable = new Map<Subscription, Unusable>();
   for (const issue of kitIssues) {
-    if (issue.labels.includes(WEEKLY_LIMIT_LABEL)) unusable.set(weeklyLimitSubscriptionOf(issue, config), "weekly-limit");
+    if (issue.labels.includes(WEEKLY_LIMIT_LABEL)) unusable.set(kitIssueSubscriptionOf(issue, config), "weekly-limit");
   }
   for (const issue of kitIssues) {
     const named = issue.labels.includes(USAGE_CREDITS_LABEL) ? subscriptionNamedBy(issue) : null;
     if (named !== null && !unusable.has(named)) unusable.set(named, "usage-credits");
   }
   for (const issue of kitIssues) {
-    const dead = issue.labels.includes(TOKEN_ROTATION_LABEL) ? tokenRotationSubscriptionOf(issue, config) : null;
+    const dead = issue.labels.includes(TOKEN_ROTATION_LABEL) ? kitIssueSubscriptionOf(issue, config) : null;
     if (dead !== null && !unusable.has(dead)) unusable.set(dead, "dead-token");
   }
   return unusable;

@@ -22,8 +22,7 @@ import {
   type RanOn,
   rotationIsOn,
   subscriptionMarker,
-  tokenRotationSubscriptionOf,
-  weeklyLimitSubscriptionOf,
+  kitIssueSubscriptionOf,
 } from "./subscriptions.ts";
 import type { Action, InfrastructureFailure, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 import { usageCreditsNotice } from "./usageCreditsIssue.ts";
@@ -104,7 +103,7 @@ export function scheduledTick(now: string, { kitIssues }: Snapshot, config: Pick
   const [first] = limits;
   if (first === undefined) return { kind: "nothing", reason: "No weekly-limit issue is open" };
   if (!rotationIsOn(config)) return closedAtReset(now, first, null);
-  const plans = limits.map((issue) => closedAtReset(now, issue, weeklyLimitSubscriptionOf(issue, config)));
+  const plans = limits.map((issue) => closedAtReset(now, issue, kitIssueSubscriptionOf(issue, config)));
   const actions = plans.flatMap((plan) => (plan.kind === "act" ? plan.actions : []));
   if (actions.length > 0) return { kind: "act", actions };
   return { kind: "nothing", reason: plans.map((plan) => (plan.kind === "nothing" ? plan.reason : "")).join("; ") };
@@ -203,7 +202,7 @@ function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun):
 function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
   const { resetsAt, subscription } = stalled;
   const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
-  const mine = limits.find((issue) => weeklyLimitSubscriptionOf(issue, stalled) === subscription);
+  const mine = limits.find((issue) => kitIssueSubscriptionOf(issue, stalled) === subscription);
   const others = limits.filter((issue) => issue !== mine);
   const mineResetsAt = mine === undefined ? null : resetsAtOf(mine);
   // A later reset time than the open issue's means its window is over: this is a new one.
@@ -295,7 +294,7 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
 }
 
 /** The line pointing the Operator at a Pairing session, at the end of a rotation issue's steps. */
-const PAIR = "Run `/fabrik-pair` on this issue to work through these steps with an agent.";
+const PAIRING_LINE = "Run `/fabrik-pair` on this issue to work through these steps with an agent.";
 
 /** How the dead-token notice words a refusal, with rotation on (naming its Subscription) or off. */
 interface DeadTokenWording {
@@ -303,7 +302,7 @@ interface DeadTokenWording {
   /** The opening of a new issue's body. */
   readonly refused: string;
   /** The new issue's steps after rotating the token, through the Pairing line. */
-  readonly then: readonly string[];
+  readonly closingSteps: readonly string[];
   /** After "no agent run in this repo can start", before "until it's rotated". */
   readonly startsOn: string;
   /** After "was refused too", for a later refusal. */
@@ -316,10 +315,10 @@ function deadTokenWording(stalled: StalledRun): DeadTokenWording {
     return {
       title: "Rotate the Claude token",
       refused: `The Claude token that every Fabrik run in this repo uses was refused (\`authentication_failed\`). ${stalled.run} was the first to fail, and no agent run can start until the token is rotated.`,
-      then: [
+      closingSteps: [
         "- [ ] Re-add the trigger label on each Ticket the Kit commented on, to run it again.",
         "",
-        `Then close this issue, so that the next dead token opens a fresh one. ${PAIR}`,
+        `Then close this issue, so that the next dead token opens a fresh one. ${PAIRING_LINE}`,
       ],
       startsOn: "",
       too: "",
@@ -328,12 +327,12 @@ function deadTokenWording(stalled: StalledRun): DeadTokenWording {
   return {
     title: `Rotate the Claude token of the \`${stalled.subscription}\` Subscription`,
     refused: `${token} was refused (\`authentication_failed\`). ${stalled.run} was the first to fail. Until this issue is closed the Kit runs no agent on that Subscription: it runs them on the other listed Subscriptions, and comments here about each other run refused on this one.`,
-    then: [
+    closingSteps: [
       "- [ ] Close this issue, so that the Kit runs agents on that Subscription again.",
       "",
       "A run the Kit moved to another Subscription needs nothing from you. A run it couldn't move got a failure comment on its Ticket naming the trigger label to re-add.",
       "",
-      PAIR,
+      PAIRING_LINE,
     ],
     startsOn: " on it",
     too: `, on the \`${stalled.subscription}\` Subscription`,
@@ -348,7 +347,7 @@ function deadTokenWording(stalled: StalledRun): DeadTokenWording {
 function rotationIssueFor(kitIssues: readonly KitIssueSnapshot[], stalled: StalledRun): KitIssueSnapshot | undefined {
   const open = kitIssues.filter((issue) => issue.labels.includes(TOKEN_ROTATION_LABEL));
   if (!stalled.rotation) return open[0];
-  return open.find((issue) => tokenRotationSubscriptionOf(issue, stalled) === stalled.subscription);
+  return open.find((issue) => kitIssueSubscriptionOf(issue, stalled) === stalled.subscription);
 }
 
 function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): RepoWideNotice {
@@ -366,7 +365,7 @@ function deadToken({ kitIssues, operator }: RepoContext, stalled: StalledRun): R
             "## Steps",
             "",
             `- [ ] Run \`claude setup-token\` and save the new token, with its expiry date, in the \`${stalled.subscription}\` item in the Fabrik 1Password vault.`,
-            ...wording.then,
+            ...wording.closingSteps,
             "",
             `[The first refused run](${stalled.runUrl})`,
             "",

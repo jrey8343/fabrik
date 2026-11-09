@@ -1,6 +1,6 @@
-# Release notes: a dead token fails over
+# Release notes: a dead token is used up
 
-The notes for the patch release that makes Subscription rotation fail over on a dead token ([#433](https://github.com/jrey8343/fabrik/issues/433)). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
+The notes for the patch release that makes Subscription rotation move runs off a Subscription whose token is dead ([#433](https://github.com/jrey8343/fabrik/issues/433)). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
 
 ## What changed
 

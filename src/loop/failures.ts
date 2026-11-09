@@ -141,16 +141,16 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
     const [held = refused] = heldInOrder([refused], context.kitIssues);
-    // A kill or a dead token says nothing of when the limit resets: the held run waits for the first weekly-limit issue's.
-    const killed = failure !== "weekly-limit";
+    // A kill or a dead token says nothing of when a limit resets: the held run waits for the first weekly-limit issue's.
+    const noResetOfItsOwn = failure !== "weekly-limit";
     const repoWide = repoWideNotice(failure, context, {
       run: failedRun,
       runUrl: run.runUrl,
-      resetsAt: killed ? null : (run.report?.resetsAt ?? null),
+      resetsAt: noResetOfItsOwn ? null : (run.report?.resetsAt ?? null),
       ...ranOn,
-      ...(killed ? {} : { held }),
+      ...(noResetOfItsOwn ? {} : { held }),
     });
-    const holds = killed ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
+    const holds = noResetOfItsOwn ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
     return { kind: "act", actions: [...holds, ...waitingAgain(run, issue), ...(repoWide?.actions ?? [])] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
