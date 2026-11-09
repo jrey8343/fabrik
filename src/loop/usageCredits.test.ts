@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   anIssue,
+  aTicket,
   auditBody,
   AUDITED_SHA,
+  dispatchSnapshotOf,
   kitConfig,
   notificationsOf,
   RETRO_WINDOW_END,
   retroBody,
   snapshotOf,
 } from "../__fixtures__/snapshots.ts";
+import { implementRunFailedIn } from "../github/threads.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AgentRole, IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -168,6 +171,42 @@ describe("A Subscription with an open usage-credits issue, with rotation on", ()
     expect(notificationsOf(plan)).toEqual([
       "mention in new \"The weekly usage limit of the `Claude token 2` Subscription is reached until 2026-11-09 04:00 UTC\"",
     ]);
+  });
+});
+
+describe("Scenario: an Implement run killed for spending while no other Subscription is free (#472)", () => {
+  // Claude token 2 is already kept off by its own usage-credits issue, so the kill can't be re-run or held: the run fails.
+  const kill = planFor(
+    killed("implement"),
+    snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }), { kitIssues: [usageCreditsIssue(61, "Claude token 2")] }),
+    TWO_SUBSCRIPTIONS,
+  );
+  const notice = actionsOf(kill).find((action): action is Extract<Action, { kind: "comment" }> => action.kind === "comment" && action.issue === 7);
+
+  it("takes agent:implement off the Ticket and tells the Operator the Loop won't retry it", () => {
+    expect(actionsOf(kill)).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
+    expect(notice?.body).toContain("the Loop won't retry it");
+  });
+
+  it("the next Dispatch check, reading that notice back, leaves the Ticket for the Operator, so no second run spends again", () => {
+    const ticket = aTicket({ number: 7, lastRunFailed: implementRunFailedIn([{ body: notice?.body ?? "", byApp: true }]) });
+
+    const plan = planFor({ kind: "dispatch-check" }, dispatchSnapshotOf([ticket]), TWO_SUBSCRIPTIONS);
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "No Ticket can be dispatched: #7's last Implement run failed, so only adding agent:implement again runs it",
+    });
+  });
+
+  it("the Operator re-adding agent:implement runs it again", () => {
+    const plan = planFor(
+      { kind: "label-added", issue: 7, label: "agent:implement" },
+      snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"] }), { kitIssues: [usageCreditsIssue(61, "Claude token 2")] }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "implement", issue: 7 }));
   });
 });
 
