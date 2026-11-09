@@ -72,6 +72,25 @@ describe("The Kit job's step summary", () => {
     );
   });
 
+  it("names a dead token when one Subscription is used up by its weekly limit and another by its open rotation issue", () => {
+    const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+    const rotation: KitIssueSnapshot = {
+      number: 41,
+      labels: ["ready-for-human", "fabrik:token-rotation"],
+      body: "<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token 2 -->",
+      comments: [],
+    };
+    const kitIssues = [firstUsedUp, rotation];
+    const plan = planFor(triage, snapshotOf(ticket, { kitIssues }), config);
+
+    expect(kitJobSummary(plan, config, kitIssues)).toBe(
+      "### Fabrik Kit job\n\n" +
+        "The Triage run on #7 was held until 2026-11-09 04:00 UTC: every listed Subscription is used up. " +
+        "`Claude token` has hit its weekly limit, and `Claude token 2` has a dead token, with an open token-rotation issue. " +
+        "Its `needs-triage` label came off.\n",
+    );
+  });
+
   describe("on an Implement run", () => {
     const dispatched = { kind: "label-added", issue: 7, label: "agent:implement" } as const;
     const readyTicket = anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"] });

@@ -8,8 +8,9 @@
 // through its trigger label while another Subscription is free, so the
 // Operator hears nothing. Once none is free it is held instead, with no
 // failure comment (src/loop/heldRun.ts). A run killed for spending usage
-// credits is re-run or held the same way, while its Subscription's
-// usage-credits issue keeps the Kit off that Subscription. An Auditor or Retro
+// credits, or refused on a dead token, is re-run or held the same way, while
+// its Subscription's usage-credits or token-rotation issue keeps the Kit off
+// that Subscription (#433). An Auditor or Retro
 // run is never re-run or held: the tick can't start one at a reset, so its
 // Audit or Retro fails, for the tick to try again.
 import { conflictRunEnded } from "./conflicts.ts";
@@ -27,12 +28,12 @@ type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 /**
  * With rotation on, the failures that leave the run's Subscription unusable,
  * so the Kit re-runs the run on the next free one, or holds it while none is:
- * the weekly limit, and a kill for spending usage credits. A run is re-run,
+ * the weekly limit, a kill for spending usage credits, and a dead token. A run is re-run,
  * or resumed, through the label RESUME_LABELS names for its role
  * (src/loop/heldRun.ts): its trigger label, and agent:design for a
  * Design-session turn, which starts the turn again (src/loop/design.ts).
  */
-const RERUN_FAILURES: readonly InfrastructureFailure[] = ["weekly-limit", "usage-credits"];
+const RERUN_FAILURES: readonly InfrastructureFailure[] = ["weekly-limit", "usage-credits", "dead-token"];
 
 /**
  * The first line of a failure notice the snapshot reads back: a failed
@@ -118,8 +119,8 @@ function heldOnRefusal(
   if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
   // The tick can't start an Auditor or Retro run at the reset, so its issue fails, and the tick opens the next one.
   if (isWeeklyRole(run.role)) return null;
-  // A kill opens no weekly-limit issue, and only one can hold the run: with none open it fails as usual.
-  if (failure === "usage-credits" && !canHold(kitIssues)) return null;
+  // A kill or a dead token opens no weekly-limit issue, and only one can hold the run: with none open it fails as usual.
+  if (failure !== "weekly-limit" && !canHold(kitIssues)) return null;
   if (anotherSubscriptionFree(kitIssues, ranOn)) return null;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
@@ -140,16 +141,16 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
     const [held = refused] = heldInOrder([refused], context.kitIssues);
-    // A kill says nothing of when the limit resets: the held run waits for the first weekly-limit issue's.
-    const killed = failure === "usage-credits";
+    // A kill or a dead token says nothing of when a limit resets: the held run waits for the first weekly-limit issue's.
+    const noResetOfItsOwn = failure !== "weekly-limit";
     const repoWide = repoWideNotice(failure, context, {
       run: failedRun,
       runUrl: run.runUrl,
-      resetsAt: killed ? null : (run.report?.resetsAt ?? null),
+      resetsAt: noResetOfItsOwn ? null : (run.report?.resetsAt ?? null),
       ...ranOn,
-      ...(killed ? {} : { held }),
+      ...(noResetOfItsOwn ? {} : { held }),
     });
-    const holds = killed ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
+    const holds = noResetOfItsOwn ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
     return { kind: "act", actions: [...holds, ...waitingAgain(run, issue), ...(repoWide?.actions ?? [])] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.

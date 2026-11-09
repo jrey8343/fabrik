@@ -10,7 +10,7 @@ import { JUDGE_TIMEOUT_MINUTES } from "../kit/runStore.ts";
 import { atOrOver } from "../kit/scorer.ts";
 import { waitingForDispatch } from "./dispatch.ts";
 import { heldOf } from "./heldRun.ts";
-import { REPLAY_TRIGGER_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { REPLAY_TRIGGER_LABEL, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { spelled } from "./readable.ts";
 import { chosenSubscription } from "./subscriptions.ts";
 import type { KitConfig, KitIssueSnapshot, Plan, ReplaySnapshot, Snapshot } from "./types.ts";
@@ -104,16 +104,25 @@ function capacityOf(now: string, { capacity }: ReplaySnapshot, { kitIssues }: Sn
   return { spare: true };
 }
 
+/** The Kit-owned issues that leave a Subscription used up, as each is named in the reason. */
+const USED_UP_LABELS: readonly (readonly [string, string])[] = [
+  [WEEKLY_LIMIT_LABEL, "weekly-limit"],
+  [USAGE_CREDITS_LABEL, "usage-credits"],
+  [TOKEN_ROTATION_LABEL, "token-rotation"],
+];
+
 /**
- * Why a Subscription is used up, from the first open weekly-limit or
- * usage-credits issue, or null while none is open. Any Subscription's, not
- * only the one a replay run would use, so a Replay never spends into a limit.
+ * Why a Subscription is used up, from the first open weekly-limit,
+ * usage-credits or token-rotation issue, or null while none is open. Any
+ * Subscription's, not only the one a replay run would use, so a Replay never
+ * spends into a limit, nor runs while live work has lost a Subscription.
  */
 export function whyUsedUp(kitIssues: readonly KitIssueSnapshot[]): string | null {
-  const usedUp = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL) || issue.labels.includes(USAGE_CREDITS_LABEL));
-  if (usedUp === undefined) return null;
-  const what = usedUp.labels.includes(WEEKLY_LIMIT_LABEL) ? "weekly-limit" : "usage-credits";
-  return `A Subscription is used up, as the ${what} issue #${usedUp.number} says`;
+  for (const issue of kitIssues) {
+    const used = USED_UP_LABELS.find(([label]) => issue.labels.includes(label));
+    if (used !== undefined) return `A Subscription is used up, as the ${used[1]} issue #${issue.number} says`;
+  }
+  return null;
 }
 
 /**

@@ -29,7 +29,7 @@ A skill a Product repo pins from its own Skills source and gives to particular r
 _Avoid_: custom skill, plugin, add-on
 
 **Subscription**:
-A Claude account whose token the Kit runs agents on. The Kit may hold several, used one after another in a fixed order as each reaches its weekly limit.
+A Claude account whose token the Kit runs agents on. The Kit may hold several, used one after another in a fixed order as each is used up.
 _Avoid_: account, plan, token (the token is the Subscription's credential, not the Subscription)
 
 **Subscription rotation**:
@@ -37,7 +37,7 @@ Running agents on the next listed Subscription once one is used up. It is on whe
 _Avoid_: failover, load balancing, round-robin
 
 **Used up**:
-Of a Subscription: unusable until something changes, because it has reached its weekly limit or has been caught spending usage credits.
+Of a Subscription: unusable until something changes, because it has reached its weekly limit, has been caught spending usage credits, or its token was refused as dead.
 _Avoid_: exhausted, rate-limited, out
 
 **Product repo**:
