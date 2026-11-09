@@ -84,7 +84,7 @@ import { type KitPrompt, kitPromptPath } from "../guard/trust-root.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
 import { AGENT_FAILURE_FILE, MissingVerdictError } from "./failure.ts";
-import { bundleAgentBranch, cutBranch, implementInput, setImplementerEnv, setSandboxEnv } from "./implement.ts";
+import { bundleAgentBranch, cutBranch, failedRunCommits, implementInput, setImplementerEnv, setSandboxEnv } from "./implement.ts";
 import { BASE_SHA_ENV, replayImplementInput, replayReviewContext, writeReplayPatch } from "./replay.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { triageContext } from "./triage.ts";
@@ -454,6 +454,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   // With rotation on, a run that shows overage is stopped, so no Subscription spends usage credits.
   const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: rotationIsOn(config) });
   const timeoutMs = role.timeoutMinutes * 60_000;
+  // The bundle of what the run committed, once made, so a failure after it still reports it kept (#431).
+  let built: BuiltBranch | null = null;
 
   try {
     const result = await run({
@@ -486,18 +488,18 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     });
     watch.checkInit();
 
+    // The Researcher commits nothing itself: the Kit commits what it left, as the Fabrik Researcher.
+    if (spec.researches === true) await commitResearch(productDir, issueNumber);
+    // Bundled before the reply is checked, so a reply that breaks its contract doesn't lose the commits (#431):
+    // the push job lands a bundle only beside a result it reads, so this one goes out with the failure report instead.
+    // A replay arm's commits go out as a patch from baseSha, which nothing pushes; every other run's as a bundle.
+    if (branch !== null) {
+      built =
+        spec.replay === "implement" ? await writeReplayPatch(productDir, branch, outDir) : await bundleAgentBranch(productDir, branch, outDir);
+    }
     // Text output is checked here, so a reply that breaks its contract fails this job, never passes.
     // Either output kind puts what the tag held on the result; a JSON reply is saved as the agent wrote it.
     const { output: parsed, saved } = settleReply(contract, (result as { output?: unknown }).output);
-    // The Researcher commits nothing itself: the Kit commits what it left, as the Fabrik Researcher.
-    if (spec.researches === true) await commitResearch(productDir, issueNumber);
-    // A replay arm's commits go out as a patch from baseSha, which nothing pushes; every other run's as a bundle.
-    const built =
-      branch === null
-        ? null
-        : spec.replay === "implement"
-          ? await writeReplayPatch(productDir, branch, outDir)
-          : await bundleAgentBranch(productDir, branch, outDir);
     const artifact: AgentRunResult = {
       role: name,
       issue: subject,
@@ -510,8 +512,10 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     await writeFile(join(outDir, AGENT_RESULT_FILE), `${JSON.stringify(artifact, null, 2)}\n`);
     console.log(spec.describe(subject, parsed));
   } catch (error) {
-    // Left for the push job, which posts the failure notice (loop.yml).
-    await leaveFailureReport(error, watch, { path: join(outDir, AGENT_FAILURE_FILE), title: "Infrastructure failure" });
+    // Left for the push job, which posts the failure notice (loop.yml), saying what the run had committed.
+    // A replay arm's failure posts no notice, so its commits go unreported.
+    const commits = branch === null || spec.replay === "implement" ? null : await failedRunCommits(productDir, branch, outDir, built);
+    await leaveFailureReport(error, watch, { path: join(outDir, AGENT_FAILURE_FILE), title: "Infrastructure failure" }, commits);
     throw error;
   } finally {
     // The install record src/skills/fetch.ts wrote last, naming each source and the skills from it.

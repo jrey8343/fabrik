@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
-import type { LoopEvent } from "./types.ts";
+import type { FailedRunCommits, LoopEvent } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
@@ -173,6 +173,58 @@ describe("Failure notices", () => {
 
     expect(plan).toMatchObject({ kind: "act", actions: expect.arrayContaining([expect.objectContaining({ kind: "comment", issue: 12 })]) });
     expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->/);
+  });
+
+  // #431: its commits are never pushed, so the notice says what the run had made, and where a re-run starts.
+  describe("an Implement run that failed after it had committed", () => {
+    const base = "a".repeat(40);
+    const head = "b".repeat(40);
+    const noticeAfter = (commits: FailedRunCommits) =>
+      planFor(
+        failed({ role: "implement", report: { failure: "missing-output", detail: "reviewMissPoints is required", commits } }),
+        snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [12] })),
+        kitConfig(),
+      );
+
+    it("says its commits are kept as a bundle on the run but weren't pushed, so a re-run starts from the old head without them", () => {
+      expect(commentOf(noticeAfter({ base, continued: true, head, kept: true }))).toContain(
+        [
+          "> reviewMissPoints is required",
+          "",
+          "It had made commits before it failed. They weren't pushed, so running it again starts from `aaaaaaa` without them; they're kept for 7 days as `agent-branch.bundle` in the run's `fabrik-agent-failure` artifact.",
+          "",
+          "This is an Infrastructure failure,",
+        ].join("\n"),
+      );
+    });
+
+    it("says commits it couldn't keep are lost, and a re-run starts from the old head", () => {
+      expect(commentOf(noticeAfter({ base, continued: true, head, kept: false }))).toContain(
+        "It had made commits before it failed, and they weren't kept, so running it again starts from `aaaaaaa` without them.",
+      );
+    });
+
+    it("says a run that made no commits lost none", () => {
+      expect(commentOf(noticeAfter({ base, continued: true, head: null, kept: false }))).toContain(
+        "It made no commits, so running it again starts from `aaaaaaa`, as this run did.",
+      );
+    });
+
+    // A first run cuts its branch from the default branch, whose head may have moved by the re-run.
+    it("names no commit for a re-run of a run that cut its branch, only the default branch", () => {
+      expect(commentOf(noticeAfter({ base, continued: false, head, kept: true }))).toContain(
+        "They weren't pushed, so running it again starts from the default branch without them;",
+      );
+      expect(commentOf(noticeAfter({ base, continued: false, head: null, kept: false }))).toContain(
+        "It made no commits, so running it again starts from the default branch, as this run did.",
+      );
+    });
+
+    it("says nothing of commits when the report doesn't say", () => {
+      const plan = planFor(failed({ role: "implement", report: { failure: "missing-output", detail: "" } }), snapshotOf(anIssue({ number: 7 })), kitConfig());
+
+      expect(commentOf(plan)).not.toMatch(/commits/);
+    });
   });
 
   it("a Review failure's notice on the PR carries no failure marker", () => {

@@ -13,7 +13,7 @@ import { sandboxEnv } from "../kit/secrets.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
-import type { GivenOperatorComment } from "../loop/types.ts";
+import type { FailedRunCommits, GivenOperatorComment } from "../loop/types.ts";
 import {
   givenOperatorComments,
   operatorCommentId,
@@ -309,6 +309,31 @@ export async function bundleAgentBranch(productDir: string, started: BuiltBranch
   if (head === started.base.sha) return started;
   await git(productDir, "bundle", "create", "--quiet", join(outDir, AGENT_BUNDLE_FILE), `refs/heads/${started.name}`, `^${started.base.sha}`);
   return { ...started, head };
+}
+
+/**
+ * What a failed run had committed on its branch (#431), for its failure
+ * report: `built` is the bundle the run made before its output was checked,
+ * if it got that far; otherwise its commits are bundled now. Commits that
+ * can't be bundled (the agent left its branch, say) are named but not kept.
+ * Null if not even the branch can be read.
+ */
+export async function failedRunCommits(
+  productDir: string,
+  started: BuiltBranch,
+  outDir: string,
+  built: BuiltBranch | null,
+): Promise<FailedRunCommits | null> {
+  const base = started.base.sha;
+  const continued = started.base.ref === started.name;
+  try {
+    const { head } = built ?? (await bundleAgentBranch(productDir, started, outDir));
+    return { base, continued, head, kept: head !== null };
+  } catch {
+    const head = await git(productDir, "rev-parse", `refs/heads/${started.name}`).catch(() => null);
+    if (head === null) return null;
+    return { base, continued, head: head === base ? null : head, kept: false };
+  }
 }
 
 /**

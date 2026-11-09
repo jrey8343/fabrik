@@ -3,7 +3,8 @@
 // stream, or for its input step, from the GitHub call that failed. A job cancelled by its timeout leaves nothing, and the push job
 // works that out itself (src/loop/failures.ts). Pure, no I/O.
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
-import type { FailureReport, ReportedFailure } from "../loop/types.ts";
+import type { FailedRunCommits, FailureReport, ReportedFailure } from "../loop/types.ts";
+import { FULL_SHA } from "../skills/lock.ts";
 import { readStream, streamMessageOf, type AgentStream } from "./stream.ts";
 
 /** The artifact's file name, the same in the agent job and the push job. */
@@ -152,5 +153,16 @@ export function readFailureReport(text: string): FailureReport {
     detail: typeof detail === "string" ? detail : "",
     ...(typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? { resetsAt } : {}),
     ...(value?.["refused"] === true ? { refused: true as const } : {}),
+    ...withCommits(value?.["commits"]),
   };
+}
+
+/** What a run had committed, as the report gives it; nothing if any of it doesn't read. */
+function withCommits(value: unknown): { commits?: FailedRunCommits } {
+  if (typeof value !== "object" || value === null) return {};
+  const { base, continued, head, kept } = value as Record<string, unknown>;
+  if (typeof base !== "string" || !FULL_SHA.test(base) || typeof continued !== "boolean" || typeof kept !== "boolean") return {};
+  if (head === null) return kept ? {} : { commits: { base, continued, head, kept } };
+  if (typeof head !== "string" || !FULL_SHA.test(head)) return {};
+  return { commits: { base, continued, head, kept } };
 }
