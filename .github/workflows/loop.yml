@@ -1909,6 +1909,9 @@ jobs:
       secrets-step: ${{ steps.judge.outputs.secrets-step }}
       model: ${{ steps.judge.outputs.model }}
       effort: ${{ steps.judge.outputs.effort }}
+      # The attempt the judge ran in: a judge re-run after a failed one gets a
+      # Run record of its own, under this attempt, so what both cost counts.
+      attempt: ${{ github.run_attempt }}
     steps:
       # The run-judge action checks nothing out, so this is all the job has.
       - name: Check out the Kit (never the Product repo)

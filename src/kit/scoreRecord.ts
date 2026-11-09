@@ -1,7 +1,8 @@
 // What the score-record job writes (#149): the judge run's transcript, its Run
 // record (role `score`) and the score file, each create-only and retrying on
 // conflict through the record writer (src/kit/recordWriter.ts), to the store,
-// RUN_STORE. Like the push job, the job runs no agent and no Product code. The
+// RUN_STORE, save that a judge re-run's scores replace the skip score file a
+// failed judge left (#451). Like the push job, the job runs no agent and no Product code. The
 // files themselves are built by src/kit/runRecord.ts and src/kit/scorer.ts.
 // Also the push job's part, which runs the scoring plan on the run it just
 // recorded, and writes a skip's score file itself.
@@ -13,10 +14,20 @@ import {
   storeCommitMessage,
   storeJson,
   storeWriteSummary,
+  writeStoreFileReplacing,
   writeStoreFiles,
 } from "./recordWriter.ts";
 import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
-import { type KitRubrics, type ScoreFile, type ScoreFileWithPath, scoreFileFor, type ScoreSkip, scoringPlan, scoringRubrics } from "./scorer.ts";
+import {
+  type KitRubrics,
+  readScoreFile,
+  type ScoreFile,
+  type ScoreFileWithPath,
+  scoreFileFor,
+  type ScoreSkip,
+  scoringPlan,
+  scoringRubrics,
+} from "./scorer.ts";
 
 /** A judge run's files, as the score-record job writes them. */
 export interface ScoreRecordFiles {
@@ -28,6 +39,16 @@ export interface ScoreRecordFiles {
   readonly score: ScoreFileWithPath;
 }
 
+/**
+ * What came of the score file: written; written over the skip score file a
+ * failed judge left, which it names; or kept, the store already holding one
+ * it leaves as it was, which `held` gives, null when the Kit can't read it.
+ */
+export type ScoreFileWrite =
+  | { readonly kind: "written" }
+  | { readonly kind: "replaced"; readonly skip: ScoreSkip }
+  | { readonly kind: "kept"; readonly held: ScoreFile | null };
+
 /** What writing a judge run's files came to. */
 export type ScoreRecordWrite =
   | { readonly kind: "public-store" }
@@ -36,6 +57,8 @@ export type ScoreRecordWrite =
       /** The score file and the judge's record built for this run, whether or not the store already held them. */
       readonly score: ScoreFile;
       readonly judge: RunRecord;
+      /** What came of the score file, which says what the store holds for the run. */
+      readonly scoreFile: ScoreFileWrite;
       readonly written: readonly string[];
       readonly existing: readonly string[];
     };
@@ -43,7 +66,10 @@ export type ScoreRecordWrite =
 /**
  * Writes the judge's transcript, then its Run record, then the score file that
  * links to it, each only if the store doesn't hold it yet: a re-run of scoring
- * under the same rubrics leaves every file it finds as it was.
+ * under the same rubrics leaves every file it finds as it was. The one
+ * exception is a skip score file, which a judge with scores replaces: so a
+ * judge re-run after a failed one, in the workflow run's next attempt, stores
+ * its scores beside its own record, and the failed judge's record stays (#451).
  */
 export async function writeScoreRecord(
   store: StoreApi,
@@ -51,11 +77,48 @@ export async function writeScoreRecord(
   wait: (ms: number) => Promise<void>,
 ): Promise<ScoreRecordWrite> {
   const { judge, judgeTranscriptGzip, score } = files;
-  const toWrite: StoreFile[] = [];
-  if (judge.transcriptPath !== null && judgeTranscriptGzip !== null) toWrite.push({ path: judge.transcriptPath, content: judgeTranscriptGzip });
-  toWrite.push({ path: judge.recordPath, content: storeJson(judge.record) }, { path: score.path, content: storeJson(score.file) });
-  const write = await writeStoreFiles(store, toWrite, storeCommitMessage(judge.record), wait);
-  return write.kind === "public-store" ? write : { ...write, score: score.file, judge: judge.record };
+  const message = storeCommitMessage(judge.record);
+  const judgeFiles: StoreFile[] = [];
+  if (judge.transcriptPath !== null && judgeTranscriptGzip !== null) judgeFiles.push({ path: judge.transcriptPath, content: judgeTranscriptGzip });
+  judgeFiles.push({ path: judge.recordPath, content: storeJson(judge.record) });
+  const write = await writeStoreFiles(store, judgeFiles, message, wait);
+  if (write.kind === "public-store") return write;
+  // The skip a judge with scores replaces, once the store shows it one.
+  let replaced: ScoreSkip | null = null;
+  const scoreWrite = await writeStoreFileReplacing(
+    store,
+    { path: score.path, content: storeJson(score.file) },
+    (held) => {
+      replaced = score.file.entries === null ? null : (heldScoreFile(held)?.skip ?? null);
+      return replaced !== null;
+    },
+    message,
+    wait,
+  );
+  const scoreFile: ScoreFileWrite =
+    scoreWrite.kind === "kept"
+      ? { kind: "kept", held: heldScoreFile(scoreWrite.held) }
+      : replaced === null
+        ? { kind: "written" }
+        : { kind: "replaced", skip: replaced };
+  const kept = scoreFile.kind === "kept";
+  return {
+    kind: "written",
+    score: score.file,
+    judge: judge.record,
+    scoreFile,
+    written: kept ? write.written : [...write.written, score.path],
+    existing: kept ? [...write.existing, score.path] : write.existing,
+  };
+}
+
+/** A score file's text as the store holds it, read as a score file, or null if it isn't one the Kit can read. */
+function heldScoreFile(text: string): ScoreFile | null {
+  try {
+    return readScoreFile(JSON.parse(text));
+  } catch {
+    return null;
+  }
 }
 
 /** How the score-record job ended: a write, no judge run to record, or no token for the store. */
@@ -67,7 +130,7 @@ export function scoreRecordSummary(outcome: ScoreRecordOutcome): string {
     case "no-judge":
       return "Nothing scored: the judge job didn't run.";
     case "written":
-      return scoreWriteSummary(outcome.score, outcome.judge, outcome);
+      return `${storedLine(outcome.score, outcome.judge, outcome.scoreFile)} ${storeWriteSummary(SCORE, outcome)}`;
     default:
       return storeWriteSummary(SCORE, outcome);
   }
@@ -82,14 +145,40 @@ function scoreWriteSummary(score: ScoreFile, judge: RunRecord | null, write: Sto
   return `${scoredLine(score, judge)} ${storeWriteSummary(SCORE, write)}`;
 }
 
+/**
+ * What the store holds for the run after the judge's write: the score file
+ * built for it, written or written over a failed judge's skip, or the one the
+ * store already held and kept, never scores the store doesn't hold (#451).
+ */
+function storedLine(score: ScoreFile, judge: RunRecord, scoreFile: ScoreFileWrite): string {
+  switch (scoreFile.kind) {
+    case "written":
+      return scoredLine(score, judge);
+    case "replaced":
+      return `${scoredLine(score, judge)} They replace the ${scoreFile.skip.reason} score file an earlier judge left.`;
+    case "kept": {
+      const run = `Run ${score.runId}-${score.runAttempt} on #${score.issue}`;
+      const why = score.skip === null ? "" : `Not scored: ${whyNot(score.skip, judge)}. `;
+      const { held } = scoreFile;
+      if (held === null) return `${why}${run} already has a score file the Kit can't read, which the store keeps.`;
+      if (held.skip !== null) return `${why}${run} already has a ${held.skip.reason} score file, which the store keeps.`;
+      return `${why}${run} was already scored, and the store keeps its score file: ${entriesOf(held)}.`;
+    }
+  }
+}
+
 /** What the score file says: each rubric's score, or why the run has none. `judge` is null for a skip decided before any judge ran. */
 function scoredLine(score: ScoreFile, judge: RunRecord | null): string {
   const run = `run ${score.runId}-${score.runAttempt} on #${score.issue}`;
   if (score.skip !== null) return `Not scored: ${whyNot(score.skip, judge)}, so ${run} gets a ${score.skip.reason} score file.`;
-  const entries = (score.entries ?? []).map(
-    (entry) => `${entry.scorer}@${entry.version} ${entry.score.toFixed(2)}, ${entry.pass ? "passed" : "failed"} (${entry.label})`,
-  );
-  return `Scored ${run}${score.digestTrimmed === true ? " from a trimmed transcript" : ""}: ${entries.join("; ")}.`;
+  return `Scored ${run}${score.digestTrimmed === true ? " from a trimmed transcript" : ""}: ${entriesOf(score)}.`;
+}
+
+/** Each rubric's score in a score file, whether it passed and its label. */
+function entriesOf(score: ScoreFile): string {
+  return (score.entries ?? [])
+    .map((entry) => `${entry.scorer}@${entry.version} ${entry.score.toFixed(2)}, ${entry.pass ? "passed" : "failed"} (${entry.label})`)
+    .join("; ");
 }
 
 function whyNot(skip: ScoreSkip, judge: RunRecord | null): string {

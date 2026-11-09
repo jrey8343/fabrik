@@ -74,6 +74,33 @@ export async function writeRunRecord(
   return writeStoreFiles(store, toWrite, storeCommitMessage(files.record), wait);
 }
 
+/** What writing a file the store may already hold came to: created, or the text the store held and whether it was replaced or kept. */
+export type ReplacingWrite = { readonly kind: "written" } | { readonly kind: "replaced" | "kept"; readonly held: string };
+
+/**
+ * Creates the file, or, when the store already holds one, replaces it if
+ * `replaces` says so of the text it holds, and otherwise leaves it as it was,
+ * retrying a write a parallel commit beat. Only for a store already found
+ * private: it doesn't look again.
+ */
+export async function writeStoreFileReplacing(
+  store: StoreApi,
+  file: StoreFile,
+  replaces: (held: string) => boolean,
+  message: string,
+  wait: (ms: number) => Promise<void>,
+): Promise<ReplacingWrite> {
+  return retryingConflicts(async () => {
+    if (await createFile(store, file.path, file.content, message)) return { kind: "written" };
+    const contents = contentsPath(file.path);
+    const held = await heldFile(store, contents);
+    if (held === null) throw new Error(`The store refused to create ${file.path}, yet holds no file there`);
+    if (!replaces(held.text)) return { kind: "kept", held: held.text };
+    await store.rest("PUT", contents, { message, content: Buffer.from(file.content).toString("base64"), sha: held.sha });
+    return { kind: "replaced", held: held.text };
+  }, wait);
+}
+
 /**
  * Creates the file, retrying with backoff when a parallel commit to the store
  * (another run's record) moved its branch first (409).
@@ -85,9 +112,14 @@ async function createRetryingConflicts(
   message: string,
   wait: (ms: number) => Promise<void>,
 ): Promise<boolean> {
+  return retryingConflicts(() => createFile(store, path, content, message), wait);
+}
+
+/** Runs a write, again with backoff when a parallel commit to the store moved its branch first (409). */
+async function retryingConflicts<T>(write: () => Promise<T>, wait: (ms: number) => Promise<void>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await createFile(store, path, content, message);
+      return await write();
     } catch (error) {
       if (!(error instanceof GitHubError && error.status === CONFLICT) || attempt + 1 >= ATTEMPTS) throw error;
       // Doubling, with jitter under half a step so parallel writers spread out and each wait is still longer.
@@ -110,23 +142,31 @@ const CONFLICT = 409;
  * refusal is checked by looking for the file, never by reading its message.
  */
 async function createFile(store: StoreApi, path: string, content: Uint8Array, message: string): Promise<boolean> {
-  const contents = `/repos/${RUN_STORE.owner}/${RUN_STORE.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
+  const contents = contentsPath(path);
   try {
     await store.rest("PUT", contents, { message, content: Buffer.from(content).toString("base64") });
     return true;
   } catch (error) {
-    if (error instanceof GitHubError && error.status === UNPROCESSABLE && (await isThere(store, contents))) return false;
+    if (error instanceof GitHubError && error.status === UNPROCESSABLE && (await heldFile(store, contents)) !== null) return false;
     throw error;
   }
 }
 
-/** Whether the store holds a file at this Contents API path. */
-async function isThere(store: StoreApi, contents: string): Promise<boolean> {
+/** A file's Contents API path in the store. */
+function contentsPath(path: string): string {
+  return `/repos/${RUN_STORE.owner}/${RUN_STORE.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** The file the store holds at this Contents API path, as text with the blob sha that replacing it names, or null if it holds none. */
+async function heldFile(store: StoreApi, contents: string): Promise<{ readonly text: string; readonly sha: string } | null> {
   try {
-    await store.rest("GET", contents);
-    return true;
+    const file = (await store.rest("GET", contents)) as { content?: unknown; sha?: unknown };
+    return {
+      text: typeof file.content === "string" ? Buffer.from(file.content, "base64").toString("utf8") : "",
+      sha: typeof file.sha === "string" ? file.sha : "",
+    };
   } catch (error) {
-    if (error instanceof GitHubError && error.status === NOT_FOUND) return false;
+    if (error instanceof GitHubError && error.status === NOT_FOUND) return null;
     throw error;
   }
 }

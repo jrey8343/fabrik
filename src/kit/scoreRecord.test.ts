@@ -4,7 +4,7 @@ import { noWait, storeWith } from "../__fixtures__/store.ts";
 import type { RecordWrite } from "./recordWriter.ts";
 import type { Rubric } from "./rubrics.ts";
 import { judgeRunRecordFor } from "./runRecord.ts";
-import { scoreFileFor, type ScoringOutcome } from "./scorer.ts";
+import { type ScoreFile, scoreFileFor, type ScoringOutcome } from "./scorer.ts";
 import { recordedRunScoringSummary, type ScoreRecordFiles, scoreRecordedRun, scoreRecordSummary, writeScoreRecord } from "./scoreRecord.ts";
 
 const RUBRICS: readonly Rubric[] = [
@@ -21,6 +21,9 @@ const SCORED_PATH = "runs/owner/product/2026-11/1007-1-implement.json";
 
 const JUDGE_RECORD = "runs/owner/product/2026-11/1007-1-score.json";
 const JUDGE_TRANSCRIPT = "transcripts/owner/product/2026-11/1007-1-score.jsonl.gz";
+/** Where a judge re-run in the workflow run's second attempt files its own record and transcript. */
+const JUDGE_RECORD_2 = "runs/owner/product/2026-11/1007-2-score.json";
+const JUDGE_TRANSCRIPT_2 = "transcripts/owner/product/2026-11/1007-2-score.jsonl.gz";
 const TRANSCRIPT_GZIP = new Uint8Array([0x1f, 0x8b, 8, 0]);
 
 /** The judge's stream: an init and a clean result. */
@@ -29,29 +32,34 @@ const JUDGE_LINES = [
   JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 1, total_cost_usd: 0.04 }),
 ];
 
+const ANSWERS = [
+  { scorer: "efficiency", score: 0.8, label: "clean", rationale: "Each call moved the work on." },
+  { scorer: "skill-use", score: 0.5, label: "missed-skill", rationale: "Never loaded tdd." },
+] as const;
+
 const judged: ScoringOutcome = {
   kind: "judged",
   judge: { model: "claude-sonnet-5-5", record: JUDGE_RECORD, digestTrimmed: false },
-  output: {
-    answers: [
-      { scorer: "efficiency", score: 0.8, label: "clean", rationale: "Each call moved the work on." },
-      { scorer: "skill-use", score: 0.5, label: "missed-skill", rationale: "Never loaded tdd." },
-    ],
-  },
+  output: { answers: ANSWERS },
 };
 
-/** What the score-record job writes for a judge run that ended with `outcome`, its job ending with `jobResult`. */
-function files(outcome: ScoringOutcome = judged, transcript: readonly string[] | null = JUDGE_LINES, jobResult = "success"): ScoreRecordFiles {
+/**
+ * What the score-record job writes for a judge run that ended with `outcome`,
+ * its job ending with `jobResult` in the workflow run's `attempt`.
+ */
+function files(outcome: ScoringOutcome = judged, transcript: readonly string[] | null = JUDGE_LINES, jobResult = "success", attempt = "1"): ScoreRecordFiles {
   const judge = judgeRunRecordFor({
     scored,
-    judge: { result: jobResult, outputs: { "secrets-step": "success", model: "claude-sonnet-5-5", effort: "" } },
+    judge: { result: jobResult, outputs: { "secrets-step": "success", model: "claude-sonnet-5-5", effort: "", attempt } },
     judgeModel: "claude-sonnet-5-5",
     kitSha: "k".repeat(40),
     endedAt: "2026-11-04T12:06:00Z",
     failureReport: null,
     transcript,
   });
-  const score = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: "2026-11-04T12:06:00Z", outcome });
+  // The score file names the judge's record wherever it went, as the score-record job's does.
+  const judgedBy = outcome.kind === "skip" ? outcome : { ...outcome, judge: { ...outcome.judge, record: judge.recordPath } };
+  const score = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: "2026-11-04T12:06:00Z", outcome: judgedBy });
   return { judge, judgeTranscriptGzip: transcript === null ? null : TRANSCRIPT_GZIP, score };
 }
 
@@ -65,7 +73,14 @@ describe("Writing a judge run's files to the store", () => {
     const write = await writeScoreRecord(store, run, noWait);
 
     expect(store.writes).toEqual([JUDGE_TRANSCRIPT, JUDGE_RECORD, run.score.path]);
-    expect(write).toEqual({ kind: "written", score: run.score.file, judge: run.judge.record, written: [JUDGE_TRANSCRIPT, JUDGE_RECORD, run.score.path], existing: [] });
+    expect(write).toEqual({
+      kind: "written",
+      score: run.score.file,
+      judge: run.judge.record,
+      scoreFile: { kind: "written" },
+      written: [JUDGE_TRANSCRIPT, JUDGE_RECORD, run.score.path],
+      existing: [],
+    });
     expect(Buffer.from(store.held.get(JUDGE_TRANSCRIPT) ?? "", "base64")).toEqual(Buffer.from(TRANSCRIPT_GZIP));
     expect(decoded(store.held.get(JUDGE_RECORD))).toMatchObject({ role: "score", issue: 7, runId: 1007, runAttempt: 1 });
     expect(decoded(store.held.get(run.score.path))).toMatchObject({ record: SCORED_PATH, judge: { record: JUDGE_RECORD }, skip: null });
@@ -83,6 +98,61 @@ describe("Writing a judge run's files to the store", () => {
       [JUDGE_RECORD, "earlier"],
       [run.score.path, "earlier"],
     ]);
+  });
+
+  it("a judge re-run after one whose output wasn't valid replaces the skip score file with its scores, beside a Run record of its own (#451)", async () => {
+    const invalid = files({ ...judged, output: { answers: [] } });
+    const first = storeWith();
+    await writeScoreRecord(first, invalid, noWait);
+    const store = storeWith({ contents: Object.fromEntries(first.held) });
+    const rerun = files(judged, JUDGE_LINES, "success", "2");
+
+    const write = await writeScoreRecord(store, rerun, noWait);
+
+    expect(write).toMatchObject({
+      kind: "written",
+      written: [JUDGE_TRANSCRIPT_2, JUDGE_RECORD_2, rerun.score.path],
+      existing: [],
+      scoreFile: { kind: "replaced", skip: { reason: "judge-output-invalid" } },
+    });
+    expect(rerun.score.path).toBe(invalid.score.path);
+    expect(decoded(store.held.get(rerun.score.path))).toMatchObject({
+      judge: { record: JUDGE_RECORD_2 },
+      skip: null,
+      entries: [{ scorer: "efficiency", score: 0.8 }, { scorer: "skill-use", score: 0.5 }],
+    });
+    // The failed judge's record stays, so what both judges cost counts.
+    expect(store.held.get(JUDGE_RECORD)).toBe(first.held.get(JUDGE_RECORD));
+    expect(decoded(store.held.get(JUDGE_RECORD_2))).toMatchObject({ role: "score", runId: 1007, runAttempt: 2, totalCostUsd: 0.04 });
+  });
+
+  it("a judge re-run that fails again leaves the skip score file as it was, beside a Run record of its own", async () => {
+    const failed = files({ kind: "judge-failed", judge: { ...judged.judge, digestTrimmed: null } }, null, "failure");
+    const first = storeWith();
+    await writeScoreRecord(first, failed, noWait);
+    const store = storeWith({ contents: Object.fromEntries(first.held) });
+
+    const write = await writeScoreRecord(store, files({ ...judged, output: { answers: [] } }, JUDGE_LINES, "success", "2"), noWait);
+
+    expect(write).toMatchObject({
+      kind: "written",
+      written: [JUDGE_TRANSCRIPT_2, JUDGE_RECORD_2],
+      existing: [failed.score.path],
+      scoreFile: { kind: "kept", held: { skip: { reason: "judge-failed" } } },
+    });
+    expect(store.held.get(failed.score.path)).toBe(first.held.get(failed.score.path));
+  });
+
+  it("never replaces a score file that holds scores", async () => {
+    const first = storeWith();
+    await writeScoreRecord(first, files(), noWait);
+    const store = storeWith({ contents: Object.fromEntries(first.held) });
+    const rerun = files({ ...judged, output: { answers: [{ ...ANSWERS[0], score: 0.1 }, ANSWERS[1]] } }, JUDGE_LINES, "success", "2");
+
+    const write = await writeScoreRecord(store, rerun, noWait);
+
+    expect(write).toMatchObject({ kind: "written", existing: [rerun.score.path], scoreFile: { kind: "kept", held: { entries: [{ score: 0.8 }, { score: 0.5 }] } } });
+    expect(store.held.get(rerun.score.path)).toBe(first.held.get(rerun.score.path));
   });
 
   it("writes the files a re-run finds missing, and leaves the others", async () => {
@@ -124,7 +194,17 @@ describe("Writing a judge run's files to the store", () => {
 
 describe("The score-record job's step-summary line", () => {
   const written = (run: ScoreRecordFiles) =>
-    ({ kind: "written", score: run.score.file, judge: run.judge.record, written: [run.judge.recordPath, run.score.path], existing: [] }) as const;
+    ({
+      kind: "written",
+      score: run.score.file,
+      judge: run.judge.record,
+      scoreFile: { kind: "written" },
+      written: [run.judge.recordPath, run.score.path],
+      existing: [],
+    }) as const;
+  /** A judge re-run's write that found the score file already there, holding `held`. */
+  const kept = (run: ScoreRecordFiles, held: ScoreFile | null) =>
+    ({ ...written(run), scoreFile: { kind: "kept", held }, written: [run.judge.recordPath], existing: [run.score.path] }) as const;
 
   it("names each rubric's score, whether it passed and its label, and what was written", () => {
     const run = files();
@@ -156,13 +236,44 @@ describe("The score-record job's step-summary line", () => {
     expect(scoreRecordSummary(written(run))).toMatch(/^Not scored: the judge's output wasn't valid, so run 1007-1 on #7 gets a judge-output-invalid score file\. /);
   });
 
-  it("says what a re-run found already there and left as it was", () => {
-    const run = files();
-    const again = { ...written(run), written: [], existing: [run.judge.recordPath, run.score.path] };
+  it("says what a re-run found already there and left as it was, giving the scores the store holds, not its own (#451)", () => {
+    const stored = files();
+    const run = files({ ...judged, output: { answers: [{ ...ANSWERS[0], score: 0.1 }, ANSWERS[1]] } });
+    const again = { ...kept(run, stored.score.file), written: [], existing: [run.judge.recordPath, run.score.path] };
 
     expect(scoreRecordSummary(again)).toBe(
-      "Scored run 1007-1 on #7: efficiency@1 0.80, passed (clean); skill-use@1 0.50, failed (missed-skill). " +
+      "Run 1007-1 on #7 was already scored, and the store keeps its score file: efficiency@1 0.80, passed (clean); skill-use@1 0.50, failed (missed-skill). " +
         `Already there, left as it was: ${JUDGE_RECORD}, ${run.score.path}.`,
+    );
+  });
+
+  it("says a judge re-run's scores replaced the skip score file a failed judge left, and where it wrote them (#451)", () => {
+    const run = files(judged, JUDGE_LINES, "success", "2");
+    const replaced = { ...written(run), scoreFile: { kind: "replaced", skip: { reason: "judge-output-invalid" } } } as const;
+
+    expect(scoreRecordSummary(replaced)).toBe(
+      "Scored run 1007-1 on #7: efficiency@1 0.80, passed (clean); skill-use@1 0.50, failed (missed-skill). " +
+        "They replace the judge-output-invalid score file an earlier judge left. " +
+        `Written to jrey8343/fabrik-runs: ${JUDGE_RECORD_2}, ${run.score.path}.`,
+    );
+  });
+
+  it("says why a judge re-run scored nothing, and which skip score file the store keeps", () => {
+    const stored = files({ kind: "judge-failed", judge: { ...judged.judge, digestTrimmed: null } }, null, "cancelled");
+    const run = files({ ...judged, output: { answers: [] } }, JUDGE_LINES, "success", "2");
+
+    expect(scoreRecordSummary(kept(run, stored.score.file))).toBe(
+      "Not scored: the judge's output wasn't valid. Run 1007-1 on #7 already has a judge-failed score file, which the store keeps. " +
+        `Written to jrey8343/fabrik-runs: ${JUDGE_RECORD_2}. Already there, left as it was: ${run.score.path}.`,
+    );
+  });
+
+  it("says when the score file the store keeps is one the Kit can't read", () => {
+    const run = files();
+
+    expect(scoreRecordSummary(kept(run, null))).toBe(
+      "Run 1007-1 on #7 already has a score file the Kit can't read, which the store keeps. " +
+        `Written to jrey8343/fabrik-runs: ${JUDGE_RECORD}. Already there, left as it was: ${run.score.path}.`,
     );
   });
 

@@ -1,7 +1,9 @@
 # Writes what scoring a run came to (#149) to the fabrik-runs store
 # (src/kit/runStore.ts): the judge run's transcript, its Run record (role
 # `score`) and the score file, each create-only and retrying on conflict, so a
-# re-run with the same rubrics leaves the files it finds as they were. It is the
+# re-run with the same rubrics leaves the files it finds as they were, save
+# that a judge's scores replace the skip score file a failed judge left, and a
+# judge re-run in a later attempt gets a Run record of its own (#451). It is the
 # judge run's own push job (ADR-0009): it runs no agent and no Product code,
 # gets a token scoped to fabrik-runs with Contents write only from the
 # store-token action, as the write the Run record action does, and runs

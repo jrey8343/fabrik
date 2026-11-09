@@ -295,9 +295,14 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
 
 /** What the score-record job knows when a judge run, scoring a finished run, ends. */
 export interface JudgeRunEnd {
-  /** The scored run's record: the judge run is for its subject, in the same workflow run and attempt. */
+  /** The scored run's record: the judge run is for its subject, in the same workflow run. */
   readonly scored: RunRecord;
-  /** The judge job's `needs.<job>`: how it ended, and the outputs it passed out as an agent job does (`secrets-step`, `model`, `effort`). */
+  /**
+   * The judge job's `needs.<job>`: how it ended, and the outputs it passed out
+   * as an agent job does (`secrets-step`, `model`, `effort`), with the attempt
+   * of the workflow run it ran in (`attempt`), which a re-run of a failed judge
+   * makes later than the scored run's.
+   */
   readonly judge: NeededJob;
   /** The Kit's fixed judge model, which the record names when the judge job passed out none. */
   readonly judgeModel: string;
@@ -314,17 +319,20 @@ export interface JudgeRunEnd {
 /**
  * The judge run's record, in role `score`, and its paths beside the scored
  * run's. Its subject and Replay are the scored run's; what ran, how it ended,
- * the effort it spent, its cost and its weekly-limit reading are its own.
+ * the effort it spent, its cost and its weekly-limit reading are its own, and
+ * so is its attempt, when its job passed one out: a judge re-run after a
+ * failed one gets a record of its own, so what both cost counts (#451).
  */
 export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
   const { scored, judge } = end;
+  const runAttempt = countOf(judge.outputs["attempt"]) ?? scored.runAttempt;
   // In the scored run's month, so the two sit side by side even when the judge ends in the next one.
-  const { recordPath, transcriptPath } = pathsFor({ ...scored, role: "score" }, end.transcript !== null);
+  const { recordPath, transcriptPath } = pathsFor({ ...scored, runAttempt, role: "score" }, end.transcript !== null);
   const facts: RunFacts = {
     kitSha: end.kitSha,
     repo: scored.repo,
     runId: scored.runId,
-    runAttempt: scored.runAttempt,
+    runAttempt,
     role: "score",
     issue: scored.issue,
     pullRequest: scored.pullRequest,

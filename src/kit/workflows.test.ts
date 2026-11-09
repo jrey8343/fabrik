@@ -1150,6 +1150,10 @@ describe("loop.yml's judge job", () => {
     expect(judge()).toContain("effort: ${{ steps.judge.outputs.effort }}");
     expect(stepsOf(judge()).find((step) => step.includes("uses: ./kit/.github/actions/run-judge"))).toContain("id: judge");
   });
+
+  it("passes out the attempt it ran in, so a judge re-run after a failed one gets a Run record of its own (#451)", () => {
+    expect(judge()).toContain("attempt: ${{ github.run_attempt }}");
+  });
 });
 
 describe("loop.yml's score-record job", () => {

@@ -1397,6 +1397,16 @@ describe("A judge run's record", () => {
     expect(files.record).toMatchObject({ runId: 9001, runAttempt: 2, endedAt: "2026-12-01T00:03:00Z", transcript: files.transcriptPath });
   });
 
+  it("a judge re-run in a later attempt of the workflow run gets a record of its own, under the attempt its job ran in (#451)", () => {
+    const files = judgeRunRecordFor(
+      judgeRunEnd({ judge: { result: "success", outputs: { "secrets-step": "success", model: JUDGE_MODEL, effort: "", attempt: "2" } } }),
+    );
+
+    expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-2-score.json");
+    expect(files.transcriptPath).toBe("transcripts/acme/widgets/2026-11/9001-2-score.jsonl.gz");
+    expect(files.record).toMatchObject({ runId: 9001, runAttempt: 2, issue: 7, totalCostUsd: 0.04 });
+  });
+
   it("a judge timed out with no transcript, its job passing out no model, gets a record on the Kit's judge model with no transcript", () => {
     const files = judgeRunRecordFor(judgeRunEnd({ judge: { result: "cancelled", outputs: {} }, transcript: null }));
 
