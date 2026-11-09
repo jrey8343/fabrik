@@ -69,7 +69,7 @@ async function main(): Promise<string> {
   const storeDir = required("FABRIK_STORE_DIR");
   const [records, scoreFiles, readTranscript, facts, elsewhere] = await Promise.all([
     // A schema 1 record, written before runs were given a Subscription, reads as on the first this repo lists.
-    readStoreRunRecords(storeDir, config.config.subscriptions),
+    readStoreRunRecords(storeDir, config.config.subscriptions).then(({ records }) => records),
     readStoreScoreFiles(storeDir),
     readStoreTranscripts(storeDir),
     gatherRetroFacts(product, repo, Date.now(), operator, reach),

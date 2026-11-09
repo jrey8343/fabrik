@@ -12,6 +12,7 @@ import { spelled } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type DesignQueueSnapshot, type InfrastructureFailure, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
+import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import {
   type ArchitecturalEscape,
@@ -32,7 +33,17 @@ import {
 } from "./retroEvidence.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { firstRunOf, isLive, type RateLimitReading, type RunRecord, runKey, UNKNOWN_COST_BASIS, WEEKLY_LIMIT } from "./runRecord.ts";
+import {
+  firstRunOf,
+  isLive,
+  type RateLimitReading,
+  RUN_RECORD_SCHEMA,
+  type RunRecord,
+  runKey,
+  UNKNOWN_COST_BASIS,
+  type UnreadableRunRecords,
+  WEEKLY_LIMIT,
+} from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
@@ -150,6 +161,8 @@ export interface UnreadRepo {
 
 export interface WeeklySummaryInput {
   readonly records: readonly RunRecord[];
+  /** The store's Run records the Kit couldn't read, which no figure counts: the summary says how many and how to read them. */
+  readonly unreadableRecords: UnreadableRunRecords;
   /** The store's score files: a picked run's scores, or why it has none (src/kit/scorer.ts). */
   readonly scoreFiles: readonly ScoreFile[];
   readonly facts: readonly GitHubFacts[];
@@ -515,8 +528,10 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   // Held work counts too, so a queue never sits unseen through a week nothing ran,
   // and so does a repo that couldn't be read, so its failure is never taken for a quiet week.
   const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null && repo.unread === null);
-  // And a week only Replays ran in is no quiet week either, so what they cost still shows.
-  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && replaySpend.thisWeek === null && quiet) return { kind: "skip" };
+  // And a week only Replays ran in is no quiet week either, so what they cost still shows,
+  // and nor is a store with Run records the Kit couldn't read, so a store on an older release is never taken for a quiet one (#474).
+  const unreadable = input.unreadableRecords.count > 0;
+  if (thisWeek.records === 0 && thisWeek.scores.scoreFiles === 0 && replaySpend.thisWeek === null && quiet && !unreadable) return { kind: "skip" };
   const change = <K extends keyof WeekMetrics>(metric: K): WeekOverWeek<WeekMetrics[K]> => ({
     thisWeek: thisWeek[metric],
     lastWeek: lastWeek[metric],
@@ -1229,7 +1244,7 @@ function localTime(time: number, timeZone: string): string {
 // Scores shows only in a week with score files, and never a run's own scores.
 // Held shows what the Design-session, Monitor and Map caps hold.
 
-function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInput): string {
+function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords }: WeeklySummaryInput): string {
   const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
   const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
   const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
@@ -1256,6 +1271,8 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
     ["spend that never merged", spendNeverMerged],
   ];
   const lines = [
+    // First, since every figure below leaves these records out.
+    ...unreadableLines(unreadableRecords),
     "## Metrics",
     "",
     "| | This week | Last week | Change |",
@@ -1308,6 +1325,17 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone }: WeeklySummaryInp
   // The Operator's one mention, last: the week's only scheduled push.
   lines.push(`@${operator}`);
   return `${lines.join("\n")}\n`;
+}
+
+/** The line saying how many of the store's Run records the Kit couldn't read, and how to read them when a newer Kit wrote them, or nothing when it read them all. */
+function unreadableLines({ count, newestSchema }: UnreadableRunRecords): string[] {
+  if (count === 0) return [];
+  const [records, them] = count === 1 ? ["1 Run record", "it"] : [`${count} Run records`, "them"];
+  const line =
+    newestSchema === null
+      ? `${records} in the store ${count === 1 ? "isn't" : "aren't"} of a schema the Kit knows, so this summary leaves ${them} out.`
+      : `${records} ${count === 1 ? "was" : "were"} written by a newer Kit than this store runs (schema ${newestSchema} > ${RUN_RECORD_SCHEMA}), so this summary leaves ${them} out: bump the Kit's pin in \`${STORE_CALLER_PATH}\` to the release the Product repos run.`;
+  return [line, ""];
 }
 
 /** The escapes opened in the 90 days by Strength, naming those with no known Strength only when there are some. */

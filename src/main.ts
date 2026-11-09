@@ -223,7 +223,7 @@ async function replayRunEvent(path: string, config: KitConfig): Promise<EventSou
       ? null
       : {
           // Ticket numbers repeat across Product repos, so only this repo's count.
-          records: Object.values(await readStoreRunRecords(storeDir, config.subscriptions)).filter((record) => record.repo === thisRepo),
+          records: Object.values((await readStoreRunRecords(storeDir, config.subscriptions)).records).filter((record) => record.repo === thisRepo),
           scoreFiles: Object.values(await readStoreScoreFiles(storeDir)).filter((file) => file.repo === thisRepo),
           gates: await readStoreReplayGates(storeDir),
         };
@@ -278,7 +278,7 @@ async function finishedReviewEvent(
  */
 function storeCheckoutAt(dir: string | undefined, config: KitConfig): ReplayStore {
   return {
-    records: async () => (dir === undefined || dir === "" ? null : Object.values(await readStoreRunRecords(dir, config.subscriptions))),
+    records: async () => (dir === undefined || dir === "" ? null : Object.values((await readStoreRunRecords(dir, config.subscriptions)).records)),
   };
 }
 

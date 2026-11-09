@@ -475,6 +475,25 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
 }
 
 /**
+ * The Run records in the store the Kit couldn't read (readRunRecord), which
+ * every figure leaves out: how many, and the newest schema among them when
+ * any is newer than the Kit's, a record a newer Kit wrote than the one
+ * reading it.
+ */
+export interface UnreadableRunRecords {
+  readonly count: number;
+  /** Null when none is of a schema newer than RUN_RECORD_SCHEMA. */
+  readonly newestSchema: number | null;
+}
+
+/** The schema of a stored file that isn't a Run record the Kit can read, when it's newer than the Kit's own: null for any other. */
+export function newerSchemaOf(stored: unknown): number | null {
+  if (typeof stored !== "object" || stored === null) return null;
+  const { schema } = stored as { schema?: unknown };
+  return typeof schema === "number" && Number.isInteger(schema) && schema > RUN_RECORD_SCHEMA ? schema : null;
+}
+
+/**
  * The job whose failure the push job saw: for a Review, the Reviewer, unless
  * its checks job failed first and the Reviewer never ran; for a Retro, the
  * Retro job, unless its evidence job failed first and the Retro never ran; for

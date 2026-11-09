@@ -42,7 +42,18 @@ import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type T
 const NOW = "2026-11-08T20:00:00Z";
 
 function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput {
-  return { records: [], scoreFiles: [], facts: [factsOf()], unread: [], operator: "operator", appLogin: "fabrik-app[bot]", timeZone: "Australia/Sydney", now: NOW, ...overrides };
+  return {
+    records: [],
+    unreadableRecords: { count: 0, newestSchema: null },
+    scoreFiles: [],
+    facts: [factsOf()],
+    unread: [],
+    operator: "operator",
+    appLogin: "fabrik-app[bot]",
+    timeZone: "Australia/Sydney",
+    now: NOW,
+    ...overrides,
+  };
 }
 
 describe("the Weekly summary", () => {
@@ -59,6 +70,25 @@ describe("the Weekly summary", () => {
 
   it("isn't skipped in a week with no records but a Product repo the Kit couldn't read", () => {
     expect(weeklySummary(input({ unread: [{ repo: "owner/gone", why: "GitHub GraphQL query failed: Bad Gateway" }] })).kind).toBe("summary");
+  });
+
+  // A store whose caller pins an older release than the Product repos' (#474).
+  it("isn't skipped in a week whose every Run record the Kit couldn't read, and says how many and how to read them", () => {
+    const result = weeklySummary(input({ unreadableRecords: { count: 12, newestSchema: 6 } }));
+
+    if (result.kind !== "summary") throw new Error("skipped");
+    expect(result.body).toContain(
+      "12 Run records were written by a newer Kit than this store runs (schema 6 > 5), so this summary leaves them out: bump the Kit's pin in `.github/workflows/weekly-summary.yml` to the release the Product repos run.",
+    );
+  });
+
+  it("says how many Run records the Kit couldn't read when none is a newer Kit's, and nothing when it read them all", () => {
+    const unknown = weeklySummary(input({ records: [aRunRecord()], unreadableRecords: { count: 1, newestSchema: null } }));
+    const read = weeklySummary(input({ records: [aRunRecord()] }));
+
+    if (unknown.kind !== "summary" || read.kind !== "summary") throw new Error("skipped");
+    expect(unknown.body).toContain("1 Run record in the store isn't of a schema the Kit knows, so this summary leaves it out.");
+    expect(read.body).not.toContain("Run record");
   });
 
   it("gives a Product repo the Kit couldn't read a line in its section saying why, and the other repo its whole section", () => {

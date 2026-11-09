@@ -30,8 +30,28 @@ describe("Reading the store's checkout", () => {
       "scores/owner/product/2026-11/1003-1-implement-def456.json": JSON.stringify({ ...aScoreFile(), schema: 3 }),
     });
 
-    expect(await readStoreRunRecords(store, ["Claude token", "Claude token 2"])).toEqual({ [recordPathOf(record)]: record });
+    expect((await readStoreRunRecords(store, ["Claude token", "Claude token 2"])).records).toEqual({ [recordPathOf(record)]: record });
     expect(await readStoreScoreFiles(store)).toEqual({ [scorePath]: aScoreFile() });
+  });
+
+  // A store whose caller pins an older release than the Product repos' (#474).
+  it("counts the Run records it can't read, with the newest schema among them a newer Kit wrote", async () => {
+    const store = await aCheckoutWith({
+      [recordPathOf(record)]: JSON.stringify(record),
+      "runs/owner/product/2026-11/1002-1-triage.json": JSON.stringify({ ...record, schema: 6 }),
+      "runs/owner/product/2026-11/1003-1-triage.json": JSON.stringify({ ...record, schema: 7 }),
+      "runs/owner/product/2026-11/1004-1-triage.json": JSON.stringify("not a record"),
+    });
+
+    expect((await readStoreRunRecords(store, ["Claude token"])).unreadable).toEqual({ count: 3, newestSchema: 7 });
+  });
+
+  it("counts no Run record it can't read, and no newer schema, when it reads them all or none is a newer Kit's", async () => {
+    const readable = await aCheckoutWith({ [recordPathOf(record)]: JSON.stringify(record) });
+    const unknown = await aCheckoutWith({ [recordPathOf(record)]: JSON.stringify({ ...record, schema: 0 }) });
+
+    expect((await readStoreRunRecords(readable, ["Claude token"])).unreadable).toEqual({ count: 0, newestSchema: null });
+    expect((await readStoreRunRecords(unknown, ["Claude token"])).unreadable).toEqual({ count: 1, newestSchema: null });
   });
 
   it("reads a schema 1 score file, written before Replays, as no replay's, at the current schema", async () => {
@@ -45,7 +65,7 @@ describe("Reading the store's checkout", () => {
     const { subscription: _, ...unnamed } = record;
     const store = await aCheckoutWith({ [recordPathOf(record)]: JSON.stringify({ ...unnamed, schema: 1 }) });
 
-    expect(await readStoreRunRecords(store, ["Claude token 2", "Claude token"])).toEqual({
+    expect((await readStoreRunRecords(store, ["Claude token 2", "Claude token"])).records).toEqual({
       [recordPathOf(record)]: { ...record, subscription: "Claude token 2" },
     });
   });
@@ -63,7 +83,7 @@ describe("Reading the store's checkout", () => {
   it("reads nothing from a part of the store the checkout doesn't hold", async () => {
     const store = await aCheckoutWith({});
 
-    expect(await readStoreRunRecords(store, ["Claude token"])).toEqual({});
+    expect(await readStoreRunRecords(store, ["Claude token"])).toEqual({ records: {}, unreadable: { count: 0, newestSchema: null } });
     expect(await readStoreScoreFiles(store)).toEqual({});
     expect((await readStoreTranscripts(store))(record.transcript!)).toBeNull();
   });

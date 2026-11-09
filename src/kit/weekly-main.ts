@@ -153,7 +153,7 @@ async function main(): Promise<string> {
   const storeDir = required("FABRIK_STORE_DIR");
   // The summary has no Product's Kit config, so a schema 1 record is read as
   // being on the one V1 Subscription, the first a Kit config lists by default.
-  const records = Object.values(await readStoreRunRecords(storeDir, DEFAULT_KIT_CONFIG.subscriptions));
+  const { records, unreadable } = await readStoreRunRecords(storeDir, DEFAULT_KIT_CONFIG.subscriptions);
   // No scores/ until scoring has run.
   const scoreFiles = Object.values(await readStoreScoreFiles(storeDir));
   const repos = await productReposOf(products);
@@ -161,7 +161,8 @@ async function main(): Promise<string> {
   const { facts, unread } = await gatherEveryRepoFacts(products, repos, now, RUN_STORE.owner);
 
   const result = weeklySummary({
-    records,
+    records: Object.values(records),
+    unreadableRecords: unreadable,
     scoreFiles,
     facts,
     unread,

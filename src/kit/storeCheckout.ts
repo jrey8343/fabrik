@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { readTranscriptGzip } from "../agent/transcript.ts";
 import type { KitConfig } from "./config.ts";
 import { readReplayArmGates, type ReplayArmGates } from "./replay.ts";
-import { readRunRecord, type RunRecord } from "./runRecord.ts";
+import { newerSchemaOf, readRunRecord, type RunRecord, type UnreadableRunRecords } from "./runRecord.ts";
 import { readScoreFile, type ScoreFile } from "./scorer.ts";
 
 /** Every path under one of the checkout's directories ending in `suffix`, as a path in the store: none when the directory isn't there. */
@@ -30,24 +30,38 @@ async function readStoreFiles(storeDir: string, directory: "runs" | "scores"): P
   return Promise.all(paths.map(async (path): Promise<[string, unknown]> => [path, JSON.parse(await readFile(join(storeDir, path), "utf8"))]));
 }
 
+/** The Run records in a checkout of the store, and the ones it couldn't read. */
+export interface StoreRunRecords {
+  /** Every Run record the Kit can read, by its path in the store. */
+  readonly records: Record<string, RunRecord>;
+  readonly unreadable: UnreadableRunRecords;
+}
+
 /**
  * Every Run record under `runs/`, by its path in the store, at the current
  * schema: a schema 1 record, which names no Subscription, as being on the
  * first of `subscriptions`, a schema 1 or 2 record as no prototype turn, and
  * a schema 1, 2 or 3 record as no replay's (readRunRecord). A file of a schema
- * the Kit doesn't know is left out.
+ * the Kit doesn't know is left out of `records` and counted in `unreadable`,
+ * so a store on an older release than the runs that wrote its records says so
+ * rather than reading as a store with fewer runs (#474).
  */
-export async function readStoreRunRecords(
-  storeDir: string,
-  subscriptions: KitConfig["subscriptions"],
-): Promise<Record<string, RunRecord>> {
+export async function readStoreRunRecords(storeDir: string, subscriptions: KitConfig["subscriptions"]): Promise<StoreRunRecords> {
   const files = await readStoreFiles(storeDir, "runs");
-  return Object.fromEntries(
-    files.flatMap(([path, file]): [string, RunRecord][] => {
-      const record = readRunRecord(file, subscriptions);
-      return record === null ? [] : [[path, record]];
-    }),
-  );
+  const records: Record<string, RunRecord> = {};
+  let count = 0;
+  let newestSchema: number | null = null;
+  for (const [path, file] of files) {
+    const record = readRunRecord(file, subscriptions);
+    if (record !== null) {
+      records[path] = record;
+      continue;
+    }
+    count += 1;
+    const schema = newerSchemaOf(file);
+    if (schema !== null && (newestSchema === null || schema > newestSchema)) newestSchema = schema;
+  }
+  return { records, unreadable: { count, newestSchema } };
 }
 
 /**
