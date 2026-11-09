@@ -340,6 +340,16 @@ export function retroRunSnapshotOf(retro: Partial<IssueSnapshot> = {}): Snapshot
 }
 
 /**
+ * A scheduled tick's plan without its notes, which say why each part of the
+ * tick did nothing, for a test about what the tick does.
+ */
+export function withoutNotes(plan: Plan): Plan {
+  if (plan.kind !== "act") return plan;
+  const { notes: _notes, ...acting } = plan;
+  return acting;
+}
+
+/**
  * Every way a plan would buzz the Operator's phone: an assignment, a review request, an issue
  * opened or created assigned to them, or an @-mention of them in a comment or new issue.
  */

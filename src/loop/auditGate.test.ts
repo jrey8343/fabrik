@@ -8,6 +8,7 @@ import {
   notificationsOf,
   snapshotOf,
   tickSnapshot,
+  withoutNotes,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, AuditIssueSnapshot, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
@@ -28,7 +29,7 @@ function tick(
   }: { head?: string | null; issues?: readonly AuditIssueSnapshot[]; kitIssues?: readonly KitIssueSnapshot[] } = {},
   config: KitConfig = kitConfig(),
 ): Plan {
-  return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ kitIssues, audit: { head, issues } }), config);
+  return withoutNotes(planFor({ kind: "scheduled-tick", now }, tickSnapshot({ kitIssues, audit: { head, issues } }), config));
 }
 
 /** A tick that opens no Audit and closes or posts nothing: it only asks for the Design queue check every tick ends with. */
@@ -225,6 +226,22 @@ describe("The tick's other rules", () => {
       kind: "act",
       actions: [expect.objectContaining({ kind: "comment", issue: 41 }), { kind: "close", issue: 41, reason: "completed" }, { kind: "check-dispatch" }, { kind: "check-design-queue" }],
     });
+  });
+});
+
+describe("Why a tick's gate opens nothing", () => {
+  it("reaches the step summary's notes even when another part of the tick acts, as the weekly-limit close does here", () => {
+    const snapshot = tickSnapshot({ kitIssues: [weeklyLimitIssue("2026-11-08T03:00:00.000Z")], audit: { head: HEAD, issues: [] } });
+    const plan = planFor({ kind: "scheduled-tick", now: SUNDAY }, snapshot, kitConfig({ audit: { day: null } }));
+
+    expect(plan.kind === "act" && plan.actions.some((action) => action.kind === "close" && action.issue === 41)).toBe(true);
+    expect(plan.kind === "act" ? plan.notes : []).toContain("The Audit is off: audit.day is null");
+  });
+
+  it("reaches the step summary's notes when nothing else in the tick acts either", () => {
+    const plan = planFor({ kind: "scheduled-tick", now: SUNDAY }, tickSnapshot({ audit: { head: HEAD, issues: [] } }), kitConfig({ audit: { day: null }, retro: { day: null } }));
+
+    expect(plan.kind === "act" ? plan.notes : []).toEqual(expect.arrayContaining(["The Audit is off: audit.day is null", "The Retro is off: retro.day is null"]));
   });
 });
 

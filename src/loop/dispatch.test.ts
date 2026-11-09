@@ -11,6 +11,7 @@ import {
   snapshotOf,
   snapshotOfPullRequest,
   tickSnapshot,
+  withoutNotes,
 } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
@@ -447,6 +448,6 @@ describe("What triggers a Dispatch check (#418)", () => {
   it("the hourly scheduled tick, which picks up a Ticket left waiting while every slot was full", () => {
     const plan = planFor({ kind: "scheduled-tick", now: "2026-11-09T04:05:00.000Z" }, tickSnapshot(), kitConfig());
 
-    expect(plan).toEqual({ kind: "act", actions: expect.arrayContaining([{ kind: "check-dispatch" }]) });
+    expect(withoutNotes(plan)).toEqual({ kind: "act", actions: expect.arrayContaining([{ kind: "check-dispatch" }]) });
   });
 });

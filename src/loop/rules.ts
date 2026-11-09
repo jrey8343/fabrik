@@ -193,9 +193,14 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // Dispatch check, so a Ticket left waiting while every slot was full, or
       // marked ready by an event the Loop missed, starts within the hour (#418).
       // First of all it sweeps trigger labels with no run behind them (#419),
-      // so a slot it frees can be filled by this tick's queue checks.
+      // so a slot it frees can be filled by this tick's queue checks. Why each
+      // part does nothing is a note, so the step summary says it whatever the
+      // rest of the tick does.
       return thenCheckQueues(
-        alongside(stuckTriggers(event.now, snapshot), scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config)),
+        alongside(
+          withReasonNoted(stuckTriggers(event.now, snapshot)),
+          scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config),
+        ),
       );
   }
 }
@@ -253,7 +258,12 @@ function scheduledTickWith(gates: readonly TickGate[], now: string, snapshot: Sn
   // A weekly-limit issue this tick closes after its reset no longer holds a gate back.
   const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));
   const kitIssues = snapshot.kitIssues.filter((issue) => !closing.includes(issue.number));
-  return gates.reduce((plan, gate) => alongside(plan, gate(now, { ...snapshot, kitIssues }, config)), tick);
+  return gates.reduce((plan, gate) => alongside(plan, withReasonNoted(gate(now, { ...snapshot, kitIssues }, config))), withReasonNoted(tick));
+}
+
+/** A part of the tick's plan, its reason for doing nothing kept as a note, which alongside would drop once another part acts. */
+function withReasonNoted(plan: Plan): Plan {
+  return plan.kind === "nothing" ? { kind: "act", actions: [], notes: [plan.reason] } : plan;
 }
 
 /**

@@ -2,37 +2,54 @@
 // every fabrik:monitor issue in the Product repo, the default branch's newest
 // commits with their check runs, and whether the Monitor itself made the last
 // close of the newest red-main issue, as the facts the Monitor core plans from
-// (src/monitor/core.ts). Read-only. Its program is src/monitor/main.ts.
+// (src/monitor/core.ts); and whether a closing note is already on an issue.
+// Read-only. Its program is src/monitor/main.ts.
 import { MONITOR_LABEL } from "../loop/labels.ts";
 import { RED_MAIN_GREEN_MARKER } from "../loop/markers.ts";
 import { type MonitorIssue, newestByMarker } from "../monitor/issues.ts";
 import type { CheckRun, MainChecksRead, MainCommit } from "../monitor/redMain.ts";
 import { allPages, type GitHub, GitHubError, type Repo, refusalOf } from "./client.ts";
 
-/** What the Monitor reads of the Product repo on GitHub. */
-export interface MonitorGitHubFacts {
-  /** Every issue carrying fabrik:monitor, open or closed. */
-  readonly issues: readonly MonitorIssue[];
-  /** The default branch's newest commits and their check runs, or null when red main is off and they weren't read. */
-  readonly mainChecks: MainChecksRead | null;
-}
+/** What the Monitor reads of the Product repo on GitHub, or GitHub's error when its rate limit stopped the read of the issues. */
+export type MonitorGitHubFacts =
+  | {
+      readonly kind: "read";
+      /** Every issue carrying fabrik:monitor, open or closed. */
+      readonly issues: readonly MonitorIssue[];
+      /** The default branch's newest commits and their check runs, or null when red main is off and they weren't read. */
+      readonly mainChecks: MainChecksRead | null;
+    }
+  | { readonly kind: "rate-limited"; readonly error: string };
 
 /**
  * Reads the Monitor's GitHub facts: the issues, and with red main on the
  * default branch's commits and their check runs, through the gating checks
  * `sandbox.checks` lists, and who last closed the newest red-main issue.
  * `appLogin` is the Fabrik App's bot login, which names its issues and its own close.
+ * When GitHub's rate limit stops the read of the issues, the Monitor can plan
+ * nothing, so it's rate-limited, with a warning, rather than a failed run.
  */
 export async function gatherMonitorFacts(
   github: Pick<GitHub, "rest">,
   repo: Repo,
   { appLogin, redMain, gatingChecks }: { readonly appLogin: string; readonly redMain: boolean; readonly gatingChecks: readonly string[] },
 ): Promise<MonitorGitHubFacts> {
-  const [issues, mainChecks] = await Promise.all([
-    monitorIssues(github, repo, appLogin),
+  const [issuesRead, mainChecks] = await Promise.all([
+    monitorIssues(github, repo, appLogin).then(
+      (issues) => ({ kind: "read", issues }) as const,
+      (error: unknown) => {
+        if (error instanceof GitHubError && refusalOf(error) === "rate-limited") return { kind: "rate-limited", error: error.message } as const;
+        throw error;
+      },
+    ),
     redMain ? mainChecksOf(github, repo, gatingChecks) : null,
   ]);
-  return { issues: mainChecks?.kind === "read" ? await withRedMainCloser(github, repo, issues, appLogin) : issues, mainChecks };
+  if (issuesRead.kind === "rate-limited") {
+    console.log(`::warning title=GitHub rate limit::${issuesRead.error}`);
+    return issuesRead;
+  }
+  const { issues } = issuesRead;
+  return { kind: "read", issues: mainChecks?.kind === "read" ? await withRedMainCloser(github, repo, issues, appLogin) : issues, mainChecks };
 }
 
 /** An issue in GitHub's REST listing; pull requests come in it too. */
@@ -172,4 +189,20 @@ async function withRedMainCloser(
     }
   }
   return issues.map((issue) => (issue === newest ? { ...issue, closedByMonitor: byMonitor } : issue));
+}
+
+/**
+ * Whether the Fabrik App already commented `note` on the issue since it was
+ * last reopened, as a tick that posted its closing note and then failed
+ * before the close leaves it. The note's first line names it, so a green-at
+ * note for another commit counts too: the issue's note goes on it only once.
+ */
+export async function closingNotePosted(github: Pick<GitHub, "rest">, repo: Repo, issue: number, note: string, appLogin: string): Promise<boolean> {
+  const firstLine = note.split("\n")[0] ?? note;
+  let posted = false;
+  for (const entry of await allPages<RawTimelineEvent>(github, `/repos/${repo.owner}/${repo.name}/issues/${issue}/timeline`)) {
+    if (entry.event === "commented" && entry.user?.login === appLogin && (entry.body ?? "").split("\n")[0] === firstLine) posted = true;
+    else if (entry.event === "reopened") posted = false;
+  }
+  return posted;
 }

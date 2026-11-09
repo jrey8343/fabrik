@@ -8,6 +8,7 @@
 // Upstream text (commit messages, the diff) only ever goes into the body
 // inside code fences, so it can't mention people or link issues here.
 import { SKILLS_SOURCES_LOCK_PATH, type SkillsSource } from "../kit/config.ts";
+import { readable } from "../loop/readable.ts";
 import { foldersIn, PLUGIN_MANIFEST_PATH, type SkillsLock, shortSha, skillFolders } from "./lock.ts";
 
 /** What the GitHub compare API says about upstream (main, or a source's default branch) against the pin. */
@@ -164,6 +165,33 @@ export function scheduledTickOf(observedAt: Date, schedule: string | undefined):
   tick.setUTCMinutes(Number(minute), 0, 0);
   if (tick > observedAt) tick.setUTCHours(tick.getUTCHours() - 1);
   return tick;
+}
+
+/**
+ * The weekly gate on a scheduled run seen at `seenAt` with the caller's hourly
+ * `schedule`: whether its tick is the skills bump tick, and the step
+ * summary's line saying so, or when the next bump tick is. On the tick just
+ * after the bump tick, the line also says the week's bump was missed if no run
+ * took that tick as due: a run GitHub started more than an hour late is read
+ * as this tick, and one run can't tell that from the bump tick's own run
+ * having been on time, so the Operator checks the run before it.
+ */
+export function skillsBumpGate(seenAt: Date, schedule: string | undefined): { readonly due: boolean; readonly summary: string } {
+  const tick = scheduledTickOf(seenAt, schedule);
+  if (isSkillsBumpTick(tick)) {
+    return { due: true, summary: `Skills bump: due, as the tick scheduled for ${readable(tick.getTime())} is the weekly skills bump tick` };
+  }
+  const next = new Date(tick);
+  do next.setUTCHours(next.getUTCHours() + 1);
+  while (!isSkillsBumpTick(next));
+  const notDue = `Skills bump: not due (next: ${readable(next.getTime())})`;
+  const previous = new Date(tick);
+  previous.setUTCHours(previous.getUTCHours() - 1);
+  if (!isSkillsBumpTick(previous)) return { due: false, summary: notDue };
+  return {
+    due: false,
+    summary: `${notDue}. This week's bump tick was ${readable(previous.getTime())}: if no run took it as due, GitHub started it more than an hour late or dropped it, and this week's bump was missed`,
+  };
 }
 
 function hasMoved(pin: { readonly sha: string }, upstream: UpstreamSkills): boolean {

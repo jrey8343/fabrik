@@ -13,10 +13,12 @@
 // its 1Password item is missing or couldn't be read. A Sentry API error is a
 // warning in the step summary, never a failed run, and red main still runs.
 // Red main reads check runs through the App's Checks: read; while the App
-// lacks it, GitHub refuses them and red main is a quiet dormant note.
+// lacks it, GitHub refuses them and red main is a quiet dormant note. GitHub's
+// rate limit on either read is a warning. Any other error fails the run with
+// an ::error, and the step summary still says what this tick applied before it.
 import { appendFile } from "node:fs/promises";
 import { GitHub, type Repo } from "../github/client.ts";
-import { gatherMonitorFacts } from "../github/monitorFacts.ts";
+import { closingNotePosted, gatherMonitorFacts } from "../github/monitorFacts.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "../kit/caller.ts";
 import { type KitConfig, resolveKitConfig } from "../kit/config.ts";
@@ -55,9 +57,32 @@ async function loadKit(github: GitHub, repo: Repo): Promise<KitConfig | null> {
   return check.config;
 }
 
-/** Files each issue the plan opens, rewrites each body it rewrites and closes what it closes, returning a step-summary line for each. */
-async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<string[]> {
+/** A failure partway through applying the plan, with the step summary's line for each change that landed before it. */
+class PartlyApplied extends Error {
+  readonly applied: readonly string[];
+  constructor(applied: readonly string[], cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.applied = applied;
+  }
+}
+
+/**
+ * Files each issue the plan opens, rewrites each body it rewrites and closes
+ * what it closes, returning a step-summary line for each. A failure throws
+ * PartlyApplied, carrying the lines for the changes that had already landed.
+ * `appLogin` is the Fabrik App's bot login, which names its own closing notes.
+ */
+async function apply(github: GitHub, repo: Repo, plan: MonitorPlan, appLogin: string): Promise<string[]> {
   const lines: string[] = [];
+  try {
+    await applyInto(github, repo, plan, appLogin, lines);
+  } catch (error) {
+    throw new PartlyApplied(lines, error);
+  }
+  return lines;
+}
+
+async function applyInto(github: GitHub, repo: Repo, plan: MonitorPlan, appLogin: string, lines: string[]): Promise<void> {
   for (const issue of plan.open) {
     // Labels go on with the issue, so the issues.opened run it starts already sees them.
     const filed = (await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues`, {
@@ -75,11 +100,13 @@ async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<str
   }
   for (const close of plan.close) {
     // The note goes first, so the close right after it reads as the Monitor's own in the issue's timeline.
-    await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues/${close.issue}/comments`, { body: close.comment });
+    // A tick that failed between the two left the note already, and it's the issue's only comment.
+    if (!(await closingNotePosted(github, repo, close.issue, close.comment, appLogin))) {
+      await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues/${close.issue}/comments`, { body: close.comment });
+    }
     await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/issues/${close.issue}`, { state: "closed", state_reason: "completed" });
     lines.push(`Closed #${close.issue} as completed: ${close.because}`);
   }
-  return lines;
 }
 
 async function main(): Promise<void> {
@@ -96,10 +123,15 @@ async function main(): Promise<void> {
   const { errors, redMain } = config.monitor;
   const gatingChecks = config.sandbox.checks;
   const sentryToken = process.env["FABRIK_SENTRY_TOKEN"] ?? "";
+  const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
   const [gitHubFacts, sentryAsListed] = await Promise.all([
-    gatherMonitorFacts(github, repo, { appLogin: `${required("FABRIK_APP_SLUG")}[bot]`, redMain, gatingChecks }),
+    gatherMonitorFacts(github, repo, { appLogin, redMain, gatingChecks }),
     readSentry(errors, sentryToken),
   ]);
+  if (gitHubFacts.kind === "rate-limited") {
+    await report([`Warning: GitHub's rate limit stopped the Monitor reading its issues, so it did nothing this tick: ${gitHubFacts.error}`]);
+    return;
+  }
   const inputWith = (sentry: SentryRead | null): MonitorInput => ({
     monitor: config.monitor,
     sentry,
@@ -115,10 +147,12 @@ async function main(): Promise<void> {
   const planAsListed = monitorPlanFor(inputWith(sentryAsListed));
   const sentryWithEvents = await withLatestEvents(sentryAsListed, errors, sentryToken, groupsNeedingLatestEvent(planAsListed));
   const plan = monitorPlanFor(inputWith(sentryWithEvents));
-  await report([...(await apply(github, repo, plan)), ...plan.summary]);
+  await report([...(await apply(github, repo, plan, appLogin)), ...plan.summary]);
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
+main().catch(async (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.log(`::error title=The Monitor failed::${message}`);
   process.exitCode = 1;
+  await report([...(error instanceof PartlyApplied ? error.applied : []), `The Monitor failed: ${message}`]);
 });

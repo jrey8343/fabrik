@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aReplayIssue, replaySlice } from "../__fixtures__/replay.ts";
-import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
 
@@ -110,7 +110,7 @@ describe("A replay issue (#156)", () => {
   });
 
   it("is taken a step on by the scheduled tick, beside the Audit it opens: the Operator's accepted issue's next Ticket starts", () => {
-    const plan = planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice() }), kitConfig());
+    const plan = withoutNotes(planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice() }), kitConfig()));
 
     expect(plan).toEqual({
       kind: "act",
@@ -124,9 +124,9 @@ describe("A replay issue (#156)", () => {
   });
 
   it("changes nothing the scheduled tick plans when it's someone else's, so nobody but the Operator spends a Subscription on one", () => {
-    const plan = planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice([aReplayIssue({ author: "someone-else" })]) }), kitConfig());
+    const plan = withoutNotes(planFor(tick, tickSnapshot({ kitIssues: [open], replay: replaySlice([aReplayIssue({ author: "someone-else" })]) }), kitConfig()));
 
-    expect(plan).toEqual(planFor(tick, tickSnapshot(), kitConfig()));
+    expect(plan).toEqual(withoutNotes(planFor(tick, tickSnapshot(), kitConfig())));
     expect(plan).toEqual({ kind: "act", actions: expect.arrayContaining([expect.objectContaining({ kind: "open-issue", labels: ["fabrik:audit"] })]) });
   });
 });
