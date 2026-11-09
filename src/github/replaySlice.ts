@@ -32,7 +32,7 @@ export interface ReplayStore {
  * waits, or the store couldn't be read: this repo's candidate Tickets, from
  * its own records alone, with their merged PRs' facts; the Kit config at
  * each baseSha the pick weighs; and whether each candidate Kit sha a request
- * names is a commit on a branch of the Fabrik repo.
+ * names is a commit in the Fabrik repo, on a branch or not (#449).
  */
 export async function gatherReplayAcceptance(
   github: GitHub,
@@ -153,7 +153,7 @@ function editedAt({ lastEditedAt, timelineItems }: EditedNode): string | null {
   return times.toSorted((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? null;
 }
 
-/** Whether each sha is a commit on a branch of the Fabrik repo, which a candidate Kit must be. */
+/** Whether each sha is a commit in the Fabrik repo, which a candidate Kit sha must be. */
 async function fabrikCommitsOf(github: GitHub, shas: readonly string[]): Promise<Record<string, boolean>> {
   return Object.fromEntries(await Promise.all(shas.map(async (sha): Promise<[string, boolean]> => [sha, await isKitCommit(github, sha)])));
 }

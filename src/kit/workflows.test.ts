@@ -2121,10 +2121,16 @@ describe("loop.yml's replay jobs", () => {
   it("runs the gates, Review and judge of each arm once its Implement job has ended, whatever it came to, unless the run was cancelled", () => {
     for (const name of ["replay-gates", "replay-review", "replay-score"]) {
       expect(needsOf(job(name)), name).toEqual(["kit", "implement-claim", "replay-implement"]);
-      expect(job(name), name).toContain(`\n    if: \${{ !cancelled() && ${CLAIMED} }}\n`);
+      expect(job(name), name).toContain(`\n    if: \${{ !cancelled() && ${CLAIMED} && needs.kit.outputs.replay-kit-sha-unavailable == '' }}\n`);
       // A matrix job's result covers both legs: each action sorts out its own arm.
       expect(job(name), name).not.toContain("needs.replay-implement.result");
     }
+  });
+
+  // #449: a variant whose candidate Kit sha the Kit job couldn't lay can't run, so no arm spends a run on it.
+  it.each(ARM_JOBS)("%s runs no arm when the Kit job couldn't lay the variant's candidate Kit sha, while replay-record still lands the run", (name) => {
+    expect(/\n    if: (.*)\n/.exec(job(name))?.[1]).toContain("needs.kit.outputs.replay-kit-sha-unavailable == ''");
+    expect(job("replay-record")).not.toContain("replay-kit-sha-unavailable");
   });
 
   it.each(REPLAY_JOBS)("%s checks out the Kit alone into kit/, at its pinned commit, before the replay action it runs", (name) => {

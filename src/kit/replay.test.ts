@@ -933,6 +933,15 @@ describe("A Replay's next step on the tick", () => {
       expect(nextReplayStep(aTick([twice]))).toEqual({ kind: "start", issue: 140, ticket: 7 });
     });
 
+    // #449: a candidate Kit sha that can't be laid fails the same way every time, so a retry would only spend another run.
+    it("marking a Ticket failed at once, with no retry, when its variant's candidate Kit sha can't be laid", () => {
+      const reason = `the variant arm's candidate Kit sha couldn't be laid (kit-sha-unavailable): ${"c".repeat(40)} isn't a commit in jrey8343/fabrik, so neither arm ran`;
+      const unavailable = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "kit-sha-unavailable", reason });
+
+      expect(replayMarksIn(unavailable.body)?.progress[0]).toEqual({ ticket: 12, state: "failed", run: 9001, reason });
+      expect(nextReplayStep(aTick([unavailable]))).toEqual({ kind: "start", issue: 140, ticket: 7 });
+    });
+
     it("keeping a retried Ticket's one retry through a weekly-limit refusal", () => {
       const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
       const refused = finished(started(once, 12, 9002), 12, 9002, { kind: "weekly-limit" });

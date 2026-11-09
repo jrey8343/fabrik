@@ -341,6 +341,30 @@ describe("How a replay Ticket's run ended, for the Loop to land on the replay is
     expect(() => readReplayRunEnded("not json")).toThrow(/doesn't read/);
   });
 
+  // #449: the Kit job read the variant's candidate sha and couldn't lay it, so neither arm's jobs ran.
+  it("fails the Ticket once, naming kit-sha-unavailable and why, when the Kit job couldn't lay the variant's candidate Kit sha, and writes nothing", () => {
+    const why = `${"c".repeat(40)} isn't a commit in jrey8343/fabrik`;
+    const context = replayRunContextOf(
+      {
+        "replay-issue": "140",
+        ticket: "12",
+        "pull-request": "112",
+        "base-sha": BASE_SHA,
+        "replay-arms": JSON.stringify(replayArms(DEFAULT_KIT_CONFIG, { kind: "kit", sha: "c".repeat(40) })),
+        "replay-kit-sha-unavailable": why,
+        subscription: "Claude token",
+        sha: KIT_SHA,
+      },
+      { repo: "acme/shop", runId: 9001, runAttempt: 1 },
+    );
+    const none: ArmArtifacts = { implement: ran({ job: null, transcript: null, transcriptGzip: null }), review: ran({ job: null, transcript: null, transcriptGzip: null }), patch: null, gates: null, judge: { ...ran({ job: null, transcript: null, transcriptGzip: null }), result: null, failure: null } };
+    const files = replayRunFiles(context, { baseline: none, variant: none }, KIT, ENDED_AT);
+
+    expect(files.ended.end).toEqual({ kind: "kit-sha-unavailable", reason: `the variant arm's candidate Kit sha couldn't be laid (kit-sha-unavailable): ${why}, so neither arm ran` });
+    expect(written(files)).toEqual([]);
+    expect(readReplayRunEnded(JSON.stringify(files.ended))).toEqual(files.ended);
+  });
+
   it("is done when an arm's Review never started because its Implement run's patch wasn't laid, which writes no Review record", () => {
     const notRun = ran({ job: line({ ran: false, why: "its patch changes .fabrik/config.json" }), transcript: null, transcriptGzip: null });
     const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline"), variant: armRan("variant", { review: notRun }) }, KIT, ENDED_AT);

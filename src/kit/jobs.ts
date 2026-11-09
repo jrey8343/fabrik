@@ -30,6 +30,9 @@
 //                            {implement: {model, effort}, review: {model, effort}, candidateSha}; else empty.
 //                            Its model names come from the replay issue's body, so a job reads it only
 //                            through `env:`, never in a `run:` script
+//   replay-kit-sha-unavailable for a replay whose variant's candidate Kit sha this job read and couldn't lay
+//                            (src/kit/overlay.ts), why, so neither arm runs and the replay-record job fails
+//                            the Ticket once (#449); else empty
 //   branch                   for a retry, the agent branch it builds on; else empty
 //   review                   for a Request-changes run, the Operator's review id; else empty
 //   conflict                 for a conflict-only run (#304), the default branch head it rebases the PR's
@@ -79,6 +82,7 @@ import { callerChangeErrors } from "./callerPermissions.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import type { KitConfig } from "./config.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
+import { readCandidate } from "./overlay.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 
@@ -167,7 +171,7 @@ async function main(productDir: string): Promise<void> {
     const run = agentRunIn(plan);
     if (run?.role === "implement" && run.pullRequest !== undefined) mainAtStart = await defaultBranchHead(github, repo);
   }
-  const outputs = kitJobOutputs(plan, ticket, config, mainAtStart);
+  const outputs = { ...kitJobOutputs(plan, ticket, config, mainAtStart), ...(await candidateOutputs(plan, github)) };
   await appendFile(
     required("GITHUB_OUTPUT"),
     Object.entries(outputs)
@@ -248,7 +252,22 @@ export function kitJobOutputs(
     "replay-issue": "",
     "base-sha": "",
     "replay-arms": "",
+    "replay-kit-sha-unavailable": "",
   };
+}
+
+/**
+ * For a replay whose variant loads a candidate Kit sha, why it can't be laid,
+ * read as the variant's overlay reads it, before either arm starts, so a
+ * variant that can't run spends no baseline (#449); empty for one it can lay,
+ * or any other run. One line, as GITHUB_OUTPUT's key=value lines need.
+ */
+async function candidateOutputs(plan: Plan | null, github: GitHub): Promise<Readonly<Record<string, string>>> {
+  const sha = (plan === null ? null : replayRunIn(plan))?.ticket.arms.variant.candidateSha ?? null;
+  const read = sha === null ? null : await readCandidate(sha, github);
+  if (read === null || read.ok) return {};
+  console.log(`::error title=Candidate Kit sha unavailable::${read.reason}`);
+  return { "replay-kit-sha-unavailable": read.reason.replace(/\s+/g, " ") };
 }
 
 /**

@@ -92,6 +92,9 @@ jobs:
       # For a replay: each arm's settings, as one line of JSON. Its model names come from the replay
       # issue's body, so a job reads it only through an action's inputs, never in a `run:` script.
       replay-arms: ${{ steps.route.outputs.replay-arms }}
+      # For a replay whose variant's candidate Kit sha this job couldn't lay (#449): why, so neither arm runs and the
+      # replay-record job fails the Ticket once, naming it; empty otherwise.
+      replay-kit-sha-unavailable: ${{ steps.route.outputs.replay-kit-sha-unavailable }}
       # For a retry: the agent branch it builds on, which the Implement job checks out.
       branch: ${{ steps.route.outputs.branch }}
       # For a Request-changes run: the Operator's review, its input. It runs as a retry otherwise does.
@@ -1447,11 +1450,13 @@ jobs:
   # the Ticket's baseSha and passes the arm's commits out as a patch, never
   # pushed. Never named `Implement`, so Dispatch's count of Implement runs in
   # flight passes both arms by (IMPLEMENT_JOB_NAME in src/github/snapshot.ts).
-  # It runs only on the Ticket this run's claim marked in progress.
+  # It runs only on the Ticket this run's claim marked in progress, and not at all
+  # when the Kit job couldn't lay the variant's candidate Kit sha (#449), so the
+  # baseline spends no run beside a variant that can't run; nor do the jobs after it.
   replay-implement:
     name: "Replay implement (${{ matrix.arm }})"
     needs: [kit, implement-claim]
-    if: needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket
+    if: needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == ''
     runs-on: ubuntu-latest
     # The Implement role's own timeout: a replay arm captures no UI evidence after it.
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
@@ -1499,7 +1504,7 @@ jobs:
   replay-gates:
     name: "Replay gates (${{ matrix.arm }})"
     needs: [kit, implement-claim, replay-implement]
-    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
     # Kit config has no gates timeout; they run what an Implement run's checks would.
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
@@ -1537,7 +1542,7 @@ jobs:
   replay-review:
     name: "Replay review (${{ matrix.arm }})"
     needs: [kit, implement-claim, replay-implement]
-    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
     strategy:
@@ -1579,7 +1584,7 @@ jobs:
   replay-score:
     name: "Replay score (${{ matrix.arm }})"
     needs: [kit, implement-claim, replay-implement]
-    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket }}
+    if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
     # The Kit's, not Kit config's: JUDGE_TIMEOUT_MINUTES in src/kit/runStore.ts (a test holds the two together).
     timeout-minutes: 15

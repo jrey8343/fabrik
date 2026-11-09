@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Repo } from "../github/client.ts";
+import { GitHubError, type Repo } from "../github/client.ts";
 import { type KitReader, overlayCandidate } from "./overlay.ts";
 
 const PINNED_LOCK = JSON.stringify({ repository: "mattpocock/skills", sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d" });
@@ -43,32 +43,29 @@ async function filesOf(kit: string): Promise<Record<string, string>> {
 }
 
 /**
- * The Fabrik repo as a read-only token reads it: its branches and their heads,
- * which commits each branch holds, and every file at the candidate, where the
+ * The Fabrik repo as a read-only token reads it: the commits GitHub has in it,
+ * read by sha, on a branch or not, and every file at the candidate, where the
  * candidate changed every one of them.
  */
 function theFabrikRepo({
-  branches = [{ name: "main", commit: { sha: MAIN } }],
-  holds = { [MAIN]: [CANDIDATE] },
+  commits = [MAIN, CANDIDATE],
   files = Object.fromEntries(Object.keys(PINNED).map((path) => [path, path === "skills.lock.json" ? CANDIDATE_LOCK : `The candidate's ${path}\n`])),
 }: {
-  branches?: { name: string; commit: { sha: string } }[];
-  holds?: Record<string, string[]>;
+  commits?: string[];
   files?: Record<string, string>;
 } = {}): KitReader & { readonly calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
-    rest: async (_method: string, path: string) => {
+    rest: async (_method: string, path: string, _body?: unknown, options?: { allowNotFound?: boolean }) => {
       calls.push(path);
-      const [route, query] = path.split("?");
-      if (route === "/repos/jrey8343/fabrik/branches") return /(^|&)page=1(&|$)/.test(query ?? "") ? branches : [];
-      const compare = /^\/repos\/jrey8343\/fabrik\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/.exec(route ?? "");
-      if (compare !== null) {
-        const [, base, head] = compare;
-        if (base === head) return { status: "identical" };
-        return { status: (holds[head!] ?? []).includes(base!) ? "ahead" : "diverged" };
+      const commit = /^\/repos\/jrey8343\/fabrik\/commits\/([0-9a-f]+)$/.exec(path);
+      if (commit !== null) {
+        if (commits.includes(commit[1]!)) return { sha: commit[1] };
+        // GitHub answers a sha it has no commit for with a 422.
+        throw new GitHubError("No commit found for SHA", 422, { request: `GET ${path}` });
       }
+      if (options?.allowNotFound === true) return null;
       throw new Error(`unexpected REST call ${path}`);
     },
     fileText: async (repo: Repo, path: string, ref: string) => {
@@ -97,13 +94,10 @@ describe("The candidate-sha overlay", () => {
     );
   });
 
-  it.each([
-    ["the head of a branch", { branches: [{ name: "main", commit: { sha: MAIN } }, { name: "retro/tighten-review", commit: { sha: CANDIDATE } }], holds: {} }],
-    ["on a branch other than main, as a Retro proposal's is", { branches: [{ name: "main", commit: { sha: MAIN } }, { name: "retro/tighten-review", commit: { sha: "e".repeat(40) } }], holds: { ["e".repeat(40)]: [CANDIDATE] } }],
-  ])("lays a candidate that's %s of the Fabrik repo", async (_, repo) => {
+  it("lays a candidate no branch of the Fabrik repo holds any more, as a squash-merged Retro proposal's once its branch is deleted", async () => {
     const kit = await aKitCheckout();
 
-    const result = await overlayCandidate(kit, CANDIDATE, theFabrikRepo(repo));
+    const result = await overlayCandidate(kit, CANDIDATE, theFabrikRepo());
 
     expect(result.kind).toBe("laid");
     expect(await readFile(join(kit, "prompts/review.md"), "utf8")).toBe("The candidate's prompts/review.md\n");
@@ -121,17 +115,6 @@ describe("The candidate-sha overlay", () => {
 
     expect(result).toEqual({ kind: "refused", reason: `${JSON.stringify(sha)} isn't a full commit sha` });
     expect(fabrik.calls).toEqual([]);
-    expect(await filesOf(kit)).toEqual(PINNED);
-  });
-
-  it("refuses a commit on no branch of the Fabrik repo, as a fork's commit is though GitHub serves it there too, changing nothing", async () => {
-    const kit = await aKitCheckout();
-    const fabrik = theFabrikRepo({ holds: {} });
-
-    const result = await overlayCandidate(kit, CANDIDATE, fabrik);
-
-    expect(result).toEqual({ kind: "refused", reason: `${CANDIDATE} isn't a commit on any branch of jrey8343/fabrik` });
-    expect(fabrik.calls.some((call) => call.includes(":"))).toBe(false);
     expect(await filesOf(kit)).toEqual(PINNED);
   });
 
@@ -159,18 +142,29 @@ describe("The candidate-sha overlay", () => {
     expect(await filesOf(kit)).toEqual(PINNED);
   });
 
-  it("refuses a sha GitHub doesn't know, changing nothing", async () => {
+  it("refuses a sha GitHub has no commit for in the Fabrik repo, reading no file, changing nothing", async () => {
+    const kit = await aKitCheckout();
+    const fabrik = theFabrikRepo({ commits: [MAIN] });
+
+    const result = await overlayCandidate(kit, CANDIDATE, fabrik);
+
+    expect(result).toEqual({ kind: "refused", reason: `${CANDIDATE} isn't a commit in jrey8343/fabrik` });
+    expect(fabrik.calls.some((call) => call.includes(":"))).toBe(false);
+    expect(await filesOf(kit)).toEqual(PINNED);
+  });
+
+  it("refuses a sha GitHub answers with a 404, as for a repo it can't read, changing nothing", async () => {
     const kit = await aKitCheckout();
     const fabrik = theFabrikRepo();
     const unknown = {
       ...fabrik,
       rest: async (method: string, path: string, body?: unknown, options?: { allowNotFound?: boolean }) =>
-        path.includes("/compare/") ? (options?.allowNotFound === true ? null : Promise.reject(new Error("404"))) : fabrik.rest(method, path, body, options),
+        path.includes("/commits/") ? (options?.allowNotFound === true ? null : Promise.reject(new Error("404"))) : fabrik.rest(method, path, body, options),
     };
 
     const result = await overlayCandidate(kit, CANDIDATE, unknown);
 
-    expect(result).toEqual({ kind: "refused", reason: `${CANDIDATE} isn't a commit on any branch of jrey8343/fabrik` });
+    expect(result).toEqual({ kind: "refused", reason: `${CANDIDATE} isn't a commit in jrey8343/fabrik` });
     expect(await filesOf(kit)).toEqual(PINNED);
   });
 });

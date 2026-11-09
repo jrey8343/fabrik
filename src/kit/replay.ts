@@ -399,7 +399,12 @@ export type ReplayTicketEnd =
   /** It was refused on a Subscription's weekly limit, which costs the Replay time, never the Ticket. */
   | { readonly kind: "weekly-limit" }
   /** Any other Infrastructure failure, with why. */
-  | { readonly kind: "infrastructure"; readonly reason: string };
+  | { readonly kind: "infrastructure"; readonly reason: string }
+  /**
+   * The Kit job couldn't lay the variant's candidate Kit sha, so neither arm
+   * ran (#449): it would fail the same way again, so the Ticket fails with no retry.
+   */
+  | { readonly kind: "kit-sha-unavailable"; readonly reason: string };
 
 /**
  * The body with Ticket `ticket` marked in progress in run `run` from
@@ -431,6 +436,8 @@ export function withTicketFinished(body: string, ticket: number, run: number, en
         return retrying === null ? { state: "pending" } : { state: "retried", reason: retrying };
       case "infrastructure":
         return retrying === null ? { state: "retried", reason: end.reason } : { state: "failed", run, reason: end.reason };
+      case "kit-sha-unavailable":
+        return { state: "failed", run, reason: end.reason };
     }
   });
 }
