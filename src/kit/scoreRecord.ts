@@ -19,6 +19,8 @@ import {
 } from "./recordWriter.ts";
 import type { RunRecord, RunRecordFiles } from "./runRecord.ts";
 import {
+  judgedRunOf,
+  type JudgedRun,
   type KitRubrics,
   readScoreFile,
   type ScoreFile,
@@ -201,12 +203,13 @@ function whyNot(skip: ScoreSkip, judge: RunRecord | null): string {
 /**
  * What the push job's scoring of the run it just recorded came to: nothing
  * (`none`), the skip score file it wrote itself (`skip`), or a score asked of
- * the judge job, which gets the scored record's store path (`score`).
+ * the judge job, which gets the scored record's store path and the run's kind
+ * (`score`).
  */
 export type RecordedRunScoring =
   | { readonly kind: "none" }
   | { readonly kind: "skip"; readonly score: ScoreFile; readonly write: StoreWrite }
-  | { readonly kind: "score"; readonly record: string };
+  | { readonly kind: "score"; readonly record: string; readonly run: JudgedRun };
 
 /**
  * The push job's part in scoring (#149): the scoring plan on the run whose
@@ -230,7 +233,7 @@ export async function scoreRecordedRun(
     case "not-sampled":
       return { kind: "none" };
     case "score":
-      return { kind: "score", record: recordPath };
+      return { kind: "score", record: recordPath, run: judgedRunOf(record) };
     case "skip": {
       const score = scoreFileFor({ scored: record, scoredPath: recordPath, rubrics: scoringRubrics(record, kit), scoredAt, outcome: plan });
       const write = await writeStoreFiles(store, [{ path: score.path, content: storeJson(score.file) }], storeCommitMessage(record), wait);

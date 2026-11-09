@@ -72,6 +72,15 @@ describe("The Kit's Scorer rubrics", () => {
     }
   });
 
+  it("judge Ticket compliance against what the run was asked (#450): the Ticket as a Request changes amends it, and a conflict-only run on its rebase alone", async () => {
+    const compliance = (await loadRubrics()).find((rubric) => rubric.name === "ticket-compliance");
+    expect(compliance?.text).toContain("Judge the run's transcript against what it was asked");
+    expect(compliance?.text).toMatch(/Request changes amends the Ticket/);
+    expect(compliance?.text).toMatch(/never scope creep/);
+    expect(compliance?.text).toMatch(/conflict-only run .*rebase/);
+    expect(compliance?.text).not.toContain("judge that work against the Ticket,");
+  });
+
   it("give Efficiency the labels clean, repeated calls, re-reads, dead-end loop and Sandbox fight", async () => {
     const [efficiency] = await loadRubrics();
     expect(efficiency?.labels).toEqual(["clean", "repeated-calls", "re-reads", "dead-end-loop", "sandbox-fight"]);

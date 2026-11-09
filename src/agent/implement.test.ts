@@ -314,6 +314,17 @@ describe("A Request-changes run on a PR that conflicts with main (#341)", () => 
     expect(mergeMain).toBe(main);
   });
 
+  it("passes out, for the judge (#450), what its prompt carried about the PR beyond the Ticket: the review and the merge, never the Spec, glossary or ADRs", async () => {
+    const { productDir } = await checkout(true);
+
+    const { parts, brief } = await input(productDir);
+
+    expect(brief).toContain("## The Operator's requested changes\n\nRebase for merge conflicts please.");
+    expect(brief).toContain("## Bring main in first");
+    expect(parts.join("\n\n").endsWith(brief ?? "(no brief)")).toBe(true);
+    expect(brief).not.toContain("## GLOSSARY.md");
+  });
+
   it("isn't told to merge when the PR only lags behind main", async () => {
     const { productDir } = await checkout(false);
 

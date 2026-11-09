@@ -10,7 +10,10 @@
 // its transcript beside them.
 //   node src/kit/judge-main.ts
 // Env:
-//   FABRIK_TRANSCRIPT_DIR   the scored run's gzipped transcript (loop.yml's fabrik-transcript-implement)
+//   FABRIK_TRANSCRIPT_DIR   the scored run's gzipped transcript, and the brief of what a run on a PR was asked
+//                           beyond the Ticket (loop.yml's fabrik-transcript-implement)
+//   FABRIK_JUDGED_RUN       the scored run's kind, from its Run record (src/kit/scorer.ts's JudgedRun), as JSON;
+//                           empty for a Replay arm's, always a first run
 //   FABRIK_TICKET_FILE      the Ticket's title and body (src/kit/judge-ticket-main.ts)
 //   FABRIK_OUT_DIR          where to write judge-result.json or judge-failure.json, the agent log and the transcript
 //   FABRIK_ROTATION         "true" when Subscription rotation is on, so overage in the stream kills the judge
@@ -24,14 +27,15 @@ import { claudeCode, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { leaveFailureReport, readyHook, setAgentEnv, streamWatch } from "../agent/launch.ts";
 import { runSummary } from "../agent/summary.ts";
-import { readTranscriptGzip, TRANSCRIPT_FILE } from "../agent/transcript.ts";
+import { readTranscriptGzip, RUN_BRIEF_FILE, TRANSCRIPT_FILE } from "../agent/transcript.ts";
 import type { FailureReport } from "../loop/types.ts";
-import { readBytesIfPresent } from "./checkout.ts";
+import { readBytesIfPresent, readIfPresent } from "./checkout.ts";
 import { writeOutputs, writeSummary } from "./stepFiles.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
 import { judgeClaudeArgs, judgeOutput, withoutTools } from "./judgeLaunch.ts";
 import { loadRubrics } from "./kitFiles.ts";
 import { JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
+import { readJudgedRun } from "./scorer.ts";
 import { type JudgedTicket, judgePrompt } from "./scorerPrompt.ts";
 
 function required(name: string): string {
@@ -65,12 +69,16 @@ async function main(): Promise<void> {
   // Unknown until the prompt is built: a judge that fails before then can't say.
   let digestTrimmed: boolean | null = null;
   try {
-    const gzip = await readBytesIfPresent(join(required("FABRIK_TRANSCRIPT_DIR"), `${TRANSCRIPT_FILE}.gz`));
+    const transcriptDir = required("FABRIK_TRANSCRIPT_DIR");
+    const gzip = await readBytesIfPresent(join(transcriptDir, `${TRANSCRIPT_FILE}.gz`));
     const scored = gzip === null ? null : readTranscriptGzip(gzip);
     if (scored === null) throw new Error("No transcript of the scored run survived to judge");
     const ticket = JSON.parse(await readFile(required("FABRIK_TICKET_FILE"), "utf8")) as JudgedTicket;
+    // The run's kind from its Run record, and what its prompt carried beyond the Ticket, so it's judged against what it was asked (#450).
+    const judged = readJudgedRun(process.env["FABRIK_JUDGED_RUN"] ?? "");
+    const brief = (await readIfPresent(join(transcriptDir, RUN_BRIEF_FILE)))?.trimEnd() ?? null;
     const rubrics = await loadRubrics();
-    const { prompt, trimmed } = judgePrompt({ transcript: scored.lines, ticket, rubrics });
+    const { prompt, trimmed } = judgePrompt({ transcript: scored.lines, ticket, run: judged, brief, rubrics });
     digestTrimmed = trimmed;
 
     // The agent inherits this process's env (noSandbox), so set what it needs here.

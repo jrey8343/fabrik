@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
 import type { ReplayArm, RunRecord } from "./runRecord.ts";
-import { type JudgeRun, scoreFileFor, scoringPlan, scoringRubrics } from "./scorer.ts";
+import { judgedRunOf, type JudgeRun, readJudgedRun, scoreFileFor, scoringPlan, scoringRubrics } from "./scorer.ts";
 
 /** A run id whose SHA-256 falls in the sampled quarter, and one whose doesn't. */
 const SAMPLED_RUN = 1007;
@@ -154,6 +154,32 @@ const RUBRICS: readonly Rubric[] = [
   { name: "ticket-compliance", version: 1, threshold: 0.8, labels: ["compliant", "scope-creep", "guessed"], text: "Whether it built the Ticket." },
   { name: "skill-use", version: 1, threshold: 0.7, labels: ["followed", "missed-skill"], text: "Whether it used its skills." },
 ];
+
+describe("The scored run as the judge is told of it (#450)", () => {
+  it.each([
+    ["a first run", {}, { kind: "first", retry: 0, timedOut: false }],
+    ["a Stepped-up start, a first run", { stepUp: true, stepUpReason: "marked" }, { kind: "first", retry: 0, timedOut: false }],
+    ["a Retry, with its number", { retry: 2, stepUp: true, stepUpReason: "retry" }, { kind: "retry", retry: 2, timedOut: false }],
+    ["a Request-changes run", { requestChanges: true, stepUp: true, stepUpReason: "request-changes" }, { kind: "request-changes", retry: 0, timedOut: false }],
+    ["a conflict-only run, never a Retry", { retry: 1, stepUp: true, stepUpReason: "conflict-only" }, { kind: "conflict-only", retry: 1, timedOut: false }],
+    ["a run its timeout stopped", { retry: 1, infrastructureFailure: "timeout" }, { kind: "retry", retry: 1, timedOut: true }],
+  ] as const)("names %s", (_, run, judged) => {
+    expect(judgedRunOf(implementRun(run))).toEqual(judged);
+  });
+
+  it("reads back as the scoring job passed it, and as a first run when none was passed, as for a Replay arm", () => {
+    const retry = judgedRunOf(implementRun({ retry: 1, infrastructureFailure: "timeout" }));
+    expect(readJudgedRun(JSON.stringify(retry))).toEqual(retry);
+    expect(readJudgedRun("")).toEqual({ kind: "first", retry: 0, timedOut: false });
+  });
+
+  it.each(['{"kind":"review","retry":0,"timedOut":false}', '{"kind":"retry","retry":-1,"timedOut":false}', '{"kind":"first","retry":0}', "[]"])(
+    "refuses %s",
+    (text) => {
+      expect(() => readJudgedRun(text)).toThrow("Not a judged run");
+    },
+  );
+});
 
 describe("The rubrics a run is scored under", () => {
   /** The pinned release that ran and recorded the run, and a candidate Kit sha a `kit` variant laid its prompts and Base skills from. */

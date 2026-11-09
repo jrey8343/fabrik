@@ -301,10 +301,14 @@ describe("The push job's scoring of the run it just recorded", () => {
     write,
   });
 
-  it("asks the judge job to score a picked run, with its record's path, and writes nothing itself", async () => {
+  it("asks the judge job to score a picked run, with its record's path and its kind (#450), and writes nothing itself", async () => {
     const store = storeWith();
 
-    expect(await scoreRecordedRun(store, recorded(), KIT, "2026-11-04T12:01:00Z", noWait)).toEqual({ kind: "score", record: RETRY_PATH });
+    expect(await scoreRecordedRun(store, recorded(), KIT, "2026-11-04T12:01:00Z", noWait)).toEqual({
+      kind: "score",
+      record: RETRY_PATH,
+      run: { kind: "retry", retry: 1, timedOut: false },
+    });
     expect(store.writes).toEqual([]);
   });
 
@@ -368,7 +372,7 @@ describe("The push job's step-summary line on scoring", () => {
   });
 
   it("says the judge job scores a picked run", () => {
-    expect(recordedRunScoringSummary({ kind: "score", record: SCORED_PATH })).toBe(`Picked for scoring: the judge job scores ${SCORED_PATH}.`);
+    expect(recordedRunScoringSummary({ kind: "score", record: SCORED_PATH, run: { kind: "first", retry: 0, timedOut: false } })).toBe(`Picked for scoring: the judge job scores ${SCORED_PATH}.`);
   });
 
   it("says why a picked run isn't scored, and where its skip score file went", () => {

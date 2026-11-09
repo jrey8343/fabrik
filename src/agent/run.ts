@@ -107,7 +107,7 @@ import { reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
 import { missingSkills, runSummary } from "./summary.ts";
-import { TRANSCRIPT_FILE } from "./transcript.ts";
+import { RUN_BRIEF_FILE, TRANSCRIPT_FILE } from "./transcript.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -372,6 +372,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     kind = input.kind;
     given = input.operatorComments;
     mergeMain = "mergeMain" in input ? input.mergeMain : null;
+    // Kept beside the transcript, before the agent runs, so the judge reads what this run was asked even if it times out (#450).
+    if (input.brief !== null) await writeFile(join(outDir, RUN_BRIEF_FILE), `${input.brief}\n`);
   }
   if (prototypeTurn) {
     // The Claude token and the Sandbox's values and test secrets, as the Implementer's, committing as the Fabrik Prototype.

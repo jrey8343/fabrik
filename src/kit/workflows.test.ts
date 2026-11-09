@@ -16,6 +16,7 @@ import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_
 import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
+import { RUN_BRIEF_FILE } from "../agent/transcript.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -117,7 +118,7 @@ describe("The Kit's workflows", () => {
       expect(upload, `${job} has no transcript upload`).toBeDefined();
       expect(upload).toContain("if: always()");
       expect(upload).toContain("continue-on-error: true");
-      expect(upload).toMatch(/path: .*transcript\.jsonl\.gz/);
+      expect(upload).toMatch(/path: (?:\|\n\s+)?.*transcript\.jsonl\.gz/);
       expect(upload).toContain("if-no-files-found: ignore");
       expect(upload).toContain("retention-days: 7");
       expect(body).toMatch(/if: always\(\)\n\s+continue-on-error: true\n\s+run: .*gzip.*transcript\.jsonl/);
@@ -1154,6 +1155,15 @@ describe("loop.yml's judge job", () => {
   it("passes out the attempt it ran in, so a judge re-run after a failed one gets a Run record of its own (#451)", () => {
     expect(judge()).toContain("attempt: ${{ github.run_attempt }}");
   });
+
+  // #450: a Retry, Request-changes or conflict-only run is judged against what it was asked, not the Ticket alone.
+  it("tells the judge the scored run's kind, from the Run record the push job wrote, and the brief the Implement job kept beside its transcript", () => {
+    expect(job("push")).toContain("scored-run: ${{ steps.record.outputs.scored-run }}");
+    expect(stepsOf(judge()).find((step) => step.includes("uses: ./kit/.github/actions/run-judge"))).toContain("scored-run: ${{ needs.push.outputs.scored-run }}");
+    const kept = stepsOf(job("implement")).find((step) => step.includes("name: fabrik-transcript-implement\n"));
+    expect(kept).toContain("/fabrik-out/transcript.jsonl.gz\n");
+    expect(kept).toContain(`/fabrik-out/${RUN_BRIEF_FILE}\n`);
+  });
 });
 
 describe("loop.yml's score-record job", () => {
@@ -1629,6 +1639,11 @@ describe("The judge action", () => {
     expect(ticket).toBeLessThan(step("1password/load-secrets-action@"));
     expect(judge).toContain("id: judge");
     expect(judge).not.toContain("inputs.github-token");
+  });
+
+  it("gives the judge the scored run's kind, which a Replay arm's judge leaves empty, as a first run's (#450)", () => {
+    expect(steps[step("run: node src/kit/judge-main.ts")]).toContain("FABRIK_JUDGED_RUN: ${{ inputs.scored-run }}");
+    expect(action).toMatch(/\n  scored-run:\n(?: {4}.*\n)*? {4}required: false\n {4}default: ""\n/);
   });
 
   it("judges the Implement run's transcript, and a missing one is the judge's failure, not the step's", () => {

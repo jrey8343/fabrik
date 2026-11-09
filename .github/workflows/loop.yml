@@ -930,13 +930,16 @@ jobs:
         continue-on-error: true
         run: if [ -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl"; fi
 
+      # With it, for the judge, the brief of what a run on an agent PR was asked beyond the Ticket (#450).
       - name: Keep the agent's transcript
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fabrik-transcript-implement
-          path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+          path: |
+            ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+            ${{ runner.temp }}/fabrik-out/brief.md
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1719,10 +1722,12 @@ jobs:
       dispatch: ${{ steps.loop.outputs.dispatch }}
       # "true" when the plan asked for a Design queue check.
       design-queue: ${{ steps.loop.outputs.design-queue }}
-      # "true" when the scoring plan picked the run for the judge job (#149), and
-      # the path of the scored run's Run record in the store, for the score-record job.
+      # "true" when the scoring plan picked the run for the judge job (#149), the
+      # path of the scored run's Run record in the store, for the score-record job,
+      # and the run's kind, as JSON, for the judge (#450).
       score: ${{ steps.record.outputs.score }}
       record: ${{ steps.record.outputs.record }}
+      scored-run: ${{ steps.record.outputs.scored-run }}
     env:
       # How each job ended and what it passed out, none of which the agent can rewrite.
       FABRIK_NEEDS: ${{ toJSON(needs) }}
@@ -1929,6 +1934,8 @@ jobs:
           op-agent-token: ${{ secrets.OP_AGENT_TOKEN }}
           github-token: ${{ github.token }}
           ticket: ${{ needs.kit.outputs.ticket }}
+          # The scored run's kind, from its Run record, so it's judged against what it was asked (#450).
+          scored-run: ${{ needs.push.outputs.scored-run }}
           # The scored Implement run's Subscription, chosen by this Loop run's Kit job.
           subscription: ${{ needs.kit.outputs.subscription }}
           # With rotation on, the judge is killed on overage, as an agent run is.

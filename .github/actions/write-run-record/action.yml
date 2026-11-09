@@ -43,6 +43,9 @@ outputs:
   record:
     description: The scored run's Run record's path in the store, for the score-record job.
     value: ${{ steps.record.outputs.record }}
+  scored-run:
+    description: The scored run's kind, from its Run record, as one line of JSON (src/kit/scorer.ts's JudgedRun), for the judge (#450).
+    value: ${{ steps.record.outputs.scored-run }}
 
 runs:
   using: composite

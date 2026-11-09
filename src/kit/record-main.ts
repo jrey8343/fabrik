@@ -108,7 +108,8 @@ async function main(): Promise<void> {
   const kit = { sha: written.kitSha, rubrics: await loadRubrics() };
   const scoring = await scoreRecordedRun(written.store, written, kit, new Date().toISOString(), (ms) => sleep(ms));
   // The judge job runs on these, and the score-record job reads the scored record back from the store by its path.
-  if (scoring.kind === "score") await appendFile(required("GITHUB_OUTPUT"), `score=true\nrecord=${scoring.record}\n`);
+  // With the run's kind, so the judge scores it against what it was asked (#450).
+  if (scoring.kind === "score") await appendFile(required("GITHUB_OUTPUT"), `score=true\nrecord=${scoring.record}\nscored-run=${JSON.stringify(scoring.run)}\n`);
   const line = recordedRunScoringSummary(scoring);
   if (line !== null) await report("Scores", line);
 }
