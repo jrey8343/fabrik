@@ -202,6 +202,15 @@ describe("Merging a shim into a file the Product repo already has", () => {
     expect(merged).toContain('dependency-name: "jrey8343/fabrik*"');
   });
 
+  it("skips a Dependabot config it can't parse, and says so, rather than write one Dependabot rejects", () => {
+    const existing = 'version: 2\nupdates:\n    - package-ecosystem: npm\n      directory: "/"\n  - package-ecosystem: pip\n';
+
+    const plan = planSetup(aCleanProduct({ files: { ".github/dependabot.yml": existing } }), kit);
+
+    expect(written(plan.actions, ".github/dependabot.yml")).toBeUndefined();
+    expect(plan.notes.join("\n")).toContain(".github/dependabot.yml doesn't parse");
+  });
+
   it("asks the Operator to merge by hand when the Dependabot config already updates GitHub Actions", () => {
     const existing = 'version: 2\nupdates:\n  - package-ecosystem: "github-actions"\n    directory: "/"\n    schedule:\n      interval: weekly\n';
 
