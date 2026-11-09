@@ -36,7 +36,7 @@ import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
 import { aDesignQueueIssue, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
 import { RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
-import { readRunRecord, type RunRecord } from "./runRecord.ts";
+import { RUN_RECORD_SCHEMA, readRunRecord, type RunRecord } from "./runRecord.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
@@ -77,11 +77,11 @@ describe("the Weekly summary", () => {
 
   // A store whose caller pins an older release than the Product repos' (#474).
   it("isn't skipped in a week whose every Run record the Kit couldn't read, and says how many and how to read them", () => {
-    const result = weeklySummary(input({ unreadableRecords: { count: 12, newestSchema: 6 } }));
+    const result = weeklySummary(input({ unreadableRecords: { count: 12, newestSchema: RUN_RECORD_SCHEMA + 1 } }));
 
     if (result.kind !== "summary") throw new Error("skipped");
     expect(result.body).toContain(
-      "12 Run records were written by a newer Kit than this store runs (schema 6 > 5), so this summary leaves them out: bump the Kit's pin in `.github/workflows/weekly-summary.yml` to the release the Product repos run.",
+      `12 Run records were written by a newer Kit than this store runs (schema ${RUN_RECORD_SCHEMA + 1} > ${RUN_RECORD_SCHEMA}), so this summary leaves them out: bump the Kit's pin in \`.github/workflows/weekly-summary.yml\` to the release the Product repos run.`,
     );
   });
 

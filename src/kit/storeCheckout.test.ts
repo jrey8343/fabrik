@@ -5,7 +5,7 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { aRecordWithTranscript } from "../__fixtures__/retroEvidence.ts";
 import { aScoreFile } from "../__fixtures__/weeklySummary.ts";
-import { recordPathOf, replayGatesPath } from "./runRecord.ts";
+import { RUN_RECORD_SCHEMA, recordPathOf, replayGatesPath } from "./runRecord.ts";
 import { readStoreReplayGates, readStoreReplayPatches, readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
 
 /** A checkout of the store holding these files, by their paths in it. */
@@ -38,12 +38,12 @@ describe("Reading the store's checkout", () => {
   it("counts the Run records it can't read, with the newest schema among them a newer Kit wrote", async () => {
     const store = await aCheckoutWith({
       [recordPathOf(record)]: JSON.stringify(record),
-      "runs/owner/product/2026-11/1002-1-triage.json": JSON.stringify({ ...record, schema: 6 }),
-      "runs/owner/product/2026-11/1003-1-triage.json": JSON.stringify({ ...record, schema: 7 }),
+      "runs/owner/product/2026-11/1002-1-triage.json": JSON.stringify({ ...record, schema: RUN_RECORD_SCHEMA + 1 }),
+      "runs/owner/product/2026-11/1003-1-triage.json": JSON.stringify({ ...record, schema: RUN_RECORD_SCHEMA + 2 }),
       "runs/owner/product/2026-11/1004-1-triage.json": JSON.stringify("not a record"),
     });
 
-    expect((await readStoreRunRecords(store, ["Claude token"])).unreadable).toEqual({ count: 3, newestSchema: 7 });
+    expect((await readStoreRunRecords(store, ["Claude token"])).unreadable).toEqual({ count: 3, newestSchema: RUN_RECORD_SCHEMA + 2 });
   });
 
   it("counts no Run record it can't read, and no newer schema, when it reads them all or none is a newer Kit's", async () => {
