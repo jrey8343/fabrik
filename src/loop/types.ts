@@ -43,6 +43,29 @@ export interface FailureReport {
    * Absent for a 5xx, a rate limit or a call GitHub never answered.
    */
   readonly refused?: true;
+  /**
+   * For a run that cut a branch (#431): what it had committed on it when it
+   * failed, so the notice says whether any work was made and whether it was
+   * kept. Absent when the run had no branch, or it couldn't be read.
+   */
+  readonly commits?: FailedRunCommits;
+}
+
+/**
+ * What a failed run had committed on its branch. Its commits are never pushed:
+ * the push job lands only a result it can read, so a re-run starts where this
+ * one did: from `base` again on a branch it continued, or from the default
+ * branch's head of the time on a branch it cut.
+ */
+export interface FailedRunCommits {
+  /** The commit the run started at. */
+  readonly base: string;
+  /** Whether the run carried on its branch from `base` (a run on a PR, a later prototype round), rather than cut it from the default branch. */
+  readonly continued: boolean;
+  /** The branch's last commit, or null if the run made none. */
+  readonly head: string | null;
+  /** Whether its commits went out as a bundle with the failure report, for the Operator to fetch. */
+  readonly kept: boolean;
 }
 
 /**

@@ -19,7 +19,7 @@ import { canHold, heldAfterKill } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DESIGN_TURN_FAILED_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
-import type { Action, AgentRole, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type { Action, AgentRole, FailedRunCommits, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
 import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -214,6 +214,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     mention: repoWide === null ? operator : null,
     failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     detail: run.report?.detail ?? "",
+    commits: run.report?.commits === undefined ? null : commitsLeft(run.report.commits),
     // A research Decision has no retries to count against, and Dispatch leaves it alone once its run failed.
     notRetried: run.role === "research" ? "neither the Loop nor Dispatch runs it again by itself" : NOT_RETRIED,
     resume: resumeAfter(failure, run, resume),
@@ -243,6 +244,21 @@ function waitingAgain(run: FailedRun, { pendingPrototype }: IssueContext["issue"
   return [{ kind: "mark-prototype-request", issue: run.issue, comment: pendingPrototype.comment, started: false }];
 }
 
+/**
+ * What a failure notice says of the commits a run had made on its branch
+ * (#431). The push job never pushes them, so a re-run starts where this one
+ * did: from the same commit on a branch it continued, or from the default
+ * branch on one it cut, whose head may have moved since. The bundle the agent
+ * job uploaded with its failure report keeps them for the Operator to fetch,
+ * for that artifact's 7 days (loop.yml).
+ */
+function commitsLeft({ base, continued, head, kept }: FailedRunCommits): string {
+  const from = continued ? `from \`${base.slice(0, 7)}\`` : "from the default branch";
+  if (head === null) return `It made no commits, so running it again starts ${from}, as this run did.`;
+  if (!kept) return `It had made commits before it failed, and they weren't kept, so running it again starts ${from} without them.`;
+  return `It had made commits before it failed. They weren't pushed, so running it again starts ${from} without them; they're kept for 7 days as \`agent-branch.bundle\` in the run's \`fabrik-agent-failure\` artifact.`;
+}
+
 /** What a failure notice says of retrying a run that isn't a research Decision's. */
 const NOT_RETRIED = "the Loop won't retry it and it doesn't count against the Ticket's retries";
 
@@ -263,6 +279,7 @@ export function prototypeTurnRefused(issueNumber: number, operator: string, how:
     mention: operator,
     failed: `The prototype turn on #${issueNumber} failed: ${how}.`,
     detail: "",
+    commits: null,
     notRetried: NOT_RETRIED,
     resume: CARRY_ON_AFTER_PROTOTYPE,
     pointer: null,
@@ -275,14 +292,15 @@ export function prototypeTurnRefused(issueNumber: number, operator: string, how:
  * A failure notice's comment: the marker the snapshot reads back, if the role
  * has one; what failed and how, with the Operator's @-mention unless a
  * Kit-owned issue notifies instead; the agent's own word on it, quoted; what
- * the Loop does about it and how to resume; where the Kit tracks a repo-wide
- * stall; and the run.
+ * the run had committed, if its report says; what the Loop does about it and
+ * how to resume; where the Kit tracks a repo-wide stall; and the run.
  */
 function noticeBody(notice: {
   readonly marker: string | undefined;
   readonly mention: string | null;
   readonly failed: string;
   readonly detail: string;
+  readonly commits: string | null;
   readonly notRetried: string;
   readonly resume: string;
   readonly pointer: string | null;
@@ -293,6 +311,7 @@ function noticeBody(notice: {
     ...(notice.marker === undefined ? [] : [notice.marker]),
     `${notice.mention === null ? "" : `@${notice.mention} `}${notice.failed}`,
     ...(detail === "" ? [] : ["", `> ${detail}`]),
+    ...(notice.commits === null ? [] : ["", notice.commits]),
     "",
     `This is an Infrastructure failure, so ${notice.notRetried}. ${notice.resume}`,
     ...(notice.pointer === null ? [] : ["", notice.pointer]),

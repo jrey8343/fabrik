@@ -15,6 +15,7 @@ import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
 import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
+import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -727,10 +728,26 @@ describe("The agent jobs whose input step may read a sent-back Ticket's PR", () 
 
     expect(read).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out\n");
     for (const name of ["design", "prototype", "triage"]) {
-      expect(stepsOf(job(name)).find((step) => step.includes("name: fabrik-agent-failure"))).toContain(
-        "path: ${{ runner.temp }}/fabrik-out/agent-failure.json",
+      expect(stepsOf(job(name)).find((step) => step.includes("name: fabrik-agent-failure"))).toMatch(
+        /path: (\|\n\s+)?\$\{\{ runner\.temp \}\}\/fabrik-out\/agent-failure\.json\n/,
       );
     }
+  });
+});
+
+// #431: run.ts bundles a run's commits before checking its reply, so a reply that
+// breaks its contract leaves them; the failure report's upload keeps the bundle, as
+// the notice says (src/loop/failures.ts), though the push job never pushes it.
+describe("The agent jobs that build a branch, when they fail", () => {
+  it.each(["implement", "prototype", "research"])("the %s job keeps its bundle in fabrik-agent-failure, beside the failure report", (name) => {
+    const failure = stepsOf(job(name)).find((step) => step.includes("name: fabrik-agent-failure\n")) ?? "";
+
+    expect(failure).toContain(`\${{ runner.temp }}/fabrik-out/${AGENT_FAILURE_FILE}\n`);
+    expect(failure).toContain(`\${{ runner.temp }}/fabrik-out/${AGENT_BUNDLE_FILE}\n`);
+    // A run that made no commits leaves no bundle, and one its timeout stopped leaves neither.
+    expect(failure).toContain("if-no-files-found: ignore");
+    // As long as the notice says it's kept for.
+    expect(failure).toContain("retention-days: 7\n");
   });
 });
 

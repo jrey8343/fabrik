@@ -160,6 +160,26 @@ describe("Reading the failure report in the push job", () => {
     expect(readFailureReport(JSON.stringify({ ...failed, refused: "yes" }))).toEqual(failed);
   });
 
+  it("reads back what a run had committed on its branch, kept or not (#431)", () => {
+    const base = "a".repeat(40);
+    const head = "b".repeat(40);
+    const kept = { failure: "missing-output", detail: "Structured output failed validation", commits: { base, continued: true, head, kept: true } };
+    const none = { failure: "missing-output", detail: "", commits: { base, continued: false, head: null, kept: false } };
+
+    expect(readFailureReport(JSON.stringify(kept))).toEqual(kept);
+    expect(readFailureReport(JSON.stringify(none))).toEqual(none);
+  });
+
+  it.each([
+    ["a base that isn't a commit sha", { base: "main", continued: true, head: "b".repeat(40), kept: true }],
+    ["a head that isn't a commit sha", { base: "a".repeat(40), continued: true, head: "HEAD", kept: true }],
+    ["no word on whether they were kept", { base: "a".repeat(40), continued: true, head: "b".repeat(40) }],
+    ["no word on whether the branch was continued", { base: "a".repeat(40), head: "b".repeat(40), kept: true }],
+    ["commits kept with no head", { base: "a".repeat(40), continued: true, head: null, kept: true }],
+  ])("drops commits with %s, so the notice claims nothing it can't back", (_, commits) => {
+    expect(readFailureReport(JSON.stringify({ failure: "missing-output", detail: "", commits }))).toEqual({ failure: "missing-output", detail: "" });
+  });
+
   it.each(["", "not json", JSON.stringify({ failure: "timeout" })])(
     "treats an unreadable report (%j) as a crash, so a notice still goes out",
     (text) => {

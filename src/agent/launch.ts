@@ -11,7 +11,7 @@ import { delimiter, join } from "node:path";
 import type { AgentStreamEvent } from "@ai-hero/sandcastle";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { KIT_DIR } from "../kit/kitFiles.ts";
-import type { FailureReport } from "../loop/types.ts";
+import type { FailedRunCommits, FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { failureReportFor } from "./failure.ts";
@@ -209,17 +209,26 @@ export interface FailureFile {
 /**
  * What a failed run leaves for the job after it, before its caller rethrows:
  * an error annotation for each route the init check refused, its failure
- * report, read from the error and the stream, and one error annotation naming
- * the failure.
+ * report, read from the error and the stream, with what the run had committed
+ * on its branch when it cut one (#431), and one error annotation naming the
+ * failure.
  */
-export async function leaveFailureReport(error: unknown, watch: StreamWatch, file: FailureFile): Promise<void> {
+export async function leaveFailureReport(
+  error: unknown,
+  watch: StreamWatch,
+  file: FailureFile,
+  commits: FailedRunCommits | null = null,
+): Promise<void> {
   for (const route of watch.initRefused() ?? []) console.log(`::error title=Metered-billing route::${route}`);
-  const report = failureReportFor({
-    error,
-    lines: watch.lines,
-    initRefused: watch.initRefused(),
-    overage: watch.overage(),
-  });
+  const report: FailureReport = {
+    ...failureReportFor({
+      error,
+      lines: watch.lines,
+      initRefused: watch.initRefused(),
+      overage: watch.overage(),
+    }),
+    ...(commits === null ? {} : { commits }),
+  };
   await writeFile(file.path, file.text?.(report) ?? `${JSON.stringify(report, null, 2)}\n`);
   console.log(`::error title=${file.title} (${report.failure})::${report.detail}`);
 }

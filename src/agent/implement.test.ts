@@ -1,12 +1,24 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { PENRITH_59_REPO, PENRITH_59_REQUEST, PENRITH_59_TICKET_PRACTITIONERS, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { verdictMarker } from "../loop/markers.ts";
-import { conflictContext, implementContext, implementInput, requestChangesContext, retryContext } from "./implement.ts";
+import {
+  bundleAgentBranch,
+  conflictContext,
+  failedRunCommits,
+  implementContext,
+  implementInput,
+  requestChangesContext,
+  retryContext,
+} from "./implement.ts";
 import { readPullRequest } from "./inputs.ts";
+import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 async function fileOf(value: unknown): Promise<string> {
   const path = join(await mkdtemp(join(tmpdir(), "fabrik-implement-")), "file.json");
@@ -344,5 +356,75 @@ describe("A conflict-only run (#304)", () => {
 
   it("refuses a main head that isn't a full commit sha", async () => {
     await expect(conflictContext(await fileOf(pullRequest), "main")).rejects.toThrow(/FABRIK_CONFLICT_MAIN/);
+  });
+});
+
+// #431: a run that committed, then failed its output contract, keeps its commits as a bundle,
+// and its failure report says so, and where a re-run starts from.
+describe("What a failed run had committed on its branch", () => {
+  const run = promisify(execFile);
+  const git = async (cwd: string, ...args: string[]) => (await run("git", args, { cwd })).stdout.trim();
+  const commit = async (cwd: string, path: string, message: string) => {
+    await writeFile(join(cwd, path), `${message}\n`);
+    await git(cwd, "add", "-A");
+    await git(cwd, "-c", "user.name=Fabrik", "-c", "user.email=fabrik@example.com", "commit", "--quiet", "-m", message);
+  };
+
+  async function startedBranch(): Promise<{ productDir: string; outDir: string; started: BuiltBranch }> {
+    const root = await mkdtemp(join(tmpdir(), "fabrik-failed-commits-"));
+    const productDir = join(root, "product");
+    const outDir = join(root, "fabrik-out");
+    await mkdir(productDir);
+    await mkdir(outDir);
+    await git(productDir, "init", "--quiet", "--initial-branch=main");
+    await commit(productDir, "README.md", "Start");
+    const sha = await git(productDir, "rev-parse", "HEAD");
+    await git(productDir, "checkout", "--quiet", "-b", "agent/7");
+    return { productDir, outDir, started: { name: "agent/7", base: { ref: "main", sha }, head: null } };
+  }
+
+  it("a missing-output failure after commits leaves a bundle, kept, and names the head the run started from", async () => {
+    const { productDir, outDir, started } = await startedBranch();
+    await commit(productDir, "feature.ts", "Build the change");
+    const head = await git(productDir, "rev-parse", "HEAD");
+
+    const commits = await failedRunCommits(productDir, started, outDir, null);
+
+    expect(commits).toEqual({ base: started.base.sha, continued: false, head, kept: true });
+    expect(existsSync(join(outDir, AGENT_BUNDLE_FILE))).toBe(true);
+    expect(await git(productDir, "bundle", "list-heads", join(outDir, AGENT_BUNDLE_FILE))).toBe(`${head} refs/heads/agent/7`);
+  });
+
+  it("reads a bundle the run already made before its output was checked as kept", async () => {
+    const { productDir, outDir, started } = await startedBranch();
+    await commit(productDir, "feature.ts", "Build the change");
+    const built = await bundleAgentBranch(productDir, started, outDir);
+
+    expect(await failedRunCommits(productDir, started, outDir, built)).toEqual({ base: started.base.sha, continued: false, head: built.head, kept: true });
+  });
+
+  it("says a run that committed nothing made no commits, and leaves no bundle", async () => {
+    const { productDir, outDir, started } = await startedBranch();
+
+    expect(await failedRunCommits(productDir, started, outDir, null)).toEqual({ base: started.base.sha, continued: false, head: null, kept: false });
+    expect(existsSync(join(outDir, AGENT_BUNDLE_FILE))).toBe(false);
+  });
+
+  it("says whether the run carried on a branch from its head, as a run on a PR does, rather than cut it", async () => {
+    const { productDir, outDir, started } = await startedBranch();
+    const onPullRequest: BuiltBranch = { ...started, base: { ref: started.name, sha: started.base.sha } };
+
+    expect(await failedRunCommits(productDir, onPullRequest, outDir, null)).toEqual({ base: started.base.sha, continued: true, head: null, kept: false });
+  });
+
+  it("says commits a run made on its branch weren't kept when they can't be bundled", async () => {
+    const { productDir, outDir, started } = await startedBranch();
+    await commit(productDir, "feature.ts", "Build the change");
+    const head = await git(productDir, "rev-parse", "HEAD");
+    // The agent left its branch, so bundleAgentBranch refuses it.
+    await git(productDir, "checkout", "--quiet", "main");
+
+    expect(await failedRunCommits(productDir, started, outDir, null)).toEqual({ base: started.base.sha, continued: false, head, kept: false });
+    expect(existsSync(join(outDir, AGENT_BUNDLE_FILE))).toBe(false);
   });
 });

@@ -589,12 +589,16 @@ jobs:
 
       # src/agent/run.ts writes this when it catches a failure. A run its
       # timeout stopped leaves none, and the push job reads that as a timeout.
+      # With it, the bundle of any commits the run made before it failed
+      # (#431): never pushed, kept for the Operator, as the notice says.
       - name: Pass the failure report to the push job
         if: failure() && steps.agent-time.outputs.timed-out != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fabrik-agent-failure
-          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          path: |
+            ${{ runner.temp }}/fabrik-out/agent-failure.json
+            ${{ runner.temp }}/fabrik-out/agent-branch.bundle
           if-no-files-found: ignore
           retention-days: 7
 
@@ -848,12 +852,16 @@ jobs:
 
       # src/agent/run.ts writes this when it catches a failure. A run its
       # timeout stopped leaves none, and the push job reads that as a timeout.
+      # With it, the bundle of any commits the run made before it failed
+      # (#431): never pushed, kept for the Operator, as the notice says.
       - name: Pass the failure report to the push job
         if: failure() && steps.agent-time.outputs.timed-out != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fabrik-agent-failure
-          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          path: |
+            ${{ runner.temp }}/fabrik-out/agent-failure.json
+            ${{ runner.temp }}/fabrik-out/agent-branch.bundle
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1394,12 +1402,16 @@ jobs:
 
       # src/agent/run.ts writes this when it catches a failure, a reply that
       # breaks the research contract included. A run cancelled by its timeout leaves none.
+      # With it, the bundle of any commits the run made before it failed
+      # (#431): never pushed, kept for the Operator, as the notice says.
       - name: Pass the failure report to the push job
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fabrik-agent-failure
-          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          path: |
+            ${{ runner.temp }}/fabrik-out/agent-failure.json
+            ${{ runner.temp }}/fabrik-out/agent-branch.bundle
           if-no-files-found: ignore
           retention-days: 7
 
