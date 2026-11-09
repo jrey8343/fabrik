@@ -16,6 +16,7 @@ import { storeIsPrivate } from "../kit/runStore.ts";
 import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { heldRunsIn } from "../loop/heldRun.ts";
+import { makesUnusable } from "../loop/subscriptions.ts";
 import {
   AUDIT_LABEL,
   DESIGN_LABEL,
@@ -519,7 +520,12 @@ export async function gatherSnapshot(
   // A closed Ticket may be its Spec's last.
   const parent = event.kind === "issue-closed" ? (part?.issue?.parent ?? null) : null;
   const spec = parent === null ? null : await gatherSpec(github, repo, parent);
-  const held = event.kind === "scheduled-tick" ? await gatherHeld(github, repo, kitIssues, appLogin) : null;
+  // The tick resumes held runs once a Subscription is free, and so does whatever may free one (#439).
+  const freesASubscription =
+    event.kind === "scheduled-tick" ||
+    event.kind === "kit-config-changed" ||
+    (event.kind === "issue-closed" && makesUnusable(part?.issue?.labels ?? []));
+  const held = freesASubscription ? await gatherHeld(github, repo, kitIssues, appLogin) : null;
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
   const conflicts =
@@ -1150,8 +1156,8 @@ const HELD_TARGET_FIELDS = "__typename number state body author { login __typena
 
 /**
  * Each issue or PR a held marker on an open weekly-limit issue names, once,
- * for the scheduled tick to tell a held run still in the state it was held in
- * from one that has moved on (src/loop/resume.ts). A number naming nothing
+ * to tell a held run still in the state it was held in from one that has
+ * moved on as it resumes (src/loop/resume.ts). A number naming nothing
  * GitHub has is left out.
  */
 async function gatherHeld(

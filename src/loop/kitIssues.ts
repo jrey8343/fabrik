@@ -9,8 +9,8 @@
 // Subscription gets its own weekly-limit issue, which stays quiet while
 // another Subscription is free: only the one opened, or refused on, once none
 // is free @-mentions the Operator. While none is free, each run due is held
-// instead of started (src/loop/hold.ts), and the scheduled tick resumes it at
-// the reset (src/loop/resume.ts). A run killed for spending usage credits gets
+// instead of started (src/loop/hold.ts), and it resumes once one is free, at
+// the reset or sooner (src/loop/resume.ts). A run killed for spending usage credits gets
 // a usage-credits issue (src/loop/usageCreditsIssue.ts).
 import type { HoldableRun } from "./heldRun.ts";
 import { heldLine } from "./hold.ts";

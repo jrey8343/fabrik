@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  aTicket,
   anIssue,
   anAuditIssue,
   AUDITED_SHA,
   auditBody,
+  dispatchSnapshotOf,
   kitConfig,
   notificationsOf,
   RETRO_WINDOW_END,
@@ -124,6 +126,84 @@ describe("The scheduled tick past a reset, with runs held and rotation on", () =
       TWO_SUBSCRIPTIONS,
     );
     expect(labelsAdded(later)).toEqual([]);
+  });
+});
+
+// A Subscription freed some way other than the tick's own close at a reset
+// resumes the held runs too, so a newer Ticket never starts ahead of them (#439).
+describe("A Subscription freed while runs are held, with rotation on (#439)", () => {
+  // A's weekly-limit issue #50 resets in days and holds #7, then #8; B's usage-credits issue was #51.
+  const IN_DAYS = "2026-11-14T10:00:00.000Z";
+  const limitA = weeklyLimitIssue(50, "Claude token", IN_DAYS, [held(7, "implement", "agent:implement"), held(8, "implement", "agent:implement")], true);
+  const usageCreditsB: KitIssueSnapshot = {
+    number: 51,
+    labels: ["ready-for-human", "fabrik:usage-credits"],
+    body: "Turn off usage credits.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token 2 -->",
+    comments: [],
+  };
+  const heldOn = [anIssueHeld(7, ["enhancement", "ready-for-agent"]), anIssueHeld(8, ["enhancement", "ready-for-agent"])];
+  const closedUsageCredits: LoopEvent = { kind: "issue-closed", issue: 51 };
+  const closedSnapshot = (kitIssues: readonly KitIssueSnapshot[]) =>
+    snapshotOf(anIssue({ number: 51, open: false, byApp: true, labels: usageCreditsB.labels, body: usageCreditsB.body }), {
+      kitIssues,
+      held: heldOn,
+    });
+
+  it("closing the usage-credits issue resumes the held runs, oldest first, before the Dispatch check", () => {
+    const plan = planFor(closedUsageCredits, closedSnapshot([limitA]), TWO_SUBSCRIPTIONS);
+
+    const actions = actionsOf(plan);
+    expect(labelsAdded(plan)).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
+      { kind: "add-labels", issue: 8, labels: ["agent:implement"] },
+    ]);
+    expect(actions).toContainEqual({
+      kind: "comment",
+      issue: 50,
+      body: expect.stringContaining('<!-- fabrik:resumed {"issue":8,"role":"implement","held":1} -->'),
+    });
+    const lastResume = actions.findIndex((action) => action.kind === "comment");
+    expect(actions.findIndex((action) => action.kind === "check-dispatch")).toBeGreaterThan(lastResume);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("closing the usage-credits issue resumes nothing while every Subscription is still used up", () => {
+    const limitB = weeklyLimitIssue(52, "Claude token 2", IN_DAYS);
+
+    const plan = planFor(closedUsageCredits, closedSnapshot([limitA, limitB]), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toEqual([]);
+    expect(actionsOf(plan).filter((action) => action.kind === "comment")).toEqual([]);
+  });
+
+  it("the scheduled tick resumes them with B free and A not reset, so a newer ready Ticket never jumps them", () => {
+    const plan = planFor(tick("2026-11-09T11:00:00.000Z"), tickSnapshot({ kitIssues: [limitA], held: heldOn }), TWO_SUBSCRIPTIONS);
+
+    const actions = actionsOf(plan);
+    expect(labelsAdded(plan)).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
+      { kind: "add-labels", issue: 8, labels: ["agent:implement"] },
+    ]);
+    expect(actions).not.toContainEqual(expect.objectContaining({ kind: "close", issue: 50 }));
+    const markers = actions.findIndex((action) => action.kind === "comment" && action.issue === 50);
+    expect(actions.findIndex((action) => action.kind === "check-dispatch")).toBeGreaterThan(markers);
+
+    // The Dispatch check that follows, once the resumes have landed, counts #7 and #8 as in flight.
+    const resumed = { ...limitA, comments: [...limitA.comments, ...actions.flatMap((action) => (action.kind === "comment" && action.issue === 50 ? [action.body] : []))] };
+    const tickets = [
+      aTicket({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"] }),
+      aTicket({ number: 8, labels: ["enhancement", "ready-for-agent", "agent:implement"] }),
+      aTicket({ number: 10 }),
+    ];
+    const dispatched = planFor({ kind: "dispatch-check" }, { ...dispatchSnapshotOf(tickets), kitIssues: [resumed] }, { ...TWO_SUBSCRIPTIONS, maxInFlight: 2 });
+    expect(dispatched.kind).toBe("nothing");
+  });
+
+  it("the scheduled tick says why it dealt with them: a Subscription is free again, not that a limit reset", () => {
+    const plan = planFor(tick("2026-11-09T11:00:00.000Z"), tickSnapshot({ kitIssues: [limitA], held: heldOn }), TWO_SUBSCRIPTIONS);
+
+    const markers = actionsOf(plan).find((action) => action.kind === "comment" && action.issue === 50);
+    expect(markers).toEqual(expect.objectContaining({ body: expect.stringMatching(/^A Subscription is free again/) }));
   });
 });
 

@@ -105,6 +105,15 @@ export function unusableSubscriptions(
 }
 
 /**
+ * Whether an issue with these labels makes a Subscription unusable while it's
+ * open, so that closing it may free one: a weekly-limit, usage-credits or
+ * token-rotation issue.
+ */
+export function makesUnusable(labels: readonly string[]): boolean {
+  return labels.some((label) => label === WEEKLY_LIMIT_LABEL || label === USAGE_CREDITS_LABEL || label === TOKEN_ROTATION_LABEL);
+}
+
+/**
  * The listed Subscriptions with no open weekly-limit, usage-credits or
  * token-rotation issue, in the listed order.
  */

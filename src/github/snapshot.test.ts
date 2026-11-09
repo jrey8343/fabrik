@@ -1823,16 +1823,29 @@ function nothingNewForTheRetro(query: string): unknown {
   return undefined;
 }
 
-describe("Gathering the issues and PRs held runs are on, for a scheduled tick", () => {
+describe("Gathering the issues and PRs held runs are on, for a scheduled tick and whatever may free a Subscription", () => {
   const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
   const heldMarker = (issue: number, role: string, label: string | null) =>
     `<!-- fabrik:held ${JSON.stringify({ issue, role, label })} -->`;
 
-  /** The read-only API, holding one weekly-limit issue with these comments, and these issues and PRs by number. */
-  function githubWith(comments: string[], targets: Record<number, unknown>) {
+  /**
+   * The read-only API, holding one weekly-limit issue with these comments,
+   * these issues and PRs by number, and a closed issue with `closedLabels`
+   * for an issue-closed event.
+   */
+  function githubWith(comments: string[], targets: Record<number, unknown>, closedLabels: string[] = []) {
     const asked: number[][] = [];
     const github = {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("issue(number: $number)")) {
+          const data = issueData(variables["number"] as number);
+          return {
+            repository: {
+              ...data.repository,
+              issue: { ...data.repository.issue, state: "CLOSED", labels: { nodes: closedLabels.map((name) => ({ name })) } },
+            },
+          };
+        }
         if (query.includes("issueOrPullRequest")) {
           const numbers = Object.entries(variables).filter(([name]) => /^n\d+$/.test(name)).map(([, value]) => value as number);
           asked.push(numbers);
@@ -1894,12 +1907,35 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick", 
     expect(asked).toEqual([]);
   });
 
-  it("isn't gathered for any other event", async () => {
-    const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], {});
+  const issue7 = { __typename: "Issue", number: 7, state: "OPEN", body: "", author: { login: "jrey", __typename: "User" }, labels: { nodes: [{ name: "bug" }] } };
+  const heldOn7 = [{ number: 7, open: true, labels: ["bug"], draft: null, byApp: false, body: "" }];
+
+  it("is gathered when a usage-credits, token-rotation or weekly-limit issue closes, since that may free a Subscription (#439)", async () => {
+    for (const label of ["fabrik:usage-credits", "fabrik:token-rotation", "fabrik:weekly-limit"]) {
+      const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], { 7: issue7 }, ["ready-for-human", label]);
+
+      const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
+
+      expect(snapshot.held).toEqual(heldOn7);
+    }
+  });
+
+  it("is gathered when the Kit config changes, since a Subscription newly listed is free (#439)", async () => {
+    const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], { 7: issue7 });
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]");
 
-    expect(snapshot.held).toBeNull();
+    expect(snapshot.held).toEqual(heldOn7);
+  });
+
+  it("isn't gathered for any other event, a Ticket closing among them", async () => {
+    const { github } = githubWith([heldMarker(7, "triage", "needs-triage")], { 7: issue7 }, ["ready-for-agent"]);
+
+    const closed = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 9 }, null, "fabrik-app[bot]");
+    const pushed = await gatherSnapshot(github, repo, { kind: "main-pushed", head: "f".repeat(40) }, null, "fabrik-app[bot]");
+
+    expect(closed.held).toBeNull();
+    expect(pushed.held).toBeNull();
   });
 });
 

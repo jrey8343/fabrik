@@ -22,7 +22,7 @@ interface Candidate {
  * to the Researcher, lowest issue number first across both, up to the free
  * slots. A max_in_flight of 0 pauses it; resuming an agent PR's run doesn't
  * go through here. `held` names the Tickets and Decisions whose run is held:
- * dispatched already, each keeps its slot until the scheduled tick resumes it.
+ * dispatched already, each keeps its slot until it resumes once a Subscription is free.
  */
 export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched): Plan {
   const tickets = [...snapshot.tickets].sort((a, b) => a.number - b.number);

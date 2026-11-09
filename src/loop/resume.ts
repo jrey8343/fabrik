@@ -1,49 +1,54 @@
-// Resuming held runs: with rotation on, when the scheduled tick closes a
-// weekly-limit issue at its reset, which frees its Subscription, the same
-// tick resumes every held run, in the order it was first held. A run with a
-// trigger label gets it back on the App token, so a normal Loop run starts it
-// on the freed Subscription, under Dispatch's max_in_flight cap and the
-// Design session cap as usual. A run whose issue or PR has closed, or moved on
-// in the Loop, since it was held is dropped instead. An Auditor run is no
-// longer held, and the tick can't start one, so a held marker one left before
-// that (#268), on a still-pending Audit, fails the Audit. Every weekly-limit
-// issue then gets a resumed marker for each run dealt with, so that only a
-// later held marker, if the resumed run is refused again, holds it again; the
-// marker carries the run's place in the order, so that held again it keeps
-// its first place even once the issue its first held marker was on has
-// closed. Only when every weekly-limit issue closes in one tick is no open
+// Resuming held runs: with rotation on, once a Subscription is free, the held
+// runs resume, in the order each was first held (#439). The scheduled tick
+// resumes them when it closes a weekly-limit issue at its reset, and on any
+// tick that finds a Subscription free some other way, as when the Operator
+// closed a usage-credits issue the Loop missed, or listed another
+// Subscription. Closing a usage-credits, token-rotation or weekly-limit issue
+// resumes them straight away, as does a Kit config change, so a Dispatch check
+// never starts a newer Ticket ahead of them. A run with a trigger label gets
+// it back on the App token, so a normal Loop run starts it on the freed
+// Subscription, under Dispatch's max_in_flight cap and the Design session cap
+// as usual: each held run kept its slot. A run whose issue or PR has closed,
+// or moved on in the Loop, since it was held is dropped instead. An Auditor
+// run is no longer held, and the tick can't start one, so a held marker one
+// left before that (#268), on a still-pending Audit, fails the Audit. Every
+// weekly-limit issue then gets a resumed marker for each run dealt with, so
+// that only a later held marker, if the resumed run is refused again, holds it
+// again; the marker carries the run's place in the order, so that held again
+// it keeps its first place even once the issue its first held marker was on
+// has closed. Only when every weekly-limit issue closes in one tick is no open
 // issue left to carry it, and a run held again then takes a new place. The
-// tick's own actions, the weekly-limit issue's close among them, come last
-// (#438): a tick that fails partway leaves the issue open with its held
+// plan's own actions, a weekly-limit issue's close among them, come last
+// (#438): a plan that fails partway leaves the issue open with its held
 // markers, so the next tick deals with what's left rather than drop it. A
 // held run whose trigger label is back on its issue or PR, since the resume
-// landed but the tick failed before its resumed markers, isn't given it again
+// landed but the plan failed before its resumed markers, isn't given it again
 // nor dropped: the next tick only leaves its markers.
 // Pure, no I/O.
 import { auditMarksIn } from "./markers.ts";
 import { type HeldRun, RUN_NAMES, resumedMarker, type Waiting, waitingHeldRuns } from "./heldRun.ts";
 import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, RESEARCH_DECISION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
-import { rotationIsOn } from "./subscriptions.ts";
+import { freeSubscriptions, rotationIsOn } from "./subscriptions.ts";
 import type { Action, HeldTargetSnapshot, KitConfig, Plan, Snapshot } from "./types.ts";
 import { failedHeldAudit } from "./weeklyRuns.ts";
 
 /**
- * The scheduled tick's Plan, with every held run resumed or dropped when it
- * closes a weekly-limit issue: the resumes, then the resumed markers, then
- * the tick's own actions, the close among them. Before any reset, or with
- * rotation off, it is left as it is.
+ * The Plan with every held run resumed or dropped while a Subscription is
+ * free once it lands: the resumes, then the resumed markers, then the Plan's
+ * own actions, a weekly-limit issue's close among them. `closed` names a
+ * Kit-owned issue already closed, as the one an issue-closed event is about,
+ * which the snapshot may still list. While every Subscription is used up, or
+ * with rotation off, or with no run held, it is left as it is.
  */
-export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConfig): Plan {
-  if (tick.kind !== "act" || !rotationIsOn(config)) return tick;
+export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConfig, closed: number | null = null): Plan {
+  if (plan.kind === "fail" || !rotationIsOn(config)) return plan;
+  const planned = plan.kind === "act" ? plan.actions : [];
   const limits = snapshot.kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
-  const closing = new Set(
-    tick.actions.flatMap((action) => (action.kind === "close" ? [action.issue] : [])).filter((number) =>
-      limits.some((issue) => issue.number === number),
-    ),
-  );
-  if (closing.size === 0) return tick;
+  const closing = new Set(planned.flatMap((action) => (action.kind === "close" ? [action.issue] : [])));
+  const stillOpen = snapshot.kitIssues.filter((issue) => issue.number !== closed && !closing.has(issue.number));
+  if (freeSubscriptions(stillOpen, config).length === 0) return plan;
   const waiting = waitingHeldRuns(limits);
-  if (waiting.length === 0) return tick;
+  if (waiting.length === 0) return plan;
   if (snapshot.held === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the issues and PRs held runs are on" };
   }
@@ -70,17 +75,21 @@ export function resumingHeldRuns(tick: Plan, snapshot: Snapshot, config: KitConf
   }
   // On every weekly-limit issue, so that a run held again keeps its place even
   // once the issue its held markers were on has closed, and so that one the
-  // tick fails to close resumes nothing again.
+  // plan fails to close resumes nothing again.
+  const why = limits.some((issue) => closing.has(issue.number))
+    ? "A Subscription's weekly limit reset, so the Kit has dealt with the runs held here."
+    : "A Subscription is free again, so the Kit has dealt with the runs held here.";
   const markers = limits.flatMap((issue): Action[] => {
     const here = dealtWith.map(({ run, markers: counts }) =>
       resumedMarker({ role: run.role, issue: run.issue, held: counts.get(issue.number) ?? 0, order: run.order ?? null }),
     );
     if (here.length === 0) return [];
-    const body = ["A Subscription's weekly limit reset, so the Kit has dealt with the runs held here.", "", ...here].join("\n");
+    const body = [why, "", ...here].join("\n");
     return [{ kind: "comment", issue: issue.number, body }];
   });
-  // The tick's own actions, its close among them, last (#438): closed, the issue's held markers are no longer read, so whatever hadn't landed would be dropped.
-  return { kind: "act", actions: [...resumes, ...markers, ...tick.actions] };
+  // The plan's own actions, a close among them, last (#438): closed, the issue's held markers are no longer read, so whatever hadn't landed would be dropped.
+  const notes = plan.kind === "act" ? plan.notes : undefined;
+  return { kind: "act", actions: [...resumes, ...markers, ...planned], ...(notes === undefined ? {} : { notes }) };
 }
 
 /**

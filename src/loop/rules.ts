@@ -36,7 +36,7 @@ import { startResearcher } from "./research.ts";
 import { landResearch } from "./researchLanding.ts";
 import { applyPrototypeTurn } from "./prototypeLanding.ts";
 import { startAgentRun } from "./runs.ts";
-import { onChosenSubscription } from "./subscriptions.ts";
+import { makesUnusable, onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { replayGate } from "./replayGate.ts";
@@ -119,12 +119,18 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     // A closed issue may finish its Spec, free a slot or unblock a Ticket, or end a
     // Design session by hand. Merging an agent PR closes its Ticket through
     // `Closes #n`, so it lands here. A closed Ticket's agent draft PR closes
-    // too, and the Dispatch check then sees its slot free (#428).
+    // too, and the Dispatch check then sees its slot free (#428). A closed
+    // usage-credits, token-rotation or weekly-limit issue may free a
+    // Subscription, so the held runs resume first, ahead of any newer Ticket
+    // the Dispatch check would start (#439).
     case "issue-closed":
-      return withIssue(snapshot, ({ issue }) => ({
-        kind: "act",
-        actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
-      }));
+      return withIssue(snapshot, ({ issue }) => {
+        const plan: Plan = {
+          kind: "act",
+          actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
+        };
+        return makesUnusable(issue.labels) ? resumingHeldRuns(plan, snapshot, config, issue.number) : plan;
+      });
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
     case "pull-request-pushed":
       return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, config));
@@ -181,11 +187,16 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return conflictCheck(snapshot, config);
     case "kit-config-changed":
       // max_in_flight or caps.design_sessions may have gone up, or from 0 back
-      // above it, so see what can start now. It's a push to main too.
-      return alongside({ kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] }, conflictCheck(snapshot, config));
+      // above it, so see what can start now. It's a push to main too. A
+      // Subscription newly listed frees one, so the held runs resume first (#439).
+      return resumingHeldRuns(
+        alongside({ kind: "act", actions: [CHECK_DISPATCH, CHECK_DESIGN_QUEUE] }, conflictCheck(snapshot, config)),
+        snapshot,
+        config,
+      );
     case "scheduled-tick":
-      // The tick closes each weekly-limit issue after its reset, resuming the
-      // runs held until then, and opens the week's pending Audit and pending
+      // The tick closes each weekly-limit issue after its reset, and resumes
+      // the held runs whenever a Subscription is free (#439), and opens the week's pending Audit and pending
       // Retro when each is due. It also catches a Design session slot freed by
       // an event the Loop doesn't watch, such as needs-design coming off by hand.
       // It also takes the Replays' next step, and catches an agent PR left
@@ -249,11 +260,11 @@ type TickGate = (now: string, snapshot: Snapshot, config: KitConfig) => Plan;
 
 /**
  * The scheduled tick with these gates: closes each weekly-limit issue after
- * its reset, as scheduledTick does, and resumes held runs then, alongside
- * each gate's plan.
+ * its reset, as scheduledTick does, and resumes held runs whenever a
+ * Subscription is free, alongside each gate's plan.
  */
 function scheduledTickWith(gates: readonly TickGate[], now: string, snapshot: Snapshot, config: KitConfig): Plan {
-  // With rotation on, a weekly-limit issue it closes resumes the held runs.
+  // With rotation on, a weekly-limit issue it closes, or a Subscription free already, resumes the held runs.
   const tick = resumingHeldRuns(scheduledTick(now, snapshot, config), snapshot, config);
   // A weekly-limit issue this tick closes after its reset no longer holds a gate back.
   const closing = actionsOf(tick).flatMap((action) => (action.kind === "close" ? [action.issue] : []));

@@ -100,9 +100,8 @@ function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | nu
 
 /**
  * Whether a run can be held now: held markers live only on weekly-limit
- * issues, and only a weekly-limit issue's close resumes them, so a run is
- * never held while none is open, as when every Subscription is unusable
- * through usage-credits issues alone.
+ * issues, so a run is never held while none is open, as when every
+ * Subscription is unusable through usage-credits issues alone.
  */
 export function canHold(kitIssues: readonly KitIssueSnapshot[]): boolean {
   return holdingOn(kitIssues).on !== undefined;

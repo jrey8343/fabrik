@@ -283,9 +283,9 @@ describe("The killed run, with rotation on", () => {
   });
 });
 
-// Held markers live only on weekly-limit issues, and closing a usage-credits
-// issue resumes nothing, so with no weekly-limit issue open there's nowhere
-// to hold a run: the Kit never takes its trigger label off without one.
+// Held markers live only on weekly-limit issues, so with no weekly-limit issue
+// open there's nowhere to hold a run: the Kit never takes its trigger label
+// off without one.
 describe("Every Subscription unusable only through usage-credits issues, with rotation on", () => {
   const BOTH_KILLED = () => [usageCreditsIssue(60, "Claude token"), usageCreditsIssue(61, "Claude token 2")];
 
