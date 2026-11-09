@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { CODING_STANDARDS_FILE, KIT_PROMPT_NAMES, kitPromptPath } from "../guard/trust-root.ts";
 import { MAX_AUDIT_CANDIDATES, readAuditOutput } from "../loop/auditOutput.ts";
 import { readDesignTurnOutput, readPrototypeTurnOutput } from "../loop/designOutput.ts";
 import { readPullRequestRunOutput, readRequestChangesRunOutput } from "../loop/implementOutput.ts";
@@ -337,6 +338,15 @@ describe("The Map question in the Design prompt", () => {
 describe("Product intent in the Implement prompt", () => {
   it("forbids changing anything under docs/product/ at the repo root, where the Vision and Roadmap live", async () => {
     expect(section(await prompt("implement"), "What you must not change")).toContain("- anything under `docs/product/` at the repo root");
+  });
+});
+
+describe("Trust roots in the Implement prompt", () => {
+  it("names every Kit prompt and the Coding standards the guard refuses, and calls no other prompts/ file fine", async () => {
+    const roots = section(await prompt("implement"), "What you must not change");
+    for (const name of KIT_PROMPT_NAMES) expect(roots).toContain(`\`${kitPromptPath(name)}\``);
+    expect(roots).toContain(`- \`${CODING_STANDARDS_FILE}\` at the repo root`);
+    expect(roots).not.toContain("other `prompts/` files are fine");
   });
 });
 

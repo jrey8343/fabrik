@@ -44,8 +44,8 @@ export function kitPromptPath(prompt: KitPrompt): string {
 
 /**
  * The Kit's prompts, which steer the agents, and its Scorers' rubrics,
- * which judge their work: trust roots only when the Loop runs on Fabrik
- * itself, since a Product's own `prompts/` folder is its own business.
+ * which judge their work: trust roots in any repo, so a Product's own file
+ * at one of these paths is refused too. A Product's other `prompts/` files are not.
  */
 const KIT_PROMPTS: readonly string[] = KIT_PROMPT_NAMES.map(kitPromptPath);
 const KIT_RUBRICS = `${RUBRICS_DIR}/`;
