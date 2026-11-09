@@ -196,6 +196,7 @@ describe("A Retry announced by its Verdict that never started", () => {
     const [note, ...more] = commentsOn(plan, 50);
     expect(more).toEqual([]);
     expect(note).toContain("Retry 1 of 2 on #50 never started, so the Kit has added `agent:implement` to #7 again");
+    expect(note).toContain("re-add `agent:implement` on the Ticket (#7) to resume it");
     expect(note).not.toContain("@");
     expect(actionsOf(thread.implement())).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "implement", retry: 1, retryFlaw: A }));
   });

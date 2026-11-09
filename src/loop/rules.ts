@@ -1,6 +1,7 @@
 import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
+import { issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { failureNotice } from "./failures.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { checkConflicts, reviewGraceMinutes } from "./conflicts.ts";
@@ -134,14 +135,16 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
     case "pull-request-pushed":
       return withPullRequest(snapshot, (pullRequest) => startReview(pullRequest, config));
+    // A label that only starts something on an issue comes off a PR, saying where it goes (#479).
     case "pull-request-labeled":
-      return withPullRequest(snapshot, (pullRequest) =>
-        event.label === REVIEW_LABEL
-          ? startReviewOnLabel(pullRequest, config)
-          : event.label === NEEDS_DESIGN
-            ? sendBackToDesign(pullRequest)
-            : { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` },
-      );
+      return withPullRequest(snapshot, (pullRequest) => {
+        if (event.label === REVIEW_LABEL) return startReviewOnLabel(pullRequest, config);
+        if (event.label === NEEDS_DESIGN) return sendBackToDesign(pullRequest);
+        const misplaced = issueLabelOnPullRequest(event.label, pullRequest);
+        return misplaced === null
+          ? { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` }
+          : { kind: "act", actions: misplaced };
+      });
     case "required-checks-finished":
       return applyRedChecks(event, snapshot);
     case "review-run-finished":
@@ -342,6 +345,7 @@ function missingFromSnapshot(what: string): Plan {
  * Implement run; and adding agent:research starts a Researcher run, whether
  * Dispatch added it to release a research Decision or the Operator re-added
  * it by hand; and adding ready-for-agent asks for a Dispatch check.
+ * agent:review, which goes on a PR, comes off with one line saying so.
  */
 function labelAdded(
   issueNumber: number,
@@ -356,6 +360,8 @@ function labelAdded(
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context, replay?.issues ?? null);
   if (label === READY_FOR_AGENT) return checkDispatchWhenReady(issueNumber, context.issue);
+  // agent:review starts a Review only on a PR, so it comes off an issue, saying where it goes (#479).
+  if (label === REVIEW_LABEL) return { kind: "act", actions: reviewLabelOnIssue(issueNumber, context.issue.openPullRequests) };
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

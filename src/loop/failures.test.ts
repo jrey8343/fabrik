@@ -20,7 +20,7 @@ function failed(overrides: Partial<Extract<LoopEvent, { kind: "agent-run-failed"
 }
 
 describe("Failure notices", () => {
-  it("a Triage run cancelled by its timeout tells the Operator to re-add needs-triage on the issue", () => {
+  it("a Triage run cancelled by its timeout tells the Operator to re-add needs-triage on this issue", () => {
     const issue = anIssue({ number: 7, labels: ["needs-triage"] });
 
     const plan = planFor(failed({ jobResult: "cancelled", secretsStep: null }), snapshotOf(issue), kitConfig());
@@ -35,7 +35,7 @@ describe("Failure notices", () => {
           body: [
             "@operator The Triage run on #7 failed: it was cancelled, most likely by its 10-minute timeout.",
             "",
-            "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-add the `needs-triage` label to run it again.",
+            "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-add `needs-triage` on this issue to run it again.",
             "",
             `[The run](${RUN})`,
           ].join("\n"),
@@ -93,7 +93,7 @@ describe("Failure notices", () => {
       const body = commentOf(plan);
       expect(body.match(/@\S+/g)).toEqual(["@operator"]);
       expect(body).toContain(`The Triage run on #7 failed: ${how}.`);
-      expect(body).toContain("Re-add the `needs-triage` label to run it again.");
+      expect(body).toContain("Re-add `needs-triage` on this issue to run it again.");
       expect(body).toContain(`[The run](${RUN})`);
     },
   );
@@ -144,7 +144,7 @@ describe("Failure notices", () => {
       ],
     });
     expect(commentOf(plan)).toContain("The Implement run on #7 failed: it crashed.");
-    expect(commentOf(plan)).toContain("Re-add the `agent:implement` label on #7 to run it again.");
+    expect(commentOf(plan)).toContain("Re-add `agent:implement` on the Ticket (#7) to run it again.");
   });
 
   it("an Implement failure with no PR yet comments on the Ticket", () => {
@@ -154,7 +154,7 @@ describe("Failure notices", () => {
       kind: "act",
       actions: [
         { kind: "remove-label", issue: 7, label: "agent:implement" },
-        { kind: "comment", issue: 7, body: expect.stringContaining("Re-add the `agent:implement` label to run it again.") },
+        { kind: "comment", issue: 7, body: expect.stringContaining("Re-add `agent:implement` on this Ticket to run it again.") },
       ],
     });
   });
@@ -252,7 +252,7 @@ describe("Failure notices", () => {
       ],
     });
     expect(commentOf(plan)).toContain("The Review run on #7 failed: the Reviewer gave no valid Verdict.");
-    expect(commentOf(plan)).toContain("Re-add the `agent:review` label to run it again.");
+    expect(commentOf(plan)).toContain("Re-add `agent:review` on this PR to run it again.");
   });
 
   it("a Design-session turn failure keeps needs-design, so the issue stays in its session, and says a reply runs it again", () => {
@@ -310,7 +310,7 @@ describe("Failure notices", () => {
       const plan = planFor(failed({ report: refused }), snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] })), kitConfig());
 
       expect(commentOf(plan)).toContain("The Triage run on #7 failed: GitHub refused a request in the Kit's input step, so the agent never started.");
-      expect(commentOf(plan)).toContain("Once that fix is in, re-add the `needs-triage` label to run it again.");
+      expect(commentOf(plan)).toContain("Once that fix is in, re-add `needs-triage` on this issue to run it again.");
     });
 
     it("a read GitHub failed (a 5xx or no answer) names the error and offers a reply as the retry", () => {

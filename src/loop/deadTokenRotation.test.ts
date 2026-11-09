@@ -180,7 +180,7 @@ describe("A dead token on one Subscription, with rotation on", () => {
     expect(actions).toContainEqual({
       kind: "comment",
       issue: 7,
-      body: expect.stringContaining("Re-add the `agent:implement` label to run it again."),
+      body: expect.stringContaining("Re-add `agent:implement` on this Ticket to run it again."),
     });
   });
 });

@@ -161,7 +161,7 @@ describe("Resuming a Request-changes run after an Infrastructure failure", () =>
       kitConfig(),
     );
 
-    expect(commentsOf(plan)[0]).toContain("Re-add the `agent:implement` label on #7 to run it again.");
+    expect(commentsOf(plan)[0]).toContain("Re-add `agent:implement` on the Ticket (#7) to run it again.");
   });
 });
 

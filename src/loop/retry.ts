@@ -228,7 +228,7 @@ export function unstartedRetry(
       issue: number,
       body: [
         RETRY_RESTARTED_MARKER,
-        `${runName(run)} on #${number} never started, so the Kit has added \`agent:implement\` to #${ticket} again to start it. It does this once: if the Retry doesn't push this time, re-add \`agent:implement\` on #${ticket} to resume it, or take #${number} out of draft to take it over.`,
+        `${runName(run)} on #${number} never started, so the Kit has added \`agent:implement\` to #${ticket} again to start it. It does this once: if the Retry doesn't push this time, re-add \`agent:implement\` on the Ticket (#${ticket}) to resume it, or take #${number} out of draft to take it over.`,
       ].join("\n"),
     },
     // A fresh agent:implement on the Ticket resumes the Retry (src/loop/implement.ts). The note notifies nobody.

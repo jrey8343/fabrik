@@ -765,7 +765,7 @@ describe("A retry that fails for Infrastructure", () => {
     expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
     expect(actions).toContainEqual({ kind: "comment", issue: 50, body: expect.any(String) });
     const [body] = actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []));
-    expect(body).toContain("Re-add the `agent:implement` label on #7 to run it again");
+    expect(body).toContain("Re-add `agent:implement` on the Ticket (#7) to run it again");
     expect(verdictsPostedIn([body!])).toEqual([]);
   });
 });

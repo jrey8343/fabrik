@@ -53,6 +53,15 @@ const FAILURE_MARKERS: Partial<Record<AgentRole, string>> = {
 };
 
 /**
+ * What a failure notice calls the issue a role's trigger label goes on, when
+ * that isn't a PR (#479): an "issue" for any role not named here.
+ */
+const LABEL_HOMES: Partial<Record<AgentRole, string>> = {
+  implement: "Ticket",
+  research: "Decision",
+};
+
+/**
  * Which Infrastructure failure this was, from what the agent job left and how
  * it ended. The Run record classifies with it too, so the two never disagree.
  */
@@ -180,12 +189,14 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const target = pullRequest ?? run.issue;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? target : run.issue;
-  const where = labelled === target ? "" : ` on #${labelled}`;
+  // The object the label goes on, by name, so it never lands on the wrong one (#479).
+  const home = labelled === pullRequest ? "PR" : (LABEL_HOMES[run.role] ?? "issue");
+  const where = labelled === target ? `this ${home}` : `the ${home} (#${labelled})`;
   // A Design-session turn has none to re-add: its issue keeps needs-design, and the Operator's reply starts it again.
   const label = run.role === "design" ? null : RESUME_LABELS[run.role];
   const resume =
     label !== null
-      ? `Re-add the \`${label}\` label${where} to run it again.`
+      ? `Re-add \`${label}\` on ${where} to run it again.`
       : run.prototype === true
         ? CARRY_ON_AFTER_PROTOTYPE
         : "Reply on this issue to run the turn again.";

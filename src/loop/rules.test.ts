@@ -605,3 +605,81 @@ describe("An Operator comment on an agent PR", () => {
     expect(plan).toEqual({ kind: "nothing", reason: "#50 isn't an agent PR" });
   });
 });
+
+describe("A trigger label on the wrong object (#479)", () => {
+  it("takes agent:review off a Ticket and points to its PR", () => {
+    const ticket = anIssue({ number: 7, labels: ["agent:review"], openPullRequests: [50] });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:review" }, snapshotOf(ticket), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:review" },
+        { kind: "comment", issue: 7, body: "`agent:review` goes on the PR, not the Ticket: add it to #50." },
+      ],
+    });
+  });
+
+  it("takes agent:review off an issue with no open PR and says it has none", () => {
+    const issue = anIssue({ number: 7, labels: ["agent:review"] });
+
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:review" }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: "agent:review" },
+        { kind: "comment", issue: 7, body: "`agent:review` goes on an agent PR, not an issue, and #7 has no open PR." },
+      ],
+    });
+  });
+
+  it("takes agent:implement off an agent PR and points to its Ticket", () => {
+    const plan = planFor(
+      { kind: "pull-request-labeled", pullRequest: 50, label: "agent:implement" },
+      snapshotOfPullRequest(aPullRequest({ labels: ["agent:implement"] })),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: "agent:implement" },
+        { kind: "comment", issue: 50, body: "`agent:implement` goes on the Ticket, not the PR: add it to #7." },
+      ],
+    });
+  });
+
+  it("takes agent:implement off a PR with no Ticket and says it has none", () => {
+    const plan = planFor(
+      { kind: "pull-request-labeled", pullRequest: 50, label: "agent:implement" },
+      snapshotOfPullRequest(aPullRequest({ isAgent: false, ticket: null })),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: "agent:implement" },
+        { kind: "comment", issue: 50, body: "`agent:implement` goes on a Ticket, not a PR, and #50 isn't on one." },
+      ],
+    });
+  });
+
+  it("takes needs-triage off a PR and says it goes on an issue", () => {
+    const plan = planFor(
+      { kind: "pull-request-labeled", pullRequest: 50, label: "needs-triage" },
+      snapshotOfPullRequest(aPullRequest()),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: "needs-triage" },
+        { kind: "comment", issue: 50, body: "`needs-triage` goes on an issue, not a PR: add it to the issue you want triaged." },
+      ],
+    });
+  });
+});
