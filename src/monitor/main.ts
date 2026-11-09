@@ -64,6 +64,7 @@ async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<str
       title: issue.title,
       body: issue.body,
       labels: issue.labels,
+      ...(issue.assignees === undefined ? {} : { assignees: issue.assignees }),
     })) as { number: number };
     lines.push(`Filed #${filed.number}: ${issue.title}`);
   }
@@ -76,7 +77,7 @@ async function apply(github: GitHub, repo: Repo, plan: MonitorPlan): Promise<str
     // The note goes first, so the close right after it reads as the Monitor's own in the issue's timeline.
     await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues/${close.issue}/comments`, { body: close.comment });
     await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/issues/${close.issue}`, { state: "closed", state_reason: "completed" });
-    lines.push(`Closed #${close.issue} as completed: the default branch is green again.`);
+    lines.push(`Closed #${close.issue} as completed: ${close.because}`);
   }
   return lines;
 }
@@ -106,6 +107,8 @@ async function main(): Promise<void> {
     gatingChecks,
     mainChecks: gitHubFacts.mainChecks,
     cap: config.caps.monitorIssues,
+    // By default the Operator owns the Product repos they run Fabrik in, as the Loop has it.
+    operator: config.operator ?? owner,
   });
   // Which groups are filed and held never depends on their latest events, so a
   // plan with the groups as listed names the ones whose latest event to read.

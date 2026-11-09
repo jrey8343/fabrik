@@ -111,7 +111,7 @@ Work that only resolves through a live exchange with the Operator speaking for t
 _Avoid_: interactive, manual
 
 **Monitor**:
-The Kit's scheduled check of a Product repo's production errors and default-branch CI that files one issue per problem for Triage, fixing nothing and never reopening what the Operator closed.
+The Kit's scheduled check of a Product repo's production errors and default-branch CI that files one issue per problem for Triage, fixing nothing and never reopening what the Operator closed. When a Sentry token that once read dies, it files a `ready-for-human` issue asking the Operator to rotate it instead.
 _Avoid_: alerting, watcher, monitor agent
 
 **Intake**:

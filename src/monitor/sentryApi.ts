@@ -3,8 +3,8 @@
 // names, from the host `monitor.errors.url` names, with the Sentry token, into
 // the facts the core plans from (./core.ts), through the Sentry translator
 // (./sentry.ts). A missing or refused token and any other Sentry API error
-// become facts the core reports, with a `::warning` annotation for an error,
-// never a failed run. Read-only. Its program is ./main.ts.
+// become facts the core reports, with a `::warning` annotation for a refused
+// token or an error, never a failed run. Read-only. Its program is ./main.ts.
 import type { MonitorErrors } from "../kit/config.ts";
 import type { SentryGroupsRead, SentryRead } from "./core.ts";
 import { type GroupFacts, groupFactsOf, type RawSentryEvent, type RawSentryGroup, withLatestEvent } from "./sentry.ts";
@@ -51,7 +51,10 @@ export async function readSentry(errors: MonitorErrors | null, token: string): P
   try {
     return await readGroups(sentryClient(errors, token), errors);
   } catch (error) {
-    if (error instanceof SentryError && (error.status === 401 || error.status === 403)) return { kind: "token-rejected", status: error.status };
+    if (error instanceof SentryError && (error.status === 401 || error.status === 403)) {
+      warned(error, "Sentry token rejected");
+      return { kind: "token-rejected", status: error.status };
+    }
     return { kind: "failed", error: warned(error) };
   }
 }
@@ -115,10 +118,10 @@ export async function withLatestEvents(
   return { ...sentry, groups: withEvents, latestEventErrors };
 }
 
-/** The error's message, after annotating the run with it as a warning. */
-function warned(error: unknown): string {
+/** The error's message, after annotating the run with it as a warning under this title. */
+function warned(error: unknown, title = "Sentry unreachable"): string {
   const message = messageOf(error);
-  console.log(`::warning title=Sentry unreachable::${message}`);
+  console.log(`::warning title=${title}::${message}`);
   return message;
 }
 

@@ -111,8 +111,8 @@ export function sentryRead(groups: readonly GroupFacts[], overrides: Partial<Sen
 
 /**
  * A tick with production errors on and Sentry read, giving these groups and
- * no Monitor issues, the default branch not read, and the Kit default cap of
- * 5 open error issues.
+ * no Monitor issues, the default branch not read, the Kit default cap of 5
+ * open error issues, and `operator` as the Operator.
  */
 export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<MonitorInput> = {}): MonitorInput {
   return {
@@ -122,6 +122,7 @@ export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<M
     gatingChecks: [],
     mainChecks: null,
     cap: DEFAULT_KIT_CONFIG.caps.monitorIssues,
+    operator: "operator",
     ...overrides,
   };
 }
