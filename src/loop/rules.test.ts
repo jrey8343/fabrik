@@ -78,14 +78,31 @@ describe("Intake", () => {
     });
   });
 
-  it("leaves a new sub-issue alone, because a skill made it under its parent", () => {
+  it("leaves a new label-less sub-issue without needs-triage, saying in one quiet line which label to add (#478)", () => {
     const issue = anIssue({ number: 7, parent: 3 });
 
     const plan = planFor({ kind: "issue-opened", issue: 7 }, snapshotOf(issue), kitConfig());
 
     expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 7,
+          body: "Fabrik leaves a sub-issue alone, since a skill usually files them with their state. Add `needs-triage` for Triage to look at it, or a state label yourself.",
+        },
+      ],
+    });
+  });
+
+  it("leaves a new sub-issue a skill filed with its state alone, with no comment", () => {
+    const issue = anIssue({ number: 7, parent: 3, labels: ["enhancement", "ready-for-agent"] });
+
+    const plan = planFor({ kind: "issue-opened", issue: 7 }, snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
       kind: "nothing",
-      reason: "#7 is a sub-issue of #3, so a skill made it",
+      reason: "#7 already has the state label ready-for-agent",
     });
   });
 });

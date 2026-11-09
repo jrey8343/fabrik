@@ -13,4 +13,6 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
+A sub-issue filed with no state label gets no `needs-triage` from Fabrik, since a skill usually files sub-issues with their state: add `needs-triage` for Triage to look at it, or a state label yourself.
+
 Edit the "Label in our tracker" column to match whatever vocabulary you actually use.

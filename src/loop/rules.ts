@@ -380,7 +380,7 @@ function checkDispatchWhenReady(issueNumber: number, issue: IssueSnapshot): Plan
   return { kind: "act", actions: [CHECK_DISPATCH] };
 }
 
-/** Intake: a new issue gets needs-triage unless something has already given it a place. */
+/** Intake: a new issue gets needs-triage unless something has already given it a place, or it's a sub-issue, which gets one line saying which label to add instead. */
 function intake(issueNumber: number, issue: IssueSnapshot): Plan {
   const state = issue.labels.find(isStateLabel);
   if (state !== undefined) {
@@ -394,8 +394,20 @@ function intake(issueNumber: number, issue: IssueSnapshot): Plan {
   if (wayfinder !== undefined) {
     return { kind: "nothing", reason: `#${issueNumber} has the label ${wayfinder}, so a skill made it` };
   }
+  // A skill files a sub-issue with its state, so one with none was likely filed
+  // by hand: it stays out of Triage, but one quiet line says which label to add,
+  // or the Operator sees no Kit activity on it, ever (#478).
   if (issue.parent !== null) {
-    return { kind: "nothing", reason: `#${issueNumber} is a sub-issue of #${issue.parent}, so a skill made it` };
+    return {
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: issueNumber,
+          body: "Fabrik leaves a sub-issue alone, since a skill usually files them with their state. Add `needs-triage` for Triage to look at it, or a state label yourself.",
+        },
+      ],
+    };
   }
   return {
     kind: "act",

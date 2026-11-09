@@ -115,7 +115,7 @@ The Kit's scheduled check of a Product repo's production errors and default-bran
 _Avoid_: alerting, watcher, monitor agent
 
 **Intake**:
-The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it.
+The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it. A sub-issue with no state gets one quiet line instead, saying which label to add.
 _Avoid_: inbox, new-issue hook
 
 **Triage**:

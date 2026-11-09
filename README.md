@@ -102,6 +102,8 @@ An idea too foggy for one Design session fails the Fast path's size test, so Tri
 
 Triage compares each issue against the recent issues: every open issue and every issue closed in the last 30 days, the 50 most recently created, each with the first 500 characters of its body, the Monitor's issues included. The job's read-only token reads them before the agent starts. When the issue reports the same request or defect as one of them, Triage chooses `wontfix` and names that original (`"duplicateOf": <n>` in its output). The issue then closes with state reason *duplicate*, and Triage's comment ends `Closing as a duplicate of #<n>.` A merely related issue isn't a duplicate, and in doubt Triage sorts as usual. Any other `wontfix` still closes as *not planned*. The original gets no comment, label or link.
 
+A sub-issue you file by hand with no state label gets no `needs-triage` from Intake, since a skill usually files sub-issues with their state; instead one quiet comment says so: add `needs-triage` for Triage to look at it, or a state label yourself.
+
 A person's reply on a `needs-info` issue swaps `needs-info` for `needs-triage`, which starts Triage again; a bot's reply does nothing. Deleting the reply doesn't undo the swap: Triage still runs, reads the thread without the reply, and most likely asks its questions again, one more round and one more notification.
 
 ## Design session (async)
