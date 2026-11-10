@@ -147,6 +147,8 @@ function orderOf(value: unknown): number | null {
 export interface Waiting {
   readonly run: HeldRun;
   readonly markers: ReadonlyMap<number, number>;
+  /** When its newest held marker was posted, or null when any of its markers' times wasn't read. */
+  readonly heldAt: string | null;
 }
 
 /**
@@ -160,13 +162,16 @@ export function waitingHeldRuns(kitIssues: readonly KitIssueSnapshot[]): Waiting
   const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   const first = new Map<string, HeldRun>();
   const counts = new Map<string, Map<number, { held: number; resumed: number }>>();
+  const heldAt = new Map<string, string | null>();
   const orders = ordersOn(kitIssues);
   for (const issue of limits) {
-    for (const text of [issue.body, ...issue.comments]) {
+    const times = [issue.createdAt, ...issue.comments.map((_, at) => issue.commentedAt?.[at])];
+    for (const [at, text] of [issue.body, ...issue.comments].entries()) {
       for (const run of heldRunsIn(text)) {
         const key = keyOf(run);
         if (!first.has(key)) first.set(key, { ...run, order: orders.get(key) ?? null });
         countOn(counts, key, issue.number).held += 1;
+        heldAt.set(key, newer(heldAt.has(key) ? (heldAt.get(key) ?? null) : undefined, times[at] ?? null));
       }
       for (const run of resumedRunsIn(text)) {
         const count = countOn(counts, keyOf(run), issue.number);
@@ -177,7 +182,7 @@ export function waitingHeldRuns(kitIssues: readonly KitIssueSnapshot[]): Waiting
   const waiting = [...first].flatMap(([key, run]): Waiting[] => {
     const onIssues = [...(counts.get(key) ?? new Map<number, { held: number; resumed: number }>())];
     if (!onIssues.some(([, count]) => count.held > count.resumed)) return [];
-    return [{ run, markers: new Map(onIssues.map(([number, count]) => [number, count.held])) }];
+    return [{ run, markers: new Map(onIssues.map(([number, count]) => [number, count.held])), heldAt: heldAt.get(key) ?? null }];
   });
   // A stable sort, so runs with no place keep the order their markers come in.
   return waiting.sort((a, b) => (a.run.order ?? Number.POSITIVE_INFINITY) - (b.run.order ?? Number.POSITIVE_INFINITY));
@@ -226,6 +231,13 @@ export function heldInOrder<Run extends HeldRun>(runs: readonly Run[], kitIssues
     orders.set(key, next);
     return { ...run, order: next++ };
   });
+}
+
+/** The later of two times, null once either is unknown; undefined for no time seen yet. */
+function newer(seen: string | null | undefined, time: string | null): string | null {
+  if (seen === undefined) return time;
+  if (seen === null || time === null) return null;
+  return Date.parse(time) > Date.parse(seen) ? time : seen;
 }
 
 function keyOf({ role, issue }: Pick<HeldRun, "role" | "issue">): string {

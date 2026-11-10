@@ -1086,6 +1086,13 @@ export interface HeldTargetSnapshot {
   /** Whether the Fabrik App itself opened it, as IssueSnapshot.byApp says. Only the App's body is read for markers. */
   readonly byApp: boolean;
   readonly body: string;
+  /**
+   * When the App last added each label to it, by label name, as far as its
+   * timeline reads. A held run's trigger label added after its newest held
+   * marker means the tick resumed it, whether or not the run has since taken
+   * it off as it started (#438). Missing when not read.
+   */
+  readonly labeledAt?: Readonly<Record<string, string>>;
 }
 
 /** A PR an Auditor named, as GitHub has it (src/loop/auditLanding.ts). */
@@ -1228,6 +1235,10 @@ export interface KitIssueSnapshot {
   readonly body: string;
   /** The App's own comments' text, every one, oldest first: anyone else's is left out. */
   readonly comments: readonly string[];
+  /** When it was opened, which its body's markers date from. Missing when not read. */
+  readonly createdAt?: string;
+  /** When each of comments was posted, in step with them. Missing when not read. */
+  readonly commentedAt?: readonly string[];
 }
 
 /** An issue event's snapshot, once the core has checked it holds the issue. */
