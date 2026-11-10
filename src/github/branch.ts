@@ -209,10 +209,23 @@ function isPrototypeBranch(name: string): boolean {
   return name.startsWith(PROTOTYPE_BRANCH_PREFIX);
 }
 
-/** Reads the bundle's branch in, checking it ends where the agent job said. */
+/**
+ * A bundle the push job can't read the agent's branch from (#535), with git's
+ * own reason, such as the prerequisite commits it lacks. Running the push job
+ * again downloads the same bundle, so it fails the same way.
+ */
+export class UnverifiedBundle extends Error {
+  override name = "UnverifiedBundle";
+}
+
+/** Reads the bundle's branch in, checking it verifies and ends where the agent job said. */
 async function fetchBundle(git: Git, branch: BuiltBranch, bundlePath: string): Promise<string> {
   const ref = `refs/heads/${branch.name}`;
-  await git("bundle", "verify", "--quiet", bundlePath);
+  // Not --quiet, which leaves stderr empty: git's reason is all the failure has to say.
+  await git("bundle", "verify", bundlePath).catch((error: unknown) => {
+    const said = String((error as { stderr?: unknown }).stderr ?? "").trim();
+    throw new UnverifiedBundle(`The bundle of ${branch.name} doesn't verify${said === "" ? "" : `: ${said}`}`, { cause: error });
+  });
   await git("fetch", "--quiet", bundlePath, `${ref}:${ref}`);
   const tip = (await git("rev-parse", "--verify", `${ref}^{commit}`)).trim();
   if (tip !== branch.head) throw new Error(`The bundle's ${branch.name} is at ${tip}, not ${branch.head}`);

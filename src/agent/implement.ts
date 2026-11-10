@@ -12,6 +12,7 @@ import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
+import { PROTOTYPE_BRANCH_PREFIX } from "../loop/designOutput.ts";
 import { verdictsIn } from "../github/threads.ts";
 import type { FailedRunCommits, GivenOperatorComment, KeptBranchStart } from "../loop/types.ts";
 import {
@@ -22,6 +23,7 @@ import {
   requestedChangesSection,
 } from "./operatorComments.ts";
 import type { ImplementRunKind } from "../loop/implementOutput.ts";
+import { UnlandableBranchError } from "./failure.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -297,18 +299,57 @@ export async function conflictContext(pullRequestFile: string, main: string): Pr
  * Bundles the commits made on the run's branch (the Implementer's, or the
  * Researcher's findings, which the Kit commits) into `outDir`. With none,
  * there's no bundle and the head stays null: the push job reads that as an
- * empty diff. Work left uncommitted isn't the run's output.
+ * empty diff. Work left uncommitted isn't the run's output. A cut branch the
+ * push job couldn't rebuild is refused before anything is bundled (#535).
  */
 export async function bundleAgentBranch(productDir: string, started: BuiltBranch, outDir: string): Promise<BuiltBranch> {
+  const head = await branchHead(productDir, started);
+  if (head === started.base.sha) return started;
+  await refuseUnlandable(productDir, started, head);
+  return bundleFrom(productDir, started, outDir, head);
+}
+
+/** The run's branch's last commit, once the agent is known to have stayed on it. */
+async function branchHead(productDir: string, started: BuiltBranch): Promise<string> {
   const current = await git(productDir, "rev-parse", "--abbrev-ref", "HEAD");
   if (current !== started.name) throw new Error(`The agent left ${started.name} for ${current}`);
   if ((await git(productDir, "status", "--porcelain")) !== "") {
     console.log("::warning title=Uncommitted work::The agent left changes it didn't commit; they aren't pushed");
   }
-  const head = await git(productDir, "rev-parse", "HEAD");
-  if (head === started.base.sha) return started;
+  return git(productDir, "rev-parse", "HEAD");
+}
+
+/** Bundles the branch's commits since its base, up to `head`, unchecked. */
+async function bundleFrom(productDir: string, started: BuiltBranch, outDir: string, head: string): Promise<BuiltBranch> {
   await git(productDir, "bundle", "create", "--quiet", join(outDir, AGENT_BUNDLE_FILE), `refs/heads/${started.name}`, `^${started.base.sha}`);
   return { ...started, head };
+}
+
+/**
+ * Refuses a cut branch the push job can't rebuild (#535): it fetches only the
+ * base at `--depth=1` (src/github/branch.ts), so the branch must descend from
+ * its base and need no commit but that one, a prototype turn's later round
+ * included. A branch carried on from a PR's head is rebuilt with its history
+ * whole, so it's left alone. This only says
+ * so early: the push job's own `git bundle verify` still stands behind it.
+ */
+async function refuseUnlandable(productDir: string, started: BuiltBranch, head: string): Promise<void> {
+  if (started.base.ref === started.name && !started.name.startsWith(PROTOTYPE_BRANCH_PREFIX)) return;
+  // The commits a bundle of the branch would need beside its own: the boundary of what it holds that its base doesn't.
+  const needed = (await git(productDir, "rev-list", "--boundary", head, `^${started.base.sha}`))
+    .split("\n")
+    .filter((line) => line.startsWith("-"))
+    .map((line) => line.slice(1));
+  const others = needed.filter((sha) => sha !== started.base.sha);
+  if (others.length > 0) throw new UnlandableBranchError(started, others);
+  // A branch reset back onto its base's history, with nothing on top, holds no commit of its own: it builds on its head.
+  if (needed.length === 0) throw new UnlandableBranchError(started, [head]);
+}
+
+/** A failed run's commits, bundled whether or not the push job could land them. */
+async function keptCommits(productDir: string, started: BuiltBranch, outDir: string): Promise<BuiltBranch> {
+  const head = await branchHead(productDir, started);
+  return head === started.base.sha ? started : bundleFrom(productDir, started, outDir, head);
 }
 
 /**
@@ -327,7 +368,8 @@ export async function failedRunCommits(
   const base = started.base.sha;
   const continued = started.base.ref === started.name;
   try {
-    const { head } = built ?? (await bundleAgentBranch(productDir, started, outDir));
+    // Unchecked, so a branch refused as one the push job can't rebuild still keeps its commits (#535).
+    const { head } = built ?? (await keptCommits(productDir, started, outDir));
     return { base, continued, head, kept: head !== null };
   } catch {
     const head = await git(productDir, "rev-parse", `refs/heads/${started.name}`).catch(() => null);

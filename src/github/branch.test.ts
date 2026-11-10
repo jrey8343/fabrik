@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkTrustRoot } from "../guard/trust-root.ts";
-import { rebaseBranchOntoMain, rebuildAgentBranch } from "./branch.ts";
+import { rebaseBranchOntoMain, rebuildAgentBranch, UnverifiedBundle } from "./branch.ts";
 
 const run = promisify(execFile);
 const BRANCH = "fabrik/ticket-7";
@@ -1087,5 +1087,23 @@ describe("A Kept-branch start (#536)", () => {
     const branch = await rebuild(prHead, null, null, false);
 
     expect(branch.changes.wholeBranch).toBeUndefined();
+  });
+});
+
+// #535: git bundle verify --quiet says nothing on stderr, so the push job's failure named only the command line.
+describe("A bundle the push job can't verify", () => {
+  it("fails with git's reason, naming the commits it lacks", async () => {
+    const main = await git(clone, "rev-parse", "origin/main");
+    const start = await git(clone, "rev-parse", "origin/main~1");
+    await git(clone, "checkout", "--quiet", "-B", "fabrik/ticket-8", start);
+    const tip = await commit(clone, { "src/feature.ts": "feature v2\n" }, "Build it");
+    const bundle = join(root, "first-run.bundle");
+    await git(clone, "bundle", "create", "--quiet", bundle, "refs/heads/fabrik/ticket-8", `^${main}`);
+
+    const rebuilt = rebuildAgentBranch({ name: "fabrik/ticket-8", base: { ref: "main", sha: main }, head: tip }, bundle, REMOTE());
+
+    await expect(rebuilt).rejects.toBeInstanceOf(UnverifiedBundle);
+    await expect(rebuilt).rejects.toThrow(/lacks these prerequisite commits/);
+    await expect(rebuilt).rejects.toThrow(start);
   });
 });

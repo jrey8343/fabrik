@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
-import { failureReportFor, inputsFailureReportFor, MissingVerdictError, readFailureReport } from "./failure.ts";
+import { failureReportFor, inputsFailureReportFor, MissingVerdictError, readFailureReport, UnlandableBranchError } from "./failure.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 const init = line({ type: "system", subtype: "init", apiKeySource: "none" });
@@ -116,6 +116,18 @@ describe("How an agent job reports its own failure", () => {
     const report = failureReportFor({ error, lines: [init], initRefused: [] });
 
     expect(report).toEqual({ failure: "missing-output", detail: "The Reviewer's reply is empty" });
+  });
+
+  // #535: the push job could never rebuild it, so it's the run's own failure, said before any result goes out.
+  it("a cut branch built on commits it didn't start from is an unlandable branch, naming them", () => {
+    const older = "c".repeat(40);
+    const error = new UnlandableBranchError({ name: "agent/7", base: { ref: "main", sha: "a".repeat(40) } }, [older]);
+
+    const report = failureReportFor({ error, lines: [init], initRefused: [] });
+
+    expect(report.failure).toBe("unlandable-branch");
+    expect(report.detail).toContain(older);
+    expect(readFailureReport(JSON.stringify(report))).toEqual(report);
   });
 
   it("anything else is a crash, with the error's message", () => {

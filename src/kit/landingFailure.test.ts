@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { PlanNotApplied, ReplayTicketTaken } from "../github/apply.ts";
+import { UnverifiedBundle } from "../github/branch.ts";
 import { GitHubError } from "../github/client.ts";
+import { implementRunFailedIn, researchRunFailedIn } from "../github/threads.ts";
+import { aTicket, dispatchSnapshotOf, kitConfig } from "../__fixtures__/snapshots.ts";
+import { planFor } from "../loop/rules.ts";
 import { claimLanding, jobFailureReport, landingFailureReport, pushLanding } from "./landingFailure.ts";
 import type { PushJobInput } from "./pushJob.ts";
 
@@ -140,6 +144,66 @@ describe("The report of a landing that failed (#421)", () => {
 
   it("posts no comment when the landing has no issue or PR", () => {
     expect(landingFailureReport(pushLanding({ kind: "actions-event" }, RUN)!, { kind: "error", error: new Error("boom") }).comment).toBeNull();
+  });
+});
+
+// A first run's landing that failed leaves the Ticket ready-for-agent with no PR, so unless its comment reads as the
+// run's failure, the next tick's Dispatch releases it again, and the same landing fails every hour (#535).
+describe("A failed landing read as its run's failure (#535)", () => {
+  const firstRun: PushJobInput = { kind: "agent-result", role: "implement", issue: 12, pullRequest: null, review: null, startedBy: null };
+  const research: PushJobInput = { kind: "agent-result", role: "research", issue: 14, pullRequest: null, review: null, startedBy: null };
+  const failed = { kind: "error", error: new Error("Command failed: git bundle verify") } as const;
+  const byApp = (body: string) => [{ body, byApp: true }];
+
+  it("holds a Ticket whose first Implement run's landing failed back from the next tick's Dispatch, saying why", () => {
+    const { comment } = landingFailureReport(pushLanding(firstRun, RUN)!, failed, "operator");
+    const lastRunFailed = implementRunFailedIn(byApp(comment!.body));
+
+    const plan = planFor({ kind: "dispatch-check" }, dispatchSnapshotOf([aTicket({ number: 12, lastRunFailed })]), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "No Ticket can be dispatched: #12's last Implement run failed, so only adding agent:implement again runs it",
+    });
+  });
+
+  it("holds a research Decision whose Research run's landing failed back the same way", () => {
+    const { comment } = landingFailureReport(pushLanding(research, RUN)!, failed, "operator");
+
+    expect(researchRunFailedIn(byApp(comment!.body))).toBe(true);
+  });
+
+  it("holds a Ticket whose failed run's notice couldn't be landed back too", () => {
+    const { comment } = landingFailureReport(pushLanding(agentFailure, RUN)!, failed, "operator");
+
+    expect(implementRunFailedIn(byApp(comment!.body))).toBe(true);
+  });
+
+  it("doesn't offer re-running the job for a bundle that doesn't verify, which only fails again, and says how to run the work again", () => {
+    const error = new UnverifiedBundle("The bundle of fabrik/ticket-12 doesn't verify: error: Repository lacks these prerequisite commits:");
+
+    const { summary, comment } = landingFailureReport(pushLanding(firstRun, RUN)!, { kind: "error", error }, "operator");
+
+    expect(summary).toContain("Repository lacks these prerequisite commits");
+    expect(comment!.body).not.toContain("Re-run failed jobs");
+    expect(comment!.body).toContain("downloads the same bundle");
+    expect(comment!.body).toContain("Re-add `agent:implement` on #12 to run it again.");
+  });
+
+  it("marks a conflict-only run's failure notice that couldn't be landed on its PR, as the notice itself is marked there (#424)", () => {
+    const conflicted: PushJobInput = { ...agentFailure, conflict: { pullRequest: 51, main: "b".repeat(40) } };
+    const { comment } = landingFailureReport(pushLanding(conflicted, RUN)!, failed, "operator");
+
+    expect(comment!.issue).toBe(51);
+    expect(implementRunFailedIn(byApp(comment!.body))).toBe(true);
+  });
+
+  it("reads no other run's failed landing as a failed Implement or Research run", () => {
+    for (const input of [implementRetry, triage, verdict]) {
+      const { comment } = landingFailureReport(pushLanding(input, RUN)!, failed, "operator");
+      expect(implementRunFailedIn(byApp(comment!.body))).toBe(false);
+      expect(researchRunFailedIn(byApp(comment!.body))).toBe(false);
+    }
   });
 });
 
