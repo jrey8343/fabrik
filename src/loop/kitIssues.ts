@@ -109,6 +109,14 @@ export function scheduledTick(now: string, { kitIssues }: Snapshot, config: Pick
   return { kind: "nothing", reason: plans.map((plan) => (plan.kind === "nothing" ? plan.reason : "")).join("; ") };
 }
 
+/**
+ * The comment closing a Dead-tick issue (#461) once a Tick has started again,
+ * as the Tick itself posts it and as the store's daily check does.
+ */
+export function tickStartedAgain(at: string, release: string | null): string {
+  return `The hourly Tick started again at ${readable(at)}${release === null ? "" : `, on Fabrik ${release}`}, so the Kit is closing this issue.`;
+}
+
 /** One weekly-limit issue, closed once its reset has passed, naming its Subscription when rotation is on. */
 function closedAtReset(now: string, open: KitIssueSnapshot, subscription: string | null): Plan {
   const resetsAt = resetsAtOf(open);

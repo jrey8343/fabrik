@@ -49,6 +49,14 @@ export const WEEKLY_LIMIT_LABEL = "fabrik:weekly-limit";
  */
 export const USAGE_CREDITS_LABEL = "fabrik:usage-credits";
 
+/**
+ * The label on a Dead-tick issue (#461): the daily check from the fabrik-runs
+ * store opens one in a Product repo whose hourly Tick hasn't started for 25
+ * hours, and in the store for a repo the Fabrik App can no longer reach. The
+ * Tick closes its own repo's on its first run once it starts again.
+ */
+export const DEAD_TICK_LABEL = "fabrik:dead-tick";
+
 /** The label on an Audit, which the scheduled tick opens for the Auditor to fill in (#150). */
 export const AUDIT_LABEL = "fabrik:audit";
 
@@ -87,6 +95,7 @@ export const KIT_ISSUE_LABELS = [
   AUDIT_LABEL,
   RETRO_LABEL,
   REPLAY_LABEL,
+  DEAD_TICK_LABEL,
 ] as const;
 export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 

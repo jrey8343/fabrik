@@ -354,6 +354,7 @@ describe("Labels", () => {
     "fabrik:audit",
     "fabrik:retro",
     "fabrik:replay",
+    "fabrik:dead-tick",
     "fabrik:monitor",
     "fabrik:step-up",
     "fabrik:kept-branch",

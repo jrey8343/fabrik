@@ -19,7 +19,7 @@ run-name: >-
   github.event_name == 'push' && format('Push to {0}', github.ref_name) ||
   github.event_name == 'issues' && github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'fabrik:audit') && format('Audit #{0}', github.event.issue.number) ||
   github.event_name == 'issues' && github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'fabrik:retro') && format('Retro #{0}', github.event.issue.number) ||
-  github.event_name == 'issues' && github.event.action == 'opened' && (contains(github.event.issue.labels.*.name, 'fabrik:token-rotation') || contains(github.event.issue.labels.*.name, 'fabrik:weekly-limit') || contains(github.event.issue.labels.*.name, 'fabrik:usage-credits') || contains(github.event.issue.labels.*.name, 'fabrik:replay')) && format('Opened #{0}', github.event.issue.number) ||
+  github.event_name == 'issues' && github.event.action == 'opened' && (contains(github.event.issue.labels.*.name, 'fabrik:token-rotation') || contains(github.event.issue.labels.*.name, 'fabrik:weekly-limit') || contains(github.event.issue.labels.*.name, 'fabrik:usage-credits') || contains(github.event.issue.labels.*.name, 'fabrik:replay') || contains(github.event.issue.labels.*.name, 'fabrik:dead-tick')) && format('Opened #{0}', github.event.issue.number) ||
   github.event_name == 'issues' && github.event.action == 'opened' && format('Triage #{0}', github.event.issue.number) ||
   github.event_name == 'issues' && github.event.label.name == 'agent:implement' && format('Implement #{0}', github.event.issue.number) ||
   github.event_name == 'issues' && github.event.label.name == 'agent:design' && format('Design-session turn #{0}', github.event.issue.number) ||

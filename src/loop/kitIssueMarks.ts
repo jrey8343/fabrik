@@ -12,6 +12,12 @@ const RESETS_AT_MARKER = "<!-- fabrik:resets-at";
  */
 export const NOTIFIED = "<!-- fabrik:notified -->";
 
+/**
+ * The marker line ending a Dead-tick issue's body (#461), by which the daily
+ * check finds the one it opened and the Tick finds the one it closes.
+ */
+export const DEAD_TICK_MARKER = "<!-- fabrik:dead-tick -->";
+
 /** Whether the Kit has buzzed the Operator about this issue already. */
 export function notified(issue: KitIssueSnapshot): boolean {
   return [issue.body, ...issue.comments].some((text) => text.includes(NOTIFIED));
