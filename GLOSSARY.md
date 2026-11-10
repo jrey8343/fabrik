@@ -122,6 +122,10 @@ _Avoid_: autonomous, background
 Work that only resolves through a live exchange with the Operator speaking for themselves; an agent never stands in for the Operator's side.
 _Avoid_: interactive, manual
 
+**Tick**:
+The Kit's hourly scheduled run in a Product repo, which drives the Loop's timed work: the stuck-trigger sweep, the Audit, Retro, Replay and conflict gates, closing Weekly-limit issues, Dispatch, the Design queue, the Skills bump and the Monitor. A Tick has started once its jobs run; one GitHub refuses at startup, or never fires, hasn't.
+_Avoid_: watchdog, heartbeat, cron
+
 **Monitor**:
 The Kit's scheduled check of a Product repo's production errors and default-branch CI that files one issue per problem for Triage, fixing nothing and never reopening what the Operator closed. When a Sentry token that once read dies, it files a `ready-for-human` issue asking the Operator to rotate it instead.
 _Avoid_: alerting, watcher, monitor agent
@@ -215,12 +219,16 @@ A run that fails for a reason outside the work itself, such as the model provide
 _Avoid_: crash, error, flake
 
 **Held run**:
-An agent run the Kit neither starts nor fails while every Subscription is used up, and resumes by itself, in the order it was first held, once one is free. An Auditor or Retro run is never held: its Audit or Retro fails, and a later scheduled tick opens the next one.
+An agent run the Kit neither starts nor fails while every Subscription is used up, and resumes by itself, in the order it was first held, once one is free. An Auditor or Retro run is never held: its Audit or Retro fails, and a later Tick opens the next one.
 _Avoid_: paused run, queued run, stalled run
 
 **Weekly-limit issue**:
 A Kit-owned issue saying a Subscription has reached its weekly limit, open until that limit resets.
 _Avoid_: rate-limit issue, quota issue
+
+**Dead-tick issue**:
+A Kit-owned `ready-for-human` issue saying a Product repo's Tick hasn't started for more than a day, open until a Tick starts again. A Product repo the Fabrik App can no longer reach gets one beside the Run records instead, where the Weekly summary is filed, open until the App reaches it again.
+_Avoid_: stale-schedule issue
 
 **Usage-credits issue**:
 A Kit-owned issue telling the Operator to turn usage credits off on a Subscription caught spending them, which stays unusable until the Operator closes it.
