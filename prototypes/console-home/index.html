@@ -1,0 +1,491 @@
+<title>Console Home prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap">
+<!--
+  PROTOTYPE. Throwaway. Never merged.
+  Three variants of the Console's Home screen, switchable from the floating bar (or #a / #b / #c, or ?variant=).
+  Answers the Decision "Prototype Home: the attention queue and what's running now, on a phone".
+  Every repo, issue, pull request and figure in here is invented.
+-->
+<style>
+/* Layout: a phone-width column of signage. Blue is the mandatory-action colour of safety signs: it marks a move the Operator owes. Green, amber and red are the andon lights: running, waiting, stuck. */
+:root{
+  --ground:#E8ECEB; --raised:#FFFFFF; --ink:#13211E; --ink-2:#465753; --ink-3:#6B7B76; --line:#C9D2CF;
+  --yours:#1D46D8; --yours-ink:#FFFFFF; --yours-wash:#DFE7FC;
+  --run:#1B7447; --run-wash:#D9EEE2; --hold:#8A5D00; --hold-wash:#F4E8C6; --stuck:#B3261E; --stuck-wash:#F8DEDB;
+  --proto:#13211E; --proto-ink:#F6F8F7; --scrim:rgba(19,33,30,.4);
+  --display:'Barlow Condensed','Arial Narrow',sans-serif;
+  --text:'Barlow',system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --ground:#0F1514; --raised:#1A2422; --ink:#E6ECEA; --ink-2:#AEBAB6; --ink-3:#84928D; --line:#2D3A37;
+  --yours:#94ABFF; --yours-ink:#0B1433; --yours-wash:#1B2750;
+  --run:#62CC91; --run-wash:#143524; --hold:#E3B341; --hold-wash:#3A2E0E; --stuck:#FF8A80; --stuck-wash:#45191A;
+  --proto:#E6ECEA; --proto-ink:#0F1514; --scrim:rgba(0,0,0,.6); color-scheme:dark } }
+:root[data-theme="dark"]{
+  --ground:#0F1514; --raised:#1A2422; --ink:#E6ECEA; --ink-2:#AEBAB6; --ink-3:#84928D; --line:#2D3A37;
+  --yours:#94ABFF; --yours-ink:#0B1433; --yours-wash:#1B2750;
+  --run:#62CC91; --run-wash:#143524; --hold:#E3B341; --hold-wash:#3A2E0E; --stuck:#FF8A80; --stuck-wash:#45191A;
+  --proto:#E6ECEA; --proto-ink:#0F1514; --scrim:rgba(0,0,0,.6); color-scheme:dark }
+
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:400 16px/1.4 var(--text);
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:12px 84px}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--yours);outline-offset:2px}
+h1,h2,h3,p,dl,dd{margin:0}
+
+.stage{display:grid;grid-template-columns:minmax(0,400px);justify-content:center;gap:36px;align-items:start}
+.phone{position:relative;display:flex;flex-direction:column;min-height:calc(100dvh - 110px);min-width:0}
+.notes{display:none}
+.notes[data-open]{display:block;position:fixed;inset:0;z-index:40;overflow:auto;background:var(--ground);
+  padding:calc(20px + env(safe-area-inset-top,0px)) max(16px, env(safe-area-inset-right,0px)) 96px max(16px, env(safe-area-inset-left,0px))}
+@media (min-width:900px){
+  .stage{grid-template-columns:400px minmax(0,380px)}
+  .phone{border:1px solid var(--line);border-radius:28px;padding:18px 16px 0}
+  .notes,.notes[data-open]{display:block;position:sticky;top:16px;inset:auto;z-index:auto;overflow:visible;background:none;padding:8px 0 0}
+  .proto .p-notes,.p-notes-close{display:none}
+}
+
+/* ---- shared small parts ---- */
+.btn{appearance:none;border:1px solid var(--yours);background:var(--yours);color:var(--yours-ink);font-weight:600;border-radius:8px;min-height:46px;padding:0 16px;cursor:pointer}
+.btn.quiet{background:none;color:var(--ink);border-color:var(--ink-3)}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.linkish{appearance:none;border:0;background:none;padding:0;color:var(--yours);font-weight:500;text-decoration:underline;text-underline-offset:3px;cursor:pointer;min-height:32px}
+.fine{font-size:14px;color:var(--ink-3);margin-top:8px}
+.pretend{appearance:none;margin-top:10px;border:1px dashed var(--ink-3);background:none;color:var(--ink-2);border-radius:8px;padding:8px 12px;font-size:14px;cursor:pointer}
+.dot{flex:none;width:10px;height:10px;border-radius:50%;display:inline-block;background:var(--ink-3)}
+.dot.run{background:var(--run)} .dot.hold{background:var(--hold)} .dot.stuck{background:var(--stuck);border-radius:2px}
+.d-title{font:700 28px/1.08 var(--display);text-wrap:balance}
+.d-facts{display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--ink-2);font-size:15px;margin-top:8px}
+.d-ask{margin-top:14px;padding:12px 14px;background:var(--yours-wash);border-radius:8px;font-weight:500}
+.d-roll{margin-top:14px;padding:12px 14px;border:1px solid var(--yours);border-radius:8px}
+.d-roll .btn{margin-top:10px}
+.d-digest{margin-top:14px;border:1px dashed var(--ink-3);border-radius:8px;padding:12px 14px;color:var(--ink-2);font-size:15px}
+.d-shots{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.d-shots span{aspect-ratio:9/16;max-width:100%;background:var(--line);border-radius:6px;display:grid;place-items:center;font-size:12px;color:var(--ink-2)}
+.compose{margin-top:14px;display:grid;gap:8px}
+.compose label{font-weight:600}
+.compose textarea{width:100%;font:inherit;color:var(--ink);background:var(--raised);border:1px solid var(--ink-3);border-radius:8px;padding:10px}
+.evidence{display:grid;gap:6px;margin-top:10px;font-size:15px}
+.evidence div{display:grid;grid-template-columns:66px minmax(0,1fr);gap:8px}
+.evidence dt{color:var(--ink-3)}
+.ok{color:var(--run);font-weight:500} .bad{color:var(--stuck);font-weight:600} .wait{color:var(--hold);font-weight:500}
+.sub{margin-top:10px}
+.sub-name{display:flex;justify-content:space-between;font-size:15px;font-weight:500;font-variant-numeric:tabular-nums}
+.meter{height:8px;background:var(--line);border-radius:4px;margin-top:5px;overflow:hidden}
+.meter span{display:block;height:100%;background:var(--ink-2)}
+.meter span.full{background:var(--hold)}
+.empty{padding:40px 0;color:var(--ink-2)}
+.empty b{display:block;font:700 30px/1.05 var(--display);color:var(--ink);margin-bottom:6px}
+.stub{padding:40px 0;color:var(--ink-2)}
+
+/* ---- prototype chrome: not part of the design ---- */
+.proto{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:50;display:flex;align-items:center;gap:2px;
+  background:var(--proto);color:var(--proto-ink);border-radius:999px;padding:4px;box-shadow:0 8px 28px var(--scrim);max-width:calc(100vw - 16px);font:500 14px var(--text);white-space:nowrap}
+.proto button{appearance:none;border:0;background:none;color:inherit;font:inherit;min-height:40px;min-width:40px;padding:0 10px;border-radius:999px;cursor:pointer}
+.proto .p-label{padding:0 4px;min-width:92px;text-align:center}
+.proto .p-label b{font:700 18px var(--display);margin-right:4px}
+.proto .p-sep{width:1px;height:22px;background:var(--proto-ink);opacity:.3;margin:0 2px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(68px + env(safe-area-inset-bottom,0px));z-index:49;background:var(--ink);color:var(--ground);
+  padding:10px 14px;border-radius:8px;font-size:15px;width:max-content;max-width:calc(100vw - 32px)}
+.notes h2{font:700 30px/1.05 var(--display)}
+.notes h3{font-size:15px;font-weight:600;margin-top:20px;color:var(--ink-2)}
+.notes ul{margin:8px 0 0;padding-left:18px;display:grid;gap:8px}
+.notes .state{margin-top:8px;font-variant-numeric:tabular-nums}
+
+/* ---- A: one list ---- */
+.a-head{padding:6px 0 4px}
+.a-head h1{font:700 42px/1 var(--display)}
+.a-head p{margin-top:6px;color:var(--ink-2)}
+.a-tier{font-size:14px;font-weight:600;color:var(--ink-3);margin:20px 0 4px}
+.a-row{appearance:none;display:grid;grid-template-columns:70px minmax(0,1fr) auto;gap:10px;align-items:start;width:100%;text-align:left;padding:14px 0;border:0;border-top:1px solid var(--line);background:none;cursor:pointer}
+.a-verb{font:700 23px/1.1 var(--display);color:var(--yours)}
+.a-verb.stuck{color:var(--stuck)}
+.a-title{display:block;font-weight:600;line-height:1.25}
+.a-meta{display:flex;flex-wrap:wrap;gap:2px 12px;color:var(--ink-3);font-size:14px;margin-top:3px;align-items:center}
+.a-line{display:block;color:var(--ink-2);font-size:15px;margin-top:3px}
+.a-age{font-weight:600;font-size:15px;font-variant-numeric:tabular-nums;color:var(--ink-2);padding-top:3px}
+.a-foot{margin-top:auto;position:sticky;bottom:calc(62px + env(safe-area-inset-bottom,0px));background:var(--ground);padding-top:8px;z-index:3}
+.a-strip{appearance:none;width:100%;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;border:1px solid var(--line);background:var(--raised);border-radius:8px;padding:10px 12px;font-size:15px;cursor:pointer;text-align:left}
+.a-strip span{display:inline-flex;align-items:center;gap:6px}
+.a-tabs{display:grid;grid-template-columns:repeat(4,1fr);margin-top:6px}
+.a-tabs button{appearance:none;border:0;border-top:3px solid transparent;background:none;min-height:48px;font-size:15px;color:var(--ink-2);cursor:pointer}
+.a-tabs button[aria-pressed="true"]{border-top-color:var(--ink);color:var(--ink);font-weight:600}
+.a-back{appearance:none;border:0;background:none;padding:0;min-height:44px;color:var(--yours);font-weight:500;cursor:pointer;text-align:left}
+.a-sec{font:700 24px/1 var(--display);margin:22px 0 2px}
+.a-run{display:grid;grid-template-columns:14px minmax(0,1fr);gap:8px;padding:12px 0;border-top:1px solid var(--line)}
+.a-run .dot{margin-top:6px}
+
+/* ---- B: by move ---- */
+.b-top{display:flex;justify-content:space-between;align-items:center;padding:2px 0}
+.b-mark{font:700 28px/1 var(--display)}
+.b-links{display:flex;gap:18px}
+.b-chips{display:flex;gap:8px;overflow-x:auto;padding:10px 0 4px;scrollbar-width:none}
+.b-chip{appearance:none;flex:none;border:1px solid var(--ink-3);border-radius:999px;min-height:38px;padding:0 13px;background:none;font-size:15px;font-weight:500;cursor:pointer;font-variant-numeric:tabular-nums}
+.b-chip[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.b-bandhead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:14px 0 8px}
+.b-bandhead h2{font-size:16px;font-weight:600}
+.b-bandhead span{font-size:14px;color:var(--ink-2)}
+.b-scroll{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:8px}
+.b-card{flex:none;width:80%;max-width:310px;scroll-snap-align:start;background:var(--raised);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.b-card.stuck{border-color:var(--stuck);background:var(--stuck-wash)}
+.b-card.held{background:var(--hold-wash);border-color:var(--hold)}
+.b-card h3{font:700 21px/1.1 var(--display)}
+.b-card .b-ct{font-size:15px;color:var(--ink-2);margin-top:2px}
+.b-group h2{font:700 32px/1 var(--display);color:var(--yours);margin:26px 0 6px;display:flex;align-items:baseline;gap:8px}
+.b-group h2 small{font:500 15px var(--text);color:var(--ink-3)}
+.b-item{appearance:none;display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line);padding:12px 0;background:none;cursor:pointer}
+.b-since{display:block;font-size:14px;color:var(--ink-3);margin-top:4px;font-variant-numeric:tabular-nums}
+.b-since.old{color:var(--ink);font-weight:600}
+.sheet-scrim{appearance:none;position:absolute;inset:0;border:0;background:var(--scrim);z-index:20;border-radius:inherit;cursor:pointer}
+.sheet{position:sticky;bottom:calc(62px + env(safe-area-inset-bottom,0px));z-index:21;margin-top:auto;background:var(--raised);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 -10px 32px var(--scrim);max-height:72dvh;overflow:auto}
+.sheet-close{float:right;margin:-4px -4px 0 8px}
+
+/* ---- C: by work ---- */
+.c-seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--ink-3);border-radius:10px;overflow:hidden;position:sticky;top:calc(8px + env(safe-area-inset-top,0px));background:var(--ground);z-index:5}
+.c-seg button{appearance:none;border:0;background:none;min-height:44px;font-size:15px;font-weight:500;cursor:pointer;font-variant-numeric:tabular-nums}
+.c-seg button[aria-pressed="true"]{background:var(--ink);color:var(--ground)}
+.c-repo{margin-top:24px}
+.c-repo header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border-bottom:2px solid var(--ink);padding-bottom:6px}
+.c-repo h2{font:700 26px/1 var(--display)}
+.c-links{display:flex;gap:16px;font-size:15px}
+.c-row{border-bottom:1px solid var(--line)}
+.c-hit{appearance:none;display:block;width:100%;text-align:left;border:0;background:none;padding:13px 0;cursor:pointer}
+.c-title{display:block;font-weight:600;line-height:1.25}
+.c-say{display:block;font-size:15px;color:var(--ink-2);margin-top:3px}
+.c-say b{font-weight:600}
+.s-yours .c-say b{color:var(--yours)} .s-run .c-say b{color:var(--run)} .s-stuck .c-say b{color:var(--stuck)} .s-held .c-say b,.s-wait .c-say b{color:var(--hold)}
+.c-track{display:grid;grid-template-columns:repeat(5,1fr);margin-top:10px}
+.c-stop{position:relative;text-align:center;font-size:12px;line-height:1.2;color:var(--ink-3);padding-top:20px}
+.c-stop::before{content:"";position:absolute;top:7px;left:0;right:0;height:2px;background:var(--line)}
+.c-stop:first-child::before{left:50%} .c-stop:last-child::before{right:50%}
+.c-stop::after{content:"";position:absolute;top:3px;left:50%;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:var(--ground);border:2px solid var(--line)}
+.c-stop.past::after{background:var(--ink-3);border-color:var(--ink-3)}
+.c-stop.at{font-weight:600;color:var(--ink)}
+.c-stop.at::after{top:0;width:16px;height:16px;margin-left:-8px;border-color:transparent}
+.c-stop.at.yours::after{background:var(--yours);border-radius:3px} .c-stop.at.yours{color:var(--yours)}
+.c-stop.at.run::after{background:var(--run)} .c-stop.at.run{color:var(--run)}
+.c-stop.at.stuck::after{background:var(--stuck);border-radius:3px} .c-stop.at.stuck{color:var(--stuck)}
+.c-stop.at.held::after,.c-stop.at.wait::after{background:var(--ground);border-color:var(--hold)} .c-stop.at.held,.c-stop.at.wait{color:var(--hold)}
+@media (prefers-reduced-motion:no-preference){ .c-stop.at.run::after{animation:beat 1.6s ease-in-out infinite} }
+@keyframes beat{50%{transform:scale(.7)}}
+.c-more{padding:0 0 16px}
+.c-legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--ink-2);margin-top:10px}
+.c-legend span{display:inline-flex;align-items:center;gap:6px}
+.c-legend .dot.yours{background:var(--yours);border-radius:2px}
+.c-legend .dot.ring{background:var(--ground);border:2px solid var(--hold)}
+</style>
+
+<div id="app"></div>
+
+<script>
+(() => {
+const NOW = new Date(2026, 10, 10, 14, 15);
+const REPO = {np:'northside-physio', ll:'ledgerline', fx:'The factory'};
+const VARIANTS = [['a','One list'],['b','By move'],['c','By work']];
+const SCENARIOS = [['busy','Busy'],['held','Held'],['clear','Clear']];
+const STOPS = ['Triage','Design','Build','Review','Merge gate'];
+
+const Q = [
+  {id:'q1',repo:'np',verb:'Merge',gate:true,stop:4,tier:1,ref:'PR #214',ticket:'#198',title:'Show the next three free slots on the booking page',line:'Passed review on the second try. 3 screenshots.',min:190,shots:3,diff:'+184 −37 in 6 files',cost:'$4.10'},
+  {id:'q2',repo:'np',verb:'Merge',gate:true,stop:4,tier:1,ref:'PR #216',ticket:'#205',title:'Send the reminder text the evening before the appointment',line:'Passed review first time. A Design session suggests rolling #221 in here.',min:1560,diff:'+62 −18 in 3 files',cost:'$1.35',roll:{ref:'#221',title:'Let patients reschedule from the reminder text'}},
+  {id:'q3',repo:'ll',verb:'Merge',gate:true,stop:4,tier:1,ref:'PR #88',ticket:'#81',title:'Round each invoice line before adding the tax',line:'Passed review after your Request changes was built.',min:45,diff:'+41 −29 in 2 files',cost:'$2.70'},
+  {id:'q4',repo:'np',verb:'Answer',stop:1,tier:1,ref:'#226',title:'Waitlist for fully booked days',line:'Design session, round 1.',ask:'When a slot frees up, does the first person on the waitlist get it automatically, or a text and ten minutes to claim it?',min:300},
+  {id:'q5',repo:'np',verb:'Answer',stop:0,tier:1,ref:'#229',title:'TypeError on the booking confirmation page',line:'Triage needs one fact before it can sort this.',ask:'Is the old /book-now link still printed on the clinic’s flyers?',min:540},
+  {id:'q6',repo:'np',verb:'Do',stop:null,tier:1,ref:'#203',title:'Add the text-message sender ID to 1Password',line:'Operator step. Ticket #204 waits on it.',min:3060},
+  {id:'q7',repo:'ll',verb:'Answer',stop:null,tier:1,ref:'Map #70',title:'Invoices by email',line:'One Decision on this Map is yours.',ask:'Which address should a bounced invoice come back to?',min:1620},
+  {id:'q8',repo:'np',verb:'Read',stop:null,tier:2,ref:'#219',title:'Retro for the week of 2 November',line:'Three proposals, each with its evidence. Close it once you have filed them or set them aside.',min:5760},
+  {id:'q9',repo:'ll',verb:'Read',stop:null,tier:2,ref:'#76',title:'Audit: three refactoring candidates',line:'File each as an issue or set it aside, then close it.',min:8640},
+];
+const Q_HELD = {id:'q0',repo:'fx',verb:'Do',stop:null,tier:1,ref:'Usage-credits issue',title:'Turn usage credits off on Subscription 2',line:'It was caught spending usage credits. Nothing runs on it until you close this issue. 4 runs are held.',min:40};
+const STUCK = [
+  {id:'s1',repo:'np',verb:'Unstick',stuck:true,stop:2,tier:1,ref:'#188',title:'Show the clinic’s public holidays on the calendar',line:'The Kit said this was going back to an Implementer. Nothing has started.',said:{text:'Execution flaw. Going back to an Implementer.',min:26},min:26},
+];
+const RUNS = [
+  {id:'r1',repo:'np',role:'Implement',kind:'Retry 1',ref:'#231',pr:'PR #234',title:'Record why a patient cancelled',model:'Sonnet',min:12,status:'running',stop:2,said:{text:'Execution flaw. Going back to an Implementer.',min:13}},
+  {id:'r2',repo:'ll',role:'Review',kind:'',ref:'PR #91',pr:'PR #91',title:'Export a month of invoices as a spreadsheet',model:'Opus',min:4,status:'checks',stop:3,said:{text:'Draft pull request opened. Going to the Reviewer.',min:5}},
+  {id:'r3',repo:'np',role:'Implement',kind:'conflict only',ref:'#197',pr:'PR #209',title:'Let reception block out a lunch hour',model:'Opus, stepped up',min:7,status:'running',stop:2,said:{text:'main moved when you merged PR #212. Bringing this up to date.',min:8}},
+  {id:'r4',repo:'ll',role:'Research',kind:'',ref:'Map #70',pr:'Map #70',title:'What does the mail provider report about a bounce?',model:'Opus',min:21,status:'running',stop:null,said:{text:'Decision unblocked. Going to the Researcher.',min:22}},
+];
+const WAITING = [
+  {id:'w1',repo:'np',ref:'#232',title:'Remember the practitioner a patient booked last',why:'Waiting for a Dispatch slot',min:70,stop:2},
+  {id:'w2',repo:'np',ref:'#235',title:'Show the practitioner’s photo on the booking page',why:'Waiting for a Dispatch slot',min:25,stop:2},
+  {id:'w3',repo:'ll',ref:'#93',title:'Credit notes',why:'Waiting for a Design-session slot',min:180,stop:1},
+];
+const SUBS = {
+  busy:[{name:'Subscription 1',used:100,note:'Used up. Its weekly limit resets Thursday 09:00.'},{name:'Subscription 2',used:64,note:'Runs are going here.'}],
+  held:[{name:'Subscription 1',used:100,note:'Used up. Its weekly limit resets Thursday 09:00.'},{name:'Subscription 2',used:71,full:true,note:'Used up. It spent usage credits, and stays unusable until you close its issue.'}],
+  clear:[{name:'Subscription 1',used:38,note:'Runs are going here.'},{name:'Subscription 2',used:12,note:'Next in line.'}],
+};
+const LAST = {label:'Review PR #214',repo:'np',min:192,verdict:'Pass',summary:'Builds the three-slot list as the Ticket asks. One Follow-up: slots that cross midnight.'};
+
+const S = {variant:'a',scenario:'busy',done:{},extra:[],open:null,tab:'queue',repo:'all',seg:'yours',expanded:null,composing:null,roll:false,notes:false,toast:null};
+
+/* ---------- helpers ---------- */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const age = m => m < 60 ? m + 'm' : m < 1440 ? Math.floor(m/60) + 'h' : Math.floor(m/1440) + 'd';
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+const ageLong = m => m < 60 ? m + ' min' : m < 1440 ? plural(Math.floor(m/60),'hour') : plural(Math.floor(m/1440),'day');
+const hhmm = t => String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
+const clock = m => hhmm(new Date(NOW.getTime() - m*60000));
+function since(m){
+  const t = new Date(NOW.getTime() - m*60000);
+  if (t.toDateString() === NOW.toDateString()) return 'today ' + hhmm(t);
+  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][t.getDay()] + ' ' + t.getDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][t.getMonth()] + ', ' + hhmm(t);
+}
+const ordinal = n => n + (['th','st','nd','rd'][n % 10 > 3 || (n % 100 > 10 && n % 100 < 14) ? 0 : n % 10]);
+const runLabel = r => r.role + ' ' + r.ref + (r.kind ? ', ' + r.kind : '');
+const runStatus = r => r.status === 'checks' ? 'Waiting ' + r.min + ' min for the pull request’s checks' : r.status === 'queued' ? 'Starting' : 'Running ' + r.min + ' min';
+const find = id => Q.concat(STUCK, [Q_HELD]).find(x => x.id === id);
+
+function world(){
+  const sc = S.scenario; let queue = [], runs = [], stuck = [], waiting = [], held = [];
+  if (sc === 'busy'){ queue = Q.slice(); runs = RUNS.concat(S.extra); stuck = STUCK.slice(); waiting = WAITING.slice(); }
+  if (sc === 'held'){ queue = [Q_HELD].concat(Q); held = [RUNS[0],RUNS[2],RUNS[1],RUNS[3]].concat(S.extra); waiting = WAITING.slice(); }
+  if (sc === 'clear'){ runs = RUNS.slice(0,2); }
+  const live = x => !S.done[x.id];
+  return {queue:queue.filter(live), stuck:stuck.filter(live), runs, waiting, held, subs:SUBS[sc], last:LAST};
+}
+
+/* ---------- shared detail pieces (content only; each variant frames it its own way) ---------- */
+function moves(it){
+  if (S.composing === it.id){
+    const pre = S.roll && it.roll ? 'Roll in ' + it.roll.ref + ', “' + it.roll.title + '”. Build what that issue asks for on this pull request.\n\n[link to ' + it.roll.ref + ' filled in]' : '';
+    return `<div class="compose"><label for="rc-text">What should change on ${esc(it.ref)}?</label>
+      <textarea id="rc-text" rows="5">${esc(pre)}</textarea>
+      <div class="btns"><button class="btn" data-act="send-rc" data-id="${it.id}">Request changes</button><button class="btn quiet" data-act="cancel-rc">Cancel</button></div></div>`;
+  }
+  if (it.gate){
+    return (it.roll ? `<div class="d-roll">A Design session on ${esc(it.roll.ref)}, “${esc(it.roll.title)}”, says it is small enough to build here.<br><button class="btn quiet" data-act="roll" data-id="${it.id}">Roll ${esc(it.roll.ref)} in</button></div>` : '')
+      + `<div class="btns"><button class="btn" data-act="merge" data-id="${it.id}">Merge</button><button class="btn quiet" data-act="rc" data-id="${it.id}">Request changes</button><button class="btn quiet" data-act="back" data-id="${it.id}">Send it back</button></div>`;
+  }
+  return `<div class="btns"><button class="btn quiet" data-act="gh">Open on GitHub</button></div>
+    <p class="fine">You make this move on GitHub. It leaves here by itself when you do.</p>
+    <button class="pretend" data-act="pretend" data-id="${it.id}">Prototype only: pretend I did it</button>`;
+}
+function facts(it){
+  const f = [REPO[it.repo], it.ref];
+  if (it.ticket) f.push('Ticket ' + it.ticket);
+  if (it.diff) f.push(it.diff);
+  if (it.cost) f.push(it.cost + ' API-equivalent');
+  f.push('yours for ' + ageLong(it.min));
+  return `<div class="d-facts">${f.map(x => `<span>${esc(x)}</span>`).join('')}</div>`;
+}
+function detailBody(it){
+  let h = facts(it);
+  if (it.stuck) h += `<dl class="evidence"><div><dt>Kit said</dt><dd>“${esc(it.said.text)}” ${clock(it.said.min)}</dd></div><div><dt>Now</dt><dd class="bad">No run has started. ${it.said.min} min.</dd></div></dl>`;
+  else h += `<p class="a-line">${esc(it.line)}</p>`;
+  if (it.ask) h += `<p class="d-ask">${esc(it.ask)}</p>`;
+  if (it.gate) h += `<div class="d-digest">The Digest goes here: what was decided and why, what was left out, what needs a Follow-up, and what deserves your own eyes. It has its own prototype.${it.shots ? `<div class="d-shots">${'<span>UI evidence</span>'.repeat(it.shots)}</div>` : ''}</div>`;
+  return h + moves(it);
+}
+function subs(w){
+  return w.subs.map(s => `<div class="sub"><div class="sub-name"><span>${s.name}</span><span>${s.used}% of the week</span></div><div class="meter"><span class="${s.used >= 100 || s.full ? 'full' : ''}" style="width:${s.used}%"></span></div><p class="fine">${esc(s.note)}</p></div>`).join('');
+}
+function evidence(r, held){
+  const now = held ? `<dd class="wait">Held, ${ordinal(held)} in line. Resumes by itself when a Subscription is free.</dd>`
+    : `<dd class="ok">${runStatus(r)} on ${esc(r.model)}. ${r.status === 'queued' ? '' : 'Started ' + clock(r.min) + '.'}</dd>`;
+  return `<dl class="evidence"><div><dt>Kit said</dt><dd>“${esc(r.said.text)}” ${clock(r.said.min)}</dd></div><div><dt>Now</dt>${now}</div></dl>`;
+}
+
+/* ---------- A: one list ---------- */
+function renderA(w){
+  const items = w.queue.concat(w.stuck).sort((x,y) => x.tier - y.tier || y.min - x.min);
+  const foot = `<div class="a-foot">
+    <button class="a-strip" data-act="tab" data-tab="running">
+      <span><i class="dot run"></i>${w.runs.length} running</span>
+      ${w.held.length ? `<span><i class="dot hold"></i>${w.held.length} held</span>` : ''}
+      ${w.waiting.length ? `<span><i class="dot hold"></i>${w.waiting.length} waiting for a slot</span>` : ''}
+    </button>
+    <nav class="a-tabs">${[['queue','Queue ' + items.length],['running','Running'],['spend','Spend'],['gallery','Gallery']].map(([k,l]) => `<button data-act="tab" data-tab="${k}" aria-pressed="${S.tab === k && !S.open}">${l}</button>`).join('')}</nav>
+  </div>`;
+  const it = S.open && items.find(x => x.id === S.open);
+  if (it) return `<div><button class="a-back" data-act="close">Back to your moves</button><h1 class="d-title">${esc(it.title)}</h1>${detailBody(it)}</div>${foot}`;
+  if (S.tab === 'queue'){
+    if (!items.length) return `<div class="empty"><b>Nothing is waiting on you.</b>${plural(w.runs.length,'run')} in flight. This list fills by itself when a move becomes yours.</div>${foot}`;
+    const oldest = Math.max(...items.map(x => x.min));
+    const row = x => `<button class="a-row" data-act="open" data-id="${x.id}">
+      <span class="a-verb ${x.stuck ? 'stuck' : ''}">${x.verb}</span>
+      <span><span class="a-title">${esc(x.title)}</span><span class="a-meta"><span>${REPO[x.repo]}</span><span>${esc(x.ref)}</span></span><span class="a-line">${esc(x.ask || x.line)}</span></span>
+      <span class="a-age">${age(x.min)}</span></button>`;
+    const t1 = items.filter(x => x.tier === 1), t2 = items.filter(x => x.tier === 2);
+    return `<div><div class="a-head"><h1>Your moves</h1><p>${items.length} owed, the oldest for ${ageLong(oldest)}.</p></div>
+      ${t1.length ? `<p class="a-tier">Holding up work</p>${t1.map(row).join('')}` : ''}
+      ${t2.length ? `<p class="a-tier">When you get to it</p>${t2.map(row).join('')}` : ''}</div>${foot}`;
+  }
+  if (S.tab === 'running'){
+    const run = r => `<div class="a-run"><i class="dot run"></i><div><span class="a-title">${esc(runLabel(r))}</span><span class="a-line">${esc(r.title)}</span>
+      <span class="a-meta"><span>${REPO[r.repo]}</span><span>${esc(r.model)}</span><span>${runStatus(r)}</span><button class="linkish" data-act="log">Live log</button></span></div></div>`;
+    const held = (r,i) => `<div class="a-run"><i class="dot hold"></i><div><span class="a-title">${esc(runLabel(r))}</span><span class="a-line">${esc(r.title)}</span>
+      <span class="a-meta"><span>${REPO[r.repo]}</span><span>${ordinal(i+1)} in line</span></span></div></div>`;
+    const wait = x => `<div class="a-run"><i class="dot hold"></i><div><span class="a-title">${esc(x.title)}</span>
+      <span class="a-meta"><span>${REPO[x.repo]}</span><span>${x.ref}</span><span>${x.why}, ${ageLong(x.min)}</span></span></div></div>`;
+    return `<div><div class="a-head"><h1>Running</h1></div>
+      <h2 class="a-sec">Now</h2>${w.runs.length ? w.runs.map(run).join('') : '<p class="fine">Nothing is running.</p>'}
+      ${w.held.length ? `<h2 class="a-sec">Held</h2><p class="fine">Every Subscription is used up. These resume by themselves, in this order.</p>${w.held.map(held).join('')}` : ''}
+      ${w.waiting.length ? `<h2 class="a-sec">Waiting for a slot</h2>${w.waiting.map(wait).join('')}` : ''}
+      <h2 class="a-sec">Last finished</h2><div class="a-run"><i class="dot"></i><div><span class="a-title">${w.last.label}: ${w.last.verdict}</span><span class="a-line">${esc(w.last.summary)}</span><span class="a-meta"><span>${REPO[w.last.repo]}</span><span>${ageLong(w.last.min)} ago</span></span></div></div>
+      <h2 class="a-sec">Subscriptions</h2>${subs(w)}</div>${foot}`;
+  }
+  return `<div class="stub"><h1 class="d-title">${S.tab === 'spend' ? 'Spend' : 'Gallery'}</h1><p style="margin-top:8px">Not in this prototype. In this variant it is one tab for every Product repo.</p></div>${foot}`;
+}
+
+/* ---------- B: by move ---------- */
+function renderB(w){
+  const inRepo = x => S.repo === 'all' || x.repo === S.repo || x.repo === 'fx';
+  const queue = w.queue.filter(inRepo), runs = w.runs.filter(inRepo), stuck = w.stuck.filter(inRepo), held = w.held.filter(inRepo), waiting = w.waiting.filter(inRepo);
+  const count = k => w.queue.filter(x => k === 'all' || x.repo === k || x.repo === 'fx').length;
+  const chips = [['all','All repos'],['np',REPO.np],['ll',REPO.ll]].map(([k,l]) => `<button class="b-chip" data-act="repo" data-repo="${k}" aria-pressed="${S.repo === k}">${l} ${count(k)}</button>`).join('');
+  const card = (r, h) => `<article class="b-card ${h ? 'held' : ''}"><h3>${esc(runLabel(r))}</h3><p class="b-ct">${esc(r.title)}${S.repo === 'all' ? ', ' + REPO[r.repo] : ''}</p>${evidence(r, h)}${h ? '' : '<button class="linkish" data-act="log">Live log</button>'}</article>`;
+  const stuckCard = s => `<article class="b-card stuck"><h3>Ticket ${s.ref}: nothing running</h3><p class="b-ct">${esc(s.title)}</p>
+    <dl class="evidence"><div><dt>Kit said</dt><dd>“${esc(s.said.text)}” ${clock(s.said.min)}</dd></div><div><dt>Now</dt><dd class="bad">No run has started. ${s.said.min} min.</dd></div></dl>
+    <button class="linkish" data-act="gh">Open on GitHub</button></article>`;
+  const cards = stuck.map(stuckCard).concat(runs.map(r => card(r, 0)), held.map((r,i) => card(r, i+1)));
+  if (waiting.length) cards.push(`<article class="b-card"><h3>${waiting.length} waiting for a slot</h3><dl class="evidence">${waiting.map(x => `<div><dt>${x.ref}</dt><dd>${esc(x.title)}. ${x.why}, ${ageLong(x.min)}.</dd></div>`).join('')}</dl></article>`);
+  cards.push(`<article class="b-card"><h3>Last finished</h3><p class="b-ct">${w.last.label}: ${w.last.verdict}, ${ageLong(w.last.min)} ago</p><p class="fine">${esc(w.last.summary)}</p></article>`);
+  cards.push(`<article class="b-card"><h3>Subscriptions</h3>${subs(w)}</article>`);
+  const summary = [runs.length + ' running'].concat(stuck.length ? [stuck.length + ' stuck'] : [], held.length ? [held.length + ' held'] : []).join(', ');
+  const groups = ['Merge','Answer','Do','Read'].map(v => {
+    const g = queue.filter(x => x.verb === v).sort((x,y) => y.min - x.min);
+    if (!g.length) return '';
+    return `<section class="b-group"><h2>${v} <small>${g.length}</small></h2>${g.map(x => `<button class="b-item" data-act="open" data-id="${x.id}">
+      <span class="a-title">${esc(x.title)}</span><span class="a-meta">${S.repo === 'all' ? `<span>${REPO[x.repo]}</span>` : ''}<span>${esc(x.ref)}</span></span>
+      <span class="a-line">${esc(x.ask || x.line)}</span><span class="b-since ${x.min >= 1440 ? 'old' : ''}">Yours since ${since(x.min)}</span></button>`).join('')}</section>`;
+  }).join('');
+  const it = S.open && w.queue.find(x => x.id === S.open);
+  return `<div><div class="b-top"><span class="b-mark">Console</span><span class="b-links"><button class="linkish" data-act="stub" data-what="Spend">Spend</button><button class="linkish" data-act="stub" data-what="The gallery">Gallery</button></span></div>
+    <div class="b-chips">${chips}</div>
+    <div class="b-bandhead"><h2>Running now</h2><span>${summary}</span></div>
+    <div class="b-scroll">${cards.join('')}</div>
+    ${groups || `<div class="empty"><b>Nothing is waiting on you.</b>Your moves appear here, grouped by what you owe.</div>`}</div>
+    ${it ? `<button class="sheet-scrim" data-act="close" aria-label="Close"></button><div class="sheet"><button class="linkish sheet-close" data-act="close">Close</button><h1 class="d-title">${esc(it.title)}</h1>${detailBody(it)}${it.gate ? '<p class="fine"><button class="linkish" data-act="stub" data-what="The full review">Open the full review</button></p>' : ''}</div>` : ''}`;
+}
+
+/* ---------- C: by work ---------- */
+function renderC(w){
+  const rows = [];
+  w.queue.forEach(q => rows.push({...q, state:'yours', rank:0}));
+  w.stuck.forEach(s => rows.push({...s, state:'stuck', rank:1}));
+  w.runs.forEach(r => rows.push({id:r.id, repo:r.repo, ref:r.pr, title:r.title, stop:r.stop, state:'run', rank:2, run:r, min:r.min}));
+  w.held.forEach((r,i) => rows.push({id:r.id, repo:r.repo, ref:r.pr, title:r.title, stop:r.stop, state:'held', rank:3, run:r, order:i+1, min:0}));
+  w.waiting.forEach(x => rows.push({...x, state:'wait', rank:4}));
+  const mine = r => r.state === 'yours' || r.state === 'stuck';
+  const nMine = rows.filter(mine).length, nMoving = rows.length - nMine;
+  const shown = rows.filter(r => S.seg === 'all' || (S.seg === 'yours') === mine(r));
+  const say = r => {
+    if (r.state === 'yours') return `<b>Yours to ${r.verb.toLowerCase()}</b> for ${ageLong(r.min)}. ${esc(r.ask || r.line)}`;
+    if (r.state === 'stuck') return `<b>Stuck.</b> The Kit said “${esc(r.said.text)}” ${r.said.min} min ago. No run has started.`;
+    if (r.state === 'run') return `<b>${esc(runLabel(r.run))}.</b> ${runStatus(r.run)} on ${esc(r.run.model)}.`;
+    if (r.state === 'held') return `<b>Held, ${ordinal(r.order)} in line.</b> ${esc(runLabel(r.run))} resumes by itself when a Subscription is free.`;
+    return `<b>${r.why}</b> for ${ageLong(r.min)}.`;
+  };
+  const track = r => r.stop == null ? '' : `<span class="c-track">${STOPS.map((n,i) => `<span class="c-stop ${i < r.stop ? 'past' : ''} ${i === r.stop ? 'at ' + r.state : ''}">${n}</span>`).join('')}</span>`;
+  const more = r => {
+    if (r.state === 'yours' || r.state === 'stuck') return detailBody(r);
+    if (r.state === 'run') return evidence(r.run, 0) + '<button class="linkish" data-act="log">Live log</button>';
+    if (r.state === 'held') return evidence(r.run, r.order);
+    return `<p class="fine">No run exists yet. The Kit starts one when a slot opens.</p>`;
+  };
+  const row = r => `<div class="c-row s-${r.state}"><button class="c-hit" data-act="expand" data-id="${r.id}" aria-expanded="${S.expanded === r.id}">
+      <span class="c-title">${esc(r.title)}</span><span class="a-meta"><span>${esc(r.ref)}</span></span><span class="c-say">${say(r)}</span>${track(r)}</button>
+      ${S.expanded === r.id ? `<div class="c-more">${more(r)}</div>` : ''}</div>`;
+  const sections = ['fx','np','ll'].map(k => {
+    const rs = shown.filter(r => r.repo === k).sort((x,y) => x.rank - y.rank || (x.stop == null) - (y.stop == null) || y.min - x.min);
+    const factory = k === 'fx' && S.seg !== 'yours';
+    if (!rs.length && !factory) return '';
+    return `<section class="c-repo"><header><h2>${REPO[k]}</h2>${k === 'fx' ? '' : `<span class="c-links"><button class="linkish" data-act="stub" data-what="Spend for ${REPO[k]}">Spend</button><button class="linkish" data-act="stub" data-what="The gallery for ${REPO[k]}">Gallery</button></span>`}</header>
+      ${rs.map(row).join('')}${factory ? subs(w) + `<p class="fine">Last finished: ${w.last.label}, ${w.last.verdict}, ${ageLong(w.last.min)} ago. ${esc(w.last.summary)}</p>` : ''}</section>`;
+  }).join('');
+  return `<div><div class="c-seg">${[['yours','Yours ' + nMine],['moving','Moving ' + nMoving],['all','Everything']].map(([k,l]) => `<button data-act="seg" data-seg="${k}" aria-pressed="${S.seg === k}">${l}</button>`).join('')}</div>
+    <div class="c-legend"><span><i class="dot yours"></i>yours</span><span><i class="dot run"></i>an agent is on it</span><span><i class="dot ring"></i>waiting or held</span><span><i class="dot stuck"></i>stuck</span></div>
+    ${sections || `<div class="empty"><b>${S.seg === 'yours' ? 'Nothing is waiting on you.' : 'Nothing here.'}</b>${S.seg === 'yours' ? plural(nMoving,'piece') + ' of work moving without you.' : ''}</div>`}</div>`;
+}
+
+/* ---------- prototype chrome ---------- */
+const BETS = {
+  a:['One list for every Product repo. The repo is a tag on the row.','Each row starts with the verb you owe. Age is a bare number on the right.','What holds up work sits above what you read when you get to it. Oldest first inside each.','A Stuck Ticket counts as a move owed: it sits in the list as Unstick.','Running is its own tab. Home keeps one line about it.','A row opens a full screen. Four tabs across the bottom: Queue, Running, Spend, Gallery.'],
+  b:['A repo switcher at the top filters everything below it.','Running now sits above your moves, as cards you swipe. Each pairs what the Kit said with what is actually running.','Moves are grouped under the verb. Age is the time the move became yours.','A Stuck Ticket is a red card among the runs, not a move.','A row opens a sheet over Home with the move on it. Spend and Gallery are links in the header.'],
+  c:['One row per piece of work, grouped by Product repo. There is no separate Running screen.','Each row shows where the work is on the Loop and whose turn it is.','What isn’t on the Loop (a Retro, an Audit, a Map, a Research run) is a plain row with no track.','A Stuck Ticket sorts with yours, in red.','A row opens in place. Spend and Gallery belong to each repo.'],
+};
+function notes(w){
+  const v = VARIANTS.find(x => x[0] === S.variant);
+  const sc = {busy:'A busy Tuesday afternoon. One Subscription is used up, runs go on the other.',held:'Every Subscription is used up. One of the reasons is a move you owe.',clear:'Nothing is owed. Two runs are in flight.'}[S.scenario];
+  return `<h2>${v[0].toUpperCase()}: ${v[1]}</h2>
+    <h3>What this variant bets on</h3><ul>${BETS[S.variant].map(b => `<li>${b}</li>`).join('')}</ul>
+    <h3>Try</h3><ul><li>Merge PR #214 and watch it leave.</li><li>Roll #221 into PR #216, then find the run it starts.</li><li>Find the Ticket the Kit said was going back to an Implementer, and decide whether you would have caught it.</li><li>Switch the scene with the second button in the bar: Busy, Held, Clear.</li></ul>
+    <h3>The scene</h3><p class="state">${sc}</p>
+    <p class="state">${w.queue.length} owed, ${w.stuck.length} stuck, ${w.runs.length} running, ${w.held.length} held, ${w.waiting.length} waiting for a slot.</p>
+    <div class="btns"><button class="btn quiet" data-act="reset">Put everything back</button><button class="btn quiet p-notes-close" data-act="notes">Close notes</button></div>
+    <p class="fine">Prototype. Every repo, issue and figure is invented. Nothing here talks to GitHub.</p>`;
+}
+function bar(){
+  const v = VARIANTS.find(x => x[0] === S.variant), s = SCENARIOS.find(x => x[0] === S.scenario);
+  return `<div class="proto" role="toolbar" aria-label="Prototype switcher">
+    <button data-act="prev" aria-label="Previous variant">&lsaquo;</button><span class="p-label"><b>${v[0].toUpperCase()}</b>${v[1]}</span><button data-act="next" aria-label="Next variant">&rsaquo;</button>
+    <span class="p-sep"></span><button data-act="scenario" aria-label="Change the scene">${s[1]}</button>
+    <span class="p-sep p-notes"></span><button class="p-notes" data-act="notes">Notes</button></div>`;
+}
+
+const app = document.getElementById('app');
+function render(keepScroll){
+  const w = world();
+  const sc = app.querySelector('.b-scroll'); const left = sc ? sc.scrollLeft : 0;
+  const body = {a:renderA, b:renderB, c:renderC}[S.variant](w);
+  app.innerHTML = `<div class="stage"><div class="phone">${body}</div><aside class="notes" ${S.notes ? 'data-open' : ''}>${notes(w)}</aside></div>${S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : ''}${bar()}`;
+  const sc2 = app.querySelector('.b-scroll'); if (sc2 && keepScroll) sc2.scrollLeft = left;
+  const name = S.variant + (S.scenario === 'busy' ? '' : '-' + S.scenario);
+  if (typeof location !== 'undefined' && location.hash !== '#' + name){ try { history.replaceState(null, '', '#' + name); } catch (e) {} }
+}
+let toastTimer;
+function toast(t){ S.toast = t; clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = null; const el = app.querySelector('.toast'); if (el) el.remove(); }, 3800); }
+function leave(id){ S.done[id] = 1; S.open = null; S.expanded = null; S.composing = null; }
+function cycle(list, cur, d){ const i = list.findIndex(x => x[0] === cur); return list[(i + d + list.length) % list.length][0]; }
+function setVariant(v){ S.variant = v; S.open = null; S.expanded = null; S.composing = null; S.tab = 'queue'; }
+
+const ACT = {
+  prev(){ setVariant(cycle(VARIANTS, S.variant, -1)); window.scrollTo(0,0); },
+  next(){ setVariant(cycle(VARIANTS, S.variant, 1)); window.scrollTo(0,0); },
+  scenario(){ S.scenario = cycle(SCENARIOS, S.scenario, 1); S.open = null; S.expanded = null; S.composing = null; },
+  notes(){ S.notes = !S.notes; },
+  reset(){ S.done = {}; S.extra = []; S.open = null; S.expanded = null; S.composing = null; toast('Everything is back.'); },
+  tab(d){ S.tab = d.tab; S.open = null; S.composing = null; window.scrollTo(0,0); },
+  open(d){ S.open = d.id; S.composing = null; if (S.variant === 'a') window.scrollTo(0,0); },
+  close(){ S.open = null; S.composing = null; },
+  repo(d){ S.repo = d.repo; },
+  seg(d){ S.seg = d.seg; S.expanded = null; },
+  expand(d){ S.expanded = S.expanded === d.id ? null : d.id; S.composing = null; },
+  merge(d){ const it = find(d.id); leave(d.id); toast('Merged ' + it.ref + '. It has left your moves.'); },
+  rc(d){ S.composing = d.id; S.roll = false; },
+  roll(d){ S.composing = d.id; S.roll = true; },
+  'cancel-rc'(){ S.composing = null; },
+  'send-rc'(d){ const it = find(d.id); leave(d.id);
+    S.extra.push({id:'x' + d.id, repo:it.repo, role:'Implement', kind:'Request changes', ref:it.ticket, pr:it.ref, title:it.title, model:'Sonnet', min:0, status:'queued', stop:2, said:{text:'Your Request changes amended the Ticket. Going to an Implementer.', min:0}});
+    toast('Changes requested on ' + it.ref + '. An Implement run is starting.'); },
+  back(d){ const it = find(d.id); leave(d.id); toast('Sent back. Ticket ' + it.ticket + ' goes to a Design session.'); },
+  pretend(d){ leave(d.id); toast('Done on GitHub. It left by itself.'); },
+  gh(){ toast('This would open GitHub.'); },
+  log(){ toast('This would open the run’s live log on GitHub.'); },
+  stub(d){ toast(d.what + ' would open here.'); },
+};
+document.addEventListener('click', e => {
+  const el = e.target.closest && e.target.closest('[data-act]'); if (!el) return;
+  const fn = ACT[el.dataset.act]; if (!fn) return;
+  fn(el.dataset); render(true);
+});
+document.addEventListener('keydown', e => {
+  const t = e.target; if (t && t.matches && t.matches('input, textarea, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft'){ ACT.prev(); render(); } else if (e.key === 'ArrowRight'){ ACT.next(); render(); }
+});
+function fromHash(){
+  const h = (location.hash || '').replace('#','').split('-');
+  if (VARIANTS.some(x => x[0] === h[0])) S.variant = h[0];
+  S.scenario = SCENARIOS.some(x => x[0] === h[1]) ? h[1] : (VARIANTS.some(x => x[0] === h[0]) ? 'busy' : S.scenario);
+}
+try { const q = new URLSearchParams(location.search).get('variant'); if (q && VARIANTS.some(x => x[0] === q.toLowerCase())) S.variant = q.toLowerCase(); } catch (e) {}
+if (location.hash) fromHash();
+window.addEventListener('hashchange', () => { fromHash(); render(); });
+render();
+})();
+</script>
