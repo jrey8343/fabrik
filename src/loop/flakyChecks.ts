@@ -5,11 +5,11 @@
 // hourly tick reads; that Verdict then no longer counts toward the Ticket's
 // Retries. Either way the Operator hears of it twice over, quietly: one line
 // on the PR, mentioning nobody, and the check's own Flaky check issue for
-// Triage, filed once and commented on at each later flake, so the Product's
+// Triage, filed once and commented on each time the check proves flaky again, so the Product's
 // suite gets fixed. Pure.
 import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker } from "./markers.ts";
-import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, KitIssueSnapshot, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
+import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 /** A check's name as Markdown code: a backtick in it can't end the span. */
 export function checkCode(name: string): string {
@@ -35,7 +35,7 @@ function issueActions(
     const runs = `#${pullRequest} at ${short}: [red](${check.red}), [green](${check.green})`;
     const open = issues.find((issue) => flakyCheckIssueOf(issue.body) === check.name);
     if (open !== undefined) {
-      actions.push({ kind: "comment", issue: open.number, body: `Flaked again on ${runs}.` });
+      actions.push({ kind: "comment", issue: open.number, body: `Flaky again on ${runs}.` });
       refs.push(open.number);
       continue;
     }
@@ -52,8 +52,8 @@ function issueActions(
       body: [
         flakyCheckIssueMarker(check.name),
         `The required check ${checkCode(check.name)} reported both failure and success on the same head commit: a Flaky check. ` +
-          "Every flake costs a Review a re-run, and one the Kit doesn't catch costs a Ticket a Retry, so it's worth fixing in the suite. " +
-          "The Kit comments here each time it flakes again while this is open.",
+          "Each time it fails costs a Review a re-run, and one the Kit doesn't catch costs a Ticket a Retry, so it's worth fixing in the suite. " +
+          "The Kit comments here each time it proves flaky again while this is open.",
         "",
         `- ${runs}`,
       ].join("\n"),
@@ -141,7 +141,9 @@ const RED = ["failure", "timed_out", "cancelled", "action_required", "startup_fa
 function flippedOn({ checks, checkRuns }: FlawHeadChecks): FlakyCheck[] | null {
   const flaky: FlakyCheck[] = [];
   for (const name of checks) {
-    const runs = checkRuns.filter((run) => run.name === name).toSorted((a, b) => Date.parse(a.startedAt ?? "") - Date.parse(b.startedAt ?? ""));
+    // A run not yet started is the newest: GitHub queued it after every run that has.
+    const started = (run: HeadCheckRun) => (run.startedAt === null ? Infinity : Date.parse(run.startedAt));
+    const runs = checkRuns.filter((run) => run.name === name).toSorted((a, b) => started(a) - started(b));
     const latest = runs.at(-1);
     const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
     if (latest?.conclusion !== "success" || red === undefined) return null;

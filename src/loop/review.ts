@@ -92,7 +92,7 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
       ...listed(
         "These required checks didn't pass, so the Reviewer didn't run:",
         plain,
-        rerun?.refused === null || rerun?.refused === undefined ? [] : ["", `The Kit couldn't re-run them: ${rerun.refused}.`],
+        rerun?.refused == null ? [] : ["", `The Kit couldn't re-run them: ${rerun.refused}.`],
       ),
       ...listed(
         red.length === 0

@@ -309,7 +309,7 @@ The Kit pushes to the Operator's phone only when it is their move, and once a we
 | Fast path, Design session finished, Spec closed, `wontfix` | Silent | |
 | A Ticket closed by hand closes its agent draft PR | Silent | The comment on the PR mentions nobody. An agent PR you close by hand stops its Ticket in `ready-for-human`, whose assignment is the push. |
 | Skills-source bump PR | Silent | The PR requests no review; the Operator merges it when they choose. |
-| Flaky check | Silent | The line on the PR mentions nobody: the pass or flaw that follows is the event's one notification. Its `Flaky required check: <name>` issue is filed with `needs-triage`, and later flakes of the check comment on it while it's open. |
+| Flaky check | Silent | The line on the PR mentions nobody: the pass or flaw that follows is the event's one notification. Its `Flaky required check: <name>` issue is filed with `needs-triage`, and each later time the check proves flaky it's commented on while it's open. |
 | Monitor issues | Silent | An error or red-main issue gets `needs-triage` from Intake and reaches the Operator through Triage, never a push of its own: if Triage asks for more, its question @-mentions the Operator. The Monitor never comments, apart from the note it closes its red-main issue with. |
 | Audit | Silent | No state label, assignee or mention; a failed run closes it the same way. It surfaces in the Weekly summary's Waiting on you while it's open. |
 | Retro | Silent | No state label, assignee or mention, and no push; a failed run closes it the same way. It surfaces in the Weekly summary's Waiting on you while it's open. |

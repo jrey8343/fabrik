@@ -879,7 +879,6 @@ export const STRENGTH_LABELS: Readonly<Record<Strength, string>> = {
   speculative: "Speculative",
 };
 
-/** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 /** A check run on a head commit, as the tick reads them for its Flaky check sweep (#462). */
 export interface HeadCheckRun {
   readonly name: string;
@@ -922,6 +921,7 @@ export interface RerunReport {
   readonly refused: string | null;
 }
 
+/** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
   readonly verdict: Verdict;
   /**

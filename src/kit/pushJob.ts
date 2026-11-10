@@ -237,7 +237,7 @@ export const RERUN_WAIT_JOB = "rerun-wait";
  */
 function rerunReportOf(red: string | undefined, rerunJob: NeededJob | undefined, rerunWait: NeededJob | undefined): RerunReport | null {
   if (rerunJob === undefined || rerunJob.result === "skipped" || red === undefined || red === "") return null;
-  const { outside } = JSON.parse(red) as { outside: string[] };
+  const outside = readNames(JSON.stringify((JSON.parse(red) as { outside?: unknown }).outside ?? []));
   if (rerunJob.result !== "success") return { outside, failedAgain: [], flaky: [], refused: "the Re-run red checks job failed" };
   const refused = rerunJob.outputs["refused"] ?? "";
   if (rerunWait?.result !== "success") return { outside, failedAgain: [], flaky: [], refused: refused === "" ? null : refused };
