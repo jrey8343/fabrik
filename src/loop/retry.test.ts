@@ -92,6 +92,26 @@ describe("An Execution flaw's Verdict names the Retry it starts", () => {
   });
 });
 
+describe("An Execution flaw on a conflict-only or Request-changes run's push calls for a stepped-up Retry (#464)", () => {
+  const flaw = reviewed("verdict: execution-flaw\n\nThe empty-cart case throws.");
+  const verdictOn = (pullRequest: PullRequestSnapshot): string => {
+    const comment = actionsOf(planFor(flaw, snapshotOfPullRequest(pullRequest), kitConfig())).find((action) => action.kind === "comment");
+    if (comment?.kind !== "comment") throw new Error("expected a Verdict comment");
+    return comment.body;
+  };
+
+  it.each([
+    ["a conflict-only run's", { conflictRun: true }],
+    ["a Request-changes run's", { requestChangesRun: true }],
+  ])("a flaw on %s push says Retry 1 starts stepped up", (_, overrides) => {
+    expect(verdictOn(aPullRequest(overrides))).toContain("Retry 1 of 2 starts now, stepped up:");
+  });
+
+  it("a flaw on an ordinary push still says Retry 1 starts plain", () => {
+    expect(verdictOn(aPullRequest())).toContain("Retry 1 of 2 starts now:");
+  });
+});
+
 /** agent:implement added to Ticket #7, whose agent PR is #50. */
 const retryLabeled: LoopEvent = { kind: "label-added", issue: 7, label: "agent:implement" };
 
@@ -213,6 +233,47 @@ describe("Starting a retry", () => {
     const plan = planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig());
 
     expect(actionsOf(plan)[1]).toMatchObject({ kind: "start-agent-run", retry: 2, model: "claude-opus-5-5", stepUp: true });
+  });
+
+  it.each([
+    ["a conflict-only run's", { source: "ci", conflictRun: true }, "conflict-only"],
+    ["a Request-changes run's", { requestChanges: true }, "request-changes"],
+  ] as const)("Retry 1 called for by a flaw on %s push runs on the Step-up model, under that run's reason (#464)", (_, latest, reason) => {
+    const config = kitConfig();
+    const plan = planFor(retryLabeled, resumeSnapshot(flawedPullRequest([], latest)), config);
+
+    expect(actionsOf(plan)[1]).toMatchObject({
+      kind: "start-agent-run",
+      retry: 1,
+      model: config.roles.stepUp.model,
+      effort: config.roles.stepUp.effort,
+      stepUp: true,
+      stepUpReason: reason,
+    });
+  });
+
+  it("a Retry steps up only for the flaw that calls for it, not an earlier stepped-up run's on the PR (#464)", () => {
+    const pullRequest = flawedPullRequest([earlier("pass", { requestChanges: true })]);
+
+    expect(actionsOf(planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig()))[1]).toMatchObject({ retry: 1, stepUp: false, stepUpReason: null });
+  });
+
+  it("with fabrik:step-up taken off, Retry 1 after a Request-changes run's flaw still steps up under that run's reason (#464)", () => {
+    // resumeSnapshot's Ticket carries no fabrik:step-up.
+    const plan = planFor(retryLabeled, resumeSnapshot(flawedPullRequest([], { requestChanges: true })), kitConfig());
+
+    expect(actionsOf(plan)[1]).toMatchObject({ retry: 1, stepUp: true, stepUpReason: "request-changes" });
+  });
+
+  it("Retry 2 records retry and a marked Ticket records marked, even after a conflict-only run's flaw (#464)", () => {
+    const second = flawedPullRequest([earlier("execution-flaw")], { conflictRun: true });
+    expect(actionsOf(planFor(retryLabeled, resumeSnapshot(second), kitConfig()))[1]).toMatchObject({ retry: 2, stepUpReason: "retry" });
+
+    const marked = snapshotOf(
+      anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement", "fabrik:step-up"], openPullRequests: [50] }),
+      { pullRequest: flawedPullRequest([], { requestChanges: true }) },
+    );
+    expect(actionsOf(planFor(retryLabeled, marked, kitConfig()))[1]).toMatchObject({ retry: 1, stepUpReason: "marked" });
   });
 
   it("after two Request-changes runs' flaws, each of which started a Retry, a third flaw starts no retry", () => {

@@ -287,7 +287,7 @@ describe("A Review while a Request-changes run is in flight", () => {
     thread.pushRed(C);
 
     expect(verdictsIn(thread.comments).at(-1)).toEqual({ verdict: "execution-flaw", source: "ci", requestChanges: true, headSha: C });
-    expect(verdictLines(thread).at(-1)).toMatch(/^Retry 1 of 2 starts now:/);
+    expect(verdictLines(thread).at(-1)).toMatch(/^Retry 1 of 2 starts now, stepped up:/);
   });
 
   it("a stalled run resumes on the head the Operator pushed meanwhile", () => {

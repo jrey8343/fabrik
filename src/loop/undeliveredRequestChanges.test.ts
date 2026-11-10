@@ -1226,8 +1226,8 @@ describe("A Request-changes run that commits nothing on a PR that doesn't confli
     const verdict = thread.reviewed("execution-flaw", 50);
 
     expect(verdictsIn(commentsOn(verdict, 50))).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: true, headSha: B }]);
-    expect(commentsOn(verdict, 50)[0]).toContain("Retry 1 of 2 starts now:");
-    expect(startsOn(thread.implement())).toMatchObject({ retry: 1 });
+    expect(commentsOn(verdict, 50)[0]).toContain("Retry 1 of 2 starts now, stepped up:");
+    expect(startsOn(thread.implement())).toMatchObject({ retry: 1, stepUp: true, stepUpReason: "request-changes" });
     for (const check of [thread.tick(120), thread.mainPushed(130, MAIN_2)]) {
       expect(commentsOn(check, 50)).toEqual([]);
       expect(startsOn(check)).toBeUndefined();
