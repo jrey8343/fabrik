@@ -4,7 +4,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
 <!--
   PROTOTYPE. Throwaway. Never merged.
-  Three variants of the Console's Spend screen, switchable from the floating bar (or #a / #b / #c, or ?variant=).
+  Three variants of the Console's Spend screen and the blend the Operator chose (D, which the file opens on), switchable from the floating bar (or #a / #b / #c / #d, or ?variant=).
   Answers the Decision "Prototype Spend: what the factory has used, reached from Home's factory panel".
   Styling is the Digest prototype's, which starts from the Home prototype's (prototypes/console-home). Every repo, issue, pull request and figure in here is invented.
 -->
@@ -149,7 +149,7 @@ button.col{cursor:pointer}
 const NOW = new Date(2026, 10, 10, 14, 15);
 const T = (day, hm) => { const [h, m] = hm.split(':'); return new Date(2026, 10, day, +h, +m); };
 const REPO = {np:'northside-physio', ll:'ledgerline'};
-const VARIANTS = [['a','Runway'],['b','Ledger'],['c','Trend']];
+const VARIANTS = [['d','Chosen'],['a','Runway'],['b','Ledger'],['c','Trend']];
 const SCENARIOS = [['busy','Busy'],['held','Held'],['quiet','Quiet']];
 const MONDAY = T(9, '00:00'), LAST_MONDAY = T(2, '00:00'), WEEK_AGO = T(3, '14:15');
 
@@ -218,7 +218,7 @@ const SCENES = {
           {id:'s2',name:'Subscription 2',used:12,state:'next',start:T(7,'18:00'),resets:T(14,'18:00'),read:'on Sunday'}]},
 };
 
-const S = {variant:'a',scenario:'busy',notes:false,toast:null, a:{repo:null,work:null}, b:{week:0,repo:'all',kind:'all',open:null}, c:{week:7}};
+const S = {variant:'d',scenario:'busy',notes:false,toast:null, a:{repo:null,work:null}, b:{week:0,repo:'all',kind:'all',open:null}, c:{week:7}};
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -266,7 +266,7 @@ const back = (label, act) => `<button class="back" data-act="${act}">‹ ${label
 const facts = fs => `<div class="r-facts">${fs.filter(Boolean).map(f => `<span>${f}</span>`).join('')}</div>`;
 const heldNote = w => allUsedUp(w) ? `<p class="callout"><b>Nothing is running.</b> Every Subscription is used up and ${plural(w.held,'run')} ${w.held === 1 ? 'is' : 'are'} held. They resume by themselves ${dayTime(w.subs[0].resets)}, or sooner if you close the usage-credits issue under Yours.</p>` : '';
 const PRICE_NOTE = `<p class="fine">Dollar figures are what the same runs would have cost at API list prices. Nothing here is billed.</p>`;
-const subState = s => s.state === 'limit' ? `used up until ${dayTime(s.resets)}` : s.state === 'credits' ? 'used up, spent usage credits' : s.state === 'running' ? 'runs go here' : 'next in line';
+const subState = s => s.state === 'limit' ? `used up until ${dayTime(s.resets)}` : s.state === 'credits' ? 'used up, spent usage credits; closing its issue under Yours frees it' : s.state === 'running' ? 'runs go here' : 'next in line';
 
 /* One piece of work as a row: its state and pull request, what it cost in the period, its title, one line more. */
 function workRow(w, x, o = {}){
@@ -348,7 +348,7 @@ function renderA(w){
 }
 
 /* ---------- B: Ledger. One flat list of work for a calendar week, dearest first, with filters. ---------- */
-function renderB(w){
+function renderB(w, chosen){
   const from = S.b.week === 0 ? MONDAY : LAST_MONDAY, to = S.b.week === 0 ? NOW : MONDAY;
   const all = slice(w.work, from, to), before = S.b.week === 0 ? sum(slice(w.work, LAST_MONDAY, MONDAY)) : OLDER[5].usd;
   const inRepo = all.filter(x => S.b.repo === 'all' || x.w.repo === S.b.repo);
@@ -358,9 +358,9 @@ function renderB(w){
   const mins = w.work.flatMap(x => x.runs).filter(within(from, to)).reduce((t, r) => t + r.mins, 0);
   return `${back('Home', 'home')}<div class="r-meta">${factoryPill(w)}<span class="ref">Spend</span></div>
     <div class="stepper"><button class="step" data-act="b-week" data-d="-1" aria-label="The week before" ${S.b.week === -1 ? 'disabled' : ''}>‹</button><span class="ref">${S.b.week === 0 ? 'Week of 9 November, so far' : 'Week of 2 November'}</span><button class="step" data-act="b-week" data-d="1" aria-label="The week after" ${S.b.week === 0 ? 'disabled' : ''}>›</button></div>
-    <h1 class="r-title">${usd(sum(all))} at API prices</h1>
-    ${facts([`${usd(before)} the week before`, merged.length ? `${merged.length} merged, ${usd(a)} each` : 'none merged', `about ${hours(mins)} of Actions runner time`])}
-    ${S.b.week === 0 ? heldNote(w) + `<section class="panel"><div class="panel-h">Subscriptions <span>also on Home</span></div><div class="md">${subsCompact(w)}</div></section>` : ''}
+    <h1 class="r-title">${chosen && S.b.week === 0 ? runway(w) : usd(sum(all)) + ' at API prices'}</h1>
+    ${facts([chosen && S.b.week === 0 ? `${usd(sum(all))} this week at API prices` : '', chosen && S.b.week === 0 && w.held ? plural(w.held, 'run') + ' held' : '', `${usd(before)} the week before`, merged.length ? `${merged.length} merged, ${usd(a)} each` : 'none merged', `about ${hours(mins)} of Actions runner time`])}
+    ${S.b.week === 0 ? (chosen ? '' : heldNote(w)) + `<section class="panel"><div class="panel-h">Subscriptions <span>also on Home</span></div><div class="md">${subsCompact(w)}</div></section>` : ''}
     <div class="toggles" style="margin-top:16px">${[['all','All repos'], ...Object.entries(REPO)].map(([k, label]) => `<button class="toggle" data-act="b-repo" data-repo="${k}" aria-pressed="${S.b.repo === k}">${label} ${usd(sum(all.filter(x => k === 'all' || x.w.repo === k)))}</button>`).join('')}</div>
     <div class="toggles">${kinds.map(([k, label]) => `<button class="toggle" data-act="b-kind" data-kind="${k}" aria-pressed="${S.b.kind === k}">${label} ${usd(sum(inRepo.filter(x => k === 'all' || x.w.st === k)))}</button>`).join('')}</div>
     <section class="panel"><div class="panel-h">${plural(shown.length, 'piece')} of work, dearest first <span>${usd(sum(shown))}</span></div>
@@ -414,11 +414,13 @@ function renderC(w){
 
 /* ---------- prototype chrome ---------- */
 const BETS = {
+  d:['Chosen by the Operator on 2026-11-11: B’s ledger with A’s sentence as the title. The file opens on it.','The title says how long the factory can keep running at this pace, or that nothing is running. It is shown on the current week only.','The week’s dollar figure, the week before, what a merged pull request cost and the Actions runner time are facts under the title.','The Subscriptions are a line each: Home already has them.','One flat list of work for a calendar week, dearest first, stepped a week at a time. Product repo and outcome are filters carrying their own totals. A row opens in place to its runs.'],
   a:['The title is one sentence on how long the factory can keep running. Under it each Subscription: the share used, a mark for how far through its week it is, and when it runs out at this pace.','The period is each Subscription’s own week, which starts at its reset. The dollars cover the last 7 days. There is no moving between periods.','Dollars are reached by drilling down: Product repo, then a piece of work, then its runs. Each step is its own screen.','A Used up Subscription says when it resets or what you owe; when the factory is Held, the title says so.','No GitHub Actions minutes.'],
   b:['Leads with one dollar figure for a calendar week, the Weekly summary’s week. The Subscriptions shrink to a line each, since Home already has them.','You step back and forward a week at a time.','One flat list of work, dearest first. Product repo and outcome are filters, each chip showing its own total. A row opens in place to its runs.','A Ticket and its pull request are one row. A week’s row shows only that week’s runs and says what fell outside.','Held is a note above the Subscriptions. GitHub Actions minutes are one fact under the title.'],
   c:['Leads with eight weeks as a chart, to show whether the factory is getting dearer. Tap a bar to choose the week.','Under it, the chosen week as the Weekly summary’s figures, each beside the week before.','Breakdowns by Product repo, role and model. Single pieces of work appear only as the dearest three.','GitHub Actions runner time gets a panel and a chart of its own.','The Subscriptions come last: Home has them.'],
 };
 const TRY = {
+  d:['Say when runs will be held, and for how long.','Find what PR #209 cost this week, then all told.','Find what northside-physio spent last week on work that never merged.','Switch the scene to Held, then Quiet.'],
   a:['Say when Subscription 2 runs out, and whether Subscription 1 is back by then.','Find what PR #209 cost, and why.','Switch the scene to Held, then Quiet.'],
   b:['Find what PR #209 cost this week, then all told.','Find what northside-physio spent last week on work that never merged.','Switch the scene to Held, then Quiet.'],
   c:['Say whether a merged pull request is getting dearer.','Find what Step-ups cost last week.','Find what PR #209 cost. (Can you?)'],
@@ -444,7 +446,7 @@ function bar(){
 const app = document.getElementById('app');
 function render(){
   const w = world();
-  const body = {a:renderA, b:renderB, c:renderC}[S.variant](w);
+  const body = {d: w => renderB(w, true), a:renderA, b:renderB, c:renderC}[S.variant](w);
   app.innerHTML = `<div class="stage"><div class="phone">${body}</div><aside class="notes" ${S.notes ? 'data-open' : ''}>${notes(w)}</aside></div>${S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : ''}${bar()}`;
   const name = S.variant + (S.scenario === 'busy' ? '' : '-' + S.scenario);
   if (location.hash !== '#' + name){ try { history.replaceState(null, '', '#' + name); } catch (e) {} }

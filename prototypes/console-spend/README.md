@@ -6,8 +6,10 @@ Three structurally different variants of Spend, for the Decision
 [Prototype Spend: what the factory has used, reached from Home's factory panel](https://github.com/jrey8343/fabrik/issues/524)
 on [Wayfinder: the Console](https://github.com/jrey8343/fabrik/issues/507).
 
+**Chosen: D, which is B's ledger with A's sentence as the title.** The file opens on it. A, B and C are kept as the record of what was judged; C was rejected.
+
 Run it: open `index.html` in a browser, or serve this folder (`python3 -m http.server`) and open it on a phone.
-Switch variants with the floating bar, the arrow keys, `#a` / `#b` / `#c`, or `?variant=`. The bar's second button changes the scene (Busy, Held, Quiet).
+Switch variants with the floating bar, the arrow keys, `#a` / `#b` / `#c` / `#d`, or `?variant=`. The bar's second button changes the scene (Busy, Held, Quiet).
 
 Every repo, issue, pull request and figure in it is invented. Nothing talks to GitHub. The styling is the Digest prototype's (the private Pilot repo, branch `prototype/console-digest`), which starts from the Home prototype's tokens: a back link, a pill and refs, a 20px title, fact chips, panels with a muted header, and no figure set larger than the title.
 
