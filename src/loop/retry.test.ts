@@ -258,6 +258,13 @@ describe("Starting a retry", () => {
     expect(actionsOf(planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig()))[1]).toMatchObject({ retry: 1, stepUp: false, stepUpReason: null });
   });
 
+  it("with fabrik:step-up taken off, Retry 1 after a Request-changes run's flaw still steps up under that run's reason (#464)", () => {
+    // resumeSnapshot's Ticket carries no fabrik:step-up.
+    const plan = planFor(retryLabeled, resumeSnapshot(flawedPullRequest([], { requestChanges: true })), kitConfig());
+
+    expect(actionsOf(plan)[1]).toMatchObject({ retry: 1, stepUp: true, stepUpReason: "request-changes" });
+  });
+
   it("Retry 2 records retry and a marked Ticket records marked, even after a conflict-only run's flaw (#464)", () => {
     const second = flawedPullRequest([earlier("execution-flaw")], { conflictRun: true });
     expect(actionsOf(planFor(retryLabeled, resumeSnapshot(second), kitConfig()))[1]).toMatchObject({ retry: 2, stepUpReason: "retry" });

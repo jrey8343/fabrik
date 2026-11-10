@@ -182,9 +182,8 @@ export function whyAwaitingRun(pullRequest: PullRequestSnapshot): string | null 
  * retry runs on the Implementer's model and the second Steps up, for this PR
  * only, and every one Steps up while its Ticket carries fabrik:step-up, or
  * when the flaw calling for it was on a conflict-only or Request-changes run's
- * push (#464). An
- * Infrastructure failure posts no Verdict, so resuming after one runs the
- * same retry again and uses none up.
+ * push (#464). An Infrastructure failure posts no Verdict, so resuming after
+ * one runs the same retry again and uses none up.
  */
 export function owedRetry(
   pullRequest: PullRequestSnapshot,
