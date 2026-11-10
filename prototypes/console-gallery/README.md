@@ -6,7 +6,7 @@ Three structurally different variants of a Product repo's Gallery, for the Decis
 [Prototype the Gallery: a Product repo's Prototypes and UI evidence in one place](https://github.com/jrey8343/fabrik/issues/525)
 on [Wayfinder: the Console](https://github.com/jrey8343/fabrik/issues/507).
 
-**Chosen: D, which is A with C's flip in place for a Prototype's variants.** The file opens on it. A, B and C are kept as the record of what was judged.
+**Chosen: D, which is A with C's flip in place for a Prototype's variants, B's "also open on this page" as one line, and each variant's video playable (a stand-in control here).** The file opens on it. A, B and C are kept as the record of what was judged.
 
 Run it: open `index.html` in a browser, or serve this folder (`python3 -m http.server`) and open it on a phone.
 Switch variants with the floating bar, the arrow keys, `#a` / `#b` / `#c` / `#d`, or `?variant=`. The bar's second button changes the scene: Kept 30 days, Kept 90 days, Quiet.
@@ -20,7 +20,7 @@ The repo, every issue and pull request, and every "screenshot" are invented. The
 What the variants rest on, so none is judged on something the Kit can't give:
 
 - UI evidence is captured per pull request at each push: up to a few routes, Before (public routes only) and After, at the two sizes, each one screen high. A page behind a sign-in has no Before (ADR-0012).
-- A Prototype is 3 to 5 variants of one route, each with a one-line summary, a screenshot at the two sizes and a short video. No variant here plays the video.
+- A Prototype is 3 to 5 variants of one route, each with a one-line summary, a screenshot at the two sizes and a short video. Only D offers to play it, and its control is a stand-in.
 - GitHub deletes the screenshots 30 days after capture and the Console keeps no copy. "Kept 90 days" shows the same repo if the Kit asked for GitHub's maximum.
 - B's "Now" picture is the After of the newest merged change that still has pictures. The Console has no picture of production of its own.
 - The choice of a Prototype's variant is made by answering the round on GitHub. Every variant only shows.
