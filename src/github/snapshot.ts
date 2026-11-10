@@ -972,7 +972,7 @@ type EventPart = Omit<
   | "triggers"
 >;
 
-const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body author { login __typename } }";
+const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
 
 /** How many open Kit-owned issues each page of them holds, oldest first. */
 const KIT_ISSUES_PAGE = 20;
@@ -992,6 +992,7 @@ const KIT_ISSUES_QUERY = `
         pageInfo { hasNextPage endCursor }
         nodes {
           number
+          createdAt
           body
           author { login __typename }
           labels(first: 100) { nodes { name } }
@@ -1017,11 +1018,13 @@ type Actor = { login: string; __typename: string } | null;
 
 interface KitIssueComments {
   pageInfo?: { hasPreviousPage: boolean; startCursor: string | null };
-  nodes: { body: string; author: Actor }[];
+  /** createdAt is always asked for; a fixture may leave it out. */
+  nodes: { body: string; createdAt?: string; author: Actor }[];
 }
 
 interface KitIssueNode {
   number: number;
+  createdAt?: string;
   body: string;
   author: Actor;
   labels: { nodes: { name: string }[] };
@@ -1085,11 +1088,16 @@ export async function gatherKitIssues(
 /** A Kit-owned issue as kitIssues holds it: only the App's own text, every comment of it. */
 async function kitIssueOf(github: Pick<GitHub, "graphql">, repo: Repo, issue: KitIssueNode, appLogin: string | null): Promise<KitIssueSnapshot> {
   const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
+  const apps = comments.filter((comment) => byAppOf(comment.author, appLogin));
+  // When its held markers were posted, so a resume that landed after them isn't given again (#438).
+  const commentedAt = apps.flatMap((comment) => (comment.createdAt === undefined ? [] : [comment.createdAt]));
   return {
     number: issue.number,
     labels: issue.labels.nodes.map((label) => label.name),
     body: byAppOf(issue.author, appLogin) ? issue.body : "",
-    comments: comments.filter((comment) => byAppOf(comment.author, appLogin)).map((comment) => comment.body),
+    comments: apps.map((comment) => comment.body),
+    ...(issue.createdAt === undefined ? {} : { createdAt: issue.createdAt }),
+    ...(apps.length === 0 || commentedAt.length !== apps.length ? {} : { commentedAt }),
   };
 }
 
@@ -1098,6 +1106,7 @@ const KIT_ISSUE_QUERY = `
     repository(owner: $owner, name: $name) {
       closedWeeklyLimit: issue(number: $number) {
         number
+        createdAt
         body
         author { login __typename }
         labels(first: 100) { nodes { name } }
@@ -1169,6 +1178,7 @@ const REPLAY_ISSUES_QUERY = `
       issues(states: OPEN, labels: [$replay], first: 50, orderBy: { field: CREATED_AT, direction: ASC }) {
         nodes {
           number
+          createdAt
           body
           author { login __typename }
           labels(first: 100) { nodes { name } }
@@ -1251,9 +1261,16 @@ interface HeldTargetNode {
   body: string;
   author: { login: string; __typename: string } | null;
   labels: { nodes: { name: string }[] };
+  /** Always asked for; a fixture may leave it out. */
+  timelineItems?: { nodes: LabeledEventNode[] };
 }
 
-const HELD_TARGET_FIELDS = "__typename number state body author { login __typename } labels(first: 100) { nodes { name } }";
+/** A LabeledEvent as a held target's timeline lists it: empty for any other item. */
+type LabeledEventNode = { createdAt: string; label: { name: string } | null; actor: Actor } | Record<string, never>;
+
+const HELD_TARGET_FIELDS =
+  "__typename number state body author { login __typename } labels(first: 100) { nodes { name } } " +
+  "timelineItems(itemTypes: [LABELED_EVENT], last: 100) { nodes { ... on LabeledEvent { createdAt label { name } actor { login __typename } } } }";
 
 /**
  * Each issue or PR a held marker on these weekly-limit issues names, once,
@@ -1302,9 +1319,22 @@ async function gatherHeld(
         draft: node.__typename === "PullRequest" ? node.isDraft === true : null,
         byApp: byAppOf(node.author, appLogin),
         body: node.body,
+        ...(node.timelineItems === undefined ? {} : { labeledAt: labeledByAppAt(node.timelineItems.nodes, appLogin) }),
       },
     ];
   });
+}
+
+/** When the App last added each label, from these label events, oldest first: what tells a resume that landed (#438). */
+function labeledByAppAt(events: readonly LabeledEventNode[], appLogin: string | null): Record<string, string> {
+  const at: Record<string, string> = {};
+  // With the App's login unknown, any bot's add would pass for the App's, and a run never resumed would be taken as resumed.
+  if (appLogin === null) return at;
+  for (const event of events) {
+    if (!("createdAt" in event) || event.label === null || !byAppOf(event.actor, appLogin)) continue;
+    at[event.label.name] = event.createdAt;
+  }
+  return at;
 }
 
 /**

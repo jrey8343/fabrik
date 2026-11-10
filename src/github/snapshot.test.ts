@@ -1971,6 +1971,62 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
     ]);
   });
 
+  it("holds when the App last added each label to a held run's issue or PR, and when each held marker was posted, so a resume that landed isn't run twice (#438)", async () => {
+    const labelled = (name: string, createdAt: string, login: string, __typename = "Bot") => ({
+      __typename: "LabeledEvent",
+      createdAt,
+      label: { name },
+      actor: { login, __typename },
+    });
+    const { github } = githubWith([], {
+      50: {
+        __typename: "PullRequest",
+        number: 50,
+        state: "OPEN",
+        isDraft: true,
+        body: "",
+        author: { login: "fabrik-app", __typename: "Bot" },
+        labels: { nodes: [] },
+        timelineItems: {
+          nodes: [
+            labelled("agent:review", "2026-11-01T09:00:00Z", "fabrik-app"),
+            labelled("agent:review", "2026-11-08T11:00:05Z", "fabrik-app"),
+            labelled("agent:review", "2026-11-08T12:00:00Z", "jrey", "User"),
+            labelled("bug", "2026-11-08T12:00:00Z", "jrey", "User"),
+          ],
+        },
+      },
+    });
+    const withTimes = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        const data = (await github.graphql(query, variables)) as { repository: { owner?: unknown; issues?: { nodes: Record<string, unknown>[] } } };
+        const issues = data.repository.issues?.nodes;
+        // Only the open Kit-owned issues' answer names the owner.
+        if (issues === undefined || data.repository.owner === undefined) return data;
+        return {
+          ...data,
+          repository: {
+            ...data.repository,
+            issues: {
+              nodes: issues.map((issue) => ({
+                ...issue,
+                createdAt: "2026-11-07T09:00:00Z",
+                comments: { nodes: [{ body: heldMarker(50, "review", "agent:review"), createdAt: "2026-11-08T09:00:00Z", author: APP }] },
+              })),
+            },
+          },
+        };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(withTimes, repo, tick, null, "fabrik-app[bot]");
+
+    expect(snapshot.kitIssues[0]).toMatchObject({ createdAt: "2026-11-07T09:00:00Z", commentedAt: ["2026-11-08T09:00:00Z"] });
+    expect(snapshot.held).toEqual([
+      { number: 50, open: true, labels: [], draft: true, byApp: true, body: "", labeledAt: { "agent:review": "2026-11-08T11:00:05Z" } },
+    ]);
+  });
+
   it("asks nothing when no run is held", async () => {
     const { github, asked } = githubWith([], {});
 

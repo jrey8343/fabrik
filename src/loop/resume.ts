@@ -24,9 +24,11 @@
 // plan's own actions, a weekly-limit issue's close among them, come last
 // (#438): a plan that fails partway leaves the issue open with its held
 // markers, so the next tick deals with what's left rather than drop it. A
-// held run whose trigger label is back on its issue or PR, since the resume
-// landed but the plan failed before its resumed markers, isn't given it again
-// nor dropped: the next tick only leaves its markers.
+// held run whose trigger label is back on its issue or PR, or that the App
+// added after its newest held marker, since the resume landed but the plan
+// failed before its resumed markers, isn't given it again nor dropped, even
+// once the run has started and taken it off: the next tick only leaves its
+// markers.
 // Pure, no I/O.
 import { auditMarksIn } from "./markers.ts";
 import { type HeldRun, resumedMarker, runNamed, type Waiting, waitingHeldRuns } from "./heldRun.ts";
@@ -68,8 +70,11 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   for (const entry of waiting) {
     const { run } = entry;
     const on = snapshot.held.find((target) => target.number === run.issue);
-    // A hold takes the trigger label off, so one back on means the run was given it already (#438).
-    if (on?.open === true && run.label !== null && on.labels.includes(run.label)) {
+    // A hold takes the trigger label off, so one back on means the run was given it already. One the App
+    // added since the run was held means so too, even once the run has started and taken it off, or has
+    // closed its issue or PR since (#438).
+    const backOn = on?.open === true && run.label !== null && on.labels.includes(run.label);
+    if (on !== undefined && (backOn || givenBackSince(entry, on))) {
       dealtWith.push(entry);
       continue;
     }
@@ -102,6 +107,17 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   // The plan's own actions, a close among them, last (#438): closed, the issue's held markers are no longer read, so whatever hadn't landed would be dropped.
   const notes = plan.kind === "act" ? plan.notes : undefined;
   return { kind: "act", actions: [...resumes, ...markers, ...planned], ...(notes === undefined ? {} : { notes }) };
+}
+
+/**
+ * Whether the App added the held run's trigger label to its issue or PR after
+ * its newest held marker was posted: the tick resumed it, and a plan that
+ * failed before its resumed markers left it waiting (#438). Unknown times say
+ * no, so a run is never dropped for want of them.
+ */
+function givenBackSince({ run, heldAt }: Waiting, on: HeldTargetSnapshot): boolean {
+  const labeledAt = run.label === null ? undefined : on.labeledAt?.[run.label];
+  return heldAt !== null && labeledAt !== undefined && Date.parse(labeledAt) > Date.parse(heldAt);
 }
 
 /**

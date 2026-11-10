@@ -382,6 +382,69 @@ describe("The reset tick, failing partway through its plan (#438)", () => {
     });
   });
 
+  it("failing before the resumed markers, once the resumed runs have started and taken their labels off, starts none of them again", () => {
+    // The held markers were posted before the reset; the App gave each label back at the reset tick.
+    const HELD_AT = "2026-11-08T09:00:00.000Z";
+    const RESUMED_AT = "2026-11-08T11:00:05.000Z";
+    const postedBefore = kitIssues.map((issue) => ({ ...issue, commentedAt: issue.comments.map(() => HELD_AT) }));
+    const first = actionsOf(planFor(PAST_EARLIER, tickSnapshot({ kitIssues: postedBefore, held: heldOn }), TWO_SUBSCRIPTIONS));
+    const failed = first.findIndex((action) => action.kind === "comment");
+    const applied = first.slice(0, failed);
+    expect(applied.every((action) => action.kind === "add-labels")).toBe(true);
+    // The Review and the Implement run started, each taking its trigger label off; Triage hasn't started yet.
+    const started = heldOn.map((on): HeldTargetSnapshot => {
+      const resumed = applied.find((action) => action.kind === "add-labels" && action.issue === on.number);
+      const label = resumed?.kind === "add-labels" ? resumed.labels[0] : undefined;
+      if (label === undefined) return on;
+      const labels = on.number === 7 ? [...on.labels, label] : on.labels;
+      return { ...on, labels, labeledAt: { [label]: RESUMED_AT } };
+    });
+
+    const next = actionsOf(planFor(NEXT_TICK, tickSnapshot({ kitIssues: postedBefore, held: started }), TWO_SUBSCRIPTIONS));
+
+    expect(next.filter((action) => action.kind === "add-labels")).toEqual([]);
+    expect(next.filter((action) => action.kind === "drop-held-run")).toEqual([]);
+    expect(next).toContainEqual({
+      kind: "comment",
+      issue: 41,
+      body: expect.stringContaining('<!-- fabrik:resumed {"issue":9,"role":"implement","held":0} -->'),
+    });
+    expect(next).toContainEqual({ kind: "close", issue: 40, reason: "completed" });
+  });
+
+  it("failing before the resumed markers, once a resumed run has finished and closed its issue, doesn't say it was dropped", () => {
+    const HELD_AT = "2026-11-08T09:00:00.000Z";
+    const RESUMED_AT = "2026-11-08T11:00:05.000Z";
+    const postedBefore = kitIssues.map((issue) => ({ ...issue, commentedAt: issue.comments.map(() => HELD_AT) }));
+    const labels: Record<number, string> = { 7: "needs-triage", 12: "agent:review", 9: "agent:implement" };
+    // Each resume landed; Triage has since closed #7 as a duplicate.
+    const since = heldOn.map((on): HeldTargetSnapshot => ({
+      ...on,
+      open: on.number !== 7,
+      labeledAt: { [labels[on.number] ?? ""]: RESUMED_AT },
+    }));
+
+    const next = actionsOf(planFor(NEXT_TICK, tickSnapshot({ kitIssues: postedBefore, held: since }), TWO_SUBSCRIPTIONS));
+
+    expect(next.filter((action) => action.kind === "drop-held-run" || action.kind === "add-labels")).toEqual([]);
+    expect(next).toContainEqual({
+      kind: "comment",
+      issue: 41,
+      body: expect.stringContaining('<!-- fabrik:resumed {"issue":7,"role":"triage","held":0} -->'),
+    });
+  });
+
+  it("a run held again after an earlier resume, its trigger label given back before this hold, is resumed", () => {
+    const HELD_AGAIN_AT = "2026-11-08T09:00:00.000Z";
+    const EARLIER_RESUME = "2026-11-01T10:00:05.000Z";
+    const postedBefore = kitIssues.map((issue) => ({ ...issue, commentedAt: issue.comments.map(() => HELD_AGAIN_AT) }));
+    const heldBefore = heldOn.map((on) => (on.number === 12 ? { ...on, labeledAt: { "agent:review": EARLIER_RESUME } } : on));
+
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: postedBefore, held: heldBefore }), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toContainEqual({ kind: "add-labels", issue: 12, labels: ["agent:review"] });
+  });
+
   it("failing on the close, after the resumed markers, resumes nothing again on the next tick and closes the issue then", () => {
     const first = actionsOf(planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: heldOn }), TWO_SUBSCRIPTIONS));
     const failed = first.findIndex((action) => action.kind === "close");
