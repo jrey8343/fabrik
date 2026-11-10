@@ -4,11 +4,17 @@
 // Operator nothing; this writes the step summary and the comment on the run's
 // issue or PR that say what the Kit was doing, what failed and how to recover.
 // Any other job that fails, such as the scheduled tick, says in its step
-// summary which action failed and what landed before it (#438).
+// summary which action failed and what landed before it (#438). A failed
+// landing of a first Implement run or a Research run opens with its role's
+// failure marker, so Dispatch holds it back as a failed run (#535), and a
+// bundle that doesn't verify isn't offered a re-run that only fails again.
 // Pure, no I/O: src/main.ts writes and posts what it returns.
 import { PlanNotApplied, ReplayTicketTaken } from "../github/apply.ts";
+import { UnverifiedBundle } from "../github/branch.ts";
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
 import { actionPhrase, describeAction } from "../github/describePlan.ts";
+import { RESUME_LABELS } from "../loop/heldRun.ts";
+import { IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Action, AgentRole } from "../loop/types.ts";
 import type { PushJobInput } from "./pushJob.ts";
 
@@ -23,6 +29,17 @@ export interface Landing {
   readonly agentWork: boolean;
   /** The Actions run attempt, which the comment links to. */
   readonly runUrl: string;
+  /**
+   * The first line of the role's failure notice, which the comment opens with
+   * when it's said on the issue whose run Dispatch would otherwise release
+   * again (#535): a Ticket with no PR, or a research Decision. Absent otherwise.
+   */
+  readonly marker?: string;
+  /**
+   * How to run the agent's work again from the start, for when landing it
+   * again can't change the outcome (#535). Absent with no agent's work.
+   */
+  readonly again?: string;
 }
 
 /** How a landing failed: an exception, or a `fail` plan. */
@@ -43,13 +60,45 @@ const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
   research: "Research run",
 };
 
+/**
+ * The failure notice's first line a failed landing's comment carries on the
+ * issue it's said on (#535), so the snapshot reads it as the run's failure
+ * (#418, #154): a Ticket's first Implement run, or a Research run. A run on a
+ * PR needs none, since the open PR holds its Ticket off Dispatch already.
+ */
+function markerOf(role: AgentRole, onPullRequest: boolean): { readonly marker?: string } {
+  if (onPullRequest) return {};
+  if (role === "implement") return { marker: IMPLEMENT_RUN_FAILED_MARKER };
+  if (role === "research") return { marker: RESEARCH_RUN_FAILED_MARKER };
+  return {};
+}
+
+/**
+ * How to run a role's work on `issue` again from the start: re-add its trigger
+ * label, or for a Design-session turn, a prototype turn among them, reply.
+ * Nothing for an Audit or Retro run, which the scheduled tick opens again.
+ */
+function againOf(role: AgentRole, issue: number): { readonly again?: string } {
+  if (role === "design") return { again: `Reply on #${issue} to run the turn again.` };
+  const label = RESUME_LABELS[role];
+  return label === null ? {} : { again: `Re-add \`${label}\` on #${issue} to run it again.` };
+}
+
 /** What the push job lands for `input`, from how the jobs before it ended (src/kit/pushJob.ts); null when it lands nothing. */
 export function pushLanding(input: PushJobInput, runUrl: string): Landing | null {
   const push = { job: "push", runUrl } as const;
   switch (input.kind) {
     case "agent-result": {
       const run = input.prototype === undefined ? `the ${RUN_NAMES[input.role]} on #${input.issue}` : `the prototype turn on #${input.issue}`;
-      return { ...push, doing: run, target: input.pullRequest ?? input.issue, agentWork: true };
+      const onPullRequest = input.pullRequest !== null || input.prototype !== undefined;
+      return {
+        ...push,
+        doing: run,
+        target: input.pullRequest ?? input.issue,
+        agentWork: true,
+        ...againOf(input.role, input.issue),
+        ...markerOf(input.role, onPullRequest),
+      };
     }
     case "review":
       return {
@@ -64,6 +113,8 @@ export function pushLanding(input: PushJobInput, runUrl: string): Landing | null
         doing: `the failure notice of the ${RUN_NAMES[input.role]} on #${input.issue}`,
         target: input.conflict?.pullRequest ?? input.issue,
         agentWork: false,
+        // A failed Implement run's notice carries its marker on the PR too, holding a conflict-only run off its hourly restart (#424).
+        ...markerOf(input.role, input.conflict !== undefined && input.role !== "implement"),
       };
     case "actions-event":
       return { ...push, doing: "the push to the default branch", target: null, agentWork: false };
@@ -109,12 +160,17 @@ export function landingFailureReport(
     return { summary: `${headline}\n\nAnother run claimed #${cause.ticket} on replay #${cause.issue} first, so this run leaves it to that one.`, comment: null };
   }
   const what = failure.kind === "fail" ? `The Loop wouldn't land it (an Infrastructure failure): ${failure.reason}` : whatFailed(cause);
-  const recovery = landing.agentWork
-    ? `The agent's finished work waits in this run's \`fabrik-agent-result\` artifact, which Actions keeps for ${AGENT_RESULT_DAYS} days. ${RE_RUN} before then to land it.`
-    : `${RE_RUN} to try it again.`;
+  const again = landing.again === undefined ? "" : ` ${landing.again}`;
+  const recovery =
+    cause instanceof UnverifiedBundle
+      ? `Re-running the job downloads the same bundle, so it fails the same way.${again}`
+      : landing.agentWork
+        ? `The agent's finished work waits in this run's \`fabrik-agent-result\` artifact, which Actions keeps for ${AGENT_RESULT_DAYS} days. ${RE_RUN} before then to land it.`
+        : `${RE_RUN} to try it again.`;
   const rest = [`**What failed:** ${what}`, ...lists, `**To recover:** ${recovery}`];
   const mention = operator === null ? "" : `@${operator} `;
-  const body = [`${mention}**The Kit couldn't land ${landing.doing}.** The [${landing.job} job](${landing.runUrl}) failed.`, ...rest].join("\n\n");
+  const opening = landing.marker === undefined ? "" : `${landing.marker}\n`;
+  const body = [`${opening}${mention}**The Kit couldn't land ${landing.doing}.** The [${landing.job} job](${landing.runUrl}) failed.`, ...rest].join("\n\n");
   return { summary: [headline, ...rest].join("\n\n"), comment: landing.target === null ? null : { issue: landing.target, body } };
 }
 

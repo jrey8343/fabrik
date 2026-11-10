@@ -17,6 +17,7 @@ import {
   requestChangesContext,
   retryContext,
 } from "./implement.ts";
+import { UnlandableBranchError } from "./failure.ts";
 import { readPullRequest } from "./inputs.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
@@ -510,5 +511,118 @@ describe("A Kept-branch start (#536)", () => {
 
     expect(parts.join("\n")).toContain("## Carrying on the Kept branch");
     expect(parts.join("\n")).not.toContain("`git merge origin/main`");
+  });
+});
+
+// #535: the push job rebuilds a cut branch from its base alone, fetched at --depth=1, so a branch that reset onto, or
+// merged in, a commit the base doesn't hold can never land. The agent job refuses it before it uploads a result.
+describe("A first run's branch the push job can't rebuild", () => {
+  const run = promisify(execFile);
+  const git = async (cwd: string, ...args: string[]) => (await run("git", args, { cwd })).stdout.trim();
+  const commit = async (cwd: string, path: string, message: string) => {
+    await writeFile(join(cwd, path), `${message}\n`);
+    await git(cwd, "add", "-A");
+    await git(cwd, "-c", "user.name=Fabrik", "-c", "user.email=fabrik@example.com", "commit", "--quiet", "-m", message);
+  };
+
+  /** A Product repo with two commits on main, the run's branch cut from the second. */
+  async function cutBranch(): Promise<{ productDir: string; outDir: string; started: BuiltBranch; older: string }> {
+    const root = await mkdtemp(join(tmpdir(), "fabrik-unlandable-"));
+    const productDir = join(root, "product");
+    const outDir = join(root, "fabrik-out");
+    await mkdir(productDir);
+    await mkdir(outDir);
+    await git(productDir, "init", "--quiet", "--initial-branch=main");
+    await commit(productDir, "README.md", "Start");
+    const older = await git(productDir, "rev-parse", "HEAD");
+    await commit(productDir, "CHANGELOG.md", "Carry on");
+    const sha = await git(productDir, "rev-parse", "HEAD");
+    await git(productDir, "checkout", "--quiet", "-b", "agent/7");
+    return { productDir, outDir, started: { name: "agent/7", base: { ref: "main", sha }, head: null }, older };
+  }
+
+  it("refuses a branch reset onto an older commit, naming it, and still keeps the run's commits", async () => {
+    const { productDir, outDir, started, older } = await cutBranch();
+    await git(productDir, "reset", "--quiet", "--hard", older);
+    await commit(productDir, "feature.ts", "Build the change");
+    const head = await git(productDir, "rev-parse", "HEAD");
+
+    const refused = bundleAgentBranch(productDir, started, outDir);
+
+    await expect(refused).rejects.toBeInstanceOf(UnlandableBranchError);
+    await expect(refused).rejects.toThrow(older);
+    expect(existsSync(join(outDir, AGENT_BUNDLE_FILE))).toBe(false);
+    expect(await failedRunCommits(productDir, started, outDir, null)).toEqual({ base: started.base.sha, continued: false, head, kept: true });
+  });
+
+  it("refuses a branch reset onto an older commit with nothing on top, naming that commit", async () => {
+    const { productDir, outDir, started, older } = await cutBranch();
+    await git(productDir, "reset", "--quiet", "--hard", older);
+
+    await expect(bundleAgentBranch(productDir, started, outDir)).rejects.toThrow(older);
+  });
+
+  it("refuses a branch that merged in another branch cut from an older commit, naming that commit", async () => {
+    const { productDir, outDir, started, older } = await cutBranch();
+    await git(productDir, "checkout", "--quiet", "-b", "elsewhere", older);
+    await commit(productDir, "other.ts", "Other work");
+    await git(productDir, "checkout", "--quiet", "agent/7");
+    await commit(productDir, "feature.ts", "Build the change");
+    await git(productDir, "-c", "user.name=Fabrik", "-c", "user.email=fabrik@example.com", "merge", "--quiet", "--no-edit", "elsewhere");
+
+    const refused = bundleAgentBranch(productDir, started, outDir);
+
+    await expect(refused).rejects.toBeInstanceOf(UnlandableBranchError);
+    await expect(refused).rejects.toThrow(older);
+  });
+
+  it("bundles a branch that only builds on its base, as ever", async () => {
+    const { productDir, outDir, started } = await cutBranch();
+    await commit(productDir, "feature.ts", "Build the change");
+    await commit(productDir, "more.ts", "Build more");
+
+    expect((await bundleAgentBranch(productDir, started, outDir)).head).toBe(await git(productDir, "rev-parse", "HEAD"));
+  });
+
+  it("leaves a branch a run carried on from its PR's head alone, since the push job fetches its history whole", async () => {
+    const { productDir, outDir, started, older } = await cutBranch();
+    const onPullRequest: BuiltBranch = { ...started, base: { ref: started.name, sha: started.base.sha } };
+    await git(productDir, "checkout", "--quiet", "-b", "elsewhere", older);
+    await commit(productDir, "other.ts", "Other work");
+    await git(productDir, "checkout", "--quiet", "agent/7");
+    await git(productDir, "-c", "user.name=Fabrik", "-c", "user.email=fabrik@example.com", "merge", "--quiet", "--no-edit", "elsewhere");
+
+    expect((await bundleAgentBranch(productDir, onPullRequest, outDir)).head).toBe(await git(productDir, "rev-parse", "HEAD"));
+  });
+});
+
+// #535: the push job fetches a prototype turn's base at --depth=1 even on a later round, which carries on its branch.
+describe("A prototype turn's later round the push job can't rebuild", () => {
+  const run = promisify(execFile);
+  const git = async (cwd: string, ...args: string[]) => (await run("git", args, { cwd })).stdout.trim();
+  const commit = async (cwd: string, path: string, message: string) => {
+    await writeFile(join(cwd, path), `${message}\n`);
+    await git(cwd, "add", "-A");
+    await git(cwd, "-c", "user.name=Fabrik", "-c", "user.email=fabrik@example.com", "commit", "--quiet", "-m", message);
+  };
+
+  it("refuses a later round reset onto an older commit, though it carried on its branch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "fabrik-unlandable-prototype-"));
+    const productDir = join(root, "product");
+    const outDir = join(root, "fabrik-out");
+    await mkdir(productDir);
+    await mkdir(outDir);
+    await git(productDir, "init", "--quiet", "--initial-branch=main");
+    await commit(productDir, "README.md", "Start");
+    const older = await git(productDir, "rev-parse", "HEAD");
+    await git(productDir, "checkout", "--quiet", "-b", "prototype/7");
+    await commit(productDir, "proto.ts", "First round");
+    const sha = await git(productDir, "rev-parse", "HEAD");
+    await git(productDir, "reset", "--quiet", "--hard", older);
+    await commit(productDir, "proto.ts", "Second round");
+
+    const laterRound: BuiltBranch = { name: "prototype/7", base: { ref: "prototype/7", sha }, head: null };
+
+    await expect(bundleAgentBranch(productDir, laterRound, outDir)).rejects.toThrow(older);
   });
 });

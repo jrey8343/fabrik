@@ -31,6 +31,11 @@ export type ReportedFailure =
   /** The Review gave up waiting on gating checks that never reported on the PR's head, which no re-run fixes. */
   | "unreported-checks"
   /**
+   * A cut branch built on commits it didn't start from, so the push job,
+   * which rebuilds it from its base alone, never could (#535).
+   */
+  | "unlandable-branch"
+  /**
    * The job ran out of time: reported by the Review checks job when it gave up
    * on required checks still running, short of its job's timeout, or inferred
    * by the push job for any role whose job was cancelled (src/loop/failures.ts).

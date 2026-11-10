@@ -6,6 +6,7 @@
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
 import type { FailedRunCommits, FailureReport, ReportedFailure } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
+import type { BuiltBranch } from "./result.ts";
 import { readStream, streamMessageOf, type AgentStream } from "./stream.ts";
 
 /** The artifact's file name, the same in the agent job and the push job. */
@@ -28,6 +29,22 @@ export interface FailureEvidence {
 /** The Reviewer replied without a valid Verdict line, which is never a pass. */
 export class MissingVerdictError extends Error {
   override name = "MissingVerdictError";
+}
+
+/**
+ * A run's cut branch builds on commits it didn't start from, as one that reset
+ * onto, or merged in, a commit its base doesn't hold (#535). The push job
+ * rebuilds a cut branch from its base alone, so it could never land it.
+ */
+export class UnlandableBranchError extends Error {
+  override name = "UnlandableBranchError";
+  /** `commits` are those it builds on beside its base, which the push job never has. */
+  constructor({ name, base }: Pick<BuiltBranch, "name" | "base">, commits: readonly string[]) {
+    super(
+      `${name} builds on ${commits.length === 1 ? "a commit" : "commits"} it didn't start from (${commits.map((sha) => `\`${sha}\``).join(", ")}): ` +
+        `it started from ${base.ref} at \`${base.sha}\`, and the push job rebuilds it from that commit alone`,
+    );
+  }
 }
 
 function messageOf(error: unknown): string {
@@ -109,6 +126,7 @@ export function failureReportFor({ error, lines, initRefused, overage = null }: 
     };
   }
 
+  if (error instanceof UnlandableBranchError) return { failure: "unlandable-branch", detail: message };
   if (nameOf(error) === "StructuredOutputError" || error instanceof MissingVerdictError) {
     return { failure: "missing-output", detail: message };
   }
@@ -140,6 +158,7 @@ const REPORTED: readonly ReportedFailure[] = [
   "unread-inputs",
   "unread-checks",
   "unreported-checks",
+  "unlandable-branch",
   "timeout",
 ];
 

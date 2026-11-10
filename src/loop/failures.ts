@@ -109,6 +109,8 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
         : "a GitHub request failed in the Kit's input step, so the agent never started";
     case "unread-checks":
       return "it was still waiting for its required checks when a GitHub request failed";
+    case "unlandable-branch":
+      return `${run.role === "implement" ? "the Implementer" : "the agent"} built on commits its branch didn't start from, so the push job couldn't rebuild it`;
     case "unreported-checks": {
       const unreported = run.report?.checks ?? [];
       // A report that lost its check names still says what to look for, without naming one.

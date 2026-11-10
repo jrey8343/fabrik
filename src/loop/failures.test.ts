@@ -175,6 +175,23 @@ describe("Failure notices", () => {
     expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->/);
   });
 
+  // #535: a first run whose branch builds on commits it didn't start from, which the push job could never rebuild.
+  it("says a first Implement run built on commits its branch didn't start from, naming them, and holds its Ticket back from Dispatch", () => {
+    const older = "c".repeat(40);
+    const detail = `agent/7 builds on a commit it didn't start from (\`${older}\`)`;
+    const plan = planFor(
+      failed({ role: "implement", report: { failure: "unlandable-branch", detail, commits: { base: "a".repeat(40), continued: false, head: "b".repeat(40), kept: true } } }),
+      snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })),
+      kitConfig(),
+    );
+
+    const body = commentOf(plan);
+    expect(body).toMatch(/^<!-- fabrik:implement-run-failed -->\n/);
+    expect(body).toContain("The Implement run on #7 failed: the Implementer built on commits its branch didn't start from, so the push job couldn't rebuild it.");
+    expect(body).toContain(`> ${detail}`);
+    expect(body).toContain("they're kept for 7 days as `agent-branch.bundle`");
+  });
+
   // #431: its commits are never pushed, so the notice says what the run had made, and where a re-run starts.
   describe("an Implement run that failed after it had committed", () => {
     const base = "a".repeat(40);
