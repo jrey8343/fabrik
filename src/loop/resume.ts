@@ -70,9 +70,11 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   for (const entry of waiting) {
     const { run } = entry;
     const on = snapshot.held.find((target) => target.number === run.issue);
-    // A hold takes the trigger label off, so one back on, or one the App added since the run was held, means
-    // the run was given it already, even if it has since started and taken it off (#438).
-    if (on?.open === true && run.label !== null && (on.labels.includes(run.label) || givenBackSince(entry, on))) {
+    // A hold takes the trigger label off, so one back on means the run was given it already. One the App
+    // added since the run was held means so too, even once the run has started and taken it off, or has
+    // closed its issue or PR since (#438).
+    const backOn = on?.open === true && run.label !== null && on.labels.includes(run.label);
+    if (on !== undefined && (backOn || givenBackSince(entry, on))) {
       dealtWith.push(entry);
       continue;
     }

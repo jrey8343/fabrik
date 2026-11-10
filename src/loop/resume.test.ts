@@ -412,6 +412,28 @@ describe("The reset tick, failing partway through its plan (#438)", () => {
     expect(next).toContainEqual({ kind: "close", issue: 40, reason: "completed" });
   });
 
+  it("failing before the resumed markers, once a resumed run has finished and closed its issue, doesn't say it was dropped", () => {
+    const HELD_AT = "2026-11-08T09:00:00.000Z";
+    const RESUMED_AT = "2026-11-08T11:00:05.000Z";
+    const postedBefore = kitIssues.map((issue) => ({ ...issue, commentedAt: issue.comments.map(() => HELD_AT) }));
+    const labels: Record<number, string> = { 7: "needs-triage", 12: "agent:review", 9: "agent:implement" };
+    // Each resume landed; Triage has since closed #7 as a duplicate.
+    const since = heldOn.map((on): HeldTargetSnapshot => ({
+      ...on,
+      open: on.number !== 7,
+      labeledAt: { [labels[on.number] ?? ""]: RESUMED_AT },
+    }));
+
+    const next = actionsOf(planFor(NEXT_TICK, tickSnapshot({ kitIssues: postedBefore, held: since }), TWO_SUBSCRIPTIONS));
+
+    expect(next.filter((action) => action.kind === "drop-held-run" || action.kind === "add-labels")).toEqual([]);
+    expect(next).toContainEqual({
+      kind: "comment",
+      issue: 41,
+      body: expect.stringContaining('<!-- fabrik:resumed {"issue":7,"role":"triage","held":0} -->'),
+    });
+  });
+
   it("a run held again after an earlier resume, its trigger label given back before this hold, is resumed", () => {
     const HELD_AGAIN_AT = "2026-11-08T09:00:00.000Z";
     const EARLIER_RESUME = "2026-11-01T10:00:05.000Z";

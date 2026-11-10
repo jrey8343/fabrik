@@ -1262,8 +1262,11 @@ interface HeldTargetNode {
   author: { login: string; __typename: string } | null;
   labels: { nodes: { name: string }[] };
   /** Always asked for; a fixture may leave it out. */
-  timelineItems?: { nodes: ({ createdAt: string; label: { name: string } | null; actor: Actor } | Record<string, never>)[] };
+  timelineItems?: { nodes: LabeledEventNode[] };
 }
+
+/** A LabeledEvent as a held target's timeline lists it: empty for any other item. */
+type LabeledEventNode = { createdAt: string; label: { name: string } | null; actor: Actor } | Record<string, never>;
 
 const HELD_TARGET_FIELDS =
   "__typename number state body author { login __typename } labels(first: 100) { nodes { name } } " +
@@ -1323,11 +1326,10 @@ async function gatherHeld(
 }
 
 /** When the App last added each label, from these label events, oldest first: what tells a resume that landed (#438). */
-function labeledByAppAt(
-  events: readonly ({ createdAt: string; label: { name: string } | null; actor: Actor } | Record<string, never>)[],
-  appLogin: string | null,
-): Record<string, string> {
+function labeledByAppAt(events: readonly LabeledEventNode[], appLogin: string | null): Record<string, string> {
   const at: Record<string, string> = {};
+  // With the App's login unknown, any bot's add would pass for the App's, and a run never resumed would be taken as resumed.
+  if (appLogin === null) return at;
   for (const event of events) {
     if (!("createdAt" in event) || event.label === null || !byAppOf(event.actor, appLogin)) continue;
     at[event.label.name] = event.createdAt;
