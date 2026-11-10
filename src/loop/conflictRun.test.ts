@@ -180,7 +180,8 @@ describe("A conflict-only run", () => {
     const verdict = thread.comments.at(-1) ?? "";
     expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: false, conflictRun: true, headSha: B }]);
     expect(verdict).toContain("after a conflict-only run");
-    expect(verdict).toMatch(/Retry 1 of 2 starts now:/);
+    // The conflict-only run ran on the Step-up model, so the Retry its flaw calls for does too (#464).
+    expect(verdict).toMatch(/Retry 1 of 2 starts now, stepped up:/);
 
     // That Retry's push is red too: the conflict-only run's flaw started Retry 1, so this one is
     // Retry 2, and then they're used up. No Retry number starts twice on one PR (ADR-0006).
@@ -339,7 +340,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
     const verdict = conflictRunThenRed(unreviewedAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]));
 
     expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: true, headSha: "c".repeat(40) }]);
-    expect(verdict).toMatch(/Retry 1 of 2 starts now:/);
+    expect(verdict).toMatch(/Retry 1 of 2 starts now, stepped up:/);
   });
 
   it("after a clean rebase of a Request-changes run's push, the Verdict is marked as a Request-changes one too", () => {
