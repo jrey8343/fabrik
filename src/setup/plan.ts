@@ -2,35 +2,7 @@
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
 import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
-import {
-  ALL_LABELS,
-  AUDIT_LABEL,
-  BUG,
-  DEAD_TICK_LABEL,
-  decisionLabel,
-  DESIGN_LABEL,
-  DISPATCH_LABEL,
-  ENHANCEMENT,
-  type Label as LoopLabel,
-  MAP_LABEL,
-  KEPT_BRANCH_LABEL,
-  MONITOR_LABEL,
-  NEEDS_DESIGN,
-  NEEDS_INFO,
-  NEEDS_TRIAGE,
-  READY_FOR_AGENT,
-  READY_FOR_HUMAN,
-  REPLAY_LABEL,
-  REPLAY_TRIGGER_LABEL,
-  RESEARCH_LABEL,
-  RETRO_LABEL,
-  REVIEW_LABEL,
-  STEP_UP_LABEL,
-  TOKEN_ROTATION_LABEL,
-  USAGE_CREDITS_LABEL,
-  WEEKLY_LIMIT_LABEL,
-  WONTFIX,
-} from "../loop/labels.ts";
+import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
 import { setupCommand } from "./finish.ts";
 import { withMember } from "./json.ts";
@@ -677,43 +649,6 @@ function secrets(state: ProductState): SetupAction[] {
   }
   return actions;
 }
-
-/**
- * How Setup creates each label the Loop reads or writes, so no run fails on a
- * missing one. A trigger label's description says when it comes off, so one
- * still on reads as a run that never started (#436). GitHub takes at most 100
- * characters.
- */
-const LOOP_LABELS: Readonly<Record<LoopLabel, { readonly color: string; readonly description: string }>> = {
-  [NEEDS_TRIAGE]: { color: "fbca04", description: "Fabrik: waiting for Triage" },
-  [NEEDS_INFO]: { color: "d876e3", description: "Fabrik: waiting on the reporter for more information" },
-  [NEEDS_DESIGN]: { color: "5319e7", description: "Fabrik: needs a Design session with the Operator" },
-  [READY_FOR_AGENT]: { color: "0e8a16", description: "Fabrik: fully specified, ready for an Implementer" },
-  [READY_FOR_HUMAN]: { color: "1d76db", description: "Fabrik: needs the Operator to build it" },
-  [WONTFIX]: { color: "ffffff", description: "Fabrik: will not be actioned" },
-  [DISPATCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes an Implementer (the Kit adds it; it comes off as the run starts)" },
-  [DESIGN_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Design session's first turn (the Kit adds it; it comes off as the turn starts)" },
-  [REVIEW_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes a Review (it comes off with the Verdict)" },
-  [RESEARCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Researcher on a research Decision (the Kit adds it; off as the run starts)" },
-  [REPLAY_TRIGGER_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Replay's next Ticket (the Kit adds it; it comes off as the run starts)" },
-  [BUG]: { color: "d73a4a", description: "Something isn't working" },
-  [ENHANCEMENT]: { color: "a2eeef", description: "New feature or request" },
-  [TOKEN_ROTATION_LABEL]: { color: "b60205", description: "Fabrik: the Claude token needs rotating" },
-  [WEEKLY_LIMIT_LABEL]: { color: "b60205", description: "Fabrik: the subscription's weekly limit is reached" },
-  [USAGE_CREDITS_LABEL]: { color: "b60205", description: "Fabrik: a Subscription spent usage credits, which must be turned off" },
-  [DEAD_TICK_LABEL]: { color: "b60205", description: "Fabrik: the hourly Tick hasn't started for 25 hours, or the Fabrik App can't reach a repo" },
-  [AUDIT_LABEL]: { color: "c5def5", description: "Fabrik: the week's Audit of deepening opportunities, which the Auditor files" },
-  [RETRO_LABEL]: { color: "c5def5", description: "Fabrik: the week's Retro, proposing changes to how the factory works" },
-  [REPLAY_LABEL]: { color: "c5def5", description: "Fabrik: the Operator's Replay, re-running merged Tickets with one thing changed" },
-  [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error, a red main or a dead Sentry token" },
-  [STEP_UP_LABEL]: { color: "f9d0c4", description: "Fabrik: while it's on, the Ticket's Implement runs are Step-ups" },
-  [KEPT_BRANCH_LABEL]: { color: "f9d0c4", description: "Fabrik: the Ticket's next Implement run carries on its Kept branch, not main" },
-  [MAP_LABEL]: { color: "bfd4f2", description: "Fabrik: a Map charting a foggy destination through its Decisions" },
-  [decisionLabel("research")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by research" },
-  [decisionLabel("prototype")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a prototype" },
-  [decisionLabel("grilling")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a grilling" },
-  [decisionLabel("task")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a task" },
-};
 
 /**
  * Files the Product repo owns from then on. Each is written once, when the repo

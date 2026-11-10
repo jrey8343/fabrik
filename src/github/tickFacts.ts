@@ -52,7 +52,7 @@ export async function readProductTicks(
     const callerCommits = (await github.rest("GET", `${path}/commits?sha=${ref}&path=${encodeURIComponent(CALLER_PATH)}&per_page=100`)) as ListedCommit[];
     const callerSince = callerCommits.map(dateOf).filter((date) => date !== "").sort().at(0) ?? null;
     const release = releaseIn(await github.fileText(repo, CALLER_PATH, branch));
-    const issues = (await github.rest("GET", `${path}/issues?labels=${encodeURIComponent(DEAD_TICK_LABEL)}&state=open&per_page=100`)) as ListedIssue[];
+    const issues = await openDeadTickIssues(github, name, appLogin);
     return {
       repo: name,
       kind: "read",
@@ -60,11 +60,7 @@ export async function readProductTicks(
         callerSince,
         lastTick: lastTick === null ? null : { ...lastTick.tick, release: releaseIn(await github.fileText(repo, CALLER_PATH, lastTick.commit)) },
         release,
-        issues: issues.filter((issue) => issue.pull_request === undefined).map((issue): DeadTickIssue => ({
-          number: issue.number,
-          body: issue.body ?? "",
-          byApp: issue.user?.login === appLogin,
-        })),
+        issues,
       },
     };
   } catch (error) {
@@ -72,6 +68,14 @@ export async function readProductTicks(
     const refused = refusalOf(error) !== "rate-limited" && [401, 403, 404].includes(error.status);
     return { repo: name, kind: refused ? "refused" : "failed", error: gitHubMessageOf(error) };
   }
+}
+
+/** A repo's open Dead-tick issues, pull requests left out, each saying whether the Fabrik App opened it. */
+export async function openDeadTickIssues(github: Pick<GitHub, "rest">, repo: string, appLogin: string): Promise<DeadTickIssue[]> {
+  const issues = (await github.rest("GET", `/repos/${repo}/issues?labels=${encodeURIComponent(DEAD_TICK_LABEL)}&state=open&per_page=100`)) as ListedIssue[];
+  return issues
+    .filter((issue) => issue.pull_request === undefined)
+    .map((issue) => ({ number: issue.number, body: issue.body ?? "", byApp: issue.user?.login === appLogin }));
 }
 
 /** The newest Tick on the default branch, walking back from its head, and the commit it ran on. */

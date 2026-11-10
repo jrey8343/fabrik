@@ -2,6 +2,7 @@
 // passed out to its push job, into the Loop event it stands for.
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult, BuiltBranch } from "../agent/result.ts";
+import { splitWorkflowRef } from "../kit/caller.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import type { CaptureOutputs, PlannedKeptBranchStart } from "../kit/pushJob.ts";
@@ -30,8 +31,7 @@ export function loopEventFrom(
 ): LoopEvent | null {
   // The scheduled Kit workflow (schedule.yml), for the Loop's time-based rules.
   if (eventName === "schedule") {
-    const at = kitRef.lastIndexOf("@");
-    const release = at === -1 ? "" : kitRef.slice(at + 1);
+    const release = splitWorkflowRef(kitRef)?.ref ?? "";
     return { kind: "scheduled-tick", now: now.toISOString(), ...(release === "" ? {} : { release }) };
   }
   // The caller workflow's push trigger: only a push to the default branch counts.

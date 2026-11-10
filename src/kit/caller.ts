@@ -67,14 +67,24 @@ export function checkCallerWorkflow(text: string): CallerCheck {
   return { ok: true, release };
 }
 
+/**
+ * A workflow ref, `owner/repo/<path>@<ref>` as GITHUB_WORKFLOW_REF or
+ * `github.workflow_ref` gives it, split at its last `@`: what comes before it
+ * and the ref. Null when it has no `@`.
+ */
+export function splitWorkflowRef(workflowRef: string): { readonly workflow: string; readonly ref: string } | null {
+  const at = workflowRef.lastIndexOf("@");
+  return at === -1 ? null : { workflow: workflowRef.slice(0, at), ref: workflowRef.slice(at + 1) };
+}
+
 /** The caller workflow's path in the Product repo, from GITHUB_WORKFLOW_REF: `owner/repo/<path>@<ref>`. */
 export function callerWorkflowPath(workflowRef: string, repo: { readonly owner: string; readonly name: string }): string {
   const prefix = `${repo.owner}/${repo.name}/`;
-  const at = workflowRef.lastIndexOf("@");
-  if (!workflowRef.startsWith(prefix) || at < prefix.length) {
+  const split = splitWorkflowRef(workflowRef);
+  if (split === null || !split.workflow.startsWith(prefix) || split.workflow.length < prefix.length) {
     throw new Error(`GITHUB_WORKFLOW_REF is not ${prefix}<path>@<ref>: ${workflowRef}`);
   }
-  return workflowRef.slice(prefix.length, at);
+  return split.workflow.slice(prefix.length);
 }
 
 export type KitCheck =
