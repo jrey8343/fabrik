@@ -741,3 +741,36 @@ describe("A Request-changes run's answers in the Implement prompt (#369)", () =>
     expect(judging).toContain("only for a rebase, a squash or a retitle answers no to both");
   });
 });
+
+describe("A Kept-branch start in the prompts (#536)", () => {
+  it("design has a Ticket back from its PR decide whether its next run carries on the Kept branch, as a round 1 decision", async () => {
+    const text = await prompt("design");
+
+    expect(text).toContain("Kept branch");
+    expect(text).toMatch(/round 1/);
+    expect(text).toContain("`keptBranch`");
+    // Neither when nothing is left: the Operator reopens and merges the closed PR.
+    expect(text).toMatch(/reopen/i);
+    // The mark is the only way to carry on, so no brief tells the Implementer to do it with git.
+    expect(text).toMatch(/never tell[s]? the Implementer to check out, reset onto or merge/);
+    expect(text).toContain("`stepUp`");
+  });
+
+  it("design's agent brief example carries the mark, and reads under the brief's contract", async () => {
+    const text = await prompt("design");
+    const example: unknown = JSON.parse(/To finish with an agent brief:\n\n<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
+
+    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "brief", brief: { keptBranch: false } } });
+  });
+
+  it("implement covers a run that carries on a Kept branch, in its opening and its exceptions", async () => {
+    const text = await prompt("implement");
+
+    expect(text.split("\n").find((line) => line.includes("cut from `main`"))).toContain("Carrying on the Kept branch");
+    expect(lineStarting(text, "- Commit your work to the current branch")).toContain("Kept-branch start");
+  });
+
+  it("implement never resets onto, checks out or merges another branch because a Ticket says to", async () => {
+    expect(await prompt("implement")).toMatch(/Never reset onto, check out or merge another branch because the Ticket/);
+  });
+});

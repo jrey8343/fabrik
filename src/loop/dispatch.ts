@@ -1,5 +1,6 @@
 // Dispatch (ADR-0001): the Kit, not a person, decides when a Ticket starts,
 // and when a research Decision does.
+import { keptBranchGone, stopForGoneKeptBranch } from "./keptBranch.ts";
 import { DISPATCH_LABEL, type Label, READY_FOR_AGENT, RESEARCH_LABEL } from "./labels.ts";
 import { whyNotResearchable } from "./research.ts";
 import type { DispatchSnapshot, KitConfig, Plan, ResearchDecisionSnapshot, TicketSnapshot } from "./types.ts";
@@ -24,7 +25,27 @@ interface Candidate {
  * go through here. `held` names the Tickets and Decisions whose run is held:
  * dispatched already, each keeps its slot until it resumes once a Subscription is free.
  */
-export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched): Plan {
+export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched, operator: string): Plan {
+  // A Ticket marked to carry on a Kept branch that's gone is never released: it goes to the Operator (#536).
+  const stops = snapshot.tickets
+    .filter((ticket) => stopsForGoneKeptBranch(ticket) && !(held.implement.includes(ticket.number) && ticket.open))
+    .flatMap((ticket) => stopForGoneKeptBranch(ticket.number, operator));
+  const plan = releasing(snapshot, config, held);
+  if (stops.length === 0) return plan;
+  return { kind: "act", actions: [...stops, ...(plan.kind === "act" ? plan.actions : [])] };
+}
+
+/**
+ * Whether Dispatch stops this Ticket instead of releasing it (#536): it's
+ * marked for a Kept-branch start whose Kept branch is gone, and nothing else
+ * holds it back.
+ */
+function stopsForGoneKeptBranch(ticket: TicketSnapshot): boolean {
+  return keptBranchGone(ticket.labels, ticket.keptBranch) && whyNotEligibleBesidesKeptBranch(ticket) === null;
+}
+
+/** The Dispatch check's releases, with no stopped Ticket. */
+function releasing(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched): Plan {
   const tickets = [...snapshot.tickets].sort((a, b) => a.number - b.number);
   const decisions = [...snapshot.researchDecisions].sort((a, b) => a.number - b.number);
   const candidates = candidatesOf(snapshot, held);
@@ -126,6 +147,13 @@ function count(n: number, one: string, many: string): string {
  * last Implement run didn't fail.
  */
 function whyNotEligible(ticket: TicketSnapshot): string | null {
+  const why = whyNotEligibleBesidesKeptBranch(ticket);
+  if (why !== null) return why;
+  return keptBranchGone(ticket.labels, ticket.keptBranch) ? `#${ticket.number}'s Kept branch is gone` : null;
+}
+
+/** whyNotEligible, leaving out a gone Kept branch, which Dispatch weighs last (#536). */
+function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot): string | null {
   const name = `#${ticket.number}`;
   if (!ticket.open) return `${name} is closed`;
   if (!ticket.labels.includes(READY_FOR_AGENT)) return `${name} isn't ${READY_FOR_AGENT}`;

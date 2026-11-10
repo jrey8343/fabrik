@@ -243,6 +243,7 @@ describe("An empty diff", () => {
 
     expect(actions.filter((action) => action.kind !== "comment")).toEqual([
       { kind: "remove-label", issue: 7, label: "ready-for-agent" },
+      { kind: "remove-label", issue: 7, label: "fabrik:kept-branch" },
       { kind: "add-labels", issue: 7, labels: ["needs-design"] },
       { kind: "check-dispatch" },
     ]);

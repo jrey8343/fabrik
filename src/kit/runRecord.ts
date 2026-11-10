@@ -77,8 +77,12 @@ export interface RateLimitReading {
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
-/** The schema a Run record is written at: 2 added `subscription`, 3 added `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`. */
-export const RUN_RECORD_SCHEMA = 6;
+/**
+ * The schema a Run record is written at: 2 added `subscription`, 3 added
+ * `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`,
+ * 7 added `keptBranch`.
+ */
+export const RUN_RECORD_SCHEMA = 7;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -183,6 +187,14 @@ export interface RunRecord {
    * false.
    */
   readonly emptyDiff: boolean;
+  /**
+   * Whether the Implement run was a Kept-branch start (#536), carrying on the
+   * Kept branch of a PR the Kit closed rather than starting from main; false
+   * for every other run. Such a first run's `baseSha` is that branch's head,
+   * so a Replay can't rebuild its Ticket from it. A schema 1 to 6 record,
+   * written before Kept-branch starts, reads as false.
+   */
+  readonly keptBranch: boolean;
   /** Whether the run was a Design session's prototype turn (#155), whose role stays `design`. */
   readonly prototype: boolean;
   /** null for a live run, else the Replay arm the run was. */
@@ -283,6 +295,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     ...stepUpOf(implement ? kit : {}),
     requestChanges: implement && kit["request-changes"] === "true",
     emptyDiff: implement && end.emptyDiff,
+    keptBranch: implement && kit["kept-branch"] === "true",
     prototype: isPrototypeTurn(end.needs, role),
     replay: null,
     baseSha: nonEmpty(agent["base-sha"]),
@@ -345,6 +358,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     stepUpReason: null,
     requestChanges: false,
     emptyDiff: false,
+    keptBranch: false,
     prototype: false,
     // A Replay arm's judge run is the arm's too, so its cost counts as the Replay's.
     replay: scored.replay,
@@ -412,6 +426,7 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     stepUpReason: null,
     requestChanges: false,
     emptyDiff: false,
+    keptBranch: false,
     prototype: false,
     replay,
     baseSha: end.baseSha,
@@ -488,10 +503,18 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
-  type Schema5 = Omit<RunRecord, "schema" | "emptyDiff">;
-  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false };
+  type Schema6 = Omit<RunRecord, "schema" | "keptBranch">;
+  if (schema === 6) return { ...(stored as Schema6), schema: RUN_RECORD_SCHEMA, keptBranch: false };
+  type Schema5 = Omit<Schema6, "emptyDiff">;
+  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false };
   type Schema4 = Omit<Schema5, "stepUpReason">;
-  const record = (fields: Schema4): RunRecord => ({ ...fields, schema: RUN_RECORD_SCHEMA, stepUpReason: fields.stepUp ? "retry" : null, emptyDiff: false });
+  const record = (fields: Schema4): RunRecord => ({
+    ...fields,
+    schema: RUN_RECORD_SCHEMA,
+    stepUpReason: fields.stepUp ? "retry" : null,
+    emptyDiff: false,
+    keptBranch: false,
+  });
   if (schema === 4) return record(stored as Schema4);
   if (schema === 3) return record({ ...(stored as Omit<Schema4, "replay">), replay: null });
   if (schema === 2) return record({ ...(stored as Omit<Schema4, "prototype" | "replay">), prototype: false, replay: null });

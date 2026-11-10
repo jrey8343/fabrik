@@ -45,6 +45,7 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     unansweredPrototypes: pending === null ? [] : [{ request: pending.request, reply: pending.reply }],
     sentBack: null,
     emptyDiffs: 0,
+    keptBranch: null,
     openBlockers: [],
     openBlocking: [],
     ...overrides,

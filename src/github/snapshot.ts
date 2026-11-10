@@ -13,13 +13,14 @@ import {
 import { isOperatorsReplay } from "../kit/replay.ts";
 import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
-import { isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
+import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { heldRunsIn } from "../loop/heldRun.ts";
 import { makesUnusable } from "../loop/subscriptions.ts";
 import {
   AUDIT_LABEL,
   DESIGN_LABEL,
+  KEPT_BRANCH_LABEL,
   KIT_ISSUE_LABELS,
   MAP_LABEL,
   NEEDS_DESIGN,
@@ -42,6 +43,7 @@ import type {
   DesignQueueSnapshot,
   DispatchSnapshot,
   HeldTargetSnapshot,
+  KeptBranch,
   KitIssueSnapshot,
   LabelledTrigger,
   LoopEvent,
@@ -209,21 +211,22 @@ interface PullRequestComments {
   nodes: { body: string; createdAt: string; author: { __typename: string } | null }[];
 }
 
-const DEFAULT_BRANCH_HEAD_QUERY = `
+const DEFAULT_BRANCH_QUERY = `
   query ($owner: String!, $name: String!) {
     repository(owner: $owner, name: $name) {
-      defaultBranchRef { target { oid } }
+      defaultBranchRef { name target { oid } }
     }
   }
 `;
 
-/** The default branch's head, a full sha, or null when it has none. */
-export async function defaultBranchHead(github: Pick<GitHub, "graphql">, repo: Repo): Promise<string | null> {
-  const data = await github.graphql<{ repository: { defaultBranchRef: { target: { oid: string } } | null } }>(DEFAULT_BRANCH_HEAD_QUERY, {
+/** The default branch's name and its head, a full sha, or null when it has none. */
+export async function defaultBranchOf(github: Pick<GitHub, "graphql">, repo: Repo): Promise<{ readonly name: string; readonly head: string } | null> {
+  const data = await github.graphql<{ repository: { defaultBranchRef: { name: string; target: { oid: string } } | null } }>(DEFAULT_BRANCH_QUERY, {
     owner: repo.owner,
     name: repo.name,
   });
-  return data.repository.defaultBranchRef?.target.oid ?? null;
+  const ref = data.repository.defaultBranchRef;
+  return ref === null ? null : { name: ref.name, head: ref.target.oid };
 }
 
 /** A PR's comments before the ones already read, a page at a time, newest page first. */
@@ -1365,6 +1368,50 @@ export function byAppOf(author: { readonly login: string; readonly __typename: s
   return appLogin === null ? author.__typename === "Bot" : loginOf(author) === appLogin;
 }
 
+/** A Ticket's agent branch and the PRs whose head it is, newest first (#536). */
+const KEPT_BRANCH_QUERY = `
+  query ($owner: String!, $name: String!, $ref: String!) {
+    repository(owner: $owner, name: $name) {
+      ref(qualifiedName: $ref) {
+        target { oid }
+        associatedPullRequests(states: [CLOSED, MERGED], first: 20, orderBy: { field: CREATED_AT, direction: DESC }) {
+          nodes { number merged }
+        }
+      }
+    }
+  }
+`;
+
+interface KeptBranchQueryResult {
+  readonly repository: {
+    readonly ref: {
+      readonly target: { readonly oid: string };
+      readonly associatedPullRequests: { readonly nodes: readonly { readonly number: number; readonly merged: boolean }[] };
+    } | null;
+  };
+}
+
+/**
+ * A Ticket's Kept branch (#536): its agent branch on the remote now, with the
+ * latest PR from it that closed unmerged, or null when the branch is gone.
+ */
+async function keptBranchOf(github: Pick<GitHub, "graphql">, repo: Repo, ticket: number): Promise<KeptBranch | null> {
+  const data = await github.graphql<KeptBranchQueryResult>(KEPT_BRANCH_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+    ref: `refs/heads/${agentBranchFor(ticket)}`,
+  });
+  const ref = data.repository.ref;
+  if (ref === null) return null;
+  const closed = ref.associatedPullRequests.nodes.filter((pr) => !pr.merged).map((pr) => pr.number);
+  return { head: ref.target.oid, pullRequest: closed.length === 0 ? null : Math.max(...closed) };
+}
+
+/** The Ticket's Kept branch while it's marked for a Kept-branch start; null, unread, when it isn't. */
+async function keptBranchIfMarked(github: Pick<GitHub, "graphql">, repo: Repo, ticket: number, labels: readonly string[]): Promise<KeptBranch | null> {
+  return labels.includes(KEPT_BRANCH_LABEL) ? keptBranchOf(github, repo, ticket) : null;
+}
+
 async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null, appLogin: string | null): Promise<EventPart> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
@@ -1379,6 +1426,8 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
   }));
   const timeline = issue.timelineItems.nodes;
   const thisSession = commentsSince(lastNeededDesignAt(timeline), comments);
+  const labels = issue.labels.nodes.map((label) => label.name);
+  const keptBranch = await keptBranchIfMarked(github, repo, issue.number, labels);
   return {
     issue: {
       number: issue.number,
@@ -1408,6 +1457,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       pendingPrototype: pendingPrototypeIn(thisSession, new Set(comments.map(({ id }) => id))),
       unansweredPrototypes: unansweredPrototypesIn(thisSession),
       emptyDiffs: countEmptyDiffs(comments),
+      keptBranch,
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
     },
@@ -1770,10 +1820,13 @@ async function gatherDispatchTickets(github: GitHub, repo: Repo, appLogin: strin
       ready: READY_FOR_AGENT,
     });
     for (const issue of page.repository.issues.nodes) {
+      const labels = issue.labels.nodes.map((label) => label.name);
+      // Read only for a marked Ticket, so Dispatch never releases one whose Kept branch is gone (#536).
+      const kept = labels.includes(KEPT_BRANCH_LABEL) ? { keptBranch: await keptBranchOf(github, repo, issue.number) } : {};
       tickets.push({
         number: issue.number,
         open: issue.state === "OPEN",
-        labels: issue.labels.nodes.map((label) => label.name),
+        labels,
         openBlockers: issue.blockedBy.nodes.filter((b) => b.state === "OPEN").map((b) => b.number),
         notPlannedBlockers: issue.blockedBy.nodes
           .filter((b) => b.state === "CLOSED" && b.stateReason === "NOT_PLANNED")
@@ -1785,6 +1838,7 @@ async function gatherDispatchTickets(github: GitHub, repo: Repo, appLogin: strin
         lastRunFailed: implementRunFailedIn(
           issue.comments.nodes.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })),
         ),
+        ...kept,
       });
     }
     after = page.repository.issues.pageInfo.hasNextPage ? page.repository.issues.pageInfo.endCursor : null;

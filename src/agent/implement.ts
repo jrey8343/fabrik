@@ -13,7 +13,7 @@ import { sandboxEnv } from "../kit/secrets.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
-import type { FailedRunCommits, GivenOperatorComment } from "../loop/types.ts";
+import type { FailedRunCommits, GivenOperatorComment, KeptBranchStart } from "../loop/types.ts";
 import {
   givenOperatorComments,
   operatorCommentId,
@@ -402,11 +402,22 @@ export async function implementInput(
     readonly conflict?: string;
     /** The Product repo's default branch, which a Request-changes run on a conflicting PR merges in (#341). */
     readonly defaultBranch?: string;
+    /**
+     * For a Kept-branch start (#536), from the Kit job's plan, never inferred
+     * from the checkout: the closed PR whose branch the checkout holds.
+     */
+    readonly keptBranch?: KeptBranchStart | null;
   },
 ): Promise<ImplementInput> {
   const onPullRequest = files.pullRequest !== "";
-  const branch = onPullRequest ? await continueAgentBranch(productDir, ticket) : await startAgentBranch(productDir, ticket);
+  const kept = onPullRequest ? null : (files.keptBranch ?? null);
+  const branch = onPullRequest || kept !== null ? await continueAgentBranch(productDir, ticket) : await startAgentBranch(productDir, ticket);
   const parts = await implementContext(productDir, files.spec, config);
+  if (kept !== null) {
+    // A first run that carries on: it opens a new PR, so it owes a first run's output.
+    const context = await keptBranchContext(productDir, branch.name, kept.pullRequest, files.defaultBranch || "main");
+    return { branch, parts: [...parts, ...context], kind: "first", operatorComments: null, mergeMain: null, brief: context.join("\n\n") };
+  }
   if (!onPullRequest) return { branch, parts, kind: "first", operatorComments: null, mergeMain: null, brief: null };
   const conflict = files.conflict ?? "";
   const merge = conflict === "" && files.review !== "" ? await mainToMerge(productDir, files.defaultBranch || "main") : null;
@@ -425,6 +436,32 @@ export async function implementInput(
     mergeMain: merge?.main ?? null,
     brief: context.parts.join("\n\n"),
   };
+}
+
+/**
+ * What a Kept-branch start's prompt carries beyond the Ticket (#536): that
+ * the branch checked out holds the kept work of the closed PR, that the
+ * Ticket, rewritten by the Design session since, says what's left to do on
+ * it, and, when the branch doesn't hold the default branch's head, to merge
+ * that in first, never rebasing, so the run builds and tests against main as
+ * it is.
+ */
+async function keptBranchContext(productDir: string, branch: string, pullRequest: number | null, defaultBranch: string): Promise<string[]> {
+  const ref = `origin/${defaultBranch}`;
+  const main = await git(productDir, "rev-parse", "--verify", "--quiet", `refs/remotes/${ref}^{commit}`).catch(() => null);
+  const holdsMain =
+    main === null || (await git(productDir, "merge-base", "--is-ancestor", main, "HEAD").then(() => true, () => false));
+  const closed = pullRequest === null ? "a pull request the Kit closed unmerged" : `#${pullRequest}, which the Kit closed unmerged`;
+  return [
+    "## Carrying on the Kept branch",
+    `The branch checked out, \`${branch}\`, isn't cut from \`main\`: it holds the kept work of ${closed}. A Design session reworked the Ticket after that PR closed and decided this run carries on that work rather than starting again. The Ticket says what's left to do on it: build that on top of the kept commits, keeping the sound work, and still meet every acceptance criterion. Add new commits; don't rewrite, squash or revert the kept history.`,
+    ...(holdsMain
+      ? []
+      : [
+          `This branch doesn't hold \`main\` at ${main}. Before you build anything, merge it in (\`git merge ${ref}\`), never rebasing, resolve any conflicts the way the kept work meant, and commit the merge, so you build and test against \`main\` as it is.`,
+        ]),
+    "Merging `main` in is no change of your own: a run that commits nothing else changed nothing.",
+  ];
 }
 
 /**

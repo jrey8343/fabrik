@@ -693,6 +693,53 @@ describe("Gathering a closed Ticket's agent draft PRs", () => {
   });
 });
 
+describe("Gathering a Ticket's Kept branch (#536)", () => {
+  const KEPT = "f".repeat(40);
+  /** A fake GitHub whose Ticket #9 carries these labels, and whose fabrik/ticket-9 is `ref` (null when gone); it counts the Kept-branch reads. */
+  function githubWith(labels: string[], ref: unknown) {
+    const reads: Record<string, unknown>[] = [];
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("qualifiedName")) {
+          reads.push(variables);
+          return { repository: { ref } };
+        }
+        if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+        const data = issueData(9);
+        return { repository: { ...data.repository, issue: { ...data.repository.issue, labels: { nodes: labels.map((name) => ({ name })) } } } };
+      },
+    } as unknown as GitHub;
+    return { github, reads };
+  }
+  const event = { kind: "label-added", issue: 9, label: "agent:implement" } as const;
+
+  it("reads a marked Ticket's Kept branch, with the latest PR from it closed unmerged", async () => {
+    const ref = {
+      target: { oid: KEPT },
+      associatedPullRequests: { nodes: [{ number: 240, merged: true }, { number: 230, merged: false }, { number: 200, merged: false }] },
+    };
+    const { github, reads } = githubWith(["ready-for-agent", "fabrik:kept-branch"], ref);
+
+    const snapshot = await gatherSnapshot(github, repo, event, null, null);
+
+    expect(snapshot.issue?.keptBranch).toEqual({ head: KEPT, pullRequest: 230 });
+    expect(reads).toEqual([{ owner: "acme", name: "shop", ref: "refs/heads/fabrik/ticket-9" }]);
+  });
+
+  it("reads a marked Ticket's gone Kept branch as null", async () => {
+    const { github } = githubWith(["ready-for-agent", "fabrik:kept-branch"], null);
+
+    expect((await gatherSnapshot(github, repo, event, null, null)).issue?.keptBranch).toBeNull();
+  });
+
+  it("doesn't read an unmarked Ticket's branch at all", async () => {
+    const { github, reads } = githubWith(["ready-for-agent"], { target: { oid: KEPT }, associatedPullRequests: { nodes: [] } });
+
+    expect((await gatherSnapshot(github, repo, event, null, null)).issue?.keptBranch).toBeNull();
+    expect(reads).toEqual([]);
+  });
+});
+
 /** An issue's parent, as GitHub holds it. */
 interface GitHubParent {
   number: number;

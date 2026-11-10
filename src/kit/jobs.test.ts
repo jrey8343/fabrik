@@ -216,3 +216,34 @@ describe("The Kit job's routing of a conflict-only run (#304)", () => {
     expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ conflict: "" });
   });
 });
+
+describe("The Kit job's routing of a Kept-branch start (#536)", () => {
+  const MAIN = "9".repeat(40);
+  const marked = anIssue({
+    number: 7,
+    labels: ["enhancement", "ready-for-agent", "agent:implement", "fabrik:kept-branch"],
+    keptBranch: { head: "f".repeat(40), pullRequest: 230 },
+  });
+  const plan = planFor({ kind: "label-added", issue: 7, label: "agent:implement" }, snapshotOf(marked), kitConfig());
+
+  it("routes it to the Implement job on the Kept branch, with no PR, as a first run that carries on, naming the closed PR and main", () => {
+    expect(kitJobOutputs(plan, null, kitConfig(), MAIN, "main")).toMatchObject({
+      route: "implement",
+      ticket: "7",
+      "pull-request": "",
+      branch: "fabrik/ticket-7",
+      retry: "0",
+      "kept-branch": "true",
+      "kept-pull-request": "230",
+      "main-at-start": MAIN,
+      "default-branch": "main",
+    });
+  });
+
+  it("passes out no Kept-branch start for a first run from main", () => {
+    const unmarked = anIssue({ number: 8, labels: ["ready-for-agent", "agent:implement"] });
+    const first = planFor({ kind: "label-added", issue: 8, label: "agent:implement" }, snapshotOf(unmarked), kitConfig());
+
+    expect(kitJobOutputs(first, null, kitConfig())).toMatchObject({ branch: "", "kept-branch": "false", "kept-pull-request": "", "default-branch": "" });
+  });
+});

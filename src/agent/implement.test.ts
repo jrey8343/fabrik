@@ -439,3 +439,76 @@ describe("What a failed run had committed on its branch", () => {
     expect(existsSync(join(outDir, AGENT_BUNDLE_FILE))).toBe(false);
   });
 });
+
+describe("A Kept-branch start (#536)", () => {
+  const git = async (cwd: string, ...args: string[]) => {
+    const env = { ...process.env, GIT_AUTHOR_NAME: "T", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "T", GIT_COMMITTER_EMAIL: "t@example.com", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    return (await promisify(execFile)("git", args, { cwd, env })).stdout.trim();
+  };
+  const commit = async (cwd: string, path: string, text: string) => {
+    await writeFile(join(cwd, path), text);
+    await git(cwd, "add", "-A");
+    await git(cwd, "commit", "--quiet", "-m", `Change ${path}`);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+
+  /** A checkout of the Kept branch fabrik/ticket-7, as the Implement job makes it; main moved on since when `behind`. */
+  async function keptCheckout(behind: boolean): Promise<{ productDir: string; kept: string; main: string }> {
+    const root = await mkdtemp(join(tmpdir(), "fabrik-kept-git-"));
+    const origin = join(root, "origin.git");
+    await git(root, "init", "--quiet", "--bare", "--initial-branch=main", origin);
+    const seed = join(root, "seed");
+    await git(root, "clone", "--quiet", origin, seed);
+    await git(seed, "checkout", "--quiet", "-b", "main");
+    let main = await commit(seed, "shared.ts", "v1\n");
+    await git(seed, "push", "--quiet", "origin", "main");
+    await git(seed, "checkout", "--quiet", "-b", "fabrik/ticket-7");
+    const kept = await commit(seed, "feature.ts", "kept work\n");
+    await git(seed, "push", "--quiet", "origin", "fabrik/ticket-7");
+    if (behind) {
+      await git(seed, "checkout", "--quiet", "main");
+      main = await commit(seed, "other.ts", "from main\n");
+      await git(seed, "push", "--quiet", "origin", "main");
+    }
+    const productDir = join(root, "product");
+    await git(root, "clone", "--quiet", "--branch", "fabrik/ticket-7", origin, productDir);
+    return { productDir, kept, main };
+  }
+
+  const input = async (productDir: string) =>
+    implementInput(productDir, 7, kitConfig(), { spec: await fileOf(null), pullRequest: "", review: "", keptBranch: { pullRequest: 230 }, defaultBranch: "main" });
+
+  it("carries on the checked-out Kept branch as a first run, its base the branch's head, so the bundle holds only the run's own commits", async () => {
+    const { productDir, kept } = await keptCheckout(false);
+
+    const { branch, kind, operatorComments } = await input(productDir);
+
+    expect(branch).toEqual({ name: "fabrik/ticket-7", base: { ref: "fabrik/ticket-7", sha: kept }, head: null });
+    expect(kind).toBe("first");
+    expect(operatorComments).toBeNull();
+  });
+
+  it("is told the branch holds the closed PR's kept work, and to merge main in first when the branch doesn't hold its head", async () => {
+    const { productDir, main } = await keptCheckout(true);
+
+    const { parts, brief } = await input(productDir);
+
+    const text = parts.join("\n");
+    expect(text).toContain("## Carrying on the Kept branch");
+    expect(text).toContain("#230");
+    expect(text).toContain("`git merge origin/main`");
+    expect(text).toContain(main);
+    // Kept for the judge, so the Scorer judges it as a run that carried on a branch (#450).
+    expect(brief).toContain("## Carrying on the Kept branch");
+    expect(brief).not.toContain("## GLOSSARY.md");
+  });
+
+  it("isn't told to merge main when the branch already holds its head", async () => {
+    const { productDir } = await keptCheckout(false);
+
+    const { parts } = await input(productDir);
+
+    expect(parts.join("\n")).toContain("## Carrying on the Kept branch");
+    expect(parts.join("\n")).not.toContain("`git merge origin/main`");
+  });
+});

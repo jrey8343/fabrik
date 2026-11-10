@@ -33,11 +33,14 @@
 //   replay-kit-sha-unavailable for a replay whose variant's candidate Kit sha this job read and couldn't lay
 //                            (src/kit/overlay.ts), why, so neither arm runs and the replay-record job fails
 //                            the Ticket once (#449); else empty
-//   branch                   for a retry, the agent branch it builds on; else empty
+//   branch                   for a retry or a Kept-branch start (#536), the agent branch it builds on; else empty
+//   kept-branch              "true" for a Kept-branch start (#536), else "false"
+//   kept-pull-request        for a Kept-branch start, the PR the Kit closed whose branch it carries on; else empty
+//   default-branch           for a Kept-branch start, the default branch its PR opens against; else empty
 //   review                   for a Request-changes run, the Operator's review id; else empty
 //   conflict                 for a conflict-only run (#304), the default branch head it rebases the PR's
 //                            branch onto, a full sha; else empty
-//   main-at-start            for an Implement run on an agent PR's branch, the default branch head this job
+//   main-at-start            for an Implement run on an agent PR's branch or a Kept-branch start, the default branch head this job
 //                            read before the run started (#341), a full sha; else empty
 //   audit-commit             for an Auditor run, the pending Audit's marked commit, which the Audit job
 //                            checks out; else empty
@@ -71,7 +74,7 @@ import { join, resolve } from "node:path";
 import { agentRunIn, replayRunIn } from "../github/apply.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { loopEventFrom } from "../github/events.ts";
-import { defaultBranchHead, gatherSnapshot } from "../github/snapshot.ts";
+import { defaultBranchOf, gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { prototypeRequestJson } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -155,6 +158,7 @@ async function main(productDir: string): Promise<void> {
   let ticket: number | null = null;
   let summary: string | null = null;
   let mainAtStart: string | null = null;
+  let defaultBranch: string | null = null;
   if (event === null) {
     console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
   } else {
@@ -168,10 +172,16 @@ async function main(productDir: string): Promise<void> {
     ticket = snapshot.pullRequest?.ticket ?? null;
     // A run on an agent PR's branch may bring main in: the push job takes main as this job read it, before the
     // run started, for one of the heads it may have brought in (#341), as the agent job can't write this job's outputs.
+    // A Kept-branch start (#536) brings main in too, and opens its PR against the default branch, which the push job
+    // takes from here, by name, as it can't from the branch the run built on.
     const run = agentRunIn(plan);
-    if (run?.role === "implement" && run.pullRequest !== undefined) mainAtStart = await defaultBranchHead(github, repo);
+    if (run?.role === "implement" && (run.pullRequest !== undefined || run.keptBranch !== undefined)) {
+      const main = await defaultBranchOf(github, repo);
+      mainAtStart = main?.head ?? null;
+      if (run.keptBranch !== undefined) defaultBranch = main?.name ?? null;
+    }
   }
-  const outputs = { ...kitJobOutputs(plan, ticket, config, mainAtStart), ...(await candidateOutputs(plan, github)) };
+  const outputs = { ...kitJobOutputs(plan, ticket, config, mainAtStart, defaultBranch), ...(await candidateOutputs(plan, github)) };
   await appendFile(
     required("GITHUB_OUTPUT"),
     Object.entries(outputs)
@@ -194,6 +204,7 @@ export function kitJobOutputs(
   ticket: number | null,
   config: KitConfig,
   mainAtStart: string | null = null,
+  defaultBranch: string | null = null,
 ): Readonly<Record<string, string>> {
   const run = plan === null ? null : agentRunIn(plan);
   const replay = plan === null ? null : replayRunIn(plan);
@@ -214,8 +225,14 @@ export function kitJobOutputs(
     "research-timeout-minutes": String(config.roles.research.timeoutMinutes),
     "pull-request": pullRequest === null ? "" : String(pullRequest),
     ticket: (run?.role === "review" || run?.role === "implement") && builds !== null ? String(builds) : "",
-    // A retry checks out its PR's branch; a first Implement run cuts it from the default branch.
-    branch: run?.role === "implement" && run.pullRequest !== undefined ? agentBranchFor(run.issue) : "",
+    // A retry, and a Kept-branch start (#536), check out the Ticket's agent branch; any other first Implement run cuts it
+    // from the default branch.
+    branch: run?.role === "implement" && (run.pullRequest !== undefined || run.keptBranch !== undefined) ? agentBranchFor(run.issue) : "",
+    // A Kept-branch start (#536): the agent job carries on the branch on this, never on the checkout, and the push job
+    // lands it as a first run that carried on, naming the closed PR, against the default branch.
+    "kept-branch": String(run?.role === "implement" && run.keptBranch !== undefined),
+    "kept-pull-request": String(run?.keptBranch?.pullRequest ?? ""),
+    "default-branch": run?.keptBranch === undefined ? "" : (defaultBranch ?? ""),
     // A Request-changes run's input: the Operator's review on the PR.
     review: run?.requestChanges === undefined ? "" : String(run.requestChanges.review),
     // A conflict-only run's main head, which its prompt names and its push job's event carries.

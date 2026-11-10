@@ -292,6 +292,16 @@ describe("Picking a Replay's Tickets", () => {
     ]);
   });
 
+  it("leaves out a Ticket merged from a Kept-branch start, naming why, as its baseSha can't rebuild it (#536)", () => {
+    const records = [aRunRecord({ issue: 12, pullRequest: null, baseSha: baseOf(12), endedAt: "2026-10-01T09:00:00Z", keptBranch: true })];
+
+    expect(pickReplayTickets({ tickets: [12] }, [aCandidate(12, { records })])).toEqual({
+      picked: [],
+      leftOut: [{ ticket: 12, reason: "its first Implement run carried on a Kept branch, so its baseSha can't rebuild it" }],
+    });
+    expect(pickReplayTickets({ tickets: null }, [aCandidate(12, { records }), aCandidate(13)]).picked.map(({ ticket }) => ticket)).toEqual([13]);
+  });
+
   it("picks the listed Tickets that are eligible in the order listed, and names each one left out", () => {
     const reverted = aCandidate(4, { merged: { ...aCandidate(4).merged!, reverted: true } });
     const candidates = [aCandidate(3), reverted, aCandidate(12), aCandidate(20, { merged: null }), aCandidate(9)];

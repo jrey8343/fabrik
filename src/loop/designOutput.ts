@@ -177,6 +177,15 @@ export interface MapDecision {
 export interface DesignAgentBrief extends AgentBrief {
   /** True adds the mark, false takes it off; absent leaves it as it stands, so a mark the Operator added by hand stays. */
   readonly stepUp?: boolean;
+  /**
+   * Marks the Ticket for a Kept-branch start (#536): its next Implement run
+   * carries on the Kept branch of the PR it came back from. True adds the
+   * mark; false or absent takes it off if it's on, the session's decision
+   * standing over a mark added by hand while it ran. Only a brief that
+   * rewrites the Ticket in place has it: a split's Tickets are new and start
+   * from main.
+   */
+  readonly keptBranch?: boolean;
 }
 
 /**
@@ -272,12 +281,16 @@ function readBrief(value: unknown, errors: string[]): DesignAgentBrief | Operato
     return null;
   }
   const brief = { summary: value.summary, acceptanceCriteria: value.acceptanceCriteria };
-  if (value.stepUp === undefined) return brief;
-  if (typeof value.stepUp !== "boolean") {
-    errors.push("a brief needs stepUp to be true or false, if it has one");
-    return null;
+  const marks: { stepUp?: boolean; keptBranch?: boolean } = {};
+  for (const mark of ["stepUp", "keptBranch"] as const) {
+    if (value[mark] === undefined) continue;
+    if (typeof value[mark] !== "boolean") {
+      errors.push(`a brief needs ${mark} to be true or false, if it has one`);
+      return null;
+    }
+    marks[mark] = value[mark];
   }
-  return { ...brief, stepUp: value.stepUp };
+  return { ...brief, ...marks };
 }
 
 function readSpec(value: unknown, errors: string[]): { title: string; body: string } | null {
@@ -306,7 +319,10 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
       errors.push(`ticket ${i + 1} needs non-empty key, title and body text, and a blockedBy list of keys`);
     } else if (item.operator === undefined) {
       const fields = { key: item.key, title: item.title, body: item.body, blockedBy: item.blockedBy };
-      if (item.stepUp !== undefined && typeof item.stepUp !== "boolean") {
+      if (item.keptBranch !== undefined) {
+        // A new Ticket has no Kept branch of its own (#536): only a brief that rewrites a Ticket in place carries one on.
+        errors.push(`ticket ${JSON.stringify(item.key)} has keptBranch, but only a brief that rewrites the Ticket in place carries on a Kept branch`);
+      } else if (item.stepUp !== undefined && typeof item.stepUp !== "boolean") {
         errors.push(`ticket ${JSON.stringify(item.key)} needs stepUp to be true or false, if it has one`);
       } else if (item.steps === undefined) tickets.push(item.stepUp === true ? { ...fields, stepUp: true } : fields);
       else errors.push(`ticket ${JSON.stringify(item.key)} has steps, so mark it "operator": true as an Operator step`);

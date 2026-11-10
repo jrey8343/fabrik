@@ -5,7 +5,7 @@
 // its failure notice. Pure, no I/O.
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
-import type { AgentRole } from "../loop/types.ts";
+import type { AgentRole, KeptBranchStart } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 
 /** One job's `needs.<job>`: its result and its outputs. */
@@ -32,6 +32,11 @@ export interface CaptureOutputs {
   readonly timedOut: boolean;
 }
 
+/** A Kept-branch start as the Kit job's plan started it (#536): the closed PR, and the default branch its new PR opens against. */
+export interface PlannedKeptBranchStart extends KeptBranchStart {
+  readonly base: string;
+}
+
 export type PushJobInput =
   | { readonly kind: "actions-event" }
   | {
@@ -51,6 +56,12 @@ export type PushJobInput =
       readonly retry?: number | null;
       /** For a Retry: the head of the Execution flaw it fixes, from the Kit job's plan (#341); null for any other run. */
       readonly retryFlaw?: string | null;
+      /**
+       * For a Kept-branch start (#536), from the Kit job's plan: the closed PR
+       * its branch came from, if known, and the default branch its PR opens
+       * against; null for any other run.
+       */
+      readonly keptBranch?: PlannedKeptBranchStart | null;
       /** For a Design-session turn the Operator's reply started: that comment, which must still exist for the turn to post. */
       readonly startedBy: number | null;
       /** For an Implement run: what its job passed out about UI evidence. */
@@ -173,6 +184,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
               mainAtStart: shaOr(kit.outputs["main-at-start"]),
               retry: numberOr(kit.outputs["retry"]),
               retryFlaw: shaOr(kit.outputs["retry-flaw"]),
+              keptBranch: keptBranchStartOf(kit.outputs),
             }
           : {}),
         // A Design turn routed from a comment answers that reply (src/loop/design.ts).
@@ -232,6 +244,17 @@ function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
 /** The prototype request the Kit job passed out, as one line of JSON, or null when it doesn't read. */
 function requestOf(text: string | undefined): PrototypeRequestMarker | null {
   return text === undefined || text === "" ? null : parsePrototypeRequest(text);
+}
+
+/**
+ * A Kept-branch start, from the Kit job's outputs (#536), or null: one with
+ * no default branch named can't open its PR, so the push job takes it as
+ * none and refuses the branch it built on.
+ */
+function keptBranchStartOf(outputs: NeededJob["outputs"]): PlannedKeptBranchStart | null {
+  const base = outputs["default-branch"] ?? "";
+  if (outputs["kept-branch"] !== "true" || !/^[A-Za-z0-9._/-]+$/.test(base)) return null;
+  return { pullRequest: numberOr(outputs["kept-pull-request"]), base };
 }
 
 /** A full commit sha, as the Kit job passes one out, or null for anything else. */

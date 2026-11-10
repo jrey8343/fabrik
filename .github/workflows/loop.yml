@@ -95,8 +95,14 @@ jobs:
       # For a replay whose variant's candidate Kit sha this job couldn't lay (#449): why, so neither arm runs and the
       # replay-record job fails the Ticket once, naming it; empty otherwise.
       replay-kit-sha-unavailable: ${{ steps.route.outputs.replay-kit-sha-unavailable }}
-      # For a retry: the agent branch it builds on, which the Implement job checks out.
+      # For a retry, or a Kept-branch start (#536): the agent branch it builds on, which the Implement job checks out.
       branch: ${{ steps.route.outputs.branch }}
+      # For a Kept-branch start (#536): "true", which the Implement job carries on the branch on and the push job lands
+      # it as a first run that carried on; the PR the Kit closed, which its new PR names, empty when unknown; and the
+      # default branch that PR opens against. "false" and empty for any other run.
+      kept-branch: ${{ steps.route.outputs.kept-branch }}
+      kept-pull-request: ${{ steps.route.outputs.kept-pull-request }}
+      default-branch: ${{ steps.route.outputs.default-branch }}
       # For a Request-changes run: the Operator's review, its input. It runs as a retry otherwise does.
       review: ${{ steps.route.outputs.review }}
       # For a conflict-only run (#304): the default branch head it rebases the PR's branch onto, a full sha.
@@ -734,7 +740,8 @@ jobs:
       ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
     steps:
       # A fresh clone: no working directory or .env* files carried over. A first
-      # run starts from main; a retry from its PR's branch (the Kit job names it).
+      # run starts from main; a retry, or a Kept-branch start (#536), from the
+      # Ticket's agent branch (the Kit job names it).
       - name: Check out the Product repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -802,8 +809,11 @@ jobs:
           FABRIK_REVIEW_FILE: ${{ needs.kit.outputs.review != '' && format('{0}/review.json', runner.temp) || '' }}
           # A conflict-only run's main head (#304): it rebases onto it and resolves the conflicts, nothing else.
           FABRIK_CONFLICT_MAIN: ${{ needs.kit.outputs.conflict }}
-          # The branch a Request-changes run on a PR that conflicts with it merges in (#341).
+          # The branch a Request-changes run on a PR that conflicts with it merges in (#341), and a Kept-branch start too.
           FABRIK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # A Kept-branch start (#536): it carries on the branch checked out, and the PR its kept work came from.
+          FABRIK_KEPT_BRANCH: ${{ needs.kit.outputs.kept-branch }}
+          FABRIK_KEPT_PULL_REQUEST: ${{ needs.kit.outputs.kept-pull-request }}
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
           FABRIK_MODEL: ${{ needs.kit.outputs.model }}
           FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}

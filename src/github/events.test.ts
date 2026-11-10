@@ -7,6 +7,7 @@ import { evidenceBundle, readEvidenceBundle } from "../kit/retroEvidence.ts";
 import {
   agentFailureEventFrom,
   agentRunEventFrom,
+  checkBuiltAsPlanned,
   auditEventFrom,
   loopEventFrom,
   prototypeEventFrom,
@@ -517,5 +518,37 @@ describe("A failed agent run", () => {
   it("says a failed Design-session turn was the session's prototype turn when the push job found it was, and says nothing of it otherwise", () => {
     expect(agentFailureEventFrom({ ...job, role: "design", prototype: true })).toMatchObject({ role: "design", prototype: true });
     expect(agentFailureEventFrom({ ...job, role: "design" })).not.toHaveProperty("prototype");
+  });
+});
+
+describe("A finished Kept-branch start (#536)", () => {
+  const built = (ref: string) => ({ name: "fabrik/ticket-7", base: { ref, sha: "b".repeat(40) }, head: "c".repeat(40) });
+  const RUN = "https://github.com/acme/shop/actions/runs/9100/attempts/1";
+  const changes = { net: [{ path: "src/waitlist.ts" }], commits: [{ path: "src/waitlist.ts" }] };
+  const kept = { pullRequest: 230, base: "main" };
+
+  it("is a first run on the branch it carried on, opening against the default branch the Kit job named, naming the closed PR", () => {
+    const result = { role: "implement", issue: 7, output: "{}", branch: built("fabrik/ticket-7") } as const;
+
+    const event = agentRunEventFrom(result, changes, null, null, null, RUN, kept);
+
+    expect(event).toMatchObject({ kind: "implement-run-finished", branch: "fabrik/ticket-7", base: "main", keptBranch: { pullRequest: 230 } });
+    expect(event).not.toHaveProperty("fixes");
+  });
+
+  it.each([
+    ["a first run that built on its own branch without the Kit job's plan", built("fabrik/ticket-7"), null, null, "built on fabrik/ticket-7 itself, but it isn't a retry or a Kept-branch start"],
+    ["a Kept-branch start that cut its branch from main", built("main"), null, kept, "didn't carry on fabrik/ticket-7"],
+    ["a retry that cut its branch from main", built("main"), { pullRequest: 50 }, null, "didn't build on fabrik/ticket-7"],
+  ])("refuses %s", (_, branch, retry, keptBranch, message) => {
+    expect(() => checkBuiltAsPlanned(7, branch, retry, keptBranch)).toThrow(message);
+  });
+
+  it.each([
+    ["a first run from main", built("main"), null, null],
+    ["a retry on its PR's branch", built("fabrik/ticket-7"), { pullRequest: 50 }, null],
+    ["a Kept-branch start on its Kept branch", built("fabrik/ticket-7"), null, kept],
+  ])("takes %s", (_, branch, retry, keptBranch) => {
+    expect(() => checkBuiltAsPlanned(7, branch, retry, keptBranch)).not.toThrow();
   });
 });

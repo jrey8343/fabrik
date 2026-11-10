@@ -356,6 +356,7 @@ describe("Labels", () => {
     "fabrik:replay",
     "fabrik:monitor",
     "fabrik:step-up",
+    "fabrik:kept-branch",
     "wayfinder:map",
     "wayfinder:research",
     "wayfinder:prototype",
@@ -395,6 +396,15 @@ describe("Labels", () => {
 
     expect(planSetup(before, kit).actions).toEqual([
       expect.objectContaining({ kind: "create-label", name: "fabrik:step-up", description: expect.stringMatching(/Implement runs .*Step-up/) }),
+    ]);
+  });
+
+  it("creates fabrik:kept-branch, saying what it does, on a re-run of an install from before it (#536)", () => {
+    const working = afterApplying(aCleanProduct(), planSetup(aCleanProduct(), kit));
+    const before = { ...working, labels: working.labels.filter((l) => l !== "fabrik:kept-branch") };
+
+    expect(planSetup(before, kit).actions).toEqual([
+      expect.objectContaining({ kind: "create-label", name: "fabrik:kept-branch", description: expect.stringMatching(/carries on its Kept branch/) }),
     ]);
   });
 

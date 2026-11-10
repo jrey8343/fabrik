@@ -3,8 +3,10 @@
 import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { changedTestsSection, together, withoutChangedTests } from "./changedTests.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
+import { keptBranchOff } from "./backToDesign.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
+import { keptBranchGone, keptBranchStartOn, stopForGoneKeptBranch } from "./keptBranch.ts";
 import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
@@ -56,7 +58,7 @@ const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
  */
 export function startImplementer(
   issueNumber: number,
-  { issue }: IssueContext,
+  { issue, operator }: IssueContext,
   pullRequest: PullRequestSnapshot | null,
   config: KitConfig,
 ): Plan {
@@ -75,6 +77,10 @@ export function startImplementer(
   }
   const unbuildable = whyNotBuildable(issueNumber, issue);
   if (unbuildable !== null) return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, unbuildable) };
+  // Marked to carry on a Kept branch that's gone, it starts nothing and goes to the Operator (#536).
+  if (keptBranchGone(issue.labels, issue.keptBranch)) {
+    return { kind: "act", actions: [removeLabel, ...stopForGoneKeptBranch(issueNumber, operator), CHECK_DISPATCH] };
+  }
   const { implement } = config.roles;
   // The second retry Steps up, and every run does while the Ticket is marked for a Stepped-up
   // start (ADR-0014); otherwise the first run and the first retry use the Implementer's model.
@@ -84,6 +90,9 @@ export function startImplementer(
   const stepUpFields = issue.emptyDiffs === 0 && stepUpReason === null ? {} : { stepUp: stepUpReason !== null, stepUpReason };
   // Each empty diff so far was an Execution flaw, so this run is the Retry after the last one.
   const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs };
+  // A Ticket marked for a Kept-branch start carries on its Kept branch, its Retry after an empty diff too (#536).
+  const keptBranch = keptBranchStartOn(issue.labels, issue.keptBranch);
+  const kept = keptBranch === null ? {} : { keptBranch };
   return {
     kind: "act",
     actions: [
@@ -97,6 +106,7 @@ export function startImplementer(
         timeoutMinutes: implement.timeoutMinutes,
         ...retry,
         ...stepUpFields,
+        ...kept,
       },
     ],
   };
@@ -124,6 +134,11 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
   const stale = whyNotBuildable(issueNumber, issue);
   if (stale !== null) return { kind: "nothing", reason: `${stale}, so the Implementer's branch isn't pushed` };
 
+  // A Kept-branch start whose branch moved under it, its commits conflicting with the new head, starts again on it (#536).
+  if (event.keptBranch !== undefined && changes.rebase?.conflicted === true) {
+    return withStaleDispatchOff(keptBranchStartsAgain(event, changes.rebase.onto, heldOn(kitIssues, config)), issueNumber, issue);
+  }
+
   // Every commit counts, so a trust-root change can't hide behind a later revert.
   const guard = checkTrustRoot([...changes.net, ...changes.commits]);
   if (guard.kind === "refuse") return withStaleDispatchOff(refuse(issueNumber, guard.paths, operator), issueNumber, issue);
@@ -131,7 +146,9 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
   if (changes.net.length === 0) return withStaleDispatchOff(emptyDiff(issueNumber, issue, parsed.output.summary, event.runUrl, heldOn(kitIssues, config)), issueNumber, issue);
 
   const { title, summary } = parsed.output;
-  const evidence = evidenceFor(event, config, false);
+  // A Kept-branch start's PR is the whole branch, not only the run's own commits (#536).
+  const whole = changes.wholeBranch;
+  const evidence = evidenceFor(event, config, false, whole?.net);
   return withStaleDispatchOff({
     kind: "act",
     actions: [
@@ -142,7 +159,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        body: pullRequestBody(summary, issueNumber, evidence, changes.changedTests ?? []),
+        body: pullRequestBody(summary, issueNumber, evidence, whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
         draft: true,
       },
       ...previewToLink(evidence, config, branch, null),
@@ -457,12 +474,20 @@ function pushedHead({ pushedHead: head }: BranchChanges): string[] {
  * keeps no section or marker of its own: only the Kit's say which existing
  * tests changed and where the evidence is kept.
  */
-function pullRequestBody(summary: string, issueNumber: number, evidence: string | null, changedTests: readonly string[]): string {
+function pullRequestBody(
+  summary: string,
+  issueNumber: number,
+  evidence: string | null,
+  changedTests: readonly string[],
+  carriesOn: number | null = null,
+): string {
   const tests = changedTestsSection(changedTests);
   return [
     withoutChangedTests(withoutEvidence(withoutMentions(summary))),
     ...(tests === null ? [] : [tests]),
     ...(evidence === null ? [] : [evidence]),
+    // The Kit's line, never the agent's, naming the PR a Kept-branch start's branch came from (#536).
+    ...(carriesOn === null ? [] : [`Carries on from #${carriesOn}.`]),
     `Closes #${issueNumber}`,
   ].join("\n\n");
 }
@@ -477,11 +502,12 @@ function changedTestsOf(pullRequest: PullRequestSnapshot, changes: BranchChanges
  * push job decides that, never the agent job, whose runner the agent could
  * have changed: the run is UI when its changes match `ui.paths`, or when its
  * PR is `marked` UI already, a retry's changes holding only its own commits.
+ * A Kept-branch start's PR is judged on `paths`, the whole branch's (#536).
  */
-function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boolean): string | null {
+function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boolean, paths: readonly { readonly path: string }[] = event.changes.net): string | null {
   const { evidence } = event;
   if (evidence === undefined) return null;
-  if (!marked && !isUi(event.changes.net.map(({ path }) => path), config.ui)) return null;
+  if (!marked && !isUi(paths.map(({ path }) => path), config.ui)) return null;
   const { result, headSha, run, artifact, gallery } = evidence;
   return evidenceSection({
     result: result ?? { outcome: "failed", reason: "no-result", headSha, captures: [] },
@@ -605,6 +631,32 @@ function startAgain(
 }
 
 /**
+ * A Kept-branch start whose Kept branch moved while it ran (#536), as when
+ * the Operator pushed to it, and whose commits couldn't be rebased onto the
+ * new head: the Kit discards them and starts the run again on that head, as
+ * it does a retry's (startAgain). It isn't an empty diff, so it uses no
+ * retry, and it's silent.
+ */
+function keptBranchStartsAgain({ issue: ticket, branch }: ImplementRunFinished, onto: string, held: number | null): Plan {
+  const head = onto.slice(0, 7);
+  return {
+    kind: "act",
+    actions: [
+      {
+        kind: "comment",
+        issue: ticket,
+        body: [
+          `\`${branch}\` moved to ${head} while the Implementer worked on it, and its commits couldn't be rebased onto the new head without a conflict, so the Kit discarded them.`,
+          "",
+          `The run starts again on ${head}${onceReset(held)}, using no retry.${heldUntilThen(held)}`,
+        ].join("\n"),
+      },
+      { kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] },
+    ],
+  };
+}
+
+/**
  * A refusal isn't the Implementer's mistake to fix: the work itself needs a
  * trust-root change, which only the Operator may make. So it uses no retry.
  */
@@ -660,6 +712,8 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, r
           ].join("\n"),
         },
         { kind: "remove-label", issue: issueNumber, label: READY_FOR_AGENT },
+        // Back to design, so the Design session starts with the Kept-branch start mark off (#536).
+        keptBranchOff(issueNumber),
         // Starts a Design session, whose round 1 is this event's one notification.
         { kind: "add-labels", issue: issueNumber, labels: [NEEDS_DESIGN] },
         CHECK_DISPATCH,
