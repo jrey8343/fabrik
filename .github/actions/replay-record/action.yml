@@ -21,10 +21,11 @@
 # Its job runs it once both arms' jobs have ended, whatever they came to and
 # even when the workflow run was cancelled: an arm that left no account of its
 # run lands as an Infrastructure failure, which the Ticket is retried once
-# for. A landing that fails releases the Ticket from the same step, so the next
-# tick runs it again (#448). A run it can't land at all, as when 1Password is down for run-loop, the
-# scheduled tick releases once it's past the longest a run can last
-# (src/loop/replayGate.ts), so no Ticket stays in progress for good. With permissions: {} and
+# for. A landing that fails releases the Ticket from the same step, so the
+# next tick runs it again (#448). A run it can't land at all, as when
+# 1Password is down for run-loop, the scheduled tick releases once it's past
+# the longest a run can last (src/loop/replayGate.ts), so no Ticket stays in
+# progress for good. With permissions: {} and
 # continue-on-error, after checking out the Kit alone into kit/ at the Kit
 # job's sha:
 #   - uses: ./kit/.github/actions/replay-record

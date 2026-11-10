@@ -994,6 +994,16 @@ describe("A Replay's next step on the tick", () => {
         });
       });
 
+      it("saying only the failure's first line, cut short, so a stack never fills the body", () => {
+        const stack = `Error: ${"x".repeat(400)}\n    at applyPlan (src/github/apply.ts:560:7)`;
+        const released = withLandingFailed(running.body, 12, 9001, { kind: "done" }, stack);
+        const progress = replayMarksIn(released ?? "")?.progress[0];
+
+        expect(progress).toMatchObject({ state: "retried" });
+        const reason = progress?.state === "retried" ? progress.reason : "";
+        expect(reason).toBe(`run 9001's landing failed: Error: ${"x".repeat(292)}…`);
+      });
+
       it("changing nothing once the landing got the Ticket's progress in before it failed", () => {
         const landed = finished(running, 12, 9001, { kind: "done" });
 

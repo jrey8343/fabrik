@@ -354,7 +354,7 @@ async function reportLandingFailure(landing: Landing, failure: LandingFailure): 
 
 /**
  * Releases the replay Ticket whose run this replay-record job couldn't land
- * (#448), from the run's end its record step left, so the next tick runs it
+ * (#448), its landing having thrown or the Loop having refused it, from the run's end its record step left, so the next tick runs it
  * again rather than waiting out the release for a run that never landed
  * (withLandingFailed). Read fresh, so progress the landing got in before it
  * failed stays. A release GitHub won't take is only warned of: the tick's
@@ -371,12 +371,12 @@ async function releaseUnlandedReplay(error: unknown): Promise<void> {
     const issue = `/repos/${required("GITHUB_REPOSITORY")}/issues/${ended.issue}`;
     const { body } = (await github.rest("GET", issue)) as { body: string | null };
     const before = body ?? "";
-    const why = (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
-    const released = withLandingFailed(before, ended.ticket, ended.run, ended.end, why.slice(0, 300));
+    const why = error instanceof Error ? error.message : String(error);
+    const released = withLandingFailed(before, ended.ticket, ended.run, ended.end, why);
     if (released === null) return;
     await github.rest("PATCH", issue, { body: released });
     await report(`Released #${ended.ticket} on replay #${ended.issue}, whose run's landing failed, so the next tick runs it again.`);
-    // The landing that failed would have said the results are in; with the operator unknown, the body shows them.
+    // The landing that failed would have said the results are in; with the Operator unknown, the body shows them.
     if (operator !== null && replayResultsIn(released) && !replayResultsIn(before)) {
       await github.rest("POST", `${issue}/comments`, { body: resultsReady(operator) });
     }
@@ -483,6 +483,8 @@ async function main(landing: Landing | null): Promise<void> {
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);
     if (landing !== null) await reportLandingFailure(landing, plan);
+    // A replay-record job's run the Loop wouldn't land is released, as one whose landing threw is (#448).
+    else await releaseUnlandedReplay(new Error(plan.reason));
     process.exitCode = 1;
   }
 }
