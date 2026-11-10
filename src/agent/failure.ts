@@ -47,6 +47,17 @@ export class UnlandableBranchError extends Error {
   }
 }
 
+/**
+ * The agent ended the run on another branch than the one it was given (#434),
+ * so its work can't be read off its branch: a Broken run, not a crash.
+ */
+export class LeftBranchError extends Error {
+  override name = "LeftBranchError";
+  constructor(branch: string, current: string) {
+    super(`The agent left ${branch} for ${current}`);
+  }
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -127,6 +138,7 @@ export function failureReportFor({ error, lines, initRefused, overage = null }: 
   }
 
   if (error instanceof UnlandableBranchError) return { failure: "unlandable-branch", detail: message };
+  if (error instanceof LeftBranchError) return { failure: "left-branch", detail: message };
   if (nameOf(error) === "StructuredOutputError" || error instanceof MissingVerdictError) {
     return { failure: "missing-output", detail: message };
   }
@@ -159,6 +171,7 @@ const REPORTED: readonly ReportedFailure[] = [
   "unread-checks",
   "unreported-checks",
   "unlandable-branch",
+  "left-branch",
   "timeout",
 ];
 

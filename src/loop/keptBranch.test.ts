@@ -173,7 +173,7 @@ describe("Every Back to design takes the Kept-branch start mark off", () => {
       changes: { net: [], commits: [] },
       runUrl: RUN,
     };
-    const ticket = anIssue({ number: 7, labels: ["ready-for-agent", "fabrik:kept-branch"], emptyDiffs: 2, keptBranch: { head: KEPT_HEAD, pullRequest: 230 } });
+    const ticket = anIssue({ number: 7, labels: ["ready-for-agent", "fabrik:kept-branch"], landedNothing: 2, keptBranch: { head: KEPT_HEAD, pullRequest: 230 } });
 
     const actions = actionsOf(planFor(event, snapshotOf(ticket), kitConfig()));
 
@@ -247,7 +247,7 @@ describe("Landing a Kept-branch start", () => {
     expect(actions.map((action) => action.kind)).not.toContain("push-branch");
     expect(actions).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
 
-    const retry = actionsOf(planFor(dispatched, snapshotOf({ ...ticket, labels: [...ticket.labels, "agent:implement"], emptyDiffs: 1 }), kitConfig())).find(
+    const retry = actionsOf(planFor(dispatched, snapshotOf({ ...ticket, labels: [...ticket.labels, "agent:implement"], landedNothing: 1 }), kitConfig())).find(
       (action) => action.kind === "start-agent-run",
     );
     expect(retry).toMatchObject({ retry: 1, keptBranch: { pullRequest: 230 } });

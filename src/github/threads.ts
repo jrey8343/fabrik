@@ -11,6 +11,7 @@ import {
   CONFLICT_RUN_MARKER,
   DESIGN_ROUND_MARKER,
   DESIGN_TURN_FAILED_MARKER,
+  isBrokenRunComment,
   isEmptyDiffComment,
   LIVE_OUTCOME_MARKER,
   PROTOTYPE_FAILURE_ROUND_MARKER,
@@ -58,7 +59,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   if (typeof value !== "object" || value === null) return null;
   const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
-  if (source !== "reviewer" && source !== "ci" && source !== "empty-diff") return null;
+  if (source !== "reviewer" && source !== "ci" && source !== "empty-diff" && source !== "broken-run") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
   if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean") return null;
   if (requestChangesFirst !== undefined && !isReviewIds(requestChangesFirst)) return null;
@@ -462,17 +463,19 @@ export function standingIn(history: readonly PullRequestHistoryItem[]): Readonly
 }
 
 /**
- * How many empty diffs the Kit has recorded on a Ticket, from its comments
- * oldest first. A Design session starts the count again, because a Ticket
- * that went back to design starts again on its retries. Only the Fabrik App's
- * comments count (`byApp`), so nobody, another bot included, can add an empty
- * diff or start the count again by posting a marker (#426).
+ * How many Implement runs on a Ticket the Kit has recorded as landing nothing
+ * before its PR opened, from its comments oldest first: its empty diffs and
+ * its Broken runs (#434), each of which used one of its Retries. A Design
+ * session starts the count again, because a Ticket that went back to design
+ * starts again on its retries. Only the Fabrik App's comments count
+ * (`byApp`), so nobody, another bot included, can add one or start the count
+ * again by posting a marker (#426).
  */
-export function countEmptyDiffs(comments: readonly KitComment[]): number {
+export function countLandedNothing(comments: readonly KitComment[]): number {
   let count = 0;
   for (const { body } of kitCommentsIn(comments)) {
     if (isDesignSessionComment(body)) count = 0;
-    else if (isEmptyDiffComment(body)) count += 1;
+    else if (isEmptyDiffComment(body) || isBrokenRunComment(body)) count += 1;
   }
   return count;
 }

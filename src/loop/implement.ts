@@ -89,13 +89,13 @@ export function startImplementer(
   const { implement } = config.roles;
   // The second retry Steps up, and every run does while the Ticket is marked for a Stepped-up
   // start (ADR-0014); otherwise the first run and the first retry use the Implementer's model.
-  const stepUpReason = stepUpReasonFor(issue.emptyDiffs, issue.labels);
+  const stepUpReason = stepUpReasonFor(issue.landedNothing, issue.labels);
   const { model, effort } = implementSettings(stepUpReason, config);
   // A first run that doesn't Step up carries neither field.
-  const stepUpFields = issue.emptyDiffs === 0 && stepUpReason === null ? {} : { stepUp: stepUpReason !== null, stepUpReason };
-  // Each empty diff so far was an Execution flaw, so this run is the Retry after the last one.
-  const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs };
-  // A Ticket marked for a Kept-branch start carries on its Kept branch, its Retry after an empty diff too (#536).
+  const stepUpFields = issue.landedNothing === 0 && stepUpReason === null ? {} : { stepUp: stepUpReason !== null, stepUpReason };
+  // Each empty diff or Broken run so far was an Execution flaw, so this run is the Retry after the last one.
+  const retry = issue.landedNothing === 0 ? {} : { retry: issue.landedNothing };
+  // A Ticket marked for a Kept-branch start carries on its Kept branch, its Retry after an empty diff or Broken run too (#536).
   const keptBranch = keptBranchStartOn(issue.labels, issue.keptBranch);
   const kept = keptBranch === null ? {} : { keptBranch };
   return {
@@ -701,7 +701,7 @@ function refuse(issueNumber: number, paths: readonly string[], operator: string,
  * third one starts (#429).
  */
 function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, runUrl: string, held: number | null): Plan {
-  const flaw = issue.emptyDiffs + 1;
+  const flaw = issue.landedNothing + 1;
   const said = implementerSaidAndRun(summary, runUrl);
   if (flaw > MAX_RETRIES) {
     return {
@@ -712,7 +712,8 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, r
           issue: issueNumber,
           body: [
             EMPTY_DIFF_MARKER,
-            `The Implementer's branch for #${issueNumber} changed nothing, for the ${ordinal(flaw)} time. A third Execution flaw counts as a Design flaw, so this Ticket goes back to design.`,
+            // The earlier flaws may have been Broken runs, which share the pool (#434), so it doesn't count them as empty diffs.
+            `The Implementer's branch for #${issueNumber} changed nothing. Both of the Ticket's Retries are used, so this Execution flaw counts as a Design flaw, and the Ticket goes back to design.`,
             ...said,
           ].join("\n"),
         },
@@ -757,9 +758,6 @@ function implementerSaidAndRun(summary: string, runUrl: string): string[] {
   return [...implementerSaid(summary), "", `[The run](${runUrl})`];
 }
 
-function ordinal(n: number): string {
-  return ["zeroth", "first", "second", "third"][n] ?? `${n}th`;
-}
 
 /** Why an Implementer can't build this Ticket now, or null when it can. */
 function whyNotBuildable(issueNumber: number, issue: IssueSnapshot): string | null {

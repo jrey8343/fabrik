@@ -35,12 +35,26 @@ export type ReportedFailure =
    * which rebuilds it from its base alone, never could (#535).
    */
   | "unlandable-branch"
+  /** The agent ended the run on another branch than its own (#434). */
+  | "left-branch"
   /**
    * The job ran out of time: reported by the Review checks job when it gave up
    * on required checks still running, short of its job's timeout, or inferred
    * by the push job for any role whose job was cancelled (src/loop/failures.ts).
    */
   | "timeout";
+
+/**
+ * How an Implement run was a Broken run (#434): the Kit can't land its work
+ * because of what the agent did. Its output broke the run's contract, it left
+ * its branch, or it built on commits its branch didn't start from.
+ */
+export const BROKEN_RUNS = ["missing-output", "left-branch", "unlandable-branch"] as const satisfies readonly ReportedFailure[];
+export type BrokenRun = (typeof BROKEN_RUNS)[number];
+
+export function isBrokenRun(value: unknown): value is BrokenRun {
+  return (BROKEN_RUNS as readonly unknown[]).includes(value);
+}
 
 /** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
 export type InfrastructureFailure = ReportedFailure | "unreachable-1password";
@@ -632,8 +646,12 @@ export interface IssueSnapshot {
    * followed hasn't finished; otherwise null.
    */
   readonly sentBack: SentBack | null;
-  /** How many Implement runs on it ended in an empty diff since its last Design session (src/loop/implement.ts). */
-  readonly emptyDiffs: number;
+  /**
+   * How many Implement runs on it landed nothing before its PR opened, since
+   * its last Design session: its empty diffs (src/loop/implement.ts) and its
+   * Broken runs (#434, src/loop/failures.ts). Each used one of its Retries.
+   */
+  readonly landedNothing: number;
   /**
    * While it's marked for a Kept-branch start (#536): its Kept branch on the
    * remote. Null when the mark is off, so the adapter doesn't read it, or the
@@ -701,12 +719,12 @@ export interface PullRequestSnapshot {
   /** Whether that Ticket is open, read the same way; false when there's no Ticket or the PR doesn't link it. */
   readonly ticketOpen: boolean;
   /**
-   * How many Implement runs on that Ticket ended in an empty diff since its
-   * last Design session, read like IssueSnapshot.emptyDiffs from the Ticket's
+   * How many Implement runs on that Ticket landed nothing before this PR
+   * opened, since its last Design session, read like IssueSnapshot.landedNothing from the Ticket's
    * comments through the PR's closing link, or 0 when there's no such link.
    * Each used up one of the Ticket's Retries, so a Verdict counts on from them (#415).
    */
-  readonly ticketEmptyDiffs: number;
+  readonly ticketLandedNothing: number;
   readonly open: boolean;
   readonly draft: boolean;
   /** Its head commit now. */
@@ -860,10 +878,11 @@ export const STRENGTH_LABELS: Readonly<Record<Strength, string>> = {
 export interface VerdictRecord {
   readonly verdict: Verdict;
   /**
-   * The Reviewer judged it; or red required checks, or a retry whose branch
-   * changed nothing, made it an Execution flaw.
+   * The Reviewer judged it; or red required checks, a retry whose branch
+   * changed nothing, or a retry that was a Broken run (#434), made it an
+   * Execution flaw.
    */
-  readonly source: "reviewer" | "ci" | "empty-diff";
+  readonly source: "reviewer" | "ci" | "empty-diff" | "broken-run";
   /**
    * Whether it came from a Request-changes run, which uses no retry itself. An
    * Execution flaw on its push still calls for one, and counts (#393).

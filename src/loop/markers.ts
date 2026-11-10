@@ -243,6 +243,18 @@ export function isEmptyDiffComment(body: string): boolean {
   return body.startsWith(EMPTY_DIFF_MARKER);
 }
 
+/**
+ * The first line of the Kit's comment on a Ticket whose Implement run, before
+ * its PR opened, was a Broken run (#434): counted with the empty-diff comments,
+ * as each uses one of the Ticket's Retries.
+ */
+export const BROKEN_RUN_MARKER = "<!-- fabrik:broken-run -->";
+
+/** Whether a comment body is the Kit's broken-run comment. */
+export function isBrokenRunComment(body: string): boolean {
+  return body.startsWith(BROKEN_RUN_MARKER);
+}
+
 /** A Design-session round's first line. */
 export const DESIGN_ROUND_MARKER = /^<!-- fabrik:design-round (\d+) -->/;
 

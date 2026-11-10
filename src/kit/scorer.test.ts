@@ -106,6 +106,13 @@ describe("The scoring plan for a finished run", () => {
       },
     );
 
+    // #434: what the agent did, not the infrastructure, so it shows how the Implementer worked.
+    it.each(["missing-output", "left-branch", "unlandable-branch"] as const)("scores an Implement run that was a Broken run by %s", (brokenRun) => {
+      const run = implementRun({ jobResult: "failure", infrastructureFailure: null, brokenRun });
+
+      expect(scoringPlan(run)).toEqual({ kind: "score" });
+    });
+
     it("scores a run that timed out with its transcript, since a runaway loop is how it worked", () => {
       const run = implementRun({ jobResult: "cancelled", infrastructureFailure: "timeout", subtype: null, turns: null, totalCostUsd: null });
 

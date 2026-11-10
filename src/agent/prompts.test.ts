@@ -18,7 +18,7 @@ import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
-import { EMPTY_DIFFS_HEADING, MAP_CAP_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
+import { LANDED_NOTHING_HEADING, MAP_CAP_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
@@ -324,8 +324,8 @@ describe("The Map question in the Design prompt", () => {
     expect(settled).toContain("don't ask their questions again");
   });
 
-  it("names the part a Ticket's Implement runs that built nothing arrive under, after the issue (#429)", async () => {
-    expect(await prompt("design")).toContain(`"${EMPTY_DIFFS_HEADING}", after the issue, holds what each run said`);
+  it("names the part a Ticket's Implement runs that landed nothing arrive under, after the issue (#429, #434)", async () => {
+    expect(await prompt("design")).toContain(`"${LANDED_NOTHING_HEADING}", after the issue, holds what each run said or how it broke`);
   });
 
   it("names the part a Ticket's siblings under its Spec arrive under, after the Spec (#475)", async () => {

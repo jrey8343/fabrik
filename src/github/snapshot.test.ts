@@ -509,8 +509,8 @@ describe("Gathering a Design queue check's needs-design issues", () => {
       });
     }
 
-    const emptyDiff = (emptyDiffs: number): Plan =>
-      planFor(changedNothing, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], emptyDiffs })), kitConfig());
+    const emptyDiff = (landedNothing: number): Plan =>
+      planFor(changedNothing, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], landedNothing })), kitConfig());
 
     it.each<[string, Plan[]]>([
       ["a Design flaw", [planFor(reviewed("verdict: design-flaw\n\nWrong approach."), snapshotOfPullRequest(aPullRequest()), kitConfig())]],
@@ -1156,7 +1156,7 @@ describe("Gathering the empty diffs of the Ticket a pull request was cut for (#4
       { number: 7, labels: ["ready-for-agent"], comments: [{ body: "Looks good.", author: { login: "operator", __typename: "User" } }, emptyDiff, emptyDiff] },
     ]);
 
-    expect(pullRequest).toMatchObject({ ticket: 7, ticketEmptyDiffs: 2 });
+    expect(pullRequest).toMatchObject({ ticket: 7, ticketLandedNothing: 2 });
   });
 
   it("counts only the Fabrik App's empty-diff markers, so nobody, another bot included, can spend the Ticket's Retries (#426)", async () => {
@@ -1166,11 +1166,11 @@ describe("Gathering the empty diffs of the Ticket a pull request was cut for (#4
     ];
     const pullRequest = await gathered([{ number: 7, labels: ["ready-for-agent"], comments: [emptyDiff, ...forged] }]);
 
-    expect(pullRequest).toMatchObject({ ticket: 7, ticketEmptyDiffs: 1 });
+    expect(pullRequest).toMatchObject({ ticket: 7, ticketLandedNothing: 1 });
   });
 
   it("counts none when the PR closes no issue its branch names", async () => {
-    expect(await gathered([{ number: 3, labels: [], comments: [emptyDiff] }])).toMatchObject({ ticket: 7, ticketEmptyDiffs: 0 });
+    expect(await gathered([{ number: 3, labels: [], comments: [emptyDiff] }])).toMatchObject({ ticket: 7, ticketLandedNothing: 0 });
   });
 });
 

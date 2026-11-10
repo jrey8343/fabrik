@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOf, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
-import type { FailedRunCommits, LoopEvent } from "./types.ts";
+import type { FailedRunCommits, FailureReport, LoopEvent, PullRequestSnapshot } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
@@ -175,8 +175,8 @@ describe("Failure notices", () => {
     expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->/);
   });
 
-  // #535: a first run whose branch builds on commits it didn't start from, which the push job could never rebuild.
-  it("says a first Implement run built on commits its branch didn't start from, naming them, and holds its Ticket back from Dispatch", () => {
+  // #535 held its Ticket back from Dispatch; since #434 it's a Broken run the Kit re-runs itself, so nothing holds it.
+  it("says a first Implement run built on commits its branch didn't start from, naming them, and doesn't hold its Ticket back from Dispatch", () => {
     const older = "c".repeat(40);
     const detail = `agent/7 builds on a commit it didn't start from (\`${older}\`)`;
     const plan = planFor(
@@ -186,8 +186,8 @@ describe("Failure notices", () => {
     );
 
     const body = commentOf(plan);
-    expect(body).toMatch(/^<!-- fabrik:implement-run-failed -->\n/);
-    expect(body).toContain("The Implement run on #7 failed: the Implementer built on commits its branch didn't start from, so the push job couldn't rebuild it.");
+    expect(body).toMatch(/^<!-- fabrik:broken-run -->\n/);
+    expect(body).toContain("The Implement run on #7 was a Broken run, and the Kit opened no PR: the Implementer built on commits its branch didn't start from, so the push job couldn't rebuild it.");
     expect(body).toContain(`> ${detail}`);
     expect(body).toContain("they're kept for 7 days as `agent-branch.bundle`");
   });
@@ -210,7 +210,7 @@ describe("Failure notices", () => {
           "",
           "It had made commits before it failed. They weren't pushed, so running it again starts from `aaaaaaa` without them; they're kept for 7 days as `agent-branch.bundle` in the run's `fabrik-agent-failure` artifact.",
           "",
-          "This is an Infrastructure failure,",
+          "This is a Broken run",
         ].join("\n"),
       );
     });
@@ -441,5 +441,159 @@ describe("Failure notices say what fits the run that failed (#436)", () => {
     const body = bodyOf(planFor(event, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig()));
 
     expect(body).toContain("Once the weekly limit resets, re-add `agent:implement` on this Ticket to run it again.");
+  });
+});
+
+// #434: an Implement run whose work the Kit can't land because of what the agent did.
+describe("A Broken run", () => {
+  const BROKEN = [
+    ["output that breaks its contract", { failure: "missing-output", detail: "reviewMissPoints is required" }, "the Implementer gave no valid output"],
+    ["leaving its branch", { failure: "left-branch", detail: "The agent left agent/7 for main" }, "the Implementer left its branch"],
+    ["building on commits its branch didn't start from", { failure: "unlandable-branch", detail: "agent/7 builds on a commit it didn't start from" }, "the Implementer built on commits its branch didn't start from"],
+  ] as const;
+  const commentsOf = (plan: ReturnType<typeof planFor>) =>
+    (plan.kind === "act" ? plan.actions : []).flatMap((action) => (action.kind === "comment" ? [action] : []));
+
+  describe("on a Ticket's first run", () => {
+    it.each(BROKEN)("by %s is an Execution flaw: a broken-run comment mentioning nobody, and the Retry starts", (_name, report, how) => {
+      const ticket = anIssue({ number: 7, labels: ["ready-for-agent"] });
+
+      const plan = planFor(failed({ role: "implement", report }), snapshotOf(ticket), kitConfig());
+
+      expect(plan).toEqual({
+        kind: "act",
+        actions: [
+          { kind: "comment", issue: 7, body: expect.stringMatching(/^<!-- fabrik:broken-run -->\n/) },
+          { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
+        ],
+      });
+      const [comment] = commentsOf(plan);
+      expect(comment!.body).toContain(`The Implement run on #7 was a Broken run, and the Kit opened no PR: ${how}`);
+      expect(comment!.body).toContain("A Broken run is an Execution flaw: retry 1 of 2 starts now.");
+      expect(comment!.body).toContain(`> ${report.detail}`);
+      expect(comment!.body).not.toContain("doesn't count against the Ticket's retries");
+      expect(comment!.body).not.toContain("implement-run-failed");
+      expect(notificationsOf(plan)).toEqual([]);
+    });
+
+    it("points to the commits it kept, which the Retry doesn't start from", () => {
+      const commits = { base: "a".repeat(40), continued: false, head: "b".repeat(40), kept: true };
+      const plan = planFor(failed({ role: "implement", report: { failure: "left-branch", detail: "", commits } }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig());
+
+      expect(commentsOf(plan)[0]!.body).toContain("they're kept for 7 days as `agent-branch.bundle` in the run's `fabrik-agent-failure` artifact.");
+    });
+
+    it("shares the pool with empty diffs: after one, a Broken run starts the second Retry, stepped up", () => {
+      const plan = planFor(failed({ role: "implement", report: BROKEN[0][1] }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], landedNothing: 1 })), kitConfig());
+
+      expect(commentsOf(plan)[0]!.body).toContain("retry 2 of 2 starts now, stepped up.");
+      expect(plan).toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]) });
+    });
+
+    it("after both Retries are used, sends the Ticket back to design", () => {
+      const plan = planFor(failed({ role: "implement", report: BROKEN[1][1] }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], landedNothing: 2 })), kitConfig());
+
+      expect(plan).toMatchObject({
+        kind: "act",
+        actions: expect.arrayContaining([
+          { kind: "remove-label", issue: 7, label: "ready-for-agent" },
+          { kind: "add-labels", issue: 7, labels: ["needs-design"] },
+        ]),
+      });
+      expect(commentsOf(plan)[0]!.body).toMatch(/^<!-- fabrik:broken-run -->\n.*goes back to design/);
+      expect(plan).not.toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]) });
+    });
+
+    it("takes a stale agent:implement off first, so the Retry's label is a fresh event", () => {
+      const plan = planFor(failed({ role: "implement", report: BROKEN[0][1] }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"] })), kitConfig());
+
+      expect(plan).toMatchObject({ actions: [{ kind: "remove-label", issue: 7, label: "agent:implement" }, { kind: "comment" }, { kind: "add-labels", labels: ["agent:implement"] }] });
+    });
+  });
+
+  describe("on a Retry", () => {
+    const flaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: HEAD_SHA } as const;
+    const onRetry = (pullRequest: Partial<PullRequestSnapshot>, report: FailureReport = BROKEN[1][1]) =>
+      planFor(
+        failed({ role: "implement", report }),
+        snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] }), {
+          pullRequest: aPullRequest({ number: 50, ticket: 7, ticketLabels: ["ready-for-agent"], verdicts: [flaw], ...pullRequest }),
+        }),
+        kitConfig(),
+      );
+
+    it("posts an Execution flaw Verdict from the Broken run on the PR, mentioning nobody, and starts the next Retry", () => {
+      const plan = onRetry({});
+
+      const verdicts = verdictsPostedIn(commentsOf(plan).map((comment) => comment.body));
+      expect(verdicts).toEqual([{ verdict: "execution-flaw", source: "broken-run", requestChanges: false, headSha: HEAD_SHA }]);
+      const [comment] = commentsOf(plan);
+      expect(comment!.issue).toBe(50);
+      expect(comment!.body).toContain("From a Broken run, on aaaaaaa.");
+      expect(comment!.body).toContain("The Implementer's retry on #50 was a Broken run: the Implementer left its branch");
+      expect(comment!.body).toContain("> The agent left agent/7 for main");
+      expect(comment!.body).toContain("Retry 2 of 2 starts now, stepped up");
+      expect(comment!.body).not.toContain("implement-run-failed");
+      expect(plan).toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]) });
+      expect(notificationsOf(plan)).toEqual([]);
+    });
+
+    it("counts toward the two: on the second Retry, it sends the Ticket back to design", () => {
+      const plan = onRetry({ verdicts: [flaw, { ...flaw, source: "broken-run" }] });
+
+      expect(plan).toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["needs-design"] }]) });
+      expect(plan).not.toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]) });
+    });
+  });
+
+  describe("on a run that uses no retry", () => {
+    it("of a Request-changes run, posts the notice as before, naming it a Broken run, and waits for agent:implement", () => {
+      const plan = planFor(
+        failed({ role: "implement", report: BROKEN[0][1] }),
+        snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] }), {
+          pullRequest: aPullRequest({ number: 50, ticket: 7, requestChangesRunInFlight: 9001 }),
+        }),
+        kitConfig(),
+      );
+
+      expect(plan).toEqual({
+        kind: "act",
+        actions: [
+          { kind: "remove-label", issue: 7, label: "agent:implement" },
+          { kind: "comment", issue: 50, body: expect.stringMatching(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #7 failed: the Implementer gave no valid output\./) },
+        ],
+      });
+      const body = commentsOf(plan)[0]!.body;
+      expect(body).toContain("This is a Broken run on a Request-changes run, which uses no retry, so the Loop won't run it again. Re-add `agent:implement` on the Ticket (#7) to run it again.");
+      expect(body).not.toContain("Infrastructure failure");
+    });
+
+    it("of a conflict-only run, hands the PR to the Operator as before, naming it a Broken run", () => {
+      const plan = planFor(
+        failed({ role: "implement", report: BROKEN[2][1], conflict: { pullRequest: 50, main: "d".repeat(40) } }),
+        snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] })),
+        kitConfig(),
+      );
+
+      const body = commentsOf(plan)[0]!.body;
+      expect(body).toContain(`it was a Broken run: the Implementer built on commits its branch didn't start from, so the push job couldn't rebuild it (${BROKEN[2][1].detail})`);
+      expect(body).not.toContain("Infrastructure failure");
+      expect(plan).not.toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]) });
+    });
+  });
+
+  it("is never a Review's missing Verdict, nor a broken prototype turn, which stay Infrastructure failures", () => {
+    const review = planFor(failed({ role: "review", report: BROKEN[0][1] }), snapshotOf(anIssue({ number: 7, openPullRequests: [12] })), kitConfig());
+    const prototype = planFor(failed({ role: "design", prototype: true, report: BROKEN[1][1] }), snapshotOf(anIssue({ number: 7, labels: ["needs-design"] })), kitConfig());
+
+    expect(commentsOf(review)[0]!.body).toContain("This is an Infrastructure failure");
+    expect(commentsOf(prototype)[0]!.body).toContain("This is an Infrastructure failure");
+  });
+
+  it("is never a timeout, a real crash or a provider error", () => {
+    for (const report of [null, { failure: "crash", detail: "" }, { failure: "provider-error", detail: "" }] as const) {
+      const plan = planFor(failed({ role: "implement", report }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig());
+      expect(commentsOf(plan)[0]!.body).toMatch(/^<!-- fabrik:implement-run-failed -->/);
+    }
   });
 });
