@@ -1005,3 +1005,87 @@ describe("The existing tests a run's own commits changed (#463)", () => {
     expect(branch.changes.changedTests).toEqual(["src/feature.test.ts"]);
   });
 });
+
+describe("A Kept-branch start (#536)", () => {
+  /** The Kept branch is the closed PR's branch, prHead, cut from a main that has moved on since. */
+  async function rebuildKept(baseSha: string, started: string | null = null) {
+    const head = await git(clone, "rev-parse", "HEAD");
+    const bundle = join(root, "agent-branch.bundle");
+    await git(clone, "bundle", "create", "--quiet", bundle, `refs/heads/${BRANCH}`, `^${baseSha}`);
+    return rebuildAgentBranch({ name: BRANCH, base: { ref: BRANCH, sha: baseSha }, head }, bundle, REMOTE(), { started, wholeBranch: true });
+  }
+
+  it("brings main in and adds its commit: only that commit is judged, the push fast-forwards, and the PR's paths are the whole branch's", async () => {
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    const tip = await commit(clone, { "src/waitlist.ts": "waitlist\n" }, "Finish the waitlist");
+
+    const branch = await rebuildKept(prHead);
+    await branch.push(BRANCH);
+
+    expect(paths(branch.changes.net)).toEqual(["src/waitlist.ts"]);
+    expect(paths(branch.changes.commits)).toEqual(["src/waitlist.ts"]);
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+    // The kept work and the run's, never what main brought in.
+    expect(paths(branch.changes.wholeBranch?.net ?? [])).toEqual(["src/feature.ts", "src/shared.ts", "src/waitlist.ts"]);
+    expect(await git(remote, "rev-parse", `refs/heads/${BRANCH}`)).toBe(tip);
+    expect(await git(remote, "merge-base", "--is-ancestor", prHead, tip).then(() => true)).toBe(true);
+  });
+
+  it("adds one commit on a Kept branch cut from an older main: the kept commits are neither judged nor lost", async () => {
+    const tip = await commit(clone, { "src/feature.ts": "feature v2\n" }, "Drop the stale comments");
+
+    const branch = await rebuildKept(prHead);
+    await branch.push(BRANCH);
+
+    expect(paths(branch.changes.commits)).toEqual(["src/feature.ts"]);
+    expect(paths(branch.changes.wholeBranch?.net ?? [])).toEqual(["src/feature.ts", "src/shared.ts"]);
+    expect(await git(remote, "rev-parse", `refs/heads/${BRANCH}`)).toBe(tip);
+  });
+
+  it("never judges a trust-root change someone with write access pushed to the Kept branch as the run's", async () => {
+    await commit(clone, { "CLAUDE.md": "the Operator's own rules\n" }, "The Operator's trust-root change");
+    await git(clone, "push", "--quiet", "origin", BRANCH);
+    const kept = await git(clone, "rev-parse", "HEAD");
+    await commit(clone, { "src/waitlist.ts": "waitlist\n" }, "Finish the waitlist");
+
+    const branch = await rebuildKept(kept);
+
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toEqual({ kind: "allow" });
+    expect(paths(branch.changes.wholeBranch?.net ?? [])).toContain("CLAUDE.md");
+  });
+
+  it("merging main in alone changes nothing of the run's own, so it lands as an empty diff", async () => {
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+
+    const branch = await rebuildKept(prHead);
+
+    expect(branch.changes.net).toEqual([]);
+    expect(branch.changes.updatedFromMain).toBe(true);
+  });
+
+  it("lists the existing tests the kept commits changed, as well as the run's, for the whole PR", async () => {
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "main");
+    await commit(seed, { "src/cart.test.ts": "test v1\n" }, "Add a test on main");
+    await git(seed, "push", "--quiet", "origin", "main");
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    await commit(clone, { "src/cart.test.ts": "test v2\n" }, "The closed PR's change to an existing test");
+    await git(clone, "push", "--quiet", "origin", BRANCH);
+    const kept = await git(clone, "rev-parse", "HEAD");
+    await commit(clone, { "src/waitlist.ts": "waitlist\n" }, "Finish the waitlist");
+
+    const branch = await rebuildKept(kept);
+
+    expect(branch.changes.changedTests).toEqual([]);
+    expect(branch.changes.wholeBranch?.changedTests).toEqual(["src/cart.test.ts"]);
+  });
+
+  it("works out no whole branch for a retry, whose PR's paths it doesn't need", async () => {
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+
+    const branch = await rebuild(prHead, null, null, false);
+
+    expect(branch.changes.wholeBranch).toBeUndefined();
+  });
+});

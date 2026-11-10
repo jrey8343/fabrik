@@ -1,7 +1,7 @@
 // The adapter's event side: turns an Actions event, or what an agent job
 // passed out to its push job, into the Loop event it stands for.
 // It holds no Loop rules; those all live in src/loop/rules.ts.
-import type { AgentRunResult } from "../agent/result.ts";
+import type { AgentRunResult, BuiltBranch } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import type { CaptureOutputs } from "../kit/pushJob.ts";
@@ -169,6 +169,7 @@ export function agentRunEventFrom(
   startedBy: number | null = null,
   evidence: PushJobEvidence | null = null,
   runUrl: string | null = null,
+  keptBranch: { readonly pullRequest: number | null; readonly base: string } | null = null,
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role === "audit") throw new Error("An Auditor's result is applied through auditEventFrom");
@@ -193,9 +194,11 @@ export function agentRunEventFrom(
     issue: result.issue,
     output: result.output,
     branch: result.branch.name,
-    base: result.branch.base.ref,
+    // A Kept-branch start built on its own branch, but opens its PR against the default branch the Kit job named (#536).
+    base: keptBranch?.base ?? result.branch.base.ref,
     changes,
     runUrl,
+    ...(keptBranch === null ? {} : { keptBranch: { pullRequest: keptBranch.pullRequest } }),
     // A branch with no commits has no head of its own, but changes nothing, so its evidence reaches no PR.
     ...(evidence === null ? {} : { evidence: implementEvidence(evidence, result.branch.head ?? result.branch.base.sha) }),
     // A retry's branch starts at the PR head it built on, which the core checks is still the PR's.
@@ -209,6 +212,31 @@ export function agentRunEventFrom(
           },
         }),
   };
+}
+
+/**
+ * Refuses an Implement run whose branch isn't built where the Kit job's plan
+ * started it: a retry, or a Kept-branch start (#536), carries on the Ticket's
+ * agent branch, and any other first run cuts it from the default branch. The
+ * agent job writes the branch it built, so a first run that claims its own
+ * branch as its base without that plan is never landed as one that carried on.
+ */
+export function checkBuiltAsPlanned(
+  ticket: number,
+  built: BuiltBranch,
+  retry: { readonly pullRequest: number } | null,
+  keptBranch: object | null,
+): void {
+  const onItsOwn = built.base.ref === built.name;
+  if (retry !== null) {
+    if (!onItsOwn) throw new Error(`The retry on #${retry.pullRequest} didn't build on ${built.name}`);
+    return;
+  }
+  if (keptBranch !== null) {
+    if (!onItsOwn) throw new Error(`The Kept-branch start on #${ticket} didn't carry on ${built.name}`);
+    return;
+  }
+  if (onItsOwn) throw new Error(`The Implement run on #${ticket} built on ${built.name} itself, but it isn't a retry or a Kept-branch start`);
 }
 
 /**

@@ -195,11 +195,13 @@ describe("needs-design on an agent PR sends its Ticket back to design", () => {
   ])("takes the Design-flaw route for a PR %s: closes it keeping its branch, and swaps ready-for-agent for needs-design on the Ticket", (_, pullRequest) => {
     const actions = actionsOf(planFor(needsDesignOnPullRequest, snapshotOfPullRequest(pullRequest), kitConfig()));
 
-    expect(actions.map((action) => action.kind)).toEqual(["close-pull-request", "comment", "remove-label", "add-labels"]);
+    expect(actions.map((action) => action.kind)).toEqual(["close-pull-request", "comment", "remove-label", "remove-label", "add-labels"]);
     expect(actions[0]).toEqual({ kind: "close-pull-request", pullRequest: 50 });
     expect(actions[2]).toEqual({ kind: "remove-label", issue: 7, label: "ready-for-agent" });
+    // The Design session starts with the Kept-branch mark off (#536).
+    expect(actions[3]).toEqual({ kind: "remove-label", issue: 7, label: "fabrik:kept-branch" });
     // needs-design goes on the Ticket last, which starts its Design session.
-    expect(actions[3]).toEqual({ kind: "add-labels", issue: 7, labels: ["needs-design"] });
+    expect(actions[4]).toEqual({ kind: "add-labels", issue: 7, labels: ["needs-design"] });
   });
 
   it("leaves a note on the Ticket that its Design session's round 1 reads as the Operator sending it back from #50", () => {

@@ -169,6 +169,8 @@ function eligibilityOf(candidate: ReplayCandidate | undefined): Eligible | strin
   if (implementRuns.length === 0) return "the store holds no Implement run of it";
   const first = firstRunOf(implementRuns);
   if (first?.baseSha == null) return "the store has no baseSha for its first Implement run";
+  // Its baseSha is the Kept branch's head, and what the closed PR built on it isn't in the Ticket (#536).
+  if (first.keptBranch) return "its first Implement run carried on a Kept branch, so its baseSha can't rebuild it";
   const flags: ReplayFlag[] = [];
   if (candidate.humanTouches > 0) flags.push("human-touches");
   if (editedSince(candidate.lastEdited, startOf(first))) flags.push("edited-input");

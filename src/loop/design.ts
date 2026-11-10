@@ -18,6 +18,7 @@ import {
   decisionLabel,
   isCategoryLabel,
   type Label,
+  KEPT_BRANCH_LABEL,
   MAP_LABEL,
   MONITOR_LABEL,
   NEEDS_DESIGN,
@@ -624,8 +625,20 @@ function rewriteAsBrief(issueNumber: number, comment: string, brief: DesignAgent
     ...(brief.stepUp === false && issue.labels.includes(STEP_UP_LABEL)
       ? [{ kind: "remove-label", issue: issueNumber, label: STEP_UP_LABEL } as const]
       : []),
-    { kind: "add-labels", issue: issueNumber, labels: brief.stepUp === true ? [READY_FOR_AGENT, STEP_UP_LABEL] : [READY_FOR_AGENT] },
+    // The session decides afresh whether the next run carries on the Kept branch (#536): only true leaves the mark on.
+    ...(brief.keptBranch !== true && issue.labels.includes(KEPT_BRANCH_LABEL)
+      ? [{ kind: "remove-label", issue: issueNumber, label: KEPT_BRANCH_LABEL } as const]
+      : []),
+    { kind: "add-labels", issue: issueNumber, labels: briefLabels(brief) },
   ];
+}
+
+/** The labels an agent brief puts on its Ticket: ready-for-agent, and the marks it sets. */
+function briefLabels(brief: DesignAgentBrief): Label[] {
+  const labels: Label[] = [READY_FOR_AGENT];
+  if (brief.stepUp === true) labels.push(STEP_UP_LABEL);
+  if (brief.keptBranch === true) labels.push(KEPT_BRANCH_LABEL);
+  return labels;
 }
 
 /**

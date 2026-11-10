@@ -29,7 +29,7 @@ Fabrik also uses these labels, which aren't triage roles. Skills don't set them;
 | `agent:research`  | a research Decision        | a Researcher                                    |
 | `agent:replay`    | a replay issue             | the Replay's next Ticket                        |
 
-**`fabrik:` labels** say what an issue is to Fabrik, and `fabrik:step-up` marks a Ticket:
+**`fabrik:` labels** say what an issue is to Fabrik, and `fabrik:step-up` and `fabrik:kept-branch` mark a Ticket:
 
 | Label                   | Meaning                                                                 |
 | ----------------------- | ----------------------------------------------------------------------- |
@@ -41,5 +41,6 @@ Fabrik also uses these labels, which aren't triage roles. Skills don't set them;
 | `fabrik:replay`         | your Replay request, re-running merged Tickets with one thing changed   |
 | `fabrik:monitor`        | an issue the Monitor filed for a production error or a red `main`       |
 | `fabrik:step-up`        | on a Ticket: every Implement run that starts while it's on is a Step-up |
+| `fabrik:kept-branch`    | on a Ticket: its next Implement run with no open PR carries on its Kept branch, not `main`; every Back to design takes it off |
 
 Edit the "Label in our tracker" column to match whatever vocabulary you actually use.

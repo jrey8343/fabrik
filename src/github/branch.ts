@@ -102,6 +102,12 @@ export interface Judged {
   readonly mergeMain?: string | null;
   /** The main head the Kit job read before the run started, if it read one. */
   readonly started?: string | null;
+  /**
+   * Whether the run's PR is the whole branch, not only its own commits: a
+   * Kept-branch start (#536), from the Kit job's plan, whose new PR's paths
+   * are worked out from the whole branch against main.
+   */
+  readonly wholeBranch?: boolean;
 }
 
 /**
@@ -423,7 +429,7 @@ async function onItsOwnBranch(
   url: string,
   branch: BuiltBranch,
   bundlePath: string,
-  { requestChanges = false, mergeMain = null, started: startedAt = null }: Judged,
+  { requestChanges = false, mergeMain = null, started: startedAt = null, wholeBranch = false }: Judged,
 ): Promise<AgentBranchGit> {
   const ref = `refs/heads/${branch.name}`;
   await git("fetch", "--quiet", url, branch.base.sha);
@@ -500,6 +506,7 @@ async function onItsOwnBranch(
       ...(told === null || resolved === null ? {} : { mainMerge: { main: told, resolved } }),
       // What the push lands, which the run's push note names (#420).
       pushedHead: tip,
+      ...(wholeBranch ? { wholeBranch: await wholeBranchAgainst(git, main, tip) } : {}),
     },
     head: tip,
     async push(name) {
@@ -510,6 +517,19 @@ async function onItsOwnBranch(
 }
 
 /**
+ * A Kept-branch start's whole branch against main (#536), as its new PR
+ * shows it: the paths changed since the two last met, and the existing tests
+ * among them that its commits main doesn't hold, the kept ones and the run's,
+ * changed, deleted or moved away.
+ */
+async function wholeBranchAgainst(git: Git, main: string, tip: string): Promise<NonNullable<BranchChanges["wholeBranch"]>> {
+  const met = (await git("merge-base", main, tip)).trim();
+  const commits = await commitsIn(git, tip, `^${main}`);
+  return { net: await diff(git, met, tip), changedTests: await existingTests(git, commits, [main]) };
+}
+
+/**
+ * The test files (isTestPath) these commits changed/**
  * The test files (isTestPath) these commits changed, deleted or moved away
  * that one of `bases` already holds (#463), each once, sorted. Pathspecs are
  * read literally, so no path the agent made up reads as a pattern.

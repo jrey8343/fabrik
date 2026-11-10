@@ -289,6 +289,15 @@ describe("The judge prompt's account of the run (#450)", () => {
     expect(prompt).toMatch(/rebase only/i);
   });
 
+  it("tells the judge a Kept-branch start carried on the kept work of a closed PR, its ask what the Ticket says is left (#536)", () => {
+    const brief = "## Carrying on the Kept branch\n\nThe branch holds the kept work of #230.";
+    const { prompt } = judgePrompt({ transcript: shortRun, ticket, rubrics, run: { kind: "kept-branch", retry: 0, timedOut: false }, brief });
+
+    expect(prompt).toContain("A Kept-branch start");
+    expect(prompt).toMatch(/kept work/);
+    expect(fencedBlocks(prompt).some((b) => b.body === brief)).toBe(true);
+  });
+
   it("tells the judge a first run's ask is the Ticket alone, and gives no brief", () => {
     const { prompt } = judgePrompt({ transcript: shortRun, ticket, rubrics });
 

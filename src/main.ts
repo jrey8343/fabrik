@@ -15,6 +15,7 @@ import { describePlan } from "./github/describePlan.ts";
 import {
   agentFailureEventFrom,
   agentRunEventFrom,
+  checkBuiltAsPlanned,
   auditEventFrom,
   loopEventFrom,
   prototypeEventFrom,
@@ -164,13 +165,9 @@ async function agentResultEvent(
           ...(input.retryFlaw === undefined || input.retryFlaw === null ? {} : { retryFlaw: input.retryFlaw }),
           ...(input.conflict === null || input.conflict === undefined ? {} : { conflict: input.conflict }),
         };
-  if ((retry !== null) !== (built.base.ref === built.name)) {
-    throw new Error(
-      retry === null
-        ? `The Implement run on #${result.issue} built on ${built.name} itself, but it isn't a retry`
-        : `The retry on #${retry.pullRequest} didn't build on ${built.name}`,
-    );
-  }
+  // A Kept-branch start (#536), too, comes from the Kit job's plan: only then may a first run carry on its own branch.
+  const keptBranch = input.keptBranch ?? null;
+  checkBuiltAsPlanned(result.issue, built, retry, keptBranch);
   // The main head a Request-changes run was told to merge in (#341), from its result, which the agent job writes: the
   // push job checks it against main as the Kit job read it before the run, which the agent can't rewrite, and main as
   // it is now. Only a Request-changes run is ever told to, whatever the result says.
@@ -179,11 +176,13 @@ async function agentResultEvent(
     requestChanges: retry?.review !== undefined,
     mergeMain,
     started: input.mainAtStart ?? null,
+    // A Kept-branch start's PR is the whole branch, whose paths its body is worked out from (#536).
+    wholeBranch: keptBranch !== null,
   });
   // The capture result and artifact ids come from the Implement job's outputs; the core decides whether the run is UI.
   const capture = input.capture ?? { result: null, artifact: null, galleryArtifact: null, timedOut: false };
   const evidence = { ...capture, run: Number(required("GITHUB_RUN_ID")), repoUrl: thisRepoUrl() };
-  return { event: agentRunEventFrom(result, branch.changes, retry, null, evidence, thisRunUrl()), source, branch };
+  return { event: agentRunEventFrom(result, branch.changes, retry, null, evidence, thisRunUrl(), keptBranch), source, branch };
 }
 
 /** The routed agent job failed or was cancelled. Its failure report is missing when its timeout cancelled it. */

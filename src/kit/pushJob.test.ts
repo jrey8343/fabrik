@@ -99,9 +99,23 @@ describe("What the push job applies", () => {
       mainAtStart: null,
       retry: null,
       retryFlaw: null,
+      keptBranch: null,
       startedBy: null,
       capture: { result: null, artifact: null, galleryArtifact: null, timedOut: false },
     });
+  });
+
+  it("carries a Kept-branch start from the Kit job's plan, with the closed PR and the default branch it opens against (#536)", () => {
+    const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "kept-branch": "true", "kept-pull-request": "230", "default-branch": "trunk" }), 7);
+
+    expect(input).toMatchObject({ kind: "agent-result", pullRequest: null, keptBranch: { pullRequest: 230, base: "trunk" } });
+  });
+
+  it.each([
+    ["it isn't one", { ticket: "7", "kept-branch": "false" }],
+    ["the Kit job named no default branch", { ticket: "7", "kept-branch": "true", "kept-pull-request": "230" }],
+  ])("carries no Kept-branch start when %s", (_, kit) => {
+    expect(pushJobInput(needs("implement", { implement: ok() }, kit), 7)).toMatchObject({ keptBranch: null });
   });
 
   it("carries a Retry's number from the Kit job's plan, so a Retry left over from an earlier flaw never lands (#341)", () => {

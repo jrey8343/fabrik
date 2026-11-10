@@ -70,6 +70,15 @@ export const REPLAY_LABEL = "fabrik:replay";
  */
 export const STEP_UP_LABEL = "fabrik:step-up";
 
+/**
+ * The mark for a Kept-branch start (#536): a Design session or the Operator
+ * puts it on a Ticket, and an Implement run that starts with no open PR
+ * carries on the Ticket's Kept branch, the agent branch of the PR the Kit
+ * closed unmerged, instead of starting from main. Every Back to design takes
+ * it off. Like STEP_UP_LABEL, it isn't one of KIT_ISSUE_LABELS.
+ */
+export const KEPT_BRANCH_LABEL = "fabrik:kept-branch";
+
 /** Every label that marks an issue as the Kit's own, so Intake leaves it alone and the adapter reads it into the snapshot. */
 export const KIT_ISSUE_LABELS = [
   TOKEN_ROTATION_LABEL,
@@ -137,7 +146,8 @@ export type Label =
   | DecisionLabel
   | typeof RESEARCH_LABEL
   | typeof REPLAY_TRIGGER_LABEL
-  | typeof STEP_UP_LABEL;
+  | typeof STEP_UP_LABEL
+  | typeof KEPT_BRANCH_LABEL;
 
 /** Every label the Kit uses, so Setup can create each one. */
 export const ALL_LABELS: readonly Label[] = [
@@ -151,6 +161,7 @@ export const ALL_LABELS: readonly Label[] = [
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,
   STEP_UP_LABEL,
+  KEPT_BRANCH_LABEL,
   MAP_LABEL,
   ...DECISION_TYPES.map(decisionLabel),
 ];

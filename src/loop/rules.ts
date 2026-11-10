@@ -180,7 +180,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         : dispatch(snapshot.dispatch, config, {
             implement: heldOf("implement", snapshot.kitIssues),
             research: heldOf("research", snapshot.kitIssues),
-          });
+          }, snapshot.operator);
     case "design-queue-check":
       return snapshot.designQueue === null
         ? missingFromSnapshot("the needs-design issues a Design queue check weighs")

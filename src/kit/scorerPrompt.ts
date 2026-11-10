@@ -109,6 +109,8 @@ function askOf({ kind, retry }: JudgedRun): string {
       return `Retry ${retry} on the Ticket's pull request: its prompt carried the latest Verdict's findings to fix, below, with any Request changes from the Operator, which amend the Ticket for that pull request. Its ask is the fix of those findings, against the Ticket as any Request changes amended it.`;
     case "request-changes":
       return "A Request-changes run: the Operator's Request changes review, below, amends the Ticket for this pull request, and wins over the Ticket where they differ, however much it changes or widens the scope. Its ask is the Ticket as that review amends it.";
+    case "kept-branch":
+      return `A Kept-branch start${retry > 0 ? `, Retry ${retry} after an empty diff` : ""}: it carried on the kept work of a pull request the Kit closed unmerged, on that pull request's branch, rather than cutting the Ticket's branch from \`main\`, as its prompt, below, says. The Ticket, which a Design session rewrote after that pull request closed, says what's left to build on the kept work: that is the whole ask, with \`main\` merged in first when the branch lacked it.`;
     case "conflict-only":
       return "A conflict-only run: `main` moved and the pull request conflicted with it, so its prompt asked it to rebase the branch onto `main`, resolve the conflicts and change nothing else. Its ask is the rebase only, never the Ticket's criteria, which the pull request's earlier runs built.";
   }

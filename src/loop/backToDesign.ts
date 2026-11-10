@@ -4,7 +4,7 @@
 // needs-design, which starts a Design session. The Kit's note on the Ticket
 // links the closed PR and its Verdict, so that session's round 1 can too.
 import { agentBranchFor } from "./agentPullRequest.ts";
-import { NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
+import { KEPT_BRANCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import type { Action, PostedComment, PullRequestSnapshot } from "./types.ts";
 
 /** Why the PR goes back: the Reviewer said so, or its retries ran out. */
@@ -39,9 +39,19 @@ export function sentBackByOperator(pullRequest: PullRequestSnapshot): Action[] {
       ].join("\n"),
     },
     { kind: "remove-label", issue: ticket, label: READY_FOR_AGENT },
+    keptBranchOff(ticket),
     // Starts the Design session; it goes on last, so that session sees the rest.
     { kind: "add-labels", issue: ticket, labels: [NEEDS_DESIGN] },
   ];
+}
+
+/**
+ * Takes the Kept-branch mark off the Ticket (#536), whether or not it's on:
+ * every Design session starts with it off, and decides afresh whether the
+ * next run carries on the Kept branch, so none inherits a stale mark.
+ */
+export function keptBranchOff(ticket: number): Action {
+  return { kind: "remove-label", issue: ticket, label: KEPT_BRANCH_LABEL };
 }
 
 /** The line the Verdict comment ends with when its PR goes back to design. */
@@ -86,6 +96,7 @@ export function backToDesignActions(
       ],
     },
     { kind: "remove-label", issue: ticket, label: READY_FOR_AGENT },
+    keptBranchOff(ticket),
     // Starts the Design session; it goes on last, so that session sees the rest.
     { kind: "add-labels", issue: ticket, labels: [NEEDS_DESIGN] },
   ];

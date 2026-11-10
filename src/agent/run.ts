@@ -21,6 +21,8 @@
 // its comments, whose latest Verdict holds the findings to fix. A Request-changes
 // run is a retry with FABRIK_REVIEW_FILE too: the Operator's review, its input. A
 // conflict-only run (#304) is one with FABRIK_CONFLICT_MAIN: the main head it rebases onto.
+// A Kept-branch start (#536) runs in a checkout of the Ticket's Kept branch with no PR file,
+// FABRIK_KEPT_BRANCH "true" and FABRIK_KEPT_PULL_REQUEST the PR the Kit closed, if known.
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
 // for a Ticket under a Spec, the Spec's other Tickets from FABRIK_SPEC_TICKETS_FILE (#475),
 // for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
@@ -308,6 +310,17 @@ const REPLAY_SPECS = {
   } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
 };
 
+/**
+ * A Kept-branch start (#536), from the Kit job's plan: FABRIK_KEPT_BRANCH is
+ * "true", and FABRIK_KEPT_PULL_REQUEST names the closed PR, if known. Never
+ * inferred from the branch checked out.
+ */
+function keptBranchFromEnv(): { readonly pullRequest: number | null } | null {
+  if (process.env["FABRIK_KEPT_BRANCH"] !== "true") return null;
+  const pullRequest = Number(process.env["FABRIK_KEPT_PULL_REQUEST"] ?? "");
+  return { pullRequest: Number.isInteger(pullRequest) && pullRequest > 0 ? pullRequest : null };
+}
+
 /** The model and effort to run: what the Kit job's plan chose, else the role's own. */
 function modelFor(role: { model: string; effort: string | null }): { model: string; effort: string | null } {
   const model = process.env["FABRIK_MODEL"];
@@ -364,8 +377,10 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
             review: reviewFile,
             // A conflict-only run (#304) rebases its PR's branch onto this main head, from the Kit job's plan.
             conflict: process.env["FABRIK_CONFLICT_MAIN"] ?? "",
-            // The branch a Request-changes run on a conflicting PR merges in (#341).
+            // The branch a Request-changes run on a conflicting PR merges in (#341), and a Kept-branch start too (#536).
             defaultBranch: process.env["FABRIK_DEFAULT_BRANCH"] ?? "",
+            // A Kept-branch start (#536) carries on the branch checked out, on the Kit job's plan alone.
+            keptBranch: keptBranchFromEnv(),
           });
     branch = input.branch;
     extra.push(...input.parts);
