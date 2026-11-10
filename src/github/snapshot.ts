@@ -114,7 +114,7 @@ const ISSUE_QUERY = `
             ... on UnlabeledEvent { createdAt label { name } actor { __typename } }
           }
         }
-        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number isDraft headRefName author { __typename } } }
+        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number state isDraft headRefName author { __typename } } }
         blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }
         blocking(first: 50) { nodes { number state repository { nameWithOwner } } }
       }
@@ -137,7 +137,8 @@ interface IssueQueryResult {
       comments: { nodes: { fullDatabaseId: string; body: string; createdAt: string; author: { login: string; __typename: string } | null }[] };
       // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
       timelineItems: { nodes: LabelTimelineItem[] };
-      closedByPullRequestsReferences: { nodes: { number: number; isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
+      // includeClosedPrs: false leaves out only PRs closed unmerged: a merged one still comes back (#543).
+      closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
       blockedBy: DependencyEdges;
       blocking: DependencyEdges;
     } | null;
@@ -539,6 +540,8 @@ export async function gatherSnapshot(
     ? await gatherHeld(github, repo, closedWeeklyLimit === null ? kitIssues : [...kitIssues, closedWeeklyLimit], appLogin)
     : null;
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
+  // The tick closes each ready-for-agent Ticket GitHub left open after a PR of it merged (#543).
+  const readyTickets = event.kind === "scheduled-tick" ? (await gatherDispatchTickets(github, repo, appLogin)).tickets : null;
   // A weekly run's failure may give up on the week, which its gate's issues say (#443).
   const weeklyLabel = WEEKLY_RUN_EVENTS.includes(event.kind) ? weeklyLabelOf(part?.issue?.labels ?? []) : null;
   const weeklyIssues = weeklyLabel === null ? null : weeklyIssuesOf(await queryWeeklyIssues(github, repo, weeklyLabel), appLogin);
@@ -562,8 +565,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets };
 }
 
 /** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
@@ -987,6 +990,7 @@ type EventPart = Omit<
   | "conflicts"
   | "mergeable"
   | "triggers"
+  | "readyTickets"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
@@ -1426,6 +1430,11 @@ async function keptBranchIfMarked(github: Pick<GitHub, "graphql">, repo: Repo, t
   return labels.includes(KEPT_BRANCH_LABEL) ? keptBranchOf(github, repo, ticket) : null;
 }
 
+/** The numbers of an issue's closing PRs in this state, lowest first. */
+function pullRequestsIn(closedBy: { nodes: readonly { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] }, state: "OPEN" | "MERGED"): number[] {
+  return closedBy.nodes.filter((pr) => pr.state === state).map((pr) => pr.number).sort((a, b) => a - b);
+}
+
 async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null, appLogin: string | null): Promise<EventPart> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
@@ -1453,7 +1462,9 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       parentIssue: parentIssueOf(issue.parent),
-      openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
+      // A merged PR GitHub left its Ticket open after isn't open, so nothing resumes or declines it (#543).
+      openPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "OPEN"),
+      mergedPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "MERGED"),
       openAgentDrafts: issue.closedByPullRequestsReferences.nodes
         .filter(
           (pr) =>
@@ -1846,9 +1857,8 @@ async function gatherDispatchTickets(github: GitHub, repo: Repo, appLogin: strin
           .filter((b) => b.state === "CLOSED" && b.stateReason === "NOT_PLANNED")
           .map((b) => b.number),
         subIssues: issue.subIssues.totalCount,
-        openLinkedPullRequests: issue.closedByPullRequestsReferences.nodes
-          .filter((pr) => pr.state === "OPEN")
-          .map((pr) => pr.number),
+        openLinkedPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "OPEN"),
+        mergedLinkedPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "MERGED"),
         lastRunFailed: implementRunFailedIn(
           issue.comments.nodes.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })),
         ),

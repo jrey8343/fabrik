@@ -30,6 +30,7 @@ import { closeSpecAfter } from "./specClosing.ts";
 import { closeAgentDraftsOf, stopTicketOf } from "./handClosing.ts";
 import { heldOf } from "./heldRun.ts";
 import { scheduledTick } from "./kitIssues.ts";
+import { closeMergedTickets } from "./mergedTickets.ts";
 import { resumingHeldRuns } from "./resume.ts";
 import { heldOn, heldWhileUsedUp } from "./hold.ts";
 import { mapCapOf } from "./mapCap.ts";
@@ -205,7 +206,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // It also takes the Replays' next step, and catches an agent PR left
       // conflicting with main that a push to main missed (#304). And it runs a
       // Dispatch check, so a Ticket left waiting while every slot was full, or
-      // marked ready by an event the Loop missed, starts within the hour (#418).
+      // marked ready by an event the Loop missed, starts within the hour (#418),
+      // after it closes each Ticket GitHub left open once a PR of it merged (#543).
       // First of all it sweeps trigger labels with no run behind them (#419),
       // so a slot it frees can be filled by this tick's queue checks. Why each
       // part does nothing is a note, so the step summary says it whatever the
@@ -213,7 +215,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return thenCheckQueues(
         alongside(
           withReasonNoted(stuckTriggers(event.now, snapshot)),
-          scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config),
+          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config),
         ),
       );
   }
@@ -256,6 +258,11 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
 /** The conflict check as one of the tick's gates. */
 function conflictGate(_now: string, snapshot: Snapshot, config: KitConfig): Plan {
   return conflictCheck(snapshot, config);
+}
+
+/** Closing each Ticket GitHub left open after a PR of it merged (src/loop/mergedTickets.ts, #543), as one of the tick's gates. */
+function mergedTicketsGate(_now: string, snapshot: Snapshot): Plan {
+  return closeMergedTickets(snapshot);
 }
 
 /** A gate the scheduled tick runs, the audit gate or the retro gate: what it opens this tick, or why it opens nothing. */

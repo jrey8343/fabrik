@@ -11,6 +11,7 @@ import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
+import { mergedReason } from "./mergedTickets.ts";
 import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
 import {
   CONFLICT_RUN_MARKER,
@@ -63,6 +64,10 @@ export function startImplementer(
   config: KitConfig,
 ): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DISPATCH_LABEL };
+  // Its work landed though GitHub left it open, so no run starts on it, nor resumes an open PR of it (#543).
+  if (issue.open && issue.mergedPullRequests.length > 0) {
+    return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, mergedReason(issueNumber, issue.mergedPullRequests)) };
+  }
   const open = issue.openPullRequests[0];
   if (open !== undefined && issue.open && issue.labels.includes(READY_FOR_AGENT)) {
     const resumed: Action[] | null =

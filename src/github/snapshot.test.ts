@@ -661,7 +661,7 @@ describe("Gathering an issue's blocked-by edges", () => {
 
 describe("Gathering a closed Ticket's agent draft PRs", () => {
   it("holds only the open draft PRs the Fabrik App opened from this Ticket's own agent branch, which closing it closes (#428)", async () => {
-    const pull = (number: number, isDraft: boolean, headRefName: string, author: string) => ({ number, isDraft, headRefName, author: { __typename: author } });
+    const pull = (number: number, isDraft: boolean, headRefName: string, author: string) => ({ number, state: "OPEN", isDraft, headRefName, author: { __typename: author } });
     const github = {
       async graphql(query: string): Promise<unknown> {
         if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
@@ -690,6 +690,51 @@ describe("Gathering a closed Ticket's agent draft PRs", () => {
     const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 9 }, null, null);
 
     expect(snapshot.issue).toMatchObject({ openPullRequests: [50, 51, 52, 53], openAgentDrafts: [50] });
+  });
+});
+
+describe("Gathering a Ticket's open PRs (#543)", () => {
+  it("leaves out a closing PR that has merged, which GitHub still lists, so agent:implement loads no PR to resume", async () => {
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+        const data = issueData(130);
+        return {
+          repository: {
+            ...data.repository,
+            issue: {
+              ...data.repository.issue,
+              labels: { nodes: [{ name: "ready-for-agent" }] },
+              closedByPullRequestsReferences: {
+                nodes: [
+                  { number: 131, state: "MERGED", isDraft: false, headRefName: "fabrik/ticket-130", author: { __typename: "Bot" } },
+                ],
+              },
+            },
+          },
+        };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 130, label: "agent:implement" }, null, null);
+
+    expect(snapshot.issue).toMatchObject({ openPullRequests: [], mergedPullRequests: [131], openAgentDrafts: [] });
+    expect(snapshot.pullRequest).toBeNull();
+  });
+
+  it("asks GitHub for each closing PR's state", async () => {
+    const queries: string[] = [];
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        queries.push(query);
+        return query.includes("issue(number: $number)") ? issueData(9) : { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+      },
+    } as unknown as GitHub;
+
+    await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 9 }, null, null);
+
+    const issueQuery = queries.find((query) => query.includes("issue(number: $number)")) ?? "";
+    expect(/closedByPullRequestsReferences\([^)]*\) \{ nodes \{[^}]*\bstate\b/.test(issueQuery)).toBe(true);
   });
 });
 
@@ -1520,8 +1565,11 @@ describe("Gathering a Dispatch check's Tickets", () => {
     expect(snapshot.dispatch?.tickets).toMatchObject([{ number: 6, openBlockers: [10], notPlannedBlockers: [9] }]);
   });
 
-  /** The read-only API, holding one open ready-for-agent Ticket, #6, with these comments, and no research Decision. */
-  function ticketGitHub(comments: { body: string; author: { login: string; __typename: string } | null }[]): GitHub {
+  /** The read-only API, holding one open ready-for-agent Ticket, #6, with these comments and closing PRs, and no research Decision. */
+  function ticketGitHub(
+    comments: { body: string; author: { login: string; __typename: string } | null }[],
+    closedBy: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] = [],
+  ): GitHub {
     return {
       async graphql(query: string): Promise<unknown> {
         if (query.includes("labels: [$ready]")) {
@@ -1533,7 +1581,7 @@ describe("Gathering a Dispatch check's Tickets", () => {
             labels: { nodes: [{ name: "ready-for-agent" }] },
             subIssues: { totalCount: 0 },
             blockedBy: { nodes: [] },
-            closedByPullRequestsReferences: { nodes: [] },
+            closedByPullRequestsReferences: { nodes: closedBy },
             comments: { nodes: comments },
           };
           return {
@@ -1544,6 +1592,19 @@ describe("Gathering a Dispatch check's Tickets", () => {
       },
     } as unknown as GitHub;
   }
+
+  // GitHub sometimes leaves a Ticket open after its PR merged, and still lists that PR (#543).
+  it("holds a Ticket's merged closing PRs apart from its open ones", async () => {
+    const closedBy = [
+      { number: 140, state: "MERGED" as const },
+      { number: 150, state: "OPEN" as const },
+      { number: 131, state: "MERGED" as const },
+    ];
+
+    const snapshot = await gatherSnapshot(ticketGitHub([], closedBy), repo, { kind: "dispatch-check" }, null, APP_LOGIN, actionsWith([]) as unknown as GitHub);
+
+    expect(snapshot.dispatch?.tickets[0]).toMatchObject({ openLinkedPullRequests: [150], mergedLinkedPullRequests: [131, 140] });
+  });
 
   const PERSON = { login: "operator", __typename: "User" };
   const OTHER_BOT = { login: "dependabot", __typename: "Bot" };
@@ -1732,6 +1793,50 @@ describe("Gathering a weekly run's gate issues as it fails", () => {
   });
 });
 
+describe("Gathering a scheduled tick's ready-for-agent Tickets (#543)", () => {
+  /** The read-only API, holding these open ready-for-agent Tickets, each closed by these PRs, and no other issue or PR. */
+  function githubWith(closedBy: Record<number, { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[]>) {
+    return {
+      async graphql(query: string): Promise<unknown> {
+        const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+        if (query.includes("labels: [$ready]")) {
+          const nodes = Object.entries(closedBy).map(([number, prs]) => ({
+            number: Number(number),
+            state: "OPEN",
+            labels: { nodes: [{ name: "ready-for-agent" }] },
+            subIssues: { totalCount: 0 },
+            blockedBy: { nodes: [] },
+            closedByPullRequestsReferences: { nodes: prs },
+            comments: { nodes: [] },
+          }));
+          return { repository: { owner: { login: "acme" }, issues: { ...none, nodes }, pullRequests: { nodes: [] } } };
+        }
+        return { repository: { owner: { login: "acme" }, issues: none, pullRequests: none } };
+      },
+    } as unknown as GitHub;
+  }
+
+  it("holds each Ticket's merged closing PRs, a person's as well as an agent's, which the tick closes it for", async () => {
+    const github = githubWith({ 130: [{ number: 131, state: "MERGED" }], 234: [{ number: 240, state: "MERGED" }, { number: 250, state: "OPEN" }], 300: [] });
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-10T04:00:00Z" }, null, APP_LOGIN);
+
+    expect(snapshot.readyTickets).toMatchObject([
+      { number: 130, open: true, mergedLinkedPullRequests: [131], openLinkedPullRequests: [] },
+      { number: 234, open: true, mergedLinkedPullRequests: [240], openLinkedPullRequests: [250] },
+      { number: 300, open: true, mergedLinkedPullRequests: [], openLinkedPullRequests: [] },
+    ]);
+  });
+
+  it("isn't gathered for any other event", async () => {
+    const github = githubWith({ 130: [{ number: 131, state: "MERGED" }] });
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: "f".repeat(40) }, null, APP_LOGIN);
+
+    expect(snapshot.readyTickets).toBeNull();
+  });
+});
+
 describe("Gathering a scheduled tick's audit slice", () => {
   const HEAD = "c".repeat(40);
 
@@ -1839,6 +1944,8 @@ describe("Gathering a scheduled tick's retro slice", () => {
         if (query.includes("createdBy: $operator")) {
           return { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: operatorIssues } } };
         }
+        const ready = noReadyTicket(query);
+        if (ready !== undefined) return ready;
         return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
       },
     } as unknown as GitHub;
@@ -1979,6 +2086,12 @@ function nothingNewForTheRetro(query: string): unknown {
   return undefined;
 }
 
+/** The answer to the scheduled tick's read of its ready-for-agent Tickets (#543): none open. Undefined for any other query. */
+function noReadyTicket(query: string): unknown {
+  if (!query.includes("labels: [$ready]")) return undefined;
+  return { repository: { owner: { login: "acme" }, issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] }, pullRequests: { nodes: [] } } };
+}
+
 describe("Gathering the issues and PRs held runs are on, for a scheduled tick and whatever may free a Subscription", () => {
   const tick = { kind: "scheduled-tick", now: "2026-11-08T04:00:00.000Z" } as const;
   const heldMarker = (issue: number, role: string, label: string | null) =>
@@ -2029,6 +2142,8 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
         if (query.includes("defaultBranchRef")) return { repository: { defaultBranchRef: null, issues: { nodes: [] } } };
         const retro = nothingNewForTheRetro(query);
         if (retro !== undefined) return retro;
+        const ready = noReadyTicket(query);
+        if (ready !== undefined) return ready;
         return {
           repository: {
             owner: { login: "acme" },
@@ -2097,8 +2212,8 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
         const data = (await github.graphql(query, variables)) as { repository: { owner?: unknown; issues?: { nodes: Record<string, unknown>[] } } };
         const issues = data.repository.issues?.nodes;
-        // Only the open Kit-owned issues' answer names the owner.
-        if (issues === undefined || data.repository.owner === undefined) return data;
+        // Only the open Kit-owned issues' answer names the owner, besides the tick's ready-for-agent Tickets'.
+        if (issues === undefined || data.repository.owner === undefined || noReadyTicket(query) !== undefined) return data;
         return {
           ...data,
           repository: {
@@ -2471,6 +2586,8 @@ describe("Gathering the Kit-owned issues, whose markers steer agent runs (ADR-00
         }
         const retro = nothingNewForTheRetro(query);
         if (retro !== undefined) return retro;
+        const ready = noReadyTicket(query);
+        if (ready !== undefined) return ready;
         return {
           repository: {
             owner: { login: "acme" },
@@ -2696,7 +2813,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(records));
 
       expect(snapshot.replay?.capacity).toEqual({
-        tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [], lastRunFailed: false }],
+        tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [], mergedLinkedPullRequests: [], lastRunFailed: false }],
         researchDecisions: [],
         weeklyLimits: { "Claude token": aReading(0.3) },
       });

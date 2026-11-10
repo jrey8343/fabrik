@@ -40,6 +40,9 @@ describe("A Dispatch check", () => {
     ],
     ["has sub-issues, so it's a Spec", { subIssues: 3 }, "#12 has sub-issues, so it's a Spec"],
     ["has an open linked PR", { openLinkedPullRequests: [40] }, "#12 already has the open PR #40"],
+    // GitHub sometimes leaves a Ticket open after its PR merged; its work has landed (#543).
+    ["has a closing PR that merged", { mergedLinkedPullRequests: [131] }, "#12's PR #131 has merged"],
+    ["has closing PRs that merged", { mergedLinkedPullRequests: [131, 140] }, "#12's PRs #131 and #140 have merged"],
     [
       "already has agent:implement",
       { labels: ["ready-for-agent", "agent:implement"] },

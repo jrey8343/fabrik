@@ -39,6 +39,17 @@ describe("Starting an Implementer", () => {
       anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], openPullRequests: [50] }),
       "#7's open PR #50 is owed no Implement run: no Retry, Request-changes run or conflict-only run waits on it",
     ],
+    // GitHub sometimes leaves a Ticket open after its PR merged: its work landed, so no run starts on it (#543).
+    [
+      "is open though its closing PR merged",
+      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], mergedPullRequests: [131] }),
+      "#7's PR #131 has merged",
+    ],
+    [
+      "has an open PR, and a closing PR that merged",
+      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], openPullRequests: [150], mergedPullRequests: [131] }),
+      "#7's PR #131 has merged",
+    ],
   ])("a Ticket that %s loses the label, no Implementer starts, and one comment says why (#417)", (_why, ticket, reason) => {
     const plan = planFor(dispatched(), snapshotOf(ticket), kitConfig());
 
