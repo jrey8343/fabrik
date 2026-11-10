@@ -511,10 +511,11 @@ export async function gatherSnapshot(
   replayStore: ReplayStore | null = null,
   wait: (ms: number) => Promise<void> = sleep,
 ): Promise<Snapshot> {
-  const [{ owner, kitIssues }, part, startingComment, audit, namedPullRequests] = await Promise.all([
+  const [{ owner, kitIssues }, part, startingComment, reviewHasInlineComments, audit, namedPullRequests] = await Promise.all([
     gatherKitIssues(github, repo, appLogin),
     gatherEventPart(github, repo, event, operator, appLogin, actions),
     gatherStartingComment(github, repo, event),
+    gatherReviewInlineComments(github, repo, event),
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
     event.kind === "audit-run-finished" ? gatherNamedPullRequests(github, repo, event.output) : null,
   ]);
@@ -561,8 +562,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers }
-    : { ...part, spec, kitIssues, startingComment, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers };
 }
 
 /** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
@@ -853,6 +854,18 @@ async function gatherStartingComment(github: GitHub, repo: Repo, event: LoopEven
   return { id, exists: comment !== null };
 }
 
+/**
+ * For a review with no body on a PR, whether it holds any inline comment: one
+ * is enough to say so. A review with a body is acknowledged either way, so
+ * nothing is read for it.
+ */
+async function gatherReviewInlineComments(github: GitHub, repo: Repo, event: LoopEvent): Promise<boolean | null> {
+  if (event.kind !== "pull-request-commented" || event.on.kind !== "review" || event.on.hasBody) return null;
+  const path = `/repos/${repo.owner}/${repo.name}/pulls/${event.pullRequest}/reviews/${event.on.review}/comments?per_page=1`;
+  const comments = (await github.rest("GET", path)) as unknown[];
+  return comments.length > 0;
+}
+
 // A Spec's Tickets and the merged PRs that closed each. A Spec with more than 100 Tickets is far past v1.
 const SPEC_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -962,6 +975,7 @@ type EventPart = Omit<
   | "kitIssues"
   | "spec"
   | "startingComment"
+  | "reviewHasInlineComments"
   | "audit"
   | "retro"
   | "weeklyIssues"

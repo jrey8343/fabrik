@@ -218,11 +218,16 @@ describe("Applying a 👀 reaction to an Operator comment", () => {
         }
         return null;
       },
-      async graphql(): Promise<never> {
-        throw new Error("no GraphQL expected");
+      async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        calls.push({ method: "GRAPHQL", path: query, body: variables });
+        return {} as T;
       },
     };
   }
+
+  const ADD_REACTION = "mutation ($id: ID!, $content: ReactionContent!) { addReaction(input: { subjectId: $id, content: $content }) { clientMutationId } }";
+  const reactedToReview = (github: ReturnType<typeof gitHubWithReview>) =>
+    github.calls.filter((call) => call.method === "GRAPHQL").map(({ path, body }) => ({ query: path, variables: body }));
 
   const posts = (github: ReturnType<typeof gitHubWithReview>) =>
     github.calls.filter((call) => call.method === "POST").map(({ path, body }) => ({ path, body }));
@@ -241,31 +246,39 @@ describe("Applying a 👀 reaction to an Operator comment", () => {
     ]);
   });
 
-  it("reacts to each inline comment of a review, on every page, and never to the review itself", async () => {
+  const reviewPlan = (body: boolean): Plan => ({
+    kind: "act",
+    actions: [{ kind: "react", pullRequest: 50, on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: body }, content: "eyes" }],
+  });
+
+  it("reacts to a review with a body itself, by its node id, as only GraphQL can", async () => {
+    const github = gitHubWithReview([]);
+
+    await applyPlan(github, repo, reviewPlan(true));
+
+    expect(reactedToReview(github)).toStrictEqual([{ query: ADD_REACTION, variables: { id: "PRR_kwDO900", content: "EYES" } }]);
+    expect(posts(github)).toStrictEqual([]);
+  });
+
+  it("reacts to each inline comment of a review, on every page, and to its body too", async () => {
     const inline = Array.from({ length: 101 }, (_, i) => 8000 + i);
     const github = gitHubWithReview(inline);
-    const plan: Plan = {
-      kind: "act",
-      actions: [{ kind: "react", pullRequest: 50, on: { kind: "review", review: 900 }, content: "eyes" }],
-    };
 
-    await applyPlan(github, repo, plan);
+    await applyPlan(github, repo, reviewPlan(true));
 
+    expect(reactedToReview(github)).toHaveLength(1);
     expect(posts(github)).toStrictEqual(
       inline.map((id) => ({ path: `/repos/acme/shop/pulls/comments/${id}/reactions`, body: { content: "eyes" } })),
     );
   });
 
-  it("reacts to nothing for a review with no inline comments", async () => {
-    const github = gitHubWithReview([]);
-    const plan: Plan = {
-      kind: "act",
-      actions: [{ kind: "react", pullRequest: 50, on: { kind: "review", review: 900 }, content: "eyes" }],
-    };
+  it("reacts only to the inline comments of a review with no body", async () => {
+    const github = gitHubWithReview([8000]);
 
-    await applyPlan(github, repo, plan);
+    await applyPlan(github, repo, reviewPlan(false));
 
-    expect(posts(github)).toStrictEqual([]);
+    expect(reactedToReview(github)).toStrictEqual([]);
+    expect(posts(github)).toStrictEqual([{ path: "/repos/acme/shop/pulls/comments/8000/reactions", body: { content: "eyes" } }]);
   });
 });
 

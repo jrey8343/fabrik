@@ -587,17 +587,29 @@ describe("An Operator comment on an agent PR", () => {
     });
   });
 
-  it("in a Comment or Approve review gets a 👀 on each of its inline comments, and nothing else", () => {
+  it.each([
+    ["a body and no inline comments", true, false],
+    ["inline comments and no body", false, true],
+    ["a body and inline comments", true, true],
+  ])("in a Comment or Approve review with %s gets a 👀, and nothing else", (_, body, inlineComments) => {
+    const on = { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: body } as const;
     const plan = planFor(
-      commented({ on: { kind: "review", review: 900 } }),
-      snapshotOfPullRequest(aPullRequest({ draft: false })),
+      commented({ on }),
+      snapshotOfPullRequest(aPullRequest({ draft: false }), { reviewHasInlineComments: inlineComments }),
       kitConfig(),
     );
 
-    expect(plan).toEqual({
-      kind: "act",
-      actions: [{ kind: "react", pullRequest: 50, on: { kind: "review", review: 900 }, content: "eyes" }],
-    });
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "react", pullRequest: 50, on, content: "eyes" }] });
+  });
+
+  it("in a review with no body and no inline comments, such as a bare Approve, plans nothing, saying why", () => {
+    const plan = planFor(
+      commented({ on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: false } }),
+      snapshotOfPullRequest(aPullRequest({ draft: false }), { reviewHasInlineComments: false }),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({ kind: "nothing", reason: "review 900 on #50 is empty, so it has nothing to weigh" });
   });
 
   it("from a bot plans nothing", () => {

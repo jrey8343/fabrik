@@ -114,12 +114,12 @@ describe("A comment on a pull request", () => {
   });
 
   it.each(["commented", "approved", "COMMENTED", "APPROVED"])(
-    "in a submitted %s review is a pull-request comment, naming the review whose inline comments get the reaction",
+    "in a submitted %s review is a pull-request comment, naming the review by its id and node id, and that it has a body",
     (state) => {
       const payload = {
         action: "submitted",
         pull_request: { number: 50 },
-        review: { id: 900, state, user: user("operator"), body: "Looks good." },
+        review: { id: 900, node_id: "PRR_kwDO900", state, user: user("operator"), body: "Looks good." },
       };
 
       expect(loopEventFrom("pull_request_review", payload)).toEqual({
@@ -127,10 +127,22 @@ describe("A comment on a pull request", () => {
         pullRequest: 50,
         commenter: "operator",
         commenterIsBot: false,
-        on: { kind: "review", review: 900 },
+        on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: true },
       });
     },
   );
+
+  it.each([null, "", "  \n"])("in a review whose body is %j says it has no body", (body) => {
+    const payload = {
+      action: "submitted",
+      pull_request: { number: 50 },
+      review: { id: 900, node_id: "PRR_kwDO900", state: "approved", user: user("operator"), body },
+    };
+
+    expect(loopEventFrom("pull_request_review", payload)).toMatchObject({
+      on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: false },
+    });
+  });
 
   it("in a review that requests changes is still Request changes", () => {
     const payload = {

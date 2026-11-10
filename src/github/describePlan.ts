@@ -98,6 +98,8 @@ export function actionPhrase(action: Action): string {
     case "react":
       return action.on.kind === "conversation"
         ? `react ${action.content} to comment ${action.on.comment} on #${action.pullRequest}`
-        : `react ${action.content} to each inline comment of review ${action.on.review} on #${action.pullRequest}`;
+        : action.on.hasBody
+          ? `react ${action.content} to review ${action.on.review} and each of its inline comments on #${action.pullRequest}`
+          : `react ${action.content} to each inline comment of review ${action.on.review} on #${action.pullRequest}`;
   }
 }

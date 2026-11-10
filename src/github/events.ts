@@ -79,12 +79,19 @@ export function loopEventFrom(
   // commit's caller workflow and Kit config. An agent PR can't change either:
   // both are trust roots its push job refuses (ADR-0005).
   if (eventName === "pull_request_review" && payload["action"] === "submitted") {
-    const review = payload["review"] as { id: number; state: string; user: { login: string; type: string } };
+    const review = payload["review"] as {
+      id: number;
+      node_id: string;
+      state: string;
+      body: string | null;
+      user: { login: string; type: string };
+    };
     const pullRequest = (payload["pull_request"] as { number: number }).number;
     const state = review.state.toLowerCase();
     // A Comment or Approve review, which a lone inline comment or a thread reply also submits.
     if (state === "commented" || state === "approved") {
-      return pullRequestCommented(pullRequest, review.user, { kind: "review", review: review.id });
+      const hasBody = (review.body ?? "").trim() !== "";
+      return pullRequestCommented(pullRequest, review.user, { kind: "review", review: review.id, node: review.node_id, hasBody });
     }
     if (state !== "changes_requested") return null;
     return {

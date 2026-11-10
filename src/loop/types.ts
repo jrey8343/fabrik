@@ -529,12 +529,20 @@ export interface RetroEvidence {
 
 /**
  * Where a PR comment was made: a conversation comment, by its id, or a
- * submitted review, by its id. GitHub takes reactions on a review's inline
- * comments but not on the review itself.
+ * submitted review, by its id. A review takes a reaction on itself only
+ * through GraphQL, by its node id, and on each of its inline comments through
+ * REST (#435).
  */
 export type PullRequestCommentPlace =
   | { readonly kind: "conversation"; readonly comment: number }
-  | { readonly kind: "review"; readonly review: number };
+  | {
+      readonly kind: "review";
+      readonly review: number;
+      /** The review's GraphQL node id, which a reaction on the review itself names. */
+      readonly node: string;
+      /** Whether the review has a body: one with none, as a lone inline comment submits, is read through its inline comments. */
+      readonly hasBody: boolean;
+    };
 
 /**
  * A Design session's pending prototype request (#155), as the snapshot reads
@@ -991,6 +999,12 @@ export interface Snapshot {
    * whether it is still on the issue. Null when the event names no such comment.
    */
   readonly startingComment: StartingComment | null;
+  /**
+   * For a Comment or Approve review with no body: whether it holds any inline
+   * comment, so one with none, such as a bare Approve, has nothing to
+   * acknowledge (#435). Null for a review with a body, or any other event.
+   */
+  readonly reviewHasInlineComments: boolean | null;
   /** Gathered for a scheduled tick only: what the audit gate weighs. */
   readonly audit: AuditSnapshot | null;
   /** Gathered for a scheduled tick only: what the retro gate weighs. */
