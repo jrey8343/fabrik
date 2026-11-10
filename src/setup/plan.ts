@@ -51,6 +51,7 @@ import {
   SETTINGS_PATH,
   settingsUpdate,
   STORE_CALLER_PATH,
+  storeCallerUpdate,
 } from "./shims.ts";
 
 /** What Setup reads from a Product repo and its 1Password account before planning. */
@@ -517,7 +518,7 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
   const files: [string, FileUpdate, string][] = [
     [
       STORE_CALLER_PATH,
-      callerUpdate(store.files[STORE_CALLER_PATH] ?? null, caller, kit.release, STORE_CALLER_PATH),
+      storeCallerUpdate(store.files[STORE_CALLER_PATH] ?? null, caller, kit.release),
       "the Weekly summary each Monday morning, pinning one Fabrik release",
     ],
     [

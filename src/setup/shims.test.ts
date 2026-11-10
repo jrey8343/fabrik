@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { callerUpdate, dependabotUpdate, pinCaller, scheduleIn, settingsUpdate, STORE_CALLER_PATH, timeZoneIn } from "./shims.ts";
+import { callerUpdate, dependabotUpdate, pinCaller, scheduleIn, settingsUpdate, STORE_CALLER_PATH, storeCallerUpdate, timeZoneIn } from "./shims.ts";
 
 const template = readFileSync(new URL("../../templates/fabrik-runs-caller.yml", import.meta.url), "utf8");
 const dependabotTemplate = readFileSync(new URL("../../templates/dependabot.yml", import.meta.url), "utf8");
@@ -66,6 +66,15 @@ describe("The store's caller workflow's two schedules", () => {
 
     expect(update).toEqual({ content: pinCaller(scheduleIn(template, "Australia/Sydney"), "v1.1.0") });
     expect(timeZoneIn(older)).toBe("Australia/Sydney");
+  });
+
+  it("is rewritten at Setup's release over one pinned to an older release in the same major, so the Tick check's workflow exists at its pin", () => {
+    const caller = scheduleIn(template, "Australia/Sydney");
+
+    const update = storeCallerUpdate(pinCaller(caller, "v2.2.0"), caller, "v2.3.0");
+
+    expect(update).toEqual({ content: pinCaller(caller, "v2.3.0") });
+    expect((update as { content: string }).content).toContain("jrey8343/fabrik/.github/workflows/tick-check.yml@v2.3.0");
   });
 });
 

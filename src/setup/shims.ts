@@ -45,6 +45,21 @@ export function callerUpdate(existing: string | null, template: string, release:
 
 export const STORE_CALLER_PATH = ".github/workflows/weekly-summary.yml";
 
+/**
+ * The store's caller as callerUpdate writes it, except that one pinned to an
+ * older release in the same major is written at Setup's release: the caller
+ * names every workflow the release ships (the daily Tick check's among them),
+ * and one that doesn't exist at the older pin fails every run at startup, the
+ * Weekly summary's included. A newer pin, or a later major, is left as
+ * callerUpdate leaves it.
+ */
+export function storeCallerUpdate(existing: string | null, template: string, release: string): FileUpdate {
+  const pins = existing === null ? null : checkCallerWorkflow(existing);
+  const older = pins?.ok === true && compareMajors(pins.release, release) === 0 && compareReleases(pins.release, release) < 0;
+  if (older) return existing === pinCaller(template, release) ? null : { content: pinCaller(template, release) };
+  return callerUpdate(existing, template, release, STORE_CALLER_PATH);
+}
+
 /** The store caller template with its schedules, the Monday morning's and the daily one's, in the Operator's time zone. */
 export function scheduleIn(template: string, timeZone: string): string {
   return template.replace(/^(\s+timezone:\s*)\S.*$/gm, `$1${JSON.stringify(timeZone)}`);
@@ -62,6 +77,22 @@ function compareMajors(a: string, b: string): number {
   const [aMajor, aMinor] = majorLine(a);
   const [bMajor, bMinor] = majorLine(b);
   return aMajor !== bMajor ? aMajor - bMajor : aMinor - bMinor;
+}
+
+/** Exact releases by major, minor and patch; a prerelease comes before its release, and two prereleases of one release by their tags. */
+function compareReleases(a: string, b: string): number {
+  const [aCore = "", aPre] = a.replace(/^v/, "").split(/-(.*)/s);
+  const [bCore = "", bPre] = b.replace(/^v/, "").split(/-(.*)/s);
+  const aParts = aCore.split(".").map(Number);
+  const bParts = bCore.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const diff = (aParts[i] ?? 0) - (bParts[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  if (aPre === bPre) return 0;
+  if (aPre === undefined) return 1;
+  if (bPre === undefined) return -1;
+  return aPre.localeCompare(bPre, "en", { numeric: true });
 }
 
 function majorLine(release: string): [number, number] {

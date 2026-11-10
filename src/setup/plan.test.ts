@@ -836,6 +836,31 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
     expect(storeWritten(actions, ".github/workflows/weekly-summary.yml")).toContain('timezone: "Europe/London"');
   });
 
+  // #461: the daily Tick check's workflow doesn't exist at a release from before it, and a caller naming it there fails every run at startup.
+  function storeCallerPinnedAt(release: string): string {
+    const clean = aCleanProduct();
+    const setUp = afterApplying(clean, planSetup(clean, kit, operator));
+    const caller = setUp.store.files[".github/workflows/weekly-summary.yml"] ?? "";
+    const pinned = caller.replaceAll("@v1.4.2", `@${release}`);
+    const state = { ...setUp, store: { ...setUp.store, files: { ...setUp.store.files, ".github/workflows/weekly-summary.yml": pinned } } };
+    return storeWritten(planSetup(state, kit, operator).actions, ".github/workflows/weekly-summary.yml") ?? pinned;
+  }
+
+  it("moves a store caller pinned to an older release in the same major up to Setup's release", () => {
+    const caller = storeCallerPinnedAt("v1.3.0");
+
+    expect(caller).toContain("uses: jrey8343/fabrik/.github/workflows/tick-check.yml@v1.4.2");
+    expect(checkCallerWorkflow(caller)).toEqual({ ok: true, release: "v1.4.2" });
+  });
+
+  it("keeps a store caller pinned to a newer release in the same major at that release", () => {
+    expect(checkCallerWorkflow(storeCallerPinnedAt("v1.5.0"))).toEqual({ ok: true, release: "v1.5.0" });
+  });
+
+  it("moves an older patch of Setup's own minor up too", () => {
+    expect(checkCallerWorkflow(storeCallerPinnedAt("v1.4.1"))).toEqual({ ok: true, release: "v1.4.2" });
+  });
+
   it("leaves the store alone until the Operator gives setup their time zone, so it stays opt-in", () => {
     expect(storeActions(aCleanProduct()).length).toBeGreaterThan(0);
 
