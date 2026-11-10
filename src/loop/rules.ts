@@ -5,6 +5,7 @@ import { issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts
 import { failureNotice } from "./failures.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { checkConflicts, reviewGraceMinutes } from "./conflicts.ts";
+import { flakyCheckGate } from "./flakyChecks.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
@@ -204,7 +205,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // Retro when each is due. It also catches a Design session slot freed by
       // an event the Loop doesn't watch, such as needs-design coming off by hand.
       // It also takes the Replays' next step, and catches an agent PR left
-      // conflicting with main that a push to main missed (#304). And it runs a
+      // conflicting with main that a push to main missed (#304), and counts back an
+      // Execution flaw whose checks have since passed on its head (#462). And it runs a
       // Dispatch check, so a Ticket left waiting while every slot was full, or
       // marked ready by an event the Loop missed, starts within the hour (#418),
       // after it closes each Ticket GitHub left open once a PR of it merged (#543).
@@ -215,7 +217,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return thenCheckQueues(
         alongside(
           withReasonNoted(stuckTriggers(event.now, snapshot)),
-          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config),
+          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate], event.now, snapshot, config),
         ),
       );
   }

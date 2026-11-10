@@ -17,7 +17,7 @@ import type { Strength, VerdictRecord } from "./types.ts";
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, headSha } = record;
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
   const fields = {
@@ -27,9 +27,62 @@ export function verdictMarker(record: VerdictRecord): string {
     ...(conflictRun === true ? { conflictRun } : {}),
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     ...(ticketNotReady === true ? { ticketNotReady } : {}),
+    ...(checks === undefined ? {} : { checks }),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
+}
+
+/**
+ * A Flaky check line on an agent PR (#462): the head the checks flipped on,
+ * and which. `countedBack` when the checks a ci-sourced Execution flaw named
+ * have since passed on its head, so that Verdict no longer counts toward the
+ * Ticket's Retries; absent when the Kit's own re-run found them.
+ */
+export interface FlakyCheckMark {
+  readonly headSha: string;
+  readonly checks: readonly string[];
+  readonly countedBack?: true;
+}
+
+const FLAKY_CHECK_MARKER = /^<!-- fabrik:flaky-check (\{.*?\}) -->/;
+
+export function flakyCheckMarker({ headSha, checks, countedBack }: FlakyCheckMark): string {
+  return `<!-- fabrik:flaky-check ${markerJson({ headSha, checks, ...(countedBack === true ? { countedBack } : {}) })} -->`;
+}
+
+/** The Flaky check lines among these comments, oldest first. */
+export function flakyCheckMarksIn(commentBodies: readonly string[]): FlakyCheckMark[] {
+  return commentBodies.flatMap((body) => {
+    const json = FLAKY_CHECK_MARKER.exec(body)?.[1];
+    if (json === undefined) return [];
+    try {
+      const { headSha, checks, countedBack } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof headSha !== "string" || !Array.isArray(checks) || !checks.every((name) => typeof name === "string")) return [];
+      return [{ headSha, checks, ...(countedBack === true ? { countedBack: true as const } : {}) }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+const FLAKY_CHECK_ISSUE_MARKER = /^<!-- fabrik:flaky-check-issue (\{.*?\}) -->/;
+
+/** A Flaky check issue's first line (#462), naming the check it's about: one issue per check. */
+export function flakyCheckIssueMarker(check: string): string {
+  return `<!-- fabrik:flaky-check-issue ${markerJson({ check })} -->`;
+}
+
+/** The check a Flaky check issue's body is about, or null for any other body. */
+export function flakyCheckIssueOf(body: string): string | null {
+  const json = FLAKY_CHECK_ISSUE_MARKER.exec(body)?.[1];
+  if (json === undefined) return null;
+  try {
+    const { check } = JSON.parse(json) as Record<string, unknown>;
+    return typeof check === "string" ? check : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */

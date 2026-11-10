@@ -7,6 +7,7 @@ import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { upToDateBeforeMergeGate } from "./conflicts.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
+import { checkCode, flakyCheckActions } from "./flakyChecks.ts";
 import { followUpsSection } from "./followUps.ts";
 import { heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
@@ -77,11 +78,22 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
     }
     const skipped = event.skipped ?? [];
     const red = event.failed.filter((name) => !skipped.includes(name));
-    const listed = (heading: string, names: readonly string[]) =>
-      names.length === 0 ? [] : [[heading, "", ...names.map((name) => `- \`${name.replace(/`/g, "'")}\``)].join("\n")];
+    const { rerun } = event;
+    // Re-run on the same head and red again (#462): no flake, so the Retry needn't wonder whether one is.
+    const again = red.filter((name) => rerun?.failedAgain.includes(name) === true);
+    const outside = red.filter((name) => rerun?.outside.includes(name) === true && !again.includes(name));
+    const plain = red.filter((name) => !again.includes(name) && !outside.includes(name));
+    const listed = (heading: string, names: readonly string[], after: string[] = []) =>
+      names.length === 0 ? [] : [[heading, "", ...names.map((name) => `- ${checkCode(name)}`), ...after].join("\n")];
     // A skipped or neutral check is no failure a Retry can fix, so the Verdict says so apart from the ones that failed.
     const findings = [
-      ...listed("These required checks didn't pass, so the Reviewer didn't run:", red),
+      ...listed("These required checks failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:", again),
+      ...listed("These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:", outside),
+      ...listed(
+        "These required checks didn't pass, so the Reviewer didn't run:",
+        plain,
+        rerun?.refused == null ? [] : ["", `The Kit couldn't re-run them: ${rerun.refused}.`],
+      ),
       ...listed(
         red.length === 0
           ? "These required checks were skipped or reported neutral, so the Reviewer didn't run, and a Retry can't change that:"
@@ -90,7 +102,9 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
       ),
     ].join("\n\n");
     const held = heldOn(snapshot.kitIssues, config);
-    return { kind: "act", actions: verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings }, snapshot.operator, held) };
+    const flaky = flakyCheckActions(pullRequest.number, event.headSha, rerun?.flaky ?? [], snapshot.flakyCheckIssues);
+    const verdict = verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings, checks: red }, snapshot.operator, held);
+    return { kind: "act", actions: [...flaky, ...verdict] };
   });
 }
 
@@ -118,6 +132,8 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
       followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
     }, snapshot.operator, held);
+    // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
+    actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues));
     // A pass that gave way to a Request changes deferred during a Retry (#427) keeps the PR in draft for its run.
     if (parsed.verdict !== "pass" || passGivesWay(pullRequest)) return { kind: "act", actions };
     // One on a PR that conflicts with main brings it up to date first, in draft: the Operator's review couldn't land (#480).
@@ -197,10 +213,13 @@ export function verdictActions(
     findings,
     followUps = [],
     considered = [],
+    checks,
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
     readonly findings: string;
+    /** On one from red required checks, the ones it names as failed (#462). */
+    readonly checks?: readonly string[];
     readonly followUps?: readonly string[];
     readonly considered?: readonly string[];
   },
@@ -217,6 +236,7 @@ export function verdictActions(
     ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}),
     ...(first === null ? {} : { requestChangesFirst: first.reviews }),
     ...(next?.ticketNotReady === true ? { ticketNotReady: true as const } : {}),
+    ...(checks === undefined ? {} : { checks }),
     headSha: event.headSha,
   };
   const by = BY[source];

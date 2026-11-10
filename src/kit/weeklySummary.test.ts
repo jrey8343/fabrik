@@ -372,6 +372,24 @@ describe("the Weekly summary", () => {
     expect(result.kind === "summary" ? result.body : "").toContain("| Broken runs | 2 | 1 | +1 |");
   });
 
+  it("counts the week's Flaky checks, found by the Kit's re-run and counted back alike, on open and closed agent PRs (#462)", () => {
+    const line = (checks: string[], countedBack = false) =>
+      `<!-- fabrik:flaky-check ${JSON.stringify({ headSha: "a".repeat(40), checks, ...(countedBack ? { countedBack } : {}) })} -->\nflaky`;
+    const result = weeklySummary(
+      input({
+        records: [aRunRecord({ endedAt: "2026-11-03T00:00:00Z" })],
+        facts: [
+          factsOf({
+            pullRequests: [aMergedPullRequest("2026-11-05T00:00:00Z", { comments: [aComment(line(["e2e", "unit"]), "2026-11-03T00:00:00Z"), aComment(line(["e2e"]), "2026-10-28T00:00:00Z")] })],
+            openPullRequests: [anOpenPullRequest({ number: 51, comments: [aComment(line(["e2e"], true), "2026-11-06T00:00:00Z"), aComment(line(["lint"]), "2026-11-06T00:00:00Z", { byBot: false })] })],
+          }),
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { counts: { flakyChecks: { thisWeek: 3, lastWeek: 1 } } } });
+    expect(result.kind === "summary" ? result.body : "").toContain("| Flaky checks | 3 | 1 | +2 |");
+  });
+
   it("counts a Retry refused on the weekly limit, then resumed, once (#481)", () => {
     const result = weeklySummary(
       input({

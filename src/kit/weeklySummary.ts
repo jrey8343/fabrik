@@ -20,7 +20,7 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { auditMarksIn, DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
+import { auditMarksIn, DESIGN_ROUND_MARKER, flakyCheckMarksIn, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
@@ -308,6 +308,8 @@ export interface WeeklySummary {
     readonly retries: WeekOverWeek<number>;
     /** Implement records of a Broken run (#434), counted or not. */
     readonly brokenRuns: WeekOverWeek<number>;
+    /** The Flaky checks found on agent PRs: by the Kit's re-run of red checks, and counted back later alike (#462). */
+    readonly flakyChecks: WeekOverWeek<number>;
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
     /** Those records by why they Stepped up (ADR-0014). */
@@ -662,6 +664,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       ticketsDispatched: change("ticketsDispatched"),
       retries: change("retries"),
       brokenRuns: change("brokenRuns"),
+      flakyChecks: change("flakyChecks"),
       stepUps: change("stepUps"),
       stepUpsByReason: change("stepUpsByReason"),
       steppedUpStarts: change("steppedUpStarts"),
@@ -671,6 +674,19 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     repos,
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
+}
+
+/**
+ * The Flaky checks the Fabrik App's lines named on agent PRs in the week
+ * (#462), open and closed, each PR read once: one per check a line names.
+ */
+function flakyChecksIn(week: Week, facts: readonly MetricFacts[]): number {
+  return facts.reduce((total, repo) => {
+    const closed = repo.pullRequests.map(({ number }) => number);
+    const pullRequests = [...repo.pullRequests, ...repo.openPullRequests.filter(({ number }) => !closed.includes(number))];
+    const lines = pullRequests.flatMap(({ comments }) => comments.filter((comment) => comment.byBot && within(week, comment.at)));
+    return total + flakyCheckMarksIn(lines.map(({ body }) => body)).reduce((sum, mark) => sum + mark.checks.length, 0);
+  }, 0);
 }
 
 /** The summed cost of the Replay records that ended in the week, or null if none did. */
@@ -705,6 +721,7 @@ interface WeekMetrics {
   readonly ticketsDispatched: number;
   readonly retries: number;
   readonly brokenRuns: number;
+  readonly flakyChecks: number;
   readonly stepUps: number;
   readonly stepUpsByReason: StepUpCounts;
   readonly steppedUpStarts: SteppedUpStarts;
@@ -747,6 +764,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     }).length,
     retries: records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null).length,
     brokenRuns: records.filter((record) => record.brokenRun !== null).length,
+    flakyChecks: flakyChecksIn(week, input.facts),
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
     steppedUpStarts: steppedUpStartsOf(merged, input.records),
@@ -1498,6 +1516,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords 
     row("Tickets dispatched", counts.ticketsDispatched, count),
     row("Retries", counts.retries, count),
     row("Broken runs", counts.brokenRuns, count),
+    row("Flaky checks", counts.flakyChecks, count),
     row("Step-ups", counts.stepUps, count),
     ...stepUpReasonRows(counts.stepUpsByReason),
     steppedUpStartsRow(counts.steppedUpStarts),

@@ -21,6 +21,7 @@ import {
   AUDIT_LABEL,
   DESIGN_LABEL,
   KEPT_BRANCH_LABEL,
+  FLAKY_CHECK_LABEL,
   KIT_ISSUE_LABELS,
   MAP_LABEL,
   NEEDS_DESIGN,
@@ -39,6 +40,7 @@ import type {
   AuditSnapshot,
   ConflictCandidate,
   ConflictSnapshot,
+  FlawHeadChecks,
   DesignQueueIssue,
   DesignQueueSnapshot,
   DispatchSnapshot,
@@ -63,7 +65,8 @@ import type {
   TriggerSweepSnapshot,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
-import { type GitHub, pagesOf, type Repo } from "./client.ts";
+import { uncountedFlaws } from "../loop/flakyChecks.ts";
+import { allPages, type GitHub, GitHubError, pagesOf, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
   countLandedNothing,
@@ -542,6 +545,8 @@ export async function gatherSnapshot(
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
   // The tick closes each ready-for-agent Ticket GitHub left open after a PR of it merged (#543).
   const readyTickets = event.kind === "scheduled-tick" ? (await gatherDispatchTickets(github, repo, appLogin)).tickets : null;
+  // A Flaky check found again comments on its check's open issue (#462): the Kit finds them at a Review's landing and the tick.
+  const flakyCheckIssues = FLAKY_CHECK_EVENTS.includes(event.kind) ? (await gatherKitIssues(github, repo, appLogin, [FLAKY_CHECK_LABEL])).kitIssues : [];
   // A weekly run's failure may give up on the week, which its gate's issues say (#443).
   const weeklyLabel = WEEKLY_RUN_EVENTS.includes(event.kind) ? weeklyLabelOf(part?.issue?.labels ?? []) : null;
   const weeklyIssues = weeklyLabel === null ? null : weeklyIssuesOf(await queryWeeklyIssues(github, repo, weeklyLabel), appLogin);
@@ -552,6 +557,8 @@ export async function gatherSnapshot(
       : event.kind === "scheduled-tick"
         ? await gatherConflicts(github, actions, repo, event.now, appLogin, operator ?? owner, wait)
         : null;
+  // The tick counts back an Execution flaw whose checks have since passed on its head (#462).
+  const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests) : null;
   // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480).
   const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
@@ -565,9 +572,54 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
 }
+
+/** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
+interface RawHeadCheckRun {
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly started_at: string | null;
+  readonly html_url: string | null;
+}
+
+/**
+ * For the tick's Flaky check sweep (#462): each open agent PR's ci-sourced
+ * Execution flaws not yet counted back, with every check run on the head each
+ * was given on, every attempt included. The Fabrik App reads them with
+ * Checks: read; without it the sweep is "no-permission", and does nothing.
+ */
+async function gatherFlakySweep(
+  github: Pick<GitHub, "rest">,
+  repo: Repo,
+  candidates: readonly ConflictCandidate[],
+): Promise<FlawHeadChecks[] | "no-permission"> {
+  const heads: FlawHeadChecks[] = [];
+  try {
+    for (const { pullRequest } of candidates) {
+      for (const { headSha, checks = [] } of uncountedFlaws(pullRequest)) {
+        const path = `/repos/${repo.owner}/${repo.name}/commits/${headSha}/check-runs?filter=all`;
+        const runs = await allPages<RawHeadCheckRun>(github, path, (page) => (page as { check_runs: RawHeadCheckRun[] }).check_runs);
+        heads.push({
+          pullRequest: pullRequest.number,
+          ticket: pullRequest.ticket,
+          headSha,
+          checks,
+          checkRuns: runs.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion, startedAt: run.started_at, url: run.html_url ?? "" })),
+        });
+      }
+    }
+  } catch (error) {
+    if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";
+    throw error;
+  }
+  return heads;
+}
+
+/** The events whose plan may find a Flaky check (#462). */
+const FLAKY_CHECK_EVENTS: readonly LoopEvent["kind"][] = ["required-checks-finished", "review-run-finished", "scheduled-tick"];
 
 /** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
 const WEEKLY_RUN_EVENTS: readonly LoopEvent["kind"][] = ["issue-opened", "agent-run-failed", "audit-run-finished", "retro-run-finished"];
@@ -999,6 +1051,8 @@ type EventPart = Omit<
   | "mergeable"
   | "triggers"
   | "readyTickets"
+  | "flakyCheckIssues"
+  | "flakySweep"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
@@ -1087,6 +1141,7 @@ export async function gatherKitIssues(
   github: Pick<GitHub, "graphql">,
   repo: Repo,
   appLogin: string | null,
+  labels: readonly string[] = KIT_ISSUE_LABELS,
 ): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
   const nodes: KitIssueNode[] = [];
   let owner = "";
@@ -1095,7 +1150,7 @@ export async function gatherKitIssues(
     const data: KitIssuesQueryResult = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
       owner: repo.owner,
       name: repo.name,
-      labels: KIT_ISSUE_LABELS,
+      labels,
       after,
     });
     const { totalCount, pageInfo, nodes: onPage } = data.repository.issues;

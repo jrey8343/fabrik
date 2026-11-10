@@ -957,7 +957,8 @@ jobs:
   # check_suite events don't fire for Actions CI, so it polls, logging what it
   # waits on, and gives up a few minutes short of the Review timeout. It holds
   # only a read-only token and no secrets, and reads the Kit config as data.
-  # Red checks go straight to the push job as an Execution flaw; the Reviewer
+  # Red checks the Kit can re-run go to the Re-run red checks job (#462); the
+  # rest go straight to the push job as an Execution flaw, and the Reviewer
   # never runs. Giving up, or an error, fails the job with a failure report
   # naming why: a gating check that never reported, the checks still running,
   # or the GitHub request that failed (src/review/wait.ts).
@@ -984,6 +985,8 @@ jobs:
       failed: ${{ steps.wait.outputs.failed }}
       # The ones among them skipped or reported neutral, which the Verdict says no Retry changes.
       skipped: ${{ steps.wait.outputs.skipped }}
+      # On red, as JSON: the GitHub Actions checks the Kit can re-run, with their workflow runs, and the outside ones (#462).
+      red: ${{ steps.wait.outputs.red }}
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1025,6 +1028,116 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # Re-running red checks (#462, ADR-0018): the failed jobs of the workflow runs
+  # behind the red GitHub Actions checks, once on the same head. The one job on
+  # the Review path that holds a write credential: `actions: write` on the
+  # workflow token, and nothing else. It loads no secret, checks out no Product
+  # code and runs none. A run already re-run on this head isn't re-run again,
+  # and a refusal re-runs nothing: the Verdict says why (src/review/rerun-main.ts).
+  rerun-checks:
+    name: Re-run red checks
+    needs: [kit, review-checks]
+    if: needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'red'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    outputs:
+      # The checks it re-ran, as JSON, empty or [] when it re-ran none; when it re-ran them; and why it re-ran none it could have.
+      rerun: ${{ steps.rerun.outputs.rerun }}
+      rerun-at: ${{ steps.rerun.outputs.rerun-at }}
+      refused: ${{ steps.rerun.outputs.refused }}
+    steps:
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # The check names come from the Product's CI, so the step reads them only through env:.
+      - name: Re-run the red GitHub Actions checks
+        id: rerun
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FABRIK_RED: ${{ needs.review-checks.outputs.red }}
+        run: node kit/src/review/rerun-main.ts
+
+  # The wait on the re-run checks (#462): the Review checks job's wait again, with
+  # its own Review timeout, on the head the first wait read. It waits until the
+  # re-run checks have reported again, then for every gating check. Green lets
+  # the Reviewer run; red goes to the push job as an Execution flaw. Giving up,
+  # or an error, is an Infrastructure failure, as the first wait's is.
+  rerun-wait:
+    name: Re-run checks' wait
+    needs: [kit, review-checks, rerun-checks]
+    if: needs.kit.outputs.route == 'review' && needs.rerun-checks.outputs.rerun != '' && needs.rerun-checks.outputs.rerun != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: read
+      actions: read
+    outputs:
+      checks: ${{ steps.wait.outputs.checks }}
+      head-sha: ${{ steps.wait.outputs.head-sha }}
+      failed: ${{ steps.wait.outputs.failed }}
+      skipped: ${{ steps.wait.outputs.skipped }}
+      # The re-run checks that failed again, and the flaky ones with their red and green runs, as JSON.
+      failed-again: ${{ steps.wait.outputs.failed-again }}
+      flaky: ${{ steps.wait.outputs.flaky }}
+    steps:
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # main's Kit config, read as data for its gating check list.
+      - name: Check out the Product's Kit config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          sparse-checkout: .fabrik
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Wait for the re-run checks
+        id: wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FABRIK_PULL_REQUEST: ${{ needs.kit.outputs.pull-request }}
+          FABRIK_REVIEW_TIMEOUT_MINUTES: ${{ needs.kit.outputs.review-timeout-minutes }}
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_HEAD_SHA: ${{ needs.review-checks.outputs.head-sha }}
+          FABRIK_RERUN: ${{ needs.rerun-checks.outputs.rerun }}
+          FABRIK_RERUN_AT: ${{ needs.rerun-checks.outputs.rerun-at }}
+        run: node kit/src/review/wait.ts product
+
+      # src/review/wait.ts writes this when it gives up or fails, for the push job's notice.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   # The Reviewer (ADR-0002). Read-only: a checkout of the PR's head at the
   # commit its checks passed on, no GitHub write credential, and only the
   # agent service account. It runs none of the PR's code, and passes its
@@ -1034,8 +1147,11 @@ jobs:
   # sweep reads a Review under way by this name (REVIEW_JOB_NAME in src/github/snapshot.ts).
   review:
     name: "Review PR #${{ needs.kit.outputs.pull-request }}"
-    needs: [kit, review-checks]
-    if: needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'green'
+    needs: [kit, review-checks, rerun-checks, rerun-wait]
+    # On green checks, at first or once the Kit re-ran the red ones (#462); !cancelled(), as the re-run jobs skip on green.
+    if: >-
+      !cancelled() && needs.kit.outputs.route == 'review' && needs.review-checks.result == 'success' &&
+      (needs.review-checks.outputs.checks == 'green' || (needs.rerun-wait.result == 'success' && needs.rerun-wait.outputs.checks == 'green'))
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
     # One Review per PR at a time.
@@ -1712,7 +1828,7 @@ jobs:
   # and Design queue jobs, which follow this one, skip a replay too.
   push:
     name: Push
-    needs: [kit, triage, design, prototype, implement, review-checks, review, audit, retro-evidence, retro, research]
+    needs: [kit, triage, design, prototype, implement, review-checks, rerun-checks, rerun-wait, review, audit, retro-evidence, retro, research]
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'
     runs-on: ubuntu-latest
     timeout-minutes: 10

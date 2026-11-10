@@ -183,6 +183,7 @@ describe("A Review's context", () => {
       repoUrl: "https://github.com/jrey8343/penrith",
       failedChecks: [],
       skippedChecks: [],
+      rerun: null,
       result: readAgentRunResult(artifact),
     });
     const plan = planFor(

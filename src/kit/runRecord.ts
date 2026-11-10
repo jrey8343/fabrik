@@ -23,7 +23,7 @@ import { brokenRunOf, infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
 import { type AgentRole, type BrokenRun, type InfrastructureFailure, isStepUpReason, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
-import { isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
+import { isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RERUN_WAIT_JOB, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
@@ -568,13 +568,15 @@ export function newerSchemaOf(stored: unknown): number | null {
 
 /**
  * The job whose failure the push job saw: for a Review, the Reviewer, unless
- * its checks job failed first and the Reviewer never ran; for a Retro, the
+ * its checks job, or the wait on the checks the Kit re-ran, failed first and
+ * the Reviewer never ran; for a Retro, the
  * Retro job, unless its evidence job failed first and the Retro never ran; for
  * a prototype turn, the prototype job.
  */
 function failedJob(needs: Needs, role: AgentRole): NeededJob | undefined {
-  const first = role === "review" ? needs["review-checks"] : role === "retro" ? needs[RETRO_EVIDENCE_JOB] : undefined;
-  return first !== undefined && FAILED.includes(first.result) ? first : routedJob(needs, role);
+  // A Review's checks are waited on twice when the Kit re-ran the red ones (#462).
+  const first = role === "review" ? [needs["review-checks"], needs[RERUN_WAIT_JOB]] : role === "retro" ? [needs[RETRO_EVIDENCE_JOB]] : [];
+  return first.find((job) => job !== undefined && FAILED.includes(job.result)) ?? routedJob(needs, role);
 }
 
 const FAILED = ["failure", "cancelled"];

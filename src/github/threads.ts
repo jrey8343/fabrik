@@ -34,16 +34,23 @@ import {
   stuckTriggerReaddedMarker,
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
+  flakyCheckMarksIn,
 } from "../loop/markers.ts";
 import type { TriggerLabel } from "../loop/labels.ts";
 import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, UnbuiltChangesRequest, Verdict, VerdictRecord } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
-/** The Verdicts recorded in these comments, oldest first. Comments without a valid marker are skipped. */
+/**
+ * The Verdicts recorded in these comments, oldest first. Comments without a
+ * valid marker are skipped. One whose head the Kit's Flaky check line marks
+ * counted back reads as flaky (#462).
+ */
 export function verdictsIn(commentBodies: readonly string[]): VerdictRecord[] {
+  const countedBack = new Set(flakyCheckMarksIn(commentBodies).flatMap((mark) => (mark.countedBack === true ? [mark.headSha] : [])));
   return commentBodies.flatMap((body) => {
     const record = readVerdictMarker(body);
-    return record === null ? [] : [record];
+    if (record === null) return [];
+    return [record.source === "ci" && countedBack.has(record.headSha) ? { ...record, flaky: true as const } : record];
   });
 }
 
@@ -57,7 +64,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, checks, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff" && source !== "broken-run") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
@@ -66,6 +73,8 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   // Likewise ticketNotReady (#416).
   if (typeof ticketNotReady !== "boolean") return null;
   if (typeof headSha !== "string") return null;
+  // Likewise checks (#462), which only a Verdict from red required checks carries.
+  const named = Array.isArray(checks) && checks.every((name) => typeof name === "string") ? { checks: checks as string[] } : {};
   return {
     verdict: verdict as Verdict,
     source,
@@ -73,6 +82,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     ...(conflictRun ? { conflictRun: true as const } : {}),
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     ...(ticketNotReady ? { ticketNotReady: true as const } : {}),
+    ...named,
     headSha,
   };
 }

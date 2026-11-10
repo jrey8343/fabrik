@@ -14,6 +14,7 @@ import type {
   GivenOperatorComment,
   ImplementEvidence,
   LoopEvent,
+  RerunReport,
   PullRequestCommentPlace,
 } from "../loop/types.ts";
 
@@ -315,6 +316,8 @@ export interface FinishedReview {
   readonly skippedChecks: readonly string[];
   /** The Reviewer's result, null when red checks kept it from running. */
   readonly result: AgentRunResult | null;
+  /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
+  readonly rerun: RerunReport | null;
 }
 
 /** Turns a finished Review into the Loop event its push job applies. */
@@ -322,7 +325,8 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
   const { pullRequest, headSha, runUrl, result } = review;
   if (result === null) {
     const { failedChecks: failed, skippedChecks: skipped } = review;
-    return { kind: "required-checks-finished", pullRequest, headSha, failed, ...(skipped.length === 0 ? {} : { skipped }), runUrl };
+    const rerun = review.rerun === null ? {} : { rerun: review.rerun };
+    return { kind: "required-checks-finished", pullRequest, headSha, failed, ...(skipped.length === 0 ? {} : { skipped }), ...rerun, runUrl };
   }
   if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
   if (result.issue !== pullRequest) throw new Error(`The Reviewer's result is for #${result.issue}, not #${pullRequest}`);
@@ -331,6 +335,7 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     pullRequest,
     headSha,
     output: result.output,
+    ...(review.rerun === null || review.rerun.flaky.length === 0 ? {} : { flaky: review.rerun.flaky }),
     runUrl,
     repoUrl: review.repoUrl,
     ...givenTo(result),
