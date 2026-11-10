@@ -56,6 +56,10 @@ _Avoid_: cutover, migration, onboarding
 The program the Operator runs in their own terminal to adopt, repair or migrate the Kit in a repository, with no agent taking part.
 _Avoid_: installer, CLI, bootstrap, `/fabrik-setup`
 
+**Console**:
+The Operator's own app for seeing what the factory is doing across their Product repos and making their moves at the Merge gate. It shows what GitHub and the Run records hold and is never a record itself: the Loop runs the same without it.
+_Avoid_: control plane, dashboard, inbox, app
+
 ## The product
 
 **Product intent**:
@@ -253,6 +257,10 @@ _Avoid_: PR feedback, reply
 **UI evidence**:
 The screenshots, and preview link if the Product repo has one, that the Kit captures for a pull request changing a Product repo's UI, so the Operator and the Reviewer can see what was built.
 _Avoid_: visual proof, screenshots, artifacts
+
+**Digest**:
+The Kit's plain-English account of an agent pull request, kept on the pull request for the Operator at the Merge gate: what was decided and why, what was left out of scope, what needs follow-up, and which parts deserve the Operator's own eyes.
+_Avoid_: PR summary, brief, report, changelog
 
 **Capture identity**:
 A named kind of user that UI evidence views a route as, signed in to the Sandbox's own server with fake credentials.
