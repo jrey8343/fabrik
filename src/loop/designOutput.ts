@@ -180,8 +180,10 @@ export interface DesignAgentBrief extends AgentBrief {
   /**
    * Marks the Ticket for a Kept-branch start (#536): its next Implement run
    * carries on the Kept branch of the PR it came back from. True adds the
-   * mark; false or absent leaves it off. Only a brief that rewrites the Ticket
-   * in place has it: a split's Tickets are new and start from main.
+   * mark; false or absent takes it off if it's on, the session's decision
+   * standing over a mark added by hand while it ran. Only a brief that
+   * rewrites the Ticket in place has it: a split's Tickets are new and start
+   * from main.
    */
   readonly keptBranch?: boolean;
 }

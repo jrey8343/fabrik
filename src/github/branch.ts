@@ -529,7 +529,6 @@ async function wholeBranchAgainst(git: Git, main: string, tip: string): Promise<
 }
 
 /**
- * The test files (isTestPath) these commits changed/**
  * The test files (isTestPath) these commits changed, deleted or moved away
  * that one of `bases` already holds (#463), each once, sorted. Pathspecs are
  * read literally, so no path the agent made up reads as a pattern.

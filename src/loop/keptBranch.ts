@@ -4,7 +4,12 @@
 // set by a Design session or by hand, and every Back to design takes it off.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { KEPT_BRANCH_LABEL, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
-import type { Action, KeptBranch } from "./types.ts";
+import type { Action, KeptBranch, KeptBranchStart } from "./types.ts";
+
+/** The Kept-branch start a run on this Ticket makes, or null when it isn't marked or its Kept branch is gone. */
+export function keptBranchStartOn(labels: readonly string[], keptBranch: KeptBranch | null): KeptBranchStart | null {
+  return labels.includes(KEPT_BRANCH_LABEL) && keptBranch !== null ? { pullRequest: keptBranch.pullRequest } : null;
+}
 
 /** Whether the Ticket is marked for a Kept-branch start and its Kept branch is gone, so no run can carry on it. */
 export function keptBranchGone(labels: readonly string[], keptBranch: KeptBranch | null | undefined): boolean {

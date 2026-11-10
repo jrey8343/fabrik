@@ -46,7 +46,7 @@ export function sentBackByOperator(pullRequest: PullRequestSnapshot): Action[] {
 }
 
 /**
- * Takes the Kept-branch mark off the Ticket (#536), whether or not it's on:
+ * Takes the Kept-branch start mark off the Ticket (#536), whether or not it's on:
  * every Design session starts with it off, and decides afresh whether the
  * next run carries on the Kept branch, so none inherits a stale mark.
  */

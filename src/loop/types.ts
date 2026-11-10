@@ -233,7 +233,7 @@ export type LoopEvent =
        * the Ticket's Kept branch, so `changes` holds only its own commits, and
        * the PR it opens names `pullRequest`, the closed one, when known.
        */
-      readonly keptBranch?: { readonly pullRequest: number | null };
+      readonly keptBranch?: KeptBranchStart;
       /**
        * For a retry: the agent PR it fixes, and the head it built on, which is
        * its branch's base, so `changes` holds only the retry's own commits;
@@ -636,6 +636,15 @@ export interface KeptBranch {
   /** Its head now. */
   readonly head: string;
   /** The latest closed, unmerged PR from it, which the new PR names; null when none is found. */
+  readonly pullRequest: number | null;
+}
+
+/**
+ * What a Kept-branch start (#536) carries from the Kit job's plan to its push
+ * job: the closed PR whose Kept branch it carries on, which its new PR names,
+ * or null when none was found.
+ */
+export interface KeptBranchStart {
   readonly pullRequest: number | null;
 }
 
@@ -1397,7 +1406,7 @@ export type Action =
        * Kept-branch start (#536): it carries on the Ticket's Kept branch, and
        * the PR it lands opens naming `pullRequest`, the one the Kit closed.
        */
-      readonly keptBranch?: { readonly pullRequest: number | null };
+      readonly keptBranch?: KeptBranchStart;
       /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
       readonly commit?: string;
       /**

@@ -6,9 +6,9 @@ import { checkTrustRoot } from "../guard/trust-root.ts";
 import { keptBranchOff } from "./backToDesign.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
-import { keptBranchGone, stopForGoneKeptBranch } from "./keptBranch.ts";
+import { keptBranchGone, keptBranchStartOn, stopForGoneKeptBranch } from "./keptBranch.ts";
 import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput.ts";
-import { DISPATCH_LABEL, KEPT_BRANCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
+import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
@@ -91,7 +91,8 @@ export function startImplementer(
   // Each empty diff so far was an Execution flaw, so this run is the Retry after the last one.
   const retry = issue.emptyDiffs === 0 ? {} : { retry: issue.emptyDiffs };
   // A Ticket marked for a Kept-branch start carries on its Kept branch, its Retry after an empty diff too (#536).
-  const kept = issue.labels.includes(KEPT_BRANCH_LABEL) && issue.keptBranch !== null ? { keptBranch: { pullRequest: issue.keptBranch.pullRequest } } : {};
+  const keptBranch = keptBranchStartOn(issue.labels, issue.keptBranch);
+  const kept = keptBranch === null ? {} : { keptBranch };
   return {
     kind: "act",
     actions: [
@@ -711,7 +712,7 @@ function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, r
           ].join("\n"),
         },
         { kind: "remove-label", issue: issueNumber, label: READY_FOR_AGENT },
-        // Back to design, so the Design session starts with the Kept-branch mark off (#536).
+        // Back to design, so the Design session starts with the Kept-branch start mark off (#536).
         keptBranchOff(issueNumber),
         // Starts a Design session, whose round 1 is this event's one notification.
         { kind: "add-labels", issue: issueNumber, labels: [NEEDS_DESIGN] },

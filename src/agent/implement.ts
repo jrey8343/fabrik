@@ -13,7 +13,7 @@ import { sandboxEnv } from "../kit/secrets.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
 import { verdictsIn } from "../github/threads.ts";
-import type { FailedRunCommits, GivenOperatorComment } from "../loop/types.ts";
+import type { FailedRunCommits, GivenOperatorComment, KeptBranchStart } from "../loop/types.ts";
 import {
   givenOperatorComments,
   operatorCommentId,
@@ -406,7 +406,7 @@ export async function implementInput(
      * For a Kept-branch start (#536), from the Kit job's plan, never inferred
      * from the checkout: the closed PR whose branch the checkout holds.
      */
-    readonly keptBranch?: { readonly pullRequest: number | null } | null;
+    readonly keptBranch?: KeptBranchStart | null;
   },
 ): Promise<ImplementInput> {
   const onPullRequest = files.pullRequest !== "";

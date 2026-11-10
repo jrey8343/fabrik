@@ -28,16 +28,20 @@ interface Candidate {
 export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched, operator: string): Plan {
   // A Ticket marked to carry on a Kept branch that's gone is never released: it goes to the Operator (#536).
   const stops = snapshot.tickets
-    .filter((ticket) => whyNotEligible(ticket) === gone(ticket) && !(held.implement.includes(ticket.number) && ticket.open))
+    .filter((ticket) => stopsForGoneKeptBranch(ticket) && !(held.implement.includes(ticket.number) && ticket.open))
     .flatMap((ticket) => stopForGoneKeptBranch(ticket.number, operator));
   const plan = releasing(snapshot, config, held);
   if (stops.length === 0) return plan;
   return { kind: "act", actions: [...stops, ...(plan.kind === "act" ? plan.actions : [])] };
 }
 
-/** Why whyNotEligible holds back a Ticket nothing else holds back but its gone Kept branch, which Dispatch stops instead (#536). */
-function gone(ticket: TicketSnapshot): string {
-  return `#${ticket.number}'s Kept branch is gone`;
+/**
+ * Whether Dispatch stops this Ticket instead of releasing it (#536): it's
+ * marked for a Kept-branch start whose Kept branch is gone, and nothing else
+ * holds it back.
+ */
+function stopsForGoneKeptBranch(ticket: TicketSnapshot): boolean {
+  return keptBranchGone(ticket.labels, ticket.keptBranch) && whyNotEligibleBesidesKeptBranch(ticket) === null;
 }
 
 /** The Dispatch check's releases, with no stopped Ticket. */
@@ -143,6 +147,13 @@ function count(n: number, one: string, many: string): string {
  * last Implement run didn't fail.
  */
 function whyNotEligible(ticket: TicketSnapshot): string | null {
+  const why = whyNotEligibleBesidesKeptBranch(ticket);
+  if (why !== null) return why;
+  return keptBranchGone(ticket.labels, ticket.keptBranch) ? `#${ticket.number}'s Kept branch is gone` : null;
+}
+
+/** whyNotEligible, leaving out a gone Kept branch, which Dispatch weighs last (#536). */
+function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot): string | null {
   const name = `#${ticket.number}`;
   if (!ticket.open) return `${name} is closed`;
   if (!ticket.labels.includes(READY_FOR_AGENT)) return `${name} isn't ${READY_FOR_AGENT}`;
@@ -159,8 +170,6 @@ function whyNotEligible(ticket: TicketSnapshot): string | null {
   // A broken Ticket mustn't burn runs on every check, the hourly tick's included (#418):
   // its failure notice tells the Operator to re-add agent:implement, its only resume.
   if (ticket.lastRunFailed) return `${name}'s last Implement run failed, so only adding ${DISPATCH_LABEL} again runs it`;
-  // Last, so only a Ticket Dispatch would otherwise release is stopped for it.
-  if (keptBranchGone(ticket.labels, ticket.keptBranch)) return gone(ticket);
   return null;
 }
 

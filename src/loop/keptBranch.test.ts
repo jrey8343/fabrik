@@ -147,7 +147,7 @@ describe("Setting a Kept-branch start from a Design session's agent brief", () =
   });
 });
 
-describe("Every Back to design takes the Kept-branch mark off", () => {
+describe("Every Back to design takes the Kept-branch start mark off", () => {
   const takenOff = { kind: "remove-label", issue: 7, label: "fabrik:kept-branch" } as const;
   const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
   const markedPullRequest = aPullRequest({ ticketLabels: ["ready-for-agent", "fabrik:kept-branch"] });

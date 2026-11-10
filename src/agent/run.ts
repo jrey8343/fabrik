@@ -82,7 +82,7 @@ import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
 import { readRetroOutput, type RetroOutput } from "../loop/retroOutput.ts";
 import { readResearchOutput, type ResearchOutput } from "../loop/researchOutput.ts";
-import type { AgentRole, AuditWindow, GivenOperatorComment } from "../loop/types.ts";
+import type { AgentRole, AuditWindow, GivenOperatorComment, KeptBranchStart } from "../loop/types.ts";
 import { type KitPrompt, kitPromptPath } from "../guard/trust-root.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
 import { type ParsedVerdict, parseVerdict } from "../loop/verdict.ts";
@@ -315,7 +315,7 @@ const REPLAY_SPECS = {
  * "true", and FABRIK_KEPT_PULL_REQUEST names the closed PR, if known. Never
  * inferred from the branch checked out.
  */
-function keptBranchFromEnv(): { readonly pullRequest: number | null } | null {
+function keptBranchFromEnv(): KeptBranchStart | null {
   if (process.env["FABRIK_KEPT_BRANCH"] !== "true") return null;
   const pullRequest = Number(process.env["FABRIK_KEPT_PULL_REQUEST"] ?? "");
   return { pullRequest: Number.isInteger(pullRequest) && pullRequest > 0 ? pullRequest : null };

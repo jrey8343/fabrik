@@ -4,7 +4,7 @@
 import type { AgentRunResult, BuiltBranch } from "../agent/result.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { FULL_SHA } from "../skills/lock.ts";
-import type { CaptureOutputs } from "../kit/pushJob.ts";
+import type { CaptureOutputs, PlannedKeptBranchStart } from "../kit/pushJob.ts";
 import { type EvidenceBundle, retroEvidenceOf } from "../kit/retroEvidence.ts";
 import type { PrototypeRequestMarker } from "../loop/markers.ts";
 import type {
@@ -169,7 +169,7 @@ export function agentRunEventFrom(
   startedBy: number | null = null,
   evidence: PushJobEvidence | null = null,
   runUrl: string | null = null,
-  keptBranch: { readonly pullRequest: number | null; readonly base: string } | null = null,
+  keptBranch: PlannedKeptBranchStart | null = null,
 ): LoopEvent {
   if (result.role === "review") throw new Error("A Reviewer's result is applied through reviewEventFrom");
   if (result.role === "audit") throw new Error("An Auditor's result is applied through auditEventFrom");
@@ -225,7 +225,7 @@ export function checkBuiltAsPlanned(
   ticket: number,
   built: BuiltBranch,
   retry: { readonly pullRequest: number } | null,
-  keptBranch: object | null,
+  keptBranch: PlannedKeptBranchStart | null,
 ): void {
   const onItsOwn = built.base.ref === built.name;
   if (retry !== null) {

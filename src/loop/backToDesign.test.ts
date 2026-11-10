@@ -48,7 +48,7 @@ describe("A Design flaw sends the Ticket back to design", () => {
       "close-pull-request",
       "comment-linking",
       "remove-label",
-      // The Kept-branch mark, so the Design session starts with it off (#536).
+      // The Kept-branch start mark, so the Design session starts with it off (#536).
       "remove-label",
       "add-labels",
     ]);
