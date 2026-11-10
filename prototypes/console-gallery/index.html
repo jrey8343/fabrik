@@ -1,0 +1,625 @@
+<title>Console Gallery prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<!--
+  PROTOTYPE. Throwaway. Never merged.
+  Three variants of the Console's Gallery screen for one Product repo, switchable from the floating bar (or #a / #b / #c, or ?variant=).
+  Answers the Decision "Prototype the Gallery: a Product repo's Prototypes and UI evidence in one place".
+  Styling is the Digest prototype's, which starts from the Home prototype's (prototypes/console-home).
+  Every repo, issue, pull request, page and "screenshot" in here is invented: the screenshots are drawings made by this file.
+-->
+<style>
+/* Layout: one phone-width column of bordered panels; pictures are the only large thing on the screen. */
+:root{
+  --ground:#F7F9F8; --raised:#FFFFFF; --sunken:#F0F3F1; --ink:#0F1F1A; --ink-2:#4A5A54; --ink-3:#6C7A75; --line:#E0E6E3; --line-2:#C9D2CE;
+  --yours:#00684A; --yours-ink:#FFFFFF; --yours-wash:#DDF8E8;
+  --run:#1A62C4; --run-wash:#E0ECFC; --hold:#8A5A00; --hold-wash:#FCF1CF; --stuck:#C0271D; --stuck-wash:#FCE5E2;
+  --proto:#0F1F1A; --proto-ink:#F7F9F8; --scrim:rgba(15,31,26,.45); --stage:#0B0F0D; --stage-ink:#EDEDED; --stage-2:#9AA5A0; --stage-line:#2C3431;
+  --text:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --ground:#121212; --raised:#1C1C1C; --sunken:#171717; --ink:#EDEDED; --ink-2:#B4B4B4; --ink-3:#8C8C8C; --line:#2A2A2A; --line-2:#3D3D3D;
+  --yours:#3ECF8E; --yours-ink:#06281A; --yours-wash:#12352A;
+  --run:#6CB1FF; --run-wash:#142A46; --hold:#F0B429; --hold-wash:#3A2C08; --stuck:#FF7B72; --stuck-wash:#431B19;
+  --proto:#EDEDED; --proto-ink:#121212; --scrim:rgba(0,0,0,.65); --stage:#000000; --stage-ink:#EDEDED; --stage-2:#8C8C8C; --stage-line:#2A2A2A; color-scheme:dark } }
+:root[data-theme="dark"]{
+  --ground:#121212; --raised:#1C1C1C; --sunken:#171717; --ink:#EDEDED; --ink-2:#B4B4B4; --ink-3:#8C8C8C; --line:#2A2A2A; --line-2:#3D3D3D;
+  --yours:#3ECF8E; --yours-ink:#06281A; --yours-wash:#12352A;
+  --run:#6CB1FF; --run-wash:#142A46; --hold:#F0B429; --hold-wash:#3A2C08; --stuck:#FF7B72; --stuck-wash:#431B19;
+  --proto:#EDEDED; --proto-ink:#121212; --scrim:rgba(0,0,0,.65); --stage:#000000; --stage-ink:#EDEDED; --stage-2:#8C8C8C; --stage-line:#2A2A2A; color-scheme:dark }
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font:400 15px/1.5 var(--text);-webkit-font-smoothing:antialiased;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:12px 84px}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--yours);outline-offset:2px}
+h1,h2,h3,p,dl,dd{margin:0}
+h1,h2,h3{letter-spacing:-.02em}
+
+.stage{display:grid;grid-template-columns:minmax(0,400px);justify-content:center;gap:36px;align-items:start}
+.phone{position:relative;display:flex;flex-direction:column;min-height:calc(100dvh - 110px);min-width:0}
+.notes{display:none}
+.notes[data-open]{display:block;position:fixed;inset:0;z-index:70;overflow:auto;background:var(--ground);
+  padding:calc(20px + env(safe-area-inset-top,0px)) max(16px, env(safe-area-inset-right,0px)) 96px max(16px, env(safe-area-inset-left,0px))}
+@media (min-width:900px){
+  .stage{grid-template-columns:400px minmax(0,380px)}
+  .phone{border:1px solid var(--line-2);border-radius:28px;padding:18px 16px 20px}
+  .notes,.notes[data-open]{display:block;position:sticky;top:16px;inset:auto;z-index:auto;overflow:visible;background:none;padding:8px 0 0}
+  .proto .p-notes,.p-notes-close{display:none}
+}
+
+/* ---- the Console's parts, as the Digest, Home and Spend prototypes have them ---- */
+.back{appearance:none;border:0;background:none;padding:0;color:var(--ink-2);font-weight:500;font-size:14px;min-height:36px;display:flex;align-items:center;cursor:pointer}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;background:var(--sunken);color:var(--ink-2);white-space:nowrap}
+.pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.yours{background:var(--yours-wash);color:var(--yours)}
+.pill.run{background:var(--run-wash);color:var(--run)}
+.pill.stuck{background:var(--stuck-wash);color:var(--stuck)}
+.pill.held{background:var(--hold-wash);color:var(--hold)}
+.ref{font:500 12px/1 var(--mono);color:var(--ink-2);background:var(--sunken);border:1px solid var(--line);border-radius:6px;padding:4px 6px;white-space:nowrap}
+.r-title{font-size:20px;font-weight:600;line-height:1.25;letter-spacing:-.02em;margin:10px 0 0;text-wrap:balance}
+.r-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
+.r-facts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.r-facts span{font-size:12.5px;color:var(--ink-2);border:1px solid var(--line);border-radius:6px;padding:3px 7px;background:var(--raised);font-variant-numeric:tabular-nums}
+.panel{margin-top:16px;border:1px solid var(--line);border-radius:12px;background:var(--raised);overflow:hidden}
+.panel-h{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600;color:var(--ink-2);background:var(--sunken)}
+.panel-h span{font-weight:500;color:var(--ink-3);font-variant-numeric:tabular-nums;text-align:right}
+.panel-h code{font:500 12.5px var(--mono);color:var(--ink)}
+.md{padding:14px 14px 16px;font-size:15px;line-height:1.5;overflow-wrap:anywhere}
+.md>*:first-child{margin-top:0}
+.md p{margin:8px 0 0}
+.callout{margin:12px 0 0;padding:10px 12px;border-left:3px solid var(--hold);background:var(--hold-wash);border-radius:0 8px 8px 0;font-size:14px}
+.fine{font-size:12.5px;color:var(--ink-3);margin-top:8px}
+.linkish{appearance:none;border:0;background:none;padding:0;color:var(--yours);font-weight:500;font-size:14px;cursor:pointer;min-height:32px;text-align:left}
+.links{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:8px}
+.quiet{appearance:none;border:1px solid var(--line-2);background:var(--raised);border-radius:8px;min-height:44px;padding:0 16px;font-weight:500;font-size:14px;cursor:pointer;margin-top:12px}
+.go{appearance:none;border:0;background:var(--yours);color:var(--yours-ink);border-radius:8px;min-height:44px;padding:0 16px;font-weight:600;font-size:14px;cursor:pointer;margin-top:12px}
+.row{border-top:1px solid var(--line)}
+.row:first-child,.panel-h + .row{border-top:0}
+.hit{appearance:none;display:block;width:100%;text-align:left;border:0;background:none;padding:12px 14px}
+button.hit{cursor:pointer}
+.row-top{display:flex;gap:6px;align-items:center;min-width:0;flex-wrap:wrap}
+.row-top .when{margin-left:auto;font-size:12.5px;color:var(--ink-3);white-space:nowrap}
+.row-title{display:block;font-weight:600;line-height:1.3;margin-top:8px}
+.row-say{display:block;font-size:14px;color:var(--ink-2);margin-top:3px}
+.row-say code,.md code,.fine code{font:500 12px var(--mono)}
+.toggles{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.toggles + .toggles{margin-top:6px}
+.toggle{appearance:none;font-size:12.5px;color:var(--ink-2);border:1px solid var(--line);border-radius:6px;padding:0 9px;min-height:32px;background:var(--raised);cursor:pointer;font-variant-numeric:tabular-nums}
+.toggle[aria-pressed="true"]{border-color:var(--ink-2);background:var(--sunken);color:var(--ink);font-weight:600}
+
+/* ---- pictures: a screenshot is a drawing in a thin frame; its caption is small text, never a filled badge ---- */
+.shot{appearance:none;display:block;width:100%;padding:0;border:1px solid var(--line-2);border-radius:6px;overflow:hidden;background:#fff;cursor:pointer;line-height:0;position:relative}
+.shot svg{display:block;width:100%;height:auto}
+div.shot{cursor:default}
+.cap{display:block;font-size:12px;color:var(--ink-3);margin-top:4px;line-height:1.3}
+.cap b{font-weight:600;color:var(--ink-2)}
+.cap code{font:500 11px var(--mono)}
+.strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
+.pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pair + .pair,.pair + .solo,.solo + .pair{margin-top:12px}
+.gone{border:1px dashed var(--line-2);border-radius:6px;padding:10px 12px;font-size:13px;color:var(--ink-3);margin-top:10px}
+.arrow{align-self:center;color:var(--ink-3);font-size:13px;text-align:center}
+
+/* B: the wipe. After underneath, Before clipped over it, one handle. */
+.wipe{position:relative;border:1px solid var(--line-2);border-radius:6px;overflow:hidden;background:#fff;line-height:0;--cut:50%}
+.wipe svg{display:block;width:100%;height:auto}
+.wipe .over{position:absolute;inset:0;clip-path:inset(0 calc(100% - var(--cut)) 0 0)}
+.wipe .bar{position:absolute;top:0;bottom:0;left:var(--cut);width:2px;margin-left:-1px;background:var(--yours);pointer-events:none}
+.wipe .bar::after{content:"";position:absolute;top:50%;left:50%;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:var(--yours);border:2px solid #fff}
+.wipe input{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0;cursor:ew-resize}
+.wipe-l{display:flex;justify-content:space-between;font-size:12px;color:var(--ink-3);margin-top:4px}
+.pan{overflow-x:auto;border:1px solid var(--line-2);border-radius:6px;background:#fff;line-height:0}
+.pan svg{display:block;width:860px;max-width:none;height:auto}
+/* B: a Prototype's variants as a sideways swipe */
+.swipe{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;margin:10px -14px 0;padding:0 14px 4px;scrollbar-width:none}
+.swipe::-webkit-scrollbar{display:none}
+.swipe > div{flex:0 0 78%;scroll-snap-align:center;min-width:0}
+.sheet3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
+.tl{border-left:2px solid var(--line);margin:4px 0 0 4px;padding-left:14px}
+.tl > div{position:relative;padding:10px 0}
+.tl > div::before{content:"";position:absolute;left:-20px;top:17px;width:10px;height:10px;border-radius:50%;background:var(--raised);border:2px solid var(--line-2)}
+.pagerow{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;align-items:start}
+
+/* C: the roll */
+.day{font-size:13px;font-weight:600;color:var(--ink-2);margin:22px 0 0}
+.grp{margin-top:12px}
+.grp-h{display:flex;gap:6px;align-items:center;min-width:0}
+.grp-h span.t{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
+.tiles.wide{grid-template-columns:repeat(2,minmax(0,1fr))}
+
+/* the full-screen viewer (A and C) */
+.viewer{position:fixed;inset:0;z-index:60;background:var(--stage);color:var(--stage-ink);display:flex;flex-direction:column;
+  padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) calc(64px + env(safe-area-inset-bottom,0px)) env(safe-area-inset-left,0px)}
+.v-top{display:flex;align-items:center;gap:10px;padding:8px 12px;min-height:52px;width:100%;max-width:460px;margin:0 auto}
+.v-top .x{appearance:none;border:1px solid var(--stage-line);background:none;color:inherit;border-radius:8px;min-width:44px;min-height:44px;font-size:18px;cursor:pointer}
+.v-cap{min-width:0;font-size:13px;line-height:1.35}
+.v-cap b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v-cap span{color:var(--stage-2)}
+.v-cap code{font:500 12px var(--mono)}
+.v-body{flex:1;min-height:0;overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:0 12px}
+.v-body .frame{width:100%;max-width:436px;background:#fff;border-radius:4px;overflow:hidden;line-height:0;flex:none}
+.v-body .frame svg{display:block;width:100%;height:auto}
+.v-body.zoom{justify-content:flex-start}
+.v-body.zoom .frame{width:var(--zw);max-width:none}
+.v-track{flex:1;min-height:0;display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none}
+.v-track::-webkit-scrollbar{display:none}
+.v-slide{flex:0 0 100%;scroll-snap-align:center;overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:0 12px}
+.v-slide .frame{width:100%;max-width:436px;background:#fff;border-radius:4px;overflow:hidden;line-height:0;flex:none;position:relative}
+.v-slide .frame svg{display:block;width:100%;height:auto}
+.v-slide .frame .b4{position:absolute;inset:0;visibility:hidden}
+.v-slide.before .frame .b4{visibility:visible}
+.v-slide.zoom{justify-content:flex-start}
+.v-slide.zoom .frame{width:200%;max-width:none}
+.v-foot{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:center;padding:10px 12px 0;width:100%;max-width:460px;margin:0 auto}
+.seg{display:inline-flex;border:1px solid var(--stage-line);border-radius:8px;overflow:hidden}
+.seg button{appearance:none;border:0;background:none;color:var(--stage-2);min-height:40px;min-width:44px;padding:0 12px;font-size:13.5px;font-weight:500;cursor:pointer}
+.seg button + button{border-left:1px solid var(--stage-line)}
+.seg button[aria-pressed="true"]{background:var(--stage-ink);color:var(--stage);font-weight:600}
+.v-btn{appearance:none;border:1px solid var(--stage-line);background:none;color:var(--stage-ink);border-radius:8px;min-height:40px;padding:0 12px;font-size:13.5px;font-weight:500;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none}
+.v-btn.on{background:var(--stage-ink);color:var(--stage)}
+.v-say{font-size:13px;color:var(--stage-2);text-align:center;padding:8px 16px 0;width:100%;max-width:460px;margin:0 auto;min-height:28px}
+.v-say button{appearance:none;border:0;background:none;color:var(--stage-ink);font:inherit;font-weight:600;text-decoration:underline;cursor:pointer;padding:0}
+
+/* ---- prototype chrome: not part of the design ---- */
+.proto{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:80;display:flex;align-items:center;gap:2px;
+  background:var(--proto);color:var(--proto-ink);border-radius:999px;padding:4px;box-shadow:0 8px 28px var(--scrim);max-width:calc(100vw - 16px);font:500 13.5px var(--text);white-space:nowrap}
+.proto button{appearance:none;border:0;background:none;color:inherit;font:inherit;min-height:40px;min-width:40px;padding:0 10px;border-radius:999px;cursor:pointer}
+.proto .p-label{padding:0 4px;min-width:96px;text-align:center}
+.proto .p-label b{font-weight:700;margin-right:6px}
+.proto .p-sep{width:1px;height:22px;background:var(--proto-ink);opacity:.3;margin:0 2px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(68px + env(safe-area-inset-bottom,0px));z-index:79;background:var(--ink);color:var(--ground);
+  padding:10px 14px;border-radius:8px;font-size:14px;width:max-content;max-width:calc(100vw - 32px)}
+.notes{font-size:14px;color:var(--ink-2)}
+.notes h2{font-size:20px;font-weight:600;color:var(--ink)}
+.notes h3{font-size:12.5px;font-weight:600;margin-top:18px;color:var(--ink-3)}
+.notes ul{margin:6px 0 0;padding-left:18px;display:grid;gap:6px}
+.notes .state{margin-top:6px;color:var(--ink)}
+</style>
+
+<div id="app"></div>
+
+<script>
+(() => {
+/* ---------- the invented Product's pages, drawn as stand-ins for the Kit's screenshots: one screen high, 390 by 844 and 1440 by 900 ---------- */
+const VP = {m:[390,844], d:[1440,900]};
+const B = {brand:'#2D3A8C', soft:'#EEF0FA', ink:'#1B1F3B', dim:'#6B7090', line:'#D5D8EA', off:'#F1F2F6', offInk:'#B5B8CC', warn:'#B4541A', warnWash:'#FCEBDD', ok:'#1D7A4F'};
+const R = (x, y, w, h, fill, rx = 0, stroke) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${fill}"${stroke ? ` stroke="${stroke}" stroke-width="1.5"` : ''}/>`;
+const X = (x, y, s, size = 14, weight = 400, fill = B.ink, anchor = 'start') => `<text x="${x}" y="${y}" font-size="${size}" font-weight="${weight}" fill="${fill}" text-anchor="${anchor}">${s}</text>`;
+const PAGE = {
+  '/book'(f, x0, cw, W, H, d){
+    let y = 96, o = X(x0, y, 'Book an appointment', 24, 700); y += 22;
+    if (f.picker){ o += X(x0, y + 22, 'With', 13, 500, B.dim);
+      ['Anyone','Priya','Tom'].forEach((n, i) => { const px = x0 + 44 + i * 84; o += R(px, y + 2, 76, 30, i ? '#fff' : B.brand, 15, i ? B.line : null) + X(px + 38, y + 22, n, 13, 600, i ? B.ink : '#fff', 'middle'); }); y += 48; }
+    if (f.next3){ o += R(x0, y, cw, 92, B.soft, 10) + X(x0 + 14, y + 26, 'Next free', 13, 600, B.brand);
+      ['Today 3:40 pm','Wed 9:00 am','Wed 11:20 am'].forEach((s, i) => { const bw = (cw - 44) / 3, bx = x0 + 14 + i * (bw + 8); o += R(bx, y + 40, bw, 38, '#fff', 8, B.brand) + X(bx + bw / 2, y + 64, s, d ? 13 : 11, 600, B.brand, 'middle'); }); y += 108; }
+    if (f.wl === 'a'){ o += R(x0, y, cw, 100, B.warnWash, 10) + X(x0 + 14, y + 26, 'Thursday is full', 14, 700, B.warn) + X(x0 + 14, y + 46, 'We can text you if a slot opens.', 12.5)
+      + R(x0 + 14, y + 58, 124, 30, B.warn, 8) + X(x0 + 76, y + 78, 'Join waitlist', 12.5, 600, '#fff', 'middle'); y += 116; }
+    o += X(x0, y + 16, 'Week of 9 November', 13, 600, B.dim); y += 28;
+    const days = ['Mon 9','Tue 10','Wed 11','Thu 12','Fri 13'], times = ['9:00','10:20','1:40','3:40'], gw = (cw - 24) / 5, sh = f.small ? 24 : 38;
+    const free = [[0,0,0,0],[0,0,0,1],[1,1,0,1],f.full ? [0,0,0,0] : [0,1,0,0],[1,0,1,1]];
+    days.forEach((dn, i) => { const gx = x0 + i * (gw + 6); o += X(gx + gw / 2, y + 14, dn, d ? 13 : 11.5, 600, B.ink, 'middle');
+      if (f.holiday && i === 4){ o += R(gx, y + 24, gw, 4 * sh + 18, B.warnWash, 6, B.warn) + X(gx + gw / 2, y + 24 + 2 * sh + 4, 'Public', 11, 600, B.warn, 'middle') + X(gx + gw / 2, y + 24 + 2 * sh + 19, 'holiday', 11, 600, B.warn, 'middle'); return; }
+      for (let j = 0; j < 4; j++){ const sy = y + 24 + j * (sh + 6), on = free[i][j];
+        o += R(gx, sy, gw, sh, on ? '#fff' : B.off, 6, on ? B.brand : null) + X(gx + gw / 2, sy + sh / 2 + 4, times[j], d ? 13 : 11.5, on ? 600 : 400, on ? B.brand : B.offInk, 'middle'); }
+      if (f.full && i === 3){ const sy = y + 24 + 4 * (sh + 6); o += X(gx + gw / 2, sy + 12, 'Full', 11.5, 700, B.warn, 'middle');
+        if (f.wl === 'b') o += R(gx, sy + 20, gw, 34, B.warn, 6) + X(gx + gw / 2, sy + 41, 'Waitlist', 11.5, 600, '#fff', 'middle'); } });
+    y += 24 + 4 * (sh + 6) + (f.full ? 62 : 14);
+    o += R(x0, y, cw, 46, B.off, 10) + X(x0 + cw / 2, y + 28, 'Choose a time to continue', 14, 600, B.offInk, 'middle');
+    if (f.wl === 'c'){ const sy = d ? 270 : H - 310, sx = d ? x0 : 0, sw = d ? cw : W, ix = sx + 24, iw = sw - 48;
+      o += R(0, 0, W, H, 'rgba(27,31,59,.5)') + R(sx, sy, sw, d ? 300 : 330, '#fff', 18) + X(ix, sy + 44, 'Thursday 12 November is full', 18, 700)
+        + X(ix, sy + 70, 'Leave your mobile number and we will', 13.5, 400, B.dim) + X(ix, sy + 89, 'text you if a slot opens.', 13.5, 400, B.dim)
+        + R(ix, sy + 108, iw, 46, '#fff', 8, B.line) + X(ix + 14, sy + 136, '04', 15, 400, B.offInk)
+        + R(ix, sy + 168, iw, 46, B.brand, 10) + X(ix + iw / 2, sy + 196, 'Text me if a slot opens', 14, 600, '#fff', 'middle') + X(ix + iw / 2, sy + 244, 'No thanks', 13.5, 600, B.brand, 'middle'); }
+    return o; },
+  '/today'(f, x0, cw){
+    let y = 96, o = X(x0, y, 'Today, Tuesday 10 November', 21, 700) + X(x0, y + 24, '6 appointments, 2 practitioners', 13, 400, B.dim); y += 44;
+    if (f.lunch) o += R(x0 + cw - 132, y, 132, 34, '#fff', 8, B.brand) + X(x0 + cw - 66, y + 22, 'Block out time', 12.5, 600, B.brand, 'middle');
+    y += f.lunch ? 50 : 8;
+    const rows = [['9:00','M. Okafor','Priya'],['10:20','J. Lindqvist','Tom'],['11:40','R. Haddad','Priya'],f.lunch ? ['12:30'] : null,['1:40','S. Petrovic','Tom'],['3:00','D. Marlowe','Priya'],['3:40','K. Tanaka','Tom']].filter(Boolean);
+    rows.forEach(r => { if (r.length === 1){ o += R(x0, y, cw, 52, B.warnWash, 8, B.warn) + X(x0 + 14, y + 22, 'Lunch, no bookings', 14, 700, B.warn) + X(x0 + 14, y + 40, '12:30 to 1:30, both practitioners', 12, 400, B.ink) + X(x0 + cw - 14, y + 31, 'Remove', 12.5, 600, B.warn, 'end'); y += 62; return; }
+      o += R(x0, y, cw, 52, '#fff', 8, B.line) + X(x0 + 14, y + 31, r[0], 14, 700, B.brand) + X(x0 + 76, y + 31, r[1], 14, 600) + X(x0 + cw - 14, y + 31, 'with ' + r[2], 12.5, 400, B.dim, 'end'); y += 62; });
+    return o; },
+  '/book/details'(f, x0, cw){
+    let y = 96, o = X(x0, y, 'Your details', 24, 700) + X(x0, y + 26, 'Wednesday 11 November, 9:00 am with Priya', 13, 400, B.dim); y += 56;
+    o += X(x0, y, 'Name', 13, 600, B.dim) + R(x0, y + 8, cw, 46, '#fff', 8, B.line); y += 80;
+    o += X(x0, y, 'Mobile number', 13, 600, B.dim) + R(x0, y + 8, cw, 46, f.remember ? B.soft : '#fff', 8, f.remember ? B.brand : B.line);
+    if (f.remember) o += X(x0 + 14, y + 37, '04•• ••• 318', 15, 600) + X(x0, y + 74, 'Remembered from your last booking.', 12.5, 400, B.dim) + X(x0 + cw, y + 74, 'Not you?', 12.5, 600, B.brand, 'end');
+    y += f.remember ? 100 : 80;
+    return o + R(x0, y, cw, 46, B.brand, 10) + X(x0 + cw / 2, y + 28, 'Confirm booking', 14, 600, '#fff', 'middle'); },
+  '/'(f, x0, cw, W){
+    let o = R(0, 56, W, 250, B.soft) + X(x0, 126, 'Physio in Northside,', 27, 700) + X(x0, 160, 'open six days', 27, 700) + X(x0, 190, 'Same-week appointments with Priya and Tom.', 13.5, 400, B.dim)
+      + R(x0, 214, 190, 46, B.brand, 10) + X(x0 + 95, 242, 'Book an appointment', 14, 600, '#fff', 'middle'), y = 346;
+    [['Sports injuries','Sprains, strains and getting back to training'],['Back and neck pain','Assessment and a plan you can keep to'],['After surgery','Rehab that follows your surgeon’s protocol']].forEach(([a, b]) => { o += X(x0, y, a, 16, 700) + X(x0, y + 22, b, 13, 400, B.dim) + R(x0, y + 38, cw, 1, B.line); y += 66; });
+    if (f.address) o += X(x0, y + 8, 'Find us', 16, 700) + X(x0, y + 30, '12 Wattle Street, Northside', 13, 400, B.dim) + R(x0, y + 44, cw, 150, B.soft, 10)
+      + `<path d="M${x0} ${y + 130} L${x0 + cw} ${y + 90} M${x0 + cw * .3} ${y + 44} L${x0 + cw * .45} ${y + 194}" stroke="#fff" stroke-width="10" fill="none"/><circle cx="${x0 + cw * .42}" cy="${y + 112}" r="9" fill="${B.brand}"/>`;
+    return o; },
+  '/cancel'(f, x0, cw){
+    let y = 96, o = X(x0, y, 'Cancel your appointment', 24, 700); y += 22;
+    o += R(x0, y, cw, 64, B.soft, 10) + X(x0 + 14, y + 27, 'Thursday 12 November, 10:20 am', 14, 700) + X(x0 + 14, y + 47, 'with Priya', 13, 400, B.dim); y += 88;
+    if (f.why){ o += X(x0, y, 'Why are you cancelling?', 15, 700); y += 14;
+      ['I feel better','The time no longer suits','I booked by mistake','Something else'].forEach((s, i) => { o += R(x0, y, cw, 46, '#fff', 8, i === 1 ? B.brand : B.line) + `<circle cx="${x0 + 22}" cy="${y + 23}" r="8" fill="#fff" stroke="${i === 1 ? B.brand : B.line}" stroke-width="1.5"/>` + (i === 1 ? `<circle cx="${x0 + 22}" cy="${y + 23}" r="4" fill="${B.brand}"/>` : '') + X(x0 + 42, y + 28, s, 14, i === 1 ? 600 : 400); y += 54; }); y += 10; }
+    return o + R(x0, y, cw, 46, '#fff', 10, B.warn) + X(x0 + cw / 2, y + 28, 'Cancel appointment', 14, 600, B.warn, 'middle') + X(x0 + cw / 2, y + 76, 'Keep my appointment', 13.5, 600, B.brand, 'middle'); },
+  '/book/confirm'(f, x0, cw){
+    let y = 130, o = `<circle cx="${x0 + 22}" cy="${y - 8}" r="22" fill="${B.ok}"/><path d="M${x0 + 12} ${y - 8} l7 7 l13 -14" stroke="#fff" stroke-width="3.5" fill="none"/>`;
+    o += X(x0, y + 54, 'You are booked', 24, 700) + X(x0, y + 80, 'Thursday 12 November, 10:20 am with Priya', 13.5, 400, B.dim); y += 110;
+    if (f.cf === 'a') { o += R(x0, y, cw, 58, B.soft, 10) + X(x0 + 14, y + 26, 'Text me a confirmation', 14, 600) + X(x0 + 14, y + 44, 'To 04•• ••• 318', 12, 400, B.dim) + R(x0 + cw - 62, y + 16, 48, 26, B.ok, 13) + `<circle cx="${x0 + cw - 27}" cy="${y + 29}" r="10" fill="#fff"/>`; y += 76; }
+    if (f.cf === 'b') { o += R(x0, y, cw, 46, '#fff', 10, B.brand) + X(x0 + cw / 2, y + 28, 'Text me the details', 14, 600, B.brand, 'middle'); y += 62; }
+    return o + R(x0, y, cw, 46, B.brand, 10) + X(x0 + cw / 2, y + 28, 'Add to calendar', 14, 600, '#fff', 'middle'); },
+};
+/* One screenshot: a route as drawn with some features, at a viewport ('m' or 'd'). */
+function shot(route, f = {}, vp = 'm', label = ''){
+  const [W, H] = VP[vp], d = vp === 'd', cw = d ? 560 : 350, x0 = (W - cw) / 2, edge = d ? 48 : 20;
+  let o = R(0, 0, W, H, '#fff') + R(0, 0, W, 56, B.brand) + X(edge, 35, 'Northside Physio', 17, 700, '#fff');
+  if (f.reception) o += R(edge + 152, 18, 78, 22, '#fff', 11) + X(edge + 191, 33, 'Reception', 11.5, 700, B.brand, 'middle');
+  if (d) o += X(W - edge - (f.phone ? 140 : 0), 35, 'Book        Services        Find us', 14, 500, '#C9CEF2', 'end');
+  if (f.phone) o += X(W - edge, 35, 'Call 5550 0142', 13, 600, '#fff', 'end');
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" font-family="Inter, system-ui, sans-serif" role="img" aria-label="${label || 'Screenshot of ' + route}">${o}${PAGE[route](f, x0, cw, W, H, d)}</svg>`;
+}
+/* ---------- invented data: one Product repo, its Prototypes and the UI evidence of its pull requests ---------- */
+const NOW = new Date(2026, 10, 10, 14, 15);
+const T = (mon, day, hm) => new Date(2026, mon - 1, day, +hm.split(':')[0], +hm.split(':')[1]);
+const REPO = 'northside-physio';
+const VARIANTS = [['a','By work'],['b','By page'],['c','Roll']];
+const SCENARIOS = [['busy','Kept 30 days'],['keep90','Kept 90 days'],['quiet','Quiet']];
+const P = {phone:1, picker:1};            /* /book in production today */
+const FULL = {...P, full:1};
+/* What each page looks like in production now, for B's "Now". */
+const NOWLOOK = {'/book':P, '/':{phone:1, address:1}, '/book/details':{phone:1, remember:1}, '/cancel':{phone:1}, '/today':{phone:1, reception:1}, '/book/confirm':{phone:1}};
+const WORK = [
+  {id:'w226', kind:'proto', ref:'#226', title:'Waitlist for fully booked days', route:'/book', at:T(11,10,'12:05'), st:'choose', round:3, rec:'b', preview:1, busy:1,
+    why:'B puts the way out where the patient is already looking, and changes nothing on a day that is not full.',
+    variants:[['a','A banner above the calendar',{...FULL, wl:'a'}],['b','A waitlist button under the full day',{...FULL, wl:'b'}],['c','A sheet when a full day is tapped',{...FULL, wl:'c'}]]},
+  {id:'w183', kind:'proto', ref:'#183', title:'Text a patient when their slot is confirmed', route:'/book/confirm', at:T(11,7,'16:40'), st:'chosen', chose:'b', choseAt:T(11,8,'08:15'), round:2, rec:'a',
+    why:'A needs no second tap.', variants:[['a','A switch, on by default',{phone:1, cf:'a'}],['b','A button the patient presses',{phone:1, cf:'b'}]]},
+  {id:'w214', kind:'pr', ref:'#198', pr:'PR #214', title:'Show the next three free slots on the booking page', st:'gate', at:T(11,10,'10:20'), head:'a41c9e2', preview:1, busy:1,
+    routes:[{route:'/book', before:P, after:{...P, next3:1}}]},
+  {id:'w233', kind:'pr', ref:'#188', pr:'PR #233', title:'Show the clinic’s public holidays on the calendar', st:'stuck', at:T(11,10,'13:25'), head:'77d0b13', preview:1, busy:1,
+    routes:[{route:'/book', before:P, after:{...P, holiday:1}}]},
+  {id:'w234', kind:'pr', ref:'#231', pr:'PR #234', title:'Record why a patient cancelled', st:'run', at:T(11,10,'13:28'), head:'3b8a6d4', stale:1, preview:1, busy:1,
+    routes:[{route:'/cancel', before:{phone:1}, after:{phone:1, why:1}}]},
+  {id:'w209', kind:'pr', ref:'#197', pr:'PR #209', title:'Let reception block out a lunch hour', st:'checks', at:T(11,9,'14:20'), head:'c9e55f0', preview:1, busy:1,
+    routes:[{route:'/today', as:'reception', after:{phone:1, reception:1, lunch:1}}]},
+  {id:'w212', kind:'pr', ref:'#190', pr:'PR #212', title:'Let patients pick a practitioner', st:'merged', merged:T(11,10,'09:10'), live:1, at:T(11,9,'09:30'), head:'e02f7aa',
+    routes:[{route:'/book', before:{phone:1}, after:P}]},
+  {id:'w199', kind:'pr', ref:'#180', pr:'PR #199', title:'Remember a patient’s phone number between bookings', st:'merged', merged:T(11,6,'08:45'), at:T(11,5,'16:00'), head:'5a1d0c3',
+    routes:[{route:'/book/details', before:{phone:1}, after:{phone:1, remember:1}}]},
+  {id:'w195', kind:'pr', ref:'#176', pr:'PR #195', title:'Show the clinic’s phone number on every page', st:'merged', merged:T(11,3,'11:00'), at:T(11,3,'09:10'), head:'9c44b81',
+    routes:[{route:'/', before:{address:1}, after:{address:1, phone:1}},{route:'/book', before:{}, after:{phone:1}}]},
+  {id:'w168', kind:'pr', ref:'#159', pr:'PR #168', title:'Make the calendar’s slots easier to tap', st:'merged', merged:T(10,6,'10:30'), at:T(10,5,'15:10'), head:'0be7723',
+    routes:[{route:'/book', before:{small:1}, after:{}}]},
+  {id:'w162', kind:'pr', ref:'#150', pr:'PR #162', title:'Show the clinic’s address and a map on the home page', st:'merged', merged:T(9,28,'12:00'), at:T(9,27,'17:20'), head:'d318e06',
+    routes:[{route:'/', before:{}, after:{address:1}}]},
+  {id:'w131', kind:'pr', ref:'#122', pr:'PR #131', title:'Let a patient cancel from a link in their text', st:'merged', merged:T(8,20,'09:00'), at:T(8,19,'14:45'), head:'41aa9f5',
+    routes:[{route:'/cancel', after:{}}]},
+  {id:'w118', kind:'pr', ref:'#109', pr:'PR #118', title:'Put the booking button on the home page', st:'merged', merged:T(8,1,'14:00'), at:T(7,31,'11:30'), head:'b7702de',
+    routes:[{route:'/', before:{}, after:{}}]},
+];
+
+const S = {variant:'a', scenario:'busy', notes:false, toast:null,
+  a:{open:null, view:null}, b:{page:null, vp:'m', sheet:false}, c:{kind:'all', vp:'m', view:null}};
+
+/* ---------- helpers ---------- */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'], MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const hm = d => String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+const dayNo = d => Math.floor((new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+const shortDate = d => d.getDate() + ' ' + MONTHS[d.getMonth()].slice(0, 3);
+const when = d => { const n = dayNo(d); if (n === 0){ const h = Math.round((NOW - d) / 36e5); return h < 1 ? 'just now' : h + ' h ago'; } return n === 1 ? 'yesterday' : n < 7 ? DAYS[d.getDay()].slice(0, 3) + ' ' + shortDate(d) : shortDate(d); };
+const dayHead = d => { const n = dayNo(d); return n === 0 ? 'Today' : n === 1 ? 'Yesterday' : DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()]; };
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+const letter = k => k.toUpperCase();
+
+/* The scene: how long GitHub keeps the screenshots, and whether anything is open. A piece of work older than that has no pictures left. */
+function world(){
+  const keep = S.scenario === 'keep90' ? 90 : 30, quiet = S.scenario === 'quiet';
+  const work = WORK.filter(w => !(quiet && w.busy)).map(w => ({...w, age: dayNo(w.at), gone: dayNo(w.at) > keep}));
+  return {keep, quiet, work, get: id => work.find(w => w.id === id)};
+}
+const isOpen = w => w.st !== 'merged' && w.st !== 'chosen';
+const mine = w => w.st === 'choose' || w.st === 'gate' || w.st === 'stuck';
+function pillOf(w){
+  if (w.st === 'choose') return `<span class="pill yours"><i></i>Yours to choose</span>`;
+  if (w.st === 'chosen') return `<span class="pill">You chose ${letter(w.chose)}</span>`;
+  if (w.st === 'gate') return `<span class="pill yours"><i></i>Yours to merge</span>`;
+  if (w.st === 'stuck') return `<span class="pill stuck"><i></i>Stuck</span>`;
+  if (w.st === 'checks') return `<span class="pill run"><i></i>Waiting on checks</span>`;
+  if (w.st === 'run') return `<span class="pill run"><i></i>Running</span>`;
+  return `<span class="pill">${w.live ? 'Live' : 'Merged'}</span>`;
+}
+const refOf = w => `<span class="ref">${w.kind === 'proto' ? 'Prototype ' + w.ref : w.pr}</span>`;
+const back = (label, act) => `<button class="back" data-act="${act}">‹ ${label}</button>`;
+const facts = fs => `<div class="r-facts">${fs.filter(Boolean).map(f => `<span>${f}</span>`).join('')}</div>`;
+const head = (title, fs) => `${back('Home', 'home')}<div class="r-meta"><span class="ref">${REPO}</span><span class="ref">Gallery</span></div><h1 class="r-title">${title}</h1>${facts(fs)}`;
+const stub = (label, what) => `<button class="linkish" data-act="stub" data-what="${esc(what)}">${label}</button>`;
+/* Where a pull request's or a Prototype's pictures lead: the preview while it is open, production once it is merged. */
+function linksOf(w, route, k){
+  const q = k ? '?variant=' + k : '', out = [];
+  if (w.st === 'merged') out.push(stub(`Open <code>${route}</code> in production`, `${route} in production`));
+  else if (w.preview) out.push(stub(k ? `Open ${letter(k)} in the preview` : `Open <code>${route}</code> in the preview`, `The preview of ${route}${q}`));
+  else if (w.kind === 'proto' && w.st === 'chosen') out.push(stub('Open its branch on GitHub', `prototype/${w.ref.slice(1)} on GitHub`));
+  return out.join('');
+}
+const moveOf = w => w.st === 'choose' ? `<button class="go" data-act="stub" data-what="Round ${w.round} on GitHub, to answer">Answer round ${w.round} on GitHub</button>`
+  : w.st === 'gate' ? `<button class="go" data-act="stub" data-what="Review of ${w.pr}">Open review</button>`
+  : `<button class="quiet" data-act="stub" data-what="${w.kind === 'proto' ? 'Issue ' + w.ref : w.pr} on GitHub">Open on GitHub</button>`;
+const capturedSay = w => w.stale ? `Captured ${when(w.at)} at <code>${w.head}</code>. A Retry is running: these are the pictures of the push before it.` : `Captured ${when(w.at)} at <code>${w.head}</code>.`;
+const goneSay = (w, keep) => `Screenshots expired: GitHub deleted them ${keep} days after they were captured, ${plural(w.age - keep, 'day')} ago.`;
+const noBefore = r => r.as ? `No Before: a page behind a sign-in is only ever captured in the Sandbox, viewed as ${r.as}.` : 'No Before: the page was new.';
+
+/* ---------- A: By work. One row per Prototype or pull request, as on Home; a row opens to its own screen; a picture opens a viewer that flips Before and After. ---------- */
+function stripA(w){
+  const cell = (r, f, cap) => `<div><button class="shot" data-act="a-view" data-id="${w.id}" data-r="${r}" data-side="${cap === 'Before' ? 'before' : 'after'}" aria-label="${cap}, open">${f}</button><span class="cap">${cap}</span></div>`;
+  const cells = w.kind === 'proto'
+    ? w.variants.map(([k,, f]) => cell(k, shot(w.route, f), `<b>${letter(k)}</b>${w.chose === k ? ' chosen' : w.st === 'choose' && w.rec === k ? ' advised' : ''}`))
+    : w.routes.flatMap((r, i) => [r.before ? cell(i, shot(r.route, r.before), 'Before') : '', cell(i, shot(r.route, r.after), w.routes.length > 1 ? `<code>${r.route}</code>` : 'After')]);
+  return `<div class="strip" style="margin:0 14px 12px">${cells.join('')}</div>`;
+}
+function rowA(w){
+  const say = w.kind === 'proto' ? `${plural(w.variants.length, 'variant')} of <code>${w.route}</code>, ${w.st === 'choose' ? `round ${w.round} asked ${when(w.at)}` : `chosen ${when(w.choseAt)}`}`
+    : `${w.routes.map(r => `<code>${r.route}</code>`).join(' and ')}${w.st === 'merged' ? ', merged ' + when(w.merged) : ', captured ' + when(w.at)}`;
+  return `<div class="row"><button class="hit" data-act="a-open" data-id="${w.id}"><span class="row-top">${pillOf(w)}${refOf(w)}</span><span class="row-title">${esc(w.title)}</span><span class="row-say">${say}</span></button>${stripA(w)}</div>`;
+}
+function renderA(W){
+  if (S.a.open) return detailA(W, W.get(S.a.open));
+  const live = W.work.filter(w => !w.gone), protos = live.filter(w => w.kind === 'proto').sort((x, y) => isOpen(y) - isOpen(x));
+  const open = live.filter(w => w.kind === 'pr' && isOpen(w)).sort((x, y) => mine(y) - mine(x)), merged = live.filter(w => w.st === 'merged'), gone = W.work.filter(w => w.gone);
+  const waiting = protos.filter(w => w.st === 'choose').length, gate = open.filter(w => w.st === 'gate').length;
+  const title = waiting ? `${plural(waiting, 'Prototype')} ${waiting === 1 ? 'is' : 'are'} waiting for your choice` : gate ? `${plural(gate, 'pull request')} with pictures ${gate === 1 ? 'is' : 'are'} yours to merge` : `Nothing open has pictures. ${plural(merged.length, 'merged pull request')} still ${merged.length === 1 ? 'does' : 'do'}.`;
+  const panel = (name, note, rows) => rows.length ? `<section class="panel"><div class="panel-h">${name} <span>${note}</span></div>${rows.map(rowA).join('')}</section>` : '';
+  return `${head(title, [`${open.length} open with pictures`, `${merged.length} merged with pictures`, `screenshots kept ${W.keep} days`])}
+    ${panel('Prototypes', 'from Design sessions', protos)}${panel('Open pull requests', 'yours first', open)}${panel('Merged', `last ${W.keep} days`, merged)}
+    <p class="fine">${plural(gone.length, 'older pull request')} changed pages. Their screenshots have expired, so they are not listed. ${stub('See them on GitHub', 'Merged pull requests on GitHub')}</p>`;
+}
+function detailA(W, w){
+  const pic = (r, side, vp, f, route, cap) => `<div><button class="shot" data-act="a-view" data-id="${w.id}" data-r="${r}" data-side="${side}" data-vp="${vp}">${shot(route, f, vp)}</button><span class="cap">${cap}</span></div>`;
+  if (w.kind === 'proto'){
+    return `${back('Gallery', 'a-close')}<div class="r-meta">${pillOf(w)}${refOf(w)}<span class="ref">${w.route}</span></div><h1 class="r-title">${esc(w.title)}</h1>
+      ${facts([plural(w.variants.length, 'variant'), w.st === 'choose' ? `round ${w.round} asked ${when(w.at)}` : `round ${w.round} answered ${when(w.choseAt)}`, 'mobile and desktop'])}
+      ${w.variants.map(([k, say, f]) => `<section class="panel"><div class="panel-h"><b style="color:var(--ink)">${letter(k)}</b><span style="flex:1;text-align:left;color:var(--ink-2)">${say}</span><span>${w.chose === k ? 'You chose this' : w.rec === k ? 'Advised' : ''}</span></div>
+        <div class="md"><div class="solo">${pic(k, 'after', 'm', f, w.route, 'Mobile, at the size it was captured')}</div><div class="solo" style="margin-top:12px">${pic(k, 'after', 'd', f, w.route, 'Desktop')}</div><div class="links">${linksOf(w, w.route, k)}</div></div></section>`).join('')}
+      <section class="panel"><div class="panel-h">The round’s question</div><div class="md"><p><b>Which variant?</b></p><p>The Design session advises ${letter(w.rec)}. ${w.why}</p>
+        ${w.st === 'chosen' ? `<p>You answered ${letter(w.chose)} ${when(w.choseAt)}. The Ticket it filed names ${letter(w.chose)} as the reference.</p>` : `<p class="fine">The choice is made by answering the round. The Console only shows the variants.</p>`}${moveOf(w)}</div></section>`;
+  }
+  return `${back('Gallery', 'a-close')}<div class="r-meta">${pillOf(w)}${refOf(w)}<span class="ref">Ticket ${w.ref}</span></div><h1 class="r-title">${esc(w.title)}</h1>
+    ${facts([`captured ${when(w.at)}`, w.head, 'mobile and desktop', w.st === 'merged' ? `merged ${when(w.merged)}` : ''])}
+    ${w.stale ? `<p class="callout">A Retry is running. These are the pictures of the push before it, and new ones replace them when it pushes.</p>` : ''}
+    ${w.routes.map((r, i) => `<section class="panel"><div class="panel-h"><code>${r.route}</code><span>${r.as ? 'viewed as ' + r.as : r.before ? 'Before and After' : 'After only'}</span></div><div class="md">
+      ${r.before ? `<div class="pair">${pic(i, 'before', 'm', r.before, r.route, 'Before')}${pic(i, 'after', 'm', r.after, r.route, 'After')}</div><div class="pair">${pic(i, 'before', 'd', r.before, r.route, 'Before, desktop')}${pic(i, 'after', 'd', r.after, r.route, 'After, desktop')}</div>`
+        : `<div class="pair">${pic(i, 'after', 'm', r.after, r.route, 'After')}${pic(i, 'after', 'd', r.after, r.route, 'After, desktop')}</div><p class="fine">${noBefore(r)}</p>`}
+      <div class="links">${linksOf(w, r.route)}</div></div></section>`).join('')}
+    ${moveOf(w)}`;
+}
+/* A's viewer: one picture at a time. Before and After flip in place; a desktop shot can be panned at its real size. */
+function viewerA(W){
+  const v = S.a.view, w = W.get(v.id), proto = w.kind === 'proto', r = proto ? null : w.routes[+v.r], vr = proto ? w.variants.find(x => x[0] === v.r) : null;
+  const route = proto ? w.route : r.route, f = proto ? vr[2] : v.side === 'before' && r.before ? r.before : r.after, side = proto ? 'Variant ' + letter(v.r) : v.side === 'before' && r.before ? 'Before' : 'After';
+  const zw = v.vp === 'd' ? 1440 : 780, seg = (act, cur, opts) => `<span class="seg">${opts.map(([k, l]) => `<button data-act="${act}" data-k="${k}" aria-pressed="${cur === k}">${l}</button>`).join('')}</span>`;
+  return `<div class="viewer" role="dialog" aria-label="Screenshot"><div class="v-top"><button class="x" data-act="a-unview" aria-label="Close">×</button>
+      <div class="v-cap"><b>${proto ? 'Prototype ' + w.ref : w.pr} <code>${route}</code></b><span>${side}, ${v.vp === 'd' ? 'desktop 1440 wide' : 'mobile 390 wide'}, captured ${when(w.at)}</span></div></div>
+    <div class="v-body ${v.zoom ? 'zoom' : ''}" style="--zw:${zw}px"><div class="frame">${shot(route, f, v.vp)}</div></div>
+    <div class="v-foot">${!proto && r.before ? seg('a-side', v.side, [['before','Before'],['after','After']]) : ''}${seg('a-vp', v.vp, [['m','Mobile'],['d','Desktop']])}
+      <button class="v-btn ${v.zoom ? 'on' : ''}" data-act="a-zoom">${v.vp === 'd' ? 'Actual size' : 'Twice the size'}</button></div>
+    <p class="v-say">${v.zoom ? 'Drag to move around it.' : v.vp === 'd' ? 'Scaled down to fit. Actual size lets you move around it.' : 'Close to the size a phone shows it.'}</p></div>`;
+}
+/* ---------- B: By page. The Gallery is the Product's pages; a page shows how it looks now, everything open on it, and what changed it before. Nothing opens full screen: Before and After are a wipe, a Prototype's variants a sideways swipe. ---------- */
+function pagesOf(W){
+  const by = {};
+  W.work.forEach(w => (w.kind === 'proto' ? [{route: w.route}] : w.routes).forEach(r => (by[r.route] = by[r.route] || []).push({w, r})));
+  return Object.entries(by).map(([route, items]) => {
+    const open = items.filter(x => isOpen(x.w)).sort((x, y) => mine(y.w) - mine(x.w)), merged = items.filter(x => x.w.st === 'merged').sort((x, y) => y.w.merged - x.w.merged);
+    return {route, open, merged, past: items.filter(x => x.w.st === 'chosen'), mine: open.filter(x => mine(x.w)).length, last: merged[0]};
+  }).sort((x, y) => y.mine - x.mine || y.open.length - x.open.length || (y.last ? +y.last.w.merged : 0) - (x.last ? +x.last.w.merged : 0));
+}
+const wipe = (route, before, after, vp) => vp === 'd'
+  ? `<span class="cap" style="margin:0 0 4px">Before, desktop. Drag sideways.</span><div class="pan">${shot(route, before, 'd')}</div><span class="cap" style="margin:10px 0 4px">After, desktop</span><div class="pan">${shot(route, after, 'd')}</div>`
+  : `<div class="wipe">${shot(route, after)}<div class="over">${shot(route, before)}</div><span class="bar"></span><input type="range" min="0" max="100" value="50" data-wipe aria-label="Wipe between Before and After"></div><div class="wipe-l"><span>‹ Before</span><span>After ›</span></div>`;
+const alone = (route, f, vp) => vp === 'd' ? `<div class="pan">${shot(route, f, 'd')}</div>` : `<div class="shot">${shot(route, f)}</div>`;
+function renderB(W){
+  const pages = pagesOf(W);
+  if (S.b.page) return pageB(W, pages.find(p => p.route === S.b.page));
+  const busiest = pages[0], withOpen = pages.filter(p => p.open.length).length;
+  const title = busiest.open.length > 1 ? `${plural(busiest.open.length, 'change')} are open on ${busiest.route} at once` : withOpen ? `${plural(withOpen, 'page')} ${withOpen === 1 ? 'has' : 'have'} a change open` : 'No page has a change open';
+  return `${head(title, [`${pages.length} pages captured`, `${withOpen} with something open`, `screenshots kept ${W.keep} days`])}
+    <section class="panel"><div class="panel-h">Pages <span>what is open on each</span></div>${pages.map(p => {
+      const lastSay = p.last ? `Last changed by ${p.last.w.pr}, ${p.last.w.live ? 'live ' : 'merged '}${when(p.last.w.merged)}` : 'Not in production yet';
+      return `<div class="row"><button class="hit pagerow" data-act="b-page" data-route="${p.route}"><span class="shot" style="pointer-events:none">${shot(p.route, NOWLOOK[p.route])}</span>
+        <span><span class="row-top"><b style="font:500 14px var(--mono)">${p.route}</b></span>
+        ${p.open.length ? `<span class="row-top" style="margin-top:8px">${p.open.map(x => pillOf(x.w)).join('')}</span><span class="row-say">${p.open.map(x => x.w.kind === 'proto' ? 'Prototype ' + x.w.ref : x.w.pr).join(', ')}</span>` : ''}
+        <span class="row-say">${lastSay}</span></span></button></div>`; }).join('')}</section>
+    <p class="fine">A page is listed once the Kit has captured it for a pull request or a Prototype. The small picture is how it looks in production now.</p>`;
+}
+function pageB(W, p){
+  const vp = S.b.vp, lastPic = p.merged.find(x => !x.w.gone);
+  const openPart = x => {
+    const w = x.w, top = `<div class="row-top">${pillOf(w)}${refOf(w)}<span class="when">${when(w.at)}</span></div><span class="row-title">${esc(w.title)}</span>`;
+    if (w.kind === 'proto') return `<div class="row"><div class="hit">${top}<span class="row-say">${plural(w.variants.length, 'variant')}. Swipe sideways, or see them together.</span>
+      <div class="toggles"><button class="toggle" data-act="b-sheet" data-on="" aria-pressed="${!S.b.sheet}">One at a time</button><button class="toggle" data-act="b-sheet" data-on="1" aria-pressed="${S.b.sheet}">Side by side</button></div>
+      ${S.b.sheet ? `<div class="sheet3">${w.variants.map(([k, say, f]) => `<div><div class="shot">${shot(w.route, f, vp)}</div><span class="cap"><b>${letter(k)}</b>${w.rec === k ? ' advised' : ''}</span></div>`).join('')}</div>`
+        : `<div class="swipe">${w.variants.map(([k, say, f]) => `<div><div class="shot">${shot(w.route, f, vp)}</div><span class="cap"><b>${letter(k)}</b> ${say}${w.rec === k ? '. Advised.' : ''}</span>${linksOf(w, w.route, k)}</div>`).join('')}</div>`}
+      <p class="row-say" style="margin-top:10px"><b>Which variant?</b> The Design session advises ${letter(w.rec)}. ${w.why}</p>${moveOf(w)}</div></div>`;
+    return `<div class="row"><div class="hit">${top}<div style="margin-top:10px">${x.r.before ? wipe(p.route, x.r.before, x.r.after, vp) : alone(p.route, x.r.after, vp) + `<p class="fine">${noBefore(x.r)}</p>`}</div>
+      ${w.stale ? `<p class="fine">A Retry is running. These are the pictures of the push before it.</p>` : ''}<div class="links">${linksOf(w, p.route)}${w.st === 'gate' ? stub('Open review', 'Review of ' + w.pr) : stub('Open on GitHub', w.pr + ' on GitHub')}</div></div></div>`;
+  };
+  const earlier = [...p.merged, ...p.past].sort((x, y) => y.w.at - x.w.at).map(x => {
+    const w = x.w, on = S.b.open === w.id, line = `<span class="row-top">${pillOf(w)}${refOf(w)}<span class="when">${when(w.merged || w.choseAt)}</span></span><span class="row-say" style="color:var(--ink)">${esc(w.title)}</span>`;
+    if (w.gone) return `<div>${line}<div class="gone">${goneSay(w, W.keep)}</div><div class="links">${linksOf(w, p.route)}${stub('Open on GitHub', w.pr + ' on GitHub')}</div></div>`;
+    const body = w.kind === 'proto' ? `<div class="sheet3" style="grid-template-columns:repeat(${w.variants.length},minmax(0,1fr));max-width:${w.variants.length * 110}px">${w.variants.map(([k,, f]) => `<div><div class="shot">${shot(w.route, f, vp)}</div><span class="cap"><b>${letter(k)}</b>${w.chose === k ? ' chosen' : ''}</span></div>`).join('')}</div>`
+      : x.r.before ? wipe(p.route, x.r.before, x.r.after, vp) : alone(p.route, x.r.after, vp) + `<p class="fine">${noBefore(x.r)}</p>`;
+    return `<div><button class="hit" style="padding:0" data-act="b-open" data-id="${w.id}" aria-expanded="${on}">${line}</button>${on ? `<div style="margin-top:10px">${body}</div><div class="links">${linksOf(w, p.route)}</div>` : `<span class="cap">Has pictures for ${plural(W.keep - w.age, 'more day')}. Tap to look.</span>`}</div>`; }).join('');
+  return `${back('Gallery', 'b-close')}<div class="r-meta"><span class="ref">${REPO}</span><span class="ref">${p.route}</span></div>
+    <h1 class="r-title">${p.open.length ? `${plural(p.open.length, 'change')} open on this page` : 'Nothing is open on this page'}</h1>
+    ${facts([p.last ? `last changed ${when(p.last.w.merged)}` : 'not in production yet', `${plural(p.merged.length, 'merged change')} on record`])}
+    <div class="toggles"><button class="toggle" data-act="b-vp" data-vp="m" aria-pressed="${vp === 'm'}">Mobile</button><button class="toggle" data-act="b-vp" data-vp="d" aria-pressed="${vp === 'd'}">Desktop</button></div>
+    ${p.open.length ? `<section class="panel"><div class="panel-h">Open on this page <span>yours first</span></div>${p.open.map(openPart).join('')}</section>` : ''}
+    <section class="panel"><div class="panel-h">Now <span>in production</span></div><div class="md">${!p.last ? `<p>Nothing merged has captured this page.</p>`
+      : lastPic ? `<div style="${vp === 'm' ? 'max-width:60%' : ''}">${alone(p.route, lastPic.r.after, vp)}</div><p class="fine">The After of ${lastPic.w.pr}, the newest merged change that still has pictures. The Console keeps no picture of its own.</p>`
+      : `<div class="gone">No picture. The last change to this page was ${p.last.w.pr}, and its screenshots have expired.</div>`}
+      ${p.last ? `<div class="links">${stub(`Open <code>${p.route}</code> in production`, p.route + ' in production')}</div>` : ''}</div></section>
+    ${earlier ? `<section class="panel"><div class="panel-h">Earlier on this page <span>newest first</span></div><div class="md"><div class="tl">${earlier}</div></div></section>` : ''}`;
+}
+/* ---------- C: Roll. Every picture the Kit captured, newest first, as one roll by day. A tap opens a viewer that swipes through the whole roll; hold for Before, flip a Prototype's variants in place. ---------- */
+function rollOf(W){
+  const k = S.c.kind;
+  return W.work.filter(w => !w.gone && (k === 'all' || (k === 'proto' ? w.kind === 'proto' : w.kind === 'pr' && (k === 'open') === isOpen(w))))
+    .sort((x, y) => y.at - x.at).flatMap(w => w.kind === 'proto' ? [{w}] : w.routes.map(r => ({w, r})));
+}
+function renderC(W){
+  const items = rollOf(W), vp = S.c.vp, gone = W.work.filter(w => w.gone), all = W.work.filter(w => !w.gone);
+  const count = k => all.filter(w => k === 'all' || (k === 'proto' ? w.kind === 'proto' : w.kind === 'pr' && (k === 'open') === isOpen(w))).length;
+  let out = '', day = '', i = 0;
+  while (i < items.length){
+    const w = items[i].w, d = dayHead(w.at); if (d !== day){ out += `<h2 class="day">${d}</h2>`; day = d; }
+    const mineItems = []; while (i < items.length && items[i].w === w){ mineItems.push([items[i], i]); i++; }
+    const text = `<span class="row-top">${pillOf(w)}${refOf(w)}</span><span class="row-say" style="color:var(--ink);font-weight:500">${esc(w.title)}</span>`;
+    const tiles = w.kind === 'proto'
+      ? w.variants.map(([k,, f]) => `<div><button class="shot" data-act="c-view" data-i="${mineItems[0][1]}" data-k="${k}">${shot(w.route, f, vp)}</button><span class="cap"><b>${letter(k)}</b>${w.chose === k ? ' chosen' : w.st === 'choose' && w.rec === k ? ' advised' : ''}</span></div>`)
+      : mineItems.map(([x, n]) => `<div><button class="shot" data-act="c-view" data-i="${n}">${shot(x.r.route, x.r.after, vp)}</button><span class="cap"><code>${x.r.route}</code></span></div>`);
+    const cols = vp === 'd' && w.kind === 'pr' ? 2 : 3, room = cols - tiles.length;
+    out += `<div class="grp">${room > 0 ? '' : text}<div class="tiles ${cols === 2 ? 'wide' : ''}">${tiles.join('')}${room > 0 ? `<div style="grid-column:span ${room};min-width:0">${text}<span class="cap">${w.kind === 'proto' ? '' : w.st === 'merged' ? 'Merged ' + when(w.merged) : 'Captured ' + when(w.at)}</span></div>` : ''}</div></div>`;
+  }
+  const chip = (k, label) => `<button class="toggle" data-act="c-kind" data-kind="${k}" aria-pressed="${S.c.kind === k}">${label} ${count(k)}</button>`;
+  return `${head(`Everything captured in the last ${W.keep} days, newest first`, [plural(items.reduce((t, x) => t + (x.w.kind === 'proto' ? x.w.variants.length : 1), 0), 'picture'), `screenshots kept ${W.keep} days`])}
+    <div class="toggles">${chip('all', 'Everything')}${chip('proto', 'Prototypes')}${chip('open', 'Open')}${chip('merged', 'Merged')}</div>
+    <div class="toggles"><button class="toggle" data-act="c-vp" data-vp="m" aria-pressed="${vp === 'm'}">Mobile</button><button class="toggle" data-act="c-vp" data-vp="d" aria-pressed="${vp === 'd'}">Desktop</button></div>
+    ${out || `<p class="fine" style="margin-top:18px">Nothing in the last ${W.keep} days matches.</p>`}
+    <div class="gone" style="margin-top:22px">The roll ends here. Screenshots older than ${W.keep} days have expired.</div>
+    ${gone.length ? `<section class="panel"><div class="panel-h">Expired <span>links only</span></div>${gone.map(w => `<div class="row"><div class="hit"><span class="row-top">${pillOf(w)}${refOf(w)}<span class="when">${when(w.merged)}</span></span><span class="row-say" style="color:var(--ink)">${esc(w.title)}</span><div class="links">${w.routes.map(r => linksOf(w, r.route)).join('')}</div></div></div>`).join('')}</section>` : ''}`;
+}
+/* The parts of C's viewer that follow the picture in view. */
+function partsC(W){
+  const items = rollOf(W), v = S.c.view, x = items[v.i], w = x.w, proto = w.kind === 'proto', k = proto ? (v.k[w.id] || w.rec) : null, vr = proto ? w.variants.find(q => q[0] === k) : null;
+  const top = `<button class="x" data-act="c-unview" aria-label="Close">×</button><div class="v-cap"><b>${proto ? 'Prototype ' + w.ref : w.pr} <code>${proto ? w.route : x.r.route}</code></b><span>${v.i + 1} of ${items.length}. ${esc(w.title)}</span></div>`;
+  const move = w.st === 'choose' ? `<button data-act="stub" data-what="Round ${w.round} on GitHub, to answer">Answer round ${w.round} on GitHub</button>` : w.st === 'gate' ? `<button data-act="stub" data-what="Review of ${w.pr}">Open review</button>`
+    : w.st === 'merged' ? `<button data-act="stub" data-what="${x.r.route} in production">Open in production</button>` : `<button data-act="stub" data-what="${proto ? 'Issue ' + w.ref : w.pr} on GitHub">Open on GitHub</button>`;
+  const foot = proto ? `<span class="seg">${w.variants.map(q => `<button data-act="c-flip" data-k="${q[0]}" aria-pressed="${k === q[0]}">${letter(q[0])}</button>`).join('')}</span>`
+    : x.r.before ? `<button class="v-btn" data-hold>Hold for Before</button>` : '';
+  const say = proto ? `${letter(k)}: ${vr[1]}${w.chose === k ? '. You chose it.' : w.rec === k ? '. Advised.' : '.'} ${move}` : `${x.r.before ? '' : noBefore(x.r) + ' '}${pillOf(w).replace(/<[^>]+>/g, '')}, captured ${when(w.at)}. ${move}`;
+  return {top, foot: foot + `<button class="v-btn" data-zoom>Twice the size</button>`, say};
+}
+function slideC(x, v, vp){
+  const w = x.w;
+  if (w.kind === 'proto'){ const k = v.k[w.id] || w.rec; return shot(w.route, w.variants.find(q => q[0] === k)[2], vp); }
+  return shot(x.r.route, x.r.after, vp) + (x.r.before ? `<div class="b4">${shot(x.r.route, x.r.before, vp)}</div>` : '');
+}
+function viewerC(W){
+  const items = rollOf(W), v = S.c.view, p = partsC(W);
+  return `<div class="viewer" role="dialog" aria-label="The roll"><div class="v-top" id="vc-top">${p.top}</div>
+    <div class="v-track">${items.map((x, i) => `<div class="v-slide" data-i="${i}"><div class="frame">${slideC(x, v, S.c.vp)}</div></div>`).join('')}</div>
+    <div class="v-foot" id="vc-foot">${p.foot}</div><p class="v-say" id="vc-say">${p.say}</p></div>`;
+}
+/* ---------- prototype chrome ---------- */
+const BETS = {
+  a:['Organised by piece of work, as Home is: a row per Prototype and per pull request, yours first.','Merged work stays exactly as long as it has pictures, then leaves the Gallery. Nothing is listed without a picture.','A row opens to its own screen: every route, Before beside After, mobile then desktop.','A Prototype’s variants are stacked full size, one under the other. You compare by scrolling.','A picture opens full screen. Before and After flip in place with one tap; a desktop shot can be shown at its real size and moved around.'],
+  b:['Organised by page: the Gallery is the Product’s routes, each with how it looks in production now.','A page shows everything open on it together, so two pull requests and a Prototype on one page are seen side by side.','Merged work stays for good as a line in its page’s history. Its pictures last as long as GitHub keeps them; after that the line says so and links to production.','Before and After are a wipe you drag, in the page. Nothing opens full screen. Desktop shots are strips you drag sideways.','A Prototype’s variants are a sideways swipe, or all side by side.'],
+  c:['Organised by time: one roll of everything captured, newest first, grouped by day. Only the After is on the roll.','Merged work stays on the roll until its pictures expire, then drops to a list of links under it.','A tap opens a viewer that swipes through the whole roll, one picture per screen.','Hold a button to see the Before in the same place. Double-tap, or the button, for twice the size.','A Prototype is one stop in the viewer: A, B and C flip in place, so only what differs moves.'],
+};
+const TRY = {
+  a:['Open the Prototype and decide between A, B and C.','Say what PR #214 changed on the booking page.','Read the small print on PR #209’s desktop shot.','Find how the home page looked before the phone number went in.'],
+  b:['Say what else is open on the page PR #214 changes.','Drag the wipe on PR #233.','Compare the Prototype’s three variants.','Find how /book looked before its slots were made easier to tap. Then switch the scene to Kept 90 days.'],
+  c:['Catch up on what was drawn since yesterday without opening anything twice.','In the viewer, swipe to PR #214 and hold for Before.','Flip the Prototype between A, B and C.','Scroll to the end of the roll. Then switch the scene to Kept 90 days.'],
+};
+function notes(W){
+  const v = VARIANTS.find(x => x[0] === S.variant), sc = SCENARIOS.find(x => x[0] === S.scenario);
+  const at = S.variant === 'a' ? (S.a.view ? 'the viewer' : S.a.open ? 'the screen of ' + (W.get(S.a.open).pr || 'Prototype ' + W.get(S.a.open).ref) : 'the list')
+    : S.variant === 'b' ? (S.b.page ? 'the page ' + S.b.page + ', ' + (S.b.vp === 'd' ? 'desktop' : 'mobile') : 'the list of pages')
+    : (S.c.view ? 'the viewer, picture ' + (S.c.view.i + 1) : 'the roll') + ', showing ' + S.c.kind + ', ' + (S.c.vp === 'd' ? 'desktop' : 'mobile');
+  return `<h2>${v[0].toUpperCase()}: ${v[1]}</h2>
+    <h3>What this variant holds</h3><ul>${BETS[S.variant].map(b => `<li>${b}</li>`).join('')}</ul>
+    <h3>Try</h3><ul>${TRY[S.variant].map(b => `<li>${b}</li>`).join('')}</ul>
+    <h3>The scene</h3><p class="state">${sc[1]}. Now is Tuesday 10 November, 14:15. ${W.work.filter(w => !w.gone).length} pieces of work have pictures, ${W.work.filter(w => w.gone).length} have expired. You are on ${at}.</p>
+    <p class="fine">Kept 90 days shows the same repo if the Kit asked GitHub to keep screenshots for its maximum. Quiet has nothing open.</p>
+    <button class="quiet p-notes-close" data-act="notes">Close notes</button>
+    <p class="fine">Prototype. The repo, every issue and pull request, and every “screenshot” are invented, and the screenshots are drawings. Nothing here talks to GitHub. The Kit also records a short video of each Prototype variant, which none of these variants plays.</p>`;
+}
+function bar(){
+  const v = VARIANTS.find(x => x[0] === S.variant), s = SCENARIOS.find(x => x[0] === S.scenario);
+  return `<div class="proto" role="toolbar" aria-label="Prototype switcher">
+    <button data-act="prev" aria-label="Previous variant">&lsaquo;</button><span class="p-label"><b>${v[0].toUpperCase()}</b>${v[1]}</span><button data-act="next" aria-label="Next variant">&rsaquo;</button>
+    <span class="p-sep"></span><button data-act="scenario" aria-label="Change the scene">${s[1]}</button>
+    <span class="p-sep p-notes"></span><button class="p-notes" data-act="notes">Notes</button></div>`;
+}
+
+const app = document.getElementById('app');
+function render(){
+  const W = world();
+  if (S.a.open && !W.get(S.a.open)) S.a = {open:null, view:null};
+  const body = {a:renderA, b:renderB, c:renderC}[S.variant](W);
+  const over = S.variant === 'a' && S.a.view ? viewerA(W) : S.variant === 'c' && S.c.view ? viewerC(W) : '';
+  app.innerHTML = `<div class="stage"><div class="phone">${body}</div><aside class="notes" ${S.notes ? 'data-open' : ''}>${notes(W)}</aside></div>${over}${S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : ''}${bar()}`;
+  document.body.style.overflow = over ? 'hidden' : '';
+  if (S.variant === 'c' && S.c.view){ const t = app.querySelector('.v-track'); t.scrollLeft = S.c.view.i * t.clientWidth; }
+  const name = S.variant + (S.scenario === 'busy' ? '' : '-' + S.scenario);
+  if (location.hash !== '#' + name){ try { history.replaceState(null, '', '#' + name); } catch (e) {} }
+}
+let toastTimer;
+function toast(t){ S.toast = t; clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = null; const el = app.querySelector('.toast'); if (el) el.remove(); }, 3800); }
+function cycle(list, cur, d){ const i = list.findIndex(x => x[0] === cur); return list[(i + d + list.length) % list.length][0]; }
+function reset(){ S.a = {open:null, view:null}; S.b = {page:null, vp:'m', sheet:false, open:null}; S.c = {kind:'all', vp:'m', view:null}; }
+/* C's viewer follows the swipe without redrawing the roll. */
+function syncC(){
+  const p = partsC(world());
+  app.querySelector('#vc-top').innerHTML = p.top; app.querySelector('#vc-foot').innerHTML = p.foot; app.querySelector('#vc-say').innerHTML = p.say;
+}
+const slideNow = () => app.querySelector(`.v-slide[data-i="${S.c.view.i}"]`);
+
+const ACT = {
+  prev(){ S.variant = cycle(VARIANTS, S.variant, -1); reset(); window.scrollTo(0, 0); },
+  next(){ S.variant = cycle(VARIANTS, S.variant, 1); reset(); window.scrollTo(0, 0); },
+  scenario(){ S.scenario = cycle(SCENARIOS, S.scenario, 1); reset(); },
+  notes(){ S.notes = !S.notes; },
+  home(){ toast('This would go back to Home.'); },
+  stub(d){ toast(d.what + ' would open here.'); },
+  'a-open'(d){ S.a.open = d.id; window.scrollTo(0, 0); },
+  'a-close'(){ S.a.open = null; window.scrollTo(0, 0); },
+  'a-view'(d){ S.a.view = {id: d.id, r: d.r, side: d.side || 'after', vp: d.vp || 'm', zoom: false}; },
+  'a-unview'(){ S.a.view = null; },
+  'a-side'(d){ S.a.view.side = d.k; },
+  'a-vp'(d){ S.a.view.vp = d.k; S.a.view.zoom = false; },
+  'a-zoom'(){ S.a.view.zoom = !S.a.view.zoom; },
+  'b-page'(d){ S.b.page = d.route; S.b.open = null; window.scrollTo(0, 0); },
+  'b-close'(){ S.b.page = null; window.scrollTo(0, 0); },
+  'b-vp'(d){ S.b.vp = d.vp; },
+  'b-sheet'(d){ S.b.sheet = !!d.on; },
+  'b-open'(d){ S.b.open = S.b.open === d.id ? null : d.id; },
+  'c-kind'(d){ S.c.kind = d.kind; },
+  'c-vp'(d){ S.c.vp = d.vp; },
+  'c-view'(d){ const w = rollOf(world())[+d.i].w; S.c.view = {i: +d.i, k: d.k ? {[w.id]: d.k} : {}}; },
+  'c-unview'(){ S.c.view = null; },
+};
+document.addEventListener('click', e => {
+  const t = e.target.closest ? e.target : null; if (!t) return;
+  if (t.closest('[data-zoom]')){ const s = slideNow(); s.classList.toggle('zoom'); t.closest('[data-zoom]').classList.toggle('on', s.classList.contains('zoom')); return; }
+  const el = t.closest('[data-act]'); if (!el || el.disabled) return;
+  if (el.dataset.act === 'c-flip'){ const W = world(), x = rollOf(W)[S.c.view.i]; S.c.view.k[x.w.id] = el.dataset.k; slideNow().querySelector('.frame').innerHTML = slideC(x, S.c.view, S.c.vp); syncC(); return; }
+  const fn = ACT[el.dataset.act]; if (!fn) return;
+  fn(el.dataset); render();
+});
+document.addEventListener('dblclick', e => { const s = e.target.closest && e.target.closest('.v-slide'); if (s) s.classList.toggle('zoom'); });
+document.addEventListener('input', e => { if (e.target.matches && e.target.matches('[data-wipe]')) e.target.parentNode.style.setProperty('--cut', e.target.value + '%'); });
+document.addEventListener('scroll', e => {
+  const t = e.target; if (!S.c.view || !t.classList || !t.classList.contains('v-track')) return;
+  const i = Math.round(t.scrollLeft / t.clientWidth); if (i !== S.c.view.i && rollOf(world())[i]){ S.c.view.i = i; syncC(); }
+}, true);
+const hold = on => e => { if (!S.c.view) return; if (on && !(e.target.closest && e.target.closest('[data-hold]'))) return; const s = slideNow(); if (s) s.classList.toggle('before', on); const b = app.querySelector('[data-hold]'); if (b) b.classList.toggle('on', on); };
+document.addEventListener('pointerdown', hold(true)); document.addEventListener('pointerup', hold(false)); document.addEventListener('pointercancel', hold(false));
+document.addEventListener('keydown', e => {
+  const t = e.target; if (t && t.matches && t.matches('input, textarea, [contenteditable]')) return;
+  if (e.key === 'Escape' && (S.a.view || S.c.view)){ S.a.view = null; S.c.view = null; render(); return; }
+  if (S.a.view || S.c.view) return;
+  if (e.key === 'ArrowLeft'){ ACT.prev(); render(); } else if (e.key === 'ArrowRight'){ ACT.next(); render(); }
+});
+function fromHash(){
+  const h = (location.hash || '').replace('#', '').split('-');
+  if (VARIANTS.some(x => x[0] === h[0])) S.variant = h[0];
+  S.scenario = SCENARIOS.some(x => x[0] === h[1]) ? h[1] : 'busy';
+}
+try { const q = new URLSearchParams(location.search).get('variant'); if (q && VARIANTS.some(x => x[0] === q.toLowerCase())) S.variant = q.toLowerCase(); } catch (e) {}
+if (location.hash) fromHash();
+window.addEventListener('hashchange', () => { fromHash(); render(); });
+render();
+})();
+</script>
