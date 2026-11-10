@@ -106,6 +106,10 @@ _Avoid_: investigator, scout
 The end-to-end path a piece of work takes in Fabrik, from idea to a pull request the Operator has merged.
 _Avoid_: pipeline, workflow, Real Engineering Loop (Matt Pocock's term, not Fabrik's)
 
+**Standing**:
+Where one piece of work is on the Loop and whose move is next, as the Kit reads it from GitHub.
+_Avoid_: status, state, stage
+
 **AFK**:
 Work an agent drives alone, with no human in the exchange.
 _Avoid_: autonomous, background
