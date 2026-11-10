@@ -100,6 +100,10 @@ _Avoid_: architect, critic
 An agent that resolves one research Decision on a Map by reading primary sources and recording its findings, deciding nothing.
 _Avoid_: investigator, scout
 
+**Digest writer**:
+An agent on a frontier model that writes the Digest of a pull request the Reviewer has passed, before it reaches the Operator, judging nothing and changing nothing.
+_Avoid_: summariser, narrator, reporter
+
 ## The loop
 
 **Loop**:
@@ -263,7 +267,7 @@ The screenshots, and preview link if the Product repo has one, that the Kit capt
 _Avoid_: visual proof, screenshots, artifacts
 
 **Digest**:
-The Kit's plain-English account of an agent pull request, kept on the pull request for the Operator at the Merge gate: what was decided and why, what was left out of scope, what needs follow-up, and which parts deserve the Operator's own eyes.
+The Kit's plain-English account of an agent pull request as it stands at one head, written each time it arrives at the Merge gate and kept on the pull request for the Operator: what was decided and why, what was left out of scope, what needs follow-up, and which parts deserve the Operator's own eyes.
 _Avoid_: PR summary, brief, report, changelog
 
 **Capture identity**:
