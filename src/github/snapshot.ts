@@ -21,6 +21,7 @@ import {
   AUDIT_LABEL,
   DESIGN_LABEL,
   KEPT_BRANCH_LABEL,
+  FLAKY_CHECK_LABEL,
   KIT_ISSUE_LABELS,
   MAP_LABEL,
   NEEDS_DESIGN,
@@ -39,6 +40,7 @@ import type {
   AuditSnapshot,
   ConflictCandidate,
   ConflictSnapshot,
+  FlawHeadChecks,
   DesignQueueIssue,
   DesignQueueSnapshot,
   DispatchSnapshot,
@@ -63,10 +65,11 @@ import type {
   TriggerSweepSnapshot,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
-import { type GitHub, pagesOf, type Repo } from "./client.ts";
+import { uncountedFlaws } from "../loop/flakyChecks.ts";
+import { allPages, type GitHub, GitHubError, pagesOf, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
-  countEmptyDiffs,
+  countLandedNothing,
   designSessionOf,
   designTurnFailedIn,
   pendingPrototypeIn,
@@ -114,7 +117,7 @@ const ISSUE_QUERY = `
             ... on UnlabeledEvent { createdAt label { name } actor { __typename } }
           }
         }
-        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number isDraft headRefName author { __typename } } }
+        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number state isDraft headRefName author { __typename } } }
         blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }
         blocking(first: 50) { nodes { number state repository { nameWithOwner } } }
       }
@@ -137,7 +140,8 @@ interface IssueQueryResult {
       comments: { nodes: { fullDatabaseId: string; body: string; createdAt: string; author: { login: string; __typename: string } | null }[] };
       // Only Labeled and UnlabeledEvents are asked for, but the union's other members come back empty.
       timelineItems: { nodes: LabelTimelineItem[] };
-      closedByPullRequestsReferences: { nodes: { number: number; isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
+      // includeClosedPrs: false leaves out only PRs closed unmerged: a merged one still comes back (#543).
+      closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
       blockedBy: DependencyEdges;
       blocking: DependencyEdges;
     } | null;
@@ -539,6 +543,10 @@ export async function gatherSnapshot(
     ? await gatherHeld(github, repo, closedWeeklyLimit === null ? kitIssues : [...kitIssues, closedWeeklyLimit], appLogin)
     : null;
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
+  // The tick closes each ready-for-agent Ticket GitHub left open after a PR of it merged (#543).
+  const readyTickets = event.kind === "scheduled-tick" ? (await gatherDispatchTickets(github, repo, appLogin)).tickets : null;
+  // A Flaky check found again comments on its check's open issue (#462): the Kit finds them at a Review's landing and the tick.
+  const flakyCheckIssues = FLAKY_CHECK_EVENTS.includes(event.kind) ? (await gatherKitIssues(github, repo, appLogin, [FLAKY_CHECK_LABEL])).kitIssues : [];
   // A weekly run's failure may give up on the week, which its gate's issues say (#443).
   const weeklyLabel = WEEKLY_RUN_EVENTS.includes(event.kind) ? weeklyLabelOf(part?.issue?.labels ?? []) : null;
   const weeklyIssues = weeklyLabel === null ? null : weeklyIssuesOf(await queryWeeklyIssues(github, repo, weeklyLabel), appLogin);
@@ -549,6 +557,8 @@ export async function gatherSnapshot(
       : event.kind === "scheduled-tick"
         ? await gatherConflicts(github, actions, repo, event.now, appLogin, operator ?? owner, wait)
         : null;
+  // The tick counts back an Execution flaw whose checks have since passed on its head (#462).
+  const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests) : null;
   // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480).
   const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
@@ -562,9 +572,54 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
 }
+
+/** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
+interface RawHeadCheckRun {
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly started_at: string | null;
+  readonly html_url: string | null;
+}
+
+/**
+ * For the tick's Flaky check sweep (#462): each open agent PR's ci-sourced
+ * Execution flaws not yet counted back, with every check run on the head each
+ * was given on, every attempt included. The Fabrik App reads them with
+ * Checks: read; without it the sweep is "no-permission", and does nothing.
+ */
+async function gatherFlakySweep(
+  github: Pick<GitHub, "rest">,
+  repo: Repo,
+  candidates: readonly ConflictCandidate[],
+): Promise<FlawHeadChecks[] | "no-permission"> {
+  const heads: FlawHeadChecks[] = [];
+  try {
+    for (const { pullRequest } of candidates) {
+      for (const { headSha, checks = [] } of uncountedFlaws(pullRequest)) {
+        const path = `/repos/${repo.owner}/${repo.name}/commits/${headSha}/check-runs?filter=all`;
+        const runs = await allPages<RawHeadCheckRun>(github, path, (page) => (page as { check_runs: RawHeadCheckRun[] }).check_runs);
+        heads.push({
+          pullRequest: pullRequest.number,
+          ticket: pullRequest.ticket,
+          headSha,
+          checks,
+          checkRuns: runs.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion, startedAt: run.started_at, url: run.html_url ?? "" })),
+        });
+      }
+    }
+  } catch (error) {
+    if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";
+    throw error;
+  }
+  return heads;
+}
+
+/** The events whose plan may find a Flaky check (#462). */
+const FLAKY_CHECK_EVENTS: readonly LoopEvent["kind"][] = ["required-checks-finished", "review-run-finished", "scheduled-tick"];
 
 /** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
 const WEEKLY_RUN_EVENTS: readonly LoopEvent["kind"][] = ["issue-opened", "agent-run-failed", "audit-run-finished", "retro-run-finished"];
@@ -957,6 +1012,14 @@ async function gatherEventPart(
       const { pullRequest } = await gatherPullRequest(github, repo, event.fixes.pullRequest, operator, appLogin);
       return { ...ticket, pullRequest };
     }
+    case "agent-run-failed": {
+      // A failed Implement run on a Ticket with an open PR may be a Broken Retry, which posts a Verdict there (#434).
+      const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
+      const open = event.role === "implement" && event.prototype !== true ? ticket.issue?.openPullRequests[0] : undefined;
+      if (open === undefined) return ticket;
+      const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);
+      return { ...ticket, pullRequest };
+    }
     case "label-added": {
       // agent:implement on a Ticket with an open PR resumes that PR's run, so the core weighs the PR too.
       const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
@@ -987,6 +1050,9 @@ type EventPart = Omit<
   | "conflicts"
   | "mergeable"
   | "triggers"
+  | "readyTickets"
+  | "flakyCheckIssues"
+  | "flakySweep"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
@@ -1075,6 +1141,7 @@ export async function gatherKitIssues(
   github: Pick<GitHub, "graphql">,
   repo: Repo,
   appLogin: string | null,
+  labels: readonly string[] = KIT_ISSUE_LABELS,
 ): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
   const nodes: KitIssueNode[] = [];
   let owner = "";
@@ -1083,7 +1150,7 @@ export async function gatherKitIssues(
     const data: KitIssuesQueryResult = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
       owner: repo.owner,
       name: repo.name,
-      labels: KIT_ISSUE_LABELS,
+      labels,
       after,
     });
     const { totalCount, pageInfo, nodes: onPage } = data.repository.issues;
@@ -1426,6 +1493,11 @@ async function keptBranchIfMarked(github: Pick<GitHub, "graphql">, repo: Repo, t
   return labels.includes(KEPT_BRANCH_LABEL) ? keptBranchOf(github, repo, ticket) : null;
 }
 
+/** The numbers of an issue's closing PRs in this state, lowest first. */
+function pullRequestsIn(closedBy: { nodes: readonly { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] }, state: "OPEN" | "MERGED"): number[] {
+  return closedBy.nodes.filter((pr) => pr.state === state).map((pr) => pr.number).sort((a, b) => a - b);
+}
+
 async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null, appLogin: string | null): Promise<EventPart> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
@@ -1453,7 +1525,9 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       labels: issue.labels.nodes.map((label) => label.name),
       parent: issue.parent?.number ?? null,
       parentIssue: parentIssueOf(issue.parent),
-      openPullRequests: issue.closedByPullRequestsReferences.nodes.map((pr) => pr.number).sort((a, b) => a - b),
+      // A merged PR GitHub left its Ticket open after isn't open, so nothing resumes or declines it (#543).
+      openPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "OPEN"),
+      mergedPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "MERGED"),
       openAgentDrafts: issue.closedByPullRequestsReferences.nodes
         .filter(
           (pr) =>
@@ -1470,7 +1544,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       // Every comment read counts for whether the reply that approved the request is still there, not only this session's.
       pendingPrototype: pendingPrototypeIn(thisSession, new Set(comments.map(({ id }) => id))),
       unansweredPrototypes: unansweredPrototypesIn(thisSession),
-      emptyDiffs: countEmptyDiffs(comments),
+      landedNothing: countLandedNothing(comments),
       keptBranch,
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
@@ -1539,7 +1613,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     ticket,
     ticketLabels: ticketLabelsOf(pullRequest, ticket),
     ticketOpen: closedTicketOf(pullRequest, ticket)?.state === "OPEN",
-    ticketEmptyDiffs: ticketEmptyDiffsOf(pullRequest, ticket, appLogin),
+    ticketLandedNothing: ticketLandedNothingOf(pullRequest, ticket, appLogin),
     open: pullRequest.state === "OPEN",
     draft: pullRequest.isDraft,
     headSha: pullRequest.headRefOid,
@@ -1625,13 +1699,13 @@ function ticketLabelsOf(pullRequest: PullRequestNode, ticket: number | null): st
 }
 
 /**
- * How many empty diffs the Kit has recorded on that Ticket, read from its
+ * How many empty diffs and Broken runs the Kit has recorded on that Ticket, read from its
  * comments as the Ticket's own snapshot reads them, so a Verdict on its PR
  * counts on from the Retries they used (#415). None when the PR doesn't link it.
  */
-function ticketEmptyDiffsOf(pullRequest: PullRequestNode, ticket: number | null, appLogin: string | null): number {
+function ticketLandedNothingOf(pullRequest: PullRequestNode, ticket: number | null, appLogin: string | null): number {
   const comments = closedTicketOf(pullRequest, ticket)?.comments.nodes ?? [];
-  return countEmptyDiffs(comments.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })));
+  return countLandedNothing(comments.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })));
 }
 
 /** The issue among those a PR closes that is the Ticket its agent branch names, or undefined. */
@@ -1846,9 +1920,8 @@ async function gatherDispatchTickets(github: GitHub, repo: Repo, appLogin: strin
           .filter((b) => b.state === "CLOSED" && b.stateReason === "NOT_PLANNED")
           .map((b) => b.number),
         subIssues: issue.subIssues.totalCount,
-        openLinkedPullRequests: issue.closedByPullRequestsReferences.nodes
-          .filter((pr) => pr.state === "OPEN")
-          .map((pr) => pr.number),
+        openLinkedPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "OPEN"),
+        mergedLinkedPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "MERGED"),
         lastRunFailed: implementRunFailedIn(
           issue.comments.nodes.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })),
         ),
@@ -1950,8 +2023,8 @@ export async function gatherDesignQueueSlice(
         labels: issue.labels.nodes.map((label) => label.name),
         designRounds: designSessionOf(thisSession).designRounds,
         turnFailed: designTurnFailedIn(thisSession),
-        // A third empty diff is the one that sent the Ticket back to design.
-        redesign: session.sentBack !== null || countEmptyDiffs(comments) > MAX_RETRIES,
+        // A third empty diff or Broken run is the one that sent the Ticket back to design.
+        redesign: session.sentBack !== null || countLandedNothing(comments) > MAX_RETRIES,
         // The latest time it got needs-design; an issue whose timeline doesn't show it waits from when it opened.
         neededDesignAt: neededDesignAt ?? issue.createdAt,
       });

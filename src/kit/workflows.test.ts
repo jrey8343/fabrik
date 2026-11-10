@@ -2458,3 +2458,31 @@ describe("The replay-store action, which checks out the store for the tick's rep
     }
   });
 });
+
+// #462, ADR-0018: red checks are re-run once, by a job holding only actions: write.
+describe("Re-running red checks", () => {
+  it("holds actions: write on the workflow token and nothing else: no secret, no App token, no Product checkout", () => {
+    const rerun = job("rerun-checks");
+
+    expect(rerun).toMatch(/permissions:\n      actions: write\n    outputs:/);
+    expect(rerun).not.toContain("secrets.");
+    expect(rerun).not.toContain("create-github-app-token");
+    expect(rerun.match(/uses: actions\/checkout@/g)).toHaveLength(1);
+    expect(rerun).toContain("repository: jrey8343/fabrik");
+    expect(rerun).toContain("FABRIK_RED: ${{ needs.review-checks.outputs.red }}");
+  });
+
+  it("waits on the re-run checks read-only, on the head the first wait read, leaving a failure report as it does", () => {
+    const wait = job("rerun-wait");
+
+    expect(wait).not.toMatch(/: write/);
+    expect(wait).toContain("FABRIK_HEAD_SHA: ${{ needs.review-checks.outputs.head-sha }}");
+    expect(wait).toContain("FABRIK_RERUN: ${{ needs.rerun-checks.outputs.rerun }}");
+    expect(wait).toContain(`path: \${{ runner.temp }}/fabrik-out/${AGENT_FAILURE_FILE}\n`);
+  });
+
+  it("lets the Reviewer run on green, at first or after the re-run, and hands both jobs to the push job", () => {
+    expect(job("review")).toContain("needs.rerun-wait.outputs.checks == 'green'");
+    expect(job("push")).toMatch(/needs: \[[^\]]*review-checks, rerun-checks, rerun-wait, review,/);
+  });
+});

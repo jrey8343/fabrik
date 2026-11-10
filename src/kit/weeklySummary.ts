@@ -20,10 +20,10 @@ import { holdsSlot } from "../loop/designQueue.ts";
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { auditMarksIn, DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
+import { auditMarksIn, DESIGN_ROUND_MARKER, flakyCheckMarksIn, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import { type AgentRole, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
@@ -306,6 +306,10 @@ export interface WeeklySummary {
      * Retry refused on the weekly limit and then resumed counts once.
      */
     readonly retries: WeekOverWeek<number>;
+    /** Implement records of a Broken run (#434), counted or not. */
+    readonly brokenRuns: WeekOverWeek<number>;
+    /** The Flaky checks found on agent PRs: by the Kit's re-run of red checks, and counted back later alike (#462). */
+    readonly flakyChecks: WeekOverWeek<number>;
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
     /** Those records by why they Stepped up (ADR-0014). */
@@ -524,6 +528,12 @@ export type StuckItem =
   /** An open Ticket whose latest record, ended at `since`, was an Infrastructure failure or timeout. */
   | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure })
   /**
+   * An open Ticket whose latest record, ended at `since`, was a Broken run
+   * that used no retry (#434): a Request-changes or conflict-only run's, which
+   * waits for the Operator. One the Kit counted and re-runs itself isn't listed.
+   */
+  | (ItemBase & { readonly kind: "broken-run"; readonly brokenRun: BrokenRun })
+  /**
    * The Fabrik App's Audits or Retros whose runs failed in one week, enough
    * of them that the next waits for next week (src/loop/weeklyGate.ts), the
    * last opened in the summary's week, and is this item, at `since`.
@@ -653,6 +663,8 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       mergedPullRequests: change("mergedPullRequests"),
       ticketsDispatched: change("ticketsDispatched"),
       retries: change("retries"),
+      brokenRuns: change("brokenRuns"),
+      flakyChecks: change("flakyChecks"),
       stepUps: change("stepUps"),
       stepUpsByReason: change("stepUpsByReason"),
       steppedUpStarts: change("steppedUpStarts"),
@@ -662,6 +674,19 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     repos,
   };
   return { kind: "summary", summary, title: `Weekly summary: week of ${summary.week}`, body: bodyOf(summary, input) };
+}
+
+/**
+ * The Flaky checks the Fabrik App's lines named on agent PRs in the week
+ * (#462), open and closed, each PR read once: one per check a line names.
+ */
+function flakyChecksIn(week: Week, facts: readonly MetricFacts[]): number {
+  return facts.reduce((total, repo) => {
+    const closed = repo.pullRequests.map(({ number }) => number);
+    const pullRequests = [...repo.pullRequests, ...repo.openPullRequests.filter(({ number }) => !closed.includes(number))];
+    const lines = pullRequests.flatMap(({ comments }) => comments.filter((comment) => comment.byBot && within(week, comment.at)));
+    return total + flakyCheckMarksIn(lines.map(({ body }) => body)).reduce((sum, mark) => sum + mark.checks.length, 0);
+  }, 0);
 }
 
 /** The summed cost of the Replay records that ended in the week, or null if none did. */
@@ -695,6 +720,8 @@ interface WeekMetrics {
   readonly mergedPullRequests: number;
   readonly ticketsDispatched: number;
   readonly retries: number;
+  readonly brokenRuns: number;
+  readonly flakyChecks: number;
   readonly stepUps: number;
   readonly stepUpsByReason: StepUpCounts;
   readonly steppedUpStarts: SteppedUpStarts;
@@ -736,6 +763,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       return dispatch !== null && within(week, dispatch);
     }).length,
     retries: records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null).length,
+    brokenRuns: records.filter((record) => record.brokenRun !== null).length,
+    flakyChecks: flakyChecksIn(week, input.facts),
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
     steppedUpStarts: steppedUpStartsOf(merged, input.records),
@@ -1286,9 +1315,10 @@ function stuck(
     const answered = issue.labels.includes(NEEDS_INFO) ? answerOf(issue) : null;
     if (answered !== null) found.push({ kind: "needs-info-answered", ...items.issue(issue, answered) });
     const failed = failedLastRunOf(issue, repo, records);
-    if (failed !== null && !isHeld(issue.number, failed.pullRequest)) {
+    if (failed?.kind === "infrastructure-failure" && !isHeld(issue.number, failed.pullRequest)) {
       found.push({ kind: "infrastructure-failure", ...items.issue(issue, failed.endedAt), failure: failed.failure });
     }
+    if (failed?.kind === "broken-run") found.push({ kind: "broken-run", ...items.issue(issue, failed.endedAt), brokenRun: failed.brokenRun });
   }
   for (const pullRequest of openPullRequests) {
     if (isHeld(pullRequest.number, pullRequest.ticket)) continue;
@@ -1311,23 +1341,34 @@ function answerOf(issue: OpenIssueFacts): string | null {
 }
 
 /**
- * An open Ticket's latest record, if it ended in an Infrastructure failure:
- * the run nothing has picked up again. A judge run's record (role `score`) is
- * left out: scoring a run never picks its Ticket up, and a judge's own failure
+ * An open Ticket's latest record, if it ended in an Infrastructure failure,
+ * or a Broken run that used no retry (#434): the run nothing has picked up
+ * again. A Broken run on a first run or a Retry is an Execution flaw the Kit
+ * re-runs itself, so it isn't one. A judge run's record (role `score`) is left
+ * out: scoring a run never picks its Ticket up, and a judge's own failure
  * never leaves the Ticket stuck. With the run's PR, where a Review is held.
  */
 function failedLastRunOf(
   issue: OpenIssueFacts,
   repo: string,
   records: readonly RunRecord[],
-): { readonly endedAt: string; readonly failure: InfrastructureFailure; readonly pullRequest: number | null } | null {
+):
+  | { readonly kind: "infrastructure-failure"; readonly endedAt: string; readonly failure: InfrastructureFailure; readonly pullRequest: number | null }
+  | { readonly kind: "broken-run"; readonly endedAt: string; readonly brokenRun: BrokenRun }
+  | null {
   const latest = records
     .filter((record) => record.repo === repo && record.issue === issue.number && record.role !== "score")
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
     .at(-1);
-  if (latest === undefined || latest.infrastructureFailure === null) return null;
-  if (latest.role !== "implement" && latest.role !== "review") return null;
-  return { endedAt: latest.endedAt, failure: latest.infrastructureFailure, pullRequest: latest.pullRequest };
+  if (latest === undefined || (latest.role !== "implement" && latest.role !== "review")) return null;
+  if (latest.brokenRun !== null) return usedNoRetry(latest) ? { kind: "broken-run", endedAt: latest.endedAt, brokenRun: latest.brokenRun } : null;
+  if (latest.infrastructureFailure === null) return null;
+  return { kind: "infrastructure-failure", endedAt: latest.endedAt, failure: latest.infrastructureFailure, pullRequest: latest.pullRequest };
+}
+
+/** Whether an Implement run's record is a Request-changes or conflict-only run's, which uses no retry (#393, #304). */
+function usedNoRetry(record: RunRecord): boolean {
+  return record.requestChanges || record.stepUpReason === "conflict-only";
 }
 
 /** A PR's latest commit, comment or label event, or when it was opened. */
@@ -1474,6 +1515,8 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords 
     row("Merged agent PRs", counts.mergedPullRequests, count),
     row("Tickets dispatched", counts.ticketsDispatched, count),
     row("Retries", counts.retries, count),
+    row("Broken runs", counts.brokenRuns, count),
+    row("Flaky checks", counts.flakyChecks, count),
     row("Step-ups", counts.stepUps, count),
     ...stepUpReasonRows(counts.stepUpsByReason),
     steppedUpStartsRow(counts.steppedUpStarts),
@@ -1696,6 +1739,8 @@ function stuckLine(item: StuckItem): string {
       return itemLine(item, `reviewed by you ${duration(item.age)} ago; the Kit hasn't acted`);
     case "infrastructure-failure":
       return itemLine(item, `last run ended in an Infrastructure failure (${item.failure}) ${duration(item.age)} ago`);
+    case "broken-run":
+      return itemLine(item, `last run was a Broken run (${item.brokenRun}) ${duration(item.age)} ago, which uses no retry; re-add \`agent:implement\` to run it again`);
     case "weekly-runs-failed":
       return `- ${item.issueName} failed ${item.failed.length === 2 ? "twice" : `${item.failed.length} times`} this week (${item.failed.map(({ number, url }) => `[#${number}](${url})`).join(", ")})`;
   }

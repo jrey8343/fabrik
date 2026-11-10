@@ -356,6 +356,7 @@ describe("Labels", () => {
     "fabrik:replay",
     "fabrik:dead-tick",
     "fabrik:monitor",
+    "fabrik:flaky-check",
     "fabrik:step-up",
     "fabrik:kept-branch",
     "wayfinder:map",

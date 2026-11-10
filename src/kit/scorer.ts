@@ -50,7 +50,8 @@ export type ScoringPlan =
 export function scoringPlan(record: RunRecord): ScoringPlan {
   if (!picked(record)) return { kind: "not-sampled" };
   if (record.transcript === null) return { kind: "skip", skip: { reason: "no-transcript" } };
-  // A timeout is scored: a run that loops until it's stopped shows how it worked.
+  // A timeout is scored: a run that loops until it's stopped shows how it worked. A Broken run (#434) is no
+  // Infrastructure failure, so it's scored too.
   const failure = record.infrastructureFailure;
   if (failure !== null && failure !== "timeout") return { kind: "skip", skip: { reason: "infrastructure-failure" } };
   const rateLimit = record.rateLimit;

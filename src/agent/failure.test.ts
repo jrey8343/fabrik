@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
-import { failureReportFor, inputsFailureReportFor, MissingVerdictError, readFailureReport, UnlandableBranchError } from "./failure.ts";
+import { failureReportFor, inputsFailureReportFor, LeftBranchError, MissingVerdictError, readFailureReport, UnlandableBranchError } from "./failure.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 const init = line({ type: "system", subtype: "init", apiKeySource: "none" });
@@ -127,6 +127,16 @@ describe("How an agent job reports its own failure", () => {
 
     expect(report.failure).toBe("unlandable-branch");
     expect(report.detail).toContain(older);
+    expect(readFailureReport(JSON.stringify(report))).toEqual(report);
+  });
+
+  // #434: a Broken run of its own, not a crash.
+  it("an agent that left its branch is a left branch, naming where it went", () => {
+    const error = new LeftBranchError("agent/7", "main");
+
+    const report = failureReportFor({ error, lines: [init], initRefused: [] });
+
+    expect(report).toEqual({ failure: "left-branch", detail: "The agent left agent/7 for main" });
     expect(readFailureReport(JSON.stringify(report))).toEqual(report);
   });
 

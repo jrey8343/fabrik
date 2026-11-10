@@ -23,7 +23,7 @@ import {
   requestedChangesSection,
 } from "./operatorComments.ts";
 import type { ImplementRunKind } from "../loop/implementOutput.ts";
-import { UnlandableBranchError } from "./failure.ts";
+import { LeftBranchError, UnlandableBranchError } from "./failure.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -312,7 +312,7 @@ export async function bundleAgentBranch(productDir: string, started: BuiltBranch
 /** The run's branch's last commit, once the agent is known to have stayed on it. */
 async function branchHead(productDir: string, started: BuiltBranch): Promise<string> {
   const current = await git(productDir, "rev-parse", "--abbrev-ref", "HEAD");
-  if (current !== started.name) throw new Error(`The agent left ${started.name} for ${current}`);
+  if (current !== started.name) throw new LeftBranchError(started.name, current);
   if ((await git(productDir, "status", "--porcelain")) !== "") {
     console.log("::warning title=Uncommitted work::The agent left changes it didn't commit; they aren't pushed");
   }

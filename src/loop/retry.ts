@@ -1,8 +1,9 @@
 // Execution-flaw retries: an Execution flaw on an agent PR re-runs the
 // Implementer on the same branch with the findings as input, then Review runs
 // again. A Ticket gets two Retries in all, one pool counted from its empty
-// diffs before the PR opened and the PR's earlier Verdicts (#415), and they
-// stay silent: no mention, assignment or review request. While one is in
+// diffs and Broken runs before the PR opened and the PR's earlier Verdicts
+// (#415, #434), and they stay silent: no mention, assignment or review
+// request. While one is in
 // flight, no other head gets a Verdict, so each flaw starts exactly one
 // Implementer attempt (ADR-0006).
 import { whyNotReviewable } from "./agentPullRequest.ts";
@@ -19,15 +20,32 @@ function stepsUp(retry: number): boolean {
   return retry >= MAX_RETRIES;
 }
 
+/** A stepped-up run that isn't a Retry, whose push a flaw can call for one on: conflict-only (#304) or Request-changes (#393). */
+type PrecedingRun = Extract<StepUpReason, "conflict-only" | "request-changes">;
+
 /**
  * Why a first run or a Retry on a Ticket with these labels Steps up, or null
  * when it runs on the Implementer's model. The label is read as the run
  * starts, so adding it mid-chain steps up the next run and removing it drops
- * back (ADR-0014). On a marked Ticket the second Retry says `marked`.
+ * back (ADR-0014). On a marked Ticket the second Retry says `marked`. A Retry
+ * called for by a flaw on a conflict-only or Request-changes run's push,
+ * `after`, keeps that run's Step-up and its reason, so it never drops to a
+ * cheaper model on the same PR (#464); the last Retry still says `retry`.
  */
-export function stepUpReasonFor(retry: number, ticketLabels: readonly string[]): Extract<StepUpReason, "retry" | "marked"> | null {
+export function stepUpReasonFor(
+  retry: number,
+  ticketLabels: readonly string[],
+  after: PrecedingRun | null = null,
+): Extract<StepUpReason, "retry" | "marked" | PrecedingRun> | null {
   if (ticketLabels.includes(STEP_UP_LABEL)) return "marked";
-  return stepsUp(retry) ? "retry" : null;
+  if (stepsUp(retry)) return "retry";
+  return after;
+}
+
+/** Which stepped-up run, if any, pushed the head this flaw was given on, so the Retry it calls for keeps its Step-up (#464). */
+export function precedingRun(flaw: Pick<VerdictRecord, "requestChanges" | "conflictRun">): PrecedingRun | null {
+  if (flaw.conflictRun === true) return "conflict-only";
+  return flaw.requestChanges ? "request-changes" : null;
 }
 
 /** The model and effort an Implement run with this Step-up reason runs on. */
@@ -38,19 +56,24 @@ export function implementSettings(reason: StepUpReason | null, config: KitConfig
 
 /**
 * Which retry an Execution flaw calls for, given the Verdicts posted before it
- * and the Ticket's empty diffs before its PR opened: one more than those empty
- * diffs and the earlier Execution flaws that each called for one, as they draw
- * on one pool of Retries (#415). A Request-changes run (#393) and a
+ * and the Ticket's empty diffs and Broken runs before its PR opened: one more
+ * than those and the earlier Execution flaws that each called for one, as they
+ * draw on one pool of Retries (#415, #434). A Request-changes run (#393) and a
  * conflict-only run (#304) use no retry, but a flaw on their push calls for one
  * like any other, so it counts. A flaw that gave way to an undelivered Request
  * changes (#341) and one on a Ticket no longer `ready-for-agent` (#416) call
- * for none, so they don't, and an Infrastructure failure posts no Verdict at all.
+ * for none, so they don't, and an Infrastructure failure posts no Verdict at all,
+ * though a Broken Retry posts one, which counts (#434). One from a Flaky check
+ * (#462), whose checks have since passed on its head, doesn't count either,
+ * though the Retry it called for ran.
  */
-export function retryNumber(earlier: readonly VerdictRecord[], emptyDiffs: number): number {
+export function retryNumber(earlier: readonly VerdictRecord[], landedNothing: number): number {
   return (
     1 +
-    emptyDiffs +
-    earlier.filter((record) => record.verdict === "execution-flaw" && record.requestChangesFirst === undefined && record.ticketNotReady !== true).length
+    landedNothing +
+    earlier.filter(
+      (record) => record.verdict === "execution-flaw" && record.requestChangesFirst === undefined && record.ticketNotReady !== true && record.flaky !== true,
+    ).length
   );
 }
 
@@ -81,13 +104,15 @@ export interface VerdictNext {
  */
 export function retryAfterFlaw(pullRequest: PullRequestSnapshot, held: number | null): VerdictNext | null {
   const { ticket } = pullRequest;
-  const retry = retryNumber(pullRequest.verdicts, pullRequest.ticketEmptyDiffs);
+  // The flaw being given now isn't in the Verdicts yet: the run that pushed the head it judges is on the snapshot.
+  const judged = { requestChanges: pullRequest.requestChangesRun, ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}) };
+  const retry = retryNumber(pullRequest.verdicts, pullRequest.ticketLandedNothing);
   if (retry > MAX_RETRIES || ticket === null) return null;
   if (ticketNotReady(pullRequest)) {
     return { line: ticketNotReadyLine(pullRequest.number, ticket), actions: [], ticketNotReady: true };
   }
   return {
-    line: `Retry ${retry} of ${MAX_RETRIES} ${startsWhen(held)}${stepUpReasonFor(retry, pullRequest.ticketLabels) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.${heldUntilThen(held)}`,
+    line: `Retry ${retry} of ${MAX_RETRIES} ${startsWhen(held)}${stepUpReasonFor(retry, pullRequest.ticketLabels, precedingRun(judged)) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.${heldUntilThen(held)}`,
     // A fresh agent:implement on the Ticket resumes the PR's Implement run (src/loop/implement.ts). It notifies nobody.
     actions: [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }],
   };
@@ -109,8 +134,8 @@ export type RunInFlight =
 /**
  * The run in flight on this PR, read from its comments alone, or null. A
  * Retry is in flight from the Execution flaw that calls for it until a Retry
- * outcome: its push, or its empty-diff Verdict (which may call for the next
- * one). A Request-changes run is in flight from the Kit's note that started
+ * outcome: its push, or its empty-diff or broken-run Verdict (which may call
+ * for the next one, #434). A Request-changes run is in flight from the Kit's note that started
  * it, or the Execution flaw that gave way to it, until its push, its Verdict,
  * its ended note or its note that it committed nothing (#388), or until the
  * PR leaves draft (#341). An Infrastructure
@@ -134,7 +159,7 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   // One that gave way to the Operator's Request changes (#341) called for no Retry, and never owes one: its
   // Request-changes run fixes its findings, and if the Operator dismisses those reviews, the PR is theirs.
   if (latest.requestChangesFirst !== undefined) return null;
-  const retry = retryNumber(pullRequest.verdicts.slice(0, -1), pullRequest.ticketEmptyDiffs);
+  const retry = retryNumber(pullRequest.verdicts.slice(0, -1), pullRequest.ticketLandedNothing);
   return retry > MAX_RETRIES ? null : { kind: "retry", retry, flaw: latest.headSha };
 }
 
@@ -161,9 +186,10 @@ export function whyAwaitingRun(pullRequest: PullRequestSnapshot): string | null 
  * The retry an agent draft PR is owed: the one in flight, on whatever head the
  * PR is at now, the Operator's pushes included; otherwise null. The first
  * retry runs on the Implementer's model and the second Steps up, for this PR
- * only, and every one Steps up while its Ticket carries fabrik:step-up. An
- * Infrastructure failure posts no Verdict, so resuming after one runs the
- * same retry again and uses none up.
+ * only, and every one Steps up while its Ticket carries fabrik:step-up, or
+ * when the flaw calling for it was on a conflict-only or Request-changes run's
+ * push (#464). An Infrastructure failure posts no Verdict, so resuming after
+ * one runs the same retry again and uses none up.
  */
 export function owedRetry(
   pullRequest: PullRequestSnapshot,
@@ -176,7 +202,9 @@ export function owedRetry(
   const { implement } = config.roles;
   // Never a cheaper model, and never a skipped Step-up, whatever the weekly pool says. The one
   // deliberate exception is the Operator taking fabrik:step-up off the Ticket (ADR-0014).
-  const stepUpReason = stepUpReasonFor(run.retry, ticketLabels);
+  // A Retry in flight is called for by the PR's latest Verdict, so that flaw says which run it followed (#464).
+  const flaw = pullRequest.verdicts.at(-1);
+  const stepUpReason = stepUpReasonFor(run.retry, ticketLabels, flaw === undefined ? null : precedingRun(flaw));
   const { model, effort } = implementSettings(stepUpReason, config);
   return {
     kind: "start-agent-run",

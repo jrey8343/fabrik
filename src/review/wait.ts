@@ -12,6 +12,14 @@
 //   checks   "green", "red", or "stale" when the PR moved on, closed or left draft while waiting
 //   head-sha the commit the checks ran on
 //   failed   the required checks that didn't pass, as a JSON list
+//   skipped  the ones among them skipped or reported neutral, as a JSON list
+//   red      on red, the ones the Kit can re-run and the outside ones (src/review/rerun.ts), as JSON
+// After the Kit re-ran red checks (#462), the same wait runs again as the Re-run
+// checks' wait, given FABRIK_RERUN (the re-run checks, as the red output named
+// them), FABRIK_RERUN_AT and FABRIK_HEAD_SHA: it waits until the re-run checks
+// have reported again on that head, and then for every gating check, and also writes
+//   failed-again the re-run checks that failed again, as a JSON list
+//   flaky        the re-run checks that passed, with their red and green runs, as JSON
 import { execFile } from "node:child_process";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -20,7 +28,8 @@ import { promisify } from "node:util";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import type { FailureReport } from "../loop/types.ts";
-import { type CheckState, checksFromGh, requiredChecksOutcome } from "./checks.ts";
+import { type ChecksOutcome, checksFromGh, requiredChecksOutcome } from "./checks.ts";
+import { type CheckDetail, type RerunnableCheck, redChecksOf, rerunOutcome, settledChecksOutcome } from "./rerun.ts";
 
 const run = promisify(execFile);
 
@@ -62,15 +71,15 @@ async function pullRequestState(repo: string, number: string): Promise<PullReque
 }
 
 /** The PR head's checks: every one when Kit config names the gating checks, else only the required ones. */
-async function checksOf(repo: string, number: string, gating: readonly string[]): Promise<CheckState[]> {
-  const args = ["pr", "checks", number, "--repo", repo, "--json", "name,bucket"];
-  return checksFromGh(await gh(...args, ...(gating.length === 0 ? ["--required"] : [])));
+async function checksOf(repo: string, number: string, gating: readonly string[]): Promise<CheckDetail[]> {
+  const args = ["pr", "checks", number, "--repo", repo, "--json", "name,bucket,link,workflow,startedAt"];
+  return checksFromGh(await gh(...args, ...(gating.length === 0 ? ["--required"] : []))) as CheckDetail[];
 }
 
 /** What the wait reads from GitHub: the PR's state, and its head's checks. */
 export interface ChecksWaitGitHub {
   pullRequestState(): Promise<PullRequestState>;
-  checks(): Promise<CheckState[]>;
+  checks(): Promise<CheckDetail[]>;
 }
 
 export interface ChecksWaitOptions {
@@ -81,6 +90,10 @@ export interface ChecksWaitOptions {
   readonly now: () => number;
   readonly sleep: (ms: number) => Promise<void>;
   readonly log: (line: string) => void;
+  /** The head it waits on, when an earlier job named it: the PR having moved off it makes the wait stale. */
+  readonly headSha?: string;
+  /** How the checks it reads have ended; requiredChecksOutcome when not given. */
+  readonly outcome?: (checks: readonly CheckDetail[], gating: readonly string[]) => ChecksOutcome;
 }
 
 /** How the wait ended. It gives up at its deadline, naming the gating checks that never reported and those still running. */
@@ -120,16 +133,16 @@ async function whileWaiting<T>(read: () => Promise<T>): Promise<T> {
  * all passed or one didn't, the PR moves on, or its deadline passes.
  */
 export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: ChecksWaitOptions): Promise<ChecksWaitOutcome> {
-  const { gating, deadlineMs, now, sleep, log } = options;
+  const { gating, deadlineMs, now, sleep, log, outcome = requiredChecksOutcome } = options;
   const started = now();
-  const headSha = (await whileWaiting(() => github.pullRequestState())).headRefOid;
+  const headSha = options.headSha ?? (await whileWaiting(() => github.pullRequestState())).headRefOid;
   await sleep(SETTLE_MS);
   let said = "";
   let saidAt = started;
   for (;;) {
     const state = await whileWaiting(() => github.pullRequestState());
     if (state.headRefOid !== headSha || state.state !== "OPEN" || !state.isDraft) return { checks: "stale", headSha };
-    const result = requiredChecksOutcome(await whileWaiting(() => github.checks()), gating);
+    const result = outcome(await whileWaiting(() => github.checks()), gating);
     if (result.kind === "green") return { checks: "green", headSha };
     if (result.kind === "red") return { checks: "red", headSha, failed: result.failed, skipped: result.skipped };
     const line = waitingOn(result.unreported, result.running);
@@ -178,13 +191,17 @@ async function main(productDir: string): Promise<void> {
   const timeoutMinutes = Number(required("FABRIK_REVIEW_TIMEOUT_MINUTES"));
   if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1) throw new Error("FABRIK_REVIEW_TIMEOUT_MINUTES is not a whole number of minutes");
 
+  const rerun = rerunOf(process.env["FABRIK_RERUN"]);
+  const rerunAt = process.env["FABRIK_RERUN_AT"] ?? "";
+  let last: CheckDetail[] = [];
   const outcome = await waitForRequiredChecks(
     {
       pullRequestState: () => pullRequestState(repo, number),
-      checks: () => checksOf(repo, number, gating),
+      checks: async () => (last = await checksOf(repo, number, gating)),
     },
     {
       gating,
+      ...(rerun === null ? {} : { headSha: required("FABRIK_HEAD_SHA"), outcome: (checks, gating) => settledChecksOutcome(checks, gating, { rerun: rerun.map(({ name }) => name), rerunAt }) }),
       deadlineMs: Math.max(timeoutMinutes * 60_000 - TIMEOUT_MARGIN_MS, SETTLE_MS),
       now: Date.now,
       sleep: (ms) => sleep(ms),
@@ -199,10 +216,25 @@ async function main(productDir: string): Promise<void> {
   const failed = outcome.checks === "red" ? outcome.failed : [];
   const skipped = outcome.checks === "red" ? outcome.skipped : [];
   console.log(`Required checks on #${number} at ${outcome.headSha}: ${outcome.checks}${failed.length > 0 ? ` (${failed.join(", ")})` : ""}`);
-  await appendFile(
-    required("GITHUB_OUTPUT"),
-    `checks=${outcome.checks}\nhead-sha=${outcome.headSha}\nfailed=${JSON.stringify(failed)}\nskipped=${JSON.stringify(skipped)}\n`,
-  );
+  const lines = [`checks=${outcome.checks}`, `head-sha=${outcome.headSha}`, `failed=${JSON.stringify(failed)}`, `skipped=${JSON.stringify(skipped)}`];
+  if (rerun === null && outcome.checks === "red") {
+    const red = redChecksOf(last, failed, skipped);
+    console.log(`The Kit can re-run ${red.rerun.length === 0 ? "none of them" : red.rerun.map(({ name }) => name).join(", ")}`);
+    lines.push(`red=${JSON.stringify(red)}`);
+  }
+  if (rerun !== null && outcome.checks !== "stale") {
+    const { failedAgain, flaky } = rerunOutcome(rerun, last);
+    lines.push(`failed-again=${JSON.stringify(failedAgain)}`, `flaky=${JSON.stringify(flaky)}`);
+  }
+  await appendFile(required("GITHUB_OUTPUT"), `${lines.join("\n")}\n`);
+}
+
+/** The re-run checks the Re-run checks' wait is given, or null for the first wait. */
+function rerunOf(text: string | undefined): RerunnableCheck[] | null {
+  if (text === undefined || text === "") return null;
+  const value: unknown = JSON.parse(text);
+  if (!Array.isArray(value)) throw new Error("FABRIK_RERUN is not a list of re-run checks");
+  return value as RerunnableCheck[];
 }
 
 if (import.meta.main) {

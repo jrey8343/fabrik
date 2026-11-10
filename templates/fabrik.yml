@@ -76,8 +76,10 @@ jobs:
       github.event_name != 'schedule' &&
       (github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     uses: jrey8343/fabrik/.github/workflows/loop.yml@v0.1.0-pre.1
-    # The most any Kit job may hold; each job narrows it. None of these writes:
-    # every write goes through the Fabrik App token in a push job.
+    # The most any Kit job may hold; each job narrows it. Every write to the
+    # repo goes through the Fabrik App token in a push job. The one write here,
+    # actions: write, only the Review's Re-run red checks job holds, to re-run
+    # the failed jobs of a red required check once on the same head (ADR-0018).
     permissions:
       id-token: write
       contents: read
@@ -86,7 +88,7 @@ jobs:
       # For a Review to read the agent PR's required checks.
       checks: read
       statuses: read
-      actions: read
+      actions: write
     secrets:
       OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}
       OP_IMPLEMENT_TOKEN: ${{ secrets.FABRIK_OP_IMPLEMENT_TOKEN }}

@@ -5,6 +5,7 @@ import { issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts
 import { failureNotice } from "./failures.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import { checkConflicts, reviewGraceMinutes } from "./conflicts.ts";
+import { flakyCheckGate } from "./flakyChecks.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
@@ -30,6 +31,7 @@ import { closeSpecAfter } from "./specClosing.ts";
 import { closeAgentDraftsOf, stopTicketOf } from "./handClosing.ts";
 import { heldOf } from "./heldRun.ts";
 import { deadTickClosed, scheduledTick } from "./kitIssues.ts";
+import { closeMergedTickets } from "./mergedTickets.ts";
 import { resumingHeldRuns } from "./resume.ts";
 import { heldOn, heldWhileUsedUp } from "./hold.ts";
 import { mapCapOf } from "./mapCap.ts";
@@ -116,7 +118,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         ? withIssue(snapshot, (context) => applyImplementation(event, context, config))
         : applyRetryImplementation(event, snapshot, config);
     case "agent-run-failed":
-      return withIssue(snapshot, (context) => failureNotice(event, context, config));
+      return withIssue(snapshot, (context) => failureNotice(event, context, config, snapshot.pullRequest));
     // A closed issue may finish its Spec, free a slot or unblock a Ticket, or end a
     // Design session by hand. Merging an agent PR closes its Ticket through
     // `Closes #n`, so it lands here. A closed Ticket's agent draft PR closes
@@ -203,9 +205,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // Retro when each is due. It also catches a Design session slot freed by
       // an event the Loop doesn't watch, such as needs-design coming off by hand.
       // It also takes the Replays' next step, and catches an agent PR left
-      // conflicting with main that a push to main missed (#304). And it runs a
+      // conflicting with main that a push to main missed (#304), and counts back an
+      // Execution flaw whose checks have since passed on its head (#462). And it runs a
       // Dispatch check, so a Ticket left waiting while every slot was full, or
-      // marked ready by an event the Loop missed, starts within the hour (#418).
+      // marked ready by an event the Loop missed, starts within the hour (#418),
+      // after it closes each Ticket GitHub left open once a PR of it merged (#543).
       // First of all it sweeps trigger labels with no run behind them (#419),
       // so a slot it frees can be filled by this tick's queue checks. Why each
       // part does nothing is a note, so the step summary says it whatever the
@@ -214,7 +218,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return thenCheckQueues(
         alongside(
           withDeadTickClosed(event, snapshot, withReasonNoted(stuckTriggers(event.now, snapshot))),
-          scheduledTickWith([auditGate, retroGate, replayGate, conflictGate], event.now, snapshot, config),
+          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate], event.now, snapshot, config),
         ),
       );
   }
@@ -263,6 +267,11 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
 /** The conflict check as one of the tick's gates. */
 function conflictGate(_now: string, snapshot: Snapshot, config: KitConfig): Plan {
   return conflictCheck(snapshot, config);
+}
+
+/** Closing each Ticket GitHub left open after a PR of it merged (src/loop/mergedTickets.ts, #543), as one of the tick's gates. */
+function mergedTicketsGate(_now: string, snapshot: Snapshot): Plan {
+  return closeMergedTickets(snapshot);
 }
 
 /** A gate the scheduled tick runs, the audit gate or the retro gate: what it opens this tick, or why it opens nothing. */

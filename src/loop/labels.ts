@@ -107,6 +107,13 @@ export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 export const MONITOR_LABEL = "fabrik:monitor";
 
 /**
+ * The label on each Flaky check issue the Kit files (#462), one per check, by
+ * which it finds its own. Like MONITOR_LABEL, it isn't one of
+ * KIT_ISSUE_LABELS, so the issue goes to Triage.
+ */
+export const FLAKY_CHECK_LABEL = "fabrik:flaky-check";
+
+/**
  * The label on a Map: an issue charting the way to a destination still in fog,
  * whose children are Decisions (#154). A Design session that ends in a Map puts
  * it on in place of needs-design.
@@ -151,6 +158,7 @@ export type Label =
   | typeof REVIEW_LABEL
   | KitIssueLabel
   | typeof MONITOR_LABEL
+  | typeof FLAKY_CHECK_LABEL
   | typeof MAP_LABEL
   | DecisionLabel
   | typeof RESEARCH_LABEL
@@ -169,6 +177,7 @@ export const ALL_LABELS: readonly Label[] = [
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,
+  FLAKY_CHECK_LABEL,
   STEP_UP_LABEL,
   KEPT_BRANCH_LABEL,
   MAP_LABEL,
@@ -203,6 +212,7 @@ export const LOOP_LABELS: Readonly<Record<Label, { readonly color: string; reado
   [RETRO_LABEL]: { color: "c5def5", description: "Fabrik: the week's Retro, proposing changes to how the factory works" },
   [REPLAY_LABEL]: { color: "c5def5", description: "Fabrik: the Operator's Replay, re-running merged Tickets with one thing changed" },
   [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error, a red main or a dead Sentry token" },
+  [FLAKY_CHECK_LABEL]: { color: "e99695", description: "Fabrik: a required check that failed and passed on the same head" },
   [STEP_UP_LABEL]: { color: "f9d0c4", description: "Fabrik: while it's on, the Ticket's Implement runs are Step-ups" },
   [KEPT_BRANCH_LABEL]: { color: "f9d0c4", description: "Fabrik: the Ticket's next Implement run carries on its Kept branch, not main" },
   [MAP_LABEL]: { color: "bfd4f2", description: "Fabrik: a Map charting a foggy destination through its Decisions" },

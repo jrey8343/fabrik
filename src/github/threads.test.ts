@@ -11,7 +11,7 @@ import {
   conflictAttemptsIn,
   conflictRunIn,
   conflictRunInFlightIn,
-  countEmptyDiffs,
+  countLandedNothing,
   designSessionOf,
   designTurnFailedIn,
   pendingPrototypeIn,
@@ -55,10 +55,31 @@ describe("Reading a PR's Verdicts", () => {
     ];
 
     expect(verdictsIn(comments)).toEqual([
-      { verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: "1".repeat(40) },
+      { verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["build"], headSha: "1".repeat(40) },
       { verdict: "pass", source: "reviewer", requestChanges: false, headSha: "2".repeat(40) },
     ]);
   });
+});
+
+// #434: a Retry that was a Broken run posts an Execution flaw Verdict, which counts like any other.
+it("reads back the Verdict a Broken Retry posts", () => {
+  const flaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: HEAD_SHA } as const;
+  const broken: LoopEvent = {
+    kind: "agent-run-failed",
+    role: "implement",
+    issue: 7,
+    runUrl: RUN,
+    jobResult: "failure",
+    secretsStep: "success",
+    report: { failure: "missing-output", detail: "fix is required" },
+  };
+  const plan = planFor(
+    broken,
+    snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] }), { pullRequest: aPullRequest({ verdicts: [flaw] }) }),
+    kitConfig(),
+  );
+
+  expect(verdictsIn(commentsOf(plan))).toEqual([{ ...flaw, source: "broken-run" }]);
 });
 
 describe("Reading whether a PR's latest push came from a Request-changes run", () => {
@@ -164,7 +185,7 @@ describe("Reading a Request-changes run's answers about its review (#369)", () =
   });
 });
 
-describe("Counting a Ticket's earlier empty diffs", () => {
+describe("Counting a Ticket's earlier empty diffs and Broken runs", () => {
   const marker = "<!-- fabrik:empty-diff -->\nThe Implementer's branch changed nothing.";
   const round = "<!-- fabrik:design-round 1 -->\n@operator **Design session, round 1.**";
   const finishedSession = "**Design session finished.** This issue is now its agent brief, ready for an Implementer.";
@@ -181,11 +202,29 @@ describe("Counting a Ticket's earlier empty diffs", () => {
     };
     const comments = commentsOf(planFor(empty, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig()));
 
-    expect(countEmptyDiffs(comments.map(kit))).toBe(1);
+    expect(countLandedNothing(comments.map(kit))).toBe(1);
+  });
+
+  // #434: a Broken run before the PR opened uses a Retry from the same pool.
+  it("counts the comment a Broken run posts before its PR opened, alongside empty diffs", () => {
+    const broken: LoopEvent = {
+      kind: "agent-run-failed",
+      role: "implement",
+      issue: 7,
+      runUrl: RUN,
+      jobResult: "failure",
+      secretsStep: "success",
+      report: { failure: "left-branch", detail: "The agent left fabrik/ticket-7 for main" },
+    };
+    const comments = commentsOf(planFor(broken, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], landedNothing: 1 })), kitConfig()));
+
+    expect(countLandedNothing([kit(marker), ...comments.map(kit)])).toBe(2);
+    expect(countLandedNothing([kit(marker), ...comments.map(kit), kit(round), ...comments.map(kit)])).toBe(1);
+    expect(countLandedNothing(comments.map(person))).toBe(0);
   });
 
   it("counts the Kit's empty-diff comments", () => {
-    expect(countEmptyDiffs([person("hello"), kit(marker), person("a reply"), kit(marker)])).toBe(2);
+    expect(countLandedNothing([person("hello"), kit(marker), person("a reply"), kit(marker)])).toBe(2);
   });
 
   it.each([
@@ -193,16 +232,16 @@ describe("Counting a Ticket's earlier empty diffs", () => {
     ["a finished Design session", finishedSession],
     ["a live Design session's outcome", "<!-- fabrik:live-outcome brief -->\nDecided in a live session."],
   ])("starts again after %s, so a Ticket back from design gets fresh retries", (_what, comment) => {
-    expect(countEmptyDiffs([kit(marker), kit(marker), kit(comment), kit(marker)])).toBe(1);
+    expect(countLandedNothing([kit(marker), kit(marker), kit(comment), kit(marker)])).toBe(1);
   });
 
   it("ignores someone quoting the marker mid-comment", () => {
-    expect(countEmptyDiffs([kit(`see this: ${marker}`)])).toBe(0);
+    expect(countLandedNothing([kit(`see this: ${marker}`)])).toBe(0);
   });
 
   it("counts only the Fabrik App's markers, so nobody, another bot included, can add an empty diff or reset the count (#426)", () => {
-    expect(countEmptyDiffs([kit(marker), person(marker)])).toBe(1);
-    expect(countEmptyDiffs([kit(marker), kit(marker), person(round), person(finishedSession), kit(marker)])).toBe(3);
+    expect(countLandedNothing([kit(marker), person(marker)])).toBe(1);
+    expect(countLandedNothing([kit(marker), kit(marker), person(round), person(finishedSession), kit(marker)])).toBe(3);
   });
 });
 
@@ -548,5 +587,31 @@ describe("Reading a PR's conflict attempts and conflict-only run (#304)", () => 
     expect(verdictsIn([verdict(true)])).toEqual([expect.objectContaining({ conflictRun: true })]);
     expect(verdictsIn([verdict(false)])[0]).not.toHaveProperty("conflictRun");
     expect(verdict(false)).not.toContain("conflictRun");
+  });
+});
+
+describe("A Verdict counted back for a Flaky check (#462)", () => {
+  const red = (headSha: string): LoopEvent => ({
+    kind: "required-checks-finished",
+    pullRequest: 50,
+    headSha,
+    failed: ["e2e"],
+    rerun: { outside: [], failedAgain: ["e2e"], flaky: [], refused: null },
+    runUrl: "https://github.com/acme/shop/actions/runs/1",
+  });
+  const commented = (plan: Plan): string[] =>
+    plan.kind === "act"
+      ? plan.actions.flatMap((action) =>
+          action.kind === "comment" ? [action.body] : action.kind === "comment-linking" ? [action.body.map((part) => (typeof part === "string" ? part : "#9")).join("")] : [],
+        )
+      : [];
+
+  it("reads as flaky once the Kit's line marks its head counted back, and never from the Kit's own re-run line", () => {
+    const flaw = commented(planFor(red(HEAD_SHA), snapshotOfPullRequest(aPullRequest()), kitConfig()));
+    const rerunLine = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["unit"]} -->\n\`unit\` failed and passed.`;
+    const countedBack = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["e2e"],"countedBack":true} -->\n\`e2e\` has since passed.`;
+
+    expect(verdictsIn([rerunLine, ...flaw])).toEqual([expect.not.objectContaining({ flaky: true })]);
+    expect(verdictsIn([...flaw, countedBack])).toEqual([expect.objectContaining({ checks: ["e2e"], flaky: true })]);
   });
 });

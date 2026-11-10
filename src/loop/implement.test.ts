@@ -39,6 +39,17 @@ describe("Starting an Implementer", () => {
       anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], openPullRequests: [50] }),
       "#7's open PR #50 is owed no Implement run: no Retry, Request-changes run or conflict-only run waits on it",
     ],
+    // GitHub sometimes leaves a Ticket open after its PR merged: its work landed, so no run starts on it (#543).
+    [
+      "is open though its closing PR merged",
+      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], mergedPullRequests: [131] }),
+      "#7's PR #131 has merged",
+    ],
+    [
+      "has an open PR, and a closing PR that merged",
+      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], openPullRequests: [150], mergedPullRequests: [131] }),
+      "#7's PR #131 has merged",
+    ],
   ])("a Ticket that %s loses the label, no Implementer starts, and one comment says why (#417)", (_why, ticket, reason) => {
     const plan = planFor(dispatched(), snapshotOf(ticket), kitConfig());
 
@@ -53,8 +64,8 @@ describe("Starting an Implementer", () => {
 });
 
 describe("A Stepped-up start", () => {
-  const runOf = (labels: readonly string[], emptyDiffs = 0) =>
-    actionsOf(planFor(dispatched(), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement", ...labels], emptyDiffs })), kitConfig())).find(
+  const runOf = (labels: readonly string[], landedNothing = 0) =>
+    actionsOf(planFor(dispatched(), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement", ...labels], landedNothing })), kitConfig())).find(
       (action) => action.kind === "start-agent-run",
     );
 
@@ -90,7 +101,7 @@ describe("A Stepped-up start", () => {
   });
 
   it("a marked Ticket still gets two Retries: its third empty diff is a Design flaw", () => {
-    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "fabrik:step-up"], emptyDiffs: 2 });
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "fabrik:step-up"], landedNothing: 2 });
 
     const empty = finished({ changes: { net: [], commits: [] } });
 
@@ -200,10 +211,10 @@ describe("An empty diff", () => {
   });
 
   it("is told to the run's Run record, as the plan's empty diff, and only an empty diff is", () => {
-    const planOn = (event: LoopEvent, emptyDiffs = 0) =>
-      planFor(event, snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], emptyDiffs })), kitConfig());
+    const planOn = (event: LoopEvent, landedNothing = 0) =>
+      planFor(event, snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], landedNothing })), kitConfig());
 
-    expect([0, 1, 2].map((emptyDiffs) => emptyDiffIn(planOn(empty, emptyDiffs)))).toEqual([true, true, true]);
+    expect([0, 1, 2].map((landedNothing) => emptyDiffIn(planOn(empty, landedNothing)))).toEqual([true, true, true]);
     expect(emptyDiffIn(planOn(finished()))).toBe(false);
     expect(emptyDiffIn(planOn(finished({ changes: { net: [], commits: [{ path: "CLAUDE.md" }] } })))).toBe(false);
   });
@@ -224,8 +235,8 @@ describe("An empty diff", () => {
       runUrl: "https://github.com/acme/clinic/actions/runs/91/attempts/1",
     });
 
-    for (const emptyDiffs of [0, 1, 2]) {
-      const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], emptyDiffs });
+    for (const landedNothing of [0, 1, 2]) {
+      const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], landedNothing });
       const [comment] = commentsOf(actionsOf(planFor(said, snapshotOf(ticket), kitConfig())));
 
       expect(comment).toContain("## Questions for the Operator");
@@ -237,7 +248,7 @@ describe("An empty diff", () => {
   });
 
   it("a third one is a Design flaw: the Ticket goes back to needs-design instead of retrying", () => {
-    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], emptyDiffs: 2 });
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], landedNothing: 2 });
 
     const actions = actionsOf(planFor(empty, snapshotOf(ticket), kitConfig()));
 
@@ -249,11 +260,15 @@ describe("An empty diff", () => {
     ]);
     // The Design session's round 1 is this event's one notification.
     expect(commentsOf(actions)[0]).not.toMatch(/@operator/);
+    // The earlier two may have been Broken runs, which share the pool (#434), so it never counts them as empty diffs.
+    expect(commentsOf(actions)[0]).toContain(
+      "The Implementer's branch for #7 changed nothing. Both of the Ticket's Retries are used, so this Execution flaw counts as a Design flaw, and the Ticket goes back to design.",
+    );
   });
 
   it("the second retry is a Step-up", () => {
-    const after = (emptyDiffs: number) =>
-      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], emptyDiffs });
+    const after = (landedNothing: number) =>
+      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], landedNothing });
     const modelOf = (plan: Plan) => actionsOf(plan).find((action) => action.kind === "start-agent-run");
 
     expect(modelOf(planFor(dispatched(), snapshotOf(after(1)), kitConfig()))).toMatchObject({
@@ -266,10 +281,10 @@ describe("An empty diff", () => {
   });
 
   it("each retry after an empty diff says which Retry it is, and the second that it Steps up", () => {
-    const after = (emptyDiffs: number) =>
-      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], emptyDiffs });
-    const runOf = (emptyDiffs: number) =>
-      actionsOf(planFor(dispatched(), snapshotOf(after(emptyDiffs)), kitConfig())).find((action) => action.kind === "start-agent-run");
+    const after = (landedNothing: number) =>
+      anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], landedNothing });
+    const runOf = (landedNothing: number) =>
+      actionsOf(planFor(dispatched(), snapshotOf(after(landedNothing)), kitConfig())).find((action) => action.kind === "start-agent-run");
 
     expect(runOf(0)).not.toHaveProperty("retry");
     expect(runOf(1)).toMatchObject({ retry: 1, stepUp: false });

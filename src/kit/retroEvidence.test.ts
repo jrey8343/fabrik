@@ -907,6 +907,25 @@ describe("the evidence bundle", () => {
     });
   });
 
+  it("marks a sampled PR's Verdict counted back for a Flaky check, and no other (#462)", () => {
+    const flaw = aVerdictComment("execution-flaw", "a".repeat(40), "2026-11-01T00:00:00Z", {
+      body: `<!-- fabrik:verdict {"verdict":"execution-flaw","source":"ci","requestChanges":false,"checks":["e2e"],"headSha":"${"a".repeat(40)}"} -->\nRed.`,
+    });
+    const pass = aVerdictComment("pass", "b".repeat(40), "2026-11-02T00:00:00Z");
+    const countedBack = aComment(`<!-- fabrik:flaky-check {"headSha":"${"a".repeat(40)}","checks":["e2e"],"countedBack":true} -->\nFlaky.`, "2026-11-01T05:00:00Z");
+    const { sample } = evidenceBundle(
+      aRetroEvidenceInput({
+        facts: factsOf({ pullRequests: [aMergedPullRequest("2026-11-03T00:00:00Z", { number: 12, ticket: 7, comments: [flaw, countedBack, pass] })] }),
+        tickets: [{ number: 7, title: "Build the cart", body: "A cart." }],
+      }),
+    );
+
+    expect(sample[0]?.verdicts).toEqual([
+      { verdict: "execution-flaw", source: "ci", at: "2026-11-01T00:00:00Z", body: flaw.body, flaky: true },
+      { verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: pass.body },
+    ]);
+  });
+
   describe("the streak table", () => {
     it("lists every agent PR merged in the 90 days to the window's end, oldest first, with the paths it changed", () => {
       const { streakTable } = evidenceBundle(

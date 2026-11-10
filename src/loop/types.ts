@@ -35,12 +35,27 @@ export type ReportedFailure =
    * which rebuilds it from its base alone, never could (#535).
    */
   | "unlandable-branch"
+  /** The agent ended the run on another branch than its own (#434). */
+  | "left-branch"
   /**
    * The job ran out of time: reported by the Review checks job when it gave up
    * on required checks still running, short of its job's timeout, or inferred
    * by the push job for any role whose job was cancelled (src/loop/failures.ts).
    */
   | "timeout";
+
+/**
+ * How an Implement run was a Broken run (#434): the Kit can't land its work
+ * because of what the agent did. Its output broke the run's contract, it left
+ * its branch, or it built on commits its branch didn't start from.
+ */
+export const BROKEN_RUNS = ["missing-output", "left-branch", "unlandable-branch"] as const satisfies readonly ReportedFailure[];
+export type BrokenRun = (typeof BROKEN_RUNS)[number];
+
+/** Whether a failure kind is one a Broken run can be; only an Implement run's is one (brokenRunOf). */
+export function isBrokenRun(value: unknown): value is BrokenRun {
+  return (BROKEN_RUNS as readonly unknown[]).includes(value);
+}
 
 /** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
 export type InfrastructureFailure = ReportedFailure | "unreachable-1password";
@@ -311,6 +326,8 @@ export type LoopEvent =
       readonly failed: readonly string[];
       /** The ones among `failed` that were skipped or reported neutral, which no Retry changes; absent when none were. */
       readonly skipped?: readonly string[];
+      /** What the Kit's re-run of the red checks came to (#462); absent when it didn't try, as from a Kit before it. */
+      readonly rerun?: RerunReport;
       /** The Review run, linked from the Verdict comment. */
       readonly runUrl: string;
     }
@@ -322,6 +339,8 @@ export type LoopEvent =
       readonly headSha: string;
       /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
       readonly output: string;
+      /** The red checks that passed when the Kit re-ran them on this head, which let the Reviewer run (#462); absent when none did. */
+      readonly flaky?: readonly FlakyCheck[];
       readonly runUrl: string;
       /** The Product repo's web address, such as `https://github.com/acme/shop`, which a pass's Follow-ups open issues on. */
       readonly repoUrl: string;
@@ -592,6 +611,11 @@ export interface IssueSnapshot {
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
   /**
+   * The pull requests linked to close this issue that have merged, oldest
+   * first: its work landed, though GitHub sometimes leaves it open after (#543).
+   */
+  readonly mergedPullRequests: readonly number[];
+  /**
    * Those of them that are open agent draft PRs on its own agent branch, the
    * kind that holds a max_in_flight slot: closing it closes them (#428).
    */
@@ -629,8 +653,12 @@ export interface IssueSnapshot {
    * followed hasn't finished; otherwise null.
    */
   readonly sentBack: SentBack | null;
-  /** How many Implement runs on it ended in an empty diff since its last Design session (src/loop/implement.ts). */
-  readonly emptyDiffs: number;
+  /**
+   * How many Implement runs on it landed nothing before its PR opened, since
+   * its last Design session: its empty diffs (src/loop/implement.ts) and its
+   * Broken runs (#434, src/loop/failures.ts). Each used one of its Retries.
+   */
+  readonly landedNothing: number;
   /**
    * While it's marked for a Kept-branch start (#536): its Kept branch on the
    * remote. Null when the mark is off, so the adapter doesn't read it, or the
@@ -698,12 +726,12 @@ export interface PullRequestSnapshot {
   /** Whether that Ticket is open, read the same way; false when there's no Ticket or the PR doesn't link it. */
   readonly ticketOpen: boolean;
   /**
-   * How many Implement runs on that Ticket ended in an empty diff since its
-   * last Design session, read like IssueSnapshot.emptyDiffs from the Ticket's
+   * How many Implement runs on that Ticket landed nothing before this PR
+   * opened, since its last Design session, read like IssueSnapshot.landedNothing from the Ticket's
    * comments through the PR's closing link, or 0 when there's no such link.
    * Each used up one of the Ticket's Retries, so a Verdict counts on from them (#415).
    */
-  readonly ticketEmptyDiffs: number;
+  readonly ticketLandedNothing: number;
   readonly open: boolean;
   readonly draft: boolean;
   /** Its head commit now. */
@@ -853,14 +881,57 @@ export const STRENGTH_LABELS: Readonly<Record<Strength, string>> = {
   speculative: "Speculative",
 };
 
+/** A check run on a head commit, as the tick reads them for its Flaky check sweep (#462). */
+export interface HeadCheckRun {
+  readonly name: string;
+  readonly status: string;
+  /** GitHub's conclusion once it completed: success, failure, timed_out, cancelled, skipped, neutral…; null before. */
+  readonly conclusion: string | null;
+  readonly startedAt: string | null;
+  readonly url: string;
+}
+
+/** An open agent PR's ci-sourced Execution flaw not yet counted back, and every check run on its head (#462). */
+export interface FlawHeadChecks {
+  readonly pullRequest: number;
+  readonly ticket: number | null;
+  readonly headSha: string;
+  /** The checks the Verdict named as failed. */
+  readonly checks: readonly string[];
+  readonly checkRuns: readonly HeadCheckRun[];
+}
+
+/** A required check that reported both failure and success on the same head commit (GLOSSARY.md), with a link to a run of each. */
+export interface FlakyCheck {
+  readonly name: string;
+  readonly red: string;
+  readonly green: string;
+}
+
+/**
+ * What the Kit's re-run of an agent PR's red required checks came to (#462,
+ * ADR-0018): it re-runs the GitHub Actions ones once on the same head.
+ */
+export interface RerunReport {
+  /** The red checks that aren't GitHub Actions, which only their owner can re-run. */
+  readonly outside: readonly string[];
+  /** The re-run checks that failed again. */
+  readonly failedAgain: readonly string[];
+  /** The re-run checks that passed: Flaky checks. */
+  readonly flaky: readonly FlakyCheck[];
+  /** Why the Kit re-ran none of the Actions ones it could have, as GitHub refusing; null when it re-ran them, or there were none. */
+  readonly refused: string | null;
+}
+
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
   readonly verdict: Verdict;
   /**
-   * The Reviewer judged it; or red required checks, or a retry whose branch
-   * changed nothing, made it an Execution flaw.
+   * The Reviewer judged it; or red required checks, a retry whose branch
+   * changed nothing, or a retry that was a Broken run (#434), made it an
+   * Execution flaw.
    */
-  readonly source: "reviewer" | "ci" | "empty-diff";
+  readonly source: "reviewer" | "ci" | "empty-diff" | "broken-run";
   /**
    * Whether it came from a Request-changes run, which uses no retry itself. An
    * Execution flaw on its push still calls for one, and counts (#393).
@@ -885,6 +956,14 @@ export interface VerdictRecord {
    * and started nothing; absent otherwise.
    */
   readonly ticketNotReady?: true;
+  /** On one from red required checks (#462), the ones it named as failed, which a later green on its head is read against; absent otherwise, as on every marker from before them. */
+  readonly checks?: readonly string[];
+  /**
+   * True when the checks it named have since passed on its head (#462): a
+   * Flaky check, so it no longer counts toward the Ticket's Retries. Read from
+   * the Kit's Flaky check line, never from the Verdict's own marker.
+   */
+  readonly flaky?: true;
   /** The head commit it was given on. */
   readonly headSha: string;
 }
@@ -902,6 +981,11 @@ export interface TicketSnapshot {
   readonly subIssues: number;
   /** The open pull requests linked to close it. */
   readonly openLinkedPullRequests: readonly number[];
+  /**
+   * The pull requests linked to close it that have merged: its work landed,
+   * though GitHub sometimes leaves it open after (#543).
+   */
+  readonly mergedLinkedPullRequests: readonly number[];
   /**
    * Whether the Kit's Implement failure notice is its latest run's word, read
    * from the Kit's comments on it: only the Operator re-adding agent:implement
@@ -997,6 +1081,18 @@ export interface Snapshot {
   /** The open issues the Kit owns in this repo (token rotation, weekly limit), oldest first. Gathered for every event. */
   readonly kitIssues: readonly KitIssueSnapshot[];
   /**
+   * The open Flaky check issues the Fabrik App filed (#462), by FLAKY_CHECK_LABEL: a
+   * Flaky check found again comments on its check's issue rather than filing another.
+   * Read for a Review's push job and the scheduled tick; empty for any other event.
+   */
+  readonly flakyCheckIssues: readonly KitIssueSnapshot[];
+  /**
+   * For the scheduled tick: each open agent PR's ci-sourced Execution flaws not
+   * yet counted back, with every check run on the head each was given on (#462);
+   * "no-permission" when the Fabrik App lacks Checks: read; null for any other event.
+   */
+  readonly flakySweep: readonly FlawHeadChecks[] | "no-permission" | null;
+  /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.
    */
@@ -1068,6 +1164,12 @@ export interface Snapshot {
    * (src/loop/triggerSweep.ts, #419).
    */
   readonly triggers: TriggerSweepSnapshot | null;
+  /**
+   * Gathered for a scheduled tick only: every open ready-for-agent Ticket, as
+   * a Dispatch check reads them, so the tick closes each one GitHub left open
+   * after a PR that closes it merged (src/loop/mergedTickets.ts, #543).
+   */
+  readonly readyTickets: readonly TicketSnapshot[] | null;
 }
 
 /** What the stuck-trigger sweep weighs (src/loop/triggerSweep.ts, #419). */
