@@ -111,7 +111,7 @@ The end-to-end path a piece of work takes in Fabrik, from idea to a pull request
 _Avoid_: pipeline, workflow, Real Engineering Loop (Matt Pocock's term, not Fabrik's)
 
 **Standing**:
-Where one piece of work is on the Loop and whose move is next, as the Kit reads it from GitHub.
+Where one piece of work is on the Loop, or between its merge and production, and whose move is next, as the Kit reads it from GitHub.
 _Avoid_: status, state, stage
 
 **AFK**:
