@@ -66,7 +66,7 @@ import type {
 import { type GitHub, pagesOf, type Repo } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
-  countEmptyDiffs,
+  countLandedNothing,
   designSessionOf,
   designTurnFailedIn,
   pendingPrototypeIn,
@@ -960,6 +960,14 @@ async function gatherEventPart(
       const { pullRequest } = await gatherPullRequest(github, repo, event.fixes.pullRequest, operator, appLogin);
       return { ...ticket, pullRequest };
     }
+    case "agent-run-failed": {
+      // A failed Implement run on a Ticket with an open PR may be a Broken Retry, which posts a Verdict there (#434).
+      const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
+      const open = event.role === "implement" && event.prototype !== true ? ticket.issue?.openPullRequests[0] : undefined;
+      if (open === undefined) return ticket;
+      const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);
+      return { ...ticket, pullRequest };
+    }
     case "label-added": {
       // agent:implement on a Ticket with an open PR resumes that PR's run, so the core weighs the PR too.
       const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
@@ -1481,7 +1489,7 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
       // Every comment read counts for whether the reply that approved the request is still there, not only this session's.
       pendingPrototype: pendingPrototypeIn(thisSession, new Set(comments.map(({ id }) => id))),
       unansweredPrototypes: unansweredPrototypesIn(thisSession),
-      emptyDiffs: countEmptyDiffs(comments),
+      landedNothing: countLandedNothing(comments),
       keptBranch,
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
@@ -1550,7 +1558,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     ticket,
     ticketLabels: ticketLabelsOf(pullRequest, ticket),
     ticketOpen: closedTicketOf(pullRequest, ticket)?.state === "OPEN",
-    ticketEmptyDiffs: ticketEmptyDiffsOf(pullRequest, ticket, appLogin),
+    ticketLandedNothing: ticketLandedNothingOf(pullRequest, ticket, appLogin),
     open: pullRequest.state === "OPEN",
     draft: pullRequest.isDraft,
     headSha: pullRequest.headRefOid,
@@ -1636,13 +1644,13 @@ function ticketLabelsOf(pullRequest: PullRequestNode, ticket: number | null): st
 }
 
 /**
- * How many empty diffs the Kit has recorded on that Ticket, read from its
+ * How many empty diffs and Broken runs the Kit has recorded on that Ticket, read from its
  * comments as the Ticket's own snapshot reads them, so a Verdict on its PR
  * counts on from the Retries they used (#415). None when the PR doesn't link it.
  */
-function ticketEmptyDiffsOf(pullRequest: PullRequestNode, ticket: number | null, appLogin: string | null): number {
+function ticketLandedNothingOf(pullRequest: PullRequestNode, ticket: number | null, appLogin: string | null): number {
   const comments = closedTicketOf(pullRequest, ticket)?.comments.nodes ?? [];
-  return countEmptyDiffs(comments.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })));
+  return countLandedNothing(comments.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })));
 }
 
 /** The issue among those a PR closes that is the Ticket its agent branch names, or undefined. */
@@ -1960,8 +1968,8 @@ export async function gatherDesignQueueSlice(
         labels: issue.labels.nodes.map((label) => label.name),
         designRounds: designSessionOf(thisSession).designRounds,
         turnFailed: designTurnFailedIn(thisSession),
-        // A third empty diff is the one that sent the Ticket back to design.
-        redesign: session.sentBack !== null || countEmptyDiffs(comments) > MAX_RETRIES,
+        // A third empty diff or Broken run is the one that sent the Ticket back to design.
+        redesign: session.sentBack !== null || countLandedNothing(comments) > MAX_RETRIES,
         // The latest time it got needs-design; an issue whose timeline doesn't show it waits from when it opened.
         neededDesignAt: neededDesignAt ?? issue.createdAt,
       });

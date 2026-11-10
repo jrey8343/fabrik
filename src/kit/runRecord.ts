@@ -13,13 +13,15 @@
 // schema 1, 2 or 3 record, written before Replays, as no replay's, and a
 // schema 1 to 4 record, written before Step-ups had reasons, with a null
 // reason, or `retry` if it Stepped up, and a schema 1 to 5 record, written
-// before empty diffs were recorded, as no empty diff. Pure, no I/O.
+// before empty diffs were recorded, as no empty diff, and a schema 1 to 7
+// record, written before Broken runs were recorded, as no Broken run. Pure,
+// no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
-import { infrastructureFailureOf } from "../loop/failures.ts";
+import { brokenRunOf, infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
-import { type AgentRole, type InfrastructureFailure, isStepUpReason, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
+import { type AgentRole, type BrokenRun, type InfrastructureFailure, isStepUpReason, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
 import { isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
 
@@ -80,9 +82,9 @@ export type RunRecordRole = AgentRole | "score";
 /**
  * The schema a Run record is written at: 2 added `subscription`, 3 added
  * `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`,
- * 7 added `keptBranch`.
+ * 7 added `keptBranch`, 8 added `brokenRun`.
  */
-export const RUN_RECORD_SCHEMA = 7;
+export const RUN_RECORD_SCHEMA = 8;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -211,6 +213,13 @@ export interface RunRecord {
   readonly terminalReason: string | null;
   /** null, or the Infrastructure failure, classified as the failure notice classifies it. */
   readonly infrastructureFailure: InfrastructureFailure | null;
+  /**
+   * null, or how the Implement run was a Broken run (#434), which is never an
+   * Infrastructure failure, classified as the failure notice classifies it. A
+   * schema 1 to 7 record, written before Broken runs were recorded, reads as
+   * null, its Broken run left as the Infrastructure failure it was then.
+   */
+  readonly brokenRun: BrokenRun | null;
   /** A Review's Verdict, or null when it gave none (and for every other role). */
   readonly verdict: Verdict | null;
   readonly durationMs: number | null;
@@ -241,6 +250,8 @@ interface EndedRun {
   readonly job: NeededJob | undefined;
   /** For a failed or cancelled run, its Infrastructure failure. */
   readonly failure: InfrastructureFailure | null;
+  /** For a failed Implement run, the Broken run it was instead (#434). */
+  readonly broken: BrokenRun | null;
 }
 
 /** Whether an agent run ended, so there's a record to write: known from the jobs alone, before anything else is read. */
@@ -253,10 +264,10 @@ function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): 
   const input = pushJobInput(end.needs, end.eventIssue);
   switch (input.kind) {
     case "agent-result":
-      return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: routedJob(end.needs, input.role), failure: null };
+      return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: routedJob(end.needs, input.role), failure: null, broken: null };
     case "review": {
       if (!input.withResult) return null;
-      return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null };
+      return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null, broken: null };
     }
     case "agent-failure": {
       const { role, issue, jobResult, secretsStep } = input;
@@ -264,7 +275,9 @@ function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): 
       const failure = failureOf(jobResult, secretsStep, end.failureReport);
       const kit = end.needs["kit"]?.outputs ?? {};
       const pullRequest = role === "review" || role === "implement" ? countOf(kit["pull-request"]) : null;
-      return { role, issue, pullRequest, job, failure };
+      // A prototype turn's role is design, so it's never a Broken run.
+      const broken = failure === null ? null : brokenRunOf({ role }, failure);
+      return { role, issue, pullRequest, job, failure: broken === null ? failure : null, broken };
     }
     default:
       return null;
@@ -301,6 +314,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
+    brokenRun: ran.broken,
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -365,6 +379,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     baseSha: null,
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
+    brokenRun: null,
     verdict: null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -432,6 +447,8 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     baseSha: end.baseSha,
     jobResult: job.result,
     infrastructureFailure: failureOf(job.result, job.outputs["secrets-step"], end.failureReport),
+    // A Replay arm uses no Retries, and its Replay ends on any failure it can't land (src/kit/replayRecord.ts), so it's never a Broken run.
+    brokenRun: null,
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -466,7 +483,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
   const stream = transcript === null ? null : readStream(transcript);
   const last = stream?.result ?? null;
   const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
-  const { infrastructureFailure, verdict, ...ran } = facts;
+  const { infrastructureFailure, brokenRun, verdict, ...ran } = facts;
   return {
     schema: RUN_RECORD_SCHEMA,
     ...ran,
@@ -474,6 +491,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
     isError: typeof last?.["is_error"] === "boolean" ? last["is_error"] : null,
     terminalReason: stringOr(last?.["terminal_reason"]),
     infrastructureFailure,
+    brokenRun,
     verdict,
     durationMs: numberOr(last?.["duration_ms"]),
     apiDurationMs: numberOr(last?.["duration_api_ms"]),
@@ -496,17 +514,20 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * Replays, as no replay's, a schema 1 to 4 record, written before Step-ups
  * had reasons, with a null reason, or `retry` if it Stepped up: until then
  * only the second Retry recorded a Step-up, and a schema 1 to 5 record,
- * written before empty diffs were recorded, as no empty diff. Null for
+ * written before empty diffs were recorded, as no empty diff, and a schema 1
+ * to 7 record, written before Broken runs were recorded, as no Broken run. Null for
  * anything that isn't a record of a schema the Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
-  type Schema6 = Omit<RunRecord, "schema" | "keptBranch">;
-  if (schema === 6) return { ...(stored as Schema6), schema: RUN_RECORD_SCHEMA, keptBranch: false };
+  type Schema7 = Omit<RunRecord, "schema" | "brokenRun">;
+  if (schema === 7) return { ...(stored as Schema7), schema: RUN_RECORD_SCHEMA, brokenRun: null };
+  type Schema6 = Omit<Schema7, "keptBranch">;
+  if (schema === 6) return { ...(stored as Schema6), schema: RUN_RECORD_SCHEMA, keptBranch: false, brokenRun: null };
   type Schema5 = Omit<Schema6, "emptyDiff">;
-  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false };
+  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false, brokenRun: null };
   type Schema4 = Omit<Schema5, "stepUpReason">;
   const record = (fields: Schema4): RunRecord => ({
     ...fields,
@@ -514,6 +535,7 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
     stepUpReason: fields.stepUp ? "retry" : null,
     emptyDiff: false,
     keptBranch: false,
+    brokenRun: null,
   });
   if (schema === 4) return record(stored as Schema4);
   if (schema === 3) return record({ ...(stored as Omit<Schema4, "replay">), replay: null });

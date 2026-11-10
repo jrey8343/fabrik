@@ -161,6 +161,7 @@ const BY: Readonly<Record<VerdictRecord["source"], string>> = {
   ci: "red required checks",
   reviewer: "the Reviewer",
   "empty-diff": "a retry that changed nothing",
+  "broken-run": "a Broken run",
 };
 
 const HEADINGS: Readonly<Record<Verdict, string>> = {

@@ -11,7 +11,7 @@ import {
   conflictAttemptsIn,
   conflictRunIn,
   conflictRunInFlightIn,
-  countEmptyDiffs,
+  countLandedNothing,
   designSessionOf,
   designTurnFailedIn,
   pendingPrototypeIn,
@@ -59,6 +59,27 @@ describe("Reading a PR's Verdicts", () => {
       { verdict: "pass", source: "reviewer", requestChanges: false, headSha: "2".repeat(40) },
     ]);
   });
+});
+
+// #434: a Retry that was a Broken run posts an Execution flaw Verdict, which counts like any other.
+it("reads back the Verdict a Broken Retry posts", () => {
+  const flaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: HEAD_SHA } as const;
+  const broken: LoopEvent = {
+    kind: "agent-run-failed",
+    role: "implement",
+    issue: 7,
+    runUrl: RUN,
+    jobResult: "failure",
+    secretsStep: "success",
+    report: { failure: "missing-output", detail: "fix is required" },
+  };
+  const plan = planFor(
+    broken,
+    snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] }), { pullRequest: aPullRequest({ verdicts: [flaw] }) }),
+    kitConfig(),
+  );
+
+  expect(verdictsIn(commentsOf(plan))).toEqual([{ ...flaw, source: "broken-run" }]);
 });
 
 describe("Reading whether a PR's latest push came from a Request-changes run", () => {
@@ -164,7 +185,7 @@ describe("Reading a Request-changes run's answers about its review (#369)", () =
   });
 });
 
-describe("Counting a Ticket's earlier empty diffs", () => {
+describe("Counting a Ticket's earlier empty diffs and Broken runs", () => {
   const marker = "<!-- fabrik:empty-diff -->\nThe Implementer's branch changed nothing.";
   const round = "<!-- fabrik:design-round 1 -->\n@operator **Design session, round 1.**";
   const finishedSession = "**Design session finished.** This issue is now its agent brief, ready for an Implementer.";
@@ -181,11 +202,29 @@ describe("Counting a Ticket's earlier empty diffs", () => {
     };
     const comments = commentsOf(planFor(empty, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig()));
 
-    expect(countEmptyDiffs(comments.map(kit))).toBe(1);
+    expect(countLandedNothing(comments.map(kit))).toBe(1);
+  });
+
+  // #434: a Broken run before the PR opened uses a Retry from the same pool.
+  it("counts the comment a Broken run posts before its PR opened, alongside empty diffs", () => {
+    const broken: LoopEvent = {
+      kind: "agent-run-failed",
+      role: "implement",
+      issue: 7,
+      runUrl: RUN,
+      jobResult: "failure",
+      secretsStep: "success",
+      report: { failure: "left-branch", detail: "The agent left fabrik/ticket-7 for main" },
+    };
+    const comments = commentsOf(planFor(broken, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], landedNothing: 1 })), kitConfig()));
+
+    expect(countLandedNothing([kit(marker), ...comments.map(kit)])).toBe(2);
+    expect(countLandedNothing([kit(marker), ...comments.map(kit), kit(round), ...comments.map(kit)])).toBe(1);
+    expect(countLandedNothing(comments.map(person))).toBe(0);
   });
 
   it("counts the Kit's empty-diff comments", () => {
-    expect(countEmptyDiffs([person("hello"), kit(marker), person("a reply"), kit(marker)])).toBe(2);
+    expect(countLandedNothing([person("hello"), kit(marker), person("a reply"), kit(marker)])).toBe(2);
   });
 
   it.each([
@@ -193,16 +232,16 @@ describe("Counting a Ticket's earlier empty diffs", () => {
     ["a finished Design session", finishedSession],
     ["a live Design session's outcome", "<!-- fabrik:live-outcome brief -->\nDecided in a live session."],
   ])("starts again after %s, so a Ticket back from design gets fresh retries", (_what, comment) => {
-    expect(countEmptyDiffs([kit(marker), kit(marker), kit(comment), kit(marker)])).toBe(1);
+    expect(countLandedNothing([kit(marker), kit(marker), kit(comment), kit(marker)])).toBe(1);
   });
 
   it("ignores someone quoting the marker mid-comment", () => {
-    expect(countEmptyDiffs([kit(`see this: ${marker}`)])).toBe(0);
+    expect(countLandedNothing([kit(`see this: ${marker}`)])).toBe(0);
   });
 
   it("counts only the Fabrik App's markers, so nobody, another bot included, can add an empty diff or reset the count (#426)", () => {
-    expect(countEmptyDiffs([kit(marker), person(marker)])).toBe(1);
-    expect(countEmptyDiffs([kit(marker), kit(marker), person(round), person(finishedSession), kit(marker)])).toBe(3);
+    expect(countLandedNothing([kit(marker), person(marker)])).toBe(1);
+    expect(countLandedNothing([kit(marker), kit(marker), person(round), person(finishedSession), kit(marker)])).toBe(3);
   });
 });
 

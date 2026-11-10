@@ -1,8 +1,9 @@
 // Execution-flaw retries: an Execution flaw on an agent PR re-runs the
 // Implementer on the same branch with the findings as input, then Review runs
 // again. A Ticket gets two Retries in all, one pool counted from its empty
-// diffs before the PR opened and the PR's earlier Verdicts (#415), and they
-// stay silent: no mention, assignment or review request. While one is in
+// diffs and Broken runs before the PR opened and the PR's earlier Verdicts
+// (#415, #434), and they stay silent: no mention, assignment or review
+// request. While one is in
 // flight, no other head gets a Verdict, so each flaw starts exactly one
 // Implementer attempt (ADR-0006).
 import { whyNotReviewable } from "./agentPullRequest.ts";
@@ -55,18 +56,19 @@ export function implementSettings(reason: StepUpReason | null, config: KitConfig
 
 /**
 * Which retry an Execution flaw calls for, given the Verdicts posted before it
- * and the Ticket's empty diffs before its PR opened: one more than those empty
- * diffs and the earlier Execution flaws that each called for one, as they draw
- * on one pool of Retries (#415). A Request-changes run (#393) and a
+ * and the Ticket's empty diffs and Broken runs before its PR opened: one more
+ * than those and the earlier Execution flaws that each called for one, as they
+ * draw on one pool of Retries (#415, #434). A Request-changes run (#393) and a
  * conflict-only run (#304) use no retry, but a flaw on their push calls for one
  * like any other, so it counts. A flaw that gave way to an undelivered Request
  * changes (#341) and one on a Ticket no longer `ready-for-agent` (#416) call
- * for none, so they don't, and an Infrastructure failure posts no Verdict at all.
+ * for none, so they don't, and an Infrastructure failure posts no Verdict at all,
+ * though a Broken Retry posts one, which counts (#434).
  */
-export function retryNumber(earlier: readonly VerdictRecord[], emptyDiffs: number): number {
+export function retryNumber(earlier: readonly VerdictRecord[], landedNothing: number): number {
   return (
     1 +
-    emptyDiffs +
+    landedNothing +
     earlier.filter((record) => record.verdict === "execution-flaw" && record.requestChangesFirst === undefined && record.ticketNotReady !== true).length
   );
 }
@@ -100,7 +102,7 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot, held: number | 
   const { ticket } = pullRequest;
   // The flaw being given now isn't in the Verdicts yet: the run that pushed the head it judges is on the snapshot.
   const judged = { requestChanges: pullRequest.requestChangesRun, ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}) };
-  const retry = retryNumber(pullRequest.verdicts, pullRequest.ticketEmptyDiffs);
+  const retry = retryNumber(pullRequest.verdicts, pullRequest.ticketLandedNothing);
   if (retry > MAX_RETRIES || ticket === null) return null;
   if (ticketNotReady(pullRequest)) {
     return { line: ticketNotReadyLine(pullRequest.number, ticket), actions: [], ticketNotReady: true };
@@ -128,8 +130,8 @@ export type RunInFlight =
 /**
  * The run in flight on this PR, read from its comments alone, or null. A
  * Retry is in flight from the Execution flaw that calls for it until a Retry
- * outcome: its push, or its empty-diff Verdict (which may call for the next
- * one). A Request-changes run is in flight from the Kit's note that started
+ * outcome: its push, or its empty-diff or broken-run Verdict (which may call
+ * for the next one, #434). A Request-changes run is in flight from the Kit's note that started
  * it, or the Execution flaw that gave way to it, until its push, its Verdict,
  * its ended note or its note that it committed nothing (#388), or until the
  * PR leaves draft (#341). An Infrastructure
@@ -153,7 +155,7 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   // One that gave way to the Operator's Request changes (#341) called for no Retry, and never owes one: its
   // Request-changes run fixes its findings, and if the Operator dismisses those reviews, the PR is theirs.
   if (latest.requestChangesFirst !== undefined) return null;
-  const retry = retryNumber(pullRequest.verdicts.slice(0, -1), pullRequest.ticketEmptyDiffs);
+  const retry = retryNumber(pullRequest.verdicts.slice(0, -1), pullRequest.ticketLandedNothing);
   return retry > MAX_RETRIES ? null : { kind: "retry", retry, flaw: latest.headSha };
 }
 

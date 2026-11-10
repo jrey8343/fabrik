@@ -195,7 +195,7 @@ A Verdict that the right design was built wrongly, so the Implementer can fix it
 _Avoid_: bug, failing review
 
 **Retry**:
-An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff before its pull request opened uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start.
+An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff or a Broken run before its pull request opened uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff or a Broken run has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start.
 _Avoid_: rerun, attempt
 
 **Design flaw**:
@@ -211,8 +211,12 @@ Work the Reviewer names on a pass that deserves its own issue but lies outside t
 _Avoid_: nit, suggestion
 
 **Infrastructure failure**:
-A run that fails for a reason outside the work itself, such as the model provider, the Sandbox or a credential, rather than anything the Implementer built. It never counts against a Ticket's retries.
+A run that fails for a reason outside the work itself, such as the model provider, the Sandbox or a credential. It is never a Broken run, and it never counts against a Ticket's retries.
 _Avoid_: crash, error, flake
+
+**Broken run**:
+An Implement run whose work the Kit can't land because of what the agent did: its output breaks the run's contract, it left its branch, or it built on commits its branch didn't start from. On a Ticket's first run or a Retry it's an Execution flaw the Kit gives, like an empty diff, and the next run starts where it did; on a Request-changes or conflict-only run it uses no retry and waits for the Operator.
+_Avoid_: contract failure, agent crash, bad output
 
 **Held run**:
 An agent run the Kit neither starts nor fails while every Subscription is used up, and resumes by itself, in the order it was first held, once one is free. An Auditor or Retro run is never held: its Audit or Retro fails, and a later scheduled tick opens the next one.
@@ -239,7 +243,7 @@ The agent branch of a pull request the Kit closed unmerged: by Back to design, a
 _Avoid_: old branch, stale branch, closed branch
 
 **Kept-branch start**:
-A Ticket marked, by the Design session that rewrote it or by the Operator, so that its next Implement run with no open pull request carries on its Kept branch instead of starting from `main`, merging `main` in first when the branch lacks it. The Retry after its empty diff carries on it too, and only the run's own commits are judged. The mark stays until the next Back to design takes it off. With the mark on and the Kept branch gone, the Ticket goes to the Operator and no run starts. A split's Tickets never carry on one.
+A Ticket marked, by the Design session that rewrote it or by the Operator, so that its next Implement run with no open pull request carries on its Kept branch instead of starting from `main`, merging `main` in first when the branch lacks it. The Retry after its empty diff or Broken run carries on it too, and only the run's own commits are judged. The mark stays until the next Back to design takes it off. With the mark on and the Kept branch gone, the Ticket goes to the Operator and no run starts. A split's Tickets never carry on one.
 _Avoid_: resume (a held run resumes), reuse, restart on the branch
 
 **Sandbox**:

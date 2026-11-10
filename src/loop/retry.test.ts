@@ -410,9 +410,9 @@ describe("A Ticket's Retries are one pool, shared by empty diffs before its PR a
   };
 
   it("after one empty diff, the PR's first flaw starts Retry 2, stepped up, and that Retry runs on the Step-up model", () => {
-    expect(verdictOn(aPullRequest({ ticketEmptyDiffs: 1 }))).toContain("Retry 2 of 2 starts now, stepped up:");
+    expect(verdictOn(aPullRequest({ ticketLandedNothing: 1 }))).toContain("Retry 2 of 2 starts now, stepped up:");
 
-    const pullRequest = { ...flawedPullRequest(), ticketEmptyDiffs: 1 };
+    const pullRequest = { ...flawedPullRequest(), ticketLandedNothing: 1 };
     expect(actionsOf(planFor(retryLabeled, resumeSnapshot(pullRequest), kitConfig()))[1]).toMatchObject({
       kind: "start-agent-run",
       retry: 2,
@@ -423,16 +423,16 @@ describe("A Ticket's Retries are one pool, shared by empty diffs before its PR a
   });
 
   it("after two empty diffs, the stepped-up run that opened the PR was Retry 2, so the PR's first flaw starts none and goes back to design", () => {
-    const plan = planFor(flaw, snapshotOfPullRequest(aPullRequest({ ticketEmptyDiffs: 2 })), kitConfig());
+    const plan = planFor(flaw, snapshotOfPullRequest(aPullRequest({ ticketLandedNothing: 2 })), kitConfig());
 
-    expect(verdictOn(aPullRequest({ ticketEmptyDiffs: 2 }))).not.toMatch(/Retry \d of 2 starts now/);
+    expect(verdictOn(aPullRequest({ ticketLandedNothing: 2 }))).not.toMatch(/Retry \d of 2 starts now/);
     expect(actionsOf(plan)).not.toContainEqual(RETRY_TRIGGER);
     expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "add-labels", issue: 7, labels: ["needs-design"] }));
-    expect(startedRuns(planFor(retryLabeled, resumeSnapshot({ ...flawedPullRequest(), ticketEmptyDiffs: 2 }), kitConfig()))).toEqual([]);
+    expect(startedRuns(planFor(retryLabeled, resumeSnapshot({ ...flawedPullRequest(), ticketLandedNothing: 2 }), kitConfig()))).toEqual([]);
   });
 
   it("after one empty diff and Retry 2's flaw on the PR, the next flaw starts no third", () => {
-    const pullRequest = aPullRequest({ ticketEmptyDiffs: 1, pushedSinceVerdict: true, verdicts: [earlier("execution-flaw")] });
+    const pullRequest = aPullRequest({ ticketLandedNothing: 1, pushedSinceVerdict: true, verdicts: [earlier("execution-flaw")] });
 
     expect(verdictOn(pullRequest)).not.toMatch(/Retry \d of 2 starts now/);
   });

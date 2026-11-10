@@ -355,6 +355,23 @@ describe("the Weekly summary", () => {
     });
   });
 
+  // #434
+  it("counts the week's Broken runs, against last week's", () => {
+    const broken = { jobResult: "failure", infrastructureFailure: null, brokenRun: "missing-output" } as const;
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ ...broken, endedAt: "2026-11-03T00:00:00Z", pullRequest: null }),
+          aRunRecord({ ...broken, endedAt: "2026-11-04T00:00:00Z", retry: 1, brokenRun: "unlandable-branch" }),
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", jobResult: "failure", infrastructureFailure: "crash" }),
+          aRunRecord({ ...broken, endedAt: "2026-10-29T00:00:00Z" }), // last week
+        ],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { counts: { brokenRuns: { thisWeek: 2, lastWeek: 1 } } } });
+    expect(result.kind === "summary" ? result.body : "").toContain("| Broken runs | 2 | 1 | +1 |");
+  });
+
   it("counts a Retry refused on the weekly limit, then resumed, once (#481)", () => {
     const result = weeklySummary(
       input({
@@ -1032,6 +1049,27 @@ describe("the Weekly summary", () => {
         },
       ]);
     });
+    // #434: the Kit re-runs a counted Broken run itself; one on a Request-changes or conflict-only run waits for the Operator.
+    describe("whose last run was a Broken run", () => {
+      const broken = { endedAt: hoursAgo(40), jobResult: "failure", infrastructureFailure: null, brokenRun: "left-branch" } as const;
+
+      it.each([
+        ["a first run", aRunRecord({ ...broken, pullRequest: null })],
+        ["a Retry", aRunRecord({ ...broken, retry: 1 })],
+      ])("doesn't list it on %s, which the Kit re-runs itself", (_, record) => {
+        expect(stuckIn({ openIssues: [anOpenIssue({ number: 7 })] }, [record])).toEqual([]);
+      });
+
+      it.each([
+        ["a Request-changes run", aRunRecord({ ...broken, requestChanges: true, stepUp: true, stepUpReason: "request-changes" })],
+        ["a conflict-only run", aRunRecord({ ...broken, stepUp: true, stepUpReason: "conflict-only" })],
+      ])("lists it on %s, which uses no retry and waits for the Operator", (_, record) => {
+        const found = stuckIn({ openIssues: [anOpenIssue({ number: 7 })] }, [record]);
+
+        expect(found).toMatchObject([{ kind: "broken-run", number: 7, brokenRun: "left-branch", age: 40 * HOUR }]);
+      });
+    });
+
     describe("with a held run", () => {
       const heldImplement = { role: "implement", issue: 7, label: "agent:implement" } as const;
 

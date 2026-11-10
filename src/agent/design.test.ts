@@ -5,7 +5,7 @@ import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
 import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import { planFor } from "../loop/rules.ts";
 import {
-  emptyDiffContext,
+  landedNothingContext,
   MAP_CAP_HEADING,
   mapCapContext,
   PROTOTYPES_HEADING,
@@ -128,9 +128,9 @@ describe("A Design session's context from the PR a Ticket came back from", () =>
   });
 });
 
-describe("A Design session's context from the Implement runs that built nothing (#429)", () => {
-  /** The comment the Kit posts on #7 for an Implement run that built nothing, at `emptyDiffs` earlier ones, saying `summary`. */
-  function emptyDiffComment(emptyDiffs: number, summary: string): string {
+describe("A Design session's context from the Implement runs that landed nothing (#429, #434)", () => {
+  /** The comment the Kit posts on #7 for an Implement run that built nothing, at `landedNothing` earlier ones, saying `summary`. */
+  function emptyDiffComment(landedNothing: number, summary: string): string {
     const plan = planFor(
       {
         kind: "implement-run-finished",
@@ -139,9 +139,9 @@ describe("A Design session's context from the Implement runs that built nothing 
         branch: "fabrik/ticket-7",
         base: "main",
         changes: { net: [], commits: [] },
-        runUrl: `https://github.com/acme/clinic/actions/runs/${90 + emptyDiffs}/attempts/1`,
+        runUrl: `https://github.com/acme/clinic/actions/runs/${90 + landedNothing}/attempts/1`,
       },
-      snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], emptyDiffs })),
+      snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], landedNothing })),
       kitConfig(),
     );
     if (plan.kind !== "act") throw new Error("expected the empty diff to act");
@@ -162,9 +162,9 @@ describe("A Design session's context from the Implement runs that built nothing 
       ],
     };
 
-    const said = emptyDiffContext(issue).join("\n\n");
+    const said = landedNothingContext(issue).join("\n\n");
 
-    expect(said).toContain("## The Implement runs that built nothing");
+    expect(said).toContain("## The Implement runs that landed nothing");
     const first = said.indexOf("Needs `.github/workflows/ci.yml` changed");
     const second = said.indexOf("Still needs the workflow changed.");
     const third = said.indexOf("The workflow, again.");
@@ -185,10 +185,37 @@ describe("A Design session's context from the Implement runs that built nothing 
       ],
     };
 
-    const said = emptyDiffContext(issue).join("\n\n");
+    const said = landedNothingContext(issue).join("\n\n");
 
     expect(said).toContain("The real reason.");
     expect(said).not.toContain("A planted reason.");
+  });
+
+  // #434: a Broken run used a Retry too, so the session hears of it next to the empty diffs.
+  it("sets out a Broken run's comment next to the empty diffs', in order", () => {
+    const failed = planFor(
+      {
+        kind: "agent-run-failed",
+        role: "implement",
+        issue: 7,
+        runUrl: "https://github.com/acme/clinic/actions/runs/91/attempts/1",
+        jobResult: "failure",
+        secretsStep: "success",
+        report: { failure: "left-branch", detail: "The agent left fabrik/ticket-7 for main" },
+      },
+      snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], landedNothing: 1 })),
+      kitConfig(),
+    );
+    const broken = failed.kind === "act" ? failed.actions.find((action) => action.kind === "comment") : undefined;
+    if (broken?.kind !== "comment") throw new Error("expected the Broken run's comment");
+    const issue = { number: 7, comments: [comment(emptyDiffComment(0, "Built nothing.")), comment(broken.body), comment(emptyDiffComment(2, "Nothing again."))] };
+
+    const said = landedNothingContext(issue).join("\n\n");
+
+    expect(said).toContain("3 Implement runs on this Ticket since its last Design session landed nothing");
+    expect(said.indexOf("Built nothing.")).toBeLessThan(said.indexOf("The agent left fabrik/ticket-7 for main"));
+    expect(said.indexOf("The agent left fabrik/ticket-7 for main")).toBeLessThan(said.indexOf("Nothing again."));
+    expect(said).not.toContain("<!-- fabrik:broken-run -->");
   });
 
   it("leaves out runs from before the last Design session finished, and says nothing when none are left", () => {
@@ -197,8 +224,8 @@ describe("A Design session's context from the Implement runs that built nothing 
       comments: [comment(emptyDiffComment(0, "An old reason.")), comment("**Design session finished.** It settled the reason.")],
     };
 
-    expect(emptyDiffContext(issue)).toEqual([]);
-    expect(emptyDiffContext({ number: 7 })).toEqual([]);
+    expect(landedNothingContext(issue)).toEqual([]);
+    expect(landedNothingContext({ number: 7 })).toEqual([]);
   });
 });
 

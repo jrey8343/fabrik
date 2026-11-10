@@ -1,6 +1,11 @@
 // Failure notices: an agent run that fails for a reason outside the work is an
 // Infrastructure failure. It's never retried and never counts against a
-// Ticket's retries; the Operator gets one comment saying how to resume it. A
+// Ticket's retries; the Operator gets one comment saying how to resume it.
+// The exception is a Broken run (#434): an Implement run whose work the Kit
+// can't land because of what the agent did. On a Ticket's first run or a
+// Retry it's an Execution flaw the Kit gives, counted like an empty diff, and
+// the Kit re-runs it itself; on a Request-changes or conflict-only run it uses
+// no retry, and its notice, naming it a Broken run, waits for the Operator. A
 // failed Auditor or Retro run fails its Audit or Retro instead, with no
 // trigger to re-add, since the scheduled tick opens the next one
 // (src/loop/weeklyRuns.ts). With rotation on, a
@@ -13,15 +18,32 @@
 // that Subscription (#433). An Auditor or Retro
 // run is never re-run or held: the tick can't start one at a reset, so its
 // Audit or Retro fails, for the tick to try again.
+import { keptBranchOff } from "./backToDesign.ts";
 import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
 import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
-import { canHold, heldAfterKill } from "./hold.ts";
+import { canHold, heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
-import { DESIGN_TURN_FAILED_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
+import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
+import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { readable } from "./readable.ts";
+import { withoutMentions } from "./mentions.ts";
+import { MAX_RETRIES, runInFlight, stepUpReasonFor } from "./retry.ts";
+import { verdictActions } from "./review.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
-import type { Action, AgentRole, FailedRunCommits, InfrastructureFailure, IssueContext, KitConfig, LoopEvent, Plan } from "./types.ts";
+import {
+  type Action,
+  type AgentRole,
+  type BrokenRun,
+  type FailedRunCommits,
+  type InfrastructureFailure,
+  isBrokenRun,
+  type IssueContext,
+  type KitConfig,
+  type LoopEvent,
+  type Plan,
+  type PullRequestSnapshot,
+} from "./types.ts";
 import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -72,6 +94,16 @@ export function infrastructureFailureOf(run: Pick<FailedRun, "secretsStep" | "re
   return run.jobResult === "cancelled" ? "timeout" : "crash";
 }
 
+/**
+ * The Broken run an Implement run's failure was (#434), or null: a prototype
+ * turn, a Review's missing Verdict and every other role's run stay
+ * Infrastructure failures, as do a timeout, a crash and anything from the
+ * provider, a credential or 1Password.
+ */
+export function brokenRunOf(run: Pick<FailedRun, "role" | "prototype">, failure: InfrastructureFailure): BrokenRun | null {
+  return run.role === "implement" && run.prototype !== true && isBrokenRun(failure) ? failure : null;
+}
+
 function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: KitConfig): string {
   switch (failure) {
     case "timeout": {
@@ -87,7 +119,7 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
     case "crash":
       return "it crashed";
     case "missing-output":
-      return run.role === "review" ? "the Reviewer gave no valid Verdict" : "the agent gave no valid output";
+      return run.role === "review" ? "the Reviewer gave no valid Verdict" : `${run.role === "implement" ? "the Implementer" : "the agent"} gave no valid output`;
     case "provider-error":
       return "the model provider returned an error";
     case "dead-token": {
@@ -111,6 +143,8 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
       return "it was still waiting for its required checks when a GitHub request failed";
     case "unlandable-branch":
       return `${run.role === "implement" ? "the Implementer" : "the agent"} built on commits its branch didn't start from, so the push job couldn't rebuild it`;
+    case "left-branch":
+      return `${run.role === "implement" ? "the Implementer" : "the agent"} left its branch, so its work couldn't be read off it`;
     case "unreported-checks": {
       const unreported = run.report?.checks ?? [];
       // A report that lost its check names still says what to look for, without naming one.
@@ -178,7 +212,7 @@ function heldOnRefusal(
  * Operator's only @-mention, unless the failure stalls the whole repo: then a
  * Kit-owned issue does the notifying, once, and the comment points there.
  */
-export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig): Plan {
+export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig, pullRequest: PullRequestSnapshot | null = null): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
   const ranOn = ranOnOf(run, config);
@@ -210,6 +244,11 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ranOn,
     });
   }
+  const broken = brokenRunOf(run, failure);
+  if (broken !== null && run.conflict === undefined) {
+    const counted = brokenBeforePullRequest(run, failure, context, config) ?? brokenRetry(run, failure, context, config, pullRequest);
+    if (counted !== null) return counted;
+  }
   // A failed conflict-only run (#304) isn't resumed: its PR goes to the Operator until main moves.
   if (run.conflict !== undefined && !(RERUN_FAILURES.includes(failure) && anotherSubscriptionFree(context.kitIssues, ranOn))) {
     const { pullRequest: conflicted, main } = run.conflict;
@@ -218,16 +257,22 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       kind: "act",
       actions: [
         { kind: "remove-label", issue: run.issue, label: RESUME_LABELS.implement },
-        ...conflictRunEnded(conflicted, main, operator, `it failed, as an Infrastructure failure: ${howItFailed(failure, run, config)}${detail === "" ? "" : ` (${detail})`}`, run.runUrl),
+        ...conflictRunEnded(
+          conflicted,
+          main,
+          operator,
+          `${broken === null ? "it failed, as an Infrastructure failure" : "it was a Broken run"}: ${howItFailed(failure, run, config)}${detail === "" ? "" : ` (${detail})`}`,
+          run.runUrl,
+        ),
       ],
     };
   }
-  const pullRequest = issue.openPullRequests[0];
-  const target = pullRequest ?? run.issue;
+  const open = issue.openPullRequests[0];
+  const target = open ?? run.issue;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? target : run.issue;
   // The object the label goes on, by name, so it never lands on the wrong one (#479).
-  const home = labelled === pullRequest ? "PR" : (LABEL_HOMES[run.role] ?? "issue");
+  const home = labelled === open ? "PR" : (LABEL_HOMES[run.role] ?? "issue");
   const where = labelled === target ? `this ${home}` : `the ${home} (#${labelled})`;
   // A Design-session turn has none to re-add: its issue keeps needs-design, and the Operator's reply starts it again.
   const label = run.role === "design" ? null : RESUME_LABELS[run.role];
@@ -264,7 +309,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     detail: run.report?.detail ?? "",
     commits: run.report?.commits === undefined ? null : commitsLeft(run.report.commits),
-    notRetried: notRetried(run.role),
+    standing: broken === null ? `This is an Infrastructure failure, so ${notRetried(run.role)}.` : freeBrokenRun(pullRequest),
     resume: resumeAfter(failure, run, resume),
     pointer: repoWide?.pointer ?? null,
     runUrl: run.runUrl,
@@ -278,6 +323,116 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ...(repoWide?.actions ?? []),
     ],
   };
+}
+
+/**
+ * A Broken run (#434) on a Ticket with no PR yet, its first run or the Retry
+ * after an empty diff or another Broken run: an Execution flaw the Kit gives
+ * itself, from the same pool of Retries as empty diffs, so it re-runs it
+ * quietly, the second Retry Stepped up, and once both are used the Ticket goes
+ * back to design. Its comment mentions nobody and carries no failure marker,
+ * so Dispatch doesn't hold the Ticket back (#535). The Retry starts where the
+ * Broken run did, never from its commits. Null when the Ticket can't be built
+ * now, so the run's notice waits for the Operator as before.
+ */
+function brokenBeforePullRequest(run: FailedRun, failure: InfrastructureFailure, { issue, kitIssues }: IssueContext, config: KitConfig): Plan | null {
+  if (!issue.open || !issue.labels.includes(READY_FOR_AGENT) || issue.openPullRequests.length > 0) return null;
+  const flaw = issue.landedNothing + 1;
+  const held = heldOn(kitIssues, config);
+  const opening = `The Implement run on #${run.issue} was a Broken run, and the Kit opened no PR: ${howItFailed(failure, run, config)}.`;
+  const comment = (said: string): Action => ({
+    kind: "comment",
+    issue: run.issue,
+    body: [BROKEN_RUN_MARKER, `${opening} ${said}`, ...brokenRunLines(run)].join("\n"),
+  });
+  // Off now, so the Retry's label is a fresh event.
+  const staleOff: Action[] = issue.labels.includes(DISPATCH_LABEL) ? [{ kind: "remove-label", issue: run.issue, label: DISPATCH_LABEL }] : [];
+  if (flaw > MAX_RETRIES) {
+    return {
+      kind: "act",
+      actions: [
+        ...staleOff,
+        comment(`Both of the Ticket's Retries are used, so this Execution flaw counts as a Design flaw, and the Ticket goes back to design.`),
+        { kind: "remove-label", issue: run.issue, label: READY_FOR_AGENT },
+        // Back to design, so the Design session starts with the Kept-branch start mark off (#536).
+        keptBranchOff(run.issue),
+        // Starts a Design session, whose round 1 is this event's one notification.
+        { kind: "add-labels", issue: run.issue, labels: [NEEDS_DESIGN] },
+        { kind: "check-dispatch" },
+      ],
+    };
+  }
+  const steppedUp = stepUpReasonFor(flaw, issue.labels) === null ? "" : ", stepped up";
+  return {
+    kind: "act",
+    actions: [
+      ...staleOff,
+      comment(`A Broken run is an Execution flaw: retry ${flaw} of ${MAX_RETRIES} ${startsWhen(held)}${steppedUp}.${heldUntilThen(held)}`),
+      // A fresh label event, as Dispatch would add, starts the Retry in this run's own slot, where the Broken run started.
+      { kind: "add-labels", issue: run.issue, labels: [DISPATCH_LABEL] },
+    ],
+  };
+}
+
+/**
+ * A Broken run (#434) on a Retry: an Execution flaw Verdict on the PR, from
+ * the Broken run, which counts toward the Ticket's two Retries like any other,
+ * so it starts the next Retry, on the PR's head as it is, or sends the Ticket
+ * back to design. Null for any run on the PR but a Retry.
+ */
+function brokenRetry(
+  run: FailedRun,
+  failure: InfrastructureFailure,
+  { issue, operator, kitIssues }: IssueContext,
+  config: KitConfig,
+  pullRequest: PullRequestSnapshot | null,
+): Plan | null {
+  if (pullRequest === null || pullRequest.ticket !== run.issue || issue.openPullRequests[0] !== pullRequest.number) return null;
+  if (runInFlight(pullRequest)?.kind !== "retry") return null;
+  // Off now, so the next Retry's label is a fresh event.
+  const staleOff: Action[] = issue.labels.includes(DISPATCH_LABEL) ? [{ kind: "remove-label", issue: run.issue, label: DISPATCH_LABEL }] : [];
+  return {
+    kind: "act",
+    actions: [
+      ...staleOff,
+      ...verdictActions(
+        { headSha: pullRequest.headSha, runUrl: run.runUrl },
+        pullRequest,
+        {
+          verdict: "execution-flaw",
+          source: "broken-run",
+          findings: [`The Implementer's retry on #${pullRequest.number} was a Broken run: ${howItFailed(failure, run, config)}.`, ...brokenRunDetail(run)].join("\n"),
+        },
+        operator,
+        heldOn(kitIssues, config),
+      ),
+    ],
+  };
+}
+
+/**
+ * What a Broken run's notice says when it uses no retry: on a Request-changes
+ * run or a conflict-only run, or on a Ticket the Kit can't build now. It waits
+ * for the Operator.
+ */
+function freeBrokenRun(pullRequest: PullRequestSnapshot | null): string {
+  const on = pullRequest !== null && runInFlight(pullRequest)?.kind === "request-changes" ? " on a Request-changes run, which uses no retry," : " that uses no retry,";
+  return `This is a Broken run${on} so the Loop won't run it again.`;
+}
+
+/** What a Broken run's comment or Verdict says after its opening: the agent job's detail, quoted, what it had committed, and the run. */
+function brokenRunLines(run: FailedRun): string[] {
+  return [...brokenRunDetail(run), "", `[The run](${run.runUrl})`];
+}
+
+/**
+ * The agent job's detail on a Broken run, quoted, and what it had committed,
+ * which the next run doesn't start from. The detail can carry agent text, and
+ * a counted Broken run mentions nobody, so no handle in it is a mention.
+ */
+function brokenRunDetail(run: FailedRun): string[] {
+  const detail = withoutMentions(run.report?.detail.trim() ?? "");
+  return [...(detail === "" ? [] : ["", `> ${detail}`]), ...(run.report?.commits === undefined ? [] : ["", commitsLeft(run.report.commits)])];
 }
 
 /**
@@ -339,7 +494,7 @@ export function prototypeTurnRefused(issueNumber: number, operator: string, how:
     failed: `The prototype turn on #${issueNumber} failed: ${how}.`,
     detail: "",
     commits: null,
-    notRetried: NOT_RETRIED,
+    standing: `This is an Infrastructure failure, so ${NOT_RETRIED}.`,
     resume: CARRY_ON_AFTER_PROTOTYPE,
     pointer: null,
     runUrl,
@@ -351,8 +506,8 @@ export function prototypeTurnRefused(issueNumber: number, operator: string, how:
  * A failure notice's comment: the marker the snapshot reads back, if the role
  * has one; what failed and how, with the Operator's @-mention unless a
  * Kit-owned issue notifies instead; the agent's own word on it, quoted; what
- * the run had committed, if its report says; what the Loop does about it and
- * how to resume; where the Kit tracks a repo-wide stall; and the run.
+ * the run had committed, if its report says; whether it was an Infrastructure
+ * failure or a Broken run, what the Loop does about it and how to resume; where the Kit tracks a repo-wide stall; and the run.
  */
 function noticeBody(notice: {
   readonly marker: string | undefined;
@@ -360,7 +515,8 @@ function noticeBody(notice: {
   readonly failed: string;
   readonly detail: string;
   readonly commits: string | null;
-  readonly notRetried: string;
+  /** What kind of failure it was and what the Loop does about it, as one sentence. */
+  readonly standing: string;
   readonly resume: string;
   readonly pointer: string | null;
   readonly runUrl: string;
@@ -372,7 +528,7 @@ function noticeBody(notice: {
     ...(detail === "" ? [] : ["", `> ${detail}`]),
     ...(notice.commits === null ? [] : ["", notice.commits]),
     "",
-    `This is an Infrastructure failure, so ${notice.notRetried}. ${notice.resume}`,
+    `${notice.standing} ${notice.resume}`,
     ...(notice.pointer === null ? [] : ["", notice.pointer]),
     "",
     `[The run](${notice.runUrl})`,
