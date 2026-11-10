@@ -590,6 +590,11 @@ export interface IssueSnapshot {
   /** The open pull requests linked to close this issue, oldest first. */
   readonly openPullRequests: readonly number[];
   /**
+   * The pull requests linked to close this issue that have merged, oldest
+   * first: its work landed, though GitHub sometimes leaves it open after (#543).
+   */
+  readonly mergedPullRequests: readonly number[];
+  /**
    * Those of them that are open agent draft PRs on its own agent branch, the
    * kind that holds a max_in_flight slot: closing it closes them (#428).
    */
@@ -901,6 +906,11 @@ export interface TicketSnapshot {
   /** The open pull requests linked to close it. */
   readonly openLinkedPullRequests: readonly number[];
   /**
+   * The pull requests linked to close it that have merged: its work landed,
+   * though GitHub sometimes leaves it open after (#543).
+   */
+  readonly mergedLinkedPullRequests: readonly number[];
+  /**
    * Whether the Kit's Implement failure notice is its latest run's word, read
    * from the Kit's comments on it: only the Operator re-adding agent:implement
    * runs it again then (#418).
@@ -1066,6 +1076,12 @@ export interface Snapshot {
    * (src/loop/triggerSweep.ts, #419).
    */
   readonly triggers: TriggerSweepSnapshot | null;
+  /**
+   * Gathered for a scheduled tick only: every open ready-for-agent Ticket, as
+   * a Dispatch check reads them, so the tick closes each one GitHub left open
+   * after a PR that closes it merged (src/loop/mergedTickets.ts, #543).
+   */
+  readonly readyTickets: readonly TicketSnapshot[] | null;
 }
 
 /** What the stuck-trigger sweep weighs (src/loop/triggerSweep.ts, #419). */

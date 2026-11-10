@@ -2,6 +2,7 @@
 // and when a research Decision does.
 import { keptBranchGone, stopForGoneKeptBranch } from "./keptBranch.ts";
 import { DISPATCH_LABEL, type Label, READY_FOR_AGENT, RESEARCH_LABEL } from "./labels.ts";
+import { mergedReason } from "./mergedTickets.ts";
 import { whyNotResearchable } from "./research.ts";
 import type { DispatchSnapshot, KitConfig, Plan, ResearchDecisionSnapshot, TicketSnapshot } from "./types.ts";
 
@@ -143,8 +144,8 @@ function count(n: number, one: string, many: string): string {
 
 /**
  * Why this Ticket can't start an Implementer, or null if it can: it must be one
- * open, ready, buildable Ticket that nothing is already working on, and whose
- * last Implement run didn't fail.
+ * open, ready, buildable Ticket that nothing is already working on, no PR of
+ * which has merged, and whose last Implement run didn't fail.
  */
 function whyNotEligible(ticket: TicketSnapshot): string | null {
   const why = whyNotEligibleBesidesKeptBranch(ticket);
@@ -156,6 +157,8 @@ function whyNotEligible(ticket: TicketSnapshot): string | null {
 function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot): string | null {
   const name = `#${ticket.number}`;
   if (!ticket.open) return `${name} is closed`;
+  // Its work landed though GitHub left it open: only the scheduled tick closes it, never a run (#543).
+  if (ticket.mergedLinkedPullRequests.length > 0) return mergedReason(ticket.number, ticket.mergedLinkedPullRequests);
   if (!ticket.labels.includes(READY_FOR_AGENT)) return `${name} isn't ${READY_FOR_AGENT}`;
   if (ticket.openBlockers.length > 0) return `${name} is blocked by ${list(ticket.openBlockers)}`;
   // A blocker closed as not planned never landed its work, so it blocks until the Operator removes the edge.
