@@ -9,10 +9,10 @@ on [Wayfinder: the Console](https://github.com/jrey8343/fabrik/issues/507).
 Run it: open `index.html` in a browser, or serve this folder (`python3 -m http.server`) and open it on a phone.
 Switch variants with the floating bar, the arrow keys, `#a` / `#b` / `#c`, or `?variant=`. The bar's second button changes the scene (Busy, Held, Quiet).
 
-Every repo, issue, pull request and figure in it is invented. Nothing talks to GitHub. The styling is the Home prototype's (`prototypes/console-home`).
+Every repo, issue, pull request and figure in it is invented. Nothing talks to GitHub. The styling is the Digest prototype's (the private Pilot repo, branch `prototype/console-digest`), which starts from the Home prototype's tokens: a back link, a pill and refs, a 20px title, fact chips, panels with a muted header, and no figure set larger than the title.
 
 - **A, Runway:** leads with how long the Subscriptions last. Each one's share of its weekly limit, how far through its own week it is, and when it runs out at this pace. Dollars cover the last 7 days and are reached by drilling down: Product repo, piece of work, runs. No moving between periods, no GitHub Actions minutes.
-- **B, Ledger:** leads with one dollar figure for a calendar week, stepped a week at a time. One flat list of work, dearest first; Product repo and outcome are filter chips that carry their own totals; a row opens in place to its runs. The Subscriptions are a line each. GitHub Actions minutes are a line at the foot.
+- **B, Ledger:** leads with one dollar figure for a calendar week, stepped a week at a time. One flat list of work, dearest first; Product repo and outcome are filter chips that carry their own totals; a row opens in place to its runs. The Subscriptions are a line each. GitHub Actions minutes are one fact under the title.
 - **C, Trend:** leads with eight weeks as a chart; tap a bar to choose a week. Under it the Weekly summary's figures beside the week before, then breakdowns by Product repo, role and model. Single pieces of work appear only as the dearest three. GitHub Actions runner time has its own panel. The Subscriptions come last.
 
 What a figure rests on, so the variants aren't judged on something the Kit can't know:

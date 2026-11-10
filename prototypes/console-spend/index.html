@@ -6,7 +6,7 @@
   PROTOTYPE. Throwaway. Never merged.
   Three variants of the Console's Spend screen, switchable from the floating bar (or #a / #b / #c, or ?variant=).
   Answers the Decision "Prototype Spend: what the factory has used, reached from Home's factory panel".
-  Styling is the Home prototype's (prototypes/console-home). Every repo, issue, pull request and figure in here is invented.
+  Styling is the Digest prototype's, which starts from the Home prototype's (prototypes/console-home). Every repo, issue, pull request and figure in here is invented.
 -->
 <style>
 :root{
@@ -29,7 +29,7 @@
   --proto:#EDEDED; --proto-ink:#121212; --scrim:rgba(0,0,0,.65); color-scheme:dark }
 
 *{box-sizing:border-box}
-body{margin:0;background:var(--ground);color:var(--ink);font:400 15px/1.45 var(--text);-webkit-font-smoothing:antialiased;
+body{margin:0;background:var(--ground);color:var(--ink);font:400 15px/1.5 var(--text);-webkit-font-smoothing:antialiased;
   padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:12px 84px}
 button{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--yours);outline-offset:2px}
@@ -43,18 +43,13 @@ h1,h2,h3{letter-spacing:-.02em}
   padding:calc(20px + env(safe-area-inset-top,0px)) max(16px, env(safe-area-inset-right,0px)) 96px max(16px, env(safe-area-inset-left,0px))}
 @media (min-width:900px){
   .stage{grid-template-columns:400px minmax(0,380px)}
-  .phone{border:1px solid var(--line-2);border-radius:28px;padding:18px 16px 18px}
+  .phone{border:1px solid var(--line-2);border-radius:28px;padding:18px 16px 20px}
   .notes,.notes[data-open]{display:block;position:sticky;top:16px;inset:auto;z-index:auto;overflow:visible;background:none;padding:8px 0 0}
   .proto .p-notes,.p-notes-close{display:none}
 }
 
-/* ---- shared small parts (from Home) ---- */
-.btn{appearance:none;border:1px solid var(--yours);background:var(--yours);color:var(--yours-ink);font-weight:600;border-radius:8px;min-height:44px;padding:0 16px;cursor:pointer}
-.btn.quiet{background:var(--raised);color:var(--ink);border-color:var(--line-2);font-weight:500}
-.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
-.linkish{appearance:none;border:0;background:none;padding:0;color:var(--yours);font-weight:500;cursor:pointer;min-height:32px}
-.linkish:hover{text-decoration:underline;text-underline-offset:3px}
-.fine{font-size:13px;color:var(--ink-3);margin-top:8px}
+/* ---- the Console's parts, as the Digest and Home prototypes have them: a back link, a pill and refs, a 20px title, fact chips, panels with a muted header ---- */
+.back{appearance:none;border:0;background:none;padding:0;color:var(--ink-2);font-weight:500;font-size:14px;min-height:36px;display:flex;align-items:center;cursor:pointer}
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;background:var(--sunken);color:var(--ink-2);white-space:nowrap}
 .pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
 .pill.yours{background:var(--yours-wash);color:var(--yours)}
@@ -62,43 +57,74 @@ h1,h2,h3{letter-spacing:-.02em}
 .pill.stuck{background:var(--stuck-wash);color:var(--stuck)}
 .pill.held{background:var(--hold-wash);color:var(--hold)}
 .ref{font:500 12px/1 var(--mono);color:var(--ink-2);background:var(--sunken);border:1px solid var(--line);border-radius:6px;padding:4px 6px;white-space:nowrap}
-.back{appearance:none;border:0;background:none;padding:0;min-height:44px;color:var(--ink-2);font-weight:500;cursor:pointer;text-align:left}
+.r-title{font-size:20px;font-weight:600;line-height:1.25;letter-spacing:-.02em;margin:10px 0 0;text-wrap:balance}
+.r-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
+.r-facts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.r-facts span{font-size:12.5px;color:var(--ink-2);border:1px solid var(--line);border-radius:6px;padding:3px 7px;background:var(--raised);font-variant-numeric:tabular-nums}
+.panel{margin-top:16px;border:1px solid var(--line);border-radius:12px;background:var(--raised);overflow:hidden}
+.panel-h{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600;color:var(--ink-2);background:var(--sunken)}
+.panel-h span{font-weight:500;color:var(--ink-3);font-variant-numeric:tabular-nums;text-align:right}
+.md{padding:14px 14px 16px;font-size:15px;line-height:1.5;overflow-wrap:anywhere}
+.md>*:first-child{margin-top:0}
+.md p{margin:8px 0 0}
+.md table{border-collapse:collapse;width:100%;font-size:13.5px;overflow-wrap:normal}
+.md td:nth-child(3){white-space:nowrap}
+.md th,.md td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.md th{background:var(--sunken);font-weight:600;font-size:12.5px;color:var(--ink-2)}
+.md td:last-child,.md th:last-child{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.md small{display:block;font-size:12.5px;color:var(--ink-3)}
+.scroll{overflow-x:auto}
+.callout{margin:12px 0 0;padding:10px 12px;border-left:3px solid var(--hold);background:var(--hold-wash);border-radius:0 8px 8px 0;font-size:15px}
+.fine{font-size:12.5px;color:var(--ink-3);margin-top:8px}
+.linkish{appearance:none;border:0;background:none;padding:0;color:var(--yours);font-weight:500;cursor:pointer;min-height:32px}
+.quiet{appearance:none;border:1px solid var(--line-2);background:var(--raised);border-radius:8px;min-height:44px;padding:0 16px;font-weight:500;font-size:14px;cursor:pointer;margin-top:12px}
+.num{font-variant-numeric:tabular-nums}
+.amt{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* a Subscription and its meter, as on Home's factory panel */
+.sub{margin-top:14px}
+.sub:first-child{margin-top:0}
+.sub-name{display:flex;justify-content:space-between;gap:12px;font-size:14px;font-weight:500;font-variant-numeric:tabular-nums}
 .meter{position:relative;height:6px;background:var(--sunken);border:1px solid var(--line);border-radius:4px;margin-top:6px}
 .meter span{display:block;height:100%;border-radius:3px;background:var(--yours)}
 .meter span.full{background:var(--hold)}
-.panel{margin-top:16px;border:1px solid var(--line);border-radius:12px;background:var(--raised);overflow:clip}
-.panel > header{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--sunken);border-bottom:1px solid var(--line);padding:6px 14px;min-height:44px}
-.panel h2{font-size:13.5px;font-weight:600;letter-spacing:0;color:var(--ink)}
-.panel h2.mono{font:500 13.5px/1.2 var(--mono)}
-.panel > header .sum{font-size:13.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
-.pad{padding:14px}
-.top{display:flex;justify-content:space-between;align-items:center;padding:2px 0 6px}
-.mark{display:inline-flex;align-items:center;gap:8px;font-size:18px;font-weight:700;letter-spacing:-.02em}
-.mark i{width:14px;height:14px;border-radius:4px;background:var(--yours)}
-.num{font-variant-numeric:tabular-nums}
-.usd{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
-.banner{margin-top:8px;padding:12px 14px;border-radius:10px;background:var(--hold-wash);color:var(--hold);font-weight:500}
-.banner .linkish{color:inherit;text-decoration:underline;text-underline-offset:3px}
-.row{border-bottom:1px solid var(--line)}
-.row:last-child{border-bottom:0}
-.hit{appearance:none;display:block;width:100%;text-align:left;border:0;background:none;padding:12px 14px;cursor:pointer}
-.r-top{display:flex;align-items:center;gap:8px;min-width:0}
-.r-top .usd{margin-left:auto}
-.r-title{display:block;font-weight:600;line-height:1.3;margin-top:8px}
-.r-meta{display:flex;flex-wrap:wrap;gap:2px 12px;color:var(--ink-3);font-size:13px;margin-top:4px;align-items:center}
-.runs{padding:0 14px 14px}
-.runs table{width:100%;border-collapse:collapse;font-size:13px}
-.runs td{padding:6px 0;border-top:1px solid var(--line);vertical-align:top;color:var(--ink-2)}
-.runs td:first-child{color:var(--ink);font-weight:500;padding-right:8px}
-.runs td:last-child{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);white-space:nowrap;padding-left:8px}
-.runs small{display:block;font-size:12px;color:var(--ink-3);font-weight:400}
-.barlist{display:grid;gap:12px}
-.barlist .bl{appearance:none;display:block;width:100%;text-align:left;border:0;background:none;padding:0;cursor:pointer}
-.barlist div.bl{cursor:default}
-.bl-top{display:flex;justify-content:space-between;gap:12px;font-size:14px}
-.bl-top span:first-child{font-weight:500}
-.bl-bar{height:8px;margin-top:6px;border-radius:0 4px 4px 0;background:var(--ink-3);min-width:2px}
-.bl small{display:block;color:var(--ink-3);font-size:12.5px;margin-top:4px}
+.meter span.plain{background:var(--ink-3)}
+.meter .tick{position:absolute;top:-4px;bottom:-4px;width:2px;height:auto;border-radius:1px;background:var(--ink)}
+
+/* a row of work inside a panel */
+.row{border-top:1px solid var(--line)}
+.row:first-child,.panel-h + .row{border-top:0}
+.hit{appearance:none;display:block;width:100%;text-align:left;border:0;background:none;padding:12px 14px}
+button.hit{cursor:pointer}
+.row-top{display:flex;gap:6px;align-items:center;min-width:0}
+.row-top .amt{margin-left:auto}
+.row-top b{font:500 13px var(--mono)}
+.row-title{display:block;font-weight:600;line-height:1.3;margin-top:8px}
+.row-say{display:block;font-size:14px;color:var(--ink-2);margin-top:3px}
+.row-say code{font:500 12px var(--mono)}
+.row .md{padding-top:0}
+
+/* filters and the week stepper: the fact chip, made pressable */
+.toggles{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.toggles + .toggles{margin-top:6px}
+.toggle{appearance:none;font-size:12.5px;color:var(--ink-2);border:1px solid var(--line);border-radius:6px;padding:0 9px;min-height:32px;background:var(--raised);cursor:pointer;font-variant-numeric:tabular-nums}
+.toggle[aria-pressed="true"]{border-color:var(--ink-2);background:var(--sunken);color:var(--ink);font-weight:600}
+.stepper{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
+.stepper .ref{padding:7px 8px}
+.step{appearance:none;border:1px solid var(--line);background:var(--raised);border-radius:6px;min-width:32px;min-height:28px;color:var(--ink-2);cursor:pointer;font-size:14px;line-height:1}
+.step[disabled]{opacity:.35;cursor:default}
+
+/* a small bar chart of weeks */
+.chart{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;align-items:end;border-bottom:1px solid var(--line-2)}
+.col{appearance:none;border:0;background:none;padding:0 4px;display:flex;flex-direction:column;justify-content:flex-end;height:96px}
+button.col{cursor:pointer}
+.chart.small .col{height:48px}
+.col i{display:block;border-radius:4px 4px 0 0;background:var(--line-2);min-height:2px}
+.col[aria-pressed="true"] i{background:var(--ink-2)}
+.col.part i{background:repeating-linear-gradient(135deg,var(--line-2) 0 3px,transparent 3px 6px);border:1px solid var(--line-2);border-bottom:0}
+.col.part[aria-pressed="true"] i{background:repeating-linear-gradient(135deg,var(--ink-2) 0 3px,transparent 3px 6px);border-color:var(--ink-2)}
+.axis{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;font-size:11px;color:var(--ink-3);text-align:center;margin-top:5px}
+.axis span.on{color:var(--ink);font-weight:600}
 
 /* ---- prototype chrome: not part of the design ---- */
 .proto{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:50;display:flex;align-items:center;gap:2px;
@@ -109,76 +135,11 @@ h1,h2,h3{letter-spacing:-.02em}
 .proto .p-sep{width:1px;height:22px;background:var(--proto-ink);opacity:.3;margin:0 2px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(68px + env(safe-area-inset-bottom,0px));z-index:49;background:var(--ink);color:var(--ground);
   padding:10px 14px;border-radius:8px;font-size:14px;width:max-content;max-width:calc(100vw - 32px)}
-.notes h2{font-size:22px;font-weight:600}
-.notes h3{font-size:13px;font-weight:600;margin-top:20px;color:var(--ink-3)}
-.notes ul{margin:8px 0 0;padding-left:18px;display:grid;gap:8px}
-.notes .state{margin-top:8px;font-variant-numeric:tabular-nums}
-
-/* ---- A: runway ---- */
-.a-sub{padding:16px 14px;border-bottom:1px solid var(--line)}
-.a-sub:last-child{border-bottom:0}
-.a-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.a-head b{font-weight:600}
-.a-big{display:flex;align-items:baseline;gap:8px;margin-top:10px}
-.a-big strong{font-size:40px;font-weight:700;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
-.a-big span{color:var(--ink-2);font-size:14px}
-.a-gauge{position:relative;height:14px;margin-top:12px;background:var(--sunken);border:1px solid var(--line);border-radius:7px}
-.a-gauge .fill{display:block;height:100%;border-radius:6px;background:var(--yours)}
-.a-gauge .fill.full{background:var(--hold)}
-.a-gauge .tick{position:absolute;top:-5px;bottom:-5px;width:2px;background:var(--ink);border-radius:1px}
-.a-scale{position:relative;height:18px;font-size:12px;color:var(--ink-3);margin-top:4px}
-.a-scale span{position:absolute;white-space:nowrap}
-.a-say{margin-top:10px;font-size:14px;color:var(--ink-2)}
-.a-say.warn{color:var(--hold);font-weight:500}
-.a-lead{font-size:19px;font-weight:600;line-height:1.3;letter-spacing:-.015em;margin-top:6px;text-wrap:pretty}
-.a-h1{font-size:21px;font-weight:600;line-height:1.2;margin-top:4px;text-wrap:balance}
-.a-group{font-size:13px;font-weight:600;color:var(--ink-3);padding:10px 14px;background:var(--sunken);border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
-.row + .a-group{border-top:1px solid var(--line)}
-
-/* ---- B: ledger ---- */
-.b-week{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;border:1px solid var(--line);border-radius:10px;background:var(--raised)}
-.b-week button{appearance:none;border:0;background:none;min-height:44px;font-size:20px;color:var(--ink-2);cursor:pointer}
-.b-week button[disabled]{opacity:.3;cursor:default}
-.b-week div{text-align:center;font-weight:600}
-.b-total{display:flex;align-items:baseline;gap:10px;margin-top:16px}
-.b-total strong{font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
-.b-total span{color:var(--ink-2);font-size:14px}
-.b-subs{margin-top:14px;display:grid;gap:8px}
-.b-sub{display:grid;grid-template-columns:1fr auto;gap:2px 12px;font-size:13.5px}
-.b-sub .meter{grid-column:1 / -1;height:4px;margin-top:2px}
-.b-sub span:first-child{color:var(--ink-2)}
-.b-sub b{font-weight:600;color:var(--ink)}
-.chips{display:flex;gap:6px;overflow-x:auto;margin:14px -16px 0;padding:0 16px 2px;scrollbar-width:none}
-.chips::-webkit-scrollbar{display:none}
-.chips + .chips{margin-top:8px}
-.chip{appearance:none;flex:none;border:1px solid var(--line-2);background:var(--raised);border-radius:999px;min-height:36px;padding:0 12px;font-size:13.5px;font-weight:500;color:var(--ink-2);cursor:pointer;white-space:nowrap}
-.chip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--ground)}
-.chip b{font-weight:500;opacity:.75;margin-left:6px;font-variant-numeric:tabular-nums}
-.b-line{margin-top:14px;font-size:14px;color:var(--ink-2)}
-.b-foot{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-3)}
-
-/* ---- C: trend ---- */
-.c-h1{font-size:21px;font-weight:600;line-height:1.2;margin-top:4px}
-.c-sel{margin-top:14px;display:flex;justify-content:space-between;align-items:baseline;gap:12px}
-.c-sel strong{font-size:28px;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
-.c-sel span{color:var(--ink-2);font-size:14px;text-align:right}
-.chart{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;align-items:end;margin-top:12px;border-bottom:1px solid var(--line-2)}
-.chart.small{margin-top:10px}
-.col{appearance:none;border:0;background:none;padding:0 4px;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-end;height:132px}
-.chart.small .col{height:64px;cursor:default}
-.col i{display:block;border-radius:4px 4px 0 0;background:var(--line-2);min-height:2px}
-.col[aria-pressed="true"] i{background:var(--ink)}
-.col.part i{background:repeating-linear-gradient(135deg,var(--line-2) 0 3px,transparent 3px 6px);border:1px solid var(--line-2);border-bottom:0}
-.col.part[aria-pressed="true"] i{background:repeating-linear-gradient(135deg,var(--ink) 0 3px,transparent 3px 6px);border-color:var(--ink)}
-.col:hover i{filter:brightness(.92)}
-.axis{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;font-size:11px;color:var(--ink-3);text-align:center;margin-top:5px}
-.axis span.on{color:var(--ink);font-weight:600}
-.figs{width:100%;border-collapse:collapse;font-size:14px}
-.figs td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
-.figs tr:last-child td{border-bottom:0}
-.figs td:last-child{text-align:right;white-space:nowrap}
-.figs small{display:block;font-size:12.5px;color:var(--ink-3);font-weight:400}
-.figs .usd{display:block}
+.notes{font-size:14px;color:var(--ink-2)}
+.notes h2{font-size:20px;font-weight:600;color:var(--ink)}
+.notes h3{font-size:12.5px;font-weight:600;margin-top:18px;color:var(--ink-3)}
+.notes ul{margin:6px 0 0;padding-left:18px;display:grid;gap:6px}
+.notes .state{margin-top:6px;font-variant-numeric:tabular-nums;color:var(--ink)}
 </style>
 
 <div id="app"></div>
@@ -194,16 +155,16 @@ const MONDAY = T(9, '00:00'), LAST_MONDAY = T(2, '00:00'), WEEK_AGO = T(3, '14:1
 
 /* A piece of work and the runs that ended on it. A run is [role, note, model, Subscription, API-price dollars, day of November, time]. */
 const WORK = [
-  {id:'n1',repo:'np',ref:'#198',pr:'PR #214',title:'Show the next three free slots on the booking page',st:'open',where:'At the Merge gate',runs:[
+  {id:'n1',repo:'np',ref:'#198',pr:'PR #214',title:'Show the next three free slots on the booking page',st:'open',where:'gate',runs:[
     ['Implement','','Sonnet','s2',1.74,9,'20:10'],['Review','Execution flaw','Opus','s2',.61,9,'20:31'],['Implement','Retry 1','Sonnet','s2',1.21,10,'10:20'],['Review','Pass','Opus','s2',.54,10,'11:05']]},
-  {id:'n2',repo:'np',ref:'#205',pr:'PR #216',title:'Send the reminder text the evening before the appointment',st:'open',where:'At the Merge gate',runs:[
+  {id:'n2',repo:'np',ref:'#205',pr:'PR #216',title:'Send the reminder text the evening before the appointment',st:'open',where:'gate',runs:[
     ['Implement','','Sonnet','s1',.92,9,'11:40'],['Review','Pass','Opus','s1',.43,9,'12:02']]},
   {id:'n3',repo:'np',ref:'#190',pr:'PR #212',title:'Let patients pick a practitioner',st:'merged',merged:T(10,'09:10'),runs:[
     ['Implement','','Sonnet','s1',2.10,8,'15:20'],['Review','Pass','Opus','s1',.66,8,'15:44'],['Implement','Request changes','Sonnet','s1',1.42,9,'09:30'],['Review','Pass','Opus','s1',.58,9,'09:55']]},
-  {id:'n4',repo:'np',ref:'#197',pr:'PR #209',title:'Let reception block out a lunch hour',st:'open',where:'Being brought up to date with main',busy:1,runs:[
+  {id:'n4',repo:'np',ref:'#197',pr:'PR #209',title:'Let reception block out a lunch hour',st:'open',where:'run',busy:1,runs:[
     ['Implement','','Sonnet','s1',1.88,7,'10:10'],['Review','Execution flaw','Opus','s1',.60,7,'10:32'],['Implement','Retry 1','Sonnet','s1',1.64,7,'11:15'],['Review','Execution flaw','Opus','s1',.57,7,'11:40'],
     ['Implement','Retry 2, stepped up','Opus','s1',6.90,9,'14:20'],['Review','Pass','Opus','s1',.71,9,'15:02']]},
-  {id:'n5',repo:'np',ref:'#188',pr:'PR #233',title:'Show the clinic’s public holidays on the calendar',st:'open',where:'Stuck',runs:[
+  {id:'n5',repo:'np',ref:'#188',pr:'PR #233',title:'Show the clinic’s public holidays on the calendar',st:'open',where:'stuck',runs:[
     ['Implement','','Sonnet','s2',1.55,10,'13:25'],['Review','Execution flaw','Opus','s2',.52,10,'13:49']]},
   {id:'n6',repo:'np',ref:'#183',pr:'PR #201',title:'Text a patient when their slot is confirmed',st:'never',where:'Sent back to a Design session',busy:1,runs:[
     ['Implement','','Sonnet','s1',2.31,5,'10:40'],['Review','Execution flaw','Opus','s1',.64,5,'11:05'],['Implement','Retry 1','Sonnet','s1',1.90,5,'13:10'],['Review','Execution flaw','Opus','s1',.59,5,'13:36'],
@@ -213,7 +174,7 @@ const WORK = [
   {id:'n8',repo:'np',ref:'#229',title:'TypeError on the booking confirmation page',st:'other',what:'Triage',runs:[['Triage','','Opus','s2',.28,10,'05:15']]},
   {id:'n9',repo:'np',ref:'#219',title:'Retro for the week of 2 November',st:'other',what:'Retro',runs:[['Retro','','Opus','s1',3.20,6,'14:15']]},
   {id:'n10',repo:'np',ref:'#219',title:'Replay of the Retro’s first proposal on three Tickets',st:'other',what:'Replay',busy:1,runs:[['Replay','6 runs','Sonnet','s1',8.60,7,'16:30']]},
-  {id:'n11',repo:'np',ref:'#231',pr:'PR #234',title:'Record why a patient cancelled',st:'open',where:'Running, retry 1',runs:[
+  {id:'n11',repo:'np',ref:'#231',pr:'PR #234',title:'Record why a patient cancelled',st:'open',where:'run',runs:[
     ['Implement','','Sonnet','s2',1.31,10,'13:28'],['Review','Execution flaw','Opus','s2',.49,10,'14:02']]},
   {id:'n12',repo:'np',ref:'#176',pr:'PR #195',title:'Show the clinic’s phone number on every page',st:'merged',merged:T(3,'11:00'),runs:[
     ['Implement','','Sonnet','s1',2.20,3,'09:10'],['Review','Pass','Opus','s1',.55,3,'09:35']]},
@@ -221,7 +182,7 @@ const WORK = [
     ['Implement','','Sonnet','s1',1.95,2,'14:00'],['Review','Execution flaw','Opus','s1',.62,2,'14:25'],['Implement','Retry 1','Sonnet','s1',1.70,4,'10:00'],['Review','Pass','Opus','s1',.58,4,'10:22']]},
   {id:'n14',repo:'np',ref:'#180',pr:'PR #199',title:'Remember a patient’s phone number between bookings',st:'merged',merged:T(6,'08:45'),runs:[
     ['Implement','','Sonnet','s1',1.48,5,'16:00'],['Review','Pass','Opus','s1',.51,5,'16:20']]},
-  {id:'l1',repo:'ll',ref:'#81',pr:'PR #88',title:'Round each invoice line before adding the tax',st:'open',where:'At the Merge gate',runs:[
+  {id:'l1',repo:'ll',ref:'#81',pr:'PR #88',title:'Round each invoice line before adding the tax',st:'open',where:'gate',runs:[
     ['Implement','','Sonnet','s1',1.10,7,'13:00'],['Review','Pass','Opus','s1',.45,7,'13:21'],['Implement','Request changes','Sonnet','s2',.74,10,'12:50'],['Review','Pass','Opus','s2',.41,10,'13:30']]},
   {id:'l2',repo:'ll',ref:'#79',pr:'PR #86',title:'Number invoices per financial year',st:'merged',merged:T(9,'10:00'),runs:[
     ['Implement','','Sonnet','s1',1.62,8,'11:00'],['Review','Pass','Opus','s1',.50,8,'11:20']]},
@@ -230,7 +191,7 @@ const WORK = [
   {id:'l4',repo:'ll',ref:'#76',title:'Audit: three refactoring candidates',st:'other',what:'Audit',runs:[['Audit','','Opus','s1',4.80,4,'14:15']]},
   {id:'l5',repo:'ll',ref:'Map #70',title:'Which mail providers sign outbound invoices?',st:'other',what:'Research',runs:[['Research','','Opus','s1',2.05,8,'17:30']]},
   {id:'l6',repo:'ll',ref:'#93',title:'Credit notes',st:'other',what:'Triage',runs:[['Triage','','Opus','s1',.30,9,'11:15']]},
-  {id:'l7',repo:'ll',ref:'#90',pr:'PR #91',title:'Export a month of invoices as a spreadsheet',st:'open',where:'In review',runs:[['Implement','','Sonnet','s2',2.40,10,'14:09']]},
+  {id:'l7',repo:'ll',ref:'#90',pr:'PR #91',title:'Export a month of invoices as a spreadsheet',st:'open',where:'checks',runs:[['Implement','','Sonnet','s2',2.40,10,'14:09']]},
   {id:'l8',repo:'ll',ref:'#68',pr:'PR #80',title:'Print the client’s tax number on the invoice',st:'merged',merged:T(2,'12:00'),runs:[
     ['Implement','','Sonnet','s1',1.70,2,'10:00'],['Review','Pass','Opus','s1',.50,2,'10:20']]},
   {id:'l9',repo:'ll',ref:'#72',pr:'PR #82',title:'Let a client pay an invoice in two parts',st:'merged',merged:T(3,'18:00'),runs:[
@@ -289,123 +250,122 @@ const avg = ws => ws.length ? ws.reduce((t, w) => t + total(w), 0) / ws.length :
 const subName = (w, id) => w.subs.find(s => s.id === id).name;
 const allUsedUp = w => w.subs.every(s => s.state === 'limit' || s.state === 'credits');
 
-function statePill(x){
-  const w = x.w || x;
-  if (w.st === 'merged') return `<span class="pill">Merged ${shortDay(w.merged)}</span>`;
-  if (w.st === 'never') return `<span class="pill stuck"><i></i>Never merged</span>`;
+function statePill(w){
+  if (w.st === 'merged') return `<span class="pill">Merged</span>`;
+  if (w.st === 'never') return `<span class="pill">Never merged</span>`;
   if (w.st === 'other') return `<span class="pill">${w.what}</span>`;
-  if (w.where === 'Stuck') return `<span class="pill stuck"><i></i>Stuck</span>`;
-  if (w.where === 'At the Merge gate') return `<span class="pill yours"><i></i>${w.where}</span>`;
-  return `<span class="pill run"><i></i>${w.where}</span>`;
+  if (w.where === 'stuck') return `<span class="pill stuck"><i></i>Stuck</span>`;
+  if (w.where === 'gate') return `<span class="pill yours"><i></i>Yours to merge</span>`;
+  return `<span class="pill run"><i></i>${w.where === 'checks' ? 'Waiting on checks' : 'Running'}</span>`;
+}
+function factoryPill(w){
+  if (allUsedUp(w)) return `<span class="pill held"><i></i>Held</span>`;
+  return `<span class="pill run"><i></i>Running on ${w.subs.find(s => s.state === 'running').name}</span>`;
+}
+const back = (label, act) => `<button class="back" data-act="${act}">‹ ${label}</button>`;
+const facts = fs => `<div class="r-facts">${fs.filter(Boolean).map(f => `<span>${f}</span>`).join('')}</div>`;
+const heldNote = w => allUsedUp(w) ? `<p class="callout"><b>Nothing is running.</b> Every Subscription is used up and ${plural(w.held,'run')} ${w.held === 1 ? 'is' : 'are'} held. They resume by themselves ${dayTime(w.subs[0].resets)}, or sooner if you close the usage-credits issue under Yours.</p>` : '';
+const PRICE_NOTE = `<p class="fine">Dollar figures are what the same runs would have cost at API list prices. Nothing here is billed.</p>`;
+const subState = s => s.state === 'limit' ? `used up until ${dayTime(s.resets)}` : s.state === 'credits' ? 'used up, spent usage credits' : s.state === 'running' ? 'runs go here' : 'next in line';
+
+/* One piece of work as a row: its state and pull request, what it cost in the period, its title, one line more. */
+function workRow(w, x, o = {}){
+  const body = `<span class="row-top">${statePill(x.w)}<span class="ref">${x.w.pr || x.w.ref}</span><span class="amt">${usd(x.usd)}</span></span>
+    <span class="row-title">${esc(x.w.title)}</span>${o.say ? `<span class="row-say">${o.say}</span>` : ''}`;
+  return `<div class="row">${o.act ? `<button class="hit" data-act="${o.act}" data-id="${x.w.id}" ${o.open == null ? '' : `aria-expanded="${o.open}"`}>${body}</button>` : `<div class="hit">${body}</div>`}${o.open ? runsTable(w, x.runs, total(x.w)) : ''}</div>`;
 }
 function runsTable(w, runs, all){
   const rest = all - sum(runs);
-  return `<div class="runs"><table>${runs.map(r => `<tr><td>${r.role}${r.note ? `<small>${esc(r.note)}</small>` : ''}</td><td>${r.model}<small>${subName(w, r.sub)}</small></td><td>${shortDay(r.at).slice(0,3)} ${hm(r.at)}</td><td>${usd(r.usd)}</td></tr>`).join('')}</table>
+  return `<div class="md"><div class="scroll"><table><tr><th>Run</th><th>Model</th><th>Ended</th><th>Cost</th></tr>
+    ${runs.map(r => `<tr><td>${r.role}${r.note ? `<small>${esc(r.note)}</small>` : ''}</td><td>${r.model}<small>${subName(w, r.sub)}</small></td><td>${shortDay(r.at).slice(0,3)} ${hm(r.at)}</td><td>${usd(r.usd)}</td></tr>`).join('')}</table></div>
     ${rest > 0.004 ? `<p class="fine">Plus ${usd(rest)} outside this period. ${usd(all)} all told.</p>` : ''}
-    <div class="btns"><button class="btn quiet" data-act="gh">Open on GitHub</button></div></div>`;
+    <button class="quiet" data-act="gh">Open on GitHub</button></div>`;
 }
-function subPill(s){
-  if (s.state === 'running') return `<span class="pill run"><i></i>Runs go here</span>`;
-  if (s.state === 'next') return `<span class="pill">Next in line</span>`;
-  return `<span class="pill held"><i></i>Used up</span>`;
+/* Amounts as a list of plain bars. */
+function dist(items, act){
+  const max = Math.max(...items.map(x => x.usd), 1);
+  return items.map(x => `<div class="row"><${act ? `button data-act="${act}" data-repo="${x.key || ''}" data-what="${esc(x.name)}"` : 'div'} class="hit">
+    <span class="row-top">${x.mono ? `<b>${esc(x.name)}</b>` : `<span style="font-size:14px;font-weight:500">${esc(x.name)}</span>`}<span class="amt">${usd(x.usd)}</span></span>
+    <span class="meter" style="display:block"><span class="plain" style="width:${Math.round(x.usd / max * 100)}%"></span></span>${x.note ? `<span class="row-say">${x.note}</span>` : ''}</${act ? 'button' : 'div'}></div>`).join('');
 }
-function topBar(back, act){ return `<div class="top"><span class="mark"><i></i>Spend</span></div><button class="back" data-act="${act}">${back}</button>`; }
-const PRICE_NOTE = `<p class="fine">Dollar figures are what the same runs would have cost at API list prices. Nothing here is billed.</p>`;
+function subsCompact(w){
+  return w.subs.map(s => `<div class="sub"><div class="sub-name"><span>${s.name}</span><span>${s.used}%</span></div>
+    <div class="meter"><span class="${s.state === 'limit' || s.state === 'credits' ? 'full' : ''}" style="width:${s.used}%"></span></div><p class="fine" style="margin-top:6px">${subState(s)[0].toUpperCase() + subState(s).slice(1)}.</p></div>`).join('');
+}
 
 /* ---------- A: Runway. Leads with how long the Subscriptions last; the dollars are a drill-down by Product repo. ---------- */
 /* When a Subscription in use reaches its limit if it keeps the pace it has had since its reset, to the nearest half hour. */
 function runsOut(s){ const t = s.start.getTime() + (NOW - s.start) / (s.used / 100); return new Date(Math.round(t / 18e5) * 18e5); }
 /* The one sentence A leads with: how long the factory can keep running. */
 function runway(w){
-  if (allUsedUp(w)) return '';
+  if (allUsedUp(w)) return `Nothing is running until ${w.subs[0].name} resets ${dayTime(w.subs[0].resets)}`;
   const live = w.subs.filter(s => s.state === 'running' || s.state === 'next'), last = live.map(s => ({s, out: runsOut(s)})).filter(x => x.out < x.s.resets);
-  if (last.length < live.length) return `<p class="a-lead">At this pace the factory runs all week without being held.</p>`;
+  if (last.length < live.length) return 'At this pace the factory runs all week without being held';
   const out = new Date(Math.max(...last.map(x => +x.out))), back = w.subs.filter(s => s.state === 'limit' && s.resets > out).sort((x, y) => x.resets - y.resets)[0];
   const next = back || last.map(x => x.s).sort((x, y) => x.resets - y.resets)[0];
-  return `<p class="a-lead">At this pace runs keep going until about ${dayTime(out)}. Then they are held for ${span(next.resets - out)}, until ${next.name} resets ${dayTime(next.resets)}.</p>`;
+  return `At this pace runs keep going until about ${dayTime(out)}, then are held ${span(next.resets - out)} until ${next.name} resets`;
 }
-function gauge(w, s){
-  const len = s.resets - s.start, elapsed = Math.min(1, (NOW - s.start) / len), usedUp = s.state === 'limit' || s.state === 'credits';
+function subFull(w, s){
+  const elapsed = Math.min(1, (NOW - s.start) / (s.resets - s.start)), tick = Math.round(elapsed * 100), usedUp = s.state === 'limit' || s.state === 'credits';
   const mine = sum(w.work.flatMap(x => x.runs).filter(r => r.sub === s.id && r.at >= s.start));
-  let say = '', warn = false;
-  if (s.state === 'limit'){ say = `Reached its weekly limit ${s.reached}. Resets ${dayTime(s.resets)}.`; warn = true; }
-  else if (s.state === 'credits'){ say = `It spent usage credits, and stays unusable until you close its issue. That move is under Yours on Home.`; warn = true; }
-  else {
-    const out = runsOut(s);
-    if (out < s.resets){ say = `At this pace it is used up about ${dayTime(out)}, ${span(s.resets - out)} before it resets.`; warn = true; }
-    else say = `At this pace it lasts until it resets ${dayTime(s.resets)}.`;
-  }
-  const tickAt = Math.round(elapsed * 100);
-  return `<div class="a-sub"><div class="a-head"><b>${s.name}</b>${subPill(s)}</div>
-    <div class="a-big"><strong>${s.used}%</strong><span>of its weekly limit</span></div>
-    <div class="a-gauge" role="img" aria-label="${s.used}% used, ${tickAt}% of the week gone"><span class="fill ${usedUp ? 'full' : ''}" style="width:${s.used}%"></span><span class="tick" style="left:calc(${tickAt}% - 1px)"></span></div>
-    <div class="a-scale"><span style="${tickAt > 70 ? `right:${100 - tickAt}%` : `left:${tickAt}%`}">${tickAt > 70 ? 'now ↑' : '↑ now'}, ${span(s.resets - NOW)} to its reset</span></div>
-    <p class="a-say ${warn ? 'warn' : ''}">${say}</p>
-    <p class="fine">${usd(mine)} of factory runs at API prices since it reset. ${s.read ? `Read ${s.read}, from the last run that ended on it.` : ''} The share counts everything on the account, not only the factory.</p></div>`;
+  let say;
+  if (s.state === 'limit') say = `Used up. It reached its weekly limit ${s.reached} and resets ${dayTime(s.resets)}.`;
+  else if (s.state === 'credits') say = `Used up. It spent usage credits, and stays unusable until you close its issue. That move is under Yours on Home.`;
+  else { const out = runsOut(s); say = (s.state === 'running' ? 'Runs go here. ' : 'Next in line. ') + (out < s.resets ? `At this pace it is used up about ${dayTime(out)}, ${span(s.resets - out)} before it resets.` : `At this pace it lasts until it resets ${dayTime(s.resets)}.`); }
+  return `<div class="sub"><div class="sub-name"><span>${s.name}</span><span>${s.used}% of its weekly limit</span></div>
+    <div class="meter" role="img" aria-label="${s.used}% used, ${tick}% of its week gone"><span class="${usedUp ? 'full' : ''}" style="width:${s.used}%"></span><span class="tick" style="left:calc(${tick}% - 1px)"></span></div>
+    <p class="fine">${say}</p>
+    <p class="fine" style="margin-top:2px">The mark is now: ${span(s.resets - NOW)} to its reset. ${usd(mine)} of factory runs since it reset${s.read ? `, read ${s.read}` : ''}.</p></div>`;
 }
 function renderA(w){
   const week = slice(w.work, WEEK_AGO, NOW);
   if (S.a.work){
     const x = w.work.find(v => v.id === S.a.work), runs = x.runs.filter(within(WEEK_AGO, NOW));
-    return `${topBar('Back to ' + REPO[x.repo], 'a-back')}
-      <div class="r-top" style="margin-top:4px">${statePill(x)}<span class="ref">${x.pr || x.ref}</span></div>
-      <h1 class="a-h1" style="margin-top:12px">${esc(x.title)}</h1>
-      <div class="a-big"><strong>${usd(sum(runs))}</strong><span>in the last 7 days${x.pr ? ', Ticket ' + x.ref : ''}</span></div>
-      <section class="panel"><header><h2>${plural(runs.length,'run')}</h2></header><div style="padding-top:6px">${runsTable(w, runs, total(x))}</div></section>`;
+    return `${back(REPO[x.repo], 'a-back')}
+      <div class="r-meta">${statePill(x)}<span class="ref">${x.pr || x.ref}</span>${x.pr ? `<span class="ref">Ticket ${x.ref}</span>` : ''}</div>
+      <h1 class="r-title">${esc(x.title)}</h1>
+      ${facts([`${usd(sum(runs))} in the last 7 days`, plural(runs.length, 'run'), x.st === 'merged' ? 'merged ' + shortDay(x.merged) : ''])}
+      <section class="panel"><div class="panel-h">Runs <span>${usd(sum(runs))}</span></div><div style="padding-top:14px">${runsTable(w, runs, total(x))}</div></section>`;
   }
   if (S.a.repo){
     const mine = week.filter(x => x.w.repo === S.a.repo);
     const groups = [['merged','Merged'],['open','Open'],['never','Never merged'],['other','Not a Ticket']].map(([k, label]) => {
       const rows = mine.filter(x => x.w.st === k); if (!rows.length) return '';
-      return `<div class="a-group"><span>${label}</span><span class="num">${usd(sum(rows))}</span></div>` + rows.map(x => `<div class="row"><button class="hit" data-act="a-work" data-id="${x.w.id}">
-        <span class="r-top"><span class="ref">${x.w.pr || x.w.ref}</span><span class="usd">${usd(x.usd)}</span></span>
-        <span class="r-title">${esc(x.w.title)}</span>${k === 'open' || k === 'other' ? `<span class="r-meta">${statePill(x)}</span>` : ''}</button></div>`).join('');
+      return `<section class="panel"><div class="panel-h">${label} <span>${usd(sum(rows))}</span></div>${rows.map(x => workRow(w, x, {act:'a-work', say: plural(x.runs.length, 'run') + (k === 'merged' ? ', merged ' + shortDay(x.w.merged) : '')})).join('')}</section>`;
     }).join('');
-    return `${topBar('Back to Spend', 'a-back')}<h1 class="a-h1" style="font-family:var(--mono);font-size:18px">${REPO[S.a.repo]}</h1>
-      <div class="a-big"><strong>${usd(sum(mine))}</strong><span>in the last 7 days</span></div>
-      <section class="panel">${groups}</section>${PRICE_NOTE}`;
+    return `${back('Spend', 'a-back')}<div class="r-meta"><span class="ref">${REPO[S.a.repo]}</span></div>
+      <h1 class="r-title">${usd(sum(mine))} in the last 7 days</h1>${facts([plural(mine.length, 'piece') + ' of work'])}${groups}${PRICE_NOTE}`;
   }
-  const byRepo = Object.keys(REPO).map(k => ({k, usd: sum(week.filter(x => x.w.repo === k)), n: week.filter(x => x.w.repo === k).length})).sort((x, y) => y.usd - x.usd);
-  const max = Math.max(...byRepo.map(r => r.usd), 1), merged = mergedIn(w.work, WEEK_AGO, NOW), a = avg(merged);
-  const banner = allUsedUp(w) ? `<p class="banner">Nothing is running. Every Subscription is used up and ${plural(w.held,'run')} ${w.held === 1 ? 'is' : 'are'} held. They resume by themselves ${dayTime(w.subs[0].resets)}, or sooner if you close the usage-credits issue.</p>` : '';
-  return `${topBar('Back to Home', 'home')}${banner}${runway(w)}
-    <section class="panel"><header><h2>Subscriptions</h2><span class="sum">used in fixed order</span></header>${w.subs.map(s => gauge(w, s)).join('')}</section>
-    <section class="panel"><header><h2>Last 7 days at API prices</h2><span class="sum">${usd(sum(week))}</span></header>
-      <div class="pad"><div class="barlist">${byRepo.map(r => `<button class="bl" data-act="a-repo" data-repo="${r.k}">
-        <span class="bl-top"><span style="font-family:var(--mono);font-size:13.5px">${REPO[r.k]}</span><span class="usd">${usd(r.usd)}</span></span>
-        <span class="bl-bar" style="display:block;width:${Math.round(r.usd / max * 100)}%"></span><small>${plural(r.n,'piece')} of work. Open to see each.</small></button>`).join('')}</div>
-        <p class="fine" style="margin-top:14px">${merged.length ? `${plural(merged.length,'pull request')} merged, ${usd(a)} each on average.` : 'No pull request merged.'}</p></div></section>
+  const byRepo = Object.keys(REPO).map(k => ({key: k, name: REPO[k], mono: true, usd: sum(week.filter(x => x.w.repo === k)), note: plural(week.filter(x => x.w.repo === k).length, 'piece') + ' of work'})).sort((x, y) => y.usd - x.usd);
+  const merged = mergedIn(w.work, WEEK_AGO, NOW);
+  return `${back('Home', 'home')}<div class="r-meta">${factoryPill(w)}<span class="ref">Spend</span></div>
+    <h1 class="r-title">${runway(w)}</h1>
+    ${facts([`${usd(sum(week))} in the last 7 days`, merged.length ? `${merged.length} merged, ${usd(avg(merged))} each` : 'none merged', w.held ? plural(w.held, 'run') + ' held' : ''])}
+    <section class="panel"><div class="panel-h">Subscriptions <span>used in order</span></div><div class="md">${w.subs.map(s => subFull(w, s)).join('')}
+      <p class="fine">A share counts everything on the account, not only the factory.</p></div></section>
+    <section class="panel"><div class="panel-h">Last 7 days <span>${usd(sum(week))} at API prices</span></div>${dist(byRepo, 'a-repo')}</section>
     ${PRICE_NOTE}`;
 }
 
-/* ---------- B: Ledger. One flat list of work for a calendar week, dearest first, filtered by chips. ---------- */
+/* ---------- B: Ledger. One flat list of work for a calendar week, dearest first, with filters. ---------- */
 function renderB(w){
   const from = S.b.week === 0 ? MONDAY : LAST_MONDAY, to = S.b.week === 0 ? NOW : MONDAY;
   const all = slice(w.work, from, to), before = S.b.week === 0 ? sum(slice(w.work, LAST_MONDAY, MONDAY)) : OLDER[5].usd;
   const inRepo = all.filter(x => S.b.repo === 'all' || x.w.repo === S.b.repo);
   const kinds = [['all','Everything'],['merged','Merged'],['open','Open'],['never','Never merged'],['other','Not a Ticket']];
   const shown = inRepo.filter(x => S.b.kind === 'all' || x.w.st === S.b.kind);
-  const merged = mergedIn(w.work, from, to).filter(x => S.b.repo === 'all' || x.repo === S.b.repo), a = avg(merged);
+  const merged = mergedIn(w.work, from, to), a = avg(merged);
   const mins = w.work.flatMap(x => x.runs).filter(within(from, to)).reduce((t, r) => t + r.mins, 0);
-  const monthMins = w.work.flatMap(x => x.runs).reduce((t, r) => t + r.mins, 0);
-  const banner = allUsedUp(w) ? `<p class="banner" style="margin-top:14px">Nothing is running. ${plural(w.held,'run')} held until ${dayTime(w.subs[0].resets)}, or until you close the usage-credits issue under Yours.</p>` : '';
-  const subs = w.subs.map(s => `<div class="b-sub"><span><b>${s.name}</b> ${s.state === 'limit' ? `used up, resets ${dayTime(s.resets)}` : s.state === 'credits' ? 'used up, spent usage credits' : s.state === 'running' ? 'runs go here' : 'next in line'}</span><span class="num">${s.used}%</span>
-    <div class="meter"><span class="${s.state === 'limit' || s.state === 'credits' ? 'full' : ''}" style="width:${s.used}%"></span></div></div>`).join('');
-  const rows = shown.map(x => `<div class="row"><button class="hit" data-act="b-open" data-id="${x.w.id}" aria-expanded="${S.b.open === x.w.id}">
-      <span class="r-top"><span class="ref">${x.w.pr ? x.w.ref + ' → ' + x.w.pr : x.w.ref}</span><span class="usd">${usd(x.usd)}</span></span>
-      <span class="r-title">${esc(x.w.title)}</span>
-      <span class="r-meta">${statePill(x)}<span style="font-family:var(--mono);font-size:12px">${REPO[x.w.repo]}</span><span>${plural(x.runs.length,'run')}</span></span></button>
-      ${S.b.open === x.w.id ? runsTable(w, x.runs, total(x.w)) : ''}</div>`).join('');
-  return `${topBar('Back to Home', 'home')}
-    <div class="b-week"><button data-act="b-week" data-d="-1" aria-label="The week before" ${S.b.week === -1 ? 'disabled' : ''}>&lsaquo;</button><div>${S.b.week === 0 ? 'Week of 9 November, so far' : 'Week of 2 November'}</div><button data-act="b-week" data-d="1" aria-label="The week after" ${S.b.week === 0 ? 'disabled' : ''}>&rsaquo;</button></div>
-    <div class="b-total"><strong>${usd(sum(all))}</strong><span>at API prices. ${usd(before)} the week before.</span></div>
-    ${S.b.week === 0 ? `<div class="b-subs">${subs}</div>${banner}` : ''}
-    <div class="chips">${[['all','All repos'], ...Object.entries(REPO)].map(([k, label]) => `<button class="chip" data-act="b-repo" data-repo="${k}" aria-pressed="${S.b.repo === k}">${label}<b>${usd(sum(all.filter(x => k === 'all' || x.w.repo === k)))}</b></button>`).join('')}</div>
-    <div class="chips">${kinds.map(([k, label]) => { const n = inRepo.filter(x => k === 'all' || x.w.st === k); return `<button class="chip" data-act="b-kind" data-kind="${k}" aria-pressed="${S.b.kind === k}">${label}<b>${usd(sum(n))}</b></button>`; }).join('')}</div>
-    <p class="b-line">${plural(shown.length,'piece')} of work, ${usd(sum(shown))}. ${merged.length ? `${plural(merged.length,'pull request')} merged in it cost ${usd(a)} each on average, from first run to merge.` : 'No pull request merged in it.'}</p>
-    ${shown.length ? `<section class="panel" style="margin-top:12px">${rows}</section>` : `<p class="fine" style="padding:24px 0">Nothing in this week matches.</p>`}
-    <p class="b-foot">GitHub Actions: about ${hours(mins)} of runner time this week, estimated from run times. About ${monthMins.toLocaleString('en')} of 3,000 included minutes this month.</p>
-    ${PRICE_NOTE}`;
+  return `${back('Home', 'home')}<div class="r-meta">${factoryPill(w)}<span class="ref">Spend</span></div>
+    <div class="stepper"><button class="step" data-act="b-week" data-d="-1" aria-label="The week before" ${S.b.week === -1 ? 'disabled' : ''}>‹</button><span class="ref">${S.b.week === 0 ? 'Week of 9 November, so far' : 'Week of 2 November'}</span><button class="step" data-act="b-week" data-d="1" aria-label="The week after" ${S.b.week === 0 ? 'disabled' : ''}>›</button></div>
+    <h1 class="r-title">${usd(sum(all))} at API prices</h1>
+    ${facts([`${usd(before)} the week before`, merged.length ? `${merged.length} merged, ${usd(a)} each` : 'none merged', `about ${hours(mins)} of Actions runner time`])}
+    ${S.b.week === 0 ? heldNote(w) + `<section class="panel"><div class="panel-h">Subscriptions <span>also on Home</span></div><div class="md">${subsCompact(w)}</div></section>` : ''}
+    <div class="toggles" style="margin-top:16px">${[['all','All repos'], ...Object.entries(REPO)].map(([k, label]) => `<button class="toggle" data-act="b-repo" data-repo="${k}" aria-pressed="${S.b.repo === k}">${label} ${usd(sum(all.filter(x => k === 'all' || x.w.repo === k)))}</button>`).join('')}</div>
+    <div class="toggles">${kinds.map(([k, label]) => `<button class="toggle" data-act="b-kind" data-kind="${k}" aria-pressed="${S.b.kind === k}">${label} ${usd(sum(inRepo.filter(x => k === 'all' || x.w.st === k)))}</button>`).join('')}</div>
+    <section class="panel"><div class="panel-h">${plural(shown.length, 'piece')} of work, dearest first <span>${usd(sum(shown))}</span></div>
+      ${shown.length ? shown.map(x => workRow(w, x, {act:'b-open', open: S.b.open === x.w.id, say: `${x.w.pr ? 'Ticket ' + x.w.ref + ' in ' : ''}<code>${REPO[x.w.repo]}</code>, ${plural(x.runs.length, 'run')}${x.w.st === 'merged' ? ', merged ' + shortDay(x.w.merged) : ''}`})).join('') : `<div class="md"><p>Nothing in this week matches.</p></div>`}</section>
+    ${PRICE_NOTE}<p class="fine">Runner time is estimated from each run’s start and end.</p>`;
 }
 
 /* ---------- C: Trend. Leads with eight weeks; the chosen week's averages and breakdowns sit under the chart. ---------- */
@@ -417,52 +377,45 @@ function weekFacts(w, i){
     mergedN: merged.length, perPr: avg(merged), never: sum(sl.filter(x => x.w.st === 'never')), replay: sum(runs.filter(r => r.role === 'Replay')),
     design: sum(runs.filter(r => r.role === 'Triage' || r.role === 'Design')), mins: runs.reduce((t, r) => t + r.mins, 0)};
 }
-function barList(items, act){
-  const max = Math.max(...items.map(x => x.usd), 1);
-  return `<div class="barlist">${items.map(x => `<${act ? 'button' : 'div'} class="bl" ${act ? `data-act="${act}" data-what="${esc(x.name)}"` : ''}>
-    <span class="bl-top"><span ${x.mono ? 'style="font-family:var(--mono);font-size:13.5px"' : ''}>${esc(x.name)}</span><span class="usd">${usd(x.usd)}</span></span>
-    <span class="bl-bar" style="display:block;width:${Math.round(x.usd / max * 100)}%"></span>${x.note ? `<small>${x.note}</small>` : ''}</${act ? 'button' : 'div'}>`).join('')}</div>`;
-}
 function renderC(w){
   const weeks = [0,1,2,3,4,5,6,7].map(i => weekFacts(w, i)), f = weeks[S.c.week], prev = S.c.week ? weeks[S.c.week - 1] : null;
   const max = Math.max(...weeks.map(x => x.usd)), maxM = Math.max(...weeks.map(x => x.mins));
-  const vs = (now, was) => prev == null || now == null || was == null ? '' : `<small>${usd(was)} the week before</small>`;
+  const was = v => prev == null || v == null ? '' : usd(v);
   const chart = `<div class="chart" role="group" aria-label="Dollars at API prices, by week">${weeks.map((x, i) => `<button class="col ${x.part ? 'part' : ''}" data-act="c-week" data-i="${i}" aria-pressed="${S.c.week === i}" title="${x.label}: ${usd(x.usd)}" aria-label="${x.label}: ${usd(x.usd)}"><i style="height:${Math.round(x.usd / max * 100)}%"></i></button>`).join('')}</div>
     <div class="axis">${weeks.map((x, i) => `<span class="${S.c.week === i ? 'on' : ''}">${x.start.replace(' ', '&nbsp;')}</span>`).join('')}</div>`;
-  const figs = `<table class="figs">
-    <tr><td>Each merged pull request<small>${plural(f.mergedN,'pull request')} merged, first run to merge</small></td><td><span class="usd">${f.perPr == null ? 'None' : usd(f.perPr)}</span>${vs(f.perPr, prev && prev.perPr)}</td></tr>
-    <tr><td>Never merged<small>Runs on pull requests closed or sent back</small></td><td><span class="usd">${usd(f.never)}</span>${vs(f.never, prev && prev.never)}</td></tr>
-    <tr><td>Triage and Design sessions</td><td><span class="usd">${usd(f.design)}</span>${vs(f.design, prev && prev.design)}</td></tr>
-    <tr><td>Replays</td><td><span class="usd">${usd(f.replay)}</span>${vs(f.replay, prev && prev.replay)}</td></tr></table>`;
-  let detail = `<p class="fine" style="margin-top:16px">The prototype’s ledger covers the last two weeks. An older week shows its totals only.</p>`;
+  const figs = `<div class="md"><table><tr><th></th><th>Week before</th><th>${f.start}</th></tr>
+    <tr><td>Each merged pull request<small>${plural(f.mergedN, 'pull request')} merged</small></td><td>${was(prev && prev.perPr)}</td><td>${f.perPr == null ? 'None' : usd(f.perPr)}</td></tr>
+    <tr><td>Never merged</td><td>${was(prev && prev.never)}</td><td>${usd(f.never)}</td></tr>
+    <tr><td>Triage and Design sessions</td><td>${was(prev && prev.design)}</td><td>${usd(f.design)}</td></tr>
+    <tr><td>Replays</td><td>${was(prev && prev.replay)}</td><td>${usd(f.replay)}</td></tr></table></div>`;
+  let detail = `<p class="fine">The prototype’s ledger covers the last two weeks. An older week shows its totals only.</p>`;
   if (!f.canned){
     const byRepo = Object.keys(REPO).map(k => ({name: REPO[k], mono: true, usd: sum(f.sl.filter(x => x.w.repo === k)), note: plural(f.sl.filter(x => x.w.repo === k).length, 'piece') + ' of work'})).sort((x, y) => y.usd - x.usd);
     const roles = ['Implement','Review','Design','Triage','Replay','Retro','Audit','Research'].map(r => ({name: r, usd: sum(f.runs.filter(x => x.role === r)), note: plural(f.runs.filter(x => x.role === r).length, 'run')})).filter(x => x.usd > 0).sort((x, y) => y.usd - x.usd);
     const up = f.runs.filter(r => /stepped up/.test(r.note));
     const models = [{name:'Sonnet', usd: sum(f.runs.filter(r => r.model === 'Sonnet'))}, {name:'Opus', usd: sum(f.runs.filter(r => r.model === 'Opus' && !/stepped up/.test(r.note)))}, {name:'Opus, stepped up', usd: sum(up), note: plural(up.length, 'Step-up')}].filter(x => x.usd > 0);
-    detail = `<section class="panel"><header><h2>By Product repo</h2></header><div class="pad">${barList(byRepo, 'stub')}</div></section>
-      <section class="panel"><header><h2>By role</h2></header><div class="pad">${barList(roles)}</div></section>
-      <section class="panel"><header><h2>By model</h2></header><div class="pad">${barList(models)}</div></section>
-      <section class="panel"><header><h2>Dearest this week</h2><button class="linkish" data-act="stub" data-what="All ${f.sl.length} pieces of work">All ${f.sl.length}</button></header>
-        ${f.sl.slice(0, 3).map(x => `<div class="row"><div class="hit" style="cursor:default"><span class="r-top"><span class="ref">${x.w.pr || x.w.ref}</span><span class="usd">${usd(x.usd)}</span></span><span class="r-title">${esc(x.w.title)}</span><span class="r-meta">${statePill(x)}</span></div></div>`).join('')}</section>`;
+    detail = `<section class="panel"><div class="panel-h">By Product repo</div>${dist(byRepo, 'stub')}</section>
+      <section class="panel"><div class="panel-h">By role</div>${dist(roles)}</section>
+      <section class="panel"><div class="panel-h">By model</div>${dist(models)}</section>
+      <section class="panel"><div class="panel-h">Dearest <button class="linkish" data-act="stub" data-what="All ${f.sl.length} pieces of work">All ${f.sl.length}</button></div>${f.sl.slice(0, 3).map(x => workRow(w, x, {say: plural(x.runs.length, 'run')})).join('')}</section>`;
   }
-  const held = allUsedUp(w) ? `<p class="banner" style="margin-top:14px">Runs have been held for 40 minutes this week. ${plural(w.held,'run')} wait for a Subscription.</p>` : '';
-  return `${topBar('Back to Home', 'home')}<h1 class="c-h1">Eight weeks at API prices</h1>
-    <div class="c-sel"><strong>${usd(f.usd)}</strong><span>${f.label}${prev ? `<br>${usd(prev.usd)} the week before` : ''}</span></div>
-    ${chart}${held}
-    <section class="panel">${figs}</section>
+  return `${back('Home', 'home')}<div class="r-meta">${factoryPill(w)}<span class="ref">Spend</span></div>
+    <h1 class="r-title">Eight weeks at API prices</h1>
+    ${facts([`${f.label}: ${usd(f.usd)}`, prev ? `${usd(prev.usd)} the week before` : ''])}
+    ${heldNote(w)}
+    <section class="panel"><div class="panel-h">${f.label} <span>${usd(f.usd)}</span></div><div class="md">${chart}</div>${figs}</section>
     ${detail}
-    <section class="panel"><header><h2>GitHub Actions runner time</h2><span class="sum">${hours(f.mins)}</span></header><div class="pad">
+    <section class="panel"><div class="panel-h">GitHub Actions runner time <span>${hours(f.mins)}</span></div><div class="md">
       <div class="chart small" role="img" aria-label="Runner minutes by week">${weeks.map((x, i) => `<span class="col ${x.part ? 'part' : ''}" aria-pressed="${S.c.week === i}" title="${x.label}: ${hours(x.mins)}"><i style="height:${Math.round(x.mins / maxM * 100)}%"></i></span>`).join('')}</div>
       <p class="fine">Estimated from each run’s start and end. About 1,180 of 3,000 included minutes used this month.</p></div></section>
-    <section class="panel"><header><h2>Weekly limits</h2><span class="sum">also on Home</span></header><div class="pad"><div class="b-subs" style="margin-top:0">${w.subs.map(s => `<div class="b-sub"><span><b>${s.name}</b> ${s.state === 'limit' ? `used up, resets ${dayTime(s.resets)}` : s.state === 'credits' ? 'used up, spent usage credits' : s.state === 'running' ? 'runs go here' : 'next in line'}</span><span class="num">${s.used}%</span><div class="meter"><span class="${s.state === 'limit' || s.state === 'credits' ? 'full' : ''}" style="width:${s.used}%"></span></div></div>`).join('')}</div></div></section>
+    <section class="panel"><div class="panel-h">Subscriptions <span>also on Home</span></div><div class="md">${subsCompact(w)}</div></section>
     ${PRICE_NOTE}`;
 }
 
 /* ---------- prototype chrome ---------- */
 const BETS = {
-  a:['Leads with the Subscriptions, larger than on Home: the share used, a mark for how far through its week each one is, and when it runs out at this pace.','The period is each Subscription’s own week, which starts at its reset. The dollars cover the last 7 days. There is no moving between periods.','Dollars are reached by drilling down: Product repo, then a piece of work, then its runs. Each step is its own screen.','A Used up Subscription says when it resets or what you owe; a Held factory gets a banner above the gauges.','No GitHub Actions minutes.'],
-  b:['Leads with one dollar figure for a calendar week, the Weekly summary’s week. The Subscriptions shrink to a line each, since Home already has them.','You step back and forward a week at a time.','One flat list of work, dearest first. Product repo and outcome are filters, each chip showing its own total. A row opens in place to its runs.','A Ticket and its pull request are one row. A week’s row shows only that week’s runs and says what fell outside.','Held is a banner under the Subscriptions. GitHub Actions minutes are one line at the foot.'],
+  a:['The title is one sentence on how long the factory can keep running. Under it each Subscription: the share used, a mark for how far through its week it is, and when it runs out at this pace.','The period is each Subscription’s own week, which starts at its reset. The dollars cover the last 7 days. There is no moving between periods.','Dollars are reached by drilling down: Product repo, then a piece of work, then its runs. Each step is its own screen.','A Used up Subscription says when it resets or what you owe; when the factory is Held, the title says so.','No GitHub Actions minutes.'],
+  b:['Leads with one dollar figure for a calendar week, the Weekly summary’s week. The Subscriptions shrink to a line each, since Home already has them.','You step back and forward a week at a time.','One flat list of work, dearest first. Product repo and outcome are filters, each chip showing its own total. A row opens in place to its runs.','A Ticket and its pull request are one row. A week’s row shows only that week’s runs and says what fell outside.','Held is a note above the Subscriptions. GitHub Actions minutes are one fact under the title.'],
   c:['Leads with eight weeks as a chart, to show whether the factory is getting dearer. Tap a bar to choose the week.','Under it, the chosen week as the Weekly summary’s figures, each beside the week before.','Breakdowns by Product repo, role and model. Single pieces of work appear only as the dearest three.','GitHub Actions runner time gets a panel and a chart of its own.','The Subscriptions come last: Home has them.'],
 };
 const TRY = {
