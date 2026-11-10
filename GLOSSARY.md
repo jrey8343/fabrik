@@ -56,6 +56,10 @@ _Avoid_: cutover, migration, onboarding
 The program the Operator runs in their own terminal to adopt, repair or migrate the Kit in a repository, with no agent taking part.
 _Avoid_: installer, CLI, bootstrap, `/fabrik-setup`
 
+**Console**:
+The Operator's own app for seeing what the factory is doing across their Product repos and making their moves at the Merge gate. It shows what GitHub and the Run records hold and is never a record itself: the Loop runs the same without it.
+_Avoid_: control plane, dashboard, inbox, app
+
 ## The product
 
 **Product intent**:
@@ -96,11 +100,19 @@ _Avoid_: architect, critic
 An agent that resolves one research Decision on a Map by reading primary sources and recording its findings, deciding nothing.
 _Avoid_: investigator, scout
 
+**Digest writer**:
+An agent on a frontier model that writes the Digest of a pull request the Reviewer has passed, before it reaches the Operator, judging nothing and changing nothing.
+_Avoid_: summariser, narrator, reporter
+
 ## The loop
 
 **Loop**:
 The end-to-end path a piece of work takes in Fabrik, from idea to a pull request the Operator has merged.
 _Avoid_: pipeline, workflow, Real Engineering Loop (Matt Pocock's term, not Fabrik's)
+
+**Standing**:
+Where one piece of work is on the Loop, or between its merge and production, and whose move is next, as the Kit reads it from GitHub.
+_Avoid_: status, state, stage
 
 **AFK**:
 Work an agent drives alone, with no human in the exchange.
@@ -265,6 +277,10 @@ _Avoid_: PR feedback, reply
 **UI evidence**:
 The screenshots, and preview link if the Product repo has one, that the Kit captures for a pull request changing a Product repo's UI, so the Operator and the Reviewer can see what was built.
 _Avoid_: visual proof, screenshots, artifacts
+
+**Digest**:
+The Kit's plain-English account of an agent pull request as it stands at one head, written each time it arrives at the Merge gate and kept on the pull request for the Operator: what was decided and why, what was left out of scope, what needs follow-up, and which parts deserve the Operator's own eyes.
+_Avoid_: PR summary, brief, report, changelog
 
 **Capture identity**:
 A named kind of user that UI evidence views a route as, signed in to the Sandbox's own server with fake credentials.
