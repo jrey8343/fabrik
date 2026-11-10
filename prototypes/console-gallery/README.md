@@ -6,8 +6,10 @@ Three structurally different variants of a Product repo's Gallery, for the Decis
 [Prototype the Gallery: a Product repo's Prototypes and UI evidence in one place](https://github.com/jrey8343/fabrik/issues/525)
 on [Wayfinder: the Console](https://github.com/jrey8343/fabrik/issues/507).
 
+**Chosen: D, which is A with C's flip in place for a Prototype's variants.** The file opens on it. A, B and C are kept as the record of what was judged.
+
 Run it: open `index.html` in a browser, or serve this folder (`python3 -m http.server`) and open it on a phone.
-Switch variants with the floating bar, the arrow keys, `#a` / `#b` / `#c`, or `?variant=`. The bar's second button changes the scene: Kept 30 days, Kept 90 days, Quiet.
+Switch variants with the floating bar, the arrow keys, `#a` / `#b` / `#c` / `#d`, or `?variant=`. The bar's second button changes the scene: Kept 30 days, Kept 90 days, Quiet.
 
 The repo, every issue and pull request, and every "screenshot" are invented. The screenshots are drawings the file makes, at the Kit's two sizes (390 by 844 and 1440 by 900, one screen high). Nothing talks to GitHub. The styling is the Digest prototype's, as the Spend prototype has it.
 

@@ -4,7 +4,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
 <!--
   PROTOTYPE. Throwaway. Never merged.
-  Three variants of the Console's Gallery screen for one Product repo, switchable from the floating bar (or #a / #b / #c, or ?variant=).
+  Three variants of the Console's Gallery screen for one Product repo and the blend the Operator chose (D, which the file opens on), switchable from the floating bar (or #a / #b / #c / #d, or ?variant=).
   Answers the Decision "Prototype the Gallery: a Product repo's Prototypes and UI evidence in one place".
   Styling is the Digest prototype's, which starts from the Home prototype's (prototypes/console-home).
   Every repo, issue, pull request, page and "screenshot" in here is invented: the screenshots are drawings made by this file.
@@ -263,7 +263,7 @@ function shot(route, f = {}, vp = 'm', label = ''){
 const NOW = new Date(2026, 10, 10, 14, 15);
 const T = (mon, day, hm) => new Date(2026, mon - 1, day, +hm.split(':')[0], +hm.split(':')[1]);
 const REPO = 'northside-physio';
-const VARIANTS = [['a','By work'],['b','By page'],['c','Roll']];
+const VARIANTS = [['d','Chosen'],['a','By work'],['b','By page'],['c','Roll']];
 const SCENARIOS = [['busy','Kept 30 days'],['keep90','Kept 90 days'],['quiet','Quiet']];
 const P = {phone:1, picker:1};            /* /book in production today */
 const FULL = {...P, full:1};
@@ -299,8 +299,8 @@ const WORK = [
     routes:[{route:'/', before:{}, after:{}}]},
 ];
 
-const S = {variant:'a', scenario:'busy', notes:false, toast:null,
-  a:{open:null, view:null}, b:{page:null, vp:'m', sheet:false}, c:{kind:'all', vp:'m', view:null}};
+const S = {variant:'d', scenario:'busy', notes:false, toast:null,
+  a:{open:null, view:null, k:null, vp:'m'}, b:{page:null, vp:'m', sheet:false}, c:{kind:'all', vp:'m', view:null}};
 
 /* ---------- helpers ---------- */
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -376,13 +376,26 @@ function renderA(W){
 }
 function detailA(W, w){
   const pic = (r, side, vp, f, route, cap) => `<div><button class="shot" data-act="a-view" data-id="${w.id}" data-r="${r}" data-side="${side}" data-vp="${vp}">${shot(route, f, vp)}</button><span class="cap">${cap}</span></div>`;
+  const ask = w.kind !== 'proto' ? '' : `<section class="panel"><div class="panel-h">The round’s question</div><div class="md"><p><b>Which variant?</b></p><p>The Design session advises ${letter(w.rec)}. ${w.why}</p>
+        ${w.st === 'chosen' ? `<p>You answered ${letter(w.chose)} ${when(w.choseAt)}. The Ticket it filed names ${letter(w.chose)} as the reference.</p>` : `<p class="fine">The choice is made by answering the round. The Console only shows the variants.</p>`}${moveOf(w)}</div></section>`;
+  /* D, the chosen blend: C's flip in place, on A's screen. One frame; A, B and C swap in it, so only what differs moves. */
+  if (w.kind === 'proto' && S.variant === 'd'){
+    const k = w.variants.some(q => q[0] === S.a.k) ? S.a.k : (w.chose || w.rec), vr = w.variants.find(q => q[0] === k), vp = S.a.vp, tg = 'style="min-width:44px;min-height:40px"';
+    return `${back('Gallery', 'a-close')}<div class="r-meta">${pillOf(w)}${refOf(w)}<span class="ref">${w.route}</span></div><h1 class="r-title">${esc(w.title)}</h1>
+      ${facts([plural(w.variants.length, 'variant'), w.st === 'choose' ? `round ${w.round} asked ${when(w.at)}` : `round ${w.round} answered ${when(w.choseAt)}`, 'mobile and desktop'])}
+      <section class="panel" style="overflow:visible"><div class="panel-h" style="border-radius:11px 11px 0 0">Variants <span>they swap in one frame</span></div><div class="md" style="padding-top:0">
+        <div class="toggles" style="position:sticky;top:env(safe-area-inset-top,0px);z-index:2;background:var(--raised);margin:0 -14px;padding:10px 14px;border-bottom:1px solid var(--line)">${w.variants.map(q => `<button class="toggle" ${tg} data-act="a-k" data-k="${q[0]}" aria-pressed="${k === q[0]}">${letter(q[0])}${w.chose === q[0] ? ' chosen' : w.st === 'choose' && w.rec === q[0] ? ' advised' : ''}</button>`).join('')}
+          <span style="flex:1"></span><button class="toggle" ${tg} data-act="a-pvp" data-k="m" aria-pressed="${vp === 'm'}">Mobile</button><button class="toggle" ${tg} data-act="a-pvp" data-k="d" aria-pressed="${vp === 'd'}">Desktop</button></div>
+        <p style="margin-top:12px"><b>${letter(k)}.</b> ${vr[1]}.</p>
+        <div style="margin-top:10px">${pic(k, 'after', vp, vr[2], w.route, vp === 'd' ? 'Desktop, scaled to fit. Tap for its real size.' : 'Mobile, at the size it was captured. Tap to fill the screen.')}</div>
+        <div class="links">${linksOf(w, w.route, k)}</div></div></section>${ask}`;
+  }
   if (w.kind === 'proto'){
     return `${back('Gallery', 'a-close')}<div class="r-meta">${pillOf(w)}${refOf(w)}<span class="ref">${w.route}</span></div><h1 class="r-title">${esc(w.title)}</h1>
       ${facts([plural(w.variants.length, 'variant'), w.st === 'choose' ? `round ${w.round} asked ${when(w.at)}` : `round ${w.round} answered ${when(w.choseAt)}`, 'mobile and desktop'])}
       ${w.variants.map(([k, say, f]) => `<section class="panel"><div class="panel-h"><b style="color:var(--ink)">${letter(k)}</b><span style="flex:1;text-align:left;color:var(--ink-2)">${say}</span><span>${w.chose === k ? 'You chose this' : w.rec === k ? 'Advised' : ''}</span></div>
         <div class="md"><div class="solo">${pic(k, 'after', 'm', f, w.route, 'Mobile, at the size it was captured')}</div><div class="solo" style="margin-top:12px">${pic(k, 'after', 'd', f, w.route, 'Desktop')}</div><div class="links">${linksOf(w, w.route, k)}</div></div></section>`).join('')}
-      <section class="panel"><div class="panel-h">The round’s question</div><div class="md"><p><b>Which variant?</b></p><p>The Design session advises ${letter(w.rec)}. ${w.why}</p>
-        ${w.st === 'chosen' ? `<p>You answered ${letter(w.chose)} ${when(w.choseAt)}. The Ticket it filed names ${letter(w.chose)} as the reference.</p>` : `<p class="fine">The choice is made by answering the round. The Console only shows the variants.</p>`}${moveOf(w)}</div></section>`;
+      ${ask}`;
   }
   return `${back('Gallery', 'a-close')}<div class="r-meta">${pillOf(w)}${refOf(w)}<span class="ref">Ticket ${w.ref}</span></div><h1 class="r-title">${esc(w.title)}</h1>
     ${facts([`captured ${when(w.at)}`, w.head, 'mobile and desktop', w.st === 'merged' ? `merged ${when(w.merged)}` : ''])}
@@ -401,7 +414,7 @@ function viewerA(W){
   return `<div class="viewer" role="dialog" aria-label="Screenshot"><div class="v-top"><button class="x" data-act="a-unview" aria-label="Close">×</button>
       <div class="v-cap"><b>${proto ? 'Prototype ' + w.ref : w.pr} <code>${route}</code></b><span>${side}, ${v.vp === 'd' ? 'desktop 1440 wide' : 'mobile 390 wide'}, captured ${when(w.at)}</span></div></div>
     <div class="v-body ${v.zoom ? 'zoom' : ''}" style="--zw:${zw}px"><div class="frame">${shot(route, f, v.vp)}</div></div>
-    <div class="v-foot">${!proto && r.before ? seg('a-side', v.side, [['before','Before'],['after','After']]) : ''}${seg('a-vp', v.vp, [['m','Mobile'],['d','Desktop']])}
+    <div class="v-foot">${!proto && r.before ? seg('a-side', v.side, [['before','Before'],['after','After']]) : ''}${proto && S.variant === 'd' ? seg('a-k', v.r, w.variants.map(q => [q[0], letter(q[0])])) : ''}${seg('a-vp', v.vp, [['m','Mobile'],['d','Desktop']])}
       <button class="v-btn ${v.zoom ? 'on' : ''}" data-act="a-zoom">${v.vp === 'd' ? 'Actual size' : 'Twice the size'}</button></div>
     <p class="v-say">${v.zoom ? 'Drag to move around it.' : v.vp === 'd' ? 'Scaled down to fit. Actual size lets you move around it.' : 'Close to the size a phone shows it.'}</p></div>`;
 }
@@ -513,18 +526,20 @@ function viewerC(W){
 }
 /* ---------- prototype chrome ---------- */
 const BETS = {
+  d:['Chosen by the Operator on 2026-11-11: A, with C’s flip in place for a Prototype’s variants. The file opens on it.','Organised by piece of work, as Home is: a row per Prototype and per pull request, yours first.','Merged work stays exactly as long as it has pictures, then leaves the Gallery.','A pull request opens to its own screen: every route, Before beside After, mobile then desktop. A picture opens full screen, where Before and After flip in place and a desktop shot can be shown at its real size.','A Prototype’s variants share one frame. A, B and C swap in it, on its screen and in the viewer, so only what differs moves.'],
   a:['Organised by piece of work, as Home is: a row per Prototype and per pull request, yours first.','Merged work stays exactly as long as it has pictures, then leaves the Gallery. Nothing is listed without a picture.','A row opens to its own screen: every route, Before beside After, mobile then desktop.','A Prototype’s variants are stacked full size, one under the other. You compare by scrolling.','A picture opens full screen. Before and After flip in place with one tap; a desktop shot can be shown at its real size and moved around.'],
   b:['Organised by page: the Gallery is the Product’s routes, each with how it looks in production now.','A page shows everything open on it together, so two pull requests and a Prototype on one page are seen side by side.','Merged work stays for good as a line in its page’s history. Its pictures last as long as GitHub keeps them; after that the line says so and links to production.','Before and After are a wipe you drag, in the page. Nothing opens full screen. Desktop shots are strips you drag sideways.','A Prototype’s variants are a sideways swipe, or all side by side.'],
   c:['Organised by time: one roll of everything captured, newest first, grouped by day. Only the After is on the roll.','Merged work stays on the roll until its pictures expire, then drops to a list of links under it.','A tap opens a viewer that swipes through the whole roll, one picture per screen.','Hold a button to see the Before in the same place. Double-tap, or the button, for twice the size.','A Prototype is one stop in the viewer: A, B and C flip in place, so only what differs moves.'],
 };
 const TRY = {
+  d:['Open the Prototype and flip between A, B and C. Scroll down the picture and flip again.','Tap the picture, then flip in the viewer. Try Desktop at its real size.','Say what PR #214 changed on the booking page.','Switch the scene to Quiet, then Kept 90 days.'],
   a:['Open the Prototype and decide between A, B and C.','Say what PR #214 changed on the booking page.','Read the small print on PR #209’s desktop shot.','Find how the home page looked before the phone number went in.'],
   b:['Say what else is open on the page PR #214 changes.','Drag the wipe on PR #233.','Compare the Prototype’s three variants.','Find how /book looked before its slots were made easier to tap. Then switch the scene to Kept 90 days.'],
   c:['Catch up on what was drawn since yesterday without opening anything twice.','In the viewer, swipe to PR #214 and hold for Before.','Flip the Prototype between A, B and C.','Scroll to the end of the roll. Then switch the scene to Kept 90 days.'],
 };
 function notes(W){
   const v = VARIANTS.find(x => x[0] === S.variant), sc = SCENARIOS.find(x => x[0] === S.scenario);
-  const at = S.variant === 'a' ? (S.a.view ? 'the viewer' : S.a.open ? 'the screen of ' + (W.get(S.a.open).pr || 'Prototype ' + W.get(S.a.open).ref) : 'the list')
+  const at = S.variant === 'a' || S.variant === 'd' ? (S.a.view ? 'the viewer' : S.a.open ? 'the screen of ' + (W.get(S.a.open).pr || 'Prototype ' + W.get(S.a.open).ref) : 'the list')
     : S.variant === 'b' ? (S.b.page ? 'the page ' + S.b.page + ', ' + (S.b.vp === 'd' ? 'desktop' : 'mobile') : 'the list of pages')
     : (S.c.view ? 'the viewer, picture ' + (S.c.view.i + 1) : 'the roll') + ', showing ' + S.c.kind + ', ' + (S.c.vp === 'd' ? 'desktop' : 'mobile');
   return `<h2>${v[0].toUpperCase()}: ${v[1]}</h2>
@@ -546,9 +561,9 @@ function bar(){
 const app = document.getElementById('app');
 function render(){
   const W = world();
-  if (S.a.open && !W.get(S.a.open)) S.a = {open:null, view:null};
-  const body = {a:renderA, b:renderB, c:renderC}[S.variant](W);
-  const over = S.variant === 'a' && S.a.view ? viewerA(W) : S.variant === 'c' && S.c.view ? viewerC(W) : '';
+  if (S.a.open && !W.get(S.a.open)) S.a = {open:null, view:null, k:null, vp:'m'};
+  const body = {d:renderA, a:renderA, b:renderB, c:renderC}[S.variant](W);
+  const over = (S.variant === 'a' || S.variant === 'd') && S.a.view ? viewerA(W) : S.variant === 'c' && S.c.view ? viewerC(W) : '';
   app.innerHTML = `<div class="stage"><div class="phone">${body}</div><aside class="notes" ${S.notes ? 'data-open' : ''}>${notes(W)}</aside></div>${over}${S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : ''}${bar()}`;
   document.body.style.overflow = over ? 'hidden' : '';
   if (S.variant === 'c' && S.c.view){ const t = app.querySelector('.v-track'); t.scrollLeft = S.c.view.i * t.clientWidth; }
@@ -558,7 +573,7 @@ function render(){
 let toastTimer;
 function toast(t){ S.toast = t; clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = null; const el = app.querySelector('.toast'); if (el) el.remove(); }, 3800); }
 function cycle(list, cur, d){ const i = list.findIndex(x => x[0] === cur); return list[(i + d + list.length) % list.length][0]; }
-function reset(){ S.a = {open:null, view:null}; S.b = {page:null, vp:'m', sheet:false, open:null}; S.c = {kind:'all', vp:'m', view:null}; }
+function reset(){ S.a = {open:null, view:null, k:null, vp:'m'}; S.b = {page:null, vp:'m', sheet:false, open:null}; S.c = {kind:'all', vp:'m', view:null}; }
 /* C's viewer follows the swipe without redrawing the roll. */
 function syncC(){
   const p = partsC(world());
@@ -578,6 +593,8 @@ const ACT = {
   'a-view'(d){ S.a.view = {id: d.id, r: d.r, side: d.side || 'after', vp: d.vp || 'm', zoom: false}; },
   'a-unview'(){ S.a.view = null; },
   'a-side'(d){ S.a.view.side = d.k; },
+  'a-k'(d){ S.a.k = d.k; if (S.a.view) S.a.view.r = d.k; },
+  'a-pvp'(d){ S.a.vp = d.k; },
   'a-vp'(d){ S.a.view.vp = d.k; S.a.view.zoom = false; },
   'a-zoom'(){ S.a.view.zoom = !S.a.view.zoom; },
   'b-page'(d){ S.b.page = d.route; S.b.open = null; window.scrollTo(0, 0); },
