@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
+import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
-import type { Action, FlakyCheck, LoopEvent, Plan, RerunReport } from "./types.ts";
+import type { Action, FlakyCheck, FlawHeadChecks, HeadCheckRun, LoopEvent, Plan, RerunReport } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const E2E: FlakyCheck = { name: "e2e", red: "https://github.com/acme/shop/actions/runs/7/job/70", green: "https://github.com/acme/shop/actions/runs/7/job/99" };
@@ -92,5 +92,60 @@ describe("A Flaky check the Kit's re-run found (#462)", () => {
     expect(actions.some((action) => action.kind === "create-issue")).toBe(false);
     expect(actions).toContainEqual(expect.objectContaining({ kind: "comment", issue: 88, body: expect.stringContaining(`[green](${E2E.green})`) }));
     expect(actions.map(textOf).find((text) => text.includes("<!-- fabrik:flaky-check "))).toContain("a Flaky check (#88).");
+  });
+});
+
+describe("A Verdict counted back for a Flaky check (#462)", () => {
+  it("no longer counts toward the Ticket's Retries", () => {
+    const earlier = [
+      { verdict: "execution-flaw" as const, source: "ci" as const, requestChanges: false, checks: ["e2e"], flaky: true as const, headSha: "b".repeat(40) },
+    ];
+    const plan = planFor(redChecks(["unit"], { outside: [], failedAgain: ["unit"], flaky: [], refused: null }), snapshotOfPullRequest(aPullRequest({ verdicts: earlier, pushedSinceVerdict: true })), kitConfig());
+
+    expect(verdictOf(plan)).toContain("Retry 1 of 2 starts now");
+  });
+});
+
+describe("The hourly tick's sweep for Flaky checks (#462)", () => {
+  const TICK: LoopEvent = { kind: "scheduled-tick", now: "2026-11-11T12:17:00Z" };
+  const FLAW = "b".repeat(40);
+  const run = (name: string, conclusion: string | null, startedAt: string, id: number): HeadCheckRun => ({
+    name,
+    status: conclusion === null ? "in_progress" : "completed",
+    conclusion,
+    startedAt,
+    url: `https://github.com/acme/shop/actions/runs/7/job/${id}`,
+  });
+  const head = (checkRuns: HeadCheckRun[], checks = ["e2e"]): FlawHeadChecks => ({ pullRequest: 50, ticket: 7, headSha: FLAW, checks, checkRuns });
+  const sweep = (heads: FlawHeadChecks[] | "no-permission") => planFor(TICK, { ...tickSnapshot(), flakySweep: heads }, kitConfig());
+  const swept = (plan: Plan) => actionsOf(plan).filter((action) => action.kind !== "check-dispatch" && action.kind !== "check-design-queue");
+
+  it("counts back a ci Verdict once every check it named reads green on its head, saying so in one line and filing the issue", () => {
+    const plan = sweep([head([run("e2e", "failure", "2026-11-11T09:00:00Z", 70), run("e2e", "success", "2026-11-11T11:00:00Z", 99)])]);
+    const line = swept(plan).map(textOf).find((text) => text.includes("<!-- fabrik:flaky-check "));
+
+    expect(line).toContain(`"countedBack":true`);
+    expect(line).toContain(`\`e2e\` has since passed on ${FLAW.slice(0, 7)}, where its failure gave an Execution flaw: a Flaky check, so that Verdict no longer counts toward #7's Retries (#new).`);
+    expect(swept(plan)).toContainEqual(
+      expect.objectContaining({
+        kind: "create-issue",
+        title: "Flaky required check: e2e",
+        body: expect.stringContaining("[red](https://github.com/acme/shop/actions/runs/7/job/70), [green](https://github.com/acme/shop/actions/runs/7/job/99)"),
+      }),
+    );
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("leaves a Verdict whose checks aren't all green on its head, going by each one's latest result", () => {
+    const redAgain = [run("e2e", "failure", "2026-11-11T09:00:00Z", 70), run("e2e", "success", "2026-11-11T10:00:00Z", 80), run("e2e", "failure", "2026-11-11T11:00:00Z", 90)];
+    const oneOfTwo = [run("e2e", "failure", "2026-11-11T09:00:00Z", 70), run("e2e", "success", "2026-11-11T11:00:00Z", 99), run("unit", "failure", "2026-11-11T09:00:00Z", 71)];
+
+    expect(swept(sweep([head(redAgain)]))).toEqual([]);
+    expect(swept(sweep([head(oneOfTwo, ["e2e", "unit"])]))).toEqual([]);
+    expect(swept(sweep([head([run("e2e", null, "2026-11-11T11:00:00Z", 99)])]))).toEqual([]);
+  });
+
+  it("is quiet when the Fabrik App can't read check runs", () => {
+    expect(swept(sweep("no-permission"))).toEqual([]);
   });
 });

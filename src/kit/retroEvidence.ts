@@ -326,7 +326,15 @@ export interface PostedVerdict {
  * nobody can fake a Verdict by quoting one.
  */
 export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
-  return comments.flatMap((comment) => (comment.byBot ? verdictsIn([comment.body]).map((record) => ({ record, at: comment.at })) : []));
+  const posted = verdictCommentsOf(comments);
+  // Read across every comment, so the Kit's Flaky check line marks the Verdict it counted back (#462). verdictsIn
+  // keeps the comments' order, one Verdict to a comment at most.
+  return verdictsIn(comments.filter((comment) => comment.byBot).map(({ body }) => body)).map((record, at) => ({ record, at: posted[at]!.at }));
+}
+
+/** The Fabrik App's comments that hold a Verdict, oldest first, as verdictsOn reads them. */
+function verdictCommentsOf(comments: readonly CommentFacts[]): CommentFacts[] {
+  return comments.filter((comment) => comment.byBot && verdictsIn([comment.body]).length > 0);
 }
 
 /**
@@ -717,6 +725,8 @@ export interface VerdictEvidence {
   readonly at: string;
   /** The Verdict comment, its findings and Follow-ups included. */
   readonly body: string;
+  /** True when its checks have since passed on its head (#462): a Flaky check, counted back from the Ticket's Retries. */
+  readonly flaky?: true;
 }
 
 /** An agent PR in the streak table, and whatever breaks a streak it's counted in. */
@@ -1131,9 +1141,13 @@ function sampleOf(window: Window, metrics: MetricsInput, digested: Digested, tic
       title,
       mergedAt,
       ticket: ticketOf(ticket),
-      verdicts: comments.flatMap((comment) =>
-        verdictsOn([comment]).map(({ record: { verdict, source }, at }) => ({ verdict, source, at, body: comment.body })),
-      ),
+      verdicts: verdictsOn(comments).map(({ record: { verdict, source, flaky }, at }, index) => ({
+        verdict,
+        source,
+        at,
+        body: verdictCommentsOf(comments)[index]!.body,
+        ...(flaky === true ? { flaky } : {}),
+      })),
       records: metrics.records
         .filter((record) => ticket !== null && record.issue === ticket && record.role !== "score")
         .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))

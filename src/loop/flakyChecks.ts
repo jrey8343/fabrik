@@ -9,19 +9,24 @@
 // suite gets fixed. Pure.
 import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker } from "./markers.ts";
-import type { Action, CreatedIssue, FlakyCheck, KitIssueSnapshot } from "./types.ts";
+import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, KitIssueSnapshot, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 /** A check's name as Markdown code: a backtick in it can't end the span. */
 export function checkCode(name: string): string {
   return `\`${name.replace(/`/g, "'")}\``;
 }
 
-/** Each Flaky check's issue: the open one for its check when there is one, by its marker, else one filed now. */
+/**
+ * Each Flaky check's issue: the open one for its check when there is one, by
+ * its marker, else one filed earlier in the same plan (`filed`, by check),
+ * else one filed now, which goes into `filed`.
+ */
 function issueActions(
   pullRequest: number,
   headSha: string,
   flaky: readonly FlakyCheck[],
   issues: readonly KitIssueSnapshot[],
+  filed: Map<string, CreatedIssue> = new Map(),
 ): { actions: Action[]; refs: (number | CreatedIssue)[] } {
   const actions: Action[] = [];
   const refs: (number | CreatedIssue)[] = [];
@@ -34,7 +39,12 @@ function issueActions(
       refs.push(open.number);
       continue;
     }
-    const key = `flaky-check-${at}`;
+    const earlier = filed.get(check.name);
+    if (earlier !== undefined) {
+      refs.push(earlier);
+      continue;
+    }
+    const key = `flaky-check-${short}-${at}`;
     actions.push({
       kind: "create-issue",
       key,
@@ -52,6 +62,7 @@ function issueActions(
       blockedBy: [],
     });
     refs.push({ created: key });
+    filed.set(check.name, { created: key });
   }
   return { actions, refs };
 }
@@ -96,8 +107,9 @@ export function countedBackActions(
   headSha: string,
   flaky: readonly FlakyCheck[],
   issues: readonly KitIssueSnapshot[],
+  filed: Map<string, CreatedIssue> = new Map(),
 ): Action[] {
-  const { actions, refs } = issueActions(pullRequest, headSha, flaky, issues);
+  const { actions, refs } = issueActions(pullRequest, headSha, flaky, issues, filed);
   const short = headSha.slice(0, 7);
   const names = flaky.map(({ name }) => checkCode(name)).join(", ");
   const body: (string | CreatedIssue)[] = [
@@ -109,4 +121,52 @@ export function countedBackActions(
   refs.forEach((ref, at) => body.push(...(at === 0 ? [] : [", "]), issueRef(ref)));
   body.push(").");
   return [...actions, { kind: "comment-linking", issue: pullRequest, body }];
+}
+
+/** The Verdicts on this PR the tick's sweep reads the checks of: ci-sourced Execution flaws naming their checks, not yet counted back. */
+export function uncountedFlaws(pullRequest: PullRequestSnapshot): VerdictRecord[] {
+  return pullRequest.verdicts.filter(
+    (record) => record.verdict === "execution-flaw" && record.source === "ci" && record.flaky !== true && (record.checks?.length ?? 0) > 0,
+  );
+}
+
+const RED = ["failure", "timed_out", "cancelled", "action_required", "startup_failure"];
+
+/**
+ * The checks that flipped on this flaw's head, each with a red run and its
+ * latest, green, run; null unless every check the Verdict named reads green
+ * now and has a red run on that head. Each goes by its latest run, so red,
+ * green, red again is still red.
+ */
+function flippedOn({ checks, checkRuns }: FlawHeadChecks): FlakyCheck[] | null {
+  const flaky: FlakyCheck[] = [];
+  for (const name of checks) {
+    const runs = checkRuns.filter((run) => run.name === name).toSorted((a, b) => Date.parse(a.startedAt ?? "") - Date.parse(b.startedAt ?? ""));
+    const latest = runs.at(-1);
+    const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
+    if (latest?.conclusion !== "success" || red === undefined) return null;
+    flaky.push({ name, red: red.url, green: latest.url });
+  }
+  return flaky;
+}
+
+/**
+ * The tick's Flaky check sweep (#462): every ci-sourced Execution flaw on an
+ * open agent PR whose checks all read green now on the head it was given on
+ * is counted back. Its line marks it, so the sweep never counts it twice.
+ */
+export function flakyCheckGate(_now: string, snapshot: Snapshot): Plan {
+  const { flakySweep } = snapshot;
+  if (flakySweep === null) return { kind: "nothing", reason: "The snapshot holds no Flaky check sweep" };
+  if (flakySweep === "no-permission") {
+    return { kind: "nothing", reason: "The Fabrik App can't read check runs without Checks: read, so no Execution flaw is counted back for a Flaky check" };
+  }
+  // A check flaking on two PRs in one tick files one issue, which both lines link.
+  const filed = new Map<string, CreatedIssue>();
+  const actions: Action[] = [];
+  for (const head of flakySweep) {
+    const flaky = flippedOn(head);
+    if (flaky !== null) actions.push(...countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed));
+  }
+  return actions.length === 0 ? { kind: "nothing", reason: "No Execution flaw on an open agent PR has had its checks pass since on the same head" } : { kind: "act", actions };
 }

@@ -880,6 +880,26 @@ export const STRENGTH_LABELS: Readonly<Record<Strength, string>> = {
 };
 
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
+/** A check run on a head commit, as the tick reads them for its Flaky check sweep (#462). */
+export interface HeadCheckRun {
+  readonly name: string;
+  readonly status: string;
+  /** GitHub's conclusion once it completed: success, failure, timed_out, cancelled, skipped, neutral…; null before. */
+  readonly conclusion: string | null;
+  readonly startedAt: string | null;
+  readonly url: string;
+}
+
+/** An open agent PR's ci-sourced Execution flaw not yet counted back, and every check run on its head (#462). */
+export interface FlawHeadChecks {
+  readonly pullRequest: number;
+  readonly ticket: number | null;
+  readonly headSha: string;
+  /** The checks the Verdict named as failed. */
+  readonly checks: readonly string[];
+  readonly checkRuns: readonly HeadCheckRun[];
+}
+
 /** A required check that reported both failure and success on the same head commit (GLOSSARY.md), with a link to a run of each. */
 export interface FlakyCheck {
   readonly name: string;
@@ -1064,6 +1084,12 @@ export interface Snapshot {
    * Read for a Review's push job and the scheduled tick; empty for any other event.
    */
   readonly flakyCheckIssues: readonly KitIssueSnapshot[];
+  /**
+   * For the scheduled tick: each open agent PR's ci-sourced Execution flaws not
+   * yet counted back, with every check run on the head each was given on (#462);
+   * "no-permission" when the Fabrik App lacks Checks: read; null for any other event.
+   */
+  readonly flakySweep: readonly FlawHeadChecks[] | "no-permission" | null;
   /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.

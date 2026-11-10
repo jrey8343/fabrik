@@ -63,13 +63,17 @@ export function implementSettings(reason: StepUpReason | null, config: KitConfig
  * like any other, so it counts. A flaw that gave way to an undelivered Request
  * changes (#341) and one on a Ticket no longer `ready-for-agent` (#416) call
  * for none, so they don't, and an Infrastructure failure posts no Verdict at all,
- * though a Broken Retry posts one, which counts (#434).
+ * though a Broken Retry posts one, which counts (#434). One from a Flaky check
+ * (#462), whose checks have since passed on its head, doesn't count either,
+ * though the Retry it called for ran.
  */
 export function retryNumber(earlier: readonly VerdictRecord[], landedNothing: number): number {
   return (
     1 +
     landedNothing +
-    earlier.filter((record) => record.verdict === "execution-flaw" && record.requestChangesFirst === undefined && record.ticketNotReady !== true).length
+    earlier.filter(
+      (record) => record.verdict === "execution-flaw" && record.requestChangesFirst === undefined && record.ticketNotReady !== true && record.flaky !== true,
+    ).length
   );
 }
 

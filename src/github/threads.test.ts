@@ -55,7 +55,7 @@ describe("Reading a PR's Verdicts", () => {
     ];
 
     expect(verdictsIn(comments)).toEqual([
-      { verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: "1".repeat(40) },
+      { verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["build"], headSha: "1".repeat(40) },
       { verdict: "pass", source: "reviewer", requestChanges: false, headSha: "2".repeat(40) },
     ]);
   });
@@ -587,5 +587,31 @@ describe("Reading a PR's conflict attempts and conflict-only run (#304)", () => 
     expect(verdictsIn([verdict(true)])).toEqual([expect.objectContaining({ conflictRun: true })]);
     expect(verdictsIn([verdict(false)])[0]).not.toHaveProperty("conflictRun");
     expect(verdict(false)).not.toContain("conflictRun");
+  });
+});
+
+describe("A Verdict counted back for a Flaky check (#462)", () => {
+  const red = (headSha: string): LoopEvent => ({
+    kind: "required-checks-finished",
+    pullRequest: 50,
+    headSha,
+    failed: ["e2e"],
+    rerun: { outside: [], failedAgain: ["e2e"], flaky: [], refused: null },
+    runUrl: "https://github.com/acme/shop/actions/runs/1",
+  });
+  const commented = (plan: Plan): string[] =>
+    plan.kind === "act"
+      ? plan.actions.flatMap((action) =>
+          action.kind === "comment" ? [action.body] : action.kind === "comment-linking" ? [action.body.map((part) => (typeof part === "string" ? part : "#9")).join("")] : [],
+        )
+      : [];
+
+  it("reads as flaky once the Kit's line marks its head counted back, and never from the Kit's own re-run line", () => {
+    const flaw = commented(planFor(red(HEAD_SHA), snapshotOfPullRequest(aPullRequest()), kitConfig()));
+    const rerunLine = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["unit"]} -->\n\`unit\` failed and passed.`;
+    const countedBack = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["e2e"],"countedBack":true} -->\n\`e2e\` has since passed.`;
+
+    expect(verdictsIn([rerunLine, ...flaw])).toEqual([expect.not.objectContaining({ flaky: true })]);
+    expect(verdictsIn([...flaw, countedBack])).toEqual([expect.objectContaining({ checks: ["e2e"], flaky: true })]);
   });
 });

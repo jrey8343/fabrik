@@ -40,6 +40,7 @@ import type {
   AuditSnapshot,
   ConflictCandidate,
   ConflictSnapshot,
+  FlawHeadChecks,
   DesignQueueIssue,
   DesignQueueSnapshot,
   DispatchSnapshot,
@@ -64,7 +65,8 @@ import type {
   TriggerSweepSnapshot,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
-import { type GitHub, pagesOf, type Repo } from "./client.ts";
+import { uncountedFlaws } from "../loop/flakyChecks.ts";
+import { allPages, type GitHub, GitHubError, pagesOf, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
   countLandedNothing,
@@ -555,6 +557,8 @@ export async function gatherSnapshot(
       : event.kind === "scheduled-tick"
         ? await gatherConflicts(github, actions, repo, event.now, appLogin, operator ?? owner, wait)
         : null;
+  // The tick counts back an Execution flaw whose checks have since passed on its head (#462).
+  const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests) : null;
   // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480).
   const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
@@ -568,8 +572,50 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
+}
+
+/** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
+interface RawHeadCheckRun {
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly started_at: string | null;
+  readonly html_url: string | null;
+}
+
+/**
+ * For the tick's Flaky check sweep (#462): each open agent PR's ci-sourced
+ * Execution flaws not yet counted back, with every check run on the head each
+ * was given on, every attempt included. The Fabrik App reads them with
+ * Checks: read; without it the sweep is "no-permission", and does nothing.
+ */
+async function gatherFlakySweep(
+  github: Pick<GitHub, "rest">,
+  repo: Repo,
+  candidates: readonly ConflictCandidate[],
+): Promise<FlawHeadChecks[] | "no-permission"> {
+  const heads: FlawHeadChecks[] = [];
+  try {
+    for (const { pullRequest } of candidates) {
+      for (const { headSha, checks = [] } of uncountedFlaws(pullRequest)) {
+        const path = `/repos/${repo.owner}/${repo.name}/commits/${headSha}/check-runs?filter=all`;
+        const runs = await allPages<RawHeadCheckRun>(github, path, (page) => (page as { check_runs: RawHeadCheckRun[] }).check_runs);
+        heads.push({
+          pullRequest: pullRequest.number,
+          ticket: pullRequest.ticket,
+          headSha,
+          checks,
+          checkRuns: runs.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion, startedAt: run.started_at, url: run.html_url ?? "" })),
+        });
+      }
+    }
+  } catch (error) {
+    if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";
+    throw error;
+  }
+  return heads;
 }
 
 /** The events whose plan may find a Flaky check (#462). */
@@ -1006,6 +1052,7 @@ type EventPart = Omit<
   | "triggers"
   | "readyTickets"
   | "flakyCheckIssues"
+  | "flakySweep"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";

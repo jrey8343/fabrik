@@ -286,7 +286,7 @@ describe("A Review while a Request-changes run is in flight", () => {
     thread.retryPushes(B, C, true);
     thread.pushRed(C);
 
-    expect(verdictsIn(thread.comments).at(-1)).toEqual({ verdict: "execution-flaw", source: "ci", requestChanges: true, headSha: C });
+    expect(verdictsIn(thread.comments).at(-1)).toEqual({ verdict: "execution-flaw", source: "ci", requestChanges: true, checks: ["build"], headSha: C });
     expect(verdictLines(thread).at(-1)).toMatch(/^Retry 1 of 2 starts now, stepped up:/);
   });
 
