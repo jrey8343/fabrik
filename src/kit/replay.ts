@@ -442,6 +442,20 @@ export function withTicketFinished(body: string, ticket: number, run: number, en
   });
 }
 
+/**
+ * The body with run `run` of Ticket `ticket` released by its own
+ * replay-record job when it couldn't land the run, `why` saying what failed
+ * (#448), so the next tick runs the Ticket again rather than waiting out the
+ * release for a run that never landed. A run whose arms both ran counts as an
+ * Infrastructure failure, its results unlanded; any other end lands as it
+ * would have. Null when the Ticket isn't in progress in that run, as when the
+ * landing got its progress in before it failed.
+ */
+export function withLandingFailed(body: string, ticket: number, run: number, end: ReplayTicketEnd, why: string): string | null {
+  const released: ReplayTicketEnd = end.kind === "done" ? { kind: "infrastructure", reason: `run ${run}'s landing failed: ${why}` } : end;
+  return withTicketFinished(body, ticket, run, released);
+}
+
 /** The body with Ticket `ticket`'s progress changed by `next`, or null when it has no plan holding that Ticket, or `next` changes nothing. */
 function withProgress(body: string, ticket: number, next: (progress: ReplayProgress) => ReplayProgress | null): string | null {
   const marks = replayMarksIn(body);
