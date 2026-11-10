@@ -207,7 +207,7 @@ describe("Review: red CI", () => {
     const [body] = commentsOf(plan);
     expect(actions[0]).toMatchObject({ kind: "comment", issue: 50 });
     expect(verdictsPostedIn([body!])).toEqual([
-      { verdict: "execution-flaw", source: "ci", requestChanges: false, headSha: HEAD_SHA },
+      { verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["build", "test"], headSha: HEAD_SHA },
     ]);
     expect(body).toContain("`build`");
     expect(body).toContain("`test`");

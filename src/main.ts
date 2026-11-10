@@ -267,6 +267,7 @@ async function finishedReviewEvent(
     failedChecks: input.failedChecks,
     skippedChecks: input.skippedChecks,
     result,
+    rerun: input.rerun ?? null,
   });
   return {
     event,

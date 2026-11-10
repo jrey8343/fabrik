@@ -69,7 +69,7 @@ function parentOf({ parent, parentIssue }: Partial<IssueSnapshot>): Pick<IssueSn
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
@@ -120,7 +120,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "conflicts" | "mergeable" | "reviewHasInlineComments">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR open or merged. */
@@ -173,6 +173,7 @@ export function dispatchSnapshotOf(
     spec: null,
     operator: "operator",
     kitIssues: [],
+    flakyCheckIssues: [],
     startingComment: null,
     reviewHasInlineComments: null,
     audit: null,
@@ -216,6 +217,7 @@ export function designQueueSnapshotOf(
     spec: null,
     operator: "operator",
     kitIssues: [],
+    flakyCheckIssues: [],
     startingComment: null,
     reviewHasInlineComments: null,
     audit: null,
@@ -235,7 +237,7 @@ export function designQueueSnapshotOf(
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
 export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers" | "readyTickets">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, ...overrides };
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, held: null, closedWeeklyLimit: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, ...overrides };
 }
 
 /**

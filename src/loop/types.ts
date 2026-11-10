@@ -326,6 +326,8 @@ export type LoopEvent =
       readonly failed: readonly string[];
       /** The ones among `failed` that were skipped or reported neutral, which no Retry changes; absent when none were. */
       readonly skipped?: readonly string[];
+      /** What the Kit's re-run of the red checks came to (#462); absent when it didn't try, as from a Kit before it. */
+      readonly rerun?: RerunReport;
       /** The Review run, linked from the Verdict comment. */
       readonly runUrl: string;
     }
@@ -337,6 +339,8 @@ export type LoopEvent =
       readonly headSha: string;
       /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
       readonly output: string;
+      /** The red checks that passed when the Kit re-ran them on this head, which let the Reviewer run (#462); absent when none did. */
+      readonly flaky?: readonly FlakyCheck[];
       readonly runUrl: string;
       /** The Product repo's web address, such as `https://github.com/acme/shop`, which a pass's Follow-ups open issues on. */
       readonly repoUrl: string;
@@ -876,6 +880,28 @@ export const STRENGTH_LABELS: Readonly<Record<Strength, string>> = {
 };
 
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
+/** A required check that reported both failure and success on the same head commit (GLOSSARY.md), with a link to a run of each. */
+export interface FlakyCheck {
+  readonly name: string;
+  readonly red: string;
+  readonly green: string;
+}
+
+/**
+ * What the Kit's re-run of an agent PR's red required checks came to (#462,
+ * ADR-0018): it re-runs the GitHub Actions ones once on the same head.
+ */
+export interface RerunReport {
+  /** The red checks that aren't GitHub Actions, which only their owner can re-run. */
+  readonly outside: readonly string[];
+  /** The re-run checks that failed again. */
+  readonly failedAgain: readonly string[];
+  /** The re-run checks that passed: Flaky checks. */
+  readonly flaky: readonly FlakyCheck[];
+  /** Why the Kit re-ran none of the Actions ones it could have, as GitHub refusing; null when it re-ran them, or there were none. */
+  readonly refused: string | null;
+}
+
 export interface VerdictRecord {
   readonly verdict: Verdict;
   /**
@@ -908,6 +934,14 @@ export interface VerdictRecord {
    * and started nothing; absent otherwise.
    */
   readonly ticketNotReady?: true;
+  /** On one from red required checks (#462), the ones it named as failed, which a later green on its head is read against; absent otherwise, as on every marker from before them. */
+  readonly checks?: readonly string[];
+  /**
+   * True when the checks it named have since passed on its head (#462): a
+   * Flaky check, so it no longer counts toward the Ticket's Retries. Read from
+   * the Kit's Flaky check line, never from the Verdict's own marker.
+   */
+  readonly flaky?: true;
   /** The head commit it was given on. */
   readonly headSha: string;
 }
@@ -1024,6 +1058,12 @@ export interface Snapshot {
   readonly operator: string;
   /** The open issues the Kit owns in this repo (token rotation, weekly limit), oldest first. Gathered for every event. */
   readonly kitIssues: readonly KitIssueSnapshot[];
+  /**
+   * The open Flaky check issues the Fabrik App filed (#462), by FLAKY_CHECK_LABEL: a
+   * Flaky check found again comments on its check's issue rather than filing another.
+   * Read for a Review's push job and the scheduled tick; empty for any other event.
+   */
+  readonly flakyCheckIssues: readonly KitIssueSnapshot[];
   /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.

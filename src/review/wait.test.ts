@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CheckState } from "./checks.ts";
+import type { CheckDetail } from "./rerun.ts";
 import { type ChecksWaitGitHub, errorReport, gaveUpReport, type PullRequestState, waitForRequiredChecks } from "./wait.ts";
 
 const HEAD = "a".repeat(40);
@@ -8,7 +8,7 @@ const MINUTE = 60_000;
 const open: PullRequestState = { headRefOid: HEAD, isDraft: true, state: "OPEN" };
 
 /** A PR whose checks read as `rounds` gives them, one round per poll, the last repeating; and a clock that only moves when the wait sleeps. */
-function fakes(rounds: readonly (readonly CheckState[])[], states: readonly PullRequestState[] = [open]) {
+function fakes(rounds: readonly (readonly CheckDetail[])[], states: readonly PullRequestState[] = [open]) {
   let now = 0;
   let polls = 0;
   const logged: string[] = [];
@@ -37,7 +37,7 @@ function fakes(rounds: readonly (readonly CheckState[])[], states: readonly Pull
   };
 }
 
-const check = (name: string, bucket: CheckState["bucket"]): CheckState => ({ name, bucket });
+const check = (name: string, bucket: CheckDetail["bucket"]): CheckDetail => ({ name, bucket, link: "", workflow: "" });
 
 describe("Waiting for an agent PR's required checks", () => {
   it("ends green once every gating check passed", async () => {
@@ -50,6 +50,12 @@ describe("Waiting for an agent PR's required checks", () => {
     const { github, options } = fakes([[check("build", "fail"), check("lint", "pass")]]);
 
     expect(await waitForRequiredChecks(github, options([]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"], skipped: [] });
+  });
+
+  it("ends stale when the PR has moved off the head an earlier job named", async () => {
+    const { github, options } = fakes([[check("build", "pass")]]);
+
+    expect(await waitForRequiredChecks(github, { ...options([]), headSha: "c".repeat(40) })).toEqual({ checks: "stale", headSha: "c".repeat(40) });
   });
 
   it("ends stale when the PR moves on while it waits", async () => {

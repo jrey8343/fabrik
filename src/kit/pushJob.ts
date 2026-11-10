@@ -5,7 +5,7 @@
 // its failure notice. Pure, no I/O.
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
-import type { AgentRole, KeptBranchStart } from "../loop/types.ts";
+import type { AgentRole, FlakyCheck, KeptBranchStart, RerunReport } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 
 /** One job's `needs.<job>`: its result and its outputs. */
@@ -80,6 +80,8 @@ export type PushJobInput =
       readonly skippedChecks: readonly string[];
       /** Whether green checks let the Reviewer run, so its result is there to apply. */
       readonly withResult: boolean;
+      /** What the Kit's re-run of the red checks came to (#462); absent when its job didn't run. */
+      readonly rerun?: RerunReport;
     }
   | {
       readonly kind: "agent-failure";
@@ -201,19 +203,46 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       if (checks !== undefined && FAILED.includes(checks.result)) return failure("review", ticket, checks, kit);
       if (reviewer !== undefined && FAILED.includes(reviewer.result)) return failure("review", ticket, reviewer, kit);
       if (checks?.result !== "success") return { kind: "nothing", reason: `the Review checks job ended ${checks?.result ?? "unknown"}` };
-      const outcome = checks.outputs["checks"];
       const headSha = checks.outputs["head-sha"] ?? "";
-      const failedChecks = readNames(checks.outputs["failed"]);
-      const skippedChecks = readNames(checks.outputs["skipped"]);
-      if (outcome === "red") return { kind: "review", pullRequest, ticket, headSha, failedChecks, skippedChecks, withResult: false };
+      // Red checks the Kit re-ran (#462): their wait's reading stands, and its failure is the Review's, as the first wait's is.
+      const rerunJob = needs[RERUN_CHECKS_JOB];
+      const rerunWait = needs[RERUN_WAIT_JOB];
+      if (rerunWait !== undefined && FAILED.includes(rerunWait.result)) return failure("review", ticket, rerunWait, kit);
+      const report = checks.outputs["checks"] === "red" ? rerunReportOf(checks.outputs["red"], rerunJob, rerunWait) : null;
+      const last = report !== null && rerunWait?.result === "success" ? rerunWait : checks;
+      const outcome = last.outputs["checks"];
+      const failedChecks = readNames(last.outputs["failed"]);
+      const skippedChecks = readNames(last.outputs["skipped"]);
+      const rerun = report === null ? {} : { rerun: report };
+      if (outcome === "red") return { kind: "review", pullRequest, ticket, headSha, failedChecks, skippedChecks, withResult: false, ...rerun };
       if (outcome === "green" && reviewer?.result === "success") {
-        return { kind: "review", pullRequest, ticket, headSha, failedChecks, skippedChecks, withResult: true };
+        return { kind: "review", pullRequest, ticket, headSha, failedChecks, skippedChecks, withResult: true, ...rerun };
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };
     }
     default:
       return { kind: "nothing", reason: `the Kit job routed to ${route || "nothing"}` };
   }
+}
+
+/** The Review's job that re-runs red checks (#462), and the wait on them that follows, as loop.yml names them. */
+export const RERUN_CHECKS_JOB = "rerun-checks";
+export const RERUN_WAIT_JOB = "rerun-wait";
+
+/**
+ * What re-running the red checks came to, from the first wait's red output and
+ * the two re-run jobs, or null when the re-run job never ran, as on a Kit
+ * from before it. A re-run job that failed re-ran nothing, so the first
+ * wait's red checks stand, saying why.
+ */
+function rerunReportOf(red: string | undefined, rerunJob: NeededJob | undefined, rerunWait: NeededJob | undefined): RerunReport | null {
+  if (rerunJob === undefined || rerunJob.result === "skipped" || red === undefined || red === "") return null;
+  const { outside } = JSON.parse(red) as { outside: string[] };
+  if (rerunJob.result !== "success") return { outside, failedAgain: [], flaky: [], refused: "the Re-run red checks job failed" };
+  const refused = rerunJob.outputs["refused"] ?? "";
+  if (rerunWait?.result !== "success") return { outside, failedAgain: [], flaky: [], refused: refused === "" ? null : refused };
+  const flaky = JSON.parse(rerunWait.outputs["flaky"] || "[]") as FlakyCheck[];
+  return { outside, failedAgain: readNames(rerunWait.outputs["failed-again"]), flaky, refused: null };
 }
 
 function failure(role: AgentRole, issue: number, job: NeededJob, kit: NeededJob): Extract<PushJobInput, { kind: "agent-failure" }> {

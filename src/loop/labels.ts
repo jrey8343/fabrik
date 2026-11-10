@@ -98,6 +98,13 @@ export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 export const MONITOR_LABEL = "fabrik:monitor";
 
 /**
+ * The label on each Flaky check issue the Kit files (#462), one per check, by
+ * which it finds its own. Like MONITOR_LABEL, it isn't one of
+ * KIT_ISSUE_LABELS, so the issue goes to Triage.
+ */
+export const FLAKY_CHECK_LABEL = "fabrik:flaky-check";
+
+/**
  * The label on a Map: an issue charting the way to a destination still in fog,
  * whose children are Decisions (#154). A Design session that ends in a Map puts
  * it on in place of needs-design.
@@ -142,6 +149,7 @@ export type Label =
   | typeof REVIEW_LABEL
   | KitIssueLabel
   | typeof MONITOR_LABEL
+  | typeof FLAKY_CHECK_LABEL
   | typeof MAP_LABEL
   | DecisionLabel
   | typeof RESEARCH_LABEL
@@ -160,6 +168,7 @@ export const ALL_LABELS: readonly Label[] = [
   ...CATEGORY_LABELS,
   ...KIT_ISSUE_LABELS,
   MONITOR_LABEL,
+  FLAKY_CHECK_LABEL,
   STEP_UP_LABEL,
   KEPT_BRANCH_LABEL,
   MAP_LABEL,

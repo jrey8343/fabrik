@@ -21,6 +21,7 @@ import {
   AUDIT_LABEL,
   DESIGN_LABEL,
   KEPT_BRANCH_LABEL,
+  FLAKY_CHECK_LABEL,
   KIT_ISSUE_LABELS,
   MAP_LABEL,
   NEEDS_DESIGN,
@@ -542,6 +543,8 @@ export async function gatherSnapshot(
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
   // The tick closes each ready-for-agent Ticket GitHub left open after a PR of it merged (#543).
   const readyTickets = event.kind === "scheduled-tick" ? (await gatherDispatchTickets(github, repo, appLogin)).tickets : null;
+  // A Flaky check found again comments on its check's open issue (#462): the Kit finds them at a Review's landing and the tick.
+  const flakyCheckIssues = FLAKY_CHECK_EVENTS.includes(event.kind) ? (await gatherKitIssues(github, repo, appLogin, [FLAKY_CHECK_LABEL])).kitIssues : [];
   // A weekly run's failure may give up on the week, which its gate's issues say (#443).
   const weeklyLabel = WEEKLY_RUN_EVENTS.includes(event.kind) ? weeklyLabelOf(part?.issue?.labels ?? []) : null;
   const weeklyIssues = weeklyLabel === null ? null : weeklyIssuesOf(await queryWeeklyIssues(github, repo, weeklyLabel), appLogin);
@@ -565,9 +568,12 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues };
 }
+
+/** The events whose plan may find a Flaky check (#462). */
+const FLAKY_CHECK_EVENTS: readonly LoopEvent["kind"][] = ["required-checks-finished", "review-run-finished", "scheduled-tick"];
 
 /** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
 const WEEKLY_RUN_EVENTS: readonly LoopEvent["kind"][] = ["issue-opened", "agent-run-failed", "audit-run-finished", "retro-run-finished"];
@@ -999,6 +1005,7 @@ type EventPart = Omit<
   | "mergeable"
   | "triggers"
   | "readyTickets"
+  | "flakyCheckIssues"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
@@ -1087,6 +1094,7 @@ export async function gatherKitIssues(
   github: Pick<GitHub, "graphql">,
   repo: Repo,
   appLogin: string | null,
+  labels: readonly string[] = KIT_ISSUE_LABELS,
 ): Promise<{ owner: string; kitIssues: KitIssueSnapshot[] }> {
   const nodes: KitIssueNode[] = [];
   let owner = "";
@@ -1095,7 +1103,7 @@ export async function gatherKitIssues(
     const data: KitIssuesQueryResult = await github.graphql<KitIssuesQueryResult>(KIT_ISSUES_QUERY, {
       owner: repo.owner,
       name: repo.name,
-      labels: KIT_ISSUE_LABELS,
+      labels,
       after,
     });
     const { totalCount, pageInfo, nodes: onPage } = data.repository.issues;

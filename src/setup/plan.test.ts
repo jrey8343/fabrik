@@ -355,6 +355,7 @@ describe("Labels", () => {
     "fabrik:retro",
     "fabrik:replay",
     "fabrik:monitor",
+    "fabrik:flaky-check",
     "fabrik:step-up",
     "fabrik:kept-branch",
     "wayfinder:map",
