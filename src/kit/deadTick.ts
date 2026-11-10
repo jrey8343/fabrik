@@ -10,6 +10,7 @@ import { tickStartedAgain } from "../loop/kitIssues.ts";
 import { DEAD_TICK_LABEL, READY_FOR_HUMAN } from "../loop/labels.ts";
 import { readable } from "../loop/readable.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
+import { KIT_REPO } from "./caller.ts";
 import { RUN_STORE_REPO } from "./runStore.ts";
 
 /**
@@ -18,7 +19,8 @@ import { RUN_STORE_REPO } from "./runStore.ts";
  * and a day's worth of GitHub's schedule jitter.
  */
 export const DEAD_TICK_HOURS = 25;
-const WINDOW_MS = DEAD_TICK_HOURS * 3_600_000;
+const HOUR_MS = 3_600_000;
+const WINDOW_MS = DEAD_TICK_HOURS * HOUR_MS;
 
 /** How far back the store's Run records name the repos the check expects to reach. */
 export const RECENT_RUN_DAYS = 30;
@@ -99,7 +101,7 @@ export interface DeadTickPlan {
 
 /** The repos, each once, with a Run record that ended in the last RECENT_RUN_DAYS days. */
 export function recentReposOf(records: readonly { readonly repo: string; readonly endedAt: string }[], now: string): string[] {
-  const since = Date.parse(now) - RECENT_RUN_DAYS * 24 * 3_600_000;
+  const since = Date.parse(now) - RECENT_RUN_DAYS * 24 * HOUR_MS;
   return [...new Set(records.filter((record) => Date.parse(record.endedAt) >= since).map((record) => record.repo))];
 }
 
@@ -215,7 +217,7 @@ function deadTickIssue(repo: string, { callerSince, lastTick, release }: TickFac
     lastTick === null
       ? `No Tick has started its jobs on \`main\` since \`${CALLER_PATH}\` came to it at ${readable(since)}.`
       : `The last Tick started at ${readable(lastTick.at)} ([its run](${lastTick.url}))${lastTick.release === null ? "" : `, on Fabrik ${lastTick.release}`}.`;
-  const notes = release === null ? "the release notes of the release it pins" : `[${release}'s release notes](https://github.com/jrey8343/fabrik/releases/tag/${release})`;
+  const notes = release === null ? "the release notes of the release it pins" : `[${release}'s release notes](https://github.com/${KIT_REPO}/releases/tag/${release})`;
   return {
     repo,
     title: `The hourly Tick hasn't run since ${readable(since)}`,
@@ -225,7 +227,7 @@ function deadTickIssue(repo: string, { callerSince, lastTick, release }: TickFac
       "",
       "## Steps",
       "",
-      `- [ ] Open [the Actions tab for \`${CALLER_PATH}\`](https://github.com/${repo}/actions/workflows/fabrik.yml) and read the newest run's error.`,
+      `- [ ] Open [the Actions tab for \`${CALLER_PATH}\`](https://github.com/${repo}/actions/workflows/${CALLER_PATH.slice(CALLER_PATH.lastIndexOf("/") + 1)}) and read the newest run's error.`,
       "- [ ] Check that the workflow is enabled: GitHub disables a scheduled workflow after 60 days without activity in the repo.",
       `- [ ] Compare the caller's job permissions with ${notes}, or re-run Setup.`,
       "",

@@ -500,7 +500,7 @@ export type LoopEvent =
       readonly kind: "scheduled-tick";
       /** When the tick ran, as an ISO 8601 time. */
       readonly now: string;
-      /** The Fabrik release the tick runs on, such as v1.1.0, which closing a Dead-tick issue names; absent when it isn't known. */
+      /** The Fabrik release the Tick runs on, such as v1.1.0, which closing a Dead-tick issue names; absent when it isn't known. */
       readonly release?: string;
     };
 
