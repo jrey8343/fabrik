@@ -758,7 +758,6 @@ function implementerSaidAndRun(summary: string, runUrl: string): string[] {
   return [...implementerSaid(summary), "", `[The run](${runUrl})`];
 }
 
-
 /** Why an Implementer can't build this Ticket now, or null when it can. */
 function whyNotBuildable(issueNumber: number, issue: IssueSnapshot): string | null {
   if (!issue.open) return `#${issueNumber} is closed`;

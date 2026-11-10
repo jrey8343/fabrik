@@ -1,8 +1,9 @@
 // Execution-flaw retries: an Execution flaw on an agent PR re-runs the
 // Implementer on the same branch with the findings as input, then Review runs
 // again. A Ticket gets two Retries in all, one pool counted from its empty
-// diffs and Broken runs before the PR opened and the PR's earlier Verdicts (#415, #434), and they
-// stay silent: no mention, assignment or review request. While one is in
+// diffs and Broken runs before the PR opened and the PR's earlier Verdicts
+// (#415, #434), and they stay silent: no mention, assignment or review
+// request. While one is in
 // flight, no other head gets a Verdict, so each flaw starts exactly one
 // Implementer attempt (ADR-0006).
 import { whyNotReviewable } from "./agentPullRequest.ts";
@@ -129,8 +130,8 @@ export type RunInFlight =
 /**
  * The run in flight on this PR, read from its comments alone, or null. A
  * Retry is in flight from the Execution flaw that calls for it until a Retry
- * outcome: its push, or its empty-diff Verdict (which may call for the next
- * one). A Request-changes run is in flight from the Kit's note that started
+ * outcome: its push, or its empty-diff or broken-run Verdict (which may call
+ * for the next one, #434). A Request-changes run is in flight from the Kit's note that started
  * it, or the Execution flaw that gave way to it, until its push, its Verdict,
  * its ended note or its note that it committed nothing (#388), or until the
  * PR leaves draft (#341). An Infrastructure

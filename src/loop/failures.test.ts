@@ -476,6 +476,12 @@ describe("A Broken run", () => {
       expect(notificationsOf(plan)).toEqual([]);
     });
 
+    it("mentions nobody, even when the agent job's detail quotes a handle", () => {
+      const plan = planFor(failed({ role: "implement", report: { failure: "missing-output", detail: "fix is required, @someone" } }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig());
+
+      expect(commentsOf(plan)[0]!.body).not.toMatch(/(^|\s)@someone\b/);
+    });
+
     it("points to the commits it kept, which the Retry doesn't start from", () => {
       const commits = { base: "a".repeat(40), continued: false, head: "b".repeat(40), kept: true };
       const plan = planFor(failed({ role: "implement", report: { failure: "left-branch", detail: "", commits } }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig());

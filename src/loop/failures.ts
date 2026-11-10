@@ -3,9 +3,9 @@
 // Ticket's retries; the Operator gets one comment saying how to resume it.
 // The exception is a Broken run (#434): an Implement run whose work the Kit
 // can't land because of what the agent did. On a Ticket's first run or a
-// Retry it's an Execution flaw the Kit gives, counted like an empty diff,
-// and the Kit re-runs it itself; on a Request-changes or conflict-only run it
-// uses no retry and its notice, naming it a Broken run, waits for the Operator. A
+// Retry it's an Execution flaw the Kit gives, counted like an empty diff, and
+// the Kit re-runs it itself; on a Request-changes or conflict-only run it uses
+// no retry, and its notice, naming it a Broken run, waits for the Operator. A
 // failed Auditor or Retro run fails its Audit or Retro instead, with no
 // trigger to re-add, since the scheduled tick opens the next one
 // (src/loop/weeklyRuns.ts). With rotation on, a
@@ -27,6 +27,7 @@ import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssu
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { readable } from "./readable.ts";
+import { withoutMentions } from "./mentions.ts";
 import { MAX_RETRIES, runInFlight, stepUpReasonFor } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
@@ -424,9 +425,13 @@ function brokenRunLines(run: FailedRun): string[] {
   return [...brokenRunDetail(run), "", `[The run](${run.runUrl})`];
 }
 
-/** The agent job's detail on a Broken run, quoted, and what it had committed, which the next run doesn't start from. */
+/**
+ * The agent job's detail on a Broken run, quoted, and what it had committed,
+ * which the next run doesn't start from. The detail can carry agent text, and
+ * a counted Broken run mentions nobody, so no handle in it is a mention.
+ */
 function brokenRunDetail(run: FailedRun): string[] {
-  const detail = run.report?.detail.trim() ?? "";
+  const detail = withoutMentions(run.report?.detail.trim() ?? "");
   return [...(detail === "" ? [] : ["", `> ${detail}`]), ...(run.report?.commits === undefined ? [] : ["", commitsLeft(run.report.commits)])];
 }
 

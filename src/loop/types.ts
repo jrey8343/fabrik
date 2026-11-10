@@ -52,6 +52,7 @@ export type ReportedFailure =
 export const BROKEN_RUNS = ["missing-output", "left-branch", "unlandable-branch"] as const satisfies readonly ReportedFailure[];
 export type BrokenRun = (typeof BROKEN_RUNS)[number];
 
+/** Whether a failure kind is one a Broken run can be; only an Implement run's is one (brokenRunOf). */
 export function isBrokenRun(value: unknown): value is BrokenRun {
   return (BROKEN_RUNS as readonly unknown[]).includes(value);
 }
