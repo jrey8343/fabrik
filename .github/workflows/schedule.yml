@@ -38,6 +38,8 @@ jobs:
       id-token: write
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
+      # The ref the caller pinned, such as ...schedule.yml@v1.1.0, which the Tick names its release from.
+      ref: ${{ steps.kit.outputs.workflow-ref }}
       started-at: ${{ steps.kit.outputs.started-at }}
     steps:
       # No expression context names a called workflow's ref or commit, so read
@@ -96,6 +98,9 @@ jobs:
       # Request-changes run (#387), and the stuck-trigger sweep, which reads whether a trigger label has a run
       # behind it (#419); the Fabrik App has no Actions permission. The caller's tick job grants it.
       actions: read
+    # The release closing a Dead-tick issue names (#461).
+    env:
+      FABRIK_KIT_REF: ${{ needs.kit.outputs.ref }}
     outputs:
       # "true" when the plan asked for a Dispatch check.
       dispatch: ${{ steps.loop.outputs.dispatch }}

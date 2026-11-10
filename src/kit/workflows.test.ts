@@ -330,6 +330,11 @@ describe("The Kit's workflows", () => {
     for (const { text } of workflows) expect(text).not.toContain("kit-candidate");
   });
 
+  it("schedule.yml's Tick job hands the Loop the Kit workflow ref it was called at, whose release closing a Dead-tick issue names", () => {
+    expect(jobIn(schedule, "kit")).toContain("      ref: ${{ steps.kit.outputs.workflow-ref }}\n");
+    expect(jobIn(schedule, "tick")).toMatch(/\n {4}env:\n {6}FABRIK_KIT_REF: \$\{\{ needs\.kit\.outputs\.ref \}\}\n/);
+  });
+
   describe("schedule.yml's weekly skills bump job", () => {
     const bump = jobIn(schedule, "skills-bump");
     const steps = stepsOf(bump);

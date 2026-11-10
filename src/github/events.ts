@@ -17,14 +17,23 @@ import type {
   PullRequestCommentPlace,
 } from "../loop/types.ts";
 
-/** Maps an Actions event to the Loop event it stands for, or null if the Loop ignores it. */
+/**
+ * Maps an Actions event to the Loop event it stands for, or null if the Loop
+ * ignores it. `kitRef` is the Kit workflow ref the run was called at, such as
+ * `jrey8343/fabrik/.github/workflows/schedule.yml@v1.1.0`, when the job passes it.
+ */
 export function loopEventFrom(
   eventName: string,
   payload: Record<string, unknown>,
   now: Date = new Date(),
+  kitRef = "",
 ): LoopEvent | null {
   // The scheduled Kit workflow (schedule.yml), for the Loop's time-based rules.
-  if (eventName === "schedule") return { kind: "scheduled-tick", now: now.toISOString() };
+  if (eventName === "schedule") {
+    const at = kitRef.lastIndexOf("@");
+    const release = at === -1 ? "" : kitRef.slice(at + 1);
+    return { kind: "scheduled-tick", now: now.toISOString(), ...(release === "" ? {} : { release }) };
+  }
   // The caller workflow's push trigger: only a push to the default branch counts.
   if (eventName === "push") return defaultBranchPushed(payload);
   if (eventName === "issues" && payload["action"] === "opened") {

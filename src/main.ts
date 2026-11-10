@@ -66,7 +66,8 @@ async function loopEvent(repo: Repo, config: KitConfig): Promise<EventSource> {
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
   const actionsEvent: EventSource = {
-    event: loopEventFrom(eventName, payload),
+    // Only the scheduled tick's job passes its Kit workflow ref, which a Dead-tick issue's close names the release from.
+    event: loopEventFrom(eventName, payload, new Date(), process.env["FABRIK_KIT_REF"] ?? ""),
     source: `${eventName}.${String(payload["action"] ?? "")}`,
     branch: null,
   };
