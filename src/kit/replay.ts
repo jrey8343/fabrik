@@ -442,6 +442,30 @@ export function withTicketFinished(body: string, ticket: number, run: number, en
   });
 }
 
+/**
+ * The body with run `run` of Ticket `ticket` released by its own
+ * replay-record job when it couldn't land the run, `why` saying what failed
+ * (#448), so the next tick runs the Ticket again rather than waiting out the
+ * release for a run that never landed. A run whose arms both ran counts as an
+ * Infrastructure failure, its results unlanded; any other end lands as it
+ * would have. Null when the Ticket isn't in progress in that run, as when the
+ * landing got its progress in before it failed.
+ */
+export function withLandingFailed(body: string, ticket: number, run: number, end: ReplayTicketEnd, why: string): string | null {
+  const reason = `run ${run}'s landing failed: ${landingFailureWords(why)}`;
+  const landedAs: ReplayTicketEnd = end.kind === "done" ? { kind: "infrastructure", reason } : end;
+  return withTicketFinished(body, ticket, run, landedAs);
+}
+
+/** The longest a landing failure's words run in a progress marker, which the body carries for every Ticket. */
+const LANDING_FAILURE_LENGTH = 300;
+
+/** A landing failure's first line, cut to LANDING_FAILURE_LENGTH: a stack or a long GitHub reply never fills the body. */
+function landingFailureWords(why: string): string {
+  const line = why.trim().split("\n")[0] ?? "";
+  return line.length <= LANDING_FAILURE_LENGTH ? line : `${line.slice(0, LANDING_FAILURE_LENGTH - 1)}…`;
+}
+
 /** The body with Ticket `ticket`'s progress changed by `next`, or null when it has no plan holding that Ticket, or `next` changes nothing. */
 function withProgress(body: string, ticket: number, next: (progress: ReplayProgress) => ReplayProgress | null): string | null {
   const marks = replayMarksIn(body);

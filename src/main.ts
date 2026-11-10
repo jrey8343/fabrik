@@ -29,6 +29,7 @@ import { resolveKitConfig } from "./kit/config.ts";
 import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
+import { replayResultsIn, resultsReady, withLandingFailed } from "./kit/replay.ts";
 import { readReplayRunEnded } from "./kit/replayRecord.ts";
 import { readStoreReplayGates, readStoreReplayPatches, readStoreRunRecords, readStoreScoreFiles } from "./kit/storeCheckout.ts";
 import type { ReplayStore } from "./github/replaySlice.ts";
@@ -352,6 +353,39 @@ async function reportLandingFailure(landing: Landing, failure: LandingFailure): 
 }
 
 /**
+ * Releases the replay Ticket whose run this replay-record job couldn't land
+ * (#448), its landing having thrown or the Loop having refused it, from the run's end its record step left, so the next tick runs it
+ * again rather than waiting out the release for a run that never landed
+ * (withLandingFailed). Read fresh, so progress the landing got in before it
+ * failed stays. A release GitHub won't take is only warned of: the tick's
+ * release still frees the Ticket in time.
+ */
+async function releaseUnlandedReplay(error: unknown): Promise<void> {
+  const path = process.env["FABRIK_REPLAY_RUN_ENDED"];
+  if (path === undefined || path === "") return;
+  try {
+    const ended = readReplayRunEnded(await readFile(path, "utf8"));
+    // Only this run's own Ticket, never one another run has in progress.
+    if (ended.run !== Number(required("GITHUB_RUN_ID"))) return;
+    const github = new GitHub(required("FABRIK_APP_TOKEN"), process.env["GITHUB_API_URL"]);
+    const issue = `/repos/${required("GITHUB_REPOSITORY")}/issues/${ended.issue}`;
+    const { body } = (await github.rest("GET", issue)) as { body: string | null };
+    const before = body ?? "";
+    const why = error instanceof Error ? error.message : String(error);
+    const released = withLandingFailed(before, ended.ticket, ended.run, ended.end, why);
+    if (released === null) return;
+    await github.rest("PATCH", issue, { body: released });
+    await report(`Released #${ended.ticket} on replay #${ended.issue}, whose run's landing failed, so the next tick runs it again.`);
+    // The landing that failed would have said the results are in; with the Operator unknown, the body shows them.
+    if (operator !== null && replayResultsIn(released) && !replayResultsIn(before)) {
+      await github.rest("POST", `${issue}/comments`, { body: resultsReady(operator) });
+    }
+  } catch (releaseError) {
+    console.log(`::warning title=Replay Ticket not released::${releaseError instanceof Error ? releaseError.message : String(releaseError)}`);
+  }
+}
+
+/**
  * Loads and checks the Product repo's Kit config and caller workflow at the
  * commit this run is for. Returns null, having reported why, when either is invalid.
  */
@@ -449,6 +483,8 @@ async function main(landing: Landing | null): Promise<void> {
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);
     if (landing !== null) await reportLandingFailure(landing, plan);
+    // A replay-record job's run the Loop wouldn't land is released, as one whose landing threw is (#448).
+    else await releaseUnlandedReplay(new Error(plan.reason));
     process.exitCode = 1;
   }
 }
@@ -466,5 +502,7 @@ await main(landing).catch(async (error: unknown) => {
     await report(summary);
     console.log(`::error title=The Loop failed::${annotation}`);
   }
+  // A replay-record job's run it couldn't land is released here, not left to the tick's release (#448).
+  await releaseUnlandedReplay(error);
   process.exitCode = 1;
 });

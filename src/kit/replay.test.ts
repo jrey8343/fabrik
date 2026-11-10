@@ -24,6 +24,7 @@ import {
   type ReplayVariable,
   replayThisUrl,
   withReplayResults,
+  withLandingFailed,
   withTicketFinished,
   withTicketStarted,
 } from "./replay.ts";
@@ -957,6 +958,57 @@ describe("A Replay's next step on the tick", () => {
       const refused = finished(started(once, 12, 9002), 12, 9002, { kind: "weekly-limit" });
 
       expect(replayMarksIn(refused.body)?.progress[0]).toEqual({ ticket: 12, state: "retried", reason: "the model provider failed" });
+    });
+
+    // #448: a run its replay-record job couldn't land is released by that job at once, not left to the tick's 210-minute release.
+    describe("releasing a Ticket whose run's landing failed, from the replay-record job itself", () => {
+      const running = started(anAcceptedIssue(140), 12, 9001);
+      const why = "GitHub refused PATCH /repos/acme/app/issues/140 (502)";
+
+      it("to run again on the next tick, its run's work unlanded, when both arms ran", () => {
+        const released = withLandingFailed(running.body, 12, 9001, { kind: "done" }, why);
+
+        expect(replayMarksIn(released ?? "")?.progress[0]).toEqual({
+          ticket: 12,
+          state: "retried",
+          reason: "run 9001's landing failed: GitHub refused PATCH /repos/acme/app/issues/140 (502)",
+        });
+        expect(nextReplayStep(aTick([{ ...running, body: released ?? "" }]))).toEqual({ kind: "start", issue: 140, ticket: 12 });
+      });
+
+      it("back to pending, its one retry kept, when its run was refused on a weekly limit", () => {
+        const released = withLandingFailed(running.body, 12, 9001, { kind: "weekly-limit" }, why);
+
+        expect(replayMarksIn(released ?? "")?.progress[0]).toEqual({ ticket: 12, state: "pending" });
+      });
+
+      it("failed, when the Ticket was already on its one retry", () => {
+        const once = finished(running, 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+        const released = withLandingFailed(started(once, 12, 9002).body, 12, 9002, { kind: "done" }, why);
+
+        expect(replayMarksIn(released ?? "")?.progress[0]).toEqual({
+          ticket: 12,
+          state: "failed",
+          run: 9002,
+          reason: "run 9002's landing failed: GitHub refused PATCH /repos/acme/app/issues/140 (502)",
+        });
+      });
+
+      it("saying only the failure's first line, cut short, so a stack never fills the body", () => {
+        const stack = `Error: ${"x".repeat(400)}\n    at applyPlan (src/github/apply.ts:560:7)`;
+        const released = withLandingFailed(running.body, 12, 9001, { kind: "done" }, stack);
+        const progress = replayMarksIn(released ?? "")?.progress[0];
+
+        expect(progress).toMatchObject({ state: "retried" });
+        const reason = progress?.state === "retried" ? progress.reason : "";
+        expect(reason).toBe(`run 9001's landing failed: Error: ${"x".repeat(292)}…`);
+      });
+
+      it("changing nothing once the landing got the Ticket's progress in before it failed", () => {
+        const landed = finished(running, 12, 9001, { kind: "done" });
+
+        expect(withLandingFailed(landed.body, 12, 9001, { kind: "done" }, why)).toBeNull();
+      });
     });
 
     it("starting nothing once every Ticket is done or failed", () => {
