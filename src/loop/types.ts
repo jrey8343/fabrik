@@ -541,7 +541,7 @@ export type PullRequestCommentPlace =
       /** The review's GraphQL node id, which a reaction on the review itself names. */
       readonly node: string;
       /** Whether the review has a body: one with none, as a lone inline comment submits, is read through its inline comments. */
-      readonly body: boolean;
+      readonly hasBody: boolean;
     };
 
 /**
@@ -1000,11 +1000,11 @@ export interface Snapshot {
    */
   readonly startingComment: StartingComment | null;
   /**
-   * For an Operator's Comment or Approve review: whether it holds any inline
-   * comment, so one with no body and none, such as a bare Approve, has nothing
-   * to acknowledge (#435). Null for any other event.
+   * For a Comment or Approve review with no body: whether it holds any inline
+   * comment, so one with none, such as a bare Approve, has nothing to
+   * acknowledge (#435). Null for a review with a body, or any other event.
    */
-  readonly reviewInlineComments: boolean | null;
+  readonly reviewHasInlineComments: boolean | null;
   /** Gathered for a scheduled tick only: what the audit gate weighs. */
   readonly audit: AuditSnapshot | null;
   /** Gathered for a scheduled tick only: what the retro gate weighs. */

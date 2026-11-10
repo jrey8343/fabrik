@@ -90,8 +90,8 @@ export function loopEventFrom(
     const state = review.state.toLowerCase();
     // A Comment or Approve review, which a lone inline comment or a thread reply also submits.
     if (state === "commented" || state === "approved") {
-      const body = (review.body ?? "").trim() !== "";
-      return pullRequestCommented(pullRequest, review.user, { kind: "review", review: review.id, node: review.node_id, body });
+      const hasBody = (review.body ?? "").trim() !== "";
+      return pullRequestCommented(pullRequest, review.user, { kind: "review", review: review.id, node: review.node_id, hasBody });
     }
     if (state !== "changes_requested") return null;
     return {

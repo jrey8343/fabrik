@@ -418,7 +418,7 @@ async function react(github: GitHubApi, repo: Repo, action: Extract<Action, { ki
     await github.rest("POST", `${base}/issues/comments/${action.on.comment}/reactions`, body);
     return;
   }
-  if (action.on.body) {
+  if (action.on.hasBody) {
     await github.graphql(
       "mutation ($id: ID!, $content: ReactionContent!) { addReaction(input: { subjectId: $id, content: $content }) { clientMutationId } }",
       { id: action.on.node, content: action.content.toUpperCase() },

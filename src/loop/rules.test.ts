@@ -592,10 +592,10 @@ describe("An Operator comment on an agent PR", () => {
     ["inline comments and no body", false, true],
     ["a body and inline comments", true, true],
   ])("in a Comment or Approve review with %s gets a 👀, and nothing else", (_, body, inlineComments) => {
-    const on = { kind: "review", review: 900, node: "PRR_kwDO900", body } as const;
+    const on = { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: body } as const;
     const plan = planFor(
       commented({ on }),
-      snapshotOfPullRequest(aPullRequest({ draft: false }), { reviewInlineComments: inlineComments }),
+      snapshotOfPullRequest(aPullRequest({ draft: false }), { reviewHasInlineComments: inlineComments }),
       kitConfig(),
     );
 
@@ -604,8 +604,8 @@ describe("An Operator comment on an agent PR", () => {
 
   it("in a review with no body and no inline comments, such as a bare Approve, plans nothing, saying why", () => {
     const plan = planFor(
-      commented({ on: { kind: "review", review: 900, node: "PRR_kwDO900", body: false } }),
-      snapshotOfPullRequest(aPullRequest({ draft: false }), { reviewInlineComments: false }),
+      commented({ on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: false } }),
+      snapshotOfPullRequest(aPullRequest({ draft: false }), { reviewHasInlineComments: false }),
       kitConfig(),
     );
 

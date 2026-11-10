@@ -248,7 +248,7 @@ describe("Applying a 👀 reaction to an Operator comment", () => {
 
   const reviewPlan = (body: boolean): Plan => ({
     kind: "act",
-    actions: [{ kind: "react", pullRequest: 50, on: { kind: "review", review: 900, node: "PRR_kwDO900", body }, content: "eyes" }],
+    actions: [{ kind: "react", pullRequest: 50, on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: body }, content: "eyes" }],
   });
 
   it("reacts to a review with a body itself, by its node id, as only GraphQL can", async () => {

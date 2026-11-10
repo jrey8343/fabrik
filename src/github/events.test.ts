@@ -127,7 +127,7 @@ describe("A comment on a pull request", () => {
         pullRequest: 50,
         commenter: "operator",
         commenterIsBot: false,
-        on: { kind: "review", review: 900, node: "PRR_kwDO900", body: true },
+        on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: true },
       });
     },
   );
@@ -140,7 +140,7 @@ describe("A comment on a pull request", () => {
     };
 
     expect(loopEventFrom("pull_request_review", payload)).toMatchObject({
-      on: { kind: "review", review: 900, node: "PRR_kwDO900", body: false },
+      on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: false },
     });
   });
 

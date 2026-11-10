@@ -1137,6 +1137,7 @@ describe("Gathering whether an Operator's review holds inline comments (#435)", 
       ...pullRequestGitHub(),
       async rest(method: string, path: string): Promise<unknown> {
         reads.push(`${method} ${path}`);
+        // The read asks for one a page (`reads` checks it does), so that is all a page holds.
         return Array.from({ length: Math.min(inline, 1) }, (_, i) => ({ id: 8000 + i }));
       },
     } as unknown as GitHub;
@@ -1148,7 +1149,7 @@ describe("Gathering whether an Operator's review holds inline comments (#435)", 
       pullRequest: 50,
       commenter: "operator",
       commenterIsBot: false,
-      on: { kind: "review", review: 900, node: "PRR_kwDO900", body },
+      on: { kind: "review", review: 900, node: "PRR_kwDO900", hasBody: body },
     }) as const;
 
   it("reads one inline comment of the review, enough to say it holds some", async () => {
@@ -1156,22 +1157,23 @@ describe("Gathering whether an Operator's review holds inline comments (#435)", 
 
     const snapshot = await gatherSnapshot(github, repo, reviewed(false), null, APP_LOGIN);
 
-    expect(snapshot.reviewInlineComments).toBe(true);
+    expect(snapshot.reviewHasInlineComments).toBe(true);
     expect(reads).toEqual(["GET /repos/acme/shop/pulls/50/reviews/900/comments?per_page=1"]);
   });
 
   it("finds none in a bare Approve", async () => {
     const { github } = githubWithReview(0);
 
-    expect((await gatherSnapshot(github, repo, reviewed(false), null, APP_LOGIN)).reviewInlineComments).toBe(false);
+    expect((await gatherSnapshot(github, repo, reviewed(false), null, APP_LOGIN)).reviewHasInlineComments).toBe(false);
   });
 
-  it("reads nothing for a conversation comment or any other event", async () => {
+  it("reads nothing for a review with a body, a conversation comment or any other event", async () => {
     const { github, reads } = githubWithReview(3);
     const conversation = { ...reviewed(true), on: { kind: "conversation", comment: 7001 } } as const;
 
-    expect((await gatherSnapshot(github, repo, conversation, null, APP_LOGIN)).reviewInlineComments).toBeNull();
-    expect((await gatherSnapshot(github, repo, { kind: "pull-request-pushed", pullRequest: 50 }, null, APP_LOGIN)).reviewInlineComments).toBeNull();
+    expect((await gatherSnapshot(github, repo, reviewed(true), null, APP_LOGIN)).reviewHasInlineComments).toBeNull();
+    expect((await gatherSnapshot(github, repo, conversation, null, APP_LOGIN)).reviewHasInlineComments).toBeNull();
+    expect((await gatherSnapshot(github, repo, { kind: "pull-request-pushed", pullRequest: 50 }, null, APP_LOGIN)).reviewHasInlineComments).toBeNull();
     expect(reads).toEqual([]);
   });
 });
