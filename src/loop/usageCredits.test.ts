@@ -374,6 +374,28 @@ describe("Every Subscription unusable only through usage-credits issues, with ro
   });
 });
 
+describe("A usage-credits issue holding runs, closed while its Subscription is still used up (#470)", () => {
+  // Claude token is blocked twice, by #60 and its weekly-limit issue #41, so closing #60 frees nothing.
+  const carrying = { ...usageCreditsIssue(60, "Claude token"), comments: [heldMarker(7, "implement", "agent:implement")] };
+  const plan = planFor(
+    { kind: "issue-closed", issue: 60 },
+    snapshotOf(anIssue({ number: 60, labels: ["ready-for-human", "fabrik:usage-credits"] }), {
+      kitIssues: [weeklyLimitIssue(41, "Claude token"), usageCreditsIssue(61, "Claude token 2")],
+      closedKitIssue: carrying,
+      held: [{ number: 7, open: true, labels: ["enhancement", "ready-for-agent"], draft: null, byApp: false, body: "" }],
+    }),
+    TWO_SUBSCRIPTIONS,
+  );
+
+  it("doesn't resume them, since no Subscription is free", () => {
+    expect(actionsOf(plan).filter((action) => action.kind === "add-labels")).toEqual([]);
+  });
+
+  it("holds them again on an open issue, keeping their place, so a later close still resumes them", () => {
+    expect(actionsOf(plan)).toContainEqual({ kind: "comment", issue: 41, body: expect.stringContaining(heldMarker(7, "implement", "agent:implement")) });
+  });
+});
+
 describe("Scenario: an Implement run killed for spending while no other Subscription is free (#470, #472)", () => {
   // Claude token 2 is already kept off by its own usage-credits issue, so the kill can't be re-run: the run is held.
   const kill = planFor(

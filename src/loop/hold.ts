@@ -163,6 +163,18 @@ function lineOn({ until, reset }: Carrier, held: HoldableRun): string {
 }
 
 /**
+ * Runs whose held markers were only on a carrier that closed while no
+ * Subscription is free, held again, each in its place, with one quiet comment
+ * on the carrier a run due now is held on, so that a later close still
+ * resumes them (#470). Nothing with no run to hold or no carrier open.
+ */
+export function heldAgain(runs: readonly HoldableRun[], kitIssues: readonly KitIssueSnapshot[]): Action[] {
+  const carrier = holdingOn(kitIssues);
+  if (carrier === null || runs.length === 0) return [];
+  return [{ kind: "comment", issue: carrier.on.number, body: runs.map((run) => lineOn(carrier, run)).join("\n\n") }];
+}
+
+/**
  * With rotation on, a run killed for spending usage credits, or refused on a
  * dead token, while no other Subscription is free, held: its trigger label
  * off, and a quiet line naming it on its carrier, then `notice`, the actions
