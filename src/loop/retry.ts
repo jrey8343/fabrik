@@ -7,7 +7,7 @@
 // flight, no other head gets a Verdict, so each flaw starts exactly one
 // Implementer attempt (ADR-0006).
 import { whyNotReviewable } from "./agentPullRequest.ts";
-import { heldUntilThen, startsWhen } from "./hold.ts";
+import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_AGENT, STEP_UP_LABEL } from "./labels.ts";
 import { RETRY_ENDED_MARKER, RETRY_RESTARTED_MARKER } from "./markers.ts";
 import type { Action, KitConfig, PullRequestSnapshot, StepUpReason, VerdictRecord } from "./types.ts";
@@ -100,9 +100,9 @@ export interface VerdictNext {
  * or null when its retries are used up, so the flaw counts as a Design flaw.
  * On a Ticket no longer `ready-for-agent`, as when the Operator relabelled it
  * during the Review, it says so and starts nothing, marked `ticketNotReady` (#416).
- * `held` is the weekly-limit issue a run due now is held on, or null (heldOn).
+ * `held` is the carrier a run due now is held on, or null (heldOn).
  */
-export function retryAfterFlaw(pullRequest: PullRequestSnapshot, held: number | null): VerdictNext | null {
+export function retryAfterFlaw(pullRequest: PullRequestSnapshot, held: HeldOn | null): VerdictNext | null {
   const { ticket } = pullRequest;
   // The flaw being given now isn't in the Verdicts yet: the run that pushed the head it judges is on the snapshot.
   const judged = { requestChanges: pullRequest.requestChangesRun, ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}) };

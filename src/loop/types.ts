@@ -1129,19 +1129,20 @@ export interface Snapshot {
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
   /**
    * Gathered for a scheduled tick, and for whatever may free a Subscription
-   * (#439): each issue or PR a held marker on an open weekly-limit issue, or
-   * on closedWeeklyLimit, names, that GitHub has, in any order, so that only
+   * (#439): each issue or PR a held marker on an open carrier (a
+   * weekly-limit, usage-credits or token-rotation issue), or on
+   * closedKitIssue, names, that GitHub has, in any order, so that only
    * held runs still in the state they were held in resume
    * (src/loop/resume.ts). A number naming nothing GitHub has isn't here.
    */
   readonly held: readonly HeldTargetSnapshot[] | null;
   /**
-   * Gathered for an issue-closed event on a weekly-limit issue only: that
-   * issue, as kitIssues holds an open one, since it has left kitIssues, so
-   * that the runs held on it resume as it closes (#440). Null for any other
-   * event.
+   * Gathered for an issue-closed event on a weekly-limit, usage-credits or
+   * token-rotation issue only: that issue, as kitIssues holds an open one,
+   * since it has left kitIssues, so that the runs held on it resume as it
+   * closes (#440, #470). Null for any other event.
    */
-  readonly closedWeeklyLimit: KitIssueSnapshot | null;
+  readonly closedKitIssue: KitIssueSnapshot | null;
   /**
    * Gathered for a Design-session turn finishing only: the open `wayfinder:map`
    * issues, by number, oldest first, whoever made them, the Kit or the
@@ -1603,7 +1604,7 @@ export type Action =
        * Holds a role's agent run, with rotation on, while every listed
        * Subscription is used up: no agent job starts. It changes nothing on
        * GitHub itself; the Plan's other actions take the trigger label off and
-       * leave the held marker on a weekly-limit issue. The Kit job's step
+       * leave the held marker on a carrier. The Kit job's step
        * summary reads it.
        */
       readonly kind: "hold-agent-run";
@@ -1612,7 +1613,7 @@ export type Action =
       readonly issue: number;
       /** The trigger label that resumes it. */
       readonly label: Label;
-      /** When the first weekly-limit issue's limit resets, if known. */
+      /** When the first weekly-limit issue's limit resets, if known; null too on a carrier with no reset (#470). */
       readonly until: string | null;
     }
   | {

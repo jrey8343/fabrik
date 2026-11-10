@@ -1,8 +1,9 @@
 // A held run: with rotation on, an agent run the Kit doesn't start, or start
 // again, while every listed Subscription is used up. What names it is a held
-// marker on a Kit-owned weekly-limit issue: the issue or PR it's on, its role,
-// the trigger label that resumes it and its place in the order held runs
-// resume in. No new issue kind, label or shared state. Pure, no I/O.
+// marker on a carrier, a Kit-owned weekly-limit, usage-credits or
+// token-rotation issue (#470): the issue or PR it's on, its role, the trigger
+// label that resumes it and its place in the order held runs resume in. No
+// new issue kind, label or shared state. Pure, no I/O.
 import {
   DESIGN_LABEL,
   DISPATCH_LABEL,
@@ -10,8 +11,8 @@ import {
   NEEDS_TRIAGE,
   RESEARCH_LABEL,
   REVIEW_LABEL,
-  WEEKLY_LIMIT_LABEL,
 } from "./labels.ts";
+import { makesUnusable } from "./subscriptions.ts";
 import type { Action, AgentRole, KitIssueSnapshot } from "./types.ts";
 
 /** A run the Kit holds. */
@@ -33,7 +34,7 @@ export interface HeldRun {
 /** A run the Kit holds now: only one with a trigger label, since an Auditor or Retro run is never held. */
 export type HoldableRun = HeldRun & { readonly label: Label };
 
-/** Where a weekly-limit issue's body or comment names a held run, as JSON. */
+/** Where a carrier's body or comment names a held run, as JSON. */
 export const HELD_MARKER = "<!-- fabrik:held";
 
 /** The held marker for a run, such as `<!-- fabrik:held {"issue":7,"role":"triage","label":"needs-triage"} -->`. */
@@ -88,7 +89,20 @@ export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): 
   return { role: start.role, issue: start.issue, label };
 }
 
-/** The held runs a weekly-limit issue's body or comment names, in the order its held markers come. */
+/**
+ * A carrier: an open Kit-owned issue that makes a Subscription unusable, a
+ * weekly-limit, usage-credits or token-rotation issue, which held markers go on (#470).
+ */
+export function isCarrier(issue: KitIssueSnapshot): boolean {
+  return makesUnusable(issue.labels);
+}
+
+/** Whether a carrier names any held run, in its body or a comment. */
+export function carriesHeldMarkers(issue: KitIssueSnapshot): boolean {
+  return [issue.body, ...issue.comments].some((text) => heldRunsIn(text).length > 0);
+}
+
+/** The held runs a carrier's body or comment names, in the order its held markers come. */
 export function heldRunsIn(text: string): HeldRun[] {
   return markersIn(text, HELD_MARKER).flatMap((value): HeldRun[] => {
     const role = roleOf(value["role"]);
@@ -100,7 +114,7 @@ export function heldRunsIn(text: string): HeldRun[] {
 }
 
 /**
- * Where a weekly-limit issue's comment says the scheduled tick resumed, or
+ * Where a carrier's comment says the Kit resumed, or
  * dropped, a held run: how many of that issue's held markers for it the tick
  * has dealt with, so that only a later held marker holds it again (src/loop/resume.ts).
  */
@@ -124,7 +138,7 @@ export function resumedMarker({ issue, role, held, order = null }: ResumedRun): 
   return `${RESUMED_MARKER} ${JSON.stringify(order === null ? { issue, role, held } : { issue, role, held, order })} -->`;
 }
 
-/** The resumed runs a weekly-limit issue's body or comment names. */
+/** The resumed runs a carrier's body or comment names. */
 export function resumedRunsIn(text: string): ResumedRun[] {
   return markersIn(text, RESUMED_MARKER).flatMap((value): ResumedRun[] => {
     const role = roleOf(value["role"]);
@@ -143,7 +157,7 @@ function orderOf(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
-/** A held run still waiting, and how many held markers for it each open weekly-limit issue carries. */
+/** A held run still waiting, and how many held markers for it each open carrier carries. */
 export interface Waiting {
   readonly run: HeldRun;
   readonly markers: ReadonlyMap<number, number>;
@@ -152,14 +166,14 @@ export interface Waiting {
 }
 
 /**
- * The held runs still waiting on the open weekly-limit issues, in the order
+ * The held runs still waiting on the open carriers, in the order
  * they resume: by their place, the first time each was held, and a run left
  * unnumbered after every numbered one. An issue's held markers for a run past
  * the count its last resumed marker covers still hold it. Issues are read
  * oldest first, each body before its comments.
  */
 export function waitingHeldRuns(kitIssues: readonly KitIssueSnapshot[]): Waiting[] {
-  const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
+  const limits = kitIssues.filter(isCarrier);
   const first = new Map<string, HeldRun>();
   const counts = new Map<string, Map<number, { held: number; resumed: number }>>();
   const heldAt = new Map<string, string | null>();
@@ -199,12 +213,12 @@ export function heldOf(role: AgentRole, kitIssues: readonly KitIssueSnapshot[]):
 
 /**
  * Each run's place, from the held and resumed markers on the open
- * weekly-limit issues: the earliest any of them gives it.
+ * carriers: the earliest any of them gives it.
  */
 function ordersOn(kitIssues: readonly KitIssueSnapshot[]): Map<string, number> {
   const orders = new Map<string, number>();
   for (const issue of kitIssues) {
-    if (!issue.labels.includes(WEEKLY_LIMIT_LABEL)) continue;
+    if (!isCarrier(issue)) continue;
     for (const text of [issue.body, ...issue.comments]) {
       for (const run of [...heldRunsIn(text), ...resumedRunsIn(text)]) {
         if (run.order === null || run.order === undefined) continue;
@@ -218,7 +232,7 @@ function ordersOn(kitIssues: readonly KitIssueSnapshot[]): Map<string, number> {
 
 /**
  * These runs, about to be held, each given its place: the one an open
- * weekly-limit issue's held or resumed marker already gives it, if it was held
+ * carrier's held or resumed marker already gives it, if it was held
  * before, else the next after every place given so far, in the order given.
  */
 export function heldInOrder<Run extends HeldRun>(runs: readonly Run[], kitIssues: readonly KitIssueSnapshot[]): Run[] {

@@ -10,8 +10,10 @@
 // another Subscription is free: only the one opened, or refused on, once none
 // is free @-mentions the Operator. While none is free, each run due is held
 // instead of started (src/loop/hold.ts), and it resumes once one is free, at
-// the reset or sooner (src/loop/resume.ts). A run killed for spending usage credits gets
-// a usage-credits issue (src/loop/usageCreditsIssue.ts).
+// the reset or sooner (src/loop/resume.ts), whichever mix of weekly-limit,
+// usage-credits and token-rotation issues used them up (#470). A run killed
+// for spending usage credits gets a usage-credits issue
+// (src/loop/usageCreditsIssue.ts).
 import type { HoldableRun } from "./heldRun.ts";
 import { heldLine } from "./hold.ts";
 import { DEAD_TICK_MARKER, earliestOf, NOTIFIED, notified, resetsAtMarker, resetsAtOf } from "./kitIssueMarks.ts";
@@ -365,7 +367,7 @@ function deadTokenWording(stalled: StalledRun): DeadTokenWording {
     closingSteps: [
       "- [ ] Close this issue, so that the Kit runs agents on that Subscription again.",
       "",
-      "A run the Kit moved to another Subscription needs nothing from you. A run it couldn't move got a failure comment on its Ticket naming the trigger label to re-add.",
+      "A run the Kit moved to another Subscription needs nothing from you. While no other Subscription is free, each run due is held until one is, not started, and the Kit resumes it itself.",
       "",
       PAIRING_LINE,
     ],

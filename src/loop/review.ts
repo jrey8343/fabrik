@@ -9,7 +9,7 @@ import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { checkCode, flakyCheckActions } from "./flakyChecks.ts";
 import { followUpsSection } from "./followUps.ts";
-import { heldOn, heldUntilThen, startsWhen } from "./hold.ts";
+import { type HeldOn, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
@@ -224,7 +224,7 @@ export function verdictActions(
     readonly considered?: readonly string[];
   },
   operator: string,
-  held: number | null,
+  held: HeldOn | null,
 ): Action[] {
   const first =
     verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator, held) : verdict === "pass" ? deferredFirst(pullRequest, held) : null;
@@ -278,7 +278,7 @@ type GaveWay = VerdictNext & { readonly reviews: number[] };
 function requestChangesFirst(
   pullRequest: PullRequestSnapshot,
   operator: string,
-  held: number | null,
+  held: HeldOn | null,
 ): GaveWay | null {
   if (pullRequest.ticket === null) return null;
   // Not to the reviews of a Request-changes run in flight.
@@ -307,7 +307,7 @@ function passGivesWay(pullRequest: PullRequestSnapshot): boolean {
  * for it. Its marker names the reviews, so the run is in flight from it. Null
  * when none is deferred.
  */
-function deferredFirst(pullRequest: PullRequestSnapshot, held: number | null): GaveWay | null {
+function deferredFirst(pullRequest: PullRequestSnapshot, held: HeldOn | null): GaveWay | null {
   if (pullRequest.ticket === null || pullRequest.deferredChangesRequests.length === 0) return null;
   const reviews = [...pullRequest.deferredChangesRequests];
   return {
@@ -319,7 +319,7 @@ function deferredFirst(pullRequest: PullRequestSnapshot, held: number | null): G
 }
 
 /** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */
-function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot, held: number | null): VerdictNext | null {
+function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot, held: HeldOn | null): VerdictNext | null {
   if (verdict === "pass") return null;
   const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest, held) : null;
   if (retry !== null) return retry;

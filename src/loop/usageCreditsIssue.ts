@@ -1,7 +1,9 @@
 // The usage-credits issue: with rotation on, a run killed for spending usage
 // credits gets a "Turn off usage credits" issue for its Subscription, assigned
 // to the Operator, and the Kit skips that Subscription until the issue is
-// closed (src/loop/subscriptions.ts). Pure, no I/O.
+// closed (src/loop/subscriptions.ts). While every Subscription is used up, the
+// runs due are held, and this issue may carry their held markers
+// (src/loop/hold.ts). Pure, no I/O.
 import type { RepoContext, RepoWideNotice, StalledRun } from "./kitIssues.ts";
 import { NOTIFIED } from "./kitIssueMarks.ts";
 import { READY_FOR_HUMAN, USAGE_CREDITS_LABEL } from "./labels.ts";
@@ -35,7 +37,7 @@ export function usageCreditsNotice({ kitIssues, operator }: RepoContext, stalled
         kind: "open-issue",
         title,
         body: [
-          `${stalled.run} showed usage credits being spent on the \`${subscription}\` Subscription, so the Kit killed it. Until this issue is closed the Kit runs no agent on that Subscription, and comments here about each other run killed on it.`,
+          `${stalled.run} showed usage credits being spent on the \`${subscription}\` Subscription, so the Kit killed it. Until this issue is closed the Kit runs no agent on that Subscription, and comments here about each other run killed on it. While no other Subscription is free, each run due is held until one is, not started, and the Kit names it here or on another issue blocking a Subscription.`,
           "",
           "## Steps",
           "",

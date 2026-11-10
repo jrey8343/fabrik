@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, notificationsOf, snapshotOf, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
+import { anIssue, auditBody, AUDITED_SHA, kitConfig, notificationsOf, snapshotOf, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { KitIssueSnapshot, LoopEvent, Plan } from "./types.ts";
 
@@ -113,7 +113,7 @@ describe("The Rotate the Claude token issue", () => {
 
 describe("The dead-token issue names the Subscription whose vault item needs rotating", () => {
   const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
-  const onSecond = (issue = 7): LoopEvent => ({ ...deadToken(issue), subscription: "Claude token 2" });
+  const onSecond = (issue = 7): Extract<LoopEvent, { kind: "agent-run-failed" }> => ({ ...deadToken(issue), subscription: "Claude token 2" });
 
   it("opens the rotation issue for that Subscription, whose step names its vault item", () => {
     const plan = planFor(onSecond(), snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] })), TWO_SUBSCRIPTIONS);
@@ -125,29 +125,21 @@ describe("The dead-token issue names the Subscription whose vault item needs rot
     expect(issue.body).not.toContain("`Claude token` item");
   });
 
-  it("says in the Ticket's failure comment, when no other Subscription is free to re-run it on, which Subscription's token was refused", () => {
-    // The first listed Subscription's token is dead too, and no weekly-limit issue is open to hold the run on.
+  // Every other role's run is held while no Subscription is free (#470), so only an Audit, never held, fails with it said.
+  it("says in a failed Audit, when no other Subscription is free to re-run it on, which Subscription's token was refused", () => {
     const firstDead: KitIssueSnapshot = { number: 39, labels: ["fabrik:token-rotation"], body: "Rotate it.", comments: [] };
-    const plan = planFor(
-      onSecond(),
-      snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] }), { kitIssues: [firstDead] }),
-      TWO_SUBSCRIPTIONS,
-    );
+    const pending = anIssue({ number: 98, byApp: true, labels: ["fabrik:audit"], body: auditBody(AUDITED_SHA, "pending") });
+    const plan = planFor({ ...onSecond(98), role: "audit" }, snapshotOf(pending, { kitIssues: [firstDead] }), TWO_SUBSCRIPTIONS);
 
-    expect(plan).toMatchObject({
-      kind: "act",
-      actions: [
-        {},
-        {
-          kind: "comment",
-          issue: 7,
-          body: expect.stringMatching(
-            /^The Triage run on #7 failed: the Claude token of the `Claude token 2` Subscription was refused \(`authentication_failed`\), so its `Claude token 2` vault item may need rotating\./,
-          ),
-        },
-        {},
-      ],
-    });
+    if (plan.kind !== "act") throw new Error("expected a plan that acts");
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        issue: 98,
+        body: expect.stringContaining(
+          "the Claude token of the `Claude token 2` Subscription was refused (`authentication_failed`), so its `Claude token 2` vault item may need rotating",
+        ),
+      }),
+    );
   });
 
   it("names the Subscription on an open rotation issue it @-mentions on, and on a later quiet comment", () => {

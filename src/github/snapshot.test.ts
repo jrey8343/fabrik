@@ -2106,10 +2106,10 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
     const asked: number[][] = [];
     const github = {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
-        if (query.includes("closedWeeklyLimit: issue(number: $number)")) {
+        if (query.includes("closedKitIssue: issue(number: $number)")) {
           return {
             repository: {
-              closedWeeklyLimit: {
+              closedKitIssue: {
                 number: variables["number"],
                 body: "<!-- fabrik:notified -->",
                 author: APP,
@@ -2268,7 +2268,7 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
 
-    expect(snapshot.closedWeeklyLimit).toEqual({
+    expect(snapshot.closedKitIssue).toEqual({
       number: 60,
       labels: ["fabrik:weekly-limit"],
       body: "<!-- fabrik:notified -->",
@@ -2278,12 +2278,23 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
     expect(snapshot.held).toEqual([...heldOn7, { ...heldOn7[0], number: 8 }]);
   });
 
-  it("holds no closed weekly-limit issue for any other issue closing", async () => {
-    const { github } = githubWith([], {}, ["fabrik:usage-credits"]);
+  it("holds a usage-credits or token-rotation issue closed by hand too, and gathers what its held markers name (#470)", async () => {
+    for (const label of ["fabrik:usage-credits", "fabrik:token-rotation"]) {
+      const { github, asked } = githubWith([], { 8: { ...issue7, number: 8 } }, ["ready-for-human", label], [heldMarker(8, "triage", "needs-triage")]);
+
+      const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
+
+      expect(snapshot.closedKitIssue).toMatchObject({ number: 60, labels: ["ready-for-human", label] });
+      expect(asked).toEqual([[8]]);
+    }
+  });
+
+  it("holds no closed Kit-owned issue for any other issue closing", async () => {
+    const { github } = githubWith([], {}, ["ready-for-agent"]);
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
 
-    expect(snapshot.closedWeeklyLimit).toBeNull();
+    expect(snapshot.closedKitIssue).toBeNull();
   });
 
   it("is gathered when the Kit config changes, since a Subscription newly listed is free (#439)", async () => {

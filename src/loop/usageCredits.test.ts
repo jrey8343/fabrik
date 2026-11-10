@@ -174,42 +174,6 @@ describe("A Subscription with an open usage-credits issue, with rotation on", ()
   });
 });
 
-describe("Scenario: an Implement run killed for spending while no other Subscription is free (#472)", () => {
-  // Claude token 2 is already kept off by its own usage-credits issue, so the kill can't be re-run or held: the run fails.
-  const kill = planFor(
-    killed("implement"),
-    snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }), { kitIssues: [usageCreditsIssue(61, "Claude token 2")] }),
-    TWO_SUBSCRIPTIONS,
-  );
-  const notice = actionsOf(kill).find((action): action is Extract<Action, { kind: "comment" }> => action.kind === "comment" && action.issue === 7);
-
-  it("takes agent:implement off the Ticket and tells the Operator the Loop won't retry it", () => {
-    expect(actionsOf(kill)).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
-    expect(notice?.body).toContain("the Loop won't retry it");
-  });
-
-  it("the next Dispatch check, reading that notice back, leaves the Ticket for the Operator, so no second run spends again", () => {
-    const ticket = aTicket({ number: 7, lastRunFailed: implementRunFailedIn([{ body: notice?.body ?? "", byApp: true }]) });
-
-    const plan = planFor({ kind: "dispatch-check" }, dispatchSnapshotOf([ticket]), TWO_SUBSCRIPTIONS);
-
-    expect(plan).toEqual({
-      kind: "nothing",
-      reason: "No Ticket can be dispatched: #7's last Implement run failed, so only adding agent:implement again runs it",
-    });
-  });
-
-  it("the Operator re-adding agent:implement runs it again", () => {
-    const plan = planFor(
-      { kind: "label-added", issue: 7, label: "agent:implement" },
-      snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"] }), { kitIssues: [usageCreditsIssue(61, "Claude token 2")] }),
-      TWO_SUBSCRIPTIONS,
-    );
-
-    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "implement", issue: 7 }));
-  });
-});
-
 const ROLES: readonly (readonly [Exclude<AgentRole, "audit">, Partial<IssueSnapshot>, number, string])[] = [
   ["triage", { labels: ["needs-triage"] }, 7, "needs-triage"],
   ["implement", { labels: ["enhancement", "ready-for-agent"] }, 7, "agent:implement"],
@@ -322,24 +286,51 @@ describe("The killed run, with rotation on", () => {
   });
 });
 
-// Held markers live only on weekly-limit issues, so with no weekly-limit issue
-// open there's nowhere to hold a run: the Kit never takes its trigger label
-// off without one.
+// The glossary's Used up covers usage credits and a dead token as well as the
+// weekly limit (#470): with every Subscription used up through any mix of
+// them, nothing starts, so nothing is spent.
 describe("Every Subscription unusable only through usage-credits issues, with rotation on", () => {
   const BOTH_KILLED = () => [usageCreditsIssue(60, "Claude token"), usageCreditsIssue(61, "Claude token 2")];
-
-  it("a run due is started, on the first listed Subscription, rather than held where nothing would resume it", () => {
-    const plan = planFor(
+  const due = (kitIssues: KitIssueSnapshot[]) =>
+    planFor(
       { kind: "label-added", issue: 7, label: "needs-triage" },
-      snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] }), { kitIssues: BOTH_KILLED() }),
+      snapshotOf(anIssue({ number: 7, labels: ["needs-triage"] }), { kitIssues }),
       TWO_SUBSCRIPTIONS,
     );
 
-    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", subscription: "Claude token" }));
-    expect(actionsOf(plan).filter((action) => action.kind === "hold-agent-run" || action.kind === "remove-label")).toEqual([]);
+  it("a run due is held, not started: its trigger label off, no Ticket comment, and no @-mention", () => {
+    const plan = due(BOTH_KILLED());
+
+    const actions = actionsOf(plan);
+    expect(actions.filter((action) => action.kind === "start-agent-run")).toEqual([]);
+    expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "needs-triage" });
+    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "triage", issue: 7, label: "needs-triage", until: null });
+    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
+    expect(notificationsOf(plan)).toEqual([]);
   });
 
-  it("a killed run gets the usual failure comment, naming its trigger label to re-add, rather than a hold", () => {
+  it("names it, quietly, on the most recently opened usage-credits issue, saying it resumes once a Subscription is free", () => {
+    const actions = actionsOf(due(BOTH_KILLED()));
+
+    const held = actions.find((action) => action.kind === "comment");
+    expect(held).toEqual({ kind: "comment", issue: 61, body: expect.stringContaining(heldMarker(7, "triage", "needs-triage")) });
+    const body = held?.kind === "comment" ? held.body : "";
+    expect(body).toContain("held until a Subscription is free again");
+    expect(body).toContain("once this issue, or another issue blocking a Subscription, is closed");
+    expect(body).not.toContain("weekly limit");
+    expect(body).not.toContain("@");
+  });
+
+  it("names it on a usage-credits issue already carrying held markers, rather than the most recently opened", () => {
+    const [first, second] = BOTH_KILLED();
+    const carrying = { ...first!, comments: [heldMarker(8, "triage", "needs-triage")] };
+
+    const actions = actionsOf(due([carrying, second!]));
+
+    expect(actions).toContainEqual({ kind: "comment", issue: 60, body: expect.stringContaining(heldMarker(7, "triage", "needs-triage", 2)) });
+  });
+
+  it("a killed run is held, with no Ticket comment, its marker in the body of the usage-credits issue its kill opens", () => {
     const plan = planFor(
       killed("implement"),
       snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }), {
@@ -349,13 +340,70 @@ describe("Every Subscription unusable only through usage-credits issues, with ro
     );
 
     const actions = actionsOf(plan);
-    expect(actions.filter((action) => action.kind === "hold-agent-run")).toEqual([]);
+    expect(actions.filter((action) => action.kind === "comment")).toEqual([]);
     expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
-    expect(actions).toContainEqual({
-      kind: "comment",
-      issue: 7,
-      body: expect.stringContaining("Re-add `agent:implement` on this Ticket to run it again."),
-    });
+    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: null });
+    expect(actions).toContainEqual(
+      expect.objectContaining({
+        kind: "open-issue",
+        title: "Turn off usage credits on the `Claude token` Subscription",
+        body: expect.stringContaining(heldMarker(7, "implement", "agent:implement")),
+      }),
+    );
+    expect(notificationsOf(plan)).toEqual(['assign new "Turn off usage credits on the `Claude token` Subscription"']);
+  });
+
+  it("a killed run whose Subscription's issue is open already is held on the most recently opened one, quietly", () => {
+    const plan = planFor(killed("implement"), snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }), { kitIssues: BOTH_KILLED() }), TWO_SUBSCRIPTIONS);
+
+    const actions = actionsOf(plan);
+    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: null });
+    expect(actions).toContainEqual({ kind: "comment", issue: 61, body: expect.stringContaining(heldMarker(7, "implement", "agent:implement")) });
+    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("a run held on a usage-credits issue stays there once a weekly-limit issue opens, while new holds go on the weekly-limit issue", () => {
+    const [first, second] = BOTH_KILLED();
+    const carrying = { ...second!, comments: [heldMarker(8, "triage", "needs-triage")] };
+
+    const actions = actionsOf(due([first!, carrying, weeklyLimitIssue(41, "Claude token 2")]));
+
+    expect(actions).toContainEqual({ kind: "comment", issue: 41, body: expect.stringContaining(heldMarker(7, "triage", "needs-triage", 2)) });
+    expect(actions.filter((action) => action.kind === "comment" && action.issue === 61)).toEqual([]);
+  });
+});
+
+describe("Scenario: an Implement run killed for spending while no other Subscription is free (#470, #472)", () => {
+  // Claude token 2 is already kept off by its own usage-credits issue, so the kill can't be re-run: the run is held.
+  const kill = planFor(
+    killed("implement"),
+    snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }), { kitIssues: [usageCreditsIssue(61, "Claude token 2")] }),
+    TWO_SUBSCRIPTIONS,
+  );
+  const opened = kitIssueOpenedBy(kill, 62);
+
+  it("the next Dispatch check leaves the Ticket held, so no second run spends again", () => {
+    const ticket = aTicket({ number: 7 });
+
+    const plan = planFor({ kind: "dispatch-check" }, { ...dispatchSnapshotOf([ticket]), kitIssues: [usageCreditsIssue(61, "Claude token 2"), opened] }, TWO_SUBSCRIPTIONS);
+
+    expect(plan).toEqual({ kind: "nothing", reason: "No Ticket can be dispatched: #7 is held" });
+  });
+
+  it("the Operator closing either usage-credits issue resumes it, giving agent:implement back", () => {
+    const closing = { ...opened, comments: [] };
+    const plan = planFor(
+      { kind: "issue-closed", issue: 61 },
+      snapshotOf(anIssue({ number: 61, labels: ["ready-for-human", "fabrik:usage-credits"] }), {
+        kitIssues: [closing],
+        closedKitIssue: usageCreditsIssue(61, "Claude token 2"),
+        held: [{ number: 7, open: true, labels: ["enhancement", "ready-for-agent"], draft: null, byApp: false, body: "" }],
+      }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
   });
 });
 

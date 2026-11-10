@@ -15,7 +15,7 @@ import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
-import { heldRunsIn } from "../loop/heldRun.ts";
+import { heldRunsIn, isCarrier } from "../loop/heldRun.ts";
 import { makesUnusable } from "../loop/subscriptions.ts";
 import {
   AUDIT_LABEL,
@@ -31,7 +31,6 @@ import {
   RESEARCH_DECISION_LABEL,
   RETRO_LABEL,
   TRIGGER_LABELS,
-  WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
@@ -534,13 +533,13 @@ export async function gatherSnapshot(
     event.kind === "scheduled-tick" ||
     event.kind === "kit-config-changed" ||
     (event.kind === "issue-closed" && makesUnusable(part?.issue?.labels ?? []));
-  // A weekly-limit issue closed by hand has left kitIssues, yet the runs held on it resume as it closes (#440).
-  const closedWeeklyLimit =
-    event.kind === "issue-closed" && (part?.issue?.labels ?? []).includes(WEEKLY_LIMIT_LABEL)
+  // A carrier closed by hand has left kitIssues, yet the runs held on it resume as it frees a Subscription (#440, #470).
+  const closedKitIssue =
+    event.kind === "issue-closed" && makesUnusable(part?.issue?.labels ?? [])
       ? await gatherKitIssue(github, repo, event.issue, appLogin)
       : null;
   const held = freesASubscription
-    ? await gatherHeld(github, repo, closedWeeklyLimit === null ? kitIssues : [...kitIssues, closedWeeklyLimit], appLogin)
+    ? await gatherHeld(github, repo, closedKitIssue === null ? kitIssues : [...kitIssues, closedKitIssue], appLogin)
     : null;
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
   // The tick closes each ready-for-agent Ticket GitHub left open after a PR of it merged (#543).
@@ -572,8 +571,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedWeeklyLimit, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -1045,7 +1044,7 @@ type EventPart = Omit<
   | "replay"
   | "namedPullRequests"
   | "held"
-  | "closedWeeklyLimit"
+  | "closedKitIssue"
   | "openMaps"
   | "conflicts"
   | "mergeable"
@@ -1188,7 +1187,7 @@ async function kitIssueOf(github: Pick<GitHub, "graphql">, repo: Repo, issue: Ki
 const KIT_ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
-      closedWeeklyLimit: issue(number: $number) {
+      closedKitIssue: issue(number: $number) {
         number
         createdAt
         body
@@ -1202,16 +1201,16 @@ const KIT_ISSUE_QUERY = `
 
 /**
  * One Kit-owned issue by number, open or closed, as kitIssues holds an open
- * one: for a weekly-limit issue closed by hand, whose held markers kitIssues
- * no longer reads (#440).
+ * one: for a weekly-limit, usage-credits or token-rotation issue closed by
+ * hand, whose held markers kitIssues no longer reads (#440, #470).
  */
 async function gatherKitIssue(github: GitHub, repo: Repo, number: number, appLogin: string | null): Promise<KitIssueSnapshot | null> {
-  const data = await github.graphql<{ repository: { closedWeeklyLimit: KitIssueNode | null } }>(KIT_ISSUE_QUERY, {
+  const data = await github.graphql<{ repository: { closedKitIssue: KitIssueNode | null } }>(KIT_ISSUE_QUERY, {
     owner: repo.owner,
     name: repo.name,
     number,
   });
-  const issue = data.repository.closedWeeklyLimit;
+  const issue = data.repository.closedKitIssue;
   return issue === null ? null : kitIssueOf(github, repo, issue, appLogin);
 }
 
@@ -1357,7 +1356,7 @@ const HELD_TARGET_FIELDS =
   "timelineItems(itemTypes: [LABELED_EVENT], last: 100) { nodes { ... on LabeledEvent { createdAt label { name } actor { login __typename } } } }";
 
 /**
- * Each issue or PR a held marker on these weekly-limit issues names, once,
+ * Each issue or PR a held marker on these carriers names, once,
  * to tell a held run still in the state it was held in from one that has
  * moved on as it resumes (src/loop/resume.ts): the open ones, and one closed
  * by hand (#440). A number naming nothing GitHub has is left out.
@@ -1371,7 +1370,7 @@ async function gatherHeld(
   const numbers = [
     ...new Set(
       kitIssues
-        .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
+        .filter(isCarrier)
         .flatMap((issue) => [issue.body, ...issue.comments])
         .flatMap((text) => heldRunsIn(text).map((run) => run.issue)),
     ),

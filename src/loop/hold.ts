@@ -1,19 +1,31 @@
 // Where a held run is put (src/loop/heldRun.ts): with rotation on, while every
-// listed Subscription is used up, each run due is held instead of started, and
-// a run refused, or killed, while none is free is held instead of re-run. The
-// held marker naming it goes, quietly, on the weekly-limit issue that buzzed
-// the Operator, else on the first to reset, and it is held until the earliest
-// reset across them. With no weekly-limit issue open, as when every
-// Subscription is unusable through usage-credits issues alone, nothing could
-// carry the marker or resume the run, so it isn't held: a run due starts on
-// the first listed Subscription, whose stream watch kills it on overage, and a
-// killed run gets the usual failure comment. Pure, no I/O.
-import { heldInOrder, heldMarker, heldRunOf, type HoldableRun, holding, runNamed } from "./heldRun.ts";
+// listed Subscription is used up, through any mix of weekly limits, usage
+// credits and dead tokens, each run due is held instead of started, and a run
+// refused, or killed, while none is free is held instead of re-run (#470).
+// The held marker naming it goes, quietly, on a carrier: the weekly-limit
+// issue that buzzed the Operator, else the first to reset, and it is held
+// until the earliest reset across them. With no weekly-limit issue open it
+// goes on the usage-credits or token-rotation issue that already carries held
+// markers, else the most recently opened, whose opening took the last free
+// Subscription, and no reset is known: it resumes once the Operator closes an
+// issue that frees a Subscription (src/loop/resume.ts). Pure, no I/O.
+import { carriesHeldMarkers, heldInOrder, heldMarker, heldRunOf, type HoldableRun, holding, isCarrier, runNamed } from "./heldRun.ts";
 import { earliestOf, notified, resetsAtOf } from "./kitIssueMarks.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
 import { freeSubscriptions, rotationIsOn } from "./subscriptions.ts";
 import type { Action, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
+
+/**
+ * The carrier a run due now is held on, as a note promising the run names
+ * it: its number, and whether it is a weekly-limit issue, whose reset the
+ * run waits for, rather than a usage-credits or token-rotation issue, which
+ * has none.
+ */
+export interface HeldOn {
+  readonly issue: number;
+  readonly reset: boolean;
+}
 
 /** The line naming a held run, with its held marker, for a weekly-limit issue. */
 export function heldLine(held: HoldableRun, until: string | null): string {
@@ -28,11 +40,20 @@ export function heldLine(held: HoldableRun, until: string | null): string {
 }
 
 /**
+ * The line naming a held run, with its held marker, for a usage-credits or
+ * token-rotation issue, which has no reset: it resumes on a close (#470).
+ */
+export function heldUntilFreeLine(held: HoldableRun): string {
+  const line = `The ${runNamed(held.role)} on #${held.issue} is held until a Subscription is free again. It resumes once this issue, or another issue blocking a Subscription, is closed: the Kit re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
+  return [line, "", heldMarker(held)].join("\n");
+}
+
+/**
  * With rotation on and every listed Subscription used up, the Plan with each
  * run it would start held instead: its trigger label off, and a quiet comment
- * naming it on the weekly-limit issue that buzzed the Operator, or else on the
- * first to reset. No comment on the Ticket, and no @-mention. Every other
- * action, and every Plan that starts no run, is left as it is.
+ * naming it on its carrier (holdingOn). No comment on the Ticket, and no
+ * @-mention. Every other action, and every Plan that starts no run, is left
+ * as it is.
  */
 export function heldWhileUsedUp(
   plan: Plan,
@@ -41,13 +62,14 @@ export function heldWhileUsedUp(
 ): Plan {
   if (plan.kind !== "act" || !runsDueAreHeld(kitIssues, config)) return plan;
   if (!plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
-  const { until, on } = holdingOn(kitIssues);
-  if (on === undefined) return plan;
+  const carrier = holdingOn(kitIssues);
+  if (carrier === null) return plan;
+  const { until, on } = carrier;
   const { actions: planned } = plan;
   const starts = planned.filter((action) => action.kind === "start-agent-run");
   // Each in its place in the order held runs resume in.
   const held = heldInOrder(starts.map(heldRunOf), kitIssues);
-  const comments: Action[] = held.map((run) => ({ kind: "comment", issue: on.number, body: heldLine(run, until) }));
+  const comments: Action[] = held.map((run) => ({ kind: "comment", issue: on.number, body: lineOn(carrier, run) }));
   const actions = planned.flatMap((action): Action[] => {
     // A held prototype turn hasn't started, so its request isn't marked so, and its resumption starts it (src/loop/design.ts).
     if (action.kind === "mark-prototype-request" && action.started && held.some((run) => run.issue === action.issue)) return [];
@@ -64,77 +86,100 @@ export function heldWhileUsedUp(
 
 /**
  * Whether a run due now is held rather than started (heldWhileUsedUp): with
- * rotation on, while every listed Subscription is used up and a weekly-limit
- * issue is open to carry its held marker. With every Subscription unusable
- * through usage-credits issues alone, nowhere holds its marker, so it starts.
- * An Auditor or Retro run is never held: its pending issue fails instead
+ * rotation on, while every listed Subscription is used up, through any mix of
+ * weekly-limit, usage-credits and token-rotation issues (#470). An Auditor or
+ * Retro run is never held: its pending issue fails instead
  * (src/loop/weeklyRuns.ts).
  */
 export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {
-  return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && canHold(kitIssues);
+  return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && holdingOn(kitIssues) !== null;
 }
 
 /**
- * The weekly-limit issue a run due now is held on, or null when it would
- * start: what a note promising a run names, so it never says the run is
- * starting while it waits for a reset (#341).
+ * The carrier a run due now is held on, or null when it would start: what a
+ * note promising a run names, so it never says the run is starting while it
+ * waits (#341), nor promises a reset a carrier doesn't have (#470).
  */
-export function heldOn(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): number | null {
-  return runsDueAreHeld(kitIssues, config) ? (holdingOn(kitIssues).on?.number ?? null) : null;
+export function heldOn(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): HeldOn | null {
+  if (!runsDueAreHeld(kitIssues, config)) return null;
+  const carrier = holdingOn(kitIssues);
+  return carrier === null ? null : { issue: carrier.on.number, reset: carrier.reset };
 }
 
-/** How a note promising a Request-changes run says it waits on `held`, its weekly-limit issue. */
-export function heldUntilReset(held: number): string {
-  return `every Subscription is used up, so it's held on #${held} until the weekly limit resets, and starts then`;
+/** How a note promising a Request-changes run says it waits on `held`, its carrier. */
+export function heldUntilReset(held: HeldOn): string {
+  const until = held.reset ? "until the weekly limit resets" : "until a Subscription is free again";
+  return `every Subscription is used up, so it's held on #${held.issue} ${until}, and starts then`;
 }
 
 /**
  * When a note says the run it promises starts: now, or, while `held` names the
- * weekly-limit issue a run due now is held on, once the weekly limit resets (#341).
+ * carrier a run due now is held on, once the weekly limit resets, or once a
+ * Subscription is free again for a carrier with no reset (#341, #470).
  */
-export function startsWhen(held: number | null): string {
+export function startsWhen(held: HeldOn | null): string {
   return held === null ? "starts now" : `starts${onceReset(held)}`;
 }
 
 /** What a note adds after where a run starts (again) while it's held on `held` (heldOn), or "" while it would start now. */
-export function onceReset(held: number | null): string {
-  return held === null ? "" : " once the weekly limit resets";
+export function onceReset(held: HeldOn | null): string {
+  if (held === null) return "";
+  return held.reset ? " once the weekly limit resets" : " once a Subscription is free again";
 }
 
 /** The sentence a note promising a run ends with while it's held on `held` (heldOn), or "" while it would start. */
-export function heldUntilThen(held: number | null): string {
-  return held === null ? "" : ` Every Subscription is used up, so it's held on #${held} until then.`;
+export function heldUntilThen(held: HeldOn | null): string {
+  return held === null ? "" : ` Every Subscription is used up, so it's held on #${held.issue} until then.`;
+}
+
+/** A carrier a run is held on, when it is held until, and whether it has a reset at all. */
+interface Carrier {
+  readonly on: KitIssueSnapshot;
+  readonly until: string | null;
+  readonly reset: boolean;
 }
 
 /**
  * Where a run held while no Subscription is free is named: the weekly-limit
  * issue that buzzed the Operator, else the first to reset, else the first
- * open; and when it is held until, the earliest reset across them.
+ * open, held until the earliest reset across them. With no weekly-limit issue
+ * open, the usage-credits or token-rotation issue already carrying held
+ * markers, else the most recently opened, with no reset (#470). Null with no
+ * carrier open.
  */
-function holdingOn(kitIssues: readonly KitIssueSnapshot[]): { until: string | null; on: KitIssueSnapshot | undefined } {
+function holdingOn(kitIssues: readonly KitIssueSnapshot[]): Carrier | null {
   const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   const until = earliestOf(limits.map(resetsAtOf));
-  const on = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
-  return { until, on };
+  const limit = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
+  if (limit !== undefined) return { on: limit, until, reset: true };
+  const others = kitIssues.filter(isCarrier);
+  const on = others.find(carriesHeldMarkers) ?? others.toSorted((a, b) => b.number - a.number)[0];
+  return on === undefined ? null : { on, until: null, reset: false };
+}
+
+/** The held line for a run held on this carrier. */
+function lineOn({ until, reset }: Carrier, held: HoldableRun): string {
+  return reset ? heldLine(held, until) : heldUntilFreeLine(held);
 }
 
 /**
- * Whether a run can be held now: held markers live only on weekly-limit
- * issues, so a run is never held while none is open, as when every
- * Subscription is unusable through usage-credits issues alone.
+ * With rotation on, a run killed for spending usage credits, or refused on a
+ * dead token, while no other Subscription is free, held: its trigger label
+ * off, and a quiet line naming it on its carrier, then `notice`, the actions
+ * on its usage-credits or token-rotation issue. With no weekly-limit issue
+ * open and no other issue carrying held markers, the issue the notice opens
+ * is the carrier, as the most recently opened, and the line goes in its body,
+ * as a weekly-limit refusal's does (#470).
  */
-export function canHold(kitIssues: readonly KitIssueSnapshot[]): boolean {
-  return holdingOn(kitIssues).on !== undefined;
-}
-
-/**
- * With rotation on, a run killed for spending usage credits while no other
- * Subscription is free, held: its trigger label off, and a quiet comment
- * naming it on the weekly-limit issue a run held now is named on. Only while
- * one is open (canHold).
- */
-export function heldAfterKill(held: HoldableRun, kitIssues: readonly KitIssueSnapshot[]): Action[] {
-  const { until, on } = holdingOn(kitIssues);
-  if (on === undefined) throw new Error(`The ${runNamed(held.role)} on #${held.issue} has no weekly-limit issue to be held on`);
-  return [...holding(held, until), { kind: "comment", issue: on.number, body: heldLine(held, until) }];
+export function heldAfterKill(held: HoldableRun, kitIssues: readonly KitIssueSnapshot[], notice: readonly Action[]): Action[] {
+  const carrier = holdingOn(kitIssues);
+  const opens = notice.some((action) => action.kind === "open-issue");
+  if (carrier !== null && (carrier.reset || carriesHeldMarkers(carrier.on) || !opens)) {
+    return [...holding(held, carrier.until), { kind: "comment", issue: carrier.on.number, body: lineOn(carrier, held) }, ...notice];
+  }
+  if (!opens) throw new Error(`The ${runNamed(held.role)} on #${held.issue} has no issue to be held on`);
+  const opened = notice.map((action): Action =>
+    action.kind === "open-issue" ? { ...action, body: [action.body, "", heldUntilFreeLine(held)].join("\n") } : action,
+  );
+  return [...holding(held, null), ...opened];
 }

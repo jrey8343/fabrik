@@ -201,8 +201,9 @@ export function failedHeldAudit(audit: HeldTargetSnapshot): Action[] {
  * With rotation on, while every listed Subscription is used up, a run of any
  * other role would be held (src/loop/hold.ts), but the scheduled
  * tick can't start a weekly run at the reset, so its issue fails instead, as a
- * failed run leaves it, and a later tick opens the next one. Its weekly-limit
- * issues already say so, so it gives no repo-wide notice.
+ * failed run leaves it, and a later tick opens the next one. The weekly-limit,
+ * usage-credits or token-rotation issues using every Subscription up already
+ * say so, so it gives no repo-wide notice.
  */
 export function startWeekly(role: WeeklyRole, context: IssueContext, config: KitConfig): Plan {
   if (!runsDueAreHeld(context.kitIssues, config)) return WEEKLY_RUNS[role].start(context, config);
