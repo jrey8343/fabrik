@@ -1,0 +1,540 @@
+<title>Console Spend prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<!--
+  PROTOTYPE. Throwaway. Never merged.
+  Three variants of the Console's Spend screen, switchable from the floating bar (or #a / #b / #c, or ?variant=).
+  Answers the Decision "Prototype Spend: what the factory has used, reached from Home's factory panel".
+  Styling is the Home prototype's (prototypes/console-home). Every repo, issue, pull request and figure in here is invented.
+-->
+<style>
+:root{
+  --ground:#F7F9F8; --raised:#FFFFFF; --sunken:#F0F3F1; --ink:#0F1F1A; --ink-2:#4A5A54; --ink-3:#6C7A75; --line:#E0E6E3; --line-2:#C9D2CE;
+  --yours:#00684A; --yours-ink:#FFFFFF; --yours-wash:#DDF8E8;
+  --run:#1A62C4; --run-wash:#E0ECFC; --hold:#8A5A00; --hold-wash:#FCF1CF; --stuck:#C0271D; --stuck-wash:#FCE5E2;
+  --proto:#0F1F1A; --proto-ink:#F7F9F8; --scrim:rgba(15,31,26,.45);
+  --text:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --ground:#121212; --raised:#1C1C1C; --sunken:#171717; --ink:#EDEDED; --ink-2:#B4B4B4; --ink-3:#8C8C8C; --line:#2A2A2A; --line-2:#3D3D3D;
+  --yours:#3ECF8E; --yours-ink:#06281A; --yours-wash:#12352A;
+  --run:#6CB1FF; --run-wash:#142A46; --hold:#F0B429; --hold-wash:#3A2C08; --stuck:#FF7B72; --stuck-wash:#431B19;
+  --proto:#EDEDED; --proto-ink:#121212; --scrim:rgba(0,0,0,.65); color-scheme:dark } }
+:root[data-theme="dark"]{
+  --ground:#121212; --raised:#1C1C1C; --sunken:#171717; --ink:#EDEDED; --ink-2:#B4B4B4; --ink-3:#8C8C8C; --line:#2A2A2A; --line-2:#3D3D3D;
+  --yours:#3ECF8E; --yours-ink:#06281A; --yours-wash:#12352A;
+  --run:#6CB1FF; --run-wash:#142A46; --hold:#F0B429; --hold-wash:#3A2C08; --stuck:#FF7B72; --stuck-wash:#431B19;
+  --proto:#EDEDED; --proto-ink:#121212; --scrim:rgba(0,0,0,.65); color-scheme:dark }
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font:400 15px/1.45 var(--text);-webkit-font-smoothing:antialiased;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:12px 84px}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--yours);outline-offset:2px}
+h1,h2,h3,p,dl,dd{margin:0}
+h1,h2,h3{letter-spacing:-.02em}
+
+.stage{display:grid;grid-template-columns:minmax(0,400px);justify-content:center;gap:36px;align-items:start}
+.phone{position:relative;display:flex;flex-direction:column;min-height:calc(100dvh - 110px);min-width:0}
+.notes{display:none}
+.notes[data-open]{display:block;position:fixed;inset:0;z-index:40;overflow:auto;background:var(--ground);
+  padding:calc(20px + env(safe-area-inset-top,0px)) max(16px, env(safe-area-inset-right,0px)) 96px max(16px, env(safe-area-inset-left,0px))}
+@media (min-width:900px){
+  .stage{grid-template-columns:400px minmax(0,380px)}
+  .phone{border:1px solid var(--line-2);border-radius:28px;padding:18px 16px 18px}
+  .notes,.notes[data-open]{display:block;position:sticky;top:16px;inset:auto;z-index:auto;overflow:visible;background:none;padding:8px 0 0}
+  .proto .p-notes,.p-notes-close{display:none}
+}
+
+/* ---- shared small parts (from Home) ---- */
+.btn{appearance:none;border:1px solid var(--yours);background:var(--yours);color:var(--yours-ink);font-weight:600;border-radius:8px;min-height:44px;padding:0 16px;cursor:pointer}
+.btn.quiet{background:var(--raised);color:var(--ink);border-color:var(--line-2);font-weight:500}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.linkish{appearance:none;border:0;background:none;padding:0;color:var(--yours);font-weight:500;cursor:pointer;min-height:32px}
+.linkish:hover{text-decoration:underline;text-underline-offset:3px}
+.fine{font-size:13px;color:var(--ink-3);margin-top:8px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;background:var(--sunken);color:var(--ink-2);white-space:nowrap}
+.pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.yours{background:var(--yours-wash);color:var(--yours)}
+.pill.run{background:var(--run-wash);color:var(--run)}
+.pill.stuck{background:var(--stuck-wash);color:var(--stuck)}
+.pill.held{background:var(--hold-wash);color:var(--hold)}
+.ref{font:500 12px/1 var(--mono);color:var(--ink-2);background:var(--sunken);border:1px solid var(--line);border-radius:6px;padding:4px 6px;white-space:nowrap}
+.back{appearance:none;border:0;background:none;padding:0;min-height:44px;color:var(--ink-2);font-weight:500;cursor:pointer;text-align:left}
+.meter{position:relative;height:6px;background:var(--sunken);border:1px solid var(--line);border-radius:4px;margin-top:6px}
+.meter span{display:block;height:100%;border-radius:3px;background:var(--yours)}
+.meter span.full{background:var(--hold)}
+.panel{margin-top:16px;border:1px solid var(--line);border-radius:12px;background:var(--raised);overflow:clip}
+.panel > header{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--sunken);border-bottom:1px solid var(--line);padding:6px 14px;min-height:44px}
+.panel h2{font-size:13.5px;font-weight:600;letter-spacing:0;color:var(--ink)}
+.panel h2.mono{font:500 13.5px/1.2 var(--mono)}
+.panel > header .sum{font-size:13.5px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.pad{padding:14px}
+.top{display:flex;justify-content:space-between;align-items:center;padding:2px 0 6px}
+.mark{display:inline-flex;align-items:center;gap:8px;font-size:18px;font-weight:700;letter-spacing:-.02em}
+.mark i{width:14px;height:14px;border-radius:4px;background:var(--yours)}
+.num{font-variant-numeric:tabular-nums}
+.usd{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.banner{margin-top:8px;padding:12px 14px;border-radius:10px;background:var(--hold-wash);color:var(--hold);font-weight:500}
+.banner .linkish{color:inherit;text-decoration:underline;text-underline-offset:3px}
+.row{border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.hit{appearance:none;display:block;width:100%;text-align:left;border:0;background:none;padding:12px 14px;cursor:pointer}
+.r-top{display:flex;align-items:center;gap:8px;min-width:0}
+.r-top .usd{margin-left:auto}
+.r-title{display:block;font-weight:600;line-height:1.3;margin-top:8px}
+.r-meta{display:flex;flex-wrap:wrap;gap:2px 12px;color:var(--ink-3);font-size:13px;margin-top:4px;align-items:center}
+.runs{padding:0 14px 14px}
+.runs table{width:100%;border-collapse:collapse;font-size:13px}
+.runs td{padding:6px 0;border-top:1px solid var(--line);vertical-align:top;color:var(--ink-2)}
+.runs td:first-child{color:var(--ink);font-weight:500;padding-right:8px}
+.runs td:last-child{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);white-space:nowrap;padding-left:8px}
+.runs small{display:block;font-size:12px;color:var(--ink-3);font-weight:400}
+.barlist{display:grid;gap:12px}
+.barlist .bl{appearance:none;display:block;width:100%;text-align:left;border:0;background:none;padding:0;cursor:pointer}
+.barlist div.bl{cursor:default}
+.bl-top{display:flex;justify-content:space-between;gap:12px;font-size:14px}
+.bl-top span:first-child{font-weight:500}
+.bl-bar{height:8px;margin-top:6px;border-radius:0 4px 4px 0;background:var(--ink-3);min-width:2px}
+.bl small{display:block;color:var(--ink-3);font-size:12.5px;margin-top:4px}
+
+/* ---- prototype chrome: not part of the design ---- */
+.proto{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:50;display:flex;align-items:center;gap:2px;
+  background:var(--proto);color:var(--proto-ink);border-radius:999px;padding:4px;box-shadow:0 8px 28px var(--scrim);max-width:calc(100vw - 16px);font:500 13.5px var(--text);white-space:nowrap}
+.proto button{appearance:none;border:0;background:none;color:inherit;font:inherit;min-height:40px;min-width:40px;padding:0 10px;border-radius:999px;cursor:pointer}
+.proto .p-label{padding:0 4px;min-width:104px;text-align:center}
+.proto .p-label b{font-weight:700;margin-right:6px}
+.proto .p-sep{width:1px;height:22px;background:var(--proto-ink);opacity:.3;margin:0 2px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(68px + env(safe-area-inset-bottom,0px));z-index:49;background:var(--ink);color:var(--ground);
+  padding:10px 14px;border-radius:8px;font-size:14px;width:max-content;max-width:calc(100vw - 32px)}
+.notes h2{font-size:22px;font-weight:600}
+.notes h3{font-size:13px;font-weight:600;margin-top:20px;color:var(--ink-3)}
+.notes ul{margin:8px 0 0;padding-left:18px;display:grid;gap:8px}
+.notes .state{margin-top:8px;font-variant-numeric:tabular-nums}
+
+/* ---- A: runway ---- */
+.a-sub{padding:16px 14px;border-bottom:1px solid var(--line)}
+.a-sub:last-child{border-bottom:0}
+.a-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.a-head b{font-weight:600}
+.a-big{display:flex;align-items:baseline;gap:8px;margin-top:10px}
+.a-big strong{font-size:40px;font-weight:700;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+.a-big span{color:var(--ink-2);font-size:14px}
+.a-gauge{position:relative;height:14px;margin-top:12px;background:var(--sunken);border:1px solid var(--line);border-radius:7px}
+.a-gauge .fill{display:block;height:100%;border-radius:6px;background:var(--yours)}
+.a-gauge .fill.full{background:var(--hold)}
+.a-gauge .tick{position:absolute;top:-5px;bottom:-5px;width:2px;background:var(--ink);border-radius:1px}
+.a-scale{position:relative;height:18px;font-size:12px;color:var(--ink-3);margin-top:4px}
+.a-scale span{position:absolute;white-space:nowrap}
+.a-say{margin-top:10px;font-size:14px;color:var(--ink-2)}
+.a-say.warn{color:var(--hold);font-weight:500}
+.a-lead{font-size:19px;font-weight:600;line-height:1.3;letter-spacing:-.015em;margin-top:6px;text-wrap:pretty}
+.a-h1{font-size:21px;font-weight:600;line-height:1.2;margin-top:4px;text-wrap:balance}
+.a-group{font-size:13px;font-weight:600;color:var(--ink-3);padding:10px 14px;background:var(--sunken);border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+.row + .a-group{border-top:1px solid var(--line)}
+
+/* ---- B: ledger ---- */
+.b-week{display:grid;grid-template-columns:44px 1fr 44px;align-items:center;border:1px solid var(--line);border-radius:10px;background:var(--raised)}
+.b-week button{appearance:none;border:0;background:none;min-height:44px;font-size:20px;color:var(--ink-2);cursor:pointer}
+.b-week button[disabled]{opacity:.3;cursor:default}
+.b-week div{text-align:center;font-weight:600}
+.b-total{display:flex;align-items:baseline;gap:10px;margin-top:16px}
+.b-total strong{font-size:34px;font-weight:700;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+.b-total span{color:var(--ink-2);font-size:14px}
+.b-subs{margin-top:14px;display:grid;gap:8px}
+.b-sub{display:grid;grid-template-columns:1fr auto;gap:2px 12px;font-size:13.5px}
+.b-sub .meter{grid-column:1 / -1;height:4px;margin-top:2px}
+.b-sub span:first-child{color:var(--ink-2)}
+.b-sub b{font-weight:600;color:var(--ink)}
+.chips{display:flex;gap:6px;overflow-x:auto;margin:14px -16px 0;padding:0 16px 2px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chips + .chips{margin-top:8px}
+.chip{appearance:none;flex:none;border:1px solid var(--line-2);background:var(--raised);border-radius:999px;min-height:36px;padding:0 12px;font-size:13.5px;font-weight:500;color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.chip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--ground)}
+.chip b{font-weight:500;opacity:.75;margin-left:6px;font-variant-numeric:tabular-nums}
+.b-line{margin-top:14px;font-size:14px;color:var(--ink-2)}
+.b-foot{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-3)}
+
+/* ---- C: trend ---- */
+.c-h1{font-size:21px;font-weight:600;line-height:1.2;margin-top:4px}
+.c-sel{margin-top:14px;display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.c-sel strong{font-size:28px;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.c-sel span{color:var(--ink-2);font-size:14px;text-align:right}
+.chart{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;align-items:end;margin-top:12px;border-bottom:1px solid var(--line-2)}
+.chart.small{margin-top:10px}
+.col{appearance:none;border:0;background:none;padding:0 4px;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-end;height:132px}
+.chart.small .col{height:64px;cursor:default}
+.col i{display:block;border-radius:4px 4px 0 0;background:var(--line-2);min-height:2px}
+.col[aria-pressed="true"] i{background:var(--ink)}
+.col.part i{background:repeating-linear-gradient(135deg,var(--line-2) 0 3px,transparent 3px 6px);border:1px solid var(--line-2);border-bottom:0}
+.col.part[aria-pressed="true"] i{background:repeating-linear-gradient(135deg,var(--ink) 0 3px,transparent 3px 6px);border-color:var(--ink)}
+.col:hover i{filter:brightness(.92)}
+.axis{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;font-size:11px;color:var(--ink-3);text-align:center;margin-top:5px}
+.axis span.on{color:var(--ink);font-weight:600}
+.figs{width:100%;border-collapse:collapse;font-size:14px}
+.figs td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+.figs tr:last-child td{border-bottom:0}
+.figs td:last-child{text-align:right;white-space:nowrap}
+.figs small{display:block;font-size:12.5px;color:var(--ink-3);font-weight:400}
+.figs .usd{display:block}
+</style>
+
+<div id="app"></div>
+
+<script>
+(() => {
+const NOW = new Date(2026, 10, 10, 14, 15);
+const T = (day, hm) => { const [h, m] = hm.split(':'); return new Date(2026, 10, day, +h, +m); };
+const REPO = {np:'northside-physio', ll:'ledgerline'};
+const VARIANTS = [['a','Runway'],['b','Ledger'],['c','Trend']];
+const SCENARIOS = [['busy','Busy'],['held','Held'],['quiet','Quiet']];
+const MONDAY = T(9, '00:00'), LAST_MONDAY = T(2, '00:00'), WEEK_AGO = T(3, '14:15');
+
+/* A piece of work and the runs that ended on it. A run is [role, note, model, Subscription, API-price dollars, day of November, time]. */
+const WORK = [
+  {id:'n1',repo:'np',ref:'#198',pr:'PR #214',title:'Show the next three free slots on the booking page',st:'open',where:'At the Merge gate',runs:[
+    ['Implement','','Sonnet','s2',1.74,9,'20:10'],['Review','Execution flaw','Opus','s2',.61,9,'20:31'],['Implement','Retry 1','Sonnet','s2',1.21,10,'10:20'],['Review','Pass','Opus','s2',.54,10,'11:05']]},
+  {id:'n2',repo:'np',ref:'#205',pr:'PR #216',title:'Send the reminder text the evening before the appointment',st:'open',where:'At the Merge gate',runs:[
+    ['Implement','','Sonnet','s1',.92,9,'11:40'],['Review','Pass','Opus','s1',.43,9,'12:02']]},
+  {id:'n3',repo:'np',ref:'#190',pr:'PR #212',title:'Let patients pick a practitioner',st:'merged',merged:T(10,'09:10'),runs:[
+    ['Implement','','Sonnet','s1',2.10,8,'15:20'],['Review','Pass','Opus','s1',.66,8,'15:44'],['Implement','Request changes','Sonnet','s1',1.42,9,'09:30'],['Review','Pass','Opus','s1',.58,9,'09:55']]},
+  {id:'n4',repo:'np',ref:'#197',pr:'PR #209',title:'Let reception block out a lunch hour',st:'open',where:'Being brought up to date with main',busy:1,runs:[
+    ['Implement','','Sonnet','s1',1.88,7,'10:10'],['Review','Execution flaw','Opus','s1',.60,7,'10:32'],['Implement','Retry 1','Sonnet','s1',1.64,7,'11:15'],['Review','Execution flaw','Opus','s1',.57,7,'11:40'],
+    ['Implement','Retry 2, stepped up','Opus','s1',6.90,9,'14:20'],['Review','Pass','Opus','s1',.71,9,'15:02']]},
+  {id:'n5',repo:'np',ref:'#188',pr:'PR #233',title:'Show the clinic’s public holidays on the calendar',st:'open',where:'Stuck',runs:[
+    ['Implement','','Sonnet','s2',1.55,10,'13:25'],['Review','Execution flaw','Opus','s2',.52,10,'13:49']]},
+  {id:'n6',repo:'np',ref:'#183',pr:'PR #201',title:'Text a patient when their slot is confirmed',st:'never',where:'Sent back to a Design session',busy:1,runs:[
+    ['Implement','','Sonnet','s1',2.31,5,'10:40'],['Review','Execution flaw','Opus','s1',.64,5,'11:05'],['Implement','Retry 1','Sonnet','s1',1.90,5,'13:10'],['Review','Execution flaw','Opus','s1',.59,5,'13:36'],
+    ['Implement','Retry 2, stepped up','Opus','s1',7.40,6,'09:50'],['Review','Design flaw','Opus','s1',.70,6,'10:31']]},
+  {id:'n7',repo:'np',ref:'#226',title:'Waitlist for fully booked days',st:'other',what:'Design session',runs:[
+    ['Triage','','Opus','s2',.26,10,'08:40'],['Design','Round 1','Opus','s2',1.42,10,'09:15']]},
+  {id:'n8',repo:'np',ref:'#229',title:'TypeError on the booking confirmation page',st:'other',what:'Triage',runs:[['Triage','','Opus','s2',.28,10,'05:15']]},
+  {id:'n9',repo:'np',ref:'#219',title:'Retro for the week of 2 November',st:'other',what:'Retro',runs:[['Retro','','Opus','s1',3.20,6,'14:15']]},
+  {id:'n10',repo:'np',ref:'#219',title:'Replay of the Retro’s first proposal on three Tickets',st:'other',what:'Replay',busy:1,runs:[['Replay','6 runs','Sonnet','s1',8.60,7,'16:30']]},
+  {id:'n11',repo:'np',ref:'#231',pr:'PR #234',title:'Record why a patient cancelled',st:'open',where:'Running, retry 1',runs:[
+    ['Implement','','Sonnet','s2',1.31,10,'13:28'],['Review','Execution flaw','Opus','s2',.49,10,'14:02']]},
+  {id:'n12',repo:'np',ref:'#176',pr:'PR #195',title:'Show the clinic’s phone number on every page',st:'merged',merged:T(3,'11:00'),runs:[
+    ['Implement','','Sonnet','s1',2.20,3,'09:10'],['Review','Pass','Opus','s1',.55,3,'09:35']]},
+  {id:'n13',repo:'np',ref:'#171',pr:'PR #193',title:'Stop double bookings when two people pick the same slot',st:'merged',merged:T(4,'12:30'),runs:[
+    ['Implement','','Sonnet','s1',1.95,2,'14:00'],['Review','Execution flaw','Opus','s1',.62,2,'14:25'],['Implement','Retry 1','Sonnet','s1',1.70,4,'10:00'],['Review','Pass','Opus','s1',.58,4,'10:22']]},
+  {id:'n14',repo:'np',ref:'#180',pr:'PR #199',title:'Remember a patient’s phone number between bookings',st:'merged',merged:T(6,'08:45'),runs:[
+    ['Implement','','Sonnet','s1',1.48,5,'16:00'],['Review','Pass','Opus','s1',.51,5,'16:20']]},
+  {id:'l1',repo:'ll',ref:'#81',pr:'PR #88',title:'Round each invoice line before adding the tax',st:'open',where:'At the Merge gate',runs:[
+    ['Implement','','Sonnet','s1',1.10,7,'13:00'],['Review','Pass','Opus','s1',.45,7,'13:21'],['Implement','Request changes','Sonnet','s2',.74,10,'12:50'],['Review','Pass','Opus','s2',.41,10,'13:30']]},
+  {id:'l2',repo:'ll',ref:'#79',pr:'PR #86',title:'Number invoices per financial year',st:'merged',merged:T(9,'10:00'),runs:[
+    ['Implement','','Sonnet','s1',1.62,8,'11:00'],['Review','Pass','Opus','s1',.50,8,'11:20']]},
+  {id:'l3',repo:'ll',ref:'#74',pr:'PR #84',title:'Show unpaid invoices first',st:'merged',merged:T(6,'09:30'),runs:[
+    ['Implement','','Sonnet','s1',1.25,5,'14:00'],['Review','Pass','Opus','s1',.47,5,'14:22']]},
+  {id:'l4',repo:'ll',ref:'#76',title:'Audit: three refactoring candidates',st:'other',what:'Audit',runs:[['Audit','','Opus','s1',4.80,4,'14:15']]},
+  {id:'l5',repo:'ll',ref:'Map #70',title:'Which mail providers sign outbound invoices?',st:'other',what:'Research',runs:[['Research','','Opus','s1',2.05,8,'17:30']]},
+  {id:'l6',repo:'ll',ref:'#93',title:'Credit notes',st:'other',what:'Triage',runs:[['Triage','','Opus','s1',.30,9,'11:15']]},
+  {id:'l7',repo:'ll',ref:'#90',pr:'PR #91',title:'Export a month of invoices as a spreadsheet',st:'open',where:'In review',runs:[['Implement','','Sonnet','s2',2.40,10,'14:09']]},
+  {id:'l8',repo:'ll',ref:'#68',pr:'PR #80',title:'Print the client’s tax number on the invoice',st:'merged',merged:T(2,'12:00'),runs:[
+    ['Implement','','Sonnet','s1',1.70,2,'10:00'],['Review','Pass','Opus','s1',.50,2,'10:20']]},
+  {id:'l9',repo:'ll',ref:'#72',pr:'PR #82',title:'Let a client pay an invoice in two parts',st:'merged',merged:T(3,'18:00'),runs:[
+    ['Implement','','Sonnet','s1',2.90,3,'15:00'],['Review','Execution flaw','Opus','s1',.64,3,'15:30'],['Implement','Retry 1','Sonnet','s1',2.10,3,'17:00'],['Review','Pass','Opus','s1',.60,3,'17:25']]},
+];
+/* Weeks before the prototype's ledger starts: totals only. */
+const OLDER = [
+  {start:'21 Sep',usd:38.20,mergedN:9,perPr:2.61,never:3.10,replay:0,design:4.20,mins:398},
+  {start:'28 Sep',usd:51.70,mergedN:12,perPr:2.84,never:0,replay:6.40,design:5.90,mins:512},
+  {start:'5 Oct',usd:44.90,mergedN:10,perPr:2.95,never:5.20,replay:0,design:3.80,mins:455},
+  {start:'12 Oct',usd:72.30,mergedN:13,perPr:3.62,never:9.80,replay:7.10,design:6.30,mins:701},
+  {start:'19 Oct',usd:64.10,mergedN:14,perPr:3.05,never:4.40,replay:0,design:7.70,mins:630},
+  {start:'26 Oct',usd:58.40,mergedN:11,perPr:3.31,never:2.90,replay:8.20,design:5.10,mins:574},
+];
+const SCENES = {
+  busy:{held:0, say:'A busy Tuesday afternoon. Subscription 1 reached its weekly limit on Monday; runs go on Subscription 2.',
+    subs:[{id:'s1',name:'Subscription 1',used:100,state:'limit',start:T(5,'09:00'),resets:T(12,'09:00'),reached:'Monday 16:40'},
+          {id:'s2',name:'Subscription 2',used:64,state:'running',start:T(7,'18:00'),resets:T(14,'18:00'),read:'13 minutes ago'}]},
+  held:{held:4, say:'Every Subscription is used up. Subscription 2 was caught spending usage credits 40 minutes ago. 4 runs are held.',
+    subs:[{id:'s1',name:'Subscription 1',used:100,state:'limit',start:T(5,'09:00'),resets:T(12,'09:00'),reached:'Monday 16:40'},
+          {id:'s2',name:'Subscription 2',used:71,state:'credits',start:T(7,'18:00'),resets:T(14,'18:00'),read:'40 minutes ago'}]},
+  quiet:{held:0, say:'A light week. No Step-ups, nothing sent back, and Subscription 2 has not been needed.',
+    subs:[{id:'s1',name:'Subscription 1',used:38,state:'running',start:T(5,'09:00'),resets:T(12,'09:00'),read:'13 minutes ago'},
+          {id:'s2',name:'Subscription 2',used:12,state:'next',start:T(7,'18:00'),resets:T(14,'18:00'),read:'on Sunday'}]},
+};
+
+const S = {variant:'a',scenario:'busy',notes:false,toast:null, a:{repo:null,work:null}, b:{week:0,repo:'all',kind:'all',open:null}, c:{week:7}};
+
+/* ---------- helpers ---------- */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const usd = n => '$' + n.toFixed(2);
+const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const hm = d => String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+const dayTime = d => DAYS[d.getDay()] + ' ' + hm(d);
+const shortDay = d => DAYS[d.getDay()].slice(0,3) + ' ' + d.getDate() + ' Nov';
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+const span = ms => { const h = Math.round(ms / 36e5); const d = Math.floor(h / 24); return d ? `${plural(d,'day')}${h % 24 ? ' ' + plural(h % 24,'hour') : ''}` : plural(h,'hour'); };
+const hours = mins => { const h = Math.floor(mins / 60), m = mins % 60; return h ? `${h} h ${m} min` : `${m} min`; };
+
+function world(){
+  const sc = SCENES[S.scenario], quiet = S.scenario === 'quiet';
+  const work = WORK.filter(w => !(quiet && w.busy)).map(w => ({...w, runs: w.runs
+    .filter(r => !(quiet && /stepped up/.test(r[1])))
+    .map(([role, note, model, sub, cost, day, time]) => ({role, note, model, sub: quiet ? 's1' : sub, usd: cost, at: T(day, time), mins: Math.round(4 + cost * 7)}))}));
+  return {...sc, work};
+}
+const within = (from, to) => r => r.at >= from && r.at < to;
+const sum = rs => rs.reduce((t, r) => t + r.usd, 0);
+const total = w => sum(w.runs);
+/* Each piece of work with the part of it that falls in a period, dearest first. */
+function slice(work, from, to){
+  return work.map(w => ({w, runs: w.runs.filter(within(from, to))})).filter(x => x.runs.length).map(x => ({...x, usd: sum(x.runs)})).sort((x, y) => y.usd - x.usd);
+}
+const mergedIn = (work, from, to) => work.filter(w => w.st === 'merged' && w.merged >= from && w.merged < to);
+const avg = ws => ws.length ? ws.reduce((t, w) => t + total(w), 0) / ws.length : null;
+const subName = (w, id) => w.subs.find(s => s.id === id).name;
+const allUsedUp = w => w.subs.every(s => s.state === 'limit' || s.state === 'credits');
+
+function statePill(x){
+  const w = x.w || x;
+  if (w.st === 'merged') return `<span class="pill">Merged ${shortDay(w.merged)}</span>`;
+  if (w.st === 'never') return `<span class="pill stuck"><i></i>Never merged</span>`;
+  if (w.st === 'other') return `<span class="pill">${w.what}</span>`;
+  if (w.where === 'Stuck') return `<span class="pill stuck"><i></i>Stuck</span>`;
+  if (w.where === 'At the Merge gate') return `<span class="pill yours"><i></i>${w.where}</span>`;
+  return `<span class="pill run"><i></i>${w.where}</span>`;
+}
+function runsTable(w, runs, all){
+  const rest = all - sum(runs);
+  return `<div class="runs"><table>${runs.map(r => `<tr><td>${r.role}${r.note ? `<small>${esc(r.note)}</small>` : ''}</td><td>${r.model}<small>${subName(w, r.sub)}</small></td><td>${shortDay(r.at).slice(0,3)} ${hm(r.at)}</td><td>${usd(r.usd)}</td></tr>`).join('')}</table>
+    ${rest > 0.004 ? `<p class="fine">Plus ${usd(rest)} outside this period. ${usd(all)} all told.</p>` : ''}
+    <div class="btns"><button class="btn quiet" data-act="gh">Open on GitHub</button></div></div>`;
+}
+function subPill(s){
+  if (s.state === 'running') return `<span class="pill run"><i></i>Runs go here</span>`;
+  if (s.state === 'next') return `<span class="pill">Next in line</span>`;
+  return `<span class="pill held"><i></i>Used up</span>`;
+}
+function topBar(back, act){ return `<div class="top"><span class="mark"><i></i>Spend</span></div><button class="back" data-act="${act}">${back}</button>`; }
+const PRICE_NOTE = `<p class="fine">Dollar figures are what the same runs would have cost at API list prices. Nothing here is billed.</p>`;
+
+/* ---------- A: Runway. Leads with how long the Subscriptions last; the dollars are a drill-down by Product repo. ---------- */
+/* When a Subscription in use reaches its limit if it keeps the pace it has had since its reset, to the nearest half hour. */
+function runsOut(s){ const t = s.start.getTime() + (NOW - s.start) / (s.used / 100); return new Date(Math.round(t / 18e5) * 18e5); }
+/* The one sentence A leads with: how long the factory can keep running. */
+function runway(w){
+  if (allUsedUp(w)) return '';
+  const live = w.subs.filter(s => s.state === 'running' || s.state === 'next'), last = live.map(s => ({s, out: runsOut(s)})).filter(x => x.out < x.s.resets);
+  if (last.length < live.length) return `<p class="a-lead">At this pace the factory runs all week without being held.</p>`;
+  const out = new Date(Math.max(...last.map(x => +x.out))), back = w.subs.filter(s => s.state === 'limit' && s.resets > out).sort((x, y) => x.resets - y.resets)[0];
+  const next = back || last.map(x => x.s).sort((x, y) => x.resets - y.resets)[0];
+  return `<p class="a-lead">At this pace runs keep going until about ${dayTime(out)}. Then they are held for ${span(next.resets - out)}, until ${next.name} resets ${dayTime(next.resets)}.</p>`;
+}
+function gauge(w, s){
+  const len = s.resets - s.start, elapsed = Math.min(1, (NOW - s.start) / len), usedUp = s.state === 'limit' || s.state === 'credits';
+  const mine = sum(w.work.flatMap(x => x.runs).filter(r => r.sub === s.id && r.at >= s.start));
+  let say = '', warn = false;
+  if (s.state === 'limit'){ say = `Reached its weekly limit ${s.reached}. Resets ${dayTime(s.resets)}.`; warn = true; }
+  else if (s.state === 'credits'){ say = `It spent usage credits, and stays unusable until you close its issue. That move is under Yours on Home.`; warn = true; }
+  else {
+    const out = runsOut(s);
+    if (out < s.resets){ say = `At this pace it is used up about ${dayTime(out)}, ${span(s.resets - out)} before it resets.`; warn = true; }
+    else say = `At this pace it lasts until it resets ${dayTime(s.resets)}.`;
+  }
+  const tickAt = Math.round(elapsed * 100);
+  return `<div class="a-sub"><div class="a-head"><b>${s.name}</b>${subPill(s)}</div>
+    <div class="a-big"><strong>${s.used}%</strong><span>of its weekly limit</span></div>
+    <div class="a-gauge" role="img" aria-label="${s.used}% used, ${tickAt}% of the week gone"><span class="fill ${usedUp ? 'full' : ''}" style="width:${s.used}%"></span><span class="tick" style="left:calc(${tickAt}% - 1px)"></span></div>
+    <div class="a-scale"><span style="${tickAt > 70 ? `right:${100 - tickAt}%` : `left:${tickAt}%`}">${tickAt > 70 ? 'now ↑' : '↑ now'}, ${span(s.resets - NOW)} to its reset</span></div>
+    <p class="a-say ${warn ? 'warn' : ''}">${say}</p>
+    <p class="fine">${usd(mine)} of factory runs at API prices since it reset. ${s.read ? `Read ${s.read}, from the last run that ended on it.` : ''} The share counts everything on the account, not only the factory.</p></div>`;
+}
+function renderA(w){
+  const week = slice(w.work, WEEK_AGO, NOW);
+  if (S.a.work){
+    const x = w.work.find(v => v.id === S.a.work), runs = x.runs.filter(within(WEEK_AGO, NOW));
+    return `${topBar('Back to ' + REPO[x.repo], 'a-back')}
+      <div class="r-top" style="margin-top:4px">${statePill(x)}<span class="ref">${x.pr || x.ref}</span></div>
+      <h1 class="a-h1" style="margin-top:12px">${esc(x.title)}</h1>
+      <div class="a-big"><strong>${usd(sum(runs))}</strong><span>in the last 7 days${x.pr ? ', Ticket ' + x.ref : ''}</span></div>
+      <section class="panel"><header><h2>${plural(runs.length,'run')}</h2></header><div style="padding-top:6px">${runsTable(w, runs, total(x))}</div></section>`;
+  }
+  if (S.a.repo){
+    const mine = week.filter(x => x.w.repo === S.a.repo);
+    const groups = [['merged','Merged'],['open','Open'],['never','Never merged'],['other','Not a Ticket']].map(([k, label]) => {
+      const rows = mine.filter(x => x.w.st === k); if (!rows.length) return '';
+      return `<div class="a-group"><span>${label}</span><span class="num">${usd(sum(rows))}</span></div>` + rows.map(x => `<div class="row"><button class="hit" data-act="a-work" data-id="${x.w.id}">
+        <span class="r-top"><span class="ref">${x.w.pr || x.w.ref}</span><span class="usd">${usd(x.usd)}</span></span>
+        <span class="r-title">${esc(x.w.title)}</span>${k === 'open' || k === 'other' ? `<span class="r-meta">${statePill(x)}</span>` : ''}</button></div>`).join('');
+    }).join('');
+    return `${topBar('Back to Spend', 'a-back')}<h1 class="a-h1" style="font-family:var(--mono);font-size:18px">${REPO[S.a.repo]}</h1>
+      <div class="a-big"><strong>${usd(sum(mine))}</strong><span>in the last 7 days</span></div>
+      <section class="panel">${groups}</section>${PRICE_NOTE}`;
+  }
+  const byRepo = Object.keys(REPO).map(k => ({k, usd: sum(week.filter(x => x.w.repo === k)), n: week.filter(x => x.w.repo === k).length})).sort((x, y) => y.usd - x.usd);
+  const max = Math.max(...byRepo.map(r => r.usd), 1), merged = mergedIn(w.work, WEEK_AGO, NOW), a = avg(merged);
+  const banner = allUsedUp(w) ? `<p class="banner">Nothing is running. Every Subscription is used up and ${plural(w.held,'run')} ${w.held === 1 ? 'is' : 'are'} held. They resume by themselves ${dayTime(w.subs[0].resets)}, or sooner if you close the usage-credits issue.</p>` : '';
+  return `${topBar('Back to Home', 'home')}${banner}${runway(w)}
+    <section class="panel"><header><h2>Subscriptions</h2><span class="sum">used in fixed order</span></header>${w.subs.map(s => gauge(w, s)).join('')}</section>
+    <section class="panel"><header><h2>Last 7 days at API prices</h2><span class="sum">${usd(sum(week))}</span></header>
+      <div class="pad"><div class="barlist">${byRepo.map(r => `<button class="bl" data-act="a-repo" data-repo="${r.k}">
+        <span class="bl-top"><span style="font-family:var(--mono);font-size:13.5px">${REPO[r.k]}</span><span class="usd">${usd(r.usd)}</span></span>
+        <span class="bl-bar" style="display:block;width:${Math.round(r.usd / max * 100)}%"></span><small>${plural(r.n,'piece')} of work. Open to see each.</small></button>`).join('')}</div>
+        <p class="fine" style="margin-top:14px">${merged.length ? `${plural(merged.length,'pull request')} merged, ${usd(a)} each on average.` : 'No pull request merged.'}</p></div></section>
+    ${PRICE_NOTE}`;
+}
+
+/* ---------- B: Ledger. One flat list of work for a calendar week, dearest first, filtered by chips. ---------- */
+function renderB(w){
+  const from = S.b.week === 0 ? MONDAY : LAST_MONDAY, to = S.b.week === 0 ? NOW : MONDAY;
+  const all = slice(w.work, from, to), before = S.b.week === 0 ? sum(slice(w.work, LAST_MONDAY, MONDAY)) : OLDER[5].usd;
+  const inRepo = all.filter(x => S.b.repo === 'all' || x.w.repo === S.b.repo);
+  const kinds = [['all','Everything'],['merged','Merged'],['open','Open'],['never','Never merged'],['other','Not a Ticket']];
+  const shown = inRepo.filter(x => S.b.kind === 'all' || x.w.st === S.b.kind);
+  const merged = mergedIn(w.work, from, to).filter(x => S.b.repo === 'all' || x.repo === S.b.repo), a = avg(merged);
+  const mins = w.work.flatMap(x => x.runs).filter(within(from, to)).reduce((t, r) => t + r.mins, 0);
+  const monthMins = w.work.flatMap(x => x.runs).reduce((t, r) => t + r.mins, 0);
+  const banner = allUsedUp(w) ? `<p class="banner" style="margin-top:14px">Nothing is running. ${plural(w.held,'run')} held until ${dayTime(w.subs[0].resets)}, or until you close the usage-credits issue under Yours.</p>` : '';
+  const subs = w.subs.map(s => `<div class="b-sub"><span><b>${s.name}</b> ${s.state === 'limit' ? `used up, resets ${dayTime(s.resets)}` : s.state === 'credits' ? 'used up, spent usage credits' : s.state === 'running' ? 'runs go here' : 'next in line'}</span><span class="num">${s.used}%</span>
+    <div class="meter"><span class="${s.state === 'limit' || s.state === 'credits' ? 'full' : ''}" style="width:${s.used}%"></span></div></div>`).join('');
+  const rows = shown.map(x => `<div class="row"><button class="hit" data-act="b-open" data-id="${x.w.id}" aria-expanded="${S.b.open === x.w.id}">
+      <span class="r-top"><span class="ref">${x.w.pr ? x.w.ref + ' → ' + x.w.pr : x.w.ref}</span><span class="usd">${usd(x.usd)}</span></span>
+      <span class="r-title">${esc(x.w.title)}</span>
+      <span class="r-meta">${statePill(x)}<span style="font-family:var(--mono);font-size:12px">${REPO[x.w.repo]}</span><span>${plural(x.runs.length,'run')}</span></span></button>
+      ${S.b.open === x.w.id ? runsTable(w, x.runs, total(x.w)) : ''}</div>`).join('');
+  return `${topBar('Back to Home', 'home')}
+    <div class="b-week"><button data-act="b-week" data-d="-1" aria-label="The week before" ${S.b.week === -1 ? 'disabled' : ''}>&lsaquo;</button><div>${S.b.week === 0 ? 'Week of 9 November, so far' : 'Week of 2 November'}</div><button data-act="b-week" data-d="1" aria-label="The week after" ${S.b.week === 0 ? 'disabled' : ''}>&rsaquo;</button></div>
+    <div class="b-total"><strong>${usd(sum(all))}</strong><span>at API prices. ${usd(before)} the week before.</span></div>
+    ${S.b.week === 0 ? `<div class="b-subs">${subs}</div>${banner}` : ''}
+    <div class="chips">${[['all','All repos'], ...Object.entries(REPO)].map(([k, label]) => `<button class="chip" data-act="b-repo" data-repo="${k}" aria-pressed="${S.b.repo === k}">${label}<b>${usd(sum(all.filter(x => k === 'all' || x.w.repo === k)))}</b></button>`).join('')}</div>
+    <div class="chips">${kinds.map(([k, label]) => { const n = inRepo.filter(x => k === 'all' || x.w.st === k); return `<button class="chip" data-act="b-kind" data-kind="${k}" aria-pressed="${S.b.kind === k}">${label}<b>${usd(sum(n))}</b></button>`; }).join('')}</div>
+    <p class="b-line">${plural(shown.length,'piece')} of work, ${usd(sum(shown))}. ${merged.length ? `${plural(merged.length,'pull request')} merged in it cost ${usd(a)} each on average, from first run to merge.` : 'No pull request merged in it.'}</p>
+    ${shown.length ? `<section class="panel" style="margin-top:12px">${rows}</section>` : `<p class="fine" style="padding:24px 0">Nothing in this week matches.</p>`}
+    <p class="b-foot">GitHub Actions: about ${hours(mins)} of runner time this week, estimated from run times. About ${monthMins.toLocaleString('en')} of 3,000 included minutes this month.</p>
+    ${PRICE_NOTE}`;
+}
+
+/* ---------- C: Trend. Leads with eight weeks; the chosen week's averages and breakdowns sit under the chart. ---------- */
+function weekFacts(w, i){
+  if (i < 6){ const o = OLDER[i]; return {...o, label:'Week of ' + o.start, canned:true}; }
+  const from = i === 6 ? LAST_MONDAY : MONDAY, to = i === 6 ? MONDAY : NOW, sl = slice(w.work, from, to), merged = mergedIn(w.work, from, to);
+  const runs = sl.flatMap(x => x.runs.map(r => ({...r, w:x.w})));
+  return {start: i === 6 ? '2 Nov' : '9 Nov', label: i === 6 ? 'Week of 2 November' : 'Week of 9 November, so far', part: i === 7, usd: sum(sl), sl, runs,
+    mergedN: merged.length, perPr: avg(merged), never: sum(sl.filter(x => x.w.st === 'never')), replay: sum(runs.filter(r => r.role === 'Replay')),
+    design: sum(runs.filter(r => r.role === 'Triage' || r.role === 'Design')), mins: runs.reduce((t, r) => t + r.mins, 0)};
+}
+function barList(items, act){
+  const max = Math.max(...items.map(x => x.usd), 1);
+  return `<div class="barlist">${items.map(x => `<${act ? 'button' : 'div'} class="bl" ${act ? `data-act="${act}" data-what="${esc(x.name)}"` : ''}>
+    <span class="bl-top"><span ${x.mono ? 'style="font-family:var(--mono);font-size:13.5px"' : ''}>${esc(x.name)}</span><span class="usd">${usd(x.usd)}</span></span>
+    <span class="bl-bar" style="display:block;width:${Math.round(x.usd / max * 100)}%"></span>${x.note ? `<small>${x.note}</small>` : ''}</${act ? 'button' : 'div'}>`).join('')}</div>`;
+}
+function renderC(w){
+  const weeks = [0,1,2,3,4,5,6,7].map(i => weekFacts(w, i)), f = weeks[S.c.week], prev = S.c.week ? weeks[S.c.week - 1] : null;
+  const max = Math.max(...weeks.map(x => x.usd)), maxM = Math.max(...weeks.map(x => x.mins));
+  const vs = (now, was) => prev == null || now == null || was == null ? '' : `<small>${usd(was)} the week before</small>`;
+  const chart = `<div class="chart" role="group" aria-label="Dollars at API prices, by week">${weeks.map((x, i) => `<button class="col ${x.part ? 'part' : ''}" data-act="c-week" data-i="${i}" aria-pressed="${S.c.week === i}" title="${x.label}: ${usd(x.usd)}" aria-label="${x.label}: ${usd(x.usd)}"><i style="height:${Math.round(x.usd / max * 100)}%"></i></button>`).join('')}</div>
+    <div class="axis">${weeks.map((x, i) => `<span class="${S.c.week === i ? 'on' : ''}">${x.start.replace(' ', '&nbsp;')}</span>`).join('')}</div>`;
+  const figs = `<table class="figs">
+    <tr><td>Each merged pull request<small>${plural(f.mergedN,'pull request')} merged, first run to merge</small></td><td><span class="usd">${f.perPr == null ? 'None' : usd(f.perPr)}</span>${vs(f.perPr, prev && prev.perPr)}</td></tr>
+    <tr><td>Never merged<small>Runs on pull requests closed or sent back</small></td><td><span class="usd">${usd(f.never)}</span>${vs(f.never, prev && prev.never)}</td></tr>
+    <tr><td>Triage and Design sessions</td><td><span class="usd">${usd(f.design)}</span>${vs(f.design, prev && prev.design)}</td></tr>
+    <tr><td>Replays</td><td><span class="usd">${usd(f.replay)}</span>${vs(f.replay, prev && prev.replay)}</td></tr></table>`;
+  let detail = `<p class="fine" style="margin-top:16px">The prototype’s ledger covers the last two weeks. An older week shows its totals only.</p>`;
+  if (!f.canned){
+    const byRepo = Object.keys(REPO).map(k => ({name: REPO[k], mono: true, usd: sum(f.sl.filter(x => x.w.repo === k)), note: plural(f.sl.filter(x => x.w.repo === k).length, 'piece') + ' of work'})).sort((x, y) => y.usd - x.usd);
+    const roles = ['Implement','Review','Design','Triage','Replay','Retro','Audit','Research'].map(r => ({name: r, usd: sum(f.runs.filter(x => x.role === r)), note: plural(f.runs.filter(x => x.role === r).length, 'run')})).filter(x => x.usd > 0).sort((x, y) => y.usd - x.usd);
+    const up = f.runs.filter(r => /stepped up/.test(r.note));
+    const models = [{name:'Sonnet', usd: sum(f.runs.filter(r => r.model === 'Sonnet'))}, {name:'Opus', usd: sum(f.runs.filter(r => r.model === 'Opus' && !/stepped up/.test(r.note)))}, {name:'Opus, stepped up', usd: sum(up), note: plural(up.length, 'Step-up')}].filter(x => x.usd > 0);
+    detail = `<section class="panel"><header><h2>By Product repo</h2></header><div class="pad">${barList(byRepo, 'stub')}</div></section>
+      <section class="panel"><header><h2>By role</h2></header><div class="pad">${barList(roles)}</div></section>
+      <section class="panel"><header><h2>By model</h2></header><div class="pad">${barList(models)}</div></section>
+      <section class="panel"><header><h2>Dearest this week</h2><button class="linkish" data-act="stub" data-what="All ${f.sl.length} pieces of work">All ${f.sl.length}</button></header>
+        ${f.sl.slice(0, 3).map(x => `<div class="row"><div class="hit" style="cursor:default"><span class="r-top"><span class="ref">${x.w.pr || x.w.ref}</span><span class="usd">${usd(x.usd)}</span></span><span class="r-title">${esc(x.w.title)}</span><span class="r-meta">${statePill(x)}</span></div></div>`).join('')}</section>`;
+  }
+  const held = allUsedUp(w) ? `<p class="banner" style="margin-top:14px">Runs have been held for 40 minutes this week. ${plural(w.held,'run')} wait for a Subscription.</p>` : '';
+  return `${topBar('Back to Home', 'home')}<h1 class="c-h1">Eight weeks at API prices</h1>
+    <div class="c-sel"><strong>${usd(f.usd)}</strong><span>${f.label}${prev ? `<br>${usd(prev.usd)} the week before` : ''}</span></div>
+    ${chart}${held}
+    <section class="panel">${figs}</section>
+    ${detail}
+    <section class="panel"><header><h2>GitHub Actions runner time</h2><span class="sum">${hours(f.mins)}</span></header><div class="pad">
+      <div class="chart small" role="img" aria-label="Runner minutes by week">${weeks.map((x, i) => `<span class="col ${x.part ? 'part' : ''}" aria-pressed="${S.c.week === i}" title="${x.label}: ${hours(x.mins)}"><i style="height:${Math.round(x.mins / maxM * 100)}%"></i></span>`).join('')}</div>
+      <p class="fine">Estimated from each run’s start and end. About 1,180 of 3,000 included minutes used this month.</p></div></section>
+    <section class="panel"><header><h2>Weekly limits</h2><span class="sum">also on Home</span></header><div class="pad"><div class="b-subs" style="margin-top:0">${w.subs.map(s => `<div class="b-sub"><span><b>${s.name}</b> ${s.state === 'limit' ? `used up, resets ${dayTime(s.resets)}` : s.state === 'credits' ? 'used up, spent usage credits' : s.state === 'running' ? 'runs go here' : 'next in line'}</span><span class="num">${s.used}%</span><div class="meter"><span class="${s.state === 'limit' || s.state === 'credits' ? 'full' : ''}" style="width:${s.used}%"></span></div></div>`).join('')}</div></div></section>
+    ${PRICE_NOTE}`;
+}
+
+/* ---------- prototype chrome ---------- */
+const BETS = {
+  a:['Leads with the Subscriptions, larger than on Home: the share used, a mark for how far through its week each one is, and when it runs out at this pace.','The period is each Subscription’s own week, which starts at its reset. The dollars cover the last 7 days. There is no moving between periods.','Dollars are reached by drilling down: Product repo, then a piece of work, then its runs. Each step is its own screen.','A Used up Subscription says when it resets or what you owe; a Held factory gets a banner above the gauges.','No GitHub Actions minutes.'],
+  b:['Leads with one dollar figure for a calendar week, the Weekly summary’s week. The Subscriptions shrink to a line each, since Home already has them.','You step back and forward a week at a time.','One flat list of work, dearest first. Product repo and outcome are filters, each chip showing its own total. A row opens in place to its runs.','A Ticket and its pull request are one row. A week’s row shows only that week’s runs and says what fell outside.','Held is a banner under the Subscriptions. GitHub Actions minutes are one line at the foot.'],
+  c:['Leads with eight weeks as a chart, to show whether the factory is getting dearer. Tap a bar to choose the week.','Under it, the chosen week as the Weekly summary’s figures, each beside the week before.','Breakdowns by Product repo, role and model. Single pieces of work appear only as the dearest three.','GitHub Actions runner time gets a panel and a chart of its own.','The Subscriptions come last: Home has them.'],
+};
+const TRY = {
+  a:['Say when Subscription 2 runs out, and whether Subscription 1 is back by then.','Find what PR #209 cost, and why.','Switch the scene to Held, then Quiet.'],
+  b:['Find what PR #209 cost this week, then all told.','Find what northside-physio spent last week on work that never merged.','Switch the scene to Held, then Quiet.'],
+  c:['Say whether a merged pull request is getting dearer.','Find what Step-ups cost last week.','Find what PR #209 cost. (Can you?)'],
+};
+function notes(w){
+  const v = VARIANTS.find(x => x[0] === S.variant);
+  return `<h2>${v[0].toUpperCase()}: ${v[1]}</h2>
+    <h3>What this variant holds</h3><ul>${BETS[S.variant].map(b => `<li>${b}</li>`).join('')}</ul>
+    <h3>Try</h3><ul>${TRY[S.variant].map(b => `<li>${b}</li>`).join('')}</ul>
+    <h3>The scene</h3><p class="state">${w.say}</p>
+    <p class="state">Now is Tuesday 10 November, 14:15. ${w.subs.map(s => `${s.name} ${s.used}%`).join(', ')}. ${w.held} held.</p>
+    <div class="btns"><button class="btn quiet p-notes-close" data-act="notes">Close notes</button></div>
+    <p class="fine">Prototype. Every repo, issue and figure is invented. Nothing here talks to GitHub.</p>`;
+}
+function bar(){
+  const v = VARIANTS.find(x => x[0] === S.variant), s = SCENARIOS.find(x => x[0] === S.scenario);
+  return `<div class="proto" role="toolbar" aria-label="Prototype switcher">
+    <button data-act="prev" aria-label="Previous variant">&lsaquo;</button><span class="p-label"><b>${v[0].toUpperCase()}</b>${v[1]}</span><button data-act="next" aria-label="Next variant">&rsaquo;</button>
+    <span class="p-sep"></span><button data-act="scenario" aria-label="Change the scene">${s[1]}</button>
+    <span class="p-sep p-notes"></span><button class="p-notes" data-act="notes">Notes</button></div>`;
+}
+
+const app = document.getElementById('app');
+function render(){
+  const w = world();
+  const body = {a:renderA, b:renderB, c:renderC}[S.variant](w);
+  app.innerHTML = `<div class="stage"><div class="phone">${body}</div><aside class="notes" ${S.notes ? 'data-open' : ''}>${notes(w)}</aside></div>${S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : ''}${bar()}`;
+  const name = S.variant + (S.scenario === 'busy' ? '' : '-' + S.scenario);
+  if (location.hash !== '#' + name){ try { history.replaceState(null, '', '#' + name); } catch (e) {} }
+}
+let toastTimer;
+function toast(t){ S.toast = t; clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = null; const el = app.querySelector('.toast'); if (el) el.remove(); }, 3800); }
+function cycle(list, cur, d){ const i = list.findIndex(x => x[0] === cur); return list[(i + d + list.length) % list.length][0]; }
+function reset(){ S.a = {repo:null, work:null}; S.b.open = null; }
+
+const ACT = {
+  prev(){ S.variant = cycle(VARIANTS, S.variant, -1); reset(); window.scrollTo(0,0); },
+  next(){ S.variant = cycle(VARIANTS, S.variant, 1); reset(); window.scrollTo(0,0); },
+  scenario(){ S.scenario = cycle(SCENARIOS, S.scenario, 1); reset(); },
+  notes(){ S.notes = !S.notes; },
+  home(){ toast('This would go back to Home.'); },
+  gh(){ toast('This would open GitHub.'); },
+  stub(d){ toast(d.what + ' would open here.'); },
+  'a-repo'(d){ S.a.repo = d.repo; window.scrollTo(0,0); },
+  'a-work'(d){ S.a.work = d.id; window.scrollTo(0,0); },
+  'a-back'(){ if (S.a.work) S.a.work = null; else S.a.repo = null; window.scrollTo(0,0); },
+  'b-week'(d){ S.b.week = Math.max(-1, Math.min(0, S.b.week + +d.d)); S.b.open = null; },
+  'b-repo'(d){ S.b.repo = d.repo; S.b.open = null; },
+  'b-kind'(d){ S.b.kind = d.kind; S.b.open = null; },
+  'b-open'(d){ S.b.open = S.b.open === d.id ? null : d.id; },
+  'c-week'(d){ S.c.week = +d.i; },
+};
+document.addEventListener('click', e => {
+  const el = e.target.closest && e.target.closest('[data-act]'); if (!el || el.disabled) return;
+  const fn = ACT[el.dataset.act]; if (!fn) return;
+  fn(el.dataset); render();
+});
+document.addEventListener('keydown', e => {
+  const t = e.target; if (t && t.matches && t.matches('input, textarea, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft'){ ACT.prev(); render(); } else if (e.key === 'ArrowRight'){ ACT.next(); render(); }
+});
+function fromHash(){
+  const h = (location.hash || '').replace('#','').split('-');
+  if (VARIANTS.some(x => x[0] === h[0])) S.variant = h[0];
+  S.scenario = SCENARIOS.some(x => x[0] === h[1]) ? h[1] : 'busy';
+}
+try { const q = new URLSearchParams(location.search).get('variant'); if (q && VARIANTS.some(x => x[0] === q.toLowerCase())) S.variant = q.toLowerCase(); } catch (e) {}
+if (location.hash) fromHash();
+window.addEventListener('hashchange', () => { fromHash(); render(); });
+render();
+})();
+</script>
