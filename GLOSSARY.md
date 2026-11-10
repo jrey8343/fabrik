@@ -298,6 +298,14 @@ _Avoid_: role, persona, test user
 Throwaway variants of one UI route that a Design session builds on a branch that is never merged, so the Operator can choose a design by looking at it.
 _Avoid_: mockup, spike, preview
 
+**Evidence page**:
+The single HTML page the Kit uploads beside a pull request's UI evidence, or a Prototype's variants, so the Operator can open every capture from GitHub in one click.
+_Avoid_: gallery, screenshot page
+
+**Gallery**:
+The Console's view of one Product repo's Prototypes and the UI evidence of its pull requests. It shows only what still has screenshots and keeps none itself.
+_Avoid_: evidence page (the Kit's own page), album, roll
+
 ## Measuring the factory
 
 **Run record**:
