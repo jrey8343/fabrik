@@ -130,6 +130,15 @@ describe("A caller workflow's grants against what the pinned workflows' jobs ask
       expect(checkCallerPermissions({ path, text }, workflows)).toEqual([]);
     });
 
+    // A store whose Operator hasn't re-run Setup since the Tick check (#461) keeps its one summary job.
+    it("passes an older store caller with no Tick check job, which a bump leaves as it was", () => {
+      const path = "templates/fabrik-runs-caller.yml";
+      const text = read(path).replace(/\n {2}tick-check:\n[\s\S]*$/, "\n");
+      expect(text).not.toContain("tick-check.yml");
+
+      expect(checkCallerPermissions({ path, text }, workflowsAt(text))).toEqual([]);
+    });
+
     it("would fail templates/fabrik.yml with the tick job's actions: read taken away, as v1.0.0's bump PR left it", () => {
       const path = "templates/fabrik.yml";
       const text = read(path).replace(/^ {6}actions: read\n(?=    secrets:\n {6}OP_PUSH_TOKEN)/m, "");

@@ -45,9 +45,9 @@ export function callerUpdate(existing: string | null, template: string, release:
 
 export const STORE_CALLER_PATH = ".github/workflows/weekly-summary.yml";
 
-/** The store caller template with its Monday-morning schedule in the Operator's time zone. */
+/** The store caller template with its schedules, the Monday morning's and the daily one's, in the Operator's time zone. */
 export function scheduleIn(template: string, timeZone: string): string {
-  return template.replace(/^(\s+timezone:\s*)\S.*$/m, `$1${JSON.stringify(timeZone)}`);
+  return template.replace(/^(\s+timezone:\s*)\S.*$/gm, `$1${JSON.stringify(timeZone)}`);
 }
 
 /** The Operator's time zone, as `scheduleIn` wrote it into the store's caller, or null if it names none. */
