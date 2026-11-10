@@ -407,8 +407,9 @@ async function apply(
 }
 
 /**
- * Reacts to a conversation comment, or to each inline comment of a review on
- * every page: GitHub takes no reaction on the review itself.
+ * Reacts to a conversation comment, or to a review: to the review itself when
+ * it has a body, which only GraphQL can do, by its node id, and to each of its
+ * inline comments on every page.
  */
 async function react(github: GitHubApi, repo: Repo, action: Extract<Action, { kind: "react" }>): Promise<void> {
   const base = `/repos/${repo.owner}/${repo.name}`;
@@ -416,6 +417,12 @@ async function react(github: GitHubApi, repo: Repo, action: Extract<Action, { ki
   if (action.on.kind === "conversation") {
     await github.rest("POST", `${base}/issues/comments/${action.on.comment}/reactions`, body);
     return;
+  }
+  if (action.on.body) {
+    await github.graphql(
+      "mutation ($id: ID!, $content: ReactionContent!) { addReaction(input: { subjectId: $id, content: $content }) { clientMutationId } }",
+      { id: action.on.node, content: action.content.toUpperCase() },
+    );
   }
   const reviewComments = `${base}/pulls/${action.pullRequest}/reviews/${action.on.review}/comments`;
   for (let page = 1; ; page++) {

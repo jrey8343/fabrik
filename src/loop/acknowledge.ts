@@ -5,8 +5,17 @@ import type { LoopEvent, Plan, PullRequestSnapshot } from "./types.ts";
 
 type Commented = Extract<LoopEvent, { kind: "pull-request-commented" }>;
 
-/** Reacts 👀 to an Operator comment on an agent PR; anyone else's comment, or any PR else, plans nothing. */
-export function acknowledgeComment(event: Commented, pullRequest: PullRequestSnapshot, operator: string): Plan {
+/**
+ * Reacts 👀 to an Operator comment on an agent PR; anyone else's comment, any
+ * PR else, or a review with no body and no inline comments (`inlineComments`
+ * says whether it holds any) plans nothing.
+ */
+export function acknowledgeComment(
+  event: Commented,
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+  inlineComments: boolean | null,
+): Plan {
   if (event.commenterIsBot) {
     return { kind: "nothing", reason: `${event.commenter} is a bot, so its comment on #${pullRequest.number} is not read` };
   }
@@ -17,6 +26,9 @@ export function acknowledgeComment(event: Commented, pullRequest: PullRequestSna
     };
   }
   if (!pullRequest.isAgent) return { kind: "nothing", reason: `#${pullRequest.number} isn't an agent PR` };
+  if (event.on.kind === "review" && !event.on.body && inlineComments === false) {
+    return { kind: "nothing", reason: `review ${event.on.review} on #${pullRequest.number} is empty, so it has nothing to weigh` };
+  }
   return {
     kind: "act",
     actions: [{ kind: "react", pullRequest: pullRequest.number, on: event.on, content: "eyes" }],

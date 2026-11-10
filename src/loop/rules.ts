@@ -163,7 +163,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return requestChanges(event, snapshot, config);
     // Context for the next run that reads the PR, never a trigger (ADR-0007).
     case "pull-request-commented":
-      return withPullRequest(snapshot, (pullRequest) => acknowledgeComment(event, pullRequest, snapshot.operator));
+      return withPullRequest(snapshot, (pullRequest) => acknowledgeComment(event, pullRequest, snapshot.operator, snapshot.reviewInlineComments));
     // An agent PR that leaves draft or closes no longer holds a slot.
     case "pull-request-left-draft":
       return withAgentPullRequest(snapshot, () => ({ kind: "act", actions: [CHECK_DISPATCH] }));

@@ -1129,6 +1129,53 @@ describe("Gathering the empty diffs of the Ticket a pull request was cut for (#4
   });
 });
 
+describe("Gathering whether an Operator's review holds inline comments (#435)", () => {
+  /** The PR's GitHub, where review 900 holds `inline` inline comments. */
+  function githubWithReview(inline: number) {
+    const reads: string[] = [];
+    const github = {
+      ...pullRequestGitHub(),
+      async rest(method: string, path: string): Promise<unknown> {
+        reads.push(`${method} ${path}`);
+        return Array.from({ length: Math.min(inline, 1) }, (_, i) => ({ id: 8000 + i }));
+      },
+    } as unknown as GitHub;
+    return { github, reads };
+  }
+  const reviewed = (body: boolean) =>
+    ({
+      kind: "pull-request-commented",
+      pullRequest: 50,
+      commenter: "operator",
+      commenterIsBot: false,
+      on: { kind: "review", review: 900, node: "PRR_kwDO900", body },
+    }) as const;
+
+  it("reads one inline comment of the review, enough to say it holds some", async () => {
+    const { github, reads } = githubWithReview(3);
+
+    const snapshot = await gatherSnapshot(github, repo, reviewed(false), null, APP_LOGIN);
+
+    expect(snapshot.reviewInlineComments).toBe(true);
+    expect(reads).toEqual(["GET /repos/acme/shop/pulls/50/reviews/900/comments?per_page=1"]);
+  });
+
+  it("finds none in a bare Approve", async () => {
+    const { github } = githubWithReview(0);
+
+    expect((await gatherSnapshot(github, repo, reviewed(false), null, APP_LOGIN)).reviewInlineComments).toBe(false);
+  });
+
+  it("reads nothing for a conversation comment or any other event", async () => {
+    const { github, reads } = githubWithReview(3);
+    const conversation = { ...reviewed(true), on: { kind: "conversation", comment: 7001 } } as const;
+
+    expect((await gatherSnapshot(github, repo, conversation, null, APP_LOGIN)).reviewInlineComments).toBeNull();
+    expect((await gatherSnapshot(github, repo, { kind: "pull-request-pushed", pullRequest: 50 }, null, APP_LOGIN)).reviewInlineComments).toBeNull();
+    expect(reads).toEqual([]);
+  });
+});
+
 describe("Gathering a pull request's UI evidence marker", () => {
   const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
   const captured: CaptureResult = {
