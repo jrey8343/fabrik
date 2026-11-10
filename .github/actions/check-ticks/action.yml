@@ -1,0 +1,68 @@
+# The daily Tick check (#461): loads the Fabrik App key through the store's
+# push service account, mints one App token on every installed repo with
+# Checks read, Contents read and Issues write, checks out only the store's
+# runs/ (its Run records, never the transcripts), and runs
+# src/kit/dead-tick-main.ts, which reads each Product repo's last started Tick
+# and opens or closes its Dead-tick issue (src/kit/deadTick.ts).
+#
+# Use it after checking out the Kit at the pinned commit into `kit/`:
+#   - uses: ./kit/.github/actions/check-ticks
+name: Check the Product repos' Ticks
+description: Opens a Dead-tick issue in each Product repo whose hourly Tick hasn't started for 25 hours, and closes it once one has.
+
+inputs:
+  op-push-token:
+    description: The store's push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24
+
+    - name: Load the Fabrik App key
+      id: op
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}
+        FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+        FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+    # Every repo in the installation, the store among them: to find the Product
+    # repos, read their Ticks' check runs and pins, read the store's Run
+    # records, and open and close Dead-tick issues in either.
+    - name: Mint a Fabrik App token for the Tick check
+      id: app
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        owner: jrey8343
+        permission-checks: read
+        permission-contents: read
+        permission-issues: write
+
+    - name: Check out the store's Run records
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: jrey8343/fabrik-runs
+        token: ${{ steps.app.outputs.token }}
+        path: store
+        sparse-checkout: |
+          runs
+        sparse-checkout-cone-mode: true
+        persist-credentials: false
+
+    - name: Check the Product repos' Ticks
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_TICK_CHECK_TOKEN: ${{ steps.app.outputs.token }}
+        FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        FABRIK_STORE_DIR: ${{ github.workspace }}/store
+      run: node src/kit/dead-tick-main.ts

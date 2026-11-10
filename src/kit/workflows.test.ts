@@ -20,7 +20,7 @@ import { RUN_BRIEF_FILE } from "../agent/transcript.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 
 const root = new URL("../../", import.meta.url);
-const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml"].map((path) => ({
+const workflows = [".github/workflows/loop.yml", ".github/workflows/schedule.yml", ".github/workflows/weekly-summary.yml", ".github/workflows/tick-check.yml"].map((path) => ({
   path,
   text: readFileSync(new URL(path, root), "utf8"),
 }));
@@ -1551,6 +1551,57 @@ describe("The weekly summary workflow", () => {
     expect(checkout).toContain("sparse-checkout-cone-mode: true");
     expect(checkout).toContain("persist-credentials: false");
     expect(action).not.toContain("transcripts/");
+  });
+});
+
+describe("The Tick check workflow", () => {
+  const check = workflows.find((workflow) => workflow.path.endsWith("tick-check.yml"))!.text;
+  const action = actionNamed("check-ticks");
+  const tokens = action.steps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
+
+  it("is called from the fabrik-runs caller with its push service account, and runs the Kit's composite action", () => {
+    expect(check).toMatch(/on:\n {2}workflow_call:\n {4}secrets:\n {6}OP_PUSH_TOKEN:/);
+    expect(check).toContain("jrey8343/fabrik/.github/workflows/tick-check.yml@*)");
+    expect(check).toContain("uses: ./kit/.github/actions/check-ticks");
+  });
+
+  it("runs the Kit's Node program, which exists", () => {
+    const program = /run: node (src\/\S+)/.exec(action.text)?.[1];
+
+    expect(program).toBe("src/kit/dead-tick-main.ts");
+    expect(existsSync(new URL(program!, root))).toBe(true);
+  });
+
+  it("holds one Fabrik App token, on every installed repo, with Checks read, Contents read and Issues write", () => {
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toMatch(/owner: jrey8343\n/);
+    expect(tokens[0]).not.toContain("repositories:");
+    expect(permissionsOf(tokens[0])).toEqual(["checks: read", "contents: read", "issues: write"]);
+  });
+
+  it("hands the program that token and the Fabrik App's slug, from the token it minted", () => {
+    const run = action.steps.find((step) => step.includes("run: node src/kit/dead-tick-main.ts"));
+
+    expect(run).toContain("FABRIK_TICK_CHECK_TOKEN: ${{ steps.app.outputs.token }}");
+    expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
+  });
+
+  it("reads the store's Run records from a sparse checkout of runs/ alone, never its transcripts", () => {
+    const checkout = action.steps.find((step) => step.includes("uses: actions/checkout@"));
+
+    expect(checkout).toContain("repository: jrey8343/fabrik-runs");
+    expect(checkout).toMatch(/sparse-checkout: \|\n {10}runs\n {8}\S/);
+    expect(checkout).toContain("persist-credentials: false");
+    expect(action.text).not.toContain("transcripts/");
+  });
+
+  it("leaves the Weekly summary's tokens as they were", () => {
+    const weekly = actionNamed("file-weekly-summary").steps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
+
+    expect(weekly.map(permissionsOf)).toEqual([
+      ["contents: read", "issues: write"],
+      ["contents: read", "issues: read", "pull-requests: read"],
+    ]);
   });
 });
 

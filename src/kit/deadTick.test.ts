@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type DeadTickInput, type DeadTickIssue, deadTickPlan, type ProductTickRead, type TickFacts } from "./deadTick.ts";
+import { type DeadTickInput, type DeadTickIssue, deadTickPlan, type ProductTickRead, recentReposOf, type TickFacts } from "./deadTick.ts";
 
 const NOW = "2026-11-11T07:00:00Z";
 const hoursAgo = (hours: number) => new Date(Date.parse(NOW) - hours * 3_600_000).toISOString();
@@ -153,6 +153,19 @@ describe("A repo the Fabrik App can't reach", () => {
 
     expect(plan.open).toEqual([]);
     expect(plan.summary).toContain("acme/shop: couldn't be read: Bad Gateway");
+  });
+});
+
+describe("The repos the check expects to reach", () => {
+  it("are those with a Run record in the store from the last 30 days, each once", () => {
+    const records = [
+      { repo: "acme/shop", endedAt: hoursAgo(24 * 7) },
+      { repo: "acme/shop", endedAt: hoursAgo(1) },
+      { repo: "acme/old", endedAt: hoursAgo(24 * 29) },
+      { repo: "acme/gone", endedAt: hoursAgo(24 * 31) },
+    ];
+
+    expect(recentReposOf(records, NOW)).toEqual(["acme/shop", "acme/old"]);
   });
 });
 

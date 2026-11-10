@@ -97,6 +97,12 @@ export interface DeadTickPlan {
   readonly summary: readonly string[];
 }
 
+/** The repos, each once, with a Run record that ended in the last RECENT_RUN_DAYS days. */
+export function recentReposOf(records: readonly { readonly repo: string; readonly endedAt: string }[], now: string): string[] {
+  const since = Date.parse(now) - RECENT_RUN_DAYS * 24 * 3_600_000;
+  return [...new Set(records.filter((record) => Date.parse(record.endedAt) >= since).map((record) => record.repo))];
+}
+
 /** Whether a repo's Tick is dead: no Tick started in the window, with `fabrik.yml` on main for at least as long. */
 export function tickIsDead({ callerSince, lastTick }: Pick<TickFacts, "callerSince" | "lastTick">, now: string): boolean {
   const since = Date.parse(now) - WINDOW_MS;
