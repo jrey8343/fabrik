@@ -111,7 +111,7 @@ The end-to-end path a piece of work takes in Fabrik, from idea to a pull request
 _Avoid_: pipeline, workflow, Real Engineering Loop (Matt Pocock's term, not Fabrik's)
 
 **Standing**:
-Where one piece of work is on the Loop, or between its merge and production, and whose move is next, as the Kit reads it from GitHub.
+Where one piece of work stands and whose move is next, as the Kit reads it from GitHub: its place on the Loop when it is on it, or between its merge and production. A Plain pull request has one too, with no place on the Loop.
 _Avoid_: status, state, stage
 
 **Stuck**:
@@ -289,6 +289,14 @@ _Avoid_: approval, sign-off
 **Required check**:
 A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any the main branch already required.
 _Avoid_: gating check, status check
+
+**Plain pull request**:
+A pull request in a Product repo with no Ticket behind it: a Kit bump, Setup's, a Skills bump's, a Pairing session's or the Operator's own. It gets no Review, Verdict or Digest, and Request changes and Send it back mean nothing on it; the Merge gate holds it like any other.
+_Avoid_: non-agent pull request, off-Loop pull request, manual pull request
+
+**Kit bump**:
+Dependabot's pull request in a Product repo that moves the Kit's pinned release forward within a major. A new major comes through Setup, never as a Kit bump.
+_Avoid_: Kit upgrade, Dependabot PR, version bump
 
 **Request changes**:
 The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, also bringing `main` in by merging it when the pull request conflicts with it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built: sending a Ticket to a Design session instead is Send it back. One GitHub never delivered, as on a pull request that conflicts with `main`, the Kit finds and builds all the same.
