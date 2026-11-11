@@ -1,20 +1,28 @@
 // The Design queue check (#147): the Kit, not the label alone, decides when a
 // Design session starts, so at most caps.design_sessions sessions wait on the
 // Operator in a Product repo at once. Modelled on Dispatch (src/loop/dispatch.ts).
-import { DESIGN_LABEL } from "./labels.ts";
+import { DESIGN_LABEL, NEEDS_TRIAGE } from "./labels.ts";
 import type { DesignQueueIssue, DesignQueueSnapshot, KitConfig, Plan } from "./types.ts";
 
 /**
  * Starts a Design turn on as many waiting `needs-design` issues as there are
  * free slots: re-designs first, then oldest `needs-design` first. A held issue is left exactly as it
- * is: no comment, no label, no mention.
+ * is: no comment, no label, no mention. An issue that still has `needs-triage`
+ * neither waits nor holds a slot until Triage lands (#485), since Triage may
+ * land another state and take `needs-design` off.
  */
-export function checkDesignQueue(snapshot: DesignQueueSnapshot, config: KitConfig, held: readonly number[] = []): Plan {
+export function checkDesignQueue(all: DesignQueueSnapshot, config: KitConfig, held: readonly number[] = []): Plan {
   const cap = config.caps.designSessions;
+  const snapshot = { ...all, issues: all.issues.filter((issue) => !waitsOnTriage(issue)) };
+  const triaging = all.issues.filter(waitsOnTriage).map((issue) => issue.number).sort((a, b) => a - b);
   const holding = holders(snapshot, held).sort((a, b) => a - b);
   const queue = waiting(snapshot, held).map((issue) => issue.number);
   if (queue.length === 0) {
-    return { kind: "nothing", reason: "No needs-design issue is waiting for a Design session slot" };
+    const reason =
+      triaging.length === 0
+        ? "No needs-design issue is waiting for a Design session slot"
+        : `${waits(triaging)} on Triage, so no needs-design issue is waiting for a Design session slot`;
+    return { kind: "nothing", reason };
   }
   if (cap === 0) {
     const carryOn = holding.length === 0 ? "" : `; ${holdingSlots(holding)} and carr${holding.length === 1 ? "ies" : "y"} on`;
@@ -47,6 +55,14 @@ function waits(numbers: readonly number[]): string {
 function list(numbers: readonly number[]): string {
   const names = numbers.map((n) => `#${n}`);
   return names.length < 2 ? names.join(", ") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/**
+ * Whether a `needs-design` issue still has `needs-triage`, so Triage, not the
+ * Design queue, decides what happens to it next (#485).
+ */
+export function waitsOnTriage(issue: DesignQueueIssue): boolean {
+  return issue.labels.includes(NEEDS_TRIAGE);
 }
 
 /** The issues holding a Design session slot, by number. */

@@ -318,3 +318,37 @@ describe("What triggers a Design queue check", () => {
     expect(withoutNotes(plan)).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }, { kind: "check-design-queue" }] });
   });
 });
+
+describe("An issue Triage hasn't landed yet (#485)", () => {
+  const triaging = (number: number) => aDesignQueueIssue({ number, labels: ["needs-triage", "needs-design"] });
+
+  it("doesn't start, and the reason names it as waiting on Triage", () => {
+    const plan = planFor(check, designQueueSnapshotOf([triaging(7)]), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "#7 waits on Triage, so no needs-design issue is waiting for a Design session slot",
+    });
+  });
+
+  it.each([
+    ["first", (plain: ReturnType<typeof aDesignQueueIssue>) => [triaging(7), plain]],
+    ["last", (plain: ReturnType<typeof aDesignQueueIssue>) => [plain, triaging(7)]],
+  ])("is passed over for a plain needs-design issue, whatever the order (listed %s)", (_, order) => {
+    const plain = aDesignQueueIssue({ number: 9, neededDesignAt: "2026-11-05T09:00:00Z" });
+    const issues = order(plain);
+    const plan = planFor(check, designQueueSnapshotOf(issues), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 9, labels: ["agent:design"] }] });
+  });
+
+  it("holds no slot, so doesn't count toward caps.design_sessions", () => {
+    const plan = planFor(
+      check,
+      designQueueSnapshotOf([aDesignQueueIssue({ number: 7, labels: ["needs-triage", "needs-design", "agent:design"] }), aDesignQueueIssue({ number: 9 })]),
+      kitConfig({ caps: { ...DEFAULT_KIT_CONFIG.caps, designSessions: 1 } }),
+    );
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 9, labels: ["agent:design"] }] });
+  });
+});

@@ -60,7 +60,8 @@ import type {
 /**
  * Adding needs-design, by any route, asks the Design queue check for the
  * session's first round (#147): a first turn only starts through the queue
- * check, which holds the issue silently while the cap is full.
+ * check, which holds the issue silently while the cap is full, and passes it
+ * over while it still has needs-triage, until Triage lands (#485).
  */
 export function startSession(issueNumber: number, { issue }: IssueContext): Plan {
   return whileInSession(issueNumber, issue) ?? { kind: "act", actions: [CHECK_DESIGN_QUEUE] };

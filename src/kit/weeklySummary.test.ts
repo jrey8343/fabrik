@@ -2479,6 +2479,21 @@ describe("the Weekly summary", () => {
       expect(result.body).toContain("- owner/product: 1 needs-design issue waiting for a Design session slot, for 5 hours");
     });
 
+    it("never counts an issue that still has needs-triage, since it waits on Triage, not a slot (#485)", () => {
+      const result = summaryOf(
+        factsOf({
+          designQueue: {
+            issues: [
+              aDesignQueueIssue({ number: 21, neededDesignAt: hoursAgo(80), labels: ["needs-triage", "needs-design"] }),
+              aDesignQueueIssue({ number: 22, neededDesignAt: hoursAgo(5) }),
+            ],
+            designTurnsInProgress: [],
+          },
+        }),
+      );
+      expect(result.summary.repos[0]?.held?.designSessions).toEqual({ waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR });
+    });
+
     it("leaves out a repo with nothing held", () => {
       const result = summaryOf(
         factsOf({ repo: "owner/quiet", designQueue: { issues: [aDesignQueueIssue({ designRounds: 2 })], designTurnsInProgress: [] } }),

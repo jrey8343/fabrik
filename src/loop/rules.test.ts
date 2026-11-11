@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aReplayIssue, replaySlice } from "../__fixtures__/replay.ts";
-import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
+import { aDesignQueueIssue, anIssue, aPullRequest, designQueueSnapshotOf, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
 
@@ -167,6 +167,7 @@ describe("Applying Triage output", () => {
         { kind: "comment", issue: 7, body: "Needs a design pass." },
         { kind: "remove-label", issue: 7, label: "needs-triage" },
         { kind: "add-labels", issue: 7, labels: ["bug", "needs-design"] },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -189,6 +190,7 @@ describe("Applying Triage output", () => {
         { kind: "comment", issue: 7, body: comment },
         { kind: "remove-label", issue: 7, label: "needs-triage" },
         { kind: "add-labels", issue: 7, labels: ["enhancement", "needs-design"] },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -209,6 +211,7 @@ describe("Applying Triage output", () => {
         { kind: "remove-label", issue: 7, label: "needs-triage" },
         { kind: "remove-label", issue: 7, label: "bug" },
         { kind: "add-labels", issue: 7, labels: ["enhancement", "needs-design"] },
+        { kind: "check-design-queue" },
       ],
     });
   });
@@ -226,6 +229,45 @@ describe("Applying Triage output", () => {
       kind: "act",
       actions: expect.arrayContaining([{ kind: "remove-label", issue: 7, label: "needs-design" }]),
     });
+  });
+
+  it("asks for a Design queue check when it lands needs-design on an issue the Operator gave needs-design while Triage ran (#485)", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage", "needs-design"] });
+
+    const plan = planFor(triaged({ category: "bug", state: "needs-design", comment: "Needs design." }), snapshotOf(issue), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "comment", issue: 7, body: "Needs design." },
+        { kind: "remove-label", issue: 7, label: "needs-triage" },
+        { kind: "add-labels", issue: 7, labels: ["bug"] },
+        { kind: "check-design-queue" },
+      ],
+    });
+  });
+
+  it("starts no Design turn for needs-design added while Triage runs, then lands ready-for-agent asking only for a Dispatch check (#485)", () => {
+    const triaging = anIssue({ number: 7, labels: ["needs-triage", "needs-design", "bug"] });
+
+    const added = planFor({ kind: "label-added", issue: 7, label: "needs-design" }, snapshotOf(triaging), kitConfig());
+    expect(added).toEqual({ kind: "act", actions: [{ kind: "check-design-queue" }] });
+
+    const queued = planFor(
+      { kind: "design-queue-check" },
+      designQueueSnapshotOf([aDesignQueueIssue({ number: 7, labels: triaging.labels })]),
+      kitConfig(),
+    );
+    expect(queued).toEqual({ kind: "nothing", reason: "#7 waits on Triage, so no needs-design issue is waiting for a Design session slot" });
+
+    const landed = planFor(
+      triaged({ category: "bug", state: "ready-for-agent", comment: "Fast path.", brief: { summary: "Fix it.", acceptanceCriteria: ["It works"] } }),
+      snapshotOf(triaging),
+      kitConfig(),
+    );
+    if (landed.kind !== "act") throw new Error(`expected act, got ${landed.kind}`);
+    expect(landed.actions).toContainEqual({ kind: "remove-label", issue: 7, label: "needs-design" });
+    expect(landed.actions.filter((action) => action.kind.startsWith("check-"))).toEqual([{ kind: "check-dispatch" }]);
   });
 
   // labels.ts: "An issue holds at most one" state label.
@@ -478,6 +520,7 @@ describe("Applying Triage output", () => {
         { kind: "comment", issue: 7, body: "Confirmed." },
         { kind: "remove-label", issue: 7, label: "needs-triage" },
         { kind: "add-labels", issue: 7, labels: ["needs-design"] },
+        { kind: "check-design-queue" },
       ],
     });
   });
