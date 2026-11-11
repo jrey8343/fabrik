@@ -2,6 +2,7 @@
 // a GitHub facts snapshot per Product repo, the Operator and now, the one issue
 // filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
 // model call.
+import type { DispatchedRuns } from "../github/snapshot.ts";
 import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import {
@@ -13,21 +14,23 @@ import {
   NEEDS_INFO,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
+  RESEARCH_DECISION_LABEL,
   RESEARCH_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
 import { waitingIssues } from "../loop/designQueue.ts";
-import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
+import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
+import { heldOf, runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { auditMarksIn, DESIGN_ROUND_MARKER, flakyCheckMarksIn, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type InfrastructureFailure, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, type InfrastructureFailure, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
-import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "./config.ts";
 import {
   type ArchitecturalEscape,
   type CommentFacts,
@@ -190,6 +193,28 @@ export interface GitHubFacts extends MetricFacts {
   readonly kitIssues: readonly KitIssueSnapshot[];
 }
 
+/**
+ * One Product repo's Kit config, read at its default branch's head as the
+ * Loop reads it, which drives the caps Held reports, and what Dispatch weighs
+ * there (#476).
+ */
+export interface RepoKitFacts {
+  /** `owner/name`. */
+  readonly repo: string;
+  /** Its default branch, whose head the Kit config was read at. */
+  readonly branch: string;
+  readonly config: KitConfigResult;
+  /** What a Dispatch check weighs, read as it reads it; null when the Kit config is invalid, as then nothing is read. */
+  readonly dispatch: DispatchFacts | null;
+}
+
+export interface DispatchFacts {
+  /** The Tickets and research Decisions a Dispatch check weighs releasing (gatherDispatchCandidates). */
+  readonly candidates: Pick<DispatchSnapshot, "tickets" | "researchDecisions">;
+  /** The Implement and Research runs in progress (countDispatchedRuns), or null when the Actions API couldn't be read. */
+  readonly runs: DispatchedRuns | null;
+}
+
 /** A Product repo whose GitHub facts couldn't be read this run, and why. */
 export interface UnreadRepo {
   /** `owner/name`. */
@@ -208,6 +233,11 @@ export interface WeeklySummaryInput {
   readonly unread: readonly UnreadRepo[];
   /** Each Product repo's Loop, as read for its health line (#460): a repo with none gets no line. */
   readonly health: readonly RepoHealthFacts[];
+  /**
+   * Each Product repo's Kit config and what Dispatch weighs there (#476). A
+   * repo with none is held to the Kit's default caps and gets no max_in_flight line.
+   */
+  readonly kits: readonly RepoKitFacts[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
   /** The Fabrik App's bot login, its slug with `[bot]`, as label events name it. */
@@ -402,6 +432,12 @@ export interface RubricScores {
 export interface RepoSection {
   /** `owner/name`. */
   readonly repo: string;
+  /**
+   * The repo's Kit config on its default branch when it's invalid, so the
+   * Loop does nothing there: it leads Waiting on you (#476). Null when it's
+   * valid or wasn't read.
+   */
+  readonly invalidKitConfig: InvalidKitConfig | null;
   /** Oldest first. */
   readonly waitingOnYou: readonly WaitingItem[];
   /** Loop work that hasn't moved in more than 24 hours, longest-stuck first. */
@@ -414,6 +450,13 @@ export interface RepoSection {
   readonly health: LoopHealth | null;
 }
 
+export interface InvalidKitConfig {
+  /** The default branch it was read on. */
+  readonly branch: string;
+  /** What's wrong with it, as the Loop reports it: never empty. */
+  readonly errors: readonly string[];
+}
+
 /** The work a cap holds in one Product repo, by source: null for a source holding nothing. */
 export interface Held {
   /** The `needs-design` issues waiting for a Design session slot (caps.design_sessions). */
@@ -424,6 +467,35 @@ export interface Held {
   readonly maps: HeldMaps | null;
   /** The Held runs waiting on the open weekly-limit, usage-credits and token-rotation issues while every Subscription is used up. */
   readonly runs: HeldRuns | null;
+  /** The Tickets and research Decisions Dispatch would release but max_in_flight holds (#476). */
+  readonly dispatch: HeldDispatch | null;
+}
+
+/**
+ * The Tickets and research Decisions Dispatch would release, held by
+ * max_in_flight: paused at 0, or every slot taken.
+ */
+export type HeldDispatch =
+  | { readonly kind: "paused"; readonly waiting: readonly HeldIssue[] }
+  | {
+      readonly kind: "full";
+      readonly maxInFlight: number;
+      /** The slots taken, as Dispatch counts them (inFlightOf), or as much of it as could be read. */
+      readonly inFlight: number;
+      /** The Tickets and Decisions in flight the facts name, lowest first: a draft PR's Ticket, a running one, a dispatched one, a held one. */
+      readonly inFlightIssues: readonly number[];
+      /** Whether the runs in progress couldn't be read, so `inFlight` leaves them out. */
+      readonly runsUnread: boolean;
+      readonly waiting: readonly HeldIssue[];
+    };
+
+/** A Ticket or research Decision waiting for Dispatch. */
+export interface HeldIssue {
+  readonly number: number;
+  /** When its trigger label (ready-for-agent, or wayfinder:research for a Decision) was last added, ISO 8601, or null when that isn't known. */
+  readonly since: string | null;
+  /** How long it has waited at the filing, in milliseconds, or null. */
+  readonly age: number | null;
 }
 
 export interface HeldDesignSessions {
@@ -632,13 +704,14 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   };
   const repos: RepoSection[] = [
     ...input.facts.map((facts) => ({ ...repoSectionOf(facts, input), health: healthOf(facts.repo) })),
-    ...input.unread.map(({ repo, why }) => ({ repo, waitingOnYou: [], stuck: [], held: null, unread: why, health: healthOf(repo) })),
+    ...input.unread.map(({ repo, why }) => ({ repo, invalidKitConfig: null, waitingOnYou: [], stuck: [], held: null, unread: why, health: healthOf(repo) })),
   ];
   // Held work counts too, so a queue never sits unseen through a week nothing ran,
   // and so does a repo that couldn't be read, so its failure is never taken for a quiet week,
   // and a Loop that's down or failing, so a dead Loop never reads as a quiet week (#460).
   const quiet = repos.every(
     (repo) =>
+      repo.invalidKitConfig === null &&
       repo.waitingOnYou.length === 0 &&
       repo.stuck.length === 0 &&
       repo.held === null &&
@@ -1076,12 +1149,15 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt, timeZone }: WeeklySummaryInput): Omit<RepoSection, "health"> {
+function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt, timeZone, kits }: WeeklySummaryInput): Omit<RepoSection, "health"> {
+  const kit = kits.find((read) => read.repo === facts.repo) ?? null;
+  const invalid = kit === null || kit.config.ok ? null : { branch: kit.branch, errors: kit.config.errors };
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
   const { thisWeek } = weeksEndingAt(now, timeZone);
   return {
     repo: facts.repo,
+    invalidKitConfig: invalid,
     // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst([
       ...waitingOnYou(facts, operator, appLogin, items),
@@ -1097,7 +1173,8 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
       ...weekGivenUp("Audit", facts.audits, (body) => auditMarksIn(body).failed, appLogin, thisWeek, items),
       ...weekGivenUp("Retro", facts.retros, (body) => retroMarksIn(body).failed, appLogin, thisWeek, items),
     ]),
-    held: heldIn(facts, appLogin, now),
+    // The Loop does nothing in a repo whose Kit config is invalid, so no cap holds anything there.
+    held: invalid === null ? heldIn(facts, kit, appLogin, now) : null,
     unread: null,
   };
 }
@@ -1190,13 +1267,62 @@ function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: 
   });
 }
 
-/** What a cap holds in the repo, or null when nothing is held. */
-function heldIn({ designQueue, monitorIssues, openMaps, kitIssues }: GitHubFacts, appLogin: string, now: number): Held | null {
+/**
+ * What a cap holds in the repo, by its own Kit config, or the Kit's default
+ * caps without one; null when nothing is held.
+ */
+function heldIn(facts: GitHubFacts, kit: RepoKitFacts | null, appLogin: string, now: number): Held | null {
+  const { designQueue, monitorIssues, openMaps, kitIssues } = facts;
+  const config = kit?.config.ok === true ? kit.config.config : DEFAULT_KIT_CONFIG;
   const designSessions = heldDesignSessionsOf(designQueue, now);
   const monitor = heldMonitorOf(monitorIssues, appLogin);
-  const mapCap = heldMapsOf(openMaps);
+  const mapCap = heldMapsOf(openMaps, config);
   const runs = heldRunsOf(kitIssues);
-  return designSessions === null && monitor === null && mapCap === null && runs === null ? null : { designSessions, monitor, maps: mapCap, runs };
+  const dispatch = kit?.dispatch == null ? null : heldDispatchOf(facts, kit.dispatch, config, now);
+  const held = { designSessions, monitor, maps: mapCap, runs, dispatch };
+  return Object.values(held).every((source) => source === null) ? null : held;
+}
+
+/**
+ * The Tickets and research Decisions Dispatch would release while
+ * max_in_flight holds them, by Dispatch's own rules (waitingForDispatch,
+ * inFlightOf), so the summary and Dispatch can't disagree. Null when none
+ * waits or a slot is free: the next Tick's Dispatch check releases it (#418).
+ * With the runs in progress unread, it's shown unless what was read already
+ * leaves a slot free... which it can't tell, so it's shown, marked.
+ */
+function heldDispatchOf(facts: GitHubFacts, { candidates, runs }: DispatchFacts, config: KitConfig, now: number): HeldDispatch | null {
+  const held = { implement: heldOf("implement", facts.kitIssues), research: heldOf("research", facts.kitIssues) };
+  const decisions = new Set(candidates.researchDecisions.map(({ number }) => number));
+  const waiting = waitingForDispatch(candidates, held).map((number): HeldIssue => {
+    const issue = facts.openIssues.find((open) => open.number === number);
+    const label = decisions.has(number) ? RESEARCH_DECISION_LABEL : READY_FOR_AGENT;
+    const since = issue === undefined ? null : (lastAdded(issue.labelEvents, label) ?? issue.createdAt);
+    return { number, since, age: since === null ? null : now - Date.parse(since) };
+  });
+  if (waiting.length === 0) return null;
+  if (config.maxInFlight === 0) return { kind: "paused", waiting };
+  // The summary reads only agent PRs, so its open drafts are Dispatch's open agent draft PRs.
+  const drafts = facts.openPullRequests.filter(({ draft }) => draft);
+  const inFlight = inFlightOf(
+    {
+      ...candidates,
+      openAgentDraftPullRequests: drafts.length,
+      implementRunsInProgress: runs?.implement ?? 0,
+      researchRunsInProgress: runs?.research ?? 0,
+    },
+    held,
+  );
+  if (runs !== null && inFlight.total < config.maxInFlight) return null;
+  const named = [...drafts.flatMap(({ ticket }) => (ticket === null ? [] : [ticket])), ...(runs?.implementTickets ?? []), ...inFlight.waiting, ...inFlight.held];
+  return {
+    kind: "full",
+    maxInFlight: config.maxInFlight,
+    inFlight: inFlight.total,
+    inFlightIssues: [...new Set(named)].sort((a, b) => a - b),
+    runsUnread: runs === null,
+    waiting,
+  };
 }
 
 /**
@@ -1220,14 +1346,12 @@ function heldRunsOf(kitIssues: readonly KitIssueSnapshot[]): HeldRuns | null {
 /**
  * The open Maps, when they fill the Map cap: read and counted as the cap
  * reads and counts them (gatherOpenMaps, mapCapFull), so the summary and the
- * Map landing's check can't disagree. Null while the cap has room, or with no
- * Map open to name. The summary has no Product's Kit config, so it holds the
- * open Maps to the Kit's default cap: a repo's cap only tightens it, so Maps
- * that fill the default fill every repo's cap too.
+ * Map landing's check can't disagree, held to the repo's own caps.maps.
+ * Null while the cap has room, or with no Map open to name.
  */
-function heldMapsOf(openMaps: readonly number[]): HeldMaps | null {
+function heldMapsOf(openMaps: readonly number[], config: KitConfig): HeldMaps | null {
   const open = openMaps.toSorted((a, b) => a - b);
-  return open.length > 0 && mapCapFull(open, DEFAULT_KIT_CONFIG) ? { open } : null;
+  return open.length > 0 && mapCapFull(open, config) ? { open } : null;
 }
 
 /**
@@ -1489,8 +1613,10 @@ function midnight(date: number, timeZone: string): number {
 // theirs when their Spec ships. The open Retro gets no section, only its line
 // in Waiting on you, and so do an open Map and a failed research Decision.
 // Scores shows only in a week with score files, and never a run's own scores.
-// Held shows what the Design-session, Monitor and Map caps hold, and the Held
-// runs waiting on a weekly-limit issue.
+// Held shows what the Design-session, Monitor and Map caps and max_in_flight
+// hold, by each repo's own Kit config, and the Held runs waiting on a
+// weekly-limit issue. A repo whose Kit config is invalid holds nothing: its
+// Waiting on you leads with the config's first error.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords }: WeeklySummaryInput): string {
   const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, escapeRate, counts } = summary;
@@ -1660,9 +1786,29 @@ function heldLines(repos: readonly RepoSection[], timeZone: string): string[] {
     }
     const runs = held?.runs ?? null;
     if (runs !== null) shown.push(...heldRunsLines(repo, runs, timeZone));
+    const dispatch = held?.dispatch ?? null;
+    if (dispatch !== null) shown.push(heldDispatchLine(repo, dispatch));
     return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
+}
+
+/**
+ * What max_in_flight holds: Dispatch paused, or every slot taken, naming
+ * what's in flight; then each waiting issue with how long it has waited.
+ */
+function heldDispatchLine(repo: string, held: HeldDispatch): string {
+  const link = (number: number) => `[#${number}](https://github.com/${repo}/issues/${number})`;
+  const waiting = held.waiting.map(({ number, age }) => (age === null ? link(number) : `${link(number)} (${duration(age)})`)).join(", ");
+  if (held.kind === "paused") return `- ${repo}: Dispatch is paused (\`max_in_flight\` is 0): ${waiting} ${held.waiting.length === 1 ? "waits" : "wait"}`;
+  const { maxInFlight, inFlight, inFlightIssues, runsUnread } = held;
+  const names = inFlightIssues.map(link).join(", ");
+  const taken =
+    inFlightIssues.length === inFlight
+      ? `${names} ${inFlight === 1 ? "is" : "are"} in flight`
+      : `${inFlight} ${inFlight === 1 ? "is" : "are"} in flight${inFlightIssues.length === 0 ? "" : ` (${names} among them)`}`;
+  const unread = runsUnread ? " (runs in progress unread)" : "";
+  return `- ${repo}: waiting for a slot: \`max_in_flight\` is ${maxInFlight} and ${taken}${unread} · ${waiting}`;
 }
 
 /** The Held runs, each with its role and the weekly-limit issues holding it, then each open weekly-limit issue with its reset. */
@@ -1682,7 +1828,7 @@ function heldRunsLines(repo: string, { runs, weeklyLimitIssues }: HeldRuns, time
 const SHOWN_ITEMS = 10;
 
 function repoLines(
-  { repo, waitingOnYou, stuck, unread, health }: RepoSection,
+  { repo, invalidKitConfig, waitingOnYou, stuck, unread, health }: RepoSection,
   timeZone: string,
   escapes: readonly EscapeThisWeek[],
   reviewMisses: readonly ReviewMissThisWeek[],
@@ -1696,8 +1842,10 @@ function repoLines(
     return [`## ${repo}`, "", ...leading, line, "", ...trailing, liveLinks(repo), ""];
   }
   const lines = [`## ${repo}`, "", ...leading, "### Waiting on you", ""];
-  if (waitingOnYou.length === 0) lines.push("Nothing waiting on you.", "");
-  else {
+  if (invalidKitConfig !== null) lines.push(invalidKitConfigLine(invalidKitConfig), ...(waitingOnYou.length === 0 ? [""] : []));
+  if (waitingOnYou.length === 0) {
+    if (invalidKitConfig === null) lines.push("Nothing waiting on you.", "");
+  } else {
     lines.push(...waitingOnYou.slice(0, SHOWN_ITEMS).map(waitingLine), "");
     const rest = waitingOnYou.slice(SHOWN_ITEMS);
     if (rest.length > 0) lines.push(`<details><summary>${rest.length} more</summary>`, "", ...rest.map(waitingLine), "", "</details>", "");
@@ -1707,6 +1855,12 @@ function repoLines(
   if (reviewMisses.length > 0) lines.push("### Review misses this week", "", ...reviewMisses.map(reviewMissLine), "");
   lines.push(...trailing, liveLinks(repo), "");
   return lines;
+}
+
+/** An invalid Kit config's line: its first error, and how many more. */
+function invalidKitConfigLine({ branch, errors }: InvalidKitConfig): string {
+  const more = errors.length > 1 ? ` (+${errors.length - 1} more)` : "";
+  return `- The Kit config on \`${branch}\` is invalid, so the Loop does nothing: ${escapedTitle(errors[0] ?? "")}${more}`;
 }
 
 /** An escape's issue, then a line per PR it counts against: the Review run that missed it, and any Operator pushes. */
