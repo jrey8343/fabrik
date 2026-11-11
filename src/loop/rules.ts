@@ -30,7 +30,7 @@ import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
 import { closeAgentDraftsOf, stopTicketOf } from "./handClosing.ts";
 import { heldOf } from "./heldRun.ts";
-import { scheduledTick } from "./kitIssues.ts";
+import { deadTickClosed, scheduledTick } from "./kitIssues.ts";
 import { closeMergedTickets } from "./mergedTickets.ts";
 import { resumingHeldRuns } from "./resume.ts";
 import { heldOn, heldWhileUsedUp } from "./hold.ts";
@@ -214,13 +214,20 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // so a slot it frees can be filled by this tick's queue checks. Why each
       // part does nothing is a note, so the step summary says it whatever the
       // rest of the tick does.
+      // Before all that, a Tick that runs at all closes its repo's Dead-tick issue (#461).
       return thenCheckQueues(
         alongside(
-          withReasonNoted(stuckTriggers(event.now, snapshot)),
+          withDeadTickClosed(event, snapshot, withReasonNoted(stuckTriggers(event.now, snapshot))),
           scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate], event.now, snapshot, config),
         ),
       );
   }
+}
+
+/** The plan, after closing the repo's open Dead-tick issue, if one is open. */
+function withDeadTickClosed(event: Extract<LoopEvent, { kind: "scheduled-tick" }>, snapshot: Snapshot, plan: Plan): Plan {
+  const closing = deadTickClosed(event.now, event.release ?? null, snapshot);
+  return closing.length === 0 ? plan : alongside({ kind: "act", actions: closing }, plan);
 }
 
 const CHECK_DISPATCH: Action = { kind: "check-dispatch" };

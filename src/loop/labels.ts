@@ -49,6 +49,14 @@ export const WEEKLY_LIMIT_LABEL = "fabrik:weekly-limit";
  */
 export const USAGE_CREDITS_LABEL = "fabrik:usage-credits";
 
+/**
+ * The label on a Dead-tick issue (#461): the daily check from the fabrik-runs
+ * store opens one in a Product repo whose hourly Tick hasn't started for 25
+ * hours, and in the store for a repo the Fabrik App can no longer reach. The
+ * Tick closes its own repo's on its first run once it starts again.
+ */
+export const DEAD_TICK_LABEL = "fabrik:dead-tick";
+
 /** The label on an Audit, which the scheduled tick opens for the Auditor to fill in (#150). */
 export const AUDIT_LABEL = "fabrik:audit";
 
@@ -87,6 +95,7 @@ export const KIT_ISSUE_LABELS = [
   AUDIT_LABEL,
   RETRO_LABEL,
   REPLAY_LABEL,
+  DEAD_TICK_LABEL,
 ] as const;
 export type KitIssueLabel = (typeof KIT_ISSUE_LABELS)[number];
 
@@ -174,6 +183,44 @@ export const ALL_LABELS: readonly Label[] = [
   MAP_LABEL,
   ...DECISION_TYPES.map(decisionLabel),
 ];
+
+/**
+ * How Setup creates each label the Loop reads or writes, so no run fails on a
+ * missing one. A trigger label's description says when it comes off, so one
+ * still on reads as a run that never started (#436). GitHub takes at most 100
+ * characters.
+ */
+export const LOOP_LABELS: Readonly<Record<Label, { readonly color: string; readonly description: string }>> = {
+  [NEEDS_TRIAGE]: { color: "fbca04", description: "Fabrik: waiting for Triage" },
+  [NEEDS_INFO]: { color: "d876e3", description: "Fabrik: waiting on the reporter for more information" },
+  [NEEDS_DESIGN]: { color: "5319e7", description: "Fabrik: needs a Design session with the Operator" },
+  [READY_FOR_AGENT]: { color: "0e8a16", description: "Fabrik: fully specified, ready for an Implementer" },
+  [READY_FOR_HUMAN]: { color: "1d76db", description: "Fabrik: needs the Operator to build it" },
+  [WONTFIX]: { color: "ffffff", description: "Fabrik: will not be actioned" },
+  [DISPATCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes an Implementer (the Kit adds it; it comes off as the run starts)" },
+  [DESIGN_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Design session's first turn (the Kit adds it; it comes off as the turn starts)" },
+  [REVIEW_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes a Review (it comes off with the Verdict)" },
+  [RESEARCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Researcher on a research Decision (the Kit adds it; off as the run starts)" },
+  [REPLAY_TRIGGER_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Replay's next Ticket (the Kit adds it; it comes off as the run starts)" },
+  [BUG]: { color: "d73a4a", description: "Something isn't working" },
+  [ENHANCEMENT]: { color: "a2eeef", description: "New feature or request" },
+  [TOKEN_ROTATION_LABEL]: { color: "b60205", description: "Fabrik: the Claude token needs rotating" },
+  [WEEKLY_LIMIT_LABEL]: { color: "b60205", description: "Fabrik: the subscription's weekly limit is reached" },
+  [USAGE_CREDITS_LABEL]: { color: "b60205", description: "Fabrik: a Subscription spent usage credits, which must be turned off" },
+  [DEAD_TICK_LABEL]: { color: "b60205", description: "Fabrik: the hourly Tick hasn't started for 25 hours, or the Fabrik App can't reach a repo" },
+  [AUDIT_LABEL]: { color: "c5def5", description: "Fabrik: the week's Audit of deepening opportunities, which the Auditor files" },
+  [RETRO_LABEL]: { color: "c5def5", description: "Fabrik: the week's Retro, proposing changes to how the factory works" },
+  [REPLAY_LABEL]: { color: "c5def5", description: "Fabrik: the Operator's Replay, re-running merged Tickets with one thing changed" },
+  [MONITOR_LABEL]: { color: "e99695", description: "Fabrik: filed by the Monitor for a production error, a red main or a dead Sentry token" },
+  [FLAKY_CHECK_LABEL]: { color: "e99695", description: "Fabrik: a required check that failed and passed on the same head" },
+  [STEP_UP_LABEL]: { color: "f9d0c4", description: "Fabrik: while it's on, the Ticket's Implement runs are Step-ups" },
+  [KEPT_BRANCH_LABEL]: { color: "f9d0c4", description: "Fabrik: the Ticket's next Implement run carries on its Kept branch, not main" },
+  [MAP_LABEL]: { color: "bfd4f2", description: "Fabrik: a Map charting a foggy destination through its Decisions" },
+  [decisionLabel("research")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by research" },
+  [decisionLabel("prototype")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a prototype" },
+  [decisionLabel("grilling")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a grilling" },
+  [decisionLabel("task")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a task" },
+};
 
 /** Every label whose `labeled` event starts a run (ADR-0001). GitHub fires none for a label already on. */
 export const TRIGGER_LABELS = [DISPATCH_LABEL, DESIGN_LABEL, REVIEW_LABEL, RESEARCH_LABEL, REPLAY_TRIGGER_LABEL] as const;

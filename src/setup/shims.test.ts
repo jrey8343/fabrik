@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { dependabotUpdate, scheduleIn, settingsUpdate, timeZoneIn } from "./shims.ts";
+import { callerUpdate, dependabotUpdate, pinCaller, scheduleIn, settingsUpdate, STORE_CALLER_PATH, storeCallerUpdate, timeZoneIn } from "./shims.ts";
 
 const template = readFileSync(new URL("../../templates/fabrik-runs-caller.yml", import.meta.url), "utf8");
 const dependabotTemplate = readFileSync(new URL("../../templates/dependabot.yml", import.meta.url), "utf8");
@@ -13,7 +13,68 @@ describe("The Operator's time zone in the store's caller workflow", () => {
   });
 
   it("is unknown for a caller whose schedule names none", () => {
-    expect(timeZoneIn(template.replace(/^\s+timezone:.*\n/m, ""))).toBeNull();
+    expect(timeZoneIn(template.replace(/^\s+timezone:.*\n/gm, ""))).toBeNull();
+  });
+});
+
+describe("The store's caller workflow's two schedules", () => {
+  const caller = parse(scheduleIn(template, "Australia/Sydney")) as {
+    on: { schedule: { cron: string; timezone: string }[]; workflow_dispatch: unknown };
+    jobs: Record<string, { if?: string; uses: string; permissions: Record<string, string> }>;
+  };
+
+  it("runs at 07:00 every day and every Monday, both in the Operator's time zone", () => {
+    expect(caller.on.schedule).toEqual([
+      { cron: "0 7 * * 1", timezone: "Australia/Sydney" },
+      { cron: "0 7 * * *", timezone: "Australia/Sydney" },
+    ]);
+  });
+
+  it("files the Weekly summary only on the Monday schedule and by hand", () => {
+    expect(caller.jobs["summary"]?.if).toBe("github.event_name == 'workflow_dispatch' || github.event.schedule == '0 7 * * 1'");
+    expect(caller.jobs["summary"]?.uses).toMatch(/^jrey8343\/fabrik\/\.github\/workflows\/weekly-summary\.yml@/);
+  });
+
+  it("runs the Tick check only on the daily schedule, at the same pin as the summary", () => {
+    const pin = (uses = "") => uses.slice(uses.lastIndexOf("@"));
+
+    expect(caller.jobs["tick-check"]?.if).toBe("github.event.schedule == '0 7 * * *'");
+    expect(caller.jobs["tick-check"]?.uses).toMatch(/^jrey8343\/fabrik\/\.github\/workflows\/tick-check\.yml@/);
+    expect(pin(caller.jobs["tick-check"]?.uses)).toBe(pin(caller.jobs["summary"]?.uses));
+  });
+
+  it("is what re-running Setup writes over an older caller with no daily schedule, at the release it pins", () => {
+    const older = [
+      "name: Fabrik weekly summary",
+      "on:",
+      "  schedule:",
+      '    - cron: "0 7 * * 1"',
+      '      timezone: "Australia/Sydney"',
+      "  workflow_dispatch:",
+      "permissions: {}",
+      "jobs:",
+      "  summary:",
+      "    uses: jrey8343/fabrik/.github/workflows/weekly-summary.yml@v1.1.0",
+      "    permissions:",
+      "      id-token: write",
+      "    secrets:",
+      "      OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}",
+      "",
+    ].join("\n");
+
+    const update = callerUpdate(older, scheduleIn(template, "Australia/Sydney"), "v1.1.0", STORE_CALLER_PATH);
+
+    expect(update).toEqual({ content: pinCaller(scheduleIn(template, "Australia/Sydney"), "v1.1.0") });
+    expect(timeZoneIn(older)).toBe("Australia/Sydney");
+  });
+
+  it("is rewritten at Setup's release over one pinned to an older release in the same major, so the Tick check's workflow exists at its pin", () => {
+    const caller = scheduleIn(template, "Australia/Sydney");
+
+    const update = storeCallerUpdate(pinCaller(caller, "v2.2.0"), caller, "v2.3.0");
+
+    expect(update).toEqual({ content: pinCaller(caller, "v2.3.0") });
+    expect((update as { content: string }).content).toContain("jrey8343/fabrik/.github/workflows/tick-check.yml@v2.3.0");
   });
 });
 

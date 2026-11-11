@@ -14,8 +14,8 @@
 // a usage-credits issue (src/loop/usageCreditsIssue.ts).
 import type { HoldableRun } from "./heldRun.ts";
 import { heldLine } from "./hold.ts";
-import { earliestOf, NOTIFIED, notified, resetsAtMarker, resetsAtOf } from "./kitIssueMarks.ts";
-import { READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { DEAD_TICK_MARKER, earliestOf, NOTIFIED, notified, resetsAtMarker, resetsAtOf } from "./kitIssueMarks.ts";
+import { DEAD_TICK_LABEL, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
 import {
   freeSubscriptions,
@@ -107,6 +107,28 @@ export function scheduledTick(now: string, { kitIssues }: Snapshot, config: Pick
   const actions = plans.flatMap((plan) => (plan.kind === "act" ? plan.actions : []));
   if (actions.length > 0) return { kind: "act", actions };
   return { kind: "nothing", reason: plans.map((plan) => (plan.kind === "nothing" ? plan.reason : "")).join("; ") };
+}
+
+/**
+ * The Tick closes its repo's open Dead-tick issue (#461) as completed on any
+ * run, since running is all it takes. Only an issue with the marker the
+ * daily check left in the App's own body counts.
+ */
+export function deadTickClosed(now: string, release: string | null, { kitIssues }: Pick<Snapshot, "kitIssues">): Action[] {
+  return kitIssues
+    .filter((issue) => issue.labels.includes(DEAD_TICK_LABEL) && issue.body.includes(DEAD_TICK_MARKER))
+    .flatMap((issue): Action[] => [
+      { kind: "comment", issue: issue.number, body: tickStartedAgain(now, release) },
+      { kind: "close", issue: issue.number, reason: "completed" },
+    ]);
+}
+
+/**
+ * The comment closing a Dead-tick issue (#461) once a Tick has started again,
+ * as the Tick itself posts it and as the store's daily check does.
+ */
+export function tickStartedAgain(at: string, release: string | null): string {
+  return `The hourly Tick started again at ${readable(at)}${release === null ? "" : `, on Fabrik ${release}`}, so the Kit is closing this issue.`;
 }
 
 /** One weekly-limit issue, closed once its reset has passed, naming its Subscription when rotation is on. */
