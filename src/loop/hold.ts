@@ -8,7 +8,10 @@
 // goes on the usage-credits or token-rotation issue that already carries held
 // markers, else the most recently opened, whose opening took the last free
 // Subscription, and no reset is known: it resumes once the Operator closes an
-// issue that frees a Subscription (src/loop/resume.ts). Pure, no I/O.
+// issue that frees a Subscription (src/loop/resume.ts). Its own issue or PR
+// gets one quiet held line too, which mentions nobody and is edited when the
+// run resumes or is dropped (src/loop/heldLine.ts, #471). Pure, no I/O.
+import { heldLineOn, heldRunName } from "./heldLine.ts";
 import { carriesHeldMarkers, heldInOrder, heldMarker, heldRunOf, type HoldableRun, holding, isCarrier, runNamed } from "./heldRun.ts";
 import { earliestOf, notified, resetsAtOf } from "./kitIssueMarks.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
@@ -28,7 +31,7 @@ export interface HeldOn {
 }
 
 /** The line naming a held run, with its held marker, for a weekly-limit issue. */
-export function heldLine(held: HoldableRun, until: string | null): string {
+export function heldMarkerComment(held: HoldableRun, until: string | null): string {
   const run = `The ${runNamed(held.role)} on #${held.issue}`;
   const resume = `re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
   // With no reset known, only the Operator's close of this issue frees a Subscription for it (#440).
@@ -50,9 +53,9 @@ export function heldUntilFreeLine(held: HoldableRun): string {
 
 /**
  * With rotation on and every listed Subscription used up, the Plan with each
- * run it would start held instead: its trigger label off, and a quiet comment
- * naming it on its carrier (holdingOn). No comment on the Ticket, and no
- * @-mention. Every other action, and every Plan that starts no run, is left
+ * run it would start held instead: its trigger label off, a quiet comment
+ * naming it on its carrier (holdingOn), and the held line on its own issue or
+ * PR (#471). No @-mention. Every other action, and every Plan that starts no run, is left
  * as it is.
  */
 export function heldWhileUsedUp(
@@ -69,7 +72,10 @@ export function heldWhileUsedUp(
   const starts = planned.filter((action) => action.kind === "start-agent-run");
   // Each in its place in the order held runs resume in.
   const held = heldInOrder(starts.map(heldRunOf), kitIssues);
-  const comments: Action[] = held.map((run) => ({ kind: "comment", issue: on.number, body: lineOn(carrier, run) }));
+  const comments: Action[] = held.flatMap((run, at): Action[] => [
+    { kind: "comment", issue: on.number, body: lineOn(carrier, run) },
+    heldLineOn(run, heldRunName(run.role, starts[at]), on.number, carrier),
+  ]);
   const actions = planned.flatMap((action): Action[] => {
     // A held prototype turn hasn't started, so its request isn't marked so, and its resumption starts it (src/loop/design.ts).
     if (action.kind === "mark-prototype-request" && action.started && held.some((run) => run.issue === action.issue)) return [];
@@ -157,9 +163,9 @@ function holdingOn(kitIssues: readonly KitIssueSnapshot[]): Carrier | null {
   return on === undefined ? null : { on, until: null, reset: false };
 }
 
-/** The held line for a run held on this carrier. */
+/** The comment naming a run held on this carrier, with its held marker. */
 function lineOn({ until, reset }: Carrier, held: HoldableRun): string {
-  return reset ? heldLine(held, until) : heldUntilFreeLine(held);
+  return reset ? heldMarkerComment(held, until) : heldUntilFreeLine(held);
 }
 
 /**
@@ -178,20 +184,30 @@ export function heldAgain(runs: readonly HoldableRun[], kitIssues: readonly KitI
  * With rotation on, a run killed for spending usage credits, or refused on a
  * dead token, while no other Subscription is free, held: its trigger label
  * off, and a quiet line naming it on its carrier, then `notice`, the actions
- * on its usage-credits or token-rotation issue. With no weekly-limit issue
- * open and no other issue carrying held markers, the issue the notice opens
- * is the carrier, as the most recently opened, and the line goes in its body,
- * as a weekly-limit refusal's does (#470).
+ * on its usage-credits or token-rotation issue, then the held line, naming it
+ * as `name`, on its own issue or PR (#471). With no weekly-limit issue open
+ * and no other issue carrying held markers, the issue the notice opens is the
+ * carrier, as the most recently opened, and the line goes in its body, as a
+ * weekly-limit refusal's does (#470).
  */
-export function heldAfterKill(held: HoldableRun, kitIssues: readonly KitIssueSnapshot[], notice: readonly Action[]): Action[] {
+export function heldAfterKill(held: HoldableRun, kitIssues: readonly KitIssueSnapshot[], notice: readonly Action[], name: string): Action[] {
   const carrier = holdingOn(kitIssues);
   const opens = notice.some((action) => action.kind === "open-issue");
   if (carrier !== null && (carrier.reset || carriesHeldMarkers(carrier.on) || !opens)) {
-    return [...holding(held, carrier.until), { kind: "comment", issue: carrier.on.number, body: lineOn(carrier, held) }, ...notice];
+    return [
+      ...holding(held, carrier.until),
+      { kind: "comment", issue: carrier.on.number, body: lineOn(carrier, held) },
+      ...notice,
+      heldLineOn(held, name, carrier.on.number, carrier),
+    ];
   }
   if (!opens) throw new Error(`The ${runNamed(held.role)} on #${held.issue} has no issue to be held on`);
+  // The held line links the carrier the notice opens, so it comes after it.
   const opened = notice.map((action): Action =>
-    action.kind === "open-issue" ? { ...action, body: [action.body, "", heldUntilFreeLine(held)].join("\n") } : action,
+    action.kind === "open-issue" ? { ...action, body: [action.body, "", heldUntilFreeLine(held)].join("\n"), key: OPENED_CARRIER } : action,
   );
-  return [...holding(held, null), ...opened];
+  return [...holding(held, null), ...opened, heldLineOn(held, name, { created: OPENED_CARRIER }, { until: null, reset: false })];
 }
+
+/** The key a kill's Plan names the carrier it opens by, for the held line to link it (#471). */
+const OPENED_CARRIER = "carrier";

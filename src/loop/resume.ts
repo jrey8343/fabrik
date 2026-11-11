@@ -19,7 +19,10 @@
 // as usual: each held run kept its slot. A run whose issue or PR has closed,
 // or moved on in the Loop, since it was held is dropped instead. An Auditor
 // run is no longer held, and the tick can't start one, so a held marker one
-// left before that (#268), on a still-pending Audit, fails the Audit. Every
+// left before that (#268), on a still-pending Audit, fails the Audit. A
+// resumed or dropped run's held line on its own issue or PR is edited to say
+// so (src/loop/heldLine.ts, #471): the line is never read, so one the Operator
+// deleted changes nothing. Every
 // carrier then gets a resumed marker for each run dealt with, so
 // that only a later held marker, if the resumed run is refused again, holds it
 // again; the marker carries the run's place in the order, so that held again
@@ -35,6 +38,7 @@
 // once the run has started and taken it off: the next tick only leaves its
 // markers.
 // Pure, no I/O.
+import type { HoldEnded } from "./heldLine.ts";
 import { auditMarksIn } from "./markers.ts";
 import { type HeldRun, type HoldableRun, isCarrier, resumedMarker, runNamed, type Waiting, waitingHeldRuns } from "./heldRun.ts";
 import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, RESEARCH_DECISION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
@@ -82,14 +86,19 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
     // closed its issue or PR since (#438).
     const backOn = on?.open === true && run.label !== null && on.labels.includes(run.label);
     if (on !== undefined && (backOn || givenBackSince(entry, on))) {
+      // Its held line too, in case the edit was what failed: one already edited is left as it is.
+      if (run.label !== null) resumes.push(heldLineEnded(entry, { kind: "resumed" }));
       dealtWith.push(entry);
       continue;
     }
     const reason = on === undefined ? `GitHub no longer has #${run.issue}` : movedOn(run, on);
     if (reason !== null || on === undefined) {
       resumes.push({ kind: "drop-held-run", role: run.role, issue: run.issue, reason: reason ?? "" });
+      // An issue GitHub no longer has has no held line left to edit.
+      if (on !== undefined && run.label !== null) resumes.push(heldLineEnded(entry, { kind: "dropped", reason: reason ?? "" }));
     } else if (run.label !== null) {
-      resumes.push({ kind: "add-labels", issue: run.issue, labels: [run.label] });
+      // The line first: the label may start a run held again, whose own new line this edit must leave alone.
+      resumes.push(heldLineEnded(entry, { kind: "resumed" }), { kind: "add-labels", issue: run.issue, labels: [run.label] });
     } else {
       // Only an Auditor run has no trigger label: a Retro run was never held, so movedOn dropped it.
       resumes.push(...failedHeldAudit(on));
@@ -114,6 +123,11 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   // The plan's own actions, a close among them, last (#438): closed, the issue's held markers are no longer read, so whatever hadn't landed would be dropped.
   const notes = plan.kind === "act" ? plan.notes : undefined;
   return { kind: "act", actions: [...resumes, ...markers, ...planned], ...(notes === undefined ? {} : { notes }) };
+}
+
+/** The edit saying a held run's hold ended, on the held line its newest held marker put on its issue or PR (#471). */
+function heldLineEnded({ run, newest }: Waiting, ended: HoldEnded): Action {
+  return { kind: "end-held-line", role: run.role, issue: newest.lineOn, on: newest.on, ended };
 }
 
 /**

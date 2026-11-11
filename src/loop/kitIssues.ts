@@ -15,7 +15,7 @@
 // for spending usage credits gets a usage-credits issue
 // (src/loop/usageCreditsIssue.ts).
 import type { HoldableRun } from "./heldRun.ts";
-import { heldLine } from "./hold.ts";
+import { heldMarkerComment } from "./hold.ts";
 import { DEAD_TICK_MARKER, earliestOf, NOTIFIED, notified, resetsAtMarker, resetsAtOf } from "./kitIssueMarks.ts";
 import { DEAD_TICK_LABEL, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
@@ -26,7 +26,7 @@ import {
   subscriptionMarker,
   kitIssueSubscriptionOf,
 } from "./subscriptions.ts";
-import type { Action, InfrastructureFailure, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
+import type { Action, CreatedIssue, InfrastructureFailure, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 import { usageCreditsNotice } from "./usageCreditsIssue.ts";
 
 /** The repo-wide part of any snapshot: who the Operator is and which Kit-owned issues are open. */
@@ -75,7 +75,12 @@ export interface RepoWideNotice {
   readonly pointer: string;
   /** With rotation on, for the weekly limit: when the first open weekly-limit issue's limit resets, if known. */
   readonly firstReset?: string | null;
+  /** With rotation on, for a refused run held: the weekly-limit issue its held marker went on, existing or opened by the Plan (#471). */
+  readonly heldOn?: number | CreatedIssue;
 }
+
+/** The key the Plan opening a weekly-limit issue names it by, for a held line to link it (#471). */
+const OPENED_WEEKLY_LIMIT = "weekly-limit";
 
 /** The Kit-owned issue notice for a failure that stalls the whole repo, or null for one that doesn't. */
 export function repoWideNotice(
@@ -245,11 +250,11 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
   // A held run is named on the issue that buzzed, or buzzes now; else on this Subscription's own.
   const buzzed = buzz ? undefined : stayingOpen.find(notified);
   const elsewhere = buzzed !== undefined && buzzed !== mine;
-  const heldHere = stalled.held === undefined || elsewhere ? [] : ["", heldLine(stalled.held, earliest)];
+  const heldHere = stalled.held === undefined || elsewhere ? [] : ["", heldMarkerComment(stalled.held, earliest)];
   const heldThere =
     stalled.held === undefined || buzzed === undefined || !elsewhere
       ? []
-      : [{ kind: "comment" as const, issue: buzzed.number, body: heldLine(stalled.held, earliest) }];
+      : [{ kind: "comment" as const, issue: buzzed.number, body: heldMarkerComment(stalled.held, earliest) }];
   if (mine !== undefined && !newWindow) {
     const body = [
       buzz
@@ -261,6 +266,7 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
       actions: [{ kind: "comment", issue: mine.number, body }, ...heldThere],
       pointer: `The Kit is tracking this in #${mine.number}.`,
       firstReset: earliest,
+      ...(stalled.held === undefined ? {} : { heldOn: elsewhere ? buzzed.number : mine.number }),
     };
   }
   const title =
@@ -315,11 +321,13 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
         ].join("\n"),
         labels: [WEEKLY_LIMIT_LABEL],
         assignees: [],
+        ...(stalled.held === undefined || elsewhere ? {} : { key: OPENED_WEEKLY_LIMIT }),
       },
       ...heldThere,
     ],
     pointer: "The Kit has opened a weekly-limit issue for the Operator.",
     firstReset: earliest,
+    ...(stalled.held === undefined ? {} : { heldOn: elsewhere ? buzzed.number : { created: OPENED_WEEKLY_LIMIT } }),
   };
 }
 

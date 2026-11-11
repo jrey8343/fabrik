@@ -215,7 +215,7 @@ describe("The killed run, with rotation on", () => {
     expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", subscription: "Claude token 2" }));
   });
 
-  it("is held, with no Ticket comment, when no other Subscription is free, the held marker on the weekly-limit issue", () => {
+  it("is held, with only a quiet held line on the Ticket, when no other Subscription is free, the held marker on the weekly-limit issue", () => {
     const plan = planFor(
       killed("implement"),
       snapshotOf(anIssue({ number: 7 }), { kitIssues: [weeklyLimitIssue(41, "Claude token 2")] }),
@@ -223,7 +223,10 @@ describe("The killed run, with rotation on", () => {
     );
 
     const actions = actionsOf(plan);
-    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
+    // A run killed while none is free (heldAfterKill) gets the held line, as one held as it falls due does (#471).
+    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([
+      { kind: "comment", issue: 7, body: expect.stringMatching(/^<!-- fabrik:on-hold \{"role":"implement"\} -->\nThe Implement run is held on #41:/) },
+    ]);
     expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
     expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: RESETS_AT });
     expect(actions).toContainEqual({
@@ -298,14 +301,17 @@ describe("Every Subscription unusable only through usage-credits issues, with ro
       TWO_SUBSCRIPTIONS,
     );
 
-  it("a run due is held, not started: its trigger label off, no Ticket comment, and no @-mention", () => {
+  it("a run due is held, not started: its trigger label off, only a quiet held line on its issue, and no @-mention", () => {
     const plan = due(BOTH_KILLED());
 
     const actions = actionsOf(plan);
     expect(actions.filter((action) => action.kind === "start-agent-run")).toEqual([]);
     expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "needs-triage" });
     expect(actions).toContainEqual({ kind: "hold-agent-run", role: "triage", issue: 7, label: "needs-triage", until: null });
-    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
+    // A carrier with no reset: the held line says closing an issue blocking a Subscription frees one (#471).
+    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([
+      { kind: "comment", issue: 7, body: expect.stringMatching(/^<!-- fabrik:on-hold \{"role":"triage"\} -->\nThe Triage run is held on #61: every Subscription is used up, so it waits until one is free again\./) },
+    ]);
     expect(notificationsOf(plan)).toEqual([]);
   });
 
@@ -330,7 +336,7 @@ describe("Every Subscription unusable only through usage-credits issues, with ro
     expect(actions).toContainEqual({ kind: "comment", issue: 60, body: expect.stringContaining(heldMarker(7, "triage", "needs-triage", 2)) });
   });
 
-  it("a killed run is held, with no Ticket comment, its marker in the body of the usage-credits issue its kill opens", () => {
+  it("a killed run is held, its marker in the body of the usage-credits issue its kill opens, which its held line links", () => {
     const plan = planFor(
       killed("implement"),
       snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }), {
@@ -341,6 +347,18 @@ describe("Every Subscription unusable only through usage-credits issues, with ro
 
     const actions = actionsOf(plan);
     expect(actions.filter((action) => action.kind === "comment")).toEqual([]);
+    expect(actions.at(-1)).toEqual({
+      kind: "comment-linking",
+      issue: 7,
+      body: [
+        '<!-- fabrik:on-hold {"role":"implement"} -->\nThe Implement run is held on ',
+        { created: "carrier" },
+        ": every Subscription is used up, so it waits until one is free again. Closing ",
+        { created: "carrier" },
+        ", or another issue blocking a Subscription, once it's dealt with frees one. The Kit restarts the run by itself then, so there's nothing to do.",
+      ],
+    });
+    expect(actions).toContainEqual(expect.objectContaining({ kind: "open-issue", key: "carrier" }));
     expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
     expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: null });
     expect(actions).toContainEqual(
@@ -359,7 +377,7 @@ describe("Every Subscription unusable only through usage-credits issues, with ro
     const actions = actionsOf(plan);
     expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: null });
     expect(actions).toContainEqual({ kind: "comment", issue: 61, body: expect.stringContaining(heldMarker(7, "implement", "agent:implement")) });
-    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
+    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([{ kind: "comment", issue: 7, body: expect.stringMatching(/^<!-- fabrik:on-hold \{"role":"implement"\} -->\nThe Implement run is held on #61: every Subscription is used up, so it waits until one is free again\./) }]);
     expect(notificationsOf(plan)).toEqual([]);
   });
 

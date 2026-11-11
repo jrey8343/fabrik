@@ -71,6 +71,8 @@ export function actionPhrase(action: Action): string {
       return `hold the ${action.role} run on #${action.issue}${action.until === null ? "" : ` until ${action.until}`}, starting no agent job`;
     case "drop-held-run":
       return `drop the held ${action.role} run on #${action.issue} rather than resume it: ${action.reason}`;
+    case "end-held-line":
+      return `edit the held line for the ${action.role} run on #${action.issue} to say it was ${action.ended.kind === "resumed" ? "resumed" : `dropped: ${action.ended.reason}`}`;
     case "check-dispatch":
       return "run a Dispatch check";
     case "check-design-queue":

@@ -22,6 +22,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
+import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
@@ -831,7 +832,8 @@ async function main(outDir: string): Promise<void> {
   const token = process.env["GH_TOKEN"];
   if (token === undefined || token === "") throw new Error("GH_TOKEN is not set");
   const repo = { owner, name };
-  const github = new GitHub(token, process.env["GITHUB_API_URL"]);
+  // No agent is handed a held line (#471).
+  const github = leavingOutHeldLines(new GitHub(token, process.env["GITHUB_API_URL"]));
   const issueNumber = optionalNumber("FABRIK_ISSUE");
   if (issueNumber === null) throw new Error("FABRIK_ISSUE is not set");
   const pullRequest = optionalNumber("FABRIK_PULL_REQUEST");

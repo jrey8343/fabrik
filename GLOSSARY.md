@@ -231,8 +231,12 @@ An Implement run whose work the Kit can't land because of what the agent did: it
 _Avoid_: contract failure, agent crash, bad output
 
 **Held run**:
-An agent run the Kit neither starts nor fails while every Subscription is used up, and resumes by itself, in the order it was first held, once one is free. An Auditor or Retro run is never held: its Audit or Retro fails, and a later Tick opens the next one.
+An agent run the Kit neither starts nor fails while every Subscription is used up, and resumes by itself, in the order it was first held, once one is free. It is named on its carrier, and quietly on its own issue or PR as well. An Auditor or Retro run is never held: its Audit or Retro fails, and a later Tick opens the next one.
 _Avoid_: paused run, queued run, stalled run
+
+**Held line**:
+The one quiet comment a Held run puts on its own issue or PR, mentioning nobody, saying which issue it's held on and until when. It is edited, never deleted, once the run resumes or is dropped, and nothing reads it: the held markers on its carrier stay the record.
+_Avoid_: hold notice, held comment
 
 **Weekly-limit issue**:
 A Kit-owned issue saying a Subscription has reached its weekly limit, open until that limit resets.

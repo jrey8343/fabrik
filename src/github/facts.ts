@@ -31,6 +31,7 @@ import { AUDIT_LABEL, MONITOR_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/l
 import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
+import { leavingOutHeldLines } from "./heldLines.ts";
 import {
   gatherDesignQueueSlice,
   gatherKitIssues,
@@ -91,7 +92,9 @@ export async function gatherEveryRepoFacts(
 }
 
 /** The GitHub facts of one Product repo, as of `now`, with its PRs, default-branch commits and the Operator's issues from `reach` on. */
-async function gatherFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
+async function gatherFacts(client: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
+  // A held line is never activity, nor an issue's last comment (#471).
+  const github = leavingOutHeldLines(client);
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(reach).toISOString();
   const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, audits, retros, openMaps, openReplays, { kitIssues }] = await Promise.all([
