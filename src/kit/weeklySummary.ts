@@ -417,7 +417,7 @@ export interface Held {
   readonly monitor: HeldMonitor | null;
   /** The open Maps filling the Map cap (caps.maps), so no Design session offers a new one. */
   readonly maps: HeldMaps | null;
-  /** The Held runs waiting on the open weekly-limit issues while every Subscription is used up. */
+  /** The Held runs waiting on the open weekly-limit, usage-credits and token-rotation issues while every Subscription is used up. */
   readonly runs: HeldRuns | null;
 }
 
@@ -453,7 +453,7 @@ export interface HeldRunItem {
   readonly role: AgentRole;
   /** The issue or PR its trigger label lives on: a Review's PR, every other role's issue. */
   readonly issue: number;
-  /** The weekly-limit issues whose held markers hold it. */
+  /** The weekly-limit, usage-credits and token-rotation issues whose held markers hold it. */
   readonly heldOn: readonly number[];
 }
 

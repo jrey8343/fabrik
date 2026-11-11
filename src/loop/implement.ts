@@ -24,7 +24,7 @@ import {
   RETRY_PUSH_MARKER,
   UNMARKED_RETRY_PUSH,
 } from "./markers.ts";
-import { heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
+import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
 import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
 import { implementSettings, MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
@@ -567,7 +567,7 @@ function requestChangesRunDropped(
   review: number | undefined,
   inFlight: RunInFlight | null,
   operator: string,
-  held: number | null,
+  held: HeldOn | null,
 ): Plan {
   const nothing: Plan = { kind: "nothing", reason: `#${pullRequest.number} has no Request-changes run in flight, so the run's branch isn't pushed` };
   const dismissed =
@@ -613,7 +613,7 @@ function startAgain(
   fixes: NonNullable<ImplementRunFinished["fixes"]>,
   pullRequest: PullRequestSnapshot,
   onto: string,
-  held: number | null,
+  held: HeldOn | null,
 ): Plan {
   const run = runInFlight(pullRequest);
   if (run === null) {
@@ -642,7 +642,7 @@ function startAgain(
  * it does a retry's (startAgain). It isn't an empty diff, so it uses no
  * retry, and it's silent.
  */
-function keptBranchStartsAgain({ issue: ticket, branch }: ImplementRunFinished, onto: string, held: number | null): Plan {
+function keptBranchStartsAgain({ issue: ticket, branch }: ImplementRunFinished, onto: string, held: HeldOn | null): Plan {
   const head = onto.slice(0, 7);
   return {
     kind: "act",
@@ -700,7 +700,7 @@ function refuse(issueNumber: number, paths: readonly string[], operator: string,
  * trust-root change, reaches the Operator and the Design session that a
  * third one starts (#429).
  */
-function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, runUrl: string, held: number | null): Plan {
+function emptyDiff(issueNumber: number, issue: IssueSnapshot, summary: string, runUrl: string, held: HeldOn | null): Plan {
   const flaw = issue.landedNothing + 1;
   const said = implementerSaidAndRun(summary, runUrl);
   if (flaw > MAX_RETRIES) {

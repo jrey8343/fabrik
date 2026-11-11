@@ -236,7 +236,7 @@ describe("A weekly-limit issue the Operator closes by hand, with runs held and r
   const closedSnapshot = (kitIssues: readonly KitIssueSnapshot[], others: Partial<Pick<Snapshot, "held">> = {}) =>
     snapshotOf(anIssue({ number: 50, open: false, byApp: true, labels: limitA.labels, body: limitA.body }), {
       kitIssues,
-      closedWeeklyLimit: limitA,
+      closedKitIssue: limitA,
       held: heldOn,
       ...others,
     });

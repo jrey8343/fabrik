@@ -7,7 +7,7 @@
 // the Kit starts is marked on the PR by the note that started it
 // (src/github/threads.ts), so neither check ever notes the same review twice,
 // and the conflict check leaves the PR to that run.
-import { heldUntilReset } from "./hold.ts";
+import { type HeldOn, heldUntilReset } from "./hold.ts";
 import { DISPATCH_LABEL } from "./labels.ts";
 import { undeliveredMarker } from "./markers.ts";
 import type { Action, ConflictCandidate, PullRequestSnapshot, UnbuiltChangesRequest } from "./types.ts";
@@ -57,7 +57,7 @@ function actsOn(pullRequest: PullRequestSnapshot): boolean {
  * (src/loop/implement.ts). The run reads all the Operator's Request changes,
  * and, when the PR conflicts with main, merges main in. The note goes first:
  * if the rest fails, the next check, or re-adding agent:implement, still
- * starts the run. `held` is the weekly-limit issue a run due now is held on,
+ * starts the run. `held` is the carrier a run due now is held on,
  * or null when it would start, and `heldTickets` the Tickets whose Implement
  * run is held (#424).
  */
@@ -65,7 +65,7 @@ export function actOnUndelivered(
   { pullRequest, mergeable }: ConflictCandidate,
   operator: string,
   now: string,
-  held: number | null = null,
+  held: HeldOn | null = null,
   runMinutes: number = UNDELIVERED_GRACE_MINUTES,
   implementJobUnderWay: boolean | null = null,
   heldTickets: readonly number[],

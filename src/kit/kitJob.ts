@@ -50,7 +50,7 @@ function heldIn(plan: Plan): Hold[] {
 /** The step summary's line for a held run: until when, and why. */
 function heldSummaryLine(hold: Hold, why: string): string {
   const until =
-    hold.until === null ? "a Subscription's weekly limit resets, which isn't known" : readable(hold.until);
+    hold.until === null ? "a Subscription is free again, which the Kit can't time" : readable(hold.until);
   return `The ${runNamed(hold.role)} on #${hold.issue} was held until ${until}: ${why} Its \`${hold.label}\` label came off.`;
 }
 

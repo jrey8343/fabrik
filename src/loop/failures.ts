@@ -15,14 +15,15 @@
 // failure comment (src/loop/heldRun.ts). A run killed for spending usage
 // credits, or refused on a dead token, is re-run or held the same way, while
 // its Subscription's usage-credits or token-rotation issue keeps the Kit off
-// that Subscription (#433). An Auditor or Retro
+// that Subscription (#433), held even with no weekly-limit issue open, its
+// marker on a usage-credits or token-rotation issue (#470). An Auditor or Retro
 // run is never re-run or held: the tick can't start one at a reset, so its
 // Audit or Retro fails, for the tick to try again.
 import { keptBranchOff } from "./backToDesign.ts";
 import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
 import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
-import { canHold, heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
+import { heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
@@ -186,9 +187,10 @@ function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: str
 }
 
 /**
- * With rotation on, the run a weekly-limit refusal holds rather than fails, or
- * null: a run of any role but the Auditor's or the Retro's, which are never
- * held, while no other Subscription is free.
+ * With rotation on, the run a weekly-limit refusal, a kill for spending usage
+ * credits or a dead token holds rather than fails, or null: a run of any role
+ * but the Auditor's or the Retro's, which are never held, while no other
+ * Subscription is free.
  */
 function heldOnRefusal(
   run: FailedRun,
@@ -199,8 +201,6 @@ function heldOnRefusal(
   if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
   // The tick can't start an Auditor or Retro run at the reset, so its issue fails, and the tick opens the next one.
   if (isWeeklyRole(run.role)) return null;
-  // A kill or a dead token opens no weekly-limit issue, and only one can hold the run: with none open it fails as usual.
-  if (failure !== "weekly-limit" && !canHold(kitIssues)) return null;
   if (anotherSubscriptionFree(kitIssues, ranOn)) return null;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
@@ -221,7 +221,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
     const [held = refused] = heldInOrder([refused], context.kitIssues);
-    // A kill or a dead token says nothing of when a limit resets: the held run waits for the first weekly-limit issue's.
+    // A kill or a dead token says nothing of when a limit resets: the held run waits on its carrier (src/loop/hold.ts).
     const noResetOfItsOwn = failure !== "weekly-limit";
     const repoWide = repoWideNotice(failure, context, {
       run: failedRun,
@@ -230,8 +230,9 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ...ranOn,
       ...(noResetOfItsOwn ? {} : { held }),
     });
-    const holds = noResetOfItsOwn ? heldAfterKill(held, context.kitIssues) : holding(held, repoWide?.firstReset ?? null);
-    return { kind: "act", actions: [...holds, ...waitingAgain(run, issue), ...(repoWide?.actions ?? [])] };
+    const notice = [...waitingAgain(run, issue), ...(repoWide?.actions ?? [])];
+    if (noResetOfItsOwn) return { kind: "act", actions: heldAfterKill(held, context.kitIssues, notice) };
+    return { kind: "act", actions: [...holding(held, repoWide?.firstReset ?? null), ...notice] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
   if (isWeeklyRole(run.role)) {

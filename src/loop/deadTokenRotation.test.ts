@@ -166,7 +166,7 @@ describe("A dead token on one Subscription, with rotation on", () => {
     expect(notificationsOf(plan)).toEqual(['assign new "Rotate the Claude token of the `Claude token` Subscription"']);
   });
 
-  it("gets the usual failure comment when no other Subscription is free and no weekly-limit issue is open to hold it on", () => {
+  it("is held, with no Ticket comment, its marker in the body of the rotation issue its refusal opens, when no other Subscription is free (#470)", () => {
     const plan = planFor(
       refused("implement"),
       snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] }), {
@@ -176,11 +176,69 @@ describe("A dead token on one Subscription, with rotation on", () => {
     );
 
     const actions = actionsOf(plan);
-    expect(actions.filter((action) => action.kind === "hold-agent-run" || action.kind === "add-labels")).toEqual([]);
-    expect(actions).toContainEqual({
-      kind: "comment",
-      issue: 7,
-      body: expect.stringContaining("Re-add `agent:implement` on this Ticket to run it again."),
-    });
+    expect(actions.filter((action) => action.kind === "comment" || action.kind === "add-labels")).toEqual([]);
+    expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
+    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: null });
+    const opened = actions.find((action) => action.kind === "open-issue");
+    expect(opened).toMatchObject({ title: "Rotate the Claude token of the `Claude token` Subscription" });
+    expect(opened?.kind === "open-issue" ? opened.body : "").toContain(HELD_7);
+    expect(notificationsOf(plan)).toEqual(['assign new "Rotate the Claude token of the `Claude token` Subscription"']);
+  });
+});
+
+const HELD_7 = '<!-- fabrik:held {"issue":7,"role":"implement","label":"agent:implement","order":1} -->';
+
+// The glossary's Used up covers a dead token as well as the weekly limit and usage credits (#470).
+describe("Every Subscription unusable through token-rotation issues, or a mix with usage-credits issues, with rotation on", () => {
+  const due = (kitIssues: KitIssueSnapshot[]) =>
+    planFor(
+      { kind: "label-added", issue: 7, label: "agent:implement" },
+      snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"] }), { kitIssues }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+  it("a run due with both tokens dead is held, not started, quietly on the most recently opened rotation issue", () => {
+    const plan = due([rotationIssue(40, "Claude token"), rotationIssue(41, "Claude token 2")]);
+
+    const actions = actionsOf(plan);
+    expect(actions.filter((action) => action.kind === "start-agent-run")).toEqual([]);
+    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: null });
+    expect(actions).toContainEqual({ kind: "comment", issue: 41, body: expect.stringContaining(HELD_7) });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("a run due with one token dead and the other Subscription spending usage credits is held too", () => {
+    const usageCredits: KitIssueSnapshot = {
+      number: 42,
+      labels: ["ready-for-human", "fabrik:usage-credits"],
+      body: "Turn usage credits off.\n\n<!-- fabrik:subscription Claude token 2 -->",
+      comments: [],
+    };
+
+    const actions = actionsOf(due([rotationIssue(40, "Claude token"), usageCredits]));
+
+    expect(actions.filter((action) => action.kind === "start-agent-run")).toEqual([]);
+    expect(actions).toContainEqual({ kind: "comment", issue: 42, body: expect.stringContaining(HELD_7) });
+  });
+
+  it("the Operator closing the rotation issue resumes it, giving its trigger label back", () => {
+    const usageCredits: KitIssueSnapshot = {
+      number: 42,
+      labels: ["ready-for-human", "fabrik:usage-credits"],
+      body: `Turn usage credits off.\n\n<!-- fabrik:subscription Claude token 2 -->\n${HELD_7}`,
+      comments: [],
+    };
+    const plan = planFor(
+      { kind: "issue-closed", issue: 40 },
+      snapshotOf(anIssue({ number: 40, labels: ["ready-for-human", "fabrik:token-rotation"] }), {
+        kitIssues: [usageCredits],
+        closedKitIssue: rotationIssue(40, "Claude token"),
+        held: [{ number: 7, open: true, labels: ["enhancement", "ready-for-agent"], draft: null, byApp: false, body: "" }],
+      }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
+    expect(actionsOf(plan)).toContainEqual({ kind: "comment", issue: 42, body: expect.stringContaining("fabrik:resumed") });
   });
 });

@@ -242,6 +242,10 @@ _Avoid_: stale-schedule issue
 A Kit-owned issue telling the Operator to turn usage credits off on a Subscription caught spending them, which stays unusable until the Operator closes it.
 _Avoid_: overage issue, billing issue
 
+**Carrier**:
+An open weekly-limit, usage-credits or token-rotation issue, which names Held runs with held markers while every Subscription is used up. A weekly-limit issue carries them when one is open, else the one already carrying Held runs, else the most recently opened. Its close may free a Subscription and resume them.
+_Avoid_: holder, held issue
+
 **Step-up**:
 An Implementer run on a stronger model than its role's default, after a failed review, at the Operator's request, or on a Ticket marked for a Stepped-up start.
 _Avoid_: escalation, upgrade

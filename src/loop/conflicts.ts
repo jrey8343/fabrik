@@ -10,7 +10,7 @@
 // ADR-0016): nothing else would move it on. So does a draft whose Review passed
 // while it conflicts with main, before the Merge gate opens (#480).
 import { agentBranchFor } from "./agentPullRequest.ts";
-import { heldUntilThen, startsWhen } from "./hold.ts";
+import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, requestChangesRunEndedMarker } from "./markers.ts";
 import { runInFlight, runName, unstartedRetry } from "./retry.ts";
@@ -30,7 +30,7 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, MergeableS
 export function checkConflicts(
   conflicts: ConflictSnapshot,
   operator: string,
-  held: number | null,
+  held: HeldOn | null,
   runMinutes: number | undefined,
   reviewMinutes: number,
   heldTickets: readonly number[],
@@ -207,7 +207,7 @@ function stanceNotes(stance: Stance, number: number, head: string): StanceNotes 
 function rebaseOntoMain(
   pullRequest: PullRequestSnapshot,
   main: string,
-  held: number | null,
+  held: HeldOn | null,
   stance: Stance = pullRequest.draft ? "unreviewed-draft" : "merge-gate",
 ): Action {
   const { number } = pullRequest;
@@ -275,7 +275,7 @@ function rebaseOntoMain(
 export function upToDateBeforeMergeGate(
   pullRequest: PullRequestSnapshot,
   mergeable: MergeableSnapshot | null,
-  held: number | null,
+  held: HeldOn | null,
 ): Action | null {
   if (mergeable === null || mergeable.main === null || mergeable.mergeable !== false) return null;
   if (pullRequest.ticket === null || pullRequest.conflictAttempts.includes(mergeable.main)) return null;
