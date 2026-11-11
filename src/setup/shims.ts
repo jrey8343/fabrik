@@ -12,6 +12,8 @@ export type FileUpdate = { readonly content: string } | { readonly note: string 
 // --- The caller workflow -----------------------------------------------------
 
 export const CALLER_PATH = ".github/workflows/fabrik.yml";
+/** The caller workflow's file name, as the Actions API and the Actions tab name the workflow. */
+export const CALLER_FILE = CALLER_PATH.slice(CALLER_PATH.lastIndexOf("/") + 1);
 
 /** The caller template with every Fabrik uses: line pinned to the release. */
 export function pinCaller(template: string, release: string): string {

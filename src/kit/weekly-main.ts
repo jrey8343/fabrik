@@ -18,11 +18,11 @@
 import { appendFile } from "node:fs/promises";
 import { gatherEveryRepoFacts, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError, type Repo } from "../github/client.ts";
-import { readCallerRuns, tickHealthOf } from "../github/loopHealthFacts.ts";
+import { readCallerRuns } from "../github/loopHealthFacts.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
-import type { RepoHealthFacts } from "./loopHealth.ts";
+import { type RepoHealthFacts, tickHealthOf } from "./loopHealth.ts";
 import { RUN_STORE } from "./runStore.ts";
 import { readStoreRunRecords, readStoreScoreFiles } from "./storeCheckout.ts";
 import { type SummaryIssue, WEEKLY_SUMMARY_LABEL, type WeeklyFailureFiling, weeklyFailureOf, type WeeklyFiling, weeklyFilingOf } from "./weeklyFiling.ts";

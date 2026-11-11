@@ -9,7 +9,7 @@ import { DEAD_TICK_MARKER } from "../loop/kitIssueMarks.ts";
 import { tickStartedAgain } from "../loop/kitIssues.ts";
 import { DEAD_TICK_LABEL, READY_FOR_HUMAN } from "../loop/labels.ts";
 import { readable } from "../loop/readable.ts";
-import { CALLER_PATH } from "../setup/shims.ts";
+import { CALLER_FILE, CALLER_PATH } from "../setup/shims.ts";
 import { KIT_REPO } from "./caller.ts";
 import { RUN_STORE_REPO } from "./runStore.ts";
 
@@ -227,7 +227,7 @@ function deadTickIssue(repo: string, { callerSince, lastTick, release }: TickFac
       "",
       "## Steps",
       "",
-      `- [ ] Open [the Actions tab for \`${CALLER_PATH}\`](https://github.com/${repo}/actions/workflows/${CALLER_PATH.slice(CALLER_PATH.lastIndexOf("/") + 1)}) and read the newest run's error.`,
+      `- [ ] Open [the Actions tab for \`${CALLER_PATH}\`](https://github.com/${repo}/actions/workflows/${CALLER_FILE}) and read the newest run's error.`,
       "- [ ] Check that the workflow is enabled: GitHub disables a scheduled workflow after 60 days without activity in the repo.",
       `- [ ] Compare the caller's job permissions with ${notes}, or re-run Setup.`,
       "",

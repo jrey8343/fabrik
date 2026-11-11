@@ -46,7 +46,7 @@ import {
   type Window,
   within,
 } from "./retroEvidence.ts";
-import { type LoopHealth, loopHealthLines, loopHealthOf, loopNeedsLook, type RepoHealthFacts } from "./loopHealth.ts";
+import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import {
@@ -63,7 +63,6 @@ import {
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
-export type { RepoHealthFacts } from "./loopHealth.ts";
 export type {
   AgentPullRequestFacts,
   BlockerFacts,
@@ -644,7 +643,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       repo.stuck.length === 0 &&
       repo.held === null &&
       repo.unread === null &&
-      (repo.health === null || !loopNeedsLook(repo.health)),
+      (repo.health === null || !loopIsUnhealthy(repo.health)),
   );
   // And a week only Replays ran in is no quiet week either, so what they cost still shows,
   // and nor is a store with Run records the Kit couldn't read, so a store on an older release is never taken for a quiet one (#474).

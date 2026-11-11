@@ -4,9 +4,11 @@
 // Actions API. A run GitHub refuses at startup has no jobs, so it leaves no
 // Run record, check run or comment: only the Actions API sees it. Pure, no
 // I/O: src/kit/weekly-main.ts reads the facts.
+import { DEAD_TICK_MARKER } from "../loop/kitIssueMarks.ts";
 import { readable } from "../loop/readable.ts";
-import { CALLER_PATH } from "../setup/shims.ts";
-import { type StartedTick, tickIsDead } from "./deadTick.ts";
+import { CALLER_FILE } from "../setup/shims.ts";
+import { KIT_REPO } from "./caller.ts";
+import { type ProductTickRead, type StartedTick, tickIsDead } from "./deadTick.ts";
 
 /** One of the caller workflow's runs, as the Actions API lists it. */
 export interface WorkflowRunFacts {
@@ -35,6 +37,17 @@ export type RunsHealthRead =
   | { readonly kind: "no-permission" }
   | { readonly kind: "unread"; readonly why: string };
 
+/** The daily Tick check's read of a repo (src/github/tickFacts.ts), as the health line reads it. */
+export function tickHealthOf(read: ProductTickRead): TickHealthRead {
+  if (read.kind !== "read") return { kind: "unread", why: read.error };
+  const { callerSince, lastTick, issues } = read.facts;
+  const issue = issues.find((issue) => issue.byApp && issue.body.includes(DEAD_TICK_MARKER));
+  return { kind: "read", callerSince, lastTick, deadTickIssue: issue?.number ?? null };
+}
+
+/** The week's run counts, or why they're unread. */
+export type RunCounts = { readonly kind: "counted"; readonly neverStarted: number; readonly failed: number } | Exclude<RunsHealthRead, { readonly kind: "read" }>;
+
 /** What the Weekly summary read of one Product repo's Loop. */
 export interface RepoHealthFacts {
   /** `owner/name`. */
@@ -49,8 +62,7 @@ export interface LoopHealth {
   readonly tick: TickHealthRead;
   /** Whether no Tick has started in the last 25 hours, as the daily Tick check decides it. */
   readonly tickDead: boolean;
-  /** The week's counts, or why they're unread. */
-  readonly runs: { readonly kind: "counted"; readonly neverStarted: number; readonly failed: number } | { readonly kind: "no-permission" } | { readonly kind: "unread"; readonly why: string };
+  readonly runs: RunCounts;
 }
 
 /** A run that GitHub refused at startup: it never ran a job. */
@@ -64,20 +76,20 @@ export function loopHealthOf({ repo, tick, runs }: RepoHealthFacts, week: { read
     const at = Date.parse(run.createdAt);
     return at >= week.start && at < week.end;
   };
-  const counted = (read: RunsHealthRead): LoopHealth["runs"] => {
+  const counted = (read: RunsHealthRead): RunCounts => {
     if (read.kind !== "read") return read;
-    const week = read.runs.filter(inWeek);
+    const thisWeek = read.runs.filter(inWeek);
     return {
       kind: "counted",
-      neverStarted: week.filter((run) => run.conclusion === NEVER_STARTED).length,
-      failed: week.filter((run) => run.conclusion !== null && FAILED.has(run.conclusion)).length,
+      neverStarted: thisWeek.filter((run) => run.conclusion === NEVER_STARTED).length,
+      failed: thisWeek.filter((run) => run.conclusion !== null && FAILED.has(run.conclusion)).length,
     };
   };
   return { repo, tick, tickDead: tick.kind === "read" && tickIsDead(tick, now), runs: counted(runs) };
 }
 
 /** Whether the Loop's health alone keeps a week from being quiet: a dead Tick, a run that never started or failed, or anything unread. */
-export function loopNeedsLook({ tick, tickDead, runs }: LoopHealth): boolean {
+export function loopIsUnhealthy({ tick, tickDead, runs }: LoopHealth): boolean {
   if (tickDead || tick.kind === "unread") return true;
   return runs.kind !== "counted" || runs.neverStarted > 0 || runs.failed > 0;
 }
@@ -87,7 +99,8 @@ export function loopNeedsLook({ tick, tickDead, runs }: LoopHealth): boolean {
  * the health line itself. The section puts both first when the Tick is dead.
  */
 export function loopHealthLines({ repo, tick, tickDead, runs }: LoopHealth, timeZone: string): { readonly lead: string | null; readonly line: string } {
-  const workflow = `https://github.com/${repo}/actions/workflows/${CALLER_PATH.slice(CALLER_PATH.lastIndexOf("/") + 1)}`;
+  const workflow = `https://github.com/${repo}/actions/workflows/${CALLER_FILE}`;
+  const deadTickIssue = tick.kind === "read" && tick.deadTickIssue !== null ? `[#${tick.deadTickIssue}](https://github.com/${repo}/issues/${tick.deadTickIssue})` : null;
   const counts = (() => {
     switch (runs.kind) {
       case "counted": {
@@ -96,7 +109,7 @@ export function loopHealthLines({ repo, tick, tickDead, runs }: LoopHealth, time
         return `${never} · ${failed}`;
       }
       case "no-permission":
-        return "run counts unread: the Fabrik App lacks Actions: read, so accept it in the App's settings, as the release notes say";
+        return `run counts unread: the Fabrik App lacks Actions: read, so accept it in the App's settings, as [the release notes](https://github.com/${KIT_REPO}/releases) say`;
       case "unread":
         return `run counts unread: ${runs.why}`;
     }
@@ -106,9 +119,9 @@ export function loopHealthLines({ repo, tick, tickDead, runs }: LoopHealth, time
     if (tick.lastTick === null) return "no Tick has started yet";
     return `the last Tick started at ${readable(tick.lastTick.at, timeZone)} ([its run](${tick.lastTick.url}))`;
   })();
-  const line = `**Loop:** ${counts} · ${last}`;
+  const line = `**Loop:** ${counts} · ${last}${deadTickIssue === null ? "" : ` · Dead-tick issue ${deadTickIssue}`}`;
   if (!tickDead || tick.kind !== "read") return { lead: null, line };
   const since = tick.lastTick?.at ?? tick.callerSince ?? "";
-  const issue = tick.deadTickIssue === null ? "" : `: see [#${tick.deadTickIssue}](https://github.com/${repo}/issues/${tick.deadTickIssue})`;
+  const issue = deadTickIssue === null ? "" : `: see ${deadTickIssue}`;
   return { lead: `The Tick hasn't run since ${readable(since, timeZone)}, so the waits below include time the Loop was down${issue}.`, line };
 }

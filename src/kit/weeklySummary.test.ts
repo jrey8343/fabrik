@@ -36,8 +36,9 @@ import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
 import { aDesignQueueIssue, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
 import { RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
+import type { RepoHealthFacts } from "./loopHealth.ts";
 import { RUN_RECORD_SCHEMA, readRunRecord, type RunRecord } from "./runRecord.ts";
-import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type RepoHealthFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
+import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
 // week it covers runs from Monday 2 November 00:00 to Monday 9 November 00:00
@@ -3250,7 +3251,7 @@ describe("the Weekly summary's Loop health line", () => {
   it("still files with a line saying the run counts are unread when the Actions token couldn't be minted", () => {
     const body = summaryOf({ health: [health({ runs: { kind: "no-permission" } })] });
 
-    expect(body).toContain("**Loop:** run counts unread: the Fabrik App lacks Actions: read, so accept it in the App's settings, as the release notes say · the last Tick started at");
+    expect(body).toContain("**Loop:** run counts unread: the Fabrik App lacks Actions: read, so accept it in the App's settings, as [the release notes](https://github.com/jrey8343/fabrik/releases) say · the last Tick started at");
   });
 
   it("leads the repo's section when the Tick hasn't run in 25 hours, saying the waits include time the Loop was down", () => {
@@ -3259,7 +3260,7 @@ describe("the Weekly summary's Loop health line", () => {
     const body = summaryOf({ facts: [facts], health: [health({ tick })] });
 
     expect(body).toContain(
-      "## owner/product\n\nThe Tick hasn't run since 2026-11-07 21:00 Australia/Sydney, so the waits below include time the Loop was down: see [#88](https://github.com/owner/product/issues/88).\n\n**Loop:** 0 runs never started · 0 failed · the last Tick started at 2026-11-07 21:00 Australia/Sydney ([its run](https://github.com/owner/product/actions/runs/9))\n\n### Waiting on you",
+      "## owner/product\n\nThe Tick hasn't run since 2026-11-07 21:00 Australia/Sydney, so the waits below include time the Loop was down: see [#88](https://github.com/owner/product/issues/88).\n\n**Loop:** 0 runs never started · 0 failed · the last Tick started at 2026-11-07 21:00 Australia/Sydney ([its run](https://github.com/owner/product/actions/runs/9)) · Dead-tick issue [#88](https://github.com/owner/product/issues/88)\n\n### Waiting on you",
     );
   });
 

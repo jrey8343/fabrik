@@ -1,11 +1,11 @@
 # Files the week's Weekly summary in the fabrik-runs store (ADR-0009 and its
 # addendum): loads the Fabrik App key through the store's push service account,
 # mints two App tokens, one with Issues write and Contents read on fabrik-runs
-# alone and one read-only on the Product repos, and the Loop health line's two
-# (#460), each allowed to fail: one reading each repo's last Tick, one with
-# Actions read counting its runs that never started or failed. Checks out only the store's
-# runs/ and scores/ (its Run records and score files, never the transcripts),
-# and runs src/kit/weekly-main.ts, which gathers the GitHub facts, builds the
+# alone and one read-only on the Product repos, plus two for each repo's Loop
+# line (#460), each allowed to fail: one reading its last Tick, and one with
+# Actions read counting its runs that never started or failed. It checks out
+# only the store's runs/ and scores/ (its Run records and score files, never
+# the transcripts), and runs src/kit/weekly-main.ts, which gathers the GitHub facts, builds the
 # summary (src/kit/weeklySummary.ts) and files it (src/kit/weeklyFiling.ts).
 #
 # Use it after checking out the Kit at the pinned commit into `kit/`:

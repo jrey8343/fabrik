@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "./client.ts";
-import { readCallerRuns, tickHealthOf } from "./loopHealthFacts.ts";
+import { tickHealthOf } from "../kit/loopHealth.ts";
+import { readCallerRuns } from "./loopHealthFacts.ts";
 
 const REPO = { owner: "acme", name: "shop" };
 const SINCE = "2026-10-31T00:00:00Z";
