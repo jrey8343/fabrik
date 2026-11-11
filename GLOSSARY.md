@@ -203,7 +203,7 @@ A Verdict that the right design was built wrongly, so the Implementer can fix it
 _Avoid_: bug, failing review
 
 **Flaky check**:
-A required check that has reported both failure and success on the same head commit, in any order and whoever re-ran it. A check red on one head and green on another is never flaky: the code changed. An Execution flaw from a check found flaky on the head it judged no longer counts toward a Ticket's Retries, and the Operator hears of each Flaky check so the Product's suite gets fixed.
+A Required check that has reported both failure and success on the same head commit, in any order and whoever re-ran it. A check red on one head and green on another is never flaky: the code changed. An Execution flaw from a check found flaky on the head it judged no longer counts toward a Ticket's Retries, and the Operator hears of each Flaky check so the Product's suite gets fixed.
 _Avoid_: flake, intermittent failure
 
 **Retry**:
@@ -283,8 +283,12 @@ A Product repo's written rules for how its code should look, which the Reviewer 
 _Avoid_: style guide, conventions, review instructions
 
 **Merge gate**:
-The rule that only the Operator merges a pull request into a Product repo's main branch; agents never push to it.
+The rule that only the Operator merges a pull request into a Product repo's main branch, and only at a head whose Required checks have passed. Nothing reaches that branch any other way: neither agents nor the Operator push to it.
 _Avoid_: approval, sign-off
+
+**Required check**:
+A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any the main branch already required.
+_Avoid_: gating check, status check
 
 **Request changes**:
 The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, also bringing `main` in by merging it when the pull request conflicts with it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built: sending a Ticket to a Design session instead is Send it back. One GitHub never delivered, as on a pull request that conflicts with `main`, the Kit finds and builds all the same.
