@@ -63,17 +63,14 @@ function releasing(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDisp
   }
 
   const inFlight = inFlightOf(snapshot, held);
-  const researchRuns = inFlight.researchRuns;
-  const waiting = inFlight.waiting.length;
-  const heldRuns = inFlight.held.length;
   const free = Math.max(0, config.maxInFlight - inFlight.total);
   if (free === 0) {
     const counts = [
       count(snapshot.openAgentDraftPullRequests, "open agent draft PR", "open agent draft PRs"),
       count(snapshot.implementRunsInProgress, "Implement run in progress", "Implement runs in progress"),
-      ...(researchRuns === 0 ? [] : [count(researchRuns, "Research run in progress", "Research runs in progress")]),
-      `${waiting} dispatched and waiting`,
-      ...(heldRuns === 0 ? [] : [`${heldRuns} held`]),
+      ...(inFlight.researchRuns === 0 ? [] : [count(inFlight.researchRuns, "Research run in progress", "Research runs in progress")]),
+      `${inFlight.waiting.length} dispatched and waiting`,
+      ...(inFlight.held.length === 0 ? [] : [`${inFlight.held.length} held`]),
     ].join(", ");
     return {
       kind: "nothing",

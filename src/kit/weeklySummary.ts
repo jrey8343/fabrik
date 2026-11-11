@@ -208,6 +208,7 @@ export interface RepoKitFacts {
   readonly dispatch: DispatchFacts | null;
 }
 
+/** What a Dispatch check weighs in one Product repo, as the Weekly summary reads it. */
 export interface DispatchFacts {
   /** The Tickets and research Decisions a Dispatch check weighs releasing (gatherDispatchCandidates). */
   readonly candidates: Pick<DispatchSnapshot, "tickets" | "researchDecisions">;
@@ -450,6 +451,7 @@ export interface RepoSection {
   readonly health: LoopHealth | null;
 }
 
+/** A Product repo's Kit config that fails to resolve, so the Loop does nothing there. */
 export interface InvalidKitConfig {
   /** The default branch it was read on. */
   readonly branch: string;
@@ -476,7 +478,7 @@ export interface Held {
  * max_in_flight: paused at 0, or every slot taken.
  */
 export type HeldDispatch =
-  | { readonly kind: "paused"; readonly waiting: readonly HeldIssue[] }
+  | { readonly kind: "paused"; readonly waiting: readonly WaitingForSlot[] }
   | {
       readonly kind: "full";
       readonly maxInFlight: number;
@@ -486,11 +488,11 @@ export type HeldDispatch =
       readonly inFlightIssues: readonly number[];
       /** Whether the runs in progress couldn't be read, so `inFlight` leaves them out. */
       readonly runsUnread: boolean;
-      readonly waiting: readonly HeldIssue[];
+      readonly waiting: readonly WaitingForSlot[];
     };
 
 /** A Ticket or research Decision waiting for Dispatch. */
-export interface HeldIssue {
+export interface WaitingForSlot {
   readonly number: number;
   /** When its trigger label (ready-for-agent, or wayfinder:research for a Decision) was last added, ISO 8601, or null when that isn't known. */
   readonly since: string | null;
@@ -1288,13 +1290,13 @@ function heldIn(facts: GitHubFacts, kit: RepoKitFacts | null, appLogin: string, 
  * max_in_flight holds them, by Dispatch's own rules (waitingForDispatch,
  * inFlightOf), so the summary and Dispatch can't disagree. Null when none
  * waits or a slot is free: the next Tick's Dispatch check releases it (#418).
- * With the runs in progress unread, it's shown unless what was read already
- * leaves a slot free... which it can't tell, so it's shown, marked.
+ * With the runs in progress unread, what was read can't show a slot free,
+ * so the line is shown with what was read, marked.
  */
 function heldDispatchOf(facts: GitHubFacts, { candidates, runs }: DispatchFacts, config: KitConfig, now: number): HeldDispatch | null {
-  const held = { implement: heldOf("implement", facts.kitIssues), research: heldOf("research", facts.kitIssues) };
+  const heldRuns = { implement: heldOf("implement", facts.kitIssues), research: heldOf("research", facts.kitIssues) };
   const decisions = new Set(candidates.researchDecisions.map(({ number }) => number));
-  const waiting = waitingForDispatch(candidates, held).map((number): HeldIssue => {
+  const waiting = waitingForDispatch(candidates, heldRuns).map((number): WaitingForSlot => {
     const issue = facts.openIssues.find((open) => open.number === number);
     const label = decisions.has(number) ? RESEARCH_DECISION_LABEL : READY_FOR_AGENT;
     const since = issue === undefined ? null : (lastAdded(issue.labelEvents, label) ?? issue.createdAt);
@@ -1311,7 +1313,7 @@ function heldDispatchOf(facts: GitHubFacts, { candidates, runs }: DispatchFacts,
       implementRunsInProgress: runs?.implement ?? 0,
       researchRunsInProgress: runs?.research ?? 0,
     },
-    held,
+    heldRuns,
   );
   if (runs !== null && inFlight.total < config.maxInFlight) return null;
   const named = [...drafts.flatMap(({ ticket }) => (ticket === null ? [] : [ticket])), ...(runs?.implementTickets ?? []), ...inFlight.waiting, ...inFlight.held];
@@ -1842,11 +1844,10 @@ function repoLines(
     return [`## ${repo}`, "", ...leading, line, "", ...trailing, liveLinks(repo), ""];
   }
   const lines = [`## ${repo}`, "", ...leading, "### Waiting on you", ""];
-  if (invalidKitConfig !== null) lines.push(invalidKitConfigLine(invalidKitConfig), ...(waitingOnYou.length === 0 ? [""] : []));
-  if (waitingOnYou.length === 0) {
-    if (invalidKitConfig === null) lines.push("Nothing waiting on you.", "");
-  } else {
-    lines.push(...waitingOnYou.slice(0, SHOWN_ITEMS).map(waitingLine), "");
+  const waiting = [...(invalidKitConfig === null ? [] : [invalidKitConfigLine(invalidKitConfig)]), ...waitingOnYou.slice(0, SHOWN_ITEMS).map(waitingLine)];
+  if (waiting.length === 0) lines.push("Nothing waiting on you.", "");
+  else {
+    lines.push(...waiting, "");
     const rest = waitingOnYou.slice(SHOWN_ITEMS);
     if (rest.length > 0) lines.push(`<details><summary>${rest.length} more</summary>`, "", ...rest.map(waitingLine), "", "</details>", "");
   }

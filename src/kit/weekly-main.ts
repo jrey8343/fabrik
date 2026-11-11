@@ -200,6 +200,7 @@ async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo,
   return { repo: name, branch: branch.name, config, dispatch: { candidates, runs } };
 }
 
+/** The Implement and Research runs in progress, as Dispatch counts them, or null when they can't be read. */
 async function readDispatchedRuns(actions: GitHub | null, repo: Repo): Promise<DispatchedRuns | null> {
   if (actions === null) return null;
   try {
