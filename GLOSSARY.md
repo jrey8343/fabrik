@@ -286,6 +286,10 @@ _Avoid_: approval, sign-off
 The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, also bringing `main` in by merging it when the pull request conflicts with it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built: sending a Ticket to a Design session instead is Send it back. One GitHub never delivered, as on a pull request that conflicts with `main`, the Kit finds and builds all the same.
 _Avoid_: change request, revision, feedback
 
+**Roll-in**:
+The Operator's Request changes that carries another issue's work onto an agent pull request at the Merge gate, so that it is built there and never becomes a Ticket of its own. A Design session can finish by settling one; only the Operator sends it.
+_Avoid_: fold in, absorb, merge into
+
 **Conflict-only run**:
 An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, a draft one whose push GitHub never reviewed because it conflicts with main, or a draft one whose Review passed while it conflicts with main, which stays in draft until the pass on its up-to-date head opens the Merge gate. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head. An Execution flaw on its push calls for a Retry and counts like any other.
 _Avoid_: rebase run, conflict retry
