@@ -46,6 +46,7 @@ import {
   type Window,
   within,
 } from "./retroEvidence.ts";
+import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import {
@@ -205,6 +206,8 @@ export interface WeeklySummaryInput {
   readonly facts: readonly GitHubFacts[];
   /** The Product repos whose facts couldn't be read: each gets its section, saying so, and no figure counts it. */
   readonly unread: readonly UnreadRepo[];
+  /** Each Product repo's Loop, as read for its health line (#460): a repo with none gets no line. */
+  readonly health: readonly RepoHealthFacts[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
   /** The Fabrik App's bot login, its slug with `[bot]`, as label events name it. */
@@ -407,6 +410,8 @@ export interface RepoSection {
   readonly held: Held | null;
   /** Why the repo's GitHub facts couldn't be read this run, or null when they were: an unread repo has nothing waiting, stuck or held. */
   readonly unread: string | null;
+  /** Its Loop's health, or null when it wasn't read. */
+  readonly health: LoopHealth | null;
 }
 
 /** The work a cap holds in one Product repo, by source: null for a source holding nothing. */
@@ -621,13 +626,25 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   const thisWeek = metricsOf(weeks.thisWeek, input);
   const lastWeek = metricsOf(weeks.lastWeek, input);
   const replaySpend = { thisWeek: replaySpendOf(weeks.thisWeek, replays), lastWeek: replaySpendOf(weeks.lastWeek, replays) };
-  const repos = [
-    ...input.facts.map((facts) => repoSectionOf(facts, input)),
-    ...input.unread.map(({ repo, why }) => ({ repo, waitingOnYou: [], stuck: [], held: null, unread: why })),
+  const healthOf = (repo: string): LoopHealth | null => {
+    const read = input.health.find((health) => health.repo === repo);
+    return read === undefined ? null : loopHealthOf(read, weeks.thisWeek, input.now);
+  };
+  const repos: RepoSection[] = [
+    ...input.facts.map((facts) => ({ ...repoSectionOf(facts, input), health: healthOf(facts.repo) })),
+    ...input.unread.map(({ repo, why }) => ({ repo, waitingOnYou: [], stuck: [], held: null, unread: why, health: healthOf(repo) })),
   ];
   // Held work counts too, so a queue never sits unseen through a week nothing ran,
-  // and so does a repo that couldn't be read, so its failure is never taken for a quiet week.
-  const quiet = repos.every((repo) => repo.waitingOnYou.length === 0 && repo.stuck.length === 0 && repo.held === null && repo.unread === null);
+  // and so does a repo that couldn't be read, so its failure is never taken for a quiet week,
+  // and a Loop that's down or failing, so a dead Loop never reads as a quiet week (#460).
+  const quiet = repos.every(
+    (repo) =>
+      repo.waitingOnYou.length === 0 &&
+      repo.stuck.length === 0 &&
+      repo.held === null &&
+      repo.unread === null &&
+      (repo.health === null || !loopIsUnhealthy(repo.health)),
+  );
   // And a week only Replays ran in is no quiet week either, so what they cost still shows,
   // and nor is a store with Run records the Kit couldn't read, so a store on an older release is never taken for a quiet one (#474).
   const unreadable = input.unreadableRecords.count > 0;
@@ -1059,7 +1076,7 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
 
-function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt, timeZone }: WeeklySummaryInput): RepoSection {
+function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt, timeZone }: WeeklySummaryInput): Omit<RepoSection, "health"> {
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
   const { thisWeek } = weeksEndingAt(now, timeZone);
@@ -1550,6 +1567,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords 
     lines.push(
       ...repoLines(
         repo,
+        timeZone,
         summary.escapesThisWeek.filter((escape) => escape.repo === repo.repo),
         summary.reviewMissesThisWeek.filter((miss) => miss.repo === repo.repo),
       ),
@@ -1663,12 +1681,21 @@ function heldRunsLines(repo: string, { runs, weeklyLimitIssues }: HeldRuns, time
 /** How many of a repo's Waiting on you items show before the rest collapse into `<details>`. */
 const SHOWN_ITEMS = 10;
 
-function repoLines({ repo, waitingOnYou, stuck, unread }: RepoSection, escapes: readonly EscapeThisWeek[], reviewMisses: readonly ReviewMissThisWeek[]): string[] {
+function repoLines(
+  { repo, waitingOnYou, stuck, unread, health }: RepoSection,
+  timeZone: string,
+  escapes: readonly EscapeThisWeek[],
+  reviewMisses: readonly ReviewMissThisWeek[],
+): string[] {
+  // A dead Tick leads the section, so the waits below are read knowing the Loop was down.
+  const healthLines = health === null ? null : loopHealthLines(health, timeZone);
+  const leading = healthLines?.lead == null ? [] : [healthLines.lead, "", healthLines.line, ""];
+  const trailing = healthLines === null || healthLines.lead !== null ? [] : [healthLines.line, ""];
   if (unread !== null) {
     const line = `The Kit couldn't read this repo on GitHub this run, so what waits on you, what's stuck and what's held there, and its PRs, Tickets and Specs in the metrics, are left out of this summary: ${escapedTitle(unread)}. Re-run the Weekly summary to try it again.`;
-    return [`## ${repo}`, "", line, "", liveLinks(repo), ""];
+    return [`## ${repo}`, "", ...leading, line, "", ...trailing, liveLinks(repo), ""];
   }
-  const lines = [`## ${repo}`, "", "### Waiting on you", ""];
+  const lines = [`## ${repo}`, "", ...leading, "### Waiting on you", ""];
   if (waitingOnYou.length === 0) lines.push("Nothing waiting on you.", "");
   else {
     lines.push(...waitingOnYou.slice(0, SHOWN_ITEMS).map(waitingLine), "");
@@ -1678,7 +1705,7 @@ function repoLines({ repo, waitingOnYou, stuck, unread }: RepoSection, escapes: 
   if (stuck.length > 0) lines.push("### Stuck", "", ...stuck.map(stuckLine), "");
   if (escapes.length > 0) lines.push("### Architectural escapes this week", "", ...escapes.flatMap(escapeLines), "");
   if (reviewMisses.length > 0) lines.push("### Review misses this week", "", ...reviewMisses.map(reviewMissLine), "");
-  lines.push(liveLinks(repo), "");
+  lines.push(...trailing, liveLinks(repo), "");
   return lines;
 }
 

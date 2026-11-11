@@ -10,13 +10,19 @@
 //   node src/kit/weekly-main.ts
 // Reads two Fabrik App tokens: FABRIK_STORE_TOKEN, with Issues write and
 // Contents read on the store alone, and FABRIK_PRODUCTS_TOKEN, read-only on
-// the Product repos. FABRIK_STORE_DIR is the store's checkout, and
+// the Product repos; and for the Loop health line (#460), FABRIK_TICKS_TOKEN,
+// with Checks, Contents and Issues read, and FABRIK_ACTIONS_TOKEN, with
+// Actions read, each on every installed repo and each unset when its mint
+// failed. FABRIK_STORE_DIR is the store's checkout, and
 // FABRIK_APP_SLUG the Fabrik App's slug, which names its label events.
 import { appendFile } from "node:fs/promises";
 import { gatherEveryRepoFacts, productReposOf } from "../github/facts.ts";
-import { GitHub, GitHubError } from "../github/client.ts";
+import { GitHub, GitHubError, type Repo } from "../github/client.ts";
+import { readCallerRuns } from "../github/loopHealthFacts.ts";
+import { readProductTicks } from "../github/tickFacts.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { type RepoHealthFacts, tickHealthOf } from "./loopHealth.ts";
 import { RUN_STORE } from "./runStore.ts";
 import { readStoreRunRecords, readStoreScoreFiles } from "./storeCheckout.ts";
 import { type SummaryIssue, WEEKLY_SUMMARY_LABEL, type WeeklyFailureFiling, weeklyFailureOf, type WeeklyFiling, weeklyFilingOf } from "./weeklyFiling.ts";
@@ -142,6 +148,39 @@ function annotation(text: string): string {
   return text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
 
+/** How far back the run counts read: the summary's week, ending at the last Monday in any time zone, and a day to spare. */
+const RUNS_READ_DAYS = 9;
+
+/** An optional token's client, or null when its mint failed. */
+function optionalGitHub(name: string, apiUrl: string | undefined): GitHub | null {
+  const token = process.env[name];
+  return token === undefined || token === "" ? null : new GitHub(token, apiUrl);
+}
+
+/**
+ * Each Product repo's Loop, for its health line: its last started Tick and
+ * its caller's runs in the week. A token whose mint failed costs only its part
+ * of each line, which says so; the summary files either way.
+ */
+async function readLoopHealth(repos: readonly Repo[], appLogin: string, now: number): Promise<RepoHealthFacts[]> {
+  const apiUrl = process.env["GITHUB_API_URL"];
+  const ticks = optionalGitHub("FABRIK_TICKS_TOKEN", apiUrl);
+  const actions = optionalGitHub("FABRIK_ACTIONS_TOKEN", apiUrl);
+  const since = new Date(now - RUNS_READ_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const health: RepoHealthFacts[] = [];
+  for (const repo of repos) {
+    health.push({
+      repo: `${repo.owner}/${repo.name}`,
+      tick:
+        ticks === null
+          ? { kind: "unread", why: "the Fabrik App's token for reading Ticks couldn't be minted; the run's log says why" }
+          : tickHealthOf(await readProductTicks(ticks, repo, appLogin)),
+      runs: actions === null ? { kind: "no-permission" } : await readCallerRuns(actions, repo, since),
+    });
+  }
+  return health;
+}
+
 async function main(): Promise<string> {
   const store = storeOf();
   const apiUrl = process.env["GITHUB_API_URL"];
@@ -159,6 +198,7 @@ async function main(): Promise<string> {
   const repos = await productReposOf(products);
   // One repo's API error costs the summary only that repo's facts, which its section names.
   const { facts, unread } = await gatherEveryRepoFacts(products, repos, now, RUN_STORE.owner);
+  const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
 
   const result = weeklySummary({
     records: Object.values(records),
@@ -166,8 +206,9 @@ async function main(): Promise<string> {
     scoreFiles,
     facts,
     unread,
+    health: await readLoopHealth(repos, appLogin, now),
     operator: RUN_STORE.owner,
-    appLogin: `${required("FABRIK_APP_SLUG")}[bot]`,
+    appLogin,
     timeZone,
     now: new Date(now).toISOString(),
   });

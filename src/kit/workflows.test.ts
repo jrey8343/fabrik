@@ -1525,16 +1525,33 @@ describe("The weekly summary workflow", () => {
     for (const text of [weekly, action]) expect(text).not.toMatch(/\bgh (api|issue|pr|repo) /);
   });
 
-  it("holds only two Fabrik App tokens: Issues write and Contents read on fabrik-runs, and read-only on the Product repos", () => {
+  it("holds four Fabrik App tokens: Issues write and Contents read on fabrik-runs, read-only on the Product repos, and the Loop health line's two", () => {
     const store = tokens.find((step) => step.includes("repositories: fabrik-runs"));
-    const products = tokens.find((step) => step !== store);
+    const products = tokens.find((step) => step.includes("id: products"));
 
-    expect(tokens).toHaveLength(2);
+    expect(tokens).toHaveLength(4);
     expect(store).toMatch(/owner: jrey8343\n/);
     expect(permissionsOf(store)).toEqual(["contents: read", "issues: write"]);
     expect(products).toMatch(/owner: jrey8343\n/);
     expect(products).not.toContain("repositories:");
     expect(permissionsOf(products)).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+  });
+
+  // #460: an App the Operator hasn't yet given Actions: read still files the summary, saying the run counts are unread.
+  it("mints the Loop health line's Tick and Actions tokens on every installed repo, each allowed to fail", () => {
+    const ticks = tokens.find((step) => step.includes("id: ticks"));
+    const actions = tokens.find((step) => step.includes("id: actions"));
+    const run = steps.find((step) => step.includes("run: node src/kit/weekly-main.ts"));
+
+    expect(permissionsOf(ticks)).toEqual(["checks: read", "contents: read", "issues: read"]);
+    expect(permissionsOf(actions)).toEqual(["actions: read"]);
+    for (const token of [ticks, actions]) {
+      expect(token).toMatch(/owner: jrey8343\n/);
+      expect(token).not.toContain("repositories:");
+      expect(token).toContain("continue-on-error: true");
+    }
+    expect(run).toContain("FABRIK_TICKS_TOKEN: ${{ steps.ticks.outputs.token }}");
+    expect(run).toContain("FABRIK_ACTIONS_TOKEN: ${{ steps.actions.outputs.token }}");
   });
 
   it("tells the program the Fabrik App's slug, from the token it minted, to tell its label events from other Apps'", () => {
@@ -1595,10 +1612,10 @@ describe("The Tick check workflow", () => {
     expect(action.text).not.toContain("transcripts/");
   });
 
-  it("leaves the Weekly summary's tokens as they were", () => {
+  it("leaves the Weekly summary's store and products tokens as they were", () => {
     const weekly = actionNamed("file-weekly-summary").steps.filter((step) => step.includes("uses: actions/create-github-app-token@"));
 
-    expect(weekly.map(permissionsOf)).toEqual([
+    expect(weekly.slice(0, 2).map(permissionsOf)).toEqual([
       ["contents: read", "issues: write"],
       ["contents: read", "issues: read", "pull-requests: read"],
     ]);
