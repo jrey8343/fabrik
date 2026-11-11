@@ -95,6 +95,7 @@ import {
   type TriggerHistoryEntry,
   verdictsIn,
 } from "./threads.ts";
+import { leavingOutHeldLines } from "./heldLines.ts";
 
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -504,7 +505,7 @@ export const PROTOTYPE_JOB_NAME = "Prototype turn";
  * claim weighs, and nothing of the store.
  */
 export async function gatherSnapshot(
-  github: GitHub,
+  client: GitHub,
   repo: Repo,
   event: LoopEvent,
   operator: string | null,
@@ -514,6 +515,8 @@ export async function gatherSnapshot(
   replayStore: ReplayStore | null = null,
   wait: (ms: number) => Promise<void> = sleep,
 ): Promise<Snapshot> {
+  // A held line is never read as activity or a reply (#471).
+  const github = leavingOutHeldLines(client);
   const [{ owner, kitIssues }, part, startingComment, reviewHasInlineComments, audit, namedPullRequests] = await Promise.all([
     gatherKitIssues(github, repo, appLogin),
     gatherEventPart(github, repo, event, operator, appLogin, actions),

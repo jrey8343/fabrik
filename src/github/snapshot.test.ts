@@ -1395,6 +1395,26 @@ describe("Gathering an issue's Design session", () => {
     expect(issue).toMatchObject({ designRounds: 0, turnFailed: false });
   });
 
+  // A held line is never read as activity or a reply (#471): the session reads as it would without it.
+  it("leaves out a held line posted after the Operator's reply, so that reply stays the one the next turn answers", async () => {
+    const round = { body: "<!-- fabrik:design-round 1 -->\n@operator **Design session, round 1.**", createdAt: "2026-11-02T09:00:00Z", author: { __typename: "Bot" } };
+    const reply = { body: "Go with B.", createdAt: "2026-11-02T10:00:00Z", author: { login: "operator", __typename: "User" } };
+    const heldLine = {
+      body: '<!-- fabrik:on-hold {"role":"design"} -->\nThe Design-session turn is held on #41: every Subscription is used up until 2026-11-09 04:00 UTC.',
+      createdAt: "2026-11-02T10:00:05Z",
+      author: { __typename: "Bot" },
+    };
+
+    const withLine = await gatheredIssue([round, reply, heldLine]);
+
+    expect(withLine).toEqual(await gatheredIssue([round, reply]));
+    const resumed = { kind: "label-added", issue: 6, label: "agent:design" } as const;
+    expect(planFor(resumed, snapshotOf({ ...(withLine ?? anIssue()), labels: ["needs-design", "agent:design"] }), kitConfig())).toMatchObject({
+      kind: "act",
+      actions: expect.arrayContaining([expect.objectContaining({ kind: "start-agent-run", role: "design", issue: 6 })]),
+    });
+  });
+
   it("reads the Kit's refusal of a Map past the Map cap as the Operator's move, so the session keeps its slot and their reply starts its next turn", async () => {
     const refused = planFor(
       { kind: "agent-run-finished", role: "design", issue: 6, output: JSON.stringify(aMap) },

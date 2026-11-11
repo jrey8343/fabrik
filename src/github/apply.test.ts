@@ -858,3 +858,93 @@ describe("Applying a plan when one of its actions fails", () => {
     expect(github.calls.map((call) => call.method)).toEqual(["POST"]);
   });
 });
+
+// A held run's line on its own issue or PR is edited in place when its hold ends (#471).
+describe("Applying the end of a held run's held line", () => {
+  const waiting = (role: string) => `<!-- fabrik:on-hold {"role":"${role}"} -->\nThe Implement run is held on #41: every Subscription is used up.`;
+
+  /** A GitHub holding these comments on #12, every one the App's but where `byPerson`, which records each edit. */
+  function withComments(comments: { id: number; body: string; byPerson?: boolean }[]) {
+    const calls: { method: string; path: string; body: unknown }[] = [];
+    return {
+      calls,
+      comments,
+      async rest(method: string, path: string, body?: unknown): Promise<unknown> {
+        calls.push({ method, path, body });
+        if (method === "GET" && path.startsWith(`${issues}/12/comments?`)) {
+          return path.endsWith("page=1") ? comments.map(({ id, body, byPerson }) => ({ id, body, user: { type: byPerson === true ? "User" : "Bot" } })) : [];
+        }
+        const edited = new RegExp(`^${issues}/comments/(\\d+)$`).exec(path);
+        if (method === "PATCH" && edited !== null) {
+          const comment = comments.find(({ id }) => id === Number(edited[1]));
+          if (comment !== undefined) comment.body = (body as { body: string }).body;
+        }
+        return null;
+      },
+      async graphql(): Promise<never> {
+        throw new Error("no GraphQL expected");
+      },
+    };
+  }
+  const resumed = (ended: { kind: "resumed" } | { kind: "dropped"; reason: string } = { kind: "resumed" }): Plan => ({
+    kind: "act",
+    actions: [{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended }],
+  });
+  const run = { id: 7, at: "2026-11-09T04:05:00.000Z" };
+
+  it("edits the waiting line to say it resumed, and when, posting nothing new", async () => {
+    const github = withComments([{ id: 1, body: "The Operator's reply.", byPerson: true }, { id: 2, body: waiting("implement") }]);
+
+    await applyPlan(github, repo, resumed(), null, run);
+
+    expect(github.comments[1]?.body).toBe('<!-- fabrik:on-hold-ended {"role":"implement"} -->\nWas held on #41 · resumed 2026-11-09 04:05 UTC');
+    expect(github.calls.filter(({ method }) => method === "POST")).toEqual([]);
+  });
+
+  it("edits it to say it was dropped, and why", async () => {
+    const github = withComments([{ id: 2, body: waiting("implement") }]);
+
+    await applyPlan(github, repo, resumed({ kind: "dropped", reason: "The Review run's #12 is closed" }), null, run);
+
+    expect(github.comments[0]?.body).toBe('<!-- fabrik:on-hold-ended {"role":"implement"} -->\nWas held on #41 · dropped: The Review run\'s #12 is closed');
+  });
+
+  it("leaves a line already ended, another role's, and a person's quoting the marker as they are: a run held again keeps its first line saying resumed", async () => {
+    const ended = '<!-- fabrik:on-hold-ended {"role":"implement"} -->\nWas held on #40 · resumed 2026-11-02 04:00 UTC';
+    const github = withComments([
+      { id: 1, body: ended },
+      { id: 2, body: waiting("review") },
+      { id: 3, body: waiting("implement"), byPerson: true },
+      { id: 4, body: waiting("implement") },
+    ]);
+
+    await applyPlan(github, repo, resumed(), null, run);
+
+    expect(github.calls.filter(({ method }) => method === "PATCH").map(({ path }) => path)).toEqual([`${issues}/comments/4`]);
+    expect(github.comments[0]?.body).toBe(ended);
+  });
+
+  it("fails nothing when the Operator deleted the line", async () => {
+    const github = withComments([{ id: 1, body: "Something else." }]);
+
+    await applyPlan(github, repo, resumed(), null, run);
+
+    expect(github.calls.filter(({ method }) => method === "PATCH")).toEqual([]);
+  });
+});
+
+describe("Applying an open-issue a held line links (#471)", () => {
+  it("names the opened issue for the held line, which links it by its number", async () => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, {
+      kind: "act",
+      actions: [
+        { kind: "open-issue", title: "Used up", body: "b", labels: ["fabrik:weekly-limit"], assignees: [], key: "weekly-limit" },
+        { kind: "comment-linking", issue: 7, body: ["Held on ", { created: "weekly-limit" }, "."] },
+      ],
+    });
+
+    expect(github.calls.at(-1)).toEqual({ method: "POST", path: `${issues}/7/comments`, body: { body: "Held on #100." } });
+  });
+});

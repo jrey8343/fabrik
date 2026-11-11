@@ -152,7 +152,7 @@ describe("A dead token on one Subscription, with rotation on", () => {
     expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", subscription: "Claude token 2" }));
   });
 
-  it("is held, with no Ticket comment, when no other Subscription is free, the held marker on the weekly-limit issue", () => {
+  it("is held, with only a quiet held line on the Ticket, when no other Subscription is free, the held marker on the weekly-limit issue", () => {
     const plan = planFor(
       refused("implement"),
       snapshotOf(anIssue({ number: 7 }), { kitIssues: [weeklyLimitIssue(41, "Claude token 2")] }),
@@ -160,7 +160,9 @@ describe("A dead token on one Subscription, with rotation on", () => {
     );
 
     const actions = actionsOf(plan);
-    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([]);
+    expect(actions.filter((action) => action.kind === "comment" && action.issue === 7)).toEqual([
+      { kind: "comment", issue: 7, body: expect.stringMatching(/^<!-- fabrik:on-hold \{"role":"implement"\} -->\nThe Implement run is held on #41:/) },
+    ]);
     expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: RESETS_AT });
     expect(actions).toContainEqual({ kind: "comment", issue: 41, body: expect.stringContaining("fabrik:held") });
     expect(notificationsOf(plan)).toEqual(['assign new "Rotate the Claude token of the `Claude token` Subscription"']);

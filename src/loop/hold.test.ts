@@ -121,6 +121,13 @@ function actionsOf(plan: Plan): readonly Action[] {
   return plan.actions;
 }
 
+/** The held lines a Plan puts on an issue or PR (#471). */
+function heldLinesOn(plan: Plan, issue: number): string[] {
+  return actionsOf(plan).flatMap((action) =>
+    action.kind === "comment" && action.issue === issue && action.body.startsWith("<!-- fabrik:on-hold") ? [action.body] : [],
+  );
+}
+
 /** The held marker a weekly-limit issue's comment carries for a held run. */
 function heldMarker(issue: number, role: AgentRole, label: string | null, order = 1): string {
   return `<!-- fabrik:held ${JSON.stringify({ issue, role, label, order })} -->`;
@@ -134,7 +141,7 @@ describe("A run due while every Subscription is used up, with rotation on", () =
   });
 
   it.each(STARTS)(
-    "a %s run's trigger label comes off, and the buzzing weekly-limit issue gets the held marker, with no Ticket comment and no @-mention",
+    "a %s run's trigger label comes off, the buzzing weekly-limit issue gets the held marker, and its own item one quiet held line, with no @-mention",
     (role, name, start, labelled, label) => {
       const [event, snapshot] = start(BOTH_USED_UP);
 
@@ -145,7 +152,12 @@ describe("A run due while every Subscription is used up, with rotation on", () =
       const actions = actionsOf(plan);
       expect(actions.filter((action) => action.kind === "comment")).toEqual([
         { kind: "comment", issue: 41, body: expect.stringContaining(heldMarker(labelled, role, label)) },
+        { kind: "comment", issue: labelled, body: expect.stringContaining(`<!-- fabrik:on-hold {"role":"${role}"} -->`) },
       ]);
+      const line = heldLinesOn(plan, labelled)[0] ?? "";
+      expect(line).toContain(`The ${name} is held on #41: every Subscription is used up until 2026-11-08 10:00 UTC`);
+      expect(line).toContain("The Kit restarts the run by itself then, so there's nothing to do.");
+      expect(line).not.toContain("@");
       expect(actions).toContainEqual({
         kind: "comment",
         issue: 41,
@@ -155,6 +167,15 @@ describe("A run due while every Subscription is used up, with rotation on", () =
       expect(removals).toEqual(label === null ? [] : [{ kind: "remove-label", issue: labelled, label }]);
     },
   );
+
+  it("with no reset known, the held line says so and points at closing the weekly-limit issue once runs work (#440)", () => {
+    const unknown = [{ ...weeklyLimitIssue(41, "Claude token", LATER, true), body: "@operator Used up.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token -->" }, { ...weeklyLimitIssue(40, "Claude token 2", EARLIER, false), body: "<!-- fabrik:subscription Claude token 2 -->" }];
+    const [event, snapshot] = STARTS[2]![2](unknown);
+
+    expect(heldLinesOn(planFor(event, snapshot, TWO_SUBSCRIPTIONS), 7)).toEqual([
+      '<!-- fabrik:on-hold {"role":"implement"} -->\nThe Implement run is held on #41: every Subscription is used up, and the Kit doesn\'t know when the first limit resets, so it waits until a Subscription is free again. Closing #41 once agent runs work again frees one. The Kit restarts the run by itself then, so there\'s nothing to do.',
+    ]);
+  });
 
   it("names when it is held until: the earliest reset across the open weekly-limit issues", () => {
     const [event, snapshot] = STARTS[0]![2](BOTH_USED_UP);
@@ -172,9 +193,11 @@ describe("A run due while every Subscription is used up, with rotation on", () =
     const quiet = [weeklyLimitIssue(41, "Claude token", LATER, false), weeklyLimitIssue(40, "Claude token 2", EARLIER, false)];
     const [event, snapshot] = STARTS[0]![2](quiet);
 
-    const comments = actionsOf(planFor(event, snapshot, TWO_SUBSCRIPTIONS)).filter((action) => action.kind === "comment");
+    const plan = planFor(event, snapshot, TWO_SUBSCRIPTIONS);
+    const comments = actionsOf(plan).filter((action) => action.kind === "comment" && action.issue !== 7);
 
     expect(comments).toEqual([{ kind: "comment", issue: 40, body: expect.stringContaining(heldMarker(7, "triage", "needs-triage")) }]);
+    expect(heldLinesOn(plan, 7)).toEqual([expect.stringContaining("held on #40")]);
   });
 
   // The scheduled tick can't start an Auditor run at the reset, so an Audit is never held: it fails, and the tick opens the next.
@@ -332,7 +355,20 @@ describe("A run refused on its weekly limit while no other Subscription is free,
     expect(notificationsOf(plan)).toEqual([
       'mention in new "The weekly usage limit of the `Claude token` Subscription is reached until 2026-11-09 04:00 UTC"',
     ]);
+    // No failure comment: only the quiet held line, linking the weekly-limit issue the Plan opens.
     expect(actions.filter((action) => action.kind === "comment")).toEqual([]);
+    expect(actions.filter((action) => action.kind === "comment-linking")).toEqual([
+      {
+        kind: "comment-linking",
+        issue: 7,
+        body: [
+          '<!-- fabrik:on-hold {"role":"implement"} -->\nThe Implement run is held on ',
+          { created: "weekly-limit" },
+          ": every Subscription is used up until 2026-11-08 10:00 UTC, when the first weekly limit resets. The Kit restarts the run by itself then, so there's nothing to do.",
+        ],
+      },
+    ]);
+    expect(actions).toContainEqual(expect.objectContaining({ kind: "open-issue", key: "weekly-limit" }));
     expect(actions).toContainEqual({ kind: "remove-label", issue: 7, label: "agent:implement" });
     expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: EARLIER });
     expect(actions).toContainEqual(
@@ -364,7 +400,7 @@ describe("A run refused on its weekly limit while no other Subscription is free,
       issue: 41,
       body: expect.stringContaining(heldMarker(8, "triage", "needs-triage")),
     });
-    expect(actionsOf(plan).filter((action) => action.kind === "comment" && action.issue === 8)).toEqual([]);
+    expect(heldLinesOn(plan, 8)).toEqual([expect.stringContaining("The Triage run is held on #41")]);
   });
 
   it("comments the held marker on the other Subscription's issue when that one buzzed", () => {
@@ -616,6 +652,26 @@ describe("A note promising a run while every Subscription is used up says it's h
     expect(note).toContain("Retry 1 of 2 starts once the weekly limit resets: the Implementer fixes these findings on the same branch.");
     expect(note).toContain(heldNote);
     expect(note).not.toContain("starts now");
+  });
+
+  // The Verdict is left as it words the hold; the Retry still gets its own held line, on the PR (#471).
+  it("an Execution flaw's Retry gets its own held line on the PR, beside a Verdict that reads as before", () => {
+    const pullRequest = aPullRequest({ headSha: "a".repeat(40) });
+    const verdict = commentsIn(planFor(flaw, snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS), 50);
+    expect(verdict).toContain(heldNote);
+    expect(verdict).not.toContain("fabrik:on-hold");
+
+    // The Verdict re-adds agent:implement, whose Retry is held as it falls due.
+    const flawed = aPullRequest({ verdicts: [{ verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "a".repeat(40) }], headSha: "a".repeat(40) });
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"], openPullRequests: [50] });
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:implement" }, snapshotOf(ticket, { pullRequest: flawed, kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS);
+
+    expect(heldLinesOn(plan, 50)).toEqual([
+      expect.stringContaining("The Implement run (Retry 1 of 2) is held on #41: every Subscription is used up until 2026-11-08 10:00 UTC"),
+    ]);
+    expect(heldLinesOn(plan, 7)).toEqual([]);
+    expect(commentsIn(plan, 41)).toContain('<!-- fabrik:held {"issue":7,"role":"implement","label":"agent:implement","order":1,"line":50} -->');
+    expect(notificationsOf(plan)).toEqual([]);
   });
 
   it("an Execution flaw that gives way to the Operator's unbuilt Request changes says its run is held too", () => {

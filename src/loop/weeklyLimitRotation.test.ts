@@ -205,7 +205,7 @@ describe("A run refused on its Subscription's weekly limit, with rotation on", (
 });
 
 describe("A run refused while no other Subscription is free, with rotation on", () => {
-  it("holds the run with no Ticket comment, and the refused Subscription's new issue @-mentions the Operator once, naming the earliest reset", () => {
+  it("holds the run with only a quiet held line on the Ticket, and the refused Subscription's new issue @-mentions the Operator once, naming the earliest reset", () => {
     const other = quietIssue(40, "Claude token 2", EARLIER);
 
     const plan = planFor(refused("implement"), snapshotOf(anIssue({ number: 7 }), { kitIssues: [other] }), TWO_SUBSCRIPTIONS);
@@ -224,6 +224,16 @@ describe("A run refused while no other Subscription is free, with rotation on", 
         ),
         labels: ["fabrik:weekly-limit"],
         assignees: [],
+        key: "weekly-limit",
+      },
+      {
+        kind: "comment-linking",
+        issue: 7,
+        body: [
+          '<!-- fabrik:on-hold {"role":"implement"} -->\nThe Implement run is held on ',
+          { created: "weekly-limit" },
+          ": every Subscription is used up until 2026-11-08 10:00 UTC, when the first weekly limit resets. The Kit restarts the run by itself then, so there's nothing to do.",
+        ],
       },
     ]);
   });

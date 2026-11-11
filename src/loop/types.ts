@@ -6,6 +6,7 @@ import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, Repl
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
+import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
 
@@ -1500,6 +1501,8 @@ export type Action =
       readonly body: string;
       readonly labels: readonly Label[];
       readonly assignees: readonly string[];
+      /** Names the new issue for later `comment-linking` actions in the plan, which link to it. */
+      readonly key?: string;
     }
   | {
       /** Starts a role's agent job; the workflow does this by routing to it, not the adapter. */
@@ -1627,6 +1630,21 @@ export type Action =
       readonly issue: number;
       /** Why, such as "#7 is closed". */
       readonly reason: string;
+    }
+  | {
+      /**
+       * Edits the held line (src/loop/heldLine.ts) a held run left on its own
+       * issue or PR, once its hold ended: each one of that role still waiting
+       * there now says the run was resumed, or dropped. With none left, as when
+       * the Operator deleted it, it changes nothing.
+       */
+      readonly kind: "end-held-line";
+      readonly role: AgentRole;
+      /** The issue or PR the run is on. */
+      readonly issue: number;
+      /** The weekly-limit issue it was held on. */
+      readonly on: number;
+      readonly ended: HoldEnded;
     }
   /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
   | { readonly kind: "push-branch"; readonly branch: string }

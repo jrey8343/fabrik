@@ -29,6 +29,12 @@ export interface HeldRun {
    * in the order its markers come.
    */
   readonly order?: number | null;
+  /**
+   * Where its held line is (src/loop/heldLine.ts, #471), when that isn't
+   * `issue`: an Implement run on an agent PR, as a Retry, says it's held on the
+   * PR, while its trigger label lives on the Ticket.
+   */
+  readonly lineOn?: number;
 }
 
 /** A run the Kit holds now: only one with a trigger label, since an Auditor or Retro run is never held. */
@@ -38,8 +44,14 @@ export type HoldableRun = HeldRun & { readonly label: Label };
 export const HELD_MARKER = "<!-- fabrik:held";
 
 /** The held marker for a run, such as `<!-- fabrik:held {"issue":7,"role":"triage","label":"needs-triage"} -->`. */
-export function heldMarker({ issue, role, label, order = null }: HeldRun): string {
-  return `${HELD_MARKER} ${JSON.stringify(order === null ? { issue, role, label } : { issue, role, label, order })} -->`;
+export function heldMarker({ issue, role, label, order = null, lineOn }: HeldRun): string {
+  const line = lineOn === undefined || lineOn === issue ? {} : { line: lineOn };
+  return `${HELD_MARKER} ${JSON.stringify(order === null ? { issue, role, label, ...line } : { issue, role, label, order, ...line })} -->`;
+}
+
+/** The issue or PR a held run's held line is on. */
+export function heldLineIssue({ issue, lineOn }: HeldRun): number {
+  return lineOn ?? issue;
 }
 
 /**
@@ -79,14 +91,15 @@ export function runNamed(role: AgentRole): string {
 /**
  * The run a start-agent-run action would have started, held. A Review's run
  * is on its PR, where agent:review lives; an Implement run's, a Retry's
- * included, on its Ticket, where agent:implement resumes it. An Auditor or
+ * included, on its Ticket, where agent:implement resumes it, though one on an
+ * agent PR has its held line there. An Auditor or
  * Retro run never gets here: its pending issue fails before it's planned
  * (src/loop/weeklyRuns.ts).
  */
 export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): HoldableRun {
   const label = RESUME_LABELS[start.role];
   if (label === null) throw new Error(`The ${runNamed(start.role)} on #${start.issue} has no trigger label, so it can't be held`);
-  return { role: start.role, issue: start.issue, label };
+  return { role: start.role, issue: start.issue, label, ...(start.pullRequest === undefined ? {} : { lineOn: start.pullRequest }) };
 }
 
 /**
@@ -109,7 +122,7 @@ export function heldRunsIn(text: string): HeldRun[] {
     const { issue } = value;
     return role === null || typeof issue !== "number"
       ? []
-      : [{ role, issue, label: RESUME_LABELS[role], order: orderOf(value["order"]) }];
+      : [{ role, issue, label: RESUME_LABELS[role], order: orderOf(value["order"]), ...lineOf(value["line"]) }];
   });
 }
 
@@ -149,8 +162,13 @@ export function resumedRunsIn(text: string): ResumedRun[] {
   });
 }
 
-function roleOf(value: unknown): AgentRole | null {
+/** The role a marker's JSON names, or null for anything that isn't one. */
+export function roleOf(value: unknown): AgentRole | null {
   return typeof value === "string" && Object.hasOwn(RESUME_LABELS, value) ? (value as AgentRole) : null;
+}
+
+function lineOf(value: unknown): { lineOn?: number } {
+  return typeof value === "number" && Number.isInteger(value) ? { lineOn: value } : {};
 }
 
 function orderOf(value: unknown): number | null {
@@ -163,6 +181,8 @@ export interface Waiting {
   readonly markers: ReadonlyMap<number, number>;
   /** When its newest held marker was posted, or null when any of its markers' times wasn't read. */
   readonly heldAt: string | null;
+  /** Its newest held marker: the weekly-limit issue it's on, and where it put the run's held line (#471). */
+  readonly newest: { readonly on: number; readonly lineOn: number };
 }
 
 /**
@@ -177,6 +197,7 @@ export function waitingHeldRuns(kitIssues: readonly KitIssueSnapshot[]): Waiting
   const first = new Map<string, HeldRun>();
   const counts = new Map<string, Map<number, { held: number; resumed: number }>>();
   const heldAt = new Map<string, string | null>();
+  const newest = new Map<string, { on: number; lineOn: number }>();
   const orders = ordersOn(kitIssues);
   for (const issue of limits) {
     const times = [issue.createdAt, ...issue.comments.map((_, at) => issue.commentedAt?.[at])];
@@ -185,6 +206,7 @@ export function waitingHeldRuns(kitIssues: readonly KitIssueSnapshot[]): Waiting
         const key = keyOf(run);
         if (!first.has(key)) first.set(key, { ...run, order: orders.get(key) ?? null });
         countOn(counts, key, issue.number).held += 1;
+        newest.set(key, { on: issue.number, lineOn: heldLineIssue(run) });
         heldAt.set(key, newer(heldAt.has(key) ? (heldAt.get(key) ?? null) : undefined, times[at] ?? null));
       }
       for (const run of resumedRunsIn(text)) {
@@ -196,7 +218,15 @@ export function waitingHeldRuns(kitIssues: readonly KitIssueSnapshot[]): Waiting
   const waiting = [...first].flatMap(([key, run]): Waiting[] => {
     const onIssues = [...(counts.get(key) ?? new Map<number, { held: number; resumed: number }>())];
     if (!onIssues.some(([, count]) => count.held > count.resumed)) return [];
-    return [{ run, markers: new Map(onIssues.map(([number, count]) => [number, count.held])), heldAt: heldAt.get(key) ?? null }];
+    return [
+      {
+        run,
+        markers: new Map(onIssues.map(([number, count]) => [number, count.held])),
+        heldAt: heldAt.get(key) ?? null,
+        // Every run waiting has a held marker, so its newest is always known.
+        newest: newest.get(key) ?? { on: onIssues[0]?.[0] ?? run.issue, lineOn: run.issue },
+      },
+    ];
   });
   // A stable sort, so runs with no place keep the order their markers come in.
   return waiting.sort((a, b) => (a.run.order ?? Number.POSITIVE_INFINITY) - (b.run.order ?? Number.POSITIVE_INFINITY));

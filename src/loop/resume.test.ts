@@ -330,15 +330,18 @@ describe("The reset tick, failing partway through its plan (#438)", () => {
     const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: heldOn }), TWO_SUBSCRIPTIONS);
 
     const kinds = actionsOf(plan).map((action) => `${action.kind} #${"issue" in action ? action.issue : ""}`);
-    expect(kinds.slice(0, 6)).toEqual([
+    expect(kinds.slice(0, 9)).toEqual([
+      "end-held-line #7",
       "add-labels #7",
+      "end-held-line #12",
       "add-labels #12",
+      "end-held-line #9",
       "add-labels #9",
       "comment #40",
       "comment #41",
       "comment #40",
     ]);
-    expect(kinds[6]).toBe("close #40");
+    expect(kinds[9]).toBe("close #40");
   });
 
   it("failing on the second resume, leaves the weekly-limit issue open, so the next tick resumes what's left and every run resumes once", () => {
@@ -390,7 +393,7 @@ describe("The reset tick, failing partway through its plan (#438)", () => {
     const first = actionsOf(planFor(PAST_EARLIER, tickSnapshot({ kitIssues: postedBefore, held: heldOn }), TWO_SUBSCRIPTIONS));
     const failed = first.findIndex((action) => action.kind === "comment");
     const applied = first.slice(0, failed);
-    expect(applied.every((action) => action.kind === "add-labels")).toBe(true);
+    expect(applied.every((action) => action.kind === "add-labels" || action.kind === "end-held-line")).toBe(true);
     // The Review and the Implement run started, each taking its trigger label off; Triage hasn't started yet.
     const started = heldOn.map((on): HeldTargetSnapshot => {
       const resumed = applied.find((action) => action.kind === "add-labels" && action.issue === on.number);
@@ -749,5 +752,69 @@ describe("A held marker an Auditor run left, at the reset, with rotation on", ()
     expect(actionsOf(later).filter((action) => action.kind === "open-issue")).toEqual([
       expect.objectContaining({ labels: ["fabrik:audit"] }),
     ]);
+  });
+});
+
+// A held run's held line on its own issue or PR is edited, never deleted, when its hold ends (#471).
+describe("A held run's held line, when its hold ends", () => {
+  const heldTicket = (comments: readonly string[]) => [weeklyLimitIssue(41, "Claude token", EARLIER, comments, true), weeklyLimitIssue(40, "Claude token 2", LATER)];
+  const endedOn = (plan: Plan) => actionsOf(plan).filter((action) => action.kind === "end-held-line");
+
+  it("says resumed once the reset tick resumes the run, and nothing new is commented on the Ticket", () => {
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: heldTicket([held(12, "implement", "agent:implement")]), held: [anIssueHeld(12, ["enhancement", "ready-for-agent"])] }), TWO_SUBSCRIPTIONS);
+
+    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" } }]);
+    expect(actionsOf(plan).filter((action) => action.kind === "comment" && action.issue === 12)).toEqual([]);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("says dropped, and why, for a held Review whose PR the Operator closed before the reset", () => {
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: heldTicket([held(50, "review", "agent:review")]), held: [aDraftHeld(50, { open: false })] }), TWO_SUBSCRIPTIONS);
+
+    expect(endedOn(plan)).toEqual([
+      { kind: "end-held-line", role: "review", issue: 50, on: 41, ended: { kind: "dropped", reason: "The Review run's #50 is closed" } },
+    ]);
+  });
+
+  it("is edited on the PR a Retry's held marker says its line went on, not on its Ticket", () => {
+    const retry = 'The run is held.\n\n<!-- fabrik:held {"issue":7,"role":"implement","label":"agent:implement","order":1,"line":50} -->';
+
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: heldTicket([retry]), held: [anIssueHeld(7, ["enhancement", "ready-for-agent"])] }), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toEqual([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]);
+    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 50, on: 41, ended: { kind: "resumed" } }]);
+  });
+
+  it("says resumed when the Operator closes a weekly-limit issue with no reset known (#440)", () => {
+    const unknown: KitIssueSnapshot = {
+      number: 41,
+      labels: ["fabrik:weekly-limit"],
+      body: "Used up.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token -->",
+      comments: [held(12, "implement", "agent:implement")],
+    };
+    const other = weeklyLimitIssue(40, "Claude token 2", LATER);
+    const snapshot = snapshotOf(anIssue({ number: 41, open: false, byApp: true, labels: unknown.labels, body: unknown.body }), {
+      kitIssues: [other],
+      closedKitIssue: unknown,
+      held: [anIssueHeld(12, ["enhancement", "ready-for-agent"])],
+    });
+
+    const plan = planFor({ kind: "issue-closed", issue: 41 }, snapshot, TWO_SUBSCRIPTIONS);
+
+    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" } }]);
+  });
+
+  it("names the weekly-limit issue the run's newest hold went on, for a run resumed and held again", () => {
+    const resumedThenHeldAgain = [
+      weeklyLimitIssue(40, "Claude token 2", EARLIER, [
+        held(12, "implement", "agent:implement"),
+        '<!-- fabrik:resumed {"issue":12,"role":"implement","held":1} -->',
+      ]),
+      weeklyLimitIssue(41, "Claude token", LATER, [held(12, "implement", "agent:implement")], true),
+    ];
+
+    const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: resumedThenHeldAgain, held: [anIssueHeld(12, ["enhancement", "ready-for-agent"])] }), TWO_SUBSCRIPTIONS);
+
+    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" } }]);
   });
 });

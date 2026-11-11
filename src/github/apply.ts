@@ -7,10 +7,11 @@ import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/r
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
+import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
 import { isEmptyDiffComment, withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
-import type { GitHub, Repo } from "./client.ts";
+import { allPages, type GitHub, type Repo } from "./client.ts";
 
 /** The agent run a plan starts, which the workflow carries out by routing to that role's agent job. */
 export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run" }> | null {
@@ -330,15 +331,17 @@ async function apply(
       // Closing never deletes the head branch; only a merge with auto-delete on would.
       await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`, { state: "closed" });
       return;
-    case "open-issue":
+    case "open-issue": {
       // Labels go on with the issue, so the issues.opened run it starts already sees them.
-      await github.rest("POST", issues, {
+      const opened = (await github.rest("POST", issues, {
         title: action.title,
         body: action.body,
         labels: action.labels,
         assignees: action.assignees,
-      });
+      })) as CreatedRecord;
+      if (action.key !== undefined) made.created.set(action.key, { number: opened.number, id: opened.id });
       return;
+    }
     // applyPlan carries it out, since what follows it depends on how the rebase went.
     case "rebase-onto-main":
       throw new Error("A rebase onto main is applied by applyPlan");
@@ -401,8 +404,31 @@ async function apply(
       return;
     case "react":
       return react(github, repo, action);
+    case "end-held-line":
+      return endHeldLine(github, repo, action, made.run?.at ?? new Date().toISOString());
     default:
       return applyToIssue(github, `${issues}/${action.issue}`, action, made);
+  }
+}
+
+/**
+ * Edits each held line of the action's role still waiting on its issue or PR
+ * to say its hold ended (#471). Read fresh, and only a bot's, as this job
+ * doesn't know the App's login: one the Operator deleted leaves nothing to
+ * edit, which fails nothing.
+ */
+async function endHeldLine(
+  github: GitHubApi,
+  repo: Repo,
+  action: Extract<Action, { kind: "end-held-line" }>,
+  at: string,
+): Promise<void> {
+  const base = `/repos/${repo.owner}/${repo.name}/issues`;
+  const comments = await allPages<{ id: number; body: string | null; user: { type: string } | null }>(github, `${base}/${action.issue}/comments`);
+  const body = endedHeldLine(action.role, action.on, action.ended, at);
+  for (const comment of comments) {
+    if (comment.user?.type !== "Bot" || waitingHeldLineRole(comment.body ?? "") !== action.role) continue;
+    await github.rest("PATCH", `${base}/comments/${comment.id}`, { body });
   }
 }
 
@@ -479,7 +505,8 @@ async function applyToIssue(
         | "convert-to-draft"
         | "mark-ready-for-review"
         | "request-review"
-        | "react";
+        | "react"
+        | "end-held-line";
     }
   >,
   made: Made,

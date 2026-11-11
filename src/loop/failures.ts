@@ -12,8 +12,10 @@
 // run refused on its Subscription's weekly limit is re-run once, quietly,
 // through its trigger label while another Subscription is free, so the
 // Operator hears nothing. Once none is free it is held instead, with no
-// failure comment (src/loop/heldRun.ts). A run killed for spending usage
-// credits, or refused on a dead token, is re-run or held the same way, while
+// failure comment (src/loop/heldRun.ts): only one quiet held line on its own
+// issue or PR, edited when it resumes or is dropped (src/loop/heldLine.ts).
+// A run killed for spending usage credits, or refused on a dead token, is
+// re-run or held the same way, while
 // its Subscription's usage-credits or token-rotation issue keeps the Kit off
 // that Subscription (#433), held even with no weekly-limit issue open, its
 // marker on a usage-credits or token-rotation issue (#470). An Auditor or Retro
@@ -22,6 +24,7 @@
 import { keptBranchOff } from "./backToDesign.ts";
 import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
+import { heldLineOn, heldRunName } from "./heldLine.ts";
 import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
 import { heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
@@ -204,7 +207,9 @@ function heldOnRefusal(
   if (anotherSubscriptionFree(kitIssues, ranOn)) return null;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
-  return { role: run.role, issue: labelled, label: RESUME_LABELS[run.role] };
+  // An Implement run on an agent PR, a Retry, Request-changes or conflict-only run, says it's held there (#471).
+  const onPullRequest = run.role === "implement" ? (run.conflict?.pullRequest ?? issue.openPullRequests[0]) : undefined;
+  return { role: run.role, issue: labelled, label: RESUME_LABELS[run.role], ...(onPullRequest === undefined ? {} : { lineOn: onPullRequest }) };
 }
 
 /**
@@ -231,8 +236,13 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ...(noResetOfItsOwn ? {} : { held }),
     });
     const notice = [...waitingAgain(run, issue), ...(repoWide?.actions ?? [])];
-    if (noResetOfItsOwn) return { kind: "act", actions: heldAfterKill(held, context.kitIssues, notice) };
-    return { kind: "act", actions: [...holding(held, repoWide?.firstReset ?? null), ...notice] };
+    // The run's own issue or PR names it too, in one quiet line (#471).
+    const name = heldRunName(run.role, run);
+    if (noResetOfItsOwn) return { kind: "act", actions: heldAfterKill(held, context.kitIssues, notice, name) };
+    const firstReset = repoWide?.firstReset ?? null;
+    // After the weekly-limit issue's own actions, since it may link the one they open.
+    const line = repoWide?.heldOn === undefined ? [] : [heldLineOn(held, name, repoWide.heldOn, { until: firstReset, reset: true })];
+    return { kind: "act", actions: [...holding(held, firstReset), ...notice, ...line] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
   if (isWeeklyRole(run.role)) {
