@@ -189,7 +189,7 @@ describe("The setup wizard's Fabrik App stage", () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE);
 
     expect(w.stdout).toContain(
-      "It needs Issues, Pull requests and Contents (read and write), Checks (read), and never 'workflows'.",
+      "It needs Issues, Pull requests and Contents (read and write), Checks (read), Actions (read), and never 'workflows'.",
     );
     expect(w.stdout).toContain("https://github.com/settings/apps/fabrik-factory/permissions");
   });

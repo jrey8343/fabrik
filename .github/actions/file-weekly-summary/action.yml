@@ -1,7 +1,9 @@
 # Files the week's Weekly summary in the fabrik-runs store (ADR-0009 and its
 # addendum): loads the Fabrik App key through the store's push service account,
 # mints two App tokens, one with Issues write and Contents read on fabrik-runs
-# alone and one read-only on the Product repos, checks out only the store's
+# alone and one read-only on the Product repos, and the Loop health line's two
+# (#460), each allowed to fail: one reading each repo's last Tick, one with
+# Actions read counting its runs that never started or failed. Checks out only the store's
 # runs/ and scores/ (its Run records and score files, never the transcripts),
 # and runs src/kit/weekly-main.ts, which gathers the GitHub facts, builds the
 # summary (src/kit/weeklySummary.ts) and files it (src/kit/weeklyFiling.ts).
@@ -58,6 +60,32 @@ runs:
         permission-issues: read
         permission-pull-requests: read
 
+    # The Loop health line's last Tick, read as the daily Tick check reads it.
+    # A failed mint costs only that line's Tick, never the summary.
+    - name: Mint a Fabrik App token for the Product repos' Ticks
+      id: ticks
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        owner: jrey8343
+        permission-checks: read
+        permission-contents: read
+        permission-issues: read
+
+    # The Loop health line's run counts. It fails until the Operator accepts
+    # the App's Actions: read, and the summary then says the counts are unread.
+    - name: Mint a Fabrik App token for the Product repos' Actions runs
+      id: actions
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        owner: jrey8343
+        permission-actions: read
+
     - name: Check out the store's Run records and score files
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -76,6 +104,8 @@ runs:
       env:
         FABRIK_STORE_TOKEN: ${{ steps.store.outputs.token }}
         FABRIK_PRODUCTS_TOKEN: ${{ steps.products.outputs.token }}
+        FABRIK_TICKS_TOKEN: ${{ steps.ticks.outputs.token }}
+        FABRIK_ACTIONS_TOKEN: ${{ steps.actions.outputs.token }}
         FABRIK_APP_SLUG: ${{ steps.store.outputs.app-slug }}
         FABRIK_STORE_DIR: ${{ github.workspace }}/store
       run: node src/kit/weekly-main.ts

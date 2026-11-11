@@ -37,7 +37,7 @@ import { aDesignQueueIssue, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody 
 import { RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import { RUN_RECORD_SCHEMA, readRunRecord, type RunRecord } from "./runRecord.ts";
-import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
+import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type RepoHealthFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
 // week it covers runs from Monday 2 November 00:00 to Monday 9 November 00:00
@@ -51,6 +51,7 @@ function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput 
     scoreFiles: [],
     facts: [factsOf()],
     unread: [],
+    health: [],
     operator: "operator",
     appLogin: "fabrik-app[bot]",
     timeZone: "Australia/Sydney",
@@ -3203,5 +3204,66 @@ describe("Request changes in the Weekly summary (#369)", () => {
 
     expect(body).toContain("| Request changes amending the Ticket | 1 | 0 | +1 |");
     expect(body).not.toContain("Review misses this week");
+  });
+});
+
+// #460: a dead Loop must never read as a quiet week.
+describe("the Weekly summary's Loop health line", () => {
+  const REPO = "owner/product";
+  const ticked = (at: string): RepoHealthFacts["tick"] => ({ kind: "read", callerSince: "2026-10-01T00:00:00Z", lastTick: { at, url: "https://github.com/owner/product/actions/runs/9", release: "v1.2.0" }, deadTickIssue: null });
+  const health = (overrides: Partial<RepoHealthFacts> = {}): RepoHealthFacts => ({
+    repo: REPO,
+    tick: ticked("2026-11-08T19:00:00Z"),
+    runs: { kind: "read", runs: [] },
+    ...overrides,
+  });
+  // Inside the week, Monday 2 November to Monday 9 November Sydney time.
+  const run = (conclusion: string, createdAt = "2026-11-05T03:00:00Z") => ({ conclusion, createdAt });
+  const summaryOf = (overrides: Partial<WeeklySummaryInput>) => {
+    const result = weeklySummary(input(overrides));
+    if (result.kind !== "summary") throw new Error("skipped");
+    return result.body;
+  };
+
+  it("files a summary in an otherwise quiet week with runs that never started, counting them first", () => {
+    const body = summaryOf({ health: [health({ runs: { kind: "read", runs: [run("startup_failure"), run("startup_failure"), run("failure")] } })] });
+
+    expect(body).toContain(
+      "**Loop:** 2 runs never started · [1 failed](https://github.com/owner/product/actions/workflows/fabrik.yml?query=is%3Afailure) · the last Tick started at 2026-11-09 06:00 Australia/Sydney ([its run](https://github.com/owner/product/actions/runs/9))",
+    );
+  });
+
+  it("is skipped in a quiet week whose Loop is healthy, and gives a healthy Loop its line when a summary files", () => {
+    expect(weeklySummary(input({ health: [health({ runs: { kind: "read", runs: [run("success"), run("cancelled"), run("skipped")] } })] }))).toEqual({ kind: "skip" });
+
+    const body = summaryOf({ records: [aRunRecord()], health: [health()] });
+    expect(body).toContain("**Loop:** 0 runs never started · 0 failed · the last Tick started at");
+  });
+
+  it("doesn't count cancelled or skipped runs, or runs outside the week", () => {
+    const runs = [run("cancelled"), run("skipped"), run("failure", "2026-10-30T00:00:00Z"), run("startup_failure", "2026-11-08T14:00:00Z"), run("timed_out")];
+    const body = summaryOf({ health: [health({ runs: { kind: "read", runs } })] });
+
+    expect(body).toContain("**Loop:** 0 runs never started · [1 failed](");
+  });
+
+  it("still files with a line saying the run counts are unread when the Actions token couldn't be minted", () => {
+    const body = summaryOf({ health: [health({ runs: { kind: "no-permission" } })] });
+
+    expect(body).toContain("**Loop:** run counts unread: the Fabrik App lacks Actions: read, so accept it in the App's settings, as the release notes say · the last Tick started at");
+  });
+
+  it("leads the repo's section when the Tick hasn't run in 25 hours, saying the waits include time the Loop was down", () => {
+    const tick = { ...ticked("2026-11-07T10:00:00Z"), deadTickIssue: 88 } as const;
+    const facts = factsOf({ repo: REPO, openIssues: [anOpenIssue({ labels: ["ready-for-human"] })] });
+    const body = summaryOf({ facts: [facts], health: [health({ tick })] });
+
+    expect(body).toContain(
+      "## owner/product\n\nThe Tick hasn't run since 2026-11-07 21:00 Australia/Sydney, so the waits below include time the Loop was down: see [#88](https://github.com/owner/product/issues/88).\n\n**Loop:** 0 runs never started · 0 failed · the last Tick started at 2026-11-07 21:00 Australia/Sydney ([its run](https://github.com/owner/product/actions/runs/9))\n\n### Waiting on you",
+    );
+  });
+
+  it("files a summary in an otherwise quiet week whose Tick is dead", () => {
+    expect(weeklySummary(input({ health: [health({ tick: ticked("2026-11-07T10:00:00Z") })] })).kind).toBe("summary");
   });
 });

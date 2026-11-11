@@ -288,7 +288,7 @@ banner "Fabrik setup for $REPO"
 # ── 1. The Fabrik App on this repo ─────────────────────────────────────────
 stage "Install the Fabrik App on $REPO"
 say "Every label, comment and push the Loop makes comes from the Fabrik App."
-say "It needs Issues, Pull requests and Contents (read and write), Checks (read), and never 'workflows'."
+say "It needs Issues, Pull requests and Contents (read and write), Checks (read), Actions (read), and never 'workflows'."
 say "Checks (read) is how the Monitor sees main go red."
 # A slug from an earlier run is ask's own default, so it isn't looked up again.
 FOUND_APPS=""
@@ -309,12 +309,13 @@ else
   say "Click the Fabrik App there: its slug is the last part of the page's URL, github.com/settings/apps/<slug>."
   ask FABRIK_APP_SLUG "The Fabrik App's slug:"
 fi
-say "If the App lacks Checks (read), add it first:"
-step "At https://github.com/settings/apps/${FABRIK_APP_SLUG}/permissions, set Repository permissions → Checks to Read-only, then Save changes."
+say "If the App lacks Checks (read) or Actions (read), add them first:"
+step "At https://github.com/settings/apps/${FABRIK_APP_SLUG}/permissions, set Repository permissions → Checks to Read-only and Actions to Read-only, then Save changes."
+step "Actions (read) lets the Weekly summary count the runs that never started or failed; it can't re-run, cancel or start one."
 open_url "https://github.com/apps/${FABRIK_APP_SLUG}/installations/new"
 step "Pick the account that owns $REPO."
 step "Choose 'Only select repositories', add $REPO (keep the repos it already has), then Install or Save."
-step "If GitHub shows a request for new permissions (Checks: read), review it and accept."
+step "If GitHub shows a request for new permissions (Checks: read, Actions: read), review it and accept."
 # pause, except that only a pressed Enter tells Setup the App is installed:
 # your gh can't read an App's installations, so this is Setup's one sign of it.
 printf '  %s%s%s ' "$DIM" "Press Enter once $REPO is in the App's repository list." "$RESET"
