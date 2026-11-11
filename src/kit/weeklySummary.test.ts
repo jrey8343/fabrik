@@ -33,12 +33,13 @@ import {
   UNKNOWN_COST_BASIS,
 } from "../__fixtures__/weeklySummary.ts";
 import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
-import { aDesignQueueIssue, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
+import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
 import { RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import type { RepoHealthFacts } from "./loopHealth.ts";
 import { RUN_RECORD_SCHEMA, readRunRecord, type RunRecord } from "./runRecord.ts";
-import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type RepoKitFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
 // week it covers runs from Monday 2 November 00:00 to Monday 9 November 00:00
@@ -53,10 +54,22 @@ function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput 
     facts: [factsOf()],
     unread: [],
     health: [],
+    kits: [],
     operator: "operator",
     appLogin: "fabrik-app[bot]",
     timeZone: "Australia/Sydney",
     now: NOW,
+    ...overrides,
+  };
+}
+
+/** `owner/product`'s Kit config on `main`, the default one unless a test says so, with nothing for Dispatch to weigh and no run in progress. */
+function aRepoKit(overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
+  return {
+    repo: "owner/product",
+    branch: "main",
+    config: { ok: true, config: DEFAULT_KIT_CONFIG },
+    dispatch: { candidates: { tickets: [], researchDecisions: [] }, runs: { implement: 0, research: 0, implementTickets: [] } },
     ...overrides,
   };
 }
@@ -2458,7 +2471,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null, maps: null, runs: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null });
       expect(result.body).toContain(["## Held", "", "- owner/product: 2 needs-design issues waiting for a Design session slot, the oldest for 3 days", ""].join("\n"));
     });
 
@@ -2477,7 +2490,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null, maps: null, runs: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null });
       expect(result.body).toContain("- owner/product: 1 needs-design issue waiting for a Design session slot, for 5 hours");
     });
 
@@ -2503,7 +2516,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null, maps: null, runs: null }],
+        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null }],
       ]);
       expect(result.body).toContain(["## Held", "", "- owner/busy: 1 needs-design issue waiting for a Design session slot, for 30 hours", ""].join("\n"));
       expect(result.body).not.toContain("- owner/quiet:");
@@ -2529,7 +2542,7 @@ describe("the Weekly summary", () => {
 
     it("counts the error groups the Monitor holds from the held line in its newest open error issue's stats block, linking that issue", () => {
       const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) })] }));
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null });
       expect(result.body).toContain(
         ["## Held", "", "- owner/product: 3 error groups waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)", ""].join("\n"),
       );
@@ -2545,7 +2558,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null }],
+        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null }],
       ]);
       expect(result.body).not.toContain("- owner/quiet:");
     });
@@ -2558,6 +2571,7 @@ describe("the Weekly summary", () => {
         monitor: { groups: 3, issue: 41 },
         maps: null,
         runs: null,
+        dispatch: null,
       });
     });
 
@@ -2570,14 +2584,14 @@ describe("the Weekly summary", () => {
           ],
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 }, maps: null, runs: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 }, maps: null, runs: null, dispatch: null });
       expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), anOpenMonitorIssue({ number: 45 })] })).summary.repos[0]?.held).toBeNull();
     });
 
     it("passes over an open issue with no stats block, such as a Spec that kept its marker, as the Monitor does", () => {
       const spec = anOpenMonitorIssue({ number: 60, body: "<!-- fabrik:monitor sentry:4504 -->\n## Problem Statement\n\nBookings fail." });
       const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), spec] }));
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null });
     });
 
     it("never reads red main's issue, which takes no slot under the cap", () => {
@@ -2644,6 +2658,7 @@ describe("the Weekly summary", () => {
               { number: 21, resetsAt: null },
             ],
           },
+          dispatch: null,
         });
         expect(result.body).toContain(
           [
@@ -2687,7 +2702,7 @@ describe("the Weekly summary", () => {
 
       it("names the open Map when open Maps fill caps.maps, so the Operator knows why no Map was offered", () => {
         const result = summaryOf(factsOf({ openMaps: [30] }));
-        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30] }, runs: null });
+        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null });
         expect(result.body).toContain(
           ["## Held", "", "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) open, so Design sessions offer no new Map", ""].join(
             "\n",
@@ -2697,7 +2712,7 @@ describe("the Weekly summary", () => {
 
       it("names every open Map, lowest number first, one charted by hand beyond the cap among them", () => {
         const result = summaryOf(factsOf({ openMaps: [40, 30] }));
-        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30, 40] }, runs: null });
+        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30, 40] }, runs: null, dispatch: null });
         expect(result.body).toContain(
           "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) and [#40](https://github.com/owner/product/issues/40) open, so Design sessions offer no new Map",
         );
@@ -2710,9 +2725,124 @@ describe("the Weekly summary", () => {
         );
         expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
           ["owner/quiet", null],
-          ["owner/busy", { designSessions: null, monitor: null, maps: { open: [30] }, runs: null }],
+          ["owner/busy", { designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null }],
         ]);
         expect(result.body).not.toContain("- owner/quiet:");
+      });
+    });
+
+    describe("max_in_flight (#476)", () => {
+      const issue = (n: number) => `[#${n}](https://github.com/owner/product/issues/${n})`;
+      const summaryWith = (facts: GitHubFacts, kit: RepoKitFacts) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [facts], kits: [kit] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result;
+      };
+
+      it("names a ready Ticket behind a full max_in_flight, with the two in flight and how long it has waited", () => {
+        const result = summaryWith(
+          factsOf({
+            openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })],
+            openIssues: [anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", hoursAgo(80))] })],
+          }),
+          aRepoKit({ dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [] }, runs: { implement: 1, research: 0, implementTickets: [12] } } }),
+        );
+        expect(result.body).toContain(
+          `- owner/product: waiting for a slot: \`max_in_flight\` is 2 and ${issue(11)}, ${issue(12)} are in flight · ${issue(14)} (3 days)`,
+        );
+      });
+
+      const ready = (number: number, hours: number) =>
+        anOpenIssue({ number, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", hoursAgo(hours))] });
+      const readyTickets = (...numbers: number[]) => ({ tickets: numbers.map((number) => aTicket({ number })), researchDecisions: [] });
+
+      it("says Dispatch is paused when max_in_flight is 0, naming what waits", () => {
+        const result = summaryWith(
+          factsOf({ openIssues: [ready(14, 80), ready(17, 30)] }),
+          aRepoKit({ config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight: 0 } }, dispatch: { candidates: readyTickets(17, 14), runs: { implement: 0, research: 0, implementTickets: [] } } }),
+        );
+        expect(result.summary.repos[0]?.held?.dispatch?.kind).toBe("paused");
+        expect(result.body).toContain(`- owner/product: Dispatch is paused (\`max_in_flight\` is 0): ${issue(14)} (3 days), ${issue(17)} (30 hours) wait`);
+      });
+
+      it("lists nothing while a raised max_in_flight leaves a slot free, as the next Tick's Dispatch check releases it", () => {
+        const result = summaryWith(
+          factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })], openIssues: [ready(14, 80)] }),
+          aRepoKit({
+            config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight: 3 } },
+            dispatch: { candidates: readyTickets(14), runs: { implement: 1, research: 0, implementTickets: [12] } },
+          }),
+        );
+        expect(result.summary.repos[0]?.held).toBeNull();
+        expect(result.body).not.toContain("max_in_flight");
+      });
+
+      it("never holds a Ticket Dispatch wouldn't release, as a cap isn't what's in the way", () => {
+        const result = summaryWith(
+          factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 }), anOpenPullRequest({ number: 51, ticket: 12 })], openIssues: [ready(14, 80)] }),
+          aRepoKit({ dispatch: { candidates: { tickets: [aTicket({ number: 14, openBlockers: [9] })], researchDecisions: [] }, runs: { implement: 0, research: 0, implementTickets: [] } } }),
+        );
+        expect(result.summary.repos[0]?.held).toBeNull();
+      });
+
+      it("names a research Decision waiting with the Tickets, aged from when it got wayfinder:research, and a dispatched Ticket in flight", () => {
+        const result = summaryWith(
+          factsOf({
+            openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })],
+            openIssues: [ready(14, 80), anOpenIssue({ number: 16, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", hoursAgo(5))] })],
+          }),
+          aRepoKit({
+            dispatch: {
+              candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 13, labels: ["ready-for-agent", "agent:implement"] })], researchDecisions: [aResearchDecision({ number: 16 })] },
+              runs: { implement: 0, research: 0, implementTickets: [] },
+            },
+          }),
+        );
+        expect(result.body).toContain(
+          `- owner/product: waiting for a slot: \`max_in_flight\` is 2 and ${issue(11)}, ${issue(13)} are in flight · ${issue(14)} (3 days), ${issue(16)} (5 hours)`,
+        );
+      });
+
+      it("counts a run in flight its job doesn't name, naming the rest", () => {
+        const result = summaryWith(
+          factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })], openIssues: [ready(14, 80)] }),
+          aRepoKit({ dispatch: { candidates: readyTickets(14), runs: { implement: 0, research: 1, implementTickets: [] } } }),
+        );
+        expect(result.body).toContain(`- owner/product: waiting for a slot: \`max_in_flight\` is 2 and 2 are in flight (${issue(11)} among them) · ${issue(14)} (3 days)`);
+      });
+
+      it("still shows the line without the runs in progress, counting what it could read and saying so", () => {
+        const result = summaryWith(
+          factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })], openIssues: [ready(14, 80)] }),
+          aRepoKit({ dispatch: { candidates: readyTickets(14), runs: null } }),
+        );
+        expect(result.body).toContain(`- owner/product: waiting for a slot: \`max_in_flight\` is 2 and ${issue(11)} is in flight (runs in progress unread) · ${issue(14)} (3 days)`);
+      });
+
+      it("puts an invalid Kit config under Waiting on you, with its first error, and holds nothing, as the Loop does nothing there", () => {
+        const invalid = aRepoKit({
+          config: { ok: false, errors: [".fabrik/config.json: max_in_flight must be a whole number", ".fabrik/config.json: caps.maps must be a whole number"] },
+          dispatch: null,
+        });
+        const result = summaryWith(factsOf({ openMaps: [30], openIssues: [ready(14, 80)] }), invalid);
+        expect(result.summary.repos[0]?.held).toBeNull();
+        expect(result.body).not.toContain("## Held");
+        expect(result.body).toContain(
+          "### Waiting on you\n\n- The Kit config on `main` is invalid, so the Loop does nothing: .fabrik/config.json: max_in_flight must be a whole number (+1 more)\n",
+        );
+      });
+
+      it("keeps a week with nothing else but an invalid Kit config from being skipped, with no '+ more' for a single error", () => {
+        const result = weeklySummary(input({ kits: [aRepoKit({ config: { ok: false, errors: [".fabrik/config.json is not valid JSON"] }, dispatch: null })] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        expect(result.body).toContain("- The Kit config on `main` is invalid, so the Loop does nothing: .fabrik/config.json is not valid JSON\n");
+        expect(result.body).not.toContain("Nothing waiting on you.");
+      });
+
+      it("judges the Map cap by the repo's own caps.maps", () => {
+        const roomy = { ok: true, config: { ...DEFAULT_KIT_CONFIG, caps: { ...DEFAULT_KIT_CONFIG.caps, maps: 2 } } } as const;
+        expect(summaryWith(factsOf({ openMaps: [30] }), aRepoKit({ config: roomy })).summary.repos[0]?.held).toBeNull();
+        expect(summaryWith(factsOf({ openMaps: [30, 40] }), aRepoKit({ config: roomy })).summary.repos[0]?.held?.maps).toEqual({ open: [30, 40] });
       });
     });
   });

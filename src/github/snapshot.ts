@@ -2100,14 +2100,23 @@ interface Job {
  * trigger label off, so no slot goes uncounted between the label coming off
  * and the run starting. An Implement job counts on, once done, until its
  * run's push job has opened the Ticket's draft PR (implementJobsUnderWay).
+ * `implementTickets` names the Tickets their jobs' names name (#477), lowest
+ * first, for the Weekly summary's Held (#476): a run of an earlier Kit
+ * release names none.
  */
-export async function countDispatchedRuns(
-  github: Pick<GitHub, "rest">,
-  repo: Repo,
-): Promise<{ implement: number; research: number }> {
+export async function countDispatchedRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<DispatchedRuns> {
   const jobs = await jobsOfUnfinishedRuns(github, repo);
   const research = jobs.filter(({ name, status }) => status !== "completed" && isJobNamed(name, RESEARCH_JOB_NAME)).length;
-  return { implement: implementJobsUnderWay(jobs).length, research };
+  const implement = implementJobsUnderWay(jobs);
+  const named = implement.flatMap(({ name }) => IMPLEMENT_JOB.exec(name)?.[1] ?? []).map(Number);
+  return { implement: implement.length, research, implementTickets: [...new Set(named)].sort((a, b) => a - b) };
+}
+
+/** The Implement and Research runs a Dispatch check counts in flight, and the Tickets the Implement runs name. */
+export interface DispatchedRuns {
+  readonly implement: number;
+  readonly research: number;
+  readonly implementTickets: readonly number[];
 }
 
 /**
@@ -2138,7 +2147,7 @@ function isJobNamed(name: string, jobName: string): boolean {
  * not: named for what it runs on (#477), or for nothing, as a run of an earlier
  * Kit release still in flight names it.
  */
-const IMPLEMENT_JOB = new RegExp(`^(?:.+ / )?${IMPLEMENT_JOB_NAME}(?: #[1-9][0-9]*(?: \\(Retry [1-9][0-9]*\\))?)?$`);
+const IMPLEMENT_JOB = new RegExp(`^(?:.+ / )?${IMPLEMENT_JOB_NAME}(?: #([1-9][0-9]*)(?: \\(Retry [1-9][0-9]*\\))?)?$`);
 const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #[1-9][0-9]*)?$`);
 
 /**

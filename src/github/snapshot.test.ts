@@ -90,7 +90,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
   it("counts a running Implement job, called from a Product repo's caller workflow", async () => {
     const actions = actionsWith([{ id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "in_progress" }] }]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 0 });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 0, implementTickets: [] });
   });
 
   // #477: the job names its Ticket, and a retry its Retry number; a run of an earlier Kit release names neither.
@@ -103,7 +103,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
       { id: 5, status: "in_progress", jobs: [{ name: "fabrik / Replay implement (baseline)", status: "in_progress" }] },
     ]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0 });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0, implementTickets: [12, 14, 15] });
   });
 
   it("counts an Implement job still queued or waiting after its claim took agent:implement off the Ticket", async () => {
@@ -114,7 +114,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
       { id: 4, status: "waiting", jobs: [{ name: "fabrik / Implement", status: "pending" }] },
     ]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0 });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 4, research: 0, implementTickets: [] });
   });
 
   // #432: the claim took the label off and the draft PR isn't open yet, so the run is all that holds the slot.
@@ -125,7 +125,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
       { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "queued" }] },
     ]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 3, research: 0 });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 3, research: 0, implementTickets: [] });
   });
 
   it("doesn't count an Implement job once its run's push job has landed it, one its run skipped, or any other job", async () => {
@@ -144,7 +144,7 @@ describe("Counting the Implement runs a Dispatch check sees in flight", () => {
       { id: 4, status: "completed", jobs: [{ name: "fabrik / Implement", status: "completed", conclusion: "success" }] },
     ]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0, implementTickets: [] });
   });
 });
 
@@ -156,7 +156,7 @@ describe("Counting the Research runs a Dispatch check sees in flight", () => {
       { id: 3, status: "waiting", jobs: [{ name: "Research", status: "waiting" }] },
     ]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 3 });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 3, implementTickets: [] });
   });
 
   it("doesn't count a finished Research job, or any other job", async () => {
@@ -165,7 +165,7 @@ describe("Counting the Research runs a Dispatch check sees in flight", () => {
       { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Retro evidence", status: "in_progress" }, { name: "fabrik / Research failed", status: "in_progress" }] },
     ]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0, implementTickets: [] });
   });
 });
 
@@ -218,7 +218,7 @@ describe("The judge job's name", () => {
       { id: 2, status: "queued", jobs: [{ name: `fabrik / ${judgeJob}`, status: "queued" }] },
     ]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0 });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0, implementTickets: [] });
     expect(await designTurnsInProgress(actions, repo)).toEqual([]);
   });
 });

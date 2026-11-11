@@ -13,20 +13,22 @@
 // the Product repos; and for the Loop health line (#460), FABRIK_TICKS_TOKEN,
 // with Checks, Contents and Issues read, and FABRIK_ACTIONS_TOKEN, with
 // Actions read, each on every installed repo and each unset when its mint
-// failed. FABRIK_STORE_DIR is the store's checkout, and
+// failed. The Actions token also reads the runs in progress that Held's
+// max_in_flight line counts (#476). FABRIK_STORE_DIR is the store's checkout, and
 // FABRIK_APP_SLUG the Fabrik App's slug, which names its label events.
 import { appendFile } from "node:fs/promises";
 import { gatherEveryRepoFacts, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError, type Repo } from "../github/client.ts";
 import { readCallerRuns } from "../github/loopHealthFacts.ts";
+import { countDispatchedRuns, defaultBranchOf, type DispatchedRuns, gatherDispatchCandidates, readKitConfigSources } from "../github/snapshot.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
-import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "./config.ts";
 import { type RepoHealthFacts, tickHealthOf } from "./loopHealth.ts";
 import { RUN_STORE } from "./runStore.ts";
 import { readStoreRunRecords, readStoreScoreFiles } from "./storeCheckout.ts";
 import { type SummaryIssue, WEEKLY_SUMMARY_LABEL, type WeeklyFailureFiling, weeklyFailureOf, type WeeklyFiling, weeklyFilingOf } from "./weeklyFiling.ts";
-import { weeklySummary } from "./weeklySummary.ts";
+import { type GitHubFacts, type RepoKitFacts, type UnreadRepo, weeklySummary } from "./weeklySummary.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -181,6 +183,63 @@ async function readLoopHealth(repos: readonly Repo[], appLogin: string, now: num
   return health;
 }
 
+/**
+ * One Product repo's Kit config at its default branch's head, read and
+ * resolved as the Loop reads it, and, when it's valid, what a Dispatch check
+ * weighs there (#476). Null for a repo with no default branch yet. The runs in
+ * progress are null when the Actions token wasn't minted or GitHub wouldn't
+ * list them.
+ */
+async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo, appLogin: string): Promise<RepoKitFacts | null> {
+  const branch = await defaultBranchOf(products, repo);
+  if (branch === null) return null;
+  const config = resolveKitConfig(await readKitConfigSources(products, repo, branch.head));
+  const name = `${repo.owner}/${repo.name}`;
+  if (!config.ok) return { repo: name, branch: branch.name, config, dispatch: null };
+  const [candidates, runs] = await Promise.all([gatherDispatchCandidates(products, repo, appLogin), readDispatchedRuns(actions, repo)]);
+  return { repo: name, branch: branch.name, config, dispatch: { candidates, runs } };
+}
+
+/** The Implement and Research runs in progress, as Dispatch counts them, or null when they can't be read. */
+async function readDispatchedRuns(actions: GitHub | null, repo: Repo): Promise<DispatchedRuns | null> {
+  if (actions === null) return null;
+  try {
+    return await countDispatchedRuns(actions, repo);
+  } catch (error) {
+    // The Operator may not have accepted the App's Actions: read yet: Held says the runs are unread.
+    if (error instanceof GitHubError) return null;
+    throw error;
+  }
+}
+
+/**
+ * Each read repo's Kit and Dispatch facts. A repo whose Kit can't be read
+ * leaves its facts for the unread, so its section says so, as one whose
+ * GitHub facts couldn't be read does.
+ */
+async function readRepoKits(
+  products: GitHub,
+  repos: readonly Repo[],
+  gathered: { readonly facts: readonly GitHubFacts[]; readonly unread: readonly UnreadRepo[] },
+  appLogin: string,
+): Promise<{ facts: GitHubFacts[]; unread: UnreadRepo[]; kits: RepoKitFacts[] }> {
+  const actions = optionalGitHub("FABRIK_ACTIONS_TOKEN", process.env["GITHUB_API_URL"]);
+  const facts: GitHubFacts[] = [];
+  const unread = [...gathered.unread];
+  const kits: RepoKitFacts[] = [];
+  for (const repoFacts of gathered.facts) {
+    const repo = repos.find(({ owner, name }) => `${owner}/${name}` === repoFacts.repo);
+    try {
+      const kit = repo === undefined ? null : await readRepoKit(products, actions, repo, appLogin);
+      if (kit !== null) kits.push(kit);
+      facts.push(repoFacts);
+    } catch (error) {
+      unread.push({ repo: repoFacts.repo, why: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { facts, unread, kits };
+}
+
 async function main(): Promise<string> {
   const store = storeOf();
   const apiUrl = process.env["GITHUB_API_URL"];
@@ -196,9 +255,9 @@ async function main(): Promise<string> {
   // No scores/ until scoring has run.
   const scoreFiles = Object.values(await readStoreScoreFiles(storeDir));
   const repos = await productReposOf(products);
-  // One repo's API error costs the summary only that repo's facts, which its section names.
-  const { facts, unread } = await gatherEveryRepoFacts(products, repos, now, RUN_STORE.owner);
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
+  // One repo's API error costs the summary only that repo's facts, which its section names.
+  const { facts, unread, kits } = await readRepoKits(products, repos, await gatherEveryRepoFacts(products, repos, now, RUN_STORE.owner), appLogin);
 
   const result = weeklySummary({
     records: Object.values(records),
@@ -207,6 +266,7 @@ async function main(): Promise<string> {
     facts,
     unread,
     health: await readLoopHealth(repos, appLogin, now),
+    kits,
     operator: RUN_STORE.owner,
     appLogin,
     timeZone,
