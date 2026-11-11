@@ -484,13 +484,17 @@ function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, op
 
 /**
  * What each Triage state does beyond its labels and comment, so the issue has a
- * clear next step. needs-design and needs-info need nothing more.
+ * clear next step. needs-info needs nothing more.
  */
 function outcome(issueNumber: number, { state, duplicateOf }: TriageOutput, operator: string): Action[] {
   switch (state) {
     // The Fast path made a Ticket ready, so see whether it can start.
     case READY_FOR_AGENT:
       return [CHECK_DISPATCH];
+    // The Design queue passes over an issue Triage hasn't landed, so ask it
+    // again now: needs-design added while Triage ran fires no event as it lands (#485).
+    case NEEDS_DESIGN:
+      return [CHECK_DESIGN_QUEUE];
     // The assignment is ready-for-human's one notification.
     case READY_FOR_HUMAN:
       return [{ kind: "assign", issue: issueNumber, assignee: operator }];
