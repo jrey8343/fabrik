@@ -114,6 +114,10 @@ _Avoid_: pipeline, workflow, Real Engineering Loop (Matt Pocock's term, not Fabr
 Where one piece of work is on the Loop, or between its merge and production, and whose move is next, as the Kit reads it from GitHub.
 _Avoid_: status, state, stage
 
+**Stuck**:
+A Standing in which the next move is the Kit's, nothing is running or held, and the Kit has made no sign for longer than its own recoveries take. Work the Kit has handed to the Operator is waiting on the Operator, never Stuck.
+_Avoid_: stalled, hung, idle, stale
+
 **AFK**:
 Work an agent drives alone, with no human in the exchange.
 _Avoid_: autonomous, background
