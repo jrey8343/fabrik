@@ -57,7 +57,7 @@ The program the Operator runs in their own terminal to adopt, repair or migrate 
 _Avoid_: installer, CLI, bootstrap, `/fabrik-setup`
 
 **Console**:
-The Operator's own app for seeing what the factory is doing across their Product repos and making their moves at the Merge gate. It shows what GitHub and the Run records hold and is never a record itself: the Loop runs the same without it.
+The Operator's own app for seeing what the factory is doing across their Product repos, making their moves at the Merge gate and answering a Design session's Rounds. It shows what GitHub and the Run records hold and is never a record itself: the Loop runs the same without it.
 _Avoid_: control plane, dashboard, inbox, app
 
 ## The product
@@ -149,6 +149,10 @@ _Avoid_: comparison set, candidate list
 **Design session**:
 A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.
 _Avoid_: redesign, planning meeting
+
+**Round**:
+A Design session's numbered questions to the Operator, each with a recommended answer. The Operator's reply starts the session's next turn.
+_Avoid_: question, prompt
 
 **Spec**:
 A design written up in a Design session, the parent of the Tickets that build it. The Kit recognises a Spec by its `ready-for-agent` or `ready-for-human` state label; any other parent (a Map, or an issue a Product repo keeps open to track its work) is not one, and Spec closing leaves it open.
