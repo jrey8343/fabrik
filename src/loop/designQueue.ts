@@ -11,18 +11,14 @@ import type { DesignQueueIssue, DesignQueueSnapshot, KitConfig, Plan } from "./t
  * neither waits nor holds a slot until Triage lands (#485), since Triage may
  * land another state and take `needs-design` off.
  */
-export function checkDesignQueue(all: DesignQueueSnapshot, config: KitConfig, held: readonly number[] = []): Plan {
+export function checkDesignQueue(snapshot: DesignQueueSnapshot, config: KitConfig, held: readonly number[] = []): Plan {
   const cap = config.caps.designSessions;
-  const snapshot = { ...all, issues: all.issues.filter((issue) => !waitsOnTriage(issue)) };
-  const triaging = all.issues.filter(waitsOnTriage).map((issue) => issue.number).sort((a, b) => a - b);
   const holding = holders(snapshot, held).sort((a, b) => a - b);
-  const queue = waiting(snapshot, held).map((issue) => issue.number);
+  const queue = waitingIssues(snapshot, held).map((issue) => issue.number);
   if (queue.length === 0) {
-    const reason =
-      triaging.length === 0
-        ? "No needs-design issue is waiting for a Design session slot"
-        : `${waits(triaging)} on Triage, so no needs-design issue is waiting for a Design session slot`;
-    return { kind: "nothing", reason };
+    const triaging = snapshot.issues.filter(waitsOnTriage).map((issue) => issue.number).sort((a, b) => a - b);
+    const onTriage = triaging.length === 0 ? "No" : `${waits(triaging)} on Triage, so no`;
+    return { kind: "nothing", reason: `${onTriage} needs-design issue is waiting for a Design session slot` };
   }
   if (cap === 0) {
     const carryOn = holding.length === 0 ? "" : `; ${holdingSlots(holding)} and carr${holding.length === 1 ? "ies" : "y"} on`;
@@ -67,16 +63,19 @@ export function waitsOnTriage(issue: DesignQueueIssue): boolean {
 
 /** The issues holding a Design session slot, by number. */
 function holders(snapshot: DesignQueueSnapshot, held: readonly number[]): number[] {
-  return snapshot.issues.filter((issue) => holdsSlot(issue, snapshot, held)).map((issue) => issue.number);
+  return snapshot.issues
+    .filter((issue) => !waitsOnTriage(issue) && holdsSlot(issue, snapshot, held))
+    .map((issue) => issue.number);
 }
 
 /**
  * The issues waiting for a slot, in the order they start: re-designs first,
- * then oldest `needs-design` first, then by number.
+ * then oldest `needs-design` first, then by number. One Triage hasn't landed
+ * waits on Triage, not a slot.
  */
-function waiting(snapshot: DesignQueueSnapshot, held: readonly number[]): DesignQueueIssue[] {
+export function waitingIssues(snapshot: DesignQueueSnapshot, held: readonly number[] = []): DesignQueueIssue[] {
   return snapshot.issues
-    .filter((issue) => !holdsSlot(issue, snapshot, held))
+    .filter((issue) => !waitsOnTriage(issue) && !holdsSlot(issue, snapshot, held))
     .sort(
       (a, b) =>
         Number(b.redesign) - Number(a.redesign) ||

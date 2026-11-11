@@ -16,7 +16,7 @@ import {
   RESEARCH_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
-import { holdsSlot, waitsOnTriage } from "../loop/designQueue.ts";
+import { waitingIssues } from "../loop/designQueue.ts";
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
@@ -1215,11 +1215,11 @@ function heldMapsOf(openMaps: readonly number[]): HeldMaps | null {
 
 /**
  * The `needs-design` issues waiting for a Design session slot: by the Design
- * queue check's own rules (holdsSlot, waitsOnTriage), so the summary and the
- * check can't disagree.
+ * queue check's own rule (waitingIssues), so the summary and the check can't
+ * disagree.
  */
 function heldDesignSessionsOf(queue: DesignQueueSnapshot, now: number): HeldDesignSessions | null {
-  const waiting = queue.issues.filter((issue) => !waitsOnTriage(issue) && !holdsSlot(issue, queue));
+  const waiting = waitingIssues(queue);
   const oldestSince = waiting.map((issue) => issue.neededDesignAt).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (oldestSince === undefined) return null;
   return { waiting: waiting.length, oldestSince, oldestAge: now - Date.parse(oldestSince) };

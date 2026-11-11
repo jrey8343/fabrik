@@ -13,6 +13,7 @@ import {
 } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
+import type { DesignQueueIssue } from "./types.ts";
 
 const check = { kind: "design-queue-check" } as const;
 
@@ -332,8 +333,8 @@ describe("An issue Triage hasn't landed yet (#485)", () => {
   });
 
   it.each([
-    ["first", (plain: ReturnType<typeof aDesignQueueIssue>) => [triaging(7), plain]],
-    ["last", (plain: ReturnType<typeof aDesignQueueIssue>) => [plain, triaging(7)]],
+    ["first", (plain: DesignQueueIssue) => [triaging(7), plain]],
+    ["last", (plain: DesignQueueIssue) => [plain, triaging(7)]],
   ])("is passed over for a plain needs-design issue, whatever the order (listed %s)", (_, order) => {
     const plain = aDesignQueueIssue({ number: 9, neededDesignAt: "2026-11-05T09:00:00Z" });
     const issues = order(plain);
