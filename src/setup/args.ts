@@ -11,6 +11,7 @@ import { setupCommand } from "./finish.ts";
 export const SETUP_USAGE =
   `Usage: ${setupCommand("[release | --release=<release>]")} [--account=<1Password account>]` +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
+  " [--production-url=<address> | --no-production] [--production-environment=<Deployments environment>]" +
   " [--plan]";
 
 /** The questions' answers the flags gave. A missing one is unanswered; null or false answers no. */
@@ -18,6 +19,10 @@ export interface FlagAnswers {
   readonly timeZone?: string | null;
   readonly secondSubscription?: boolean;
   readonly paused?: boolean;
+  /** --production-url=: the production site's address; null, from --no-production or an empty value, declares none. */
+  readonly productionUrl?: string | null;
+  /** --production-environment=: the environment its deploys carry in GitHub's Deployments; null, from an empty value, names none. */
+  readonly productionEnvironment?: string | null;
 }
 
 export interface SetupArgs {
@@ -40,7 +45,7 @@ const YES_OR_NO = new Map<string, "secondSubscription" | "paused">([
 
 export function parseSetupArgs(args: readonly string[]): ParsedArgs {
   const positionals: string[] = [];
-  const answers: { timeZone?: string | null; secondSubscription?: boolean; paused?: boolean } = {};
+  const answers: { -readonly [K in keyof FlagAnswers]: FlagAnswers[K] } = {};
   let account: string | undefined;
   let plan = false;
   const refuse = (error: string): ParsedArgs => ({ ok: false, error });
@@ -61,6 +66,10 @@ export function parseSetupArgs(args: readonly string[]): ParsedArgs {
       if (value === undefined) return refuse("--time-zone takes its value after an =, such as --time-zone=Europe/London.");
       answers.timeZone = value === "" ? null : value;
     } else if (flag === "--no-time-zone" && value === undefined) answers.timeZone = null;
+    else if (flag === "--production-url" || flag === "--production-environment") {
+      if (value === undefined) return refuse(`${flag} takes its value after an =, such as ${flag}=${flag === "--production-url" ? "https://example.com" : "production"}.`);
+      answers[flag === "--production-url" ? "productionUrl" : "productionEnvironment"] = value.trim() === "" ? null : value.trim();
+    } else if (flag === "--no-production" && value === undefined) answers.productionUrl = null;
     else if (yes !== undefined) {
       if (value !== undefined && value !== "") return refuse(`${flag} takes no value: give ${flag} for yes, or --no-${flag.slice(2)} for no.`);
       answers[yes] = value === undefined;

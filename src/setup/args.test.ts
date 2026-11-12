@@ -60,6 +60,33 @@ describe("The setup program's flags", () => {
     });
   });
 
+  describe("production's flags", () => {
+    it("takes the address and the environment from their flags", () => {
+      expect(parsed("--production-url=https://clinic.example.com", "--production-environment=production").answers).toEqual({
+        productionUrl: "https://clinic.example.com",
+        productionEnvironment: "production",
+      });
+    });
+
+    it("answers no with --no-production or an empty --production-url=", () => {
+      expect(parsed("--no-production").answers).toEqual({ productionUrl: null });
+      expect(parsed("--production-url=").answers).toEqual({ productionUrl: null });
+    });
+
+    it("takes an empty --production-environment= as no environment", () => {
+      expect(parsed("--production-url=https://clinic.example.com", "--production-environment=").answers).toEqual({
+        productionUrl: "https://clinic.example.com",
+        productionEnvironment: null,
+      });
+    });
+
+    it("refuses either flag without its =, and a value on --no-production", () => {
+      expect(refused(".", "v1.4.2", "--production-url")).toContain("--production-url");
+      expect(refused(".", "v1.4.2", "--production-environment")).toContain("--production-environment");
+      expect(refused(".", "v1.4.2", "--no-production=yes")).toContain("--no-production");
+    });
+  });
+
   it("takes the 1Password account from --account=", () => {
     expect(parsed("--account=acme.1password.com").account).toBe("acme.1password.com");
   });
@@ -108,6 +135,9 @@ describe("The setup program's flags", () => {
       "--no-second-subscription",
       "--paused",
       "--no-paused",
+      "--production-url=",
+      "--production-environment=",
+      "--no-production",
       "--plan",
     ];
 
@@ -119,6 +149,8 @@ describe("The setup program's flags", () => {
     const values: Record<string, string> = {
       "--account=": "my.1password.com",
       "--time-zone=": "Europe/London",
+      "--production-url=": "https://clinic.example.com",
+      "--production-environment=": "production",
     };
 
     for (const [flag] of SETUP_USAGE.matchAll(/--[a-z-]+=?/g)) {
