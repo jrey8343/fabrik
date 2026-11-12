@@ -331,7 +331,7 @@ describe("A Request-changes run's branch", () => {
         "Captured routes:",
         "",
         "- `/waitlist`, named by the Implementer",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/waitlist"],"preview":{"is":"none"}} -->`,
         "",
         "Closes #7",
       ].join("\n"),

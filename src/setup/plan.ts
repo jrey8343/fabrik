@@ -1,7 +1,7 @@
 // Setup's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
 import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
 import { setupCommand } from "./finish.ts";
@@ -51,6 +51,15 @@ export interface ProductState {
   readonly readyForAgent: number;
 }
 
+/**
+ * What setup read of a repo's Deployments, to offer production's environment
+ * and address: each environment its Deployments carry, newest first, with the
+ * http(s) address on its newest successful Deployment, or why it couldn't read.
+ */
+export type DeploymentsSeen =
+  | { readonly read: true; readonly environments: readonly { readonly name: string; readonly url: string | null }[] }
+  | { readonly read: false; readonly why: string };
+
 /** What setup reads about the fabrik-runs store (ADR-0009). */
 export interface RunStoreState {
   readonly exists: boolean;
@@ -84,6 +93,12 @@ export interface SetupAnswers {
    * changed, but the starter on setup's branch is set to match, either way.
    */
   readonly paused?: boolean;
+  /**
+   * The production block the Operator confirmed: the site's address and the
+   * environment its deploys carry in GitHub's Deployments. Setup adds it to a
+   * Kit config that declares none, and never changes one it declares.
+   */
+  readonly production?: ProductionConfig;
 }
 
 /**
@@ -285,20 +300,72 @@ function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, no
     const maxInFlight = paused ? 0 : DEFAULT_KIT_CONFIG.maxInFlight;
     const repaused = pausesDispatch(existing) === paused ? null : withMember(existing, ["max_in_flight"], maxInFlight);
     const listed = withSecondSubscription(repaused ?? existing, state, answers);
-    if (repaused === null) return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, LIST_SECOND_SUBSCRIPTION)];
-    const why = `the starter Kit config, with Dispatch ${paused ? "" : "not "}paused now (max_in_flight ${maxInFlight})${listed === null ? "" : ", and the second Subscription listed"}`;
-    return [write(KIT_CONFIG_PATH, listed ?? repaused, why)];
+    const live = withProduction(listed ?? repaused ?? existing, answers, notes);
+    if (repaused === null) return edits(listed, live, answers);
+    const why = `the starter Kit config, with Dispatch ${paused ? "" : "not "}paused now (max_in_flight ${maxInFlight})${alsoWords(listed, live, answers)}`;
+    return [write(KIT_CONFIG_PATH, live ?? listed ?? repaused, why)];
   }
   if (existing !== null) {
     if (paused) notes.push(pausedHadNoEffect(existing));
     const listed = withSecondSubscription(existing, state, answers);
-    return listed === null ? [] : [write(KIT_CONFIG_PATH, listed, LIST_SECOND_SUBSCRIPTION)];
+    return edits(listed, withProduction(listed ?? existing, answers, notes), answers);
   }
   if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
   const starter = paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig;
   const listed = withSecondSubscription(starter, state, answers);
-  const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}${listed === null ? "" : ", and the second Subscription listed"}`;
-  return [write(KIT_CONFIG_PATH, listed ?? starter, why)];
+  const live = withProduction(listed ?? starter, answers, notes);
+  const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}${alsoWords(listed, live, answers)}`;
+  return [write(KIT_CONFIG_PATH, live ?? listed ?? starter, why)];
+}
+
+/** The one write of a Kit config whose only changes are the second Subscription listed and the production block added, or none. */
+function edits(listed: string | null, live: string | null, answers: SetupAnswers): SetupAction[] {
+  const words = [listed === null ? null : LIST_SECOND_SUBSCRIPTION, live === null ? null : `add ${productionWords(answers)}`].filter((w) => w !== null);
+  return words.length === 0 ? [] : [write(KIT_CONFIG_PATH, live ?? listed ?? "", words.join(", and "))];
+}
+
+/** What a starter's write also does: the second Subscription listed and the production block added. */
+function alsoWords(listed: string | null, live: string | null, answers: SetupAnswers): string {
+  return `${listed === null ? "" : ", and the second Subscription listed"}${live === null ? "" : `, and ${productionWords(answers)}`}`;
+}
+
+/** The production block the plan writes, named with both its values. */
+function productionWords({ production }: SetupAnswers): string {
+  return `the production block: url ${JSON.stringify(production?.url)}, environment ${JSON.stringify(production?.environment ?? null)}`;
+}
+
+/**
+ * The Kit config's text with the production block the Operator answered added,
+ * every other byte kept, or null when there's nothing to write: no answer, a
+ * Kit config that declares production already, which is the Product's to
+ * change, or one setup can't add a member to, which it says.
+ */
+function withProduction(text: string, { production }: SetupAnswers, notes: string[]): string | null {
+  if (production === undefined) return null;
+  const config = jsonObject(text);
+  if (config === null) {
+    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so setup didn't add the production block to it: fix it, then run setup again.`);
+    return null;
+  }
+  if (declaresProduction(text)) return null;
+  const refused = productionRefusal(production);
+  if (refused !== null) {
+    notes.push(`Setup didn't write the production block: ${refused}.`);
+    return null;
+  }
+  return withMember(text, ["production"], { url: production.url, environment: production.environment });
+}
+
+/** Whether the Kit config's text declares production: a production member that isn't null. */
+export function declaresProduction(text: string): boolean {
+  const production = jsonObject(text)?.["production"];
+  return production !== undefined && production !== null;
+}
+
+/** Why Kit config would refuse this production block, in its own words, or null when it takes it. */
+export function productionRefusal(production: ProductionConfig): string | null {
+  const resolved = resolveKitConfig({ config: JSON.stringify({ production }) });
+  return resolved.ok ? null : resolved.errors.join("; ");
 }
 
 /** The warning that an unpaused install puts the tracker's ready-for-agent issues straight into Dispatch's queue. */
@@ -332,7 +399,8 @@ function pausedStarter(starter: string): string {
   return starter.replace(member, (_, key: string) => `${key}0`);
 }
 
-function jsonObject(text: string): Record<string, unknown> | null {
+/** The Kit config's text as a JSON object, or null when it isn't one. */
+export function jsonObject(text: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(text);
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;

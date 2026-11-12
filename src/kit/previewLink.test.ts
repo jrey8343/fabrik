@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { CAPTURED, EVIDENCE_PAGE, UI } from "../__fixtures__/uiEvidence.ts";
-import { evidenceSection, type PreviewLink } from "../evidence/uiEvidence.ts";
+import { evidenceMarkerIn, evidenceSection, type PreviewLink } from "../evidence/uiEvidence.ts";
 import { applyPlan } from "../github/apply.ts";
 import { roundLineIn, withoutRoundLines } from "../loop/roundLine.ts";
 import { planFor } from "../loop/rules.ts";
@@ -92,6 +92,19 @@ describe("Linking a UI PR's preview deployment", () => {
 
     expect(outcome).toEqual({ kind: "never-answered" });
     expect(github.calls.at(-1)).toEqual({ method: "PATCH", path: PULL, body: { body: bodySaying({ kind: "never-answered", url: URL_ }) } });
+  });
+
+  it.each([
+    ["linked", [200]],
+    ["never-answered", [404]],
+  ] as const)("records in the evidence marker that the preview was %s, with the address it polled, where it said pending", async (is, answers) => {
+    const github = pullRequestWith(bodySaying({ kind: "pending" }));
+    expect(evidenceMarkerIn(bodySaying({ kind: "pending" }))?.preview).toEqual({ is: "pending" });
+
+    await linkPreview(github, repo, { pullRequest: 51, url: URL_, run: 9100 }, pollerAnswering(...answers).poller);
+
+    const { body } = github.calls.at(-1)?.body as { body: string };
+    expect(evidenceMarkerIn(body)).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/waitlist"], preview: { is, url: URL_ } });
   });
 
   it(`stops polling after ${PREVIEW_POLL_MINUTES} minutes, a Kit constant within the push job's step's timeout, polling one last time at the end`, async () => {

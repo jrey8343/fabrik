@@ -464,3 +464,15 @@ describe("The Visual evidence writer", () => {
     });
   });
 });
+
+describe("The Visual evidence skill's offers", () => {
+  const skill = readFileSync(resolve(KIT, "skills", "fabrik-visual-evidence", "SKILL.md"), "utf8");
+  const suggest = skill.slice(skill.indexOf("## 3. Suggest the answers"), skill.indexOf("## 4."));
+
+  it("offers production.url for ui.before_url when Kit config declares one, saying where the offer came from", () => {
+    const before = suggest.split("\n").find((line) => line.startsWith("- `ui.before_url`")) ?? "";
+
+    expect(before).toContain("offer `production.url`");
+    expect(before).toContain("say it came from the `production` block");
+  });
+});
