@@ -5,6 +5,8 @@
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
+import { carriedDigest, placedFilesIn } from "../loop/digestCarry.ts";
+import type { DigestHead } from "../loop/digestPlaces.ts";
 import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
@@ -47,6 +49,15 @@ export interface BranchPusher {
  */
 export interface MainRebaser {
   rebase(branch: string, onto: string): Promise<MainRebase>;
+}
+
+/**
+ * Reads what a pull request's head holds of the files a Digest's places
+ * name, and the pull request's files there (src/github/digestHead.ts), for a
+ * Digest carried forward to that head. It rejects when they cannot be read.
+ */
+export interface DigestHeadReader {
+  read(pullRequest: number, headSha: string, paths: readonly string[]): Promise<DigestHead>;
 }
 
 /** A UI PR's preview deployment, which the push job's preview step polls and links (src/kit/previewLink.ts). */
@@ -121,7 +132,7 @@ export class ReplayTicketTaken extends Error {
  * A plan applied only in part (#421): `failed` threw `cause`, after the
  * actions `applied` had landed, so those in `unapplied` never did. Each is
  * one of the plan's own actions: a failure inside a rebase onto main names
- * the rebase.
+ * the rebase, and one inside a Digest carried forward names the carry.
  */
 export class PlanNotApplied extends Error {
   readonly failed: Action;
@@ -144,6 +155,8 @@ export class PlanNotApplied extends Error {
  * branch to push. `run` is the Actions run applying it, which a replay
  * Ticket's claim marks it in progress in, from then. `rebaser` carries out a
  * rebase onto main, which a push to main's or the tick's plan may ask for.
+ * `heads` reads what a head holds, which a pass's plan that carries the last
+ * Digest forward asks for (ADR-0022).
  */
 export async function applyPlan(
   github: GitHubApi,
@@ -152,11 +165,32 @@ export async function applyPlan(
   branches: BranchPusher | null = null,
   run: ApplyingRun | null = null,
   rebaser: MainRebaser | null = null,
+  heads: DigestHeadReader | null = null,
 ): Promise<AppliedPlan> {
   if (plan.kind !== "act") return { preview: null, readded: [], refusedCollapses: [] };
   const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [], refusedCollapses: [] };
   const applyEach = async (actions: readonly Action[]): Promise<void> => {
     for (const action of actions) {
+      if (action.kind === "carry-digest") {
+        if (heads === null) throw new Error(`This job can't read #${action.pullRequest}'s head to carry its Digest forward`);
+        const { pullRequest, headSha, repoUrl } = action;
+        // With the files unread at the new head no place could be re-pointed, so nothing is carried.
+        const body = await heads.read(pullRequest, headSha, placedFilesIn(action.digest)).then(
+          (head) => carriedDigest(action.digest, { repoUrl, pullRequest, headSha }, head),
+          (error: unknown) => {
+            console.log(`::warning title=Digest not carried::#${pullRequest} at ${headSha.slice(0, 7)}: ${error instanceof Error ? error.message : String(error)}`);
+            return null;
+          },
+        );
+        if (body === null) {
+          await applyEach(action.otherwise);
+          continue;
+        }
+        // The carried Digest first, then what follows any Digest's posting: the older ones collapsed and the gate opened.
+        await apply(github, repo, { kind: "comment", issue: pullRequest, body }, made, branches);
+        await applyEach(action.carried);
+        continue;
+      }
       if (action.kind !== "rebase-onto-main") {
         await apply(github, repo, action, made, branches);
         continue;

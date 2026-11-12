@@ -32,13 +32,27 @@ export type ReadableDigest = Extract<DigestCommentRead, { ok: true }>;
  * read each carry nothing.
  */
 export function digestToCarry(pullRequest: PullRequestSnapshot): ReadableDigest | null {
-  const last = pullRequest.digests.at(-1);
-  const read = last === undefined ? null : readDigestComment(last.body);
-  if (read === null || !read.ok) return null;
+  const read = digestThatMightCarry(pullRequest);
+  if (read === null) return null;
   if (!pullRequest.verdicts.some((verdict) => verdict.headSha === read.head && sameChange(verdict.change, pullRequest.change))) return null;
   const { asks } = pullRequest;
   if (asks === undefined || asks.length !== read.asks.length || asks.some((id, index) => id !== read.asks[index])) return null;
   return read;
+}
+
+/**
+ * The pull request's last Digest, read back, while a pass might yet carry it
+ * forward: it reads back, and a Verdict on its head records a fingerprint to
+ * compare the pass's with. Null when no pass could carry it, whatever the
+ * pass's own fingerprint and the Kit's list of asks turn out to be: the push
+ * job reads that list only for a Digest this returns
+ * (src/github/digestCarry.ts).
+ */
+export function digestThatMightCarry(pullRequest: PullRequestSnapshot): ReadableDigest | null {
+  const last = pullRequest.digests.at(-1);
+  const read = last === undefined ? null : readDigestComment(last.body);
+  if (read === null || !read.ok) return null;
+  return pullRequest.verdicts.some((verdict) => verdict.headSha === read.head && verdict.change !== undefined) ? read : null;
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   retroEventFrom,
   reviewEventFrom,
 } from "./github/events.ts";
+import { digestHeadReader, snapshotWithAsks } from "./github/digestCarry.ts";
 import { readDigestGiven } from "./github/digestGiven.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
@@ -471,7 +472,10 @@ async function main(landing: Landing | null): Promise<void> {
   // summary does, and only while a replay issue the Operator filed is open (gatherReplaySlice). The tick
   // job checks the store out only while a replay issue is open (.github/actions/replay-store).
   const replayStore = storeCheckoutAt(process.env["FABRIK_STORE_DIR"], config);
-  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
+  const gathered = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
+  // A Reviewer's pass carries the last Digest forward when only main moved (ADR-0022), which takes the Kit's list of
+  // asks on the PR now: read only where its last Digest might be carried, and a Verdict never fails for want of it.
+  const { snapshot, unread: asksUnread } = await snapshotWithAsks(github, repo, event, gathered, config);
   const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
   // A plan that posts a Verdict records the fingerprint of the PR's own change with it (#643), read with git as the
   // Fabrik App. Any other plan fetches nothing, and one whose fingerprint can't be read posts its Verdict without it.
@@ -483,6 +487,7 @@ async function main(landing: Landing | null): Promise<void> {
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
   // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304), as may a Review's pass (#480).
   const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
+  // A pass that carries the last Digest forward reads what the new head holds of the files its places name, as it is applied.
   const { preview, readded, refusedCollapses } = await applyPlan(
     github,
     repo,
@@ -490,6 +495,7 @@ async function main(landing: Landing | null): Promise<void> {
     branch,
     { id: Number(required("GITHUB_RUN_ID")), at: new Date().toISOString() },
     rebaser,
+    digestHeadReader(github, repo),
   );
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
@@ -522,6 +528,7 @@ async function main(landing: Landing | null): Promise<void> {
       ...(readdedLines.length === 0 ? [] : ["", ...readdedLines]),
       ...(refusedLines.length === 0 ? [] : ["", ...refusedLines]),
       ...(unread === null ? [] : ["", unread]),
+      ...(asksUnread === null ? [] : ["", asksUnread]),
     ].join("\n"),
   );
   if (plan.kind === "fail") {
