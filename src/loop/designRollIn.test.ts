@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { aNamedPullRequest, anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { rollInIn } from "./markers.ts";
+import { landedNothingContext } from "../agent/design.ts";
+import { countLandedNothing, currentDesignSessionIn, designSessionOf, designTurnFailedIn, pendingPrototypeIn, unansweredPrototypesIn } from "../github/threads.ts";
+import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, rollInIn, sessionFinishedIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent, NamedPullRequestSnapshot, Plan } from "./types.ts";
 
@@ -232,5 +234,67 @@ describe("Reading a Roll-in back from its closing comment", () => {
 
   it("reads a mark that is the whole comment", () => {
     expect(rollInIn("<!-- fabrik:roll-in 42 -->")).toEqual({ pullRequest: 42, text: null });
+  });
+});
+
+// The comment opens with a hidden line, not the Kit's "Design session finished." line, and ends the session all the same.
+describe("A Roll-in's closing comment ends its Design session, wherever the Kit looks for a session's finish", () => {
+  const kit = (body: string) => ({ body, byApp: true });
+  const person = (body: string) => ({ body, byApp: false });
+  const round = (n: number) => kit(`<!-- fabrik:design-round ${n} -->\n@jrey **Design session, round ${n}.**`);
+  const emptyDiff = kit(`${EMPTY_DIFF_MARKER}\nThe Implementer changed nothing.`);
+  const failedTurn = kit(`${DESIGN_TURN_FAILED_MARKER}\nThe Design-session turn failed.`);
+  const settled = kit(closingComment());
+
+  it("is one, and so is any comment the Kit's finished line opens", () => {
+    expect(sessionFinishedIn(settled.body)).toBe(true);
+    expect(sessionFinishedIn("**Design session finished.** This issue is now its agent brief, ready for an Implementer.")).toBe(true);
+  });
+
+  it.each([
+    ["a round", round(1).body],
+    ["a comment that quotes a Roll-in's closing comment", `As the Kit wrote:\n\n${settled.body}`],
+    ["a comment that quotes the finished line further down", "Was it this?\n\n**Design session finished.**"],
+  ])("isn't one for %s", (_, body) => {
+    expect(sessionFinishedIn(body)).toBe(false);
+  });
+
+  it("a later session on the issue, reopened, counts its Rounds from 1", () => {
+    const earlier = [round(1), person("Yes, roll it in."), round(2), person("Onto #42."), settled];
+
+    expect(designSessionOf(earlier)).toEqual({ designRounds: 0, sentBack: null });
+    expect(designSessionOf([...earlier, round(1)])).toEqual({ designRounds: 1, sentBack: null });
+  });
+
+  it("a later session's comments start after it", () => {
+    const later = [person("Reopened: #42 merged without it."), round(1)];
+
+    expect(currentDesignSessionIn([round(1), person("Yes."), settled, ...later])).toEqual(later);
+  });
+
+  it("the earlier session's failed turn, landed-nothing runs and unanswered prototype request end with it", () => {
+    const request = kit('<!-- fabrik:prototype-request {"route":"/cart","variants":2,"brief":"Two takes.","reply":null} -->\n**Prototype requested.**');
+
+    expect(designTurnFailedIn([round(1), failedTurn, settled])).toBe(false);
+    expect(countLandedNothing([emptyDiff, emptyDiff, settled])).toBe(0);
+    expect(unansweredPrototypesIn([round(1), request, settled])).toEqual([]);
+    expect(pendingPrototypeIn([round(1), request, settled].map((comment, i) => ({ ...comment, id: i + 1 })))).toBeNull();
+  });
+
+  it("ends nothing when anyone but the Fabrik App wrote it", () => {
+    const quoted = person(settled.body);
+
+    expect(designSessionOf([round(1), round(2), quoted])).toEqual({ designRounds: 2, sentBack: null });
+    expect(currentDesignSessionIn([round(1), quoted, round(2)])).toHaveLength(3);
+  });
+
+  it("a later turn's prompt leaves out the runs that landed nothing before it", () => {
+    const comment = (body: string, byBot = true) => ({ body, byBot });
+    const before = { number: 7, comments: [comment(emptyDiff.body), comment(settled.body)] };
+    const after = { number: 7, comments: [comment(emptyDiff.body), comment(settled.body, false), comment(emptyDiff.body)] };
+
+    expect(landedNothingContext(before)).toEqual([]);
+    // A person's copy of the comment ends nothing, so both runs are still told.
+    expect(landedNothingContext(after).join("\n")).toContain("2 Implement runs on this Ticket since its last Design session landed nothing");
   });
 });

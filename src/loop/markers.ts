@@ -415,8 +415,24 @@ export function handBackMarkIn(body: string): HandBackMark | null {
   return null;
 }
 
-/** How the comment that ends a Design session starts, either way it ends. */
+/**
+ * How the comment that ends a Design session starts, whichever way it ends,
+ * but for a Roll-in's, whose two hidden lines come first. To tell whether a
+ * comment is a session's finish, ask sessionFinishedIn.
+ */
 export const SESSION_FINISHED = "**Design session finished.**";
+
+/**
+ * Whether the Kit's comment is an async Design session's finish: it opens
+ * with the Kit's finished line, or with the Roll-in's mark, whose closing
+ * comment keeps that line under its hidden ones. The one test for it,
+ * wherever the Kit looks for a session's finish: in the snapshot
+ * (src/github/threads.ts) and in a turn's prompt (src/agent/design.ts). Pass
+ * it only the Fabrik App's comments.
+ */
+export function sessionFinishedIn(body: string): boolean {
+  return body.startsWith(SESSION_FINISHED) || ROLL_IN_MARKER.test(body.split("\n", 1)[0] ?? "");
+}
 
 /**
  * The Roll-in's mark: the first line of the closing comment of a Design
