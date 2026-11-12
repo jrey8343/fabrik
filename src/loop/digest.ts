@@ -50,9 +50,13 @@ type Passed = Extract<LoopEvent, { kind: "review-run-finished" }>;
  *    opens when that attempt ends (`openGate`).
  * A pass that keeps the pull request in draft, an Execution flaw and a
  * Design flaw never come here.
+ *
+ * The snapshot here was read before this pass's Verdict was posted, so
+ * `gateUnopened`, and `openGate` with it, would answer for the Verdict
+ * before it. The pass is being given now, so its gate cannot have opened: a
+ * step here that opens it does so with `gateOpening`.
  */
 export function digestOnPass(_event: Passed, pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator">, config: KitConfig): Action[] {
-  // The pass is being given now, so its gate has not opened, whatever the snapshot says of the Verdict before it.
   if (!config.digest.enabled) return gateOpening(pullRequest, snapshot.operator);
   return [{ kind: "add-labels", issue: pullRequest.number, labels: [DIGEST_LABEL] }];
 }
