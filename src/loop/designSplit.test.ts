@@ -64,6 +64,14 @@ describe("A Design session splits a Ticket into sibling Tickets", () => {
     ]);
   });
 
+  it("gives none of the Tickets the From PR line the split Ticket's body ends with: only a rewrite carries it", () => {
+    const filedFromPullRequest = anIssue({ ...ticket, body: "The cart total is worked out twice.\n\nFrom PR #88" });
+
+    const created = actionsOf(planFor(finished(split), snapshotOf(filedFromPullRequest), kitConfig())).filter((action) => action.kind === "create-issue");
+
+    expect(created.map((action) => action.body)).toEqual(["## What to build\n\nKeep it.", "## What to build\n\nRead it."]);
+  });
+
   it("notifies nobody", () => {
     const noisy = { ...split, comment: "Thanks @jrey.", tickets: [{ ...split.tickets[1], body: "Ask @jrey." }] };
     const plan = planFor(finished(noisy), snapshotOf(ticket, { operator: "jrey" }), kitConfig());

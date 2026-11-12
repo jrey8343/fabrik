@@ -2,7 +2,7 @@
 // body. Each one marks the issue for something that reads it later, so a
 // rewrite that dropped it would lose what it records. A line quoted as code,
 // such as a Monitor issue's Sentry error title, is data and never carried.
-import { ESCAPE_MARKER_LINE, FROM_AUDIT_LINE, FROM_RETRO_LINE, linesOutsideCode } from "./markers.ts";
+import { ESCAPE_MARKER_LINE, FROM_AUDIT_LINE, FROM_PULL_REQUEST_LINE, FROM_RETRO_LINE, linesOutsideCode } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 
 /** Every line carried forward, matched against the line with its outer whitespace trimmed. */
@@ -13,6 +13,8 @@ const CARRIED_LINES: readonly RegExp[] = [
   ESCAPE_MARKER_LINE,
   // The Retro the proposal was filed from, so the next Retro skips it (#151).
   FROM_RETRO_LINE,
+  // The pull request the issue was filed from, so it stays tied to it (#658).
+  FROM_PULL_REQUEST_LINE,
 ];
 
 /**
