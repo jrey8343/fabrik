@@ -35,6 +35,7 @@ import {
   aReplayBody,
   aReplayRunRecord,
   aRetroRunRecord,
+  aRollInComment,
   aReview,
   aRunInFlight,
   aRunRecord,
@@ -68,6 +69,7 @@ import {
   MERGED_STANDS_HOURS,
   mergesToRead,
   newerSchemaOf,
+  owedRollInsOf,
   NO_DEPLOY_SEEN_MINUTES,
   parseCaptureResult,
   productionPageUrl,
@@ -126,6 +128,7 @@ import type {
   MergedLastDayFacts,
   MergeToRead,
   OutcomesRead,
+  OwedRollIn,
   PlaceShown,
   ReadClient,
   RepoRead,
@@ -484,6 +487,48 @@ const A_HEAD_WITH_THE_DIGESTS_PLACES: ReadClient = {
           }[path] ?? null),
     ),
 };
+
+/** What a Design session settled with the Operator, to be built on pull request 50. */
+const A_ROLL_IN_TEXT = {
+  summary: "Read the prices once per page, in `src/prices.ts`, so a page of forty products asks for them once.",
+  acceptanceCriteria: ["A page that shows forty products reads the prices once.", "A price changed between two pages shows on the second."],
+};
+
+/** The Roll-in settled on issue 30, "Cache the prices", owed on pull request 50. */
+const AN_OWED_ROLL_IN = {
+  issue: 30,
+  pullRequest: 50,
+  title: "Cache the prices",
+  at: "2026-11-09T10:00:00Z",
+  url: "https://github.com/owner/product/issues/30#issuecomment-301",
+  text: A_ROLL_IN_TEXT,
+} satisfies OwedRollIn;
+
+/** A Roll-in whose closing comment holds no text this release can read: still owed, on pull request 50. */
+const AN_OWED_ROLL_IN_WITH_NO_TEXT = {
+  issue: 33,
+  pullRequest: 50,
+  title: "Sort the basket",
+  at: "2026-11-09T11:00:00Z",
+  url: "https://github.com/owner/product/issues/33#issuecomment-331",
+  text: null,
+} satisfies OwedRollIn;
+
+/**
+ * A repo whose open agent pull request 50 has a Roll-in owed on it: GitHub
+ * cross-references issue 30, closed as not planned, whose latest comment is
+ * the Fabrik App's closing comment of a session that settled one onto it.
+ */
+const A_REPO_WITH_AN_OWED_ROLL_IN = homeFactsOf({
+  github: factsOf({ openIssues: [A_TICKET_WAITING], openPullRequests: [anOpenPullRequest()] }),
+  crossReferences: [{ pullRequest: 50, issue: 30, title: "Cache the prices", open: false, closedAs: "not_planned", repo: "owner/product" }],
+  closedIssueComments: [
+    {
+      issue: 30,
+      comments: [aRollInComment(50, "2026-11-09T10:00:00Z", { issue: 30, text: A_ROLL_IN_TEXT }, { url: "https://github.com/owner/product/issues/30#issuecomment-301" })],
+    },
+  ],
+}) satisfies Facts;
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -985,6 +1030,20 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       50,
       A_READABLE_DIGEST,
     ),
+
+  // Owed Roll-ins
+
+  aRollInComment: () =>
+    aRollInComment(
+      50,
+      "2026-11-09T10:00:00Z",
+      { issue: 30, text: A_ROLL_IN_TEXT },
+      { url: "https://github.com/owner/product/issues/30#issuecomment-301" },
+    ),
+  owedRollInsOf: () =>
+    owedRollInsOf(
+      rowsOf(A_REPO_WITH_AN_OWED_ROLL_IN, A_RUNS_READ, A_CHECKS_READ, A_DEPLOYMENTS_READ, NOW),
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -1036,7 +1095,8 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
 
   // The gather and the rows
 
-  Facts: homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }), issueBodies: [{ issue: 7, body: "From PR #50" }] }) satisfies Facts,
+  // With a Roll-in owed on pull request 50: the cross-reference from its closed issue, and that issue's comments.
+  Facts: { ...A_REPO_WITH_AN_OWED_ROLL_IN, issueBodies: [{ issue: 7, body: "From PR #50" }] } satisfies Facts,
   RepoRead: {
     repo: "owner/product",
     product: true,
@@ -1051,7 +1111,12 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     standing: A_KEPT_STANDING,
     title: "Build the thing",
     lastWord: { text: "The Kit added `agent:implement` again.", at: "2026-11-08T21:20:00Z", url: "https://github.com/owner/product/issues/7#issuecomment-1" },
-    related: [{ issue: 30, title: "Cache the prices", kind: "candidate" }],
+    // A candidate, an owed Roll-in with the text its session gave, and one whose text could not be read.
+    related: [
+      { issue: 31, title: "Round the totals", kind: "candidate" },
+      { issue: 30, title: "Cache the prices", kind: "owed", at: AN_OWED_ROLL_IN.at, url: AN_OWED_ROLL_IN.url, text: A_ROLL_IN_TEXT },
+      { issue: 33, title: "Sort the basket", kind: "owed", at: AN_OWED_ROLL_IN_WITH_NO_TEXT.at, url: AN_OWED_ROLL_IN_WITH_NO_TEXT.url, text: null },
+    ],
     mentions: [{ issue: 40, title: "The cart is slow" }],
     relatedTo: 51,
     followUps: [{ title: "Cache the prices", body: "The prices are read on every request.", filedAs: 30 }],
@@ -1220,6 +1285,11 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     { is: "none" },
   ] satisfies readonly DigestRead[],
   PlaceShown: A_PLACE_SHOWN satisfies PlaceShown,
+
+  // Owed Roll-ins
+
+  // One with the text the session gave, and one whose text could not be read.
+  OwedRollIn: [AN_OWED_ROLL_IN, AN_OWED_ROLL_IN_WITH_NO_TEXT] satisfies readonly OwedRollIn[],
 };
 
 /**

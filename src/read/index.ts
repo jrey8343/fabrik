@@ -166,3 +166,9 @@ export { aDigestComment, aNoDigestLine } from "./builders.ts";
 export { readDigestPlaces } from "./digestRead.ts";
 export type { DigestData } from "../loop/digestContract.ts";
 export type { DigestRead, PlaceShown } from "./digestRead.ts";
+
+// Owed Roll-ins
+
+export { aRollInComment } from "./builders.ts";
+export { owedRollInsOf } from "./owedRollIn.ts";
+export type { OwedRollIn } from "./owedRollIn.ts";

@@ -5,6 +5,7 @@ import { followUpsSection } from "../loop/followUps.ts";
 import { planFor } from "../loop/rules.ts";
 import type { RollInsSnapshot } from "../loop/types.ts";
 import { aComment, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aReview, aRollInComment, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import { EXPORT_CALLS, EXPORT_SHAPES } from "./exports.fixture.ts";
 import type { ClosedIssueCommentsFacts, CrossReferenceFacts, Facts } from "./gather.ts";
 import { owedRollInsOf } from "./owedRollIn.ts";
 import { type Row, rowsOf } from "./rows.ts";
@@ -359,6 +360,30 @@ describe("the library's owed and the Loop's unsent", () => {
 
     expect(owed).toEqual([30, 37, 38]);
     expect(reopenedByTheLoop(merged)).toEqual(owed);
+  });
+});
+
+describe("the interface fixture", () => {
+  it("holds a row with an owed entry that has its text and one that has none", () => {
+    const { related } = EXPORT_SHAPES["Row"] as Row;
+
+    expect(related.flatMap((entry) => (entry.kind === "owed" ? [entry.text === null ? "no text" : "text"] : []))).toEqual(["text", "no text"]);
+  });
+
+  it("calls the list of a repo's owed Roll-ins on rows that hold one, read from the comment its builder wrote", () => {
+    expect(EXPORT_CALLS["owedRollInsOf"]?.()).toEqual([
+      {
+        issue: 30,
+        pullRequest: 50,
+        title: "Cache the prices",
+        at: "2026-11-09T10:00:00Z",
+        url: "https://github.com/owner/product/issues/30#issuecomment-301",
+        text: {
+          summary: "Read the prices once per page, in `src/prices.ts`, so a page of forty products asks for them once.",
+          acceptanceCriteria: ["A page that shows forty products reads the prices once.", "A price changed between two pages shows on the second."],
+        },
+      },
+    ]);
   });
 });
 
