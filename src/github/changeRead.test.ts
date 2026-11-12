@@ -190,6 +190,27 @@ describe("Reading a pull request's change fingerprint with git", () => {
     expect(Object.keys(files ?? {})).toHaveLength(8);
   });
 
+  it("tells two edits of one line apart in a text file that is not UTF-8, by the file's own bytes", async () => {
+    // "café" in Latin-1: its last letter is the one byte E9, which is no UTF-8.
+    const cafe = (last: number) => Buffer.from([0x63, 0x61, 0x66, last, 0x0a]);
+    await git(work, "checkout", "--quiet", "main");
+    await commit(work, { "menu.txt": cafe(0xe9) }, "A Latin-1 file");
+    await git(work, "push", "--quiet", "origin", "main");
+    const heads: string[] = [];
+    for (const [branch, last] of [["fabrik/ticket-8", 0xe8], ["fabrik/ticket-9", 0xea]] as const) {
+      await git(work, "checkout", "--quiet", "-b", branch, "main");
+      heads.push(await commit(work, { "menu.txt": cafe(last) }, "Another last letter"));
+      await git(work, "push", "--quiet", "origin", branch);
+    }
+
+    const [grave, circumflex] = [await readChangeFingerprint(heads[0]!, REMOTE()), await readChangeFingerprint(heads[1]!, REMOTE())];
+
+    expect(grave.files?.["menu.txt"]).toMatch(/^[0-9a-f]{12}$/);
+    expect(circumflex.files?.["menu.txt"]).not.toBe(grave.files?.["menu.txt"]);
+    expect(circumflex.product).not.toBe(grave.product);
+    expect(circumflex.all).not.toBe(grave.all);
+  });
+
   it("is of nothing for a head the default branch already holds", async () => {
     expect(await readChangeFingerprint(mainHead, REMOTE())).toMatchObject({ files: {} });
   });

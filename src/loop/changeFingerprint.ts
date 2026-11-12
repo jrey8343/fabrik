@@ -28,8 +28,30 @@ const HASH_LENGTH = 12;
 /** What a binary file that the change deletes has for its hash, there being no content at the head. */
 const DELETED = "deleted";
 
-function hashOf(text: string): string {
+function hashOf(text: string | Uint8Array): string {
   return createHash("sha256").update(text).digest("hex").slice(0, HASH_LENGTH);
+}
+
+/**
+ * A diff's bytes as a string of one character for each byte, whatever the
+ * byte. A file's lines are whatever bytes the file holds, and not every text
+ * file is UTF-8: read as UTF-8, each byte that is none becomes the same
+ * replacement character, and two edits of one line could no longer be told
+ * apart. So a diff is split and matched in this form, where no byte is lost,
+ * and each file's lines are hashed as the bytes they are (bytesOf).
+ */
+function byteStringOf(bytes: Uint8Array): string {
+  const CHUNK = 8192;
+  let text = "";
+  for (let at = 0; at < bytes.length; at += CHUNK) text += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
+  return text;
+}
+
+/** The bytes a string of one character for each byte stands for. */
+function bytesOf(byteString: string): Uint8Array {
+  const bytes = new Uint8Array(byteString.length);
+  for (let at = 0; at < byteString.length; at++) bytes[at] = byteString.charCodeAt(at);
+  return bytes;
 }
 
 const FILE_HEADER = "diff --git ";
@@ -41,11 +63,13 @@ const NO_NEWLINE = "\\";
 
 /**
  * Each file a diff changes, with its hash, in the diff's order. The diff is
- * as Git prints it with rename detection off and full index lines.
+ * as Git prints it with rename detection off and full index lines, as a
+ * string of one character for each of its bytes (byteStringOf).
  *
  * - A file's hash is over the lines the diff adds and removes there, in
  *   order, each with its sign, and Git's note on one that ends the file with
  *   no newline: no hunk header, line number, index line or unchanged line.
+ *   It is over their bytes as the file holds them, in whatever encoding.
  * - A hunk is read by the counts its header gives, so a removed line that
  *   itself starts `-- a/` is never taken for a header.
  * - A binary file is Git's hash of its content after the change, from its
@@ -88,7 +112,7 @@ function changedFilesIn(diff: string): [path: string, hash: string][] {
       }
     }
     if (content === null) continue;
-    const hash = !binary ? hashOf(lines.map((line) => `${line}\n`).join("")) : deleted ? DELETED : content.slice(0, HASH_LENGTH);
+    const hash = !binary ? hashOf(bytesOf(lines.map((line) => `${line}\n`).join(""))) : deleted ? DELETED : content.slice(0, HASH_LENGTH);
     files.push([pathIn(header), hash]);
   }
   return files;
@@ -97,37 +121,40 @@ function changedFilesIn(diff: string): [path: string, hash: string][] {
 /**
  * The path a file's header names. With rename detection off both sides name
  * the same one, so it is either half of the header, whatever spaces it holds;
- * a name Git quoted is read back.
+ * a name Git quoted is read back. The header is one character for each
+ * byte, and the path is those bytes read as UTF-8, as GitHub names a file.
  */
 function pathIn(header: string): string {
   const names = header.slice(FILE_HEADER.length);
   const side = names.slice(0, (names.length - 1) / 2);
-  return (side.startsWith('"') ? unquoted(side) : side).slice("a/".length);
+  return new TextDecoder().decode(side.startsWith('"') ? unquoted(side) : bytesOf(side)).slice("a/".length);
 }
 
 /** The escapes Git writes one character for, in a name it quotes. */
 const ESCAPES: Readonly<Record<string, number>> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
 
-/** A name Git quoted, as it is: its escapes read back, an octal one as the byte of UTF-8 it stands for. */
-function unquoted(quoted: string): string {
+/** The bytes of a name Git quoted: its escapes read back, an octal one as the byte it stands for. */
+function unquoted(quoted: string): Uint8Array {
   const bytes: number[] = [];
-  const encoder = new TextEncoder();
-  for (const [plain, octal, escape] of quoted.slice(1, -1).matchAll(/\\([0-3][0-7]{2})|\\(.)|[^\\]+/gsu)) {
+  for (const [plain, octal, escape] of quoted.slice(1, -1).matchAll(/\\([0-3][0-7]{2})|\\(.)|[^\\]+/gs)) {
     if (octal !== undefined) bytes.push(Number.parseInt(octal, 8));
     else if (escape !== undefined) bytes.push(ESCAPES[escape] ?? escape.charCodeAt(0));
-    else bytes.push(...encoder.encode(plain));
+    else bytes.push(...bytesOf(plain));
   }
-  return new TextDecoder().decode(Uint8Array.from(bytes));
+  return Uint8Array.from(bytes);
 }
 
 /**
  * The fingerprint of the change this diff makes. The diff is Git's, of the
  * PR's head against its merge base with the default branch, so the same
  * commits on a default branch that moved, their lines at other line numbers,
- * come to the same fingerprint.
+ * come to the same fingerprint. It is given as the bytes Git printed, since
+ * a file's lines need not be UTF-8; text stands for its bytes in UTF-8, and
+ * comes to the same fingerprint as they do.
  */
-export function changeFingerprintOf(diff: string): ChangeFingerprint {
-  const files = changedFilesIn(diff).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+export function changeFingerprintOf(diff: Uint8Array | string): ChangeFingerprint {
+  const bytes = typeof diff === "string" ? new TextEncoder().encode(diff) : diff;
+  const files = changedFilesIn(byteStringOf(bytes)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const over = (entries: readonly (readonly [string, string])[]) => hashOf(entries.map(([path, hash]) => `${path}\0${hash}\n`).join(""));
   return {
     v: 1,

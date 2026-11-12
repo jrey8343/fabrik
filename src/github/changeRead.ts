@@ -34,8 +34,11 @@ const DIFF = [
 /**
  * The fingerprint of the PR's own change at `headSha`: that head against its
  * merge base with the default branch as it is now, so what the default branch
- * gained since the PR last met it is no part of it. Rejects when it can't be
- * read: a fetch fails, or the head shares no history with the default branch.
+ * gained since the PR last met it is no part of it. The diff is read as the
+ * bytes git prints, never as text: a file's lines are in whatever encoding
+ * the file is, and reading them as UTF-8 would make two edits of a line that
+ * is none look the same. Rejects when it can't be read: a fetch fails, or
+ * the head shares no history with the default branch.
  */
 export async function readChangeFingerprint(headSha: string, remote: Remote): Promise<ChangeFingerprint> {
   const { git, url } = await emptyRepository(remote);
@@ -47,7 +50,7 @@ export async function readChangeFingerprint(headSha: string, remote: Remote): Pr
       throw new Error(`${headSha.slice(0, 7)} has no merge base with the default branch`);
     },
   );
-  return changeFingerprintOf(await git(...DIFF, base, headSha));
+  return changeFingerprintOf(await git.bytes(...DIFF, base, headSha));
 }
 
 /** A plan, and why the Verdict it posts carries no change fingerprint; null when it carries one or the plan posts no Verdict. */

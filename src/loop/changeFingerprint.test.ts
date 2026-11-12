@@ -75,6 +75,31 @@ describe("The change fingerprint: what a file's hash is made of", () => {
 
     expect(changeFingerprintOf(added).files?.["notes.md"]).not.toBe(changeFingerprintOf(removed).files?.["notes.md"]);
   });
+
+  it("is over the diff's own bytes, so one changed byte gives another in a line that is not UTF-8", () => {
+    // "café" in Latin-1 ends in the one byte E9, which is no UTF-8: read as text, it and E8 would both be U+FFFD.
+    const withLast = (byte: number) => {
+      const bytes = new TextEncoder().encode(fileDiff("menu.txt", [{ at: 1, removed: ["tea"], added: ["caf?"] }]));
+      bytes[bytes.lastIndexOf("?".charCodeAt(0))] = byte;
+      return bytes;
+    };
+
+    const acute = changeFingerprintOf(withLast(0xe9));
+    const grave = changeFingerprintOf(withLast(0xe8));
+
+    expect(Object.keys(acute.files ?? {})).toEqual(["menu.txt"]);
+    expect(grave.files?.["menu.txt"]).not.toBe(acute.files?.["menu.txt"]);
+    expect(grave.product).not.toBe(acute.product);
+  });
+
+  it("is the same for a diff given as text and as that text's bytes in UTF-8, its paths read as UTF-8 either way", () => {
+    const diff = fileDiff("docs/café.md", [{ at: 3, removed: ["thé"], added: ["café ☕"] }]) + CART;
+
+    const fromBytes = changeFingerprintOf(new TextEncoder().encode(diff));
+
+    expect(fromBytes).toEqual(changeFingerprintOf(diff));
+    expect(Object.keys(fromBytes.files ?? {})).toEqual(["docs/café.md", "src/cart.ts"]);
+  });
 });
 
 describe("The change fingerprint: all and product", () => {
