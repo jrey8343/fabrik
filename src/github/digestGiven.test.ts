@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aDigestReply } from "../__fixtures__/digests.ts";
+import { aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
 import { digestCommentOf } from "../loop/digestContract.ts";
 import { handBackMarker, RETRY_PUSH_MARKER, verdictMarker } from "../loop/markers.ts";
 import type { ReadClient } from "./client.ts";
@@ -20,35 +20,92 @@ const PASS = `${verdictMarker({ verdict: "pass", source: "reviewer", requestChan
 const RETRY_PUSH = `${RETRY_PUSH_MARKER}\nThe Implementer pushed a fix for the Execution flaw to \`fabrik/ticket-7\`; Review runs again on it.`;
 const EMPTY_DIFF = "<!-- fabrik:empty-diff -->\nThe Implement run on #7 changed nothing.";
 
+interface User {
+  readonly login: string;
+  readonly type: string;
+}
+
 interface Thread {
-  readonly comments?: readonly { user: unknown; body: string; created_at: string }[];
-  readonly reviews?: readonly { id: number; user: unknown; state: string; submitted_at?: string | null }[];
+  readonly comments?: readonly { user: User | null; body: string; created_at: string }[];
+  /** Its reviews. One given no text of its own says "Call it a basket.", as aRequestChanges does. */
+  readonly reviews?: readonly { id: number; user: User | null; state: string; submitted_at?: string | null; body?: string | null }[];
+  /** The line comments on its diff, each in the review that holds it. */
+  readonly lineComments?: readonly {
+    id: number;
+    user: User | null;
+    pull_request_review_id: number | null;
+    path: string;
+    line: number | null;
+    original_line?: number | null;
+    created_at: string;
+  }[];
   readonly headRefName?: string;
   /** The issues the pull request closes, each with its comments as GraphQL gives them. */
   readonly closes?: readonly { number: number; comments: readonly { body: string; author: { login: string; __typename: string } | null }[] }[];
 }
 
-/** #50 of acme/shop as GitHub answers for it, and every call the read made, in order. */
-function gitHub({ comments = [], reviews = [], headRefName = "fabrik/ticket-7", closes = [] }: Thread = {}): { client: ReadClient; calls: string[] } {
+const REVIEW_URL = (id: number) => `https://github.com/acme/shop/pull/50#pullrequestreview-${id}`;
+const LINE_URL = (id: number) => `https://github.com/acme/shop/pull/50#discussion_r${id}`;
+
+/**
+ * #50 of acme/shop, a draft, as GitHub answers for it, and every call the
+ * read made, in order. Its one GraphQL answer holds what both of the reads'
+ * queries select: the thread's opening, and the pull request as the Loop's
+ * snapshot reads it.
+ */
+function gitHub({ comments = [], reviews = [], lineComments = [], headRefName = "fabrik/ticket-7", closes = [] }: Thread = {}): { client: ReadClient; calls: string[] } {
   const calls: string[] = [];
+  const author = (user: User | null) => (user === null ? null : { login: user.login, __typename: user.type });
   const client: ReadClient = {
     graphql: async <T>(_query: string, variables: Record<string, unknown>) => {
       calls.push(`graphql ${JSON.stringify(variables)}`);
-      const closingIssuesReferences = { nodes: closes.map(({ number, comments: nodes }) => ({ number, comments: { nodes } })) };
-      return { repository: { pullRequest: { createdAt: at(0), headRefName, closingIssuesReferences } } } as T;
+      const closingIssuesReferences = { nodes: closes.map(({ number, comments: nodes }) => ({ number, state: "OPEN", labels: { nodes: [] }, comments: { nodes } })) };
+      return {
+        repository: {
+          owner: { login: "acme" },
+          pullRequest: {
+            number: 50,
+            url: "https://github.com/acme/shop/pull/50",
+            state: "OPEN",
+            isDraft: true,
+            headRefName,
+            headRefOid: HEAD,
+            author: { login: BOT.login, __typename: "Bot" },
+            body: "",
+            labels: { nodes: [] },
+            comments: { pageInfo: { hasPreviousPage: false }, nodes: comments.map(({ user, body, created_at }) => ({ body, createdAt: created_at, author: author(user) })) },
+            changesRequests: {
+              nodes: reviews
+                .filter(({ state }) => state === "CHANGES_REQUESTED")
+                .map(({ id, user, submitted_at }) => ({ databaseId: id, submittedAt: submitted_at ?? null, author: author(user) })),
+            },
+            draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+            createdAt: at(0),
+            forcePushes: { nodes: [] },
+            commits: { pageInfo: { hasPreviousPage: false }, nodes: [{ commit: { oid: HEAD, committedDate: at(0) } }] },
+            closingIssuesReferences,
+          },
+        },
+      } as T;
     },
     rest: async (method: string, path: string) => {
       calls.push(`${method} ${path}`);
       const [route, query] = path.split("?");
       if (!/(^|&)page=1(&|$)/.test(query ?? "")) return [];
       if (route === "/repos/acme/shop/issues/50/comments") return comments;
-      if (route === "/repos/acme/shop/pulls/50/reviews") return reviews;
+      if (route === "/repos/acme/shop/pulls/50/comments") return lineComments.map((comment) => ({ body: "Here.", html_url: LINE_URL(comment.id), ...comment }));
+      if (route === "/repos/acme/shop/pulls/50/reviews") {
+        return reviews.map((review) => ({ html_url: REVIEW_URL(review.id), ...review, body: review.body === undefined ? "Call it a basket." : review.body }));
+      }
       throw new Error(`unexpected REST call ${path}`);
     },
     fileText: () => Promise.reject(new Error("the thread's read read a file")),
   };
   return { client, calls };
 }
+
+/** No Request changes of the Operator's is deferred. */
+const NONE_DEFERRED: readonly number[] = [];
 
 describe("The push job's read of a pull request's thread, for Kit code's facts", () => {
   it("is when it opened, the Kit's own comments oldest first, the Operator's Request changes and what the Ticket's runs landed before it opened", async () => {
@@ -62,14 +119,14 @@ describe("The push job's read of a pull request's thread, for Kit code's facts",
       closes: [{ number: 7, comments: [{ body: EMPTY_DIFF, author: { login: "fabrik-app", __typename: "Bot" } }] }],
     });
 
-    expect(await readDigestThread(client, repo, 50, "olive")).toEqual({
+    expect(await readDigestThread(client, repo, 50, "olive", NONE_DEFERRED)).toEqual({
       openedAt: at(0),
       kitComments: [
         { at: at(5), body: FLAW },
         { at: at(10), body: RETRY_PUSH },
         { at: at(15), body: PASS },
       ],
-      requestChanges: [{ review: 8, at: at(20), dismissed: false }],
+      requestChanges: [aRequestChanges(8, at(20))],
       landedNothing: 1,
     });
   });
@@ -85,7 +142,7 @@ describe("The push job's read of a pull request's thread, for Kit code's facts",
       closes: [{ number: 7, comments: [{ body: EMPTY_DIFF, author: { login: "stranger", __typename: "User" } }] }],
     });
 
-    expect(await readDigestThread(client, repo, 50, "olive")).toMatchObject({ kitComments: [{ at: at(15), body: PASS }], landedNothing: 0 });
+    expect(await readDigestThread(client, repo, 50, "olive", NONE_DEFERRED)).toMatchObject({ kitComments: [{ at: at(15), body: PASS }], landedNothing: 0 });
   });
 
   it("takes only the Operator's reviews that requested changes: one since dismissed is marked so, and anyone else's, an approval, a comment and one still pending are left out", async () => {
@@ -101,26 +158,67 @@ describe("The push job's read of a pull request's thread, for Kit code's facts",
       ],
     });
 
-    expect((await readDigestThread(client, repo, 50, "olive")).requestChanges).toEqual([
-      { review: 3, at: at(3), dismissed: true },
-      { review: 7, at: at(7), dismissed: false },
+    expect((await readDigestThread(client, repo, 50, "olive", NONE_DEFERRED)).requestChanges).toEqual([
+      aRequestChanges(3, at(3), { dismissed: true }),
+      aRequestChanges(7, at(7)),
     ]);
   });
 
   it("counts what the Ticket's runs landed only on the Ticket the branch names, and only while the pull request links it", async () => {
     const landedOnAnother = [{ number: 9, comments: [{ body: EMPTY_DIFF, author: { login: "fabrik-app", __typename: "Bot" } }] }];
 
-    expect(await readDigestThread(gitHub({ closes: landedOnAnother }).client, repo, 50, "olive")).toMatchObject({ landedNothing: 0 });
-    expect(await readDigestThread(gitHub({ headRefName: "feature/cart", closes: landedOnAnother }).client, repo, 50, "olive")).toMatchObject({ landedNothing: 0 });
+    expect(await readDigestThread(gitHub({ closes: landedOnAnother }).client, repo, 50, "olive", NONE_DEFERRED)).toMatchObject({ landedNothing: 0 });
+    expect(await readDigestThread(gitHub({ headRefName: "feature/cart", closes: landedOnAnother }).client, repo, 50, "olive", NONE_DEFERRED)).toMatchObject({ landedNothing: 0 });
   });
 
-  it("reads every page of the comments and of the reviews", async () => {
+  it("reads each Request changes with its own text, its place and the Operator's line comments in it, oldest first", async () => {
+    const line = { user: OPERATOR, path: "src/cart.ts", line: 12 };
+    const { client } = gitHub({
+      reviews: [
+        { id: 8, user: OPERATOR, state: "CHANGES_REQUESTED", submitted_at: at(20), body: "Two places still say cart." },
+        { id: 9, user: OPERATOR, state: "CHANGES_REQUESTED", submitted_at: at(25), body: null },
+      ],
+      lineComments: [
+        // A line GitHub no longer places is read by where it was when written, as the Reviewer's input reads it.
+        { ...line, id: 13, pull_request_review_id: 8, path: "src/checkout.ts", line: null, original_line: 30, created_at: at(19) },
+        { ...line, id: 12, pull_request_review_id: 8, created_at: at(18) },
+        { ...line, id: 14, pull_request_review_id: 8, user: STRANGER, created_at: at(21) },
+        { ...line, id: 15, pull_request_review_id: 9, path: "src/banner.ts", line: null, created_at: at(24) },
+        { ...line, id: 16, pull_request_review_id: null, created_at: at(26) },
+      ],
+    });
+
+    expect((await readDigestThread(client, repo, 50, "olive", NONE_DEFERRED)).requestChanges).toEqual([
+      aRequestChanges(8, at(20), {
+        body: "Two places still say cart.",
+        lineComments: [
+          { comment: 12, url: LINE_URL(12), path: "src/cart.ts", line: 12 },
+          { comment: 13, url: LINE_URL(13), path: "src/checkout.ts", line: 30 },
+        ],
+      }),
+      aRequestChanges(9, at(25), { body: "", lineComments: [{ comment: 15, url: LINE_URL(15), path: "src/banner.ts", line: null }] }),
+    ]);
+  });
+
+  it("marks the Request changes it is told were deferred during a Retry", async () => {
+    const { client } = gitHub({
+      reviews: [
+        { id: 8, user: OPERATOR, state: "CHANGES_REQUESTED", submitted_at: at(20) },
+        { id: 9, user: OPERATOR, state: "CHANGES_REQUESTED", submitted_at: at(25) },
+      ],
+    });
+
+    expect((await readDigestThread(client, repo, 50, "olive", [9])).requestChanges).toEqual([aRequestChanges(8, at(20)), aRequestChanges(9, at(25), { deferred: true })]);
+  });
+
+  it("reads every page of the comments, of the line comments and of the reviews", async () => {
     const { client, calls } = gitHub();
 
-    await readDigestThread(client, repo, 50, "olive");
+    await readDigestThread(client, repo, 50, "olive", NONE_DEFERRED);
 
     expect(calls.toSorted()).toEqual([
       "GET /repos/acme/shop/issues/50/comments?per_page=100&page=1",
+      "GET /repos/acme/shop/pulls/50/comments?per_page=100&page=1",
       "GET /repos/acme/shop/pulls/50/reviews?per_page=100&page=1",
       'graphql {"owner":"acme","name":"shop","number":50}',
     ]);
@@ -162,11 +260,43 @@ describe("What the push job hands the Digest's contract", () => {
     expect((await readDigestGiven(gitHub(thread).client, repo, { ...written, operator: null })).facts.counts.requestChanges).toBe(0);
   });
 
+  it("lists the asks from its own read: each Request changes and line comment the Reviewer is given, and none the Loop's snapshot reads as deferred during a Retry", async () => {
+    // The first Request changes came before any Verdict. The second came on the draft after the Execution flaw, while its Retry was in flight.
+    const deferring: Thread = {
+      comments: [
+        { user: BOT, body: FLAW, created_at: at(5) },
+        { user: BOT, body: PASS, created_at: at(15) },
+      ],
+      reviews: [
+        { id: 8, user: OPERATOR, state: "CHANGES_REQUESTED", submitted_at: at(3) },
+        { id: 9, user: OPERATOR, state: "CHANGES_REQUESTED", submitted_at: at(7) },
+      ],
+      lineComments: [
+        { id: 12, user: OPERATOR, pull_request_review_id: 8, path: "src/cart.ts", line: 12, created_at: at(2) },
+        { id: 13, user: OPERATOR, pull_request_review_id: 9, path: "src/coupon.ts", line: 4, created_at: at(6) },
+      ],
+    };
+
+    const given = await readDigestGiven(gitHub(deferring).client, repo, written);
+
+    expect(given.facts.asks).toEqual([
+      { id: "review-8", what: "request-changes", url: REVIEW_URL(8) },
+      { id: "inline-12", what: "line-comment", url: LINE_URL(12), path: "src/cart.ts", line: 12 },
+    ]);
+  });
+
   it("is what the contract renders a Digest from, beside the writer's reply", async () => {
     const given = await readDigestGiven(gitHub(thread).client, repo, written);
-    const comment = digestCommentOf(aDigestReply(), given);
+    const comment = digestCommentOf(aDigestReply({ asks: [{ id: "review-8", answer: "in-head", where: "src/basket/save.ts", checkedBy: "reading" }] }), given);
 
     expect(comment).toMatchObject({ ok: true, body: expect.stringContaining(`[The run](${RUN})`) });
     expect(comment).toMatchObject({ body: expect.stringContaining("| The Kit | An Infrastructure failure | |") });
+    expect(comment).toMatchObject({ body: expect.stringContaining(`| Your [Request changes](${REVIEW_URL(8)}) | In the head | Reading | src/basket/save.ts |`) });
+  });
+
+  it("is what the contract refuses a reply against: one that skips an ask the push job read", async () => {
+    const given = await readDigestGiven(gitHub(thread).client, repo, written);
+
+    expect(digestCommentOf(aDigestReply(), given)).toEqual({ ok: false, refused: "the reply left an ask unanswered: `review-8`" });
   });
 });

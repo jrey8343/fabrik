@@ -32,11 +32,15 @@ function bodyOf(reply: DigestReply, given: DigestGiven = GIVEN): string {
 }
 
 describe("The Digest's comment", () => {
-  it("is rendered from the reply's fields and Kit code's facts: the hidden first line naming the head, an opening line, the three sections, the folds line and the three folds, and a link to the run", () => {
+  it("is rendered from the reply's fields and Kit code's facts: the hidden first line naming the head and the asks answered, an opening line, the four sections, the folds line and the four folds, and a link to the run", () => {
     expect(bodyOf(aReply())).toBe(
       [
-        `<!-- fabrik:digest {"head":"${HEAD}"} -->`,
+        `<!-- fabrik:digest {"head":"${HEAD}","asks":[]} -->`,
         `**Digest** of #50, written as of [\`aaaaaaa\`](https://github.com/acme/shop/pull/50/commits/${HEAD}).`,
+        "",
+        "### Needs your eyes",
+        "",
+        "Nothing.",
         "",
         "### What it does",
         "",
@@ -85,6 +89,15 @@ describe("The Digest's comment", () => {
         "",
         "</details>",
         "",
+        "<details>",
+        "<summary>The criteria and how each was checked</summary>",
+        "",
+        "| Asked for | Answer | How it was checked | Where the writer looked |",
+        "| --- | --- | --- | --- |",
+        "| Criterion: A shopper can save their basket from /basket. | In the head | A test | src/basket/save.test.ts |",
+        "",
+        "</details>",
+        "",
         `[The run](${RUN})`,
       ].join("\n"),
     );
@@ -93,7 +106,7 @@ describe("The Digest's comment", () => {
   it("names its head on its first line, which reads back", () => {
     const body = bodyOf(aReply());
 
-    expect(digestMarkIn(body)).toEqual({ head: HEAD });
+    expect(digestMarkIn(body)).toEqual({ head: HEAD, asks: [] });
     expect(isDigestComment(body)).toBe(true);
   });
 
@@ -106,6 +119,7 @@ describe("The Digest's comment", () => {
       "<summary>Walk me through it</summary>",
       "<summary>Decided without you, and left alone</summary>",
       "<summary>The rounds</summary>",
+      "<summary>The criteria and how each was checked</summary>",
     ]);
   });
 

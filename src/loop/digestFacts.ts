@@ -1,10 +1,13 @@
 // Kit code's facts for a Digest (ADR-0022): everything in one that can be
 // counted, worked out from the pull request's thread and handed to the Digest
 // writer as fact it may word and not contradict. Kit code counts, the writer
-// words. The rounds table in the Digest's third fold is rendered from the
-// same facts (src/loop/digestContract.ts), from the push job's own read of
-// the thread (src/github/digestGiven.ts), never from anything an agent
-// passed out. Pure, no I/O.
+// words. Among them are the asks: each thing the Operator asked for on the
+// pull request, which the writer answers one by one. The rounds table in the
+// Digest's third fold is rendered from the same facts
+// (src/loop/digestContract.ts), from the push job's own read of the thread
+// (src/github/digestGiven.ts), never from anything an agent passed out. Pure,
+// no I/O.
+import { operatorCommentId } from "../agent/operatorComments.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEffect } from "./changeFingerprint.ts";
 import { listedFollowUpsIn } from "./followUps.ts";
@@ -20,12 +23,61 @@ export interface DigestThread {
   readonly kitComments: readonly { readonly at: string; readonly body: string }[];
   /**
    * The Operator's reviews that requested changes, by GitHub's id for each. A
-   * dismissed one no longer says what it asked, so it counts only when a
-   * note of the Kit's names it.
+   * dismissed one no longer says what it asked, so it counts as a round only
+   * when a note of the Kit's names it, and is never an ask.
    */
-  readonly requestChanges: readonly { readonly review: number; readonly at: string; readonly dismissed: boolean }[];
+  readonly requestChanges: readonly ThreadRequestChanges[];
   /** How many of the Ticket's runs landed nothing before the pull request opened, each of which used one of its Retries. */
   readonly landedNothing: number;
+}
+
+/** One of the Operator's reviews that requested changes, as the thread has it. */
+export interface ThreadRequestChanges {
+  /** GitHub's own id for the review. */
+  readonly review: number;
+  readonly at: string;
+  readonly dismissed: boolean;
+  /** Whether it was deferred while a Retry was in flight (#427) and no run has been started for it yet: no Review was given it. */
+  readonly deferred: boolean;
+  /** The review's own text, empty when it speaks only through its line comments. */
+  readonly body: string;
+  /** Its place on the pull request's page. */
+  readonly url: string;
+  /** The Operator's line comments in it, oldest first. */
+  readonly lineComments: readonly ThreadLineComment[];
+}
+
+/** One line comment of a Request changes. */
+export interface ThreadLineComment {
+  /** GitHub's own id for the comment. */
+  readonly comment: number;
+  /** Its place on the pull request's page. */
+  readonly url: string;
+  readonly path: string;
+  /** The line it is on, or null when GitHub no longer places it on one. */
+  readonly line: number | null;
+}
+
+/**
+ * One thing the Operator asked for on the pull request: a Request changes,
+ * or a line comment in one. The Digest writer answers every one, and Kit
+ * code refuses a Digest that skips any (src/loop/digestContract.ts).
+ */
+export interface DigestAsk {
+  /**
+   * Kit code's id for it, made from GitHub's own id of the review or of the
+   * line comment: `review-<id>` or `inline-<id>`, as the writer's input heads
+   * each (src/agent/operatorComments.ts). It is the same at every head, so
+   * the lists built at two heads can be compared.
+   */
+  readonly id: string;
+  readonly what: "request-changes" | "line-comment";
+  /** Its place on the pull request's page. */
+  readonly url: string;
+  /** On a line comment: the file it is on. */
+  readonly path?: string;
+  /** On a line comment: the line it is on, or null when GitHub no longer places it on one. */
+  readonly line?: number | null;
 }
 
 /** Who a round was. */
@@ -88,6 +140,13 @@ export interface DigestFacts {
   readonly counts: RoundCounts;
   /** The Follow-ups of every pass on the pull request, in the order their Verdicts list them. The writer says which to show, by id. */
   readonly followUps: readonly DigestFollowUp[];
+  /**
+   * The asks: every Request changes of the Operator's as the Reviewer is
+   * given them, so neither a dismissed one nor one deferred during a Retry,
+   * oldest first, each followed by every line comment in it. A review whose
+   * own text is empty is listed by its line comments alone.
+   */
+  readonly asks: readonly DigestAsk[];
   /** How many of the Ticket's Retries are left, by the Retry rules' own count (src/loop/retry.ts): what the next Execution flaw would find. */
   readonly retriesLeft: number;
   /**
@@ -148,6 +207,7 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
     followUps: bodies
       .flatMap((body) => (verdictsIn([body])[0]?.verdict === "pass" ? listedFollowUpsIn(body) : []))
       .map(({ title, url }, index) => ({ id: `f${index + 1}`, title, url })),
+    asks: asksIn(thread.requestChanges),
     // The next flaw would call for Retry `retryNumber`, so the ones before it are used.
     retriesLeft: Math.max(0, MAX_RETRIES + 1 - retryNumber(verdicts, thread.landedNothing)),
     productCode: latest?.verdict === "pass" ? productChangeBetween(first?.change, latest.change) : { kind: "not-established" },
@@ -161,6 +221,28 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
       infrastructureFailures: count("infrastructure-failure"),
     },
   };
+}
+
+/**
+ * The asks among the Operator's Request changes: those the Reviewer is given,
+ * so neither a dismissed one nor one deferred during a Retry, oldest first.
+ * Each is listed when its own text says something, then each of its line
+ * comments.
+ */
+function asksIn(requestChanges: readonly ThreadRequestChanges[]): DigestAsk[] {
+  return requestChanges
+    .filter(({ dismissed, deferred }) => !dismissed && !deferred)
+    .toSorted((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+    .flatMap(({ review, body, url, lineComments }): DigestAsk[] => [
+      ...(body.trim() === "" ? [] : [{ id: operatorCommentId("review", review), what: "request-changes" as const, url }]),
+      ...lineComments.map((comment) => ({
+        id: operatorCommentId("inline", comment.comment),
+        what: "line-comment" as const,
+        url: comment.url,
+        path: comment.path,
+        line: comment.line,
+      })),
+    ]);
 }
 
 /** A row that is no Verdict, so it says nothing of the code. */

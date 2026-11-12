@@ -43,7 +43,7 @@ export async function digestContext(
   const given = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as Partial<DigestPullRequest>;
   const { number, title, body, baseRefName, operatorComments, requestedChanges } = given;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
-  // The rounds, the counts, the Retries left, the Follow-ups and the product code since the first Verdict (src/loop/digestFacts.ts).
+  // The rounds, the counts, the Retries left, the Follow-ups, the asks and the product code since the first Verdict (src/loop/digestFacts.ts).
   const { facts } = given;
   if (typeof facts !== "object" || facts === null) throw new Error("FABRIK_PULL_REQUEST_FILE has none of Kit code's facts");
   const verdicts = Array.isArray(given.verdicts) ? given.verdicts : [];

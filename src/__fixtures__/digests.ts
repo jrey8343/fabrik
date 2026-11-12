@@ -3,7 +3,7 @@
 // (src/loop/digestContract.ts). A Ticket that widens any of the three adds
 // its field here once, and every test that lands a Digest keeps its shape.
 import type { DigestGiven, DigestReply } from "../loop/digestContract.ts";
-import type { DigestFacts } from "../loop/digestFacts.ts";
+import type { DigestFacts, ThreadRequestChanges } from "../loop/digestFacts.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -21,14 +21,39 @@ export function aDigestFacts(overrides: Partial<DigestFacts> = {}): DigestFacts 
     counts: { passes: 1, executionFlaws: 0, designFlaws: 0, retries: 0, conflictOnlyRuns: 0, requestChanges: 0, infrastructureFailures: 0 },
     retriesLeft: 2,
     followUps: [],
+    asks: [],
     productCode: { kind: "unchanged" },
     ...overrides,
   };
 }
 
-/** A reply as the Digest writer emits one, keeping its shape: it shows no Follow-up. */
+/**
+ * A Request changes of the Operator's on #50 of acme/shop, as a thread has
+ * it: review `review`, given at `at`, still requesting changes, not deferred,
+ * with a line of text and no line comment.
+ */
+export function aRequestChanges(review: number, at: string, overrides: Partial<ThreadRequestChanges> = {}): ThreadRequestChanges {
+  return {
+    review,
+    at,
+    dismissed: false,
+    deferred: false,
+    body: "Call it a basket.",
+    url: `https://github.com/acme/shop/pull/50#pullrequestreview-${review}`,
+    lineComments: [],
+    ...overrides,
+  };
+}
+
+/**
+ * A reply as the Digest writer emits one, keeping its shape: it answers the
+ * Ticket's one criterion as in the head, has nothing for the Operator's eyes
+ * and shows no Follow-up.
+ */
 export function aDigestReply(overrides: Partial<DigestReply> = {}): DigestReply {
   return {
+    asks: [{ id: "c1", criterion: "A shopper can save their basket from /basket.", answer: "in-head", where: "src/basket/save.test.ts", checkedBy: "test" }],
+    items: [],
     whatItDoes: "A shopper can now save their basket from /basket. A saved basket keeps its prices for a day.",
     howItGotHere: "One Review passed it at the first head. The product code is unchanged since that Verdict.",
     followUps: [],

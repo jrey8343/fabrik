@@ -238,7 +238,7 @@ describe("Reading the Digests on a pull request's thread (ADR-0022)", () => {
     const digests = await digestsOn(gitHubHolding([held("IC_first", FIRST, "2026-11-10T09:00:00Z", { isMinimized: true })]));
 
     expect(digests?.[0]?.body).toBe(FIRST);
-    expect(digestMarkIn(digests?.[0]?.body ?? "")).toEqual({ head: EARLIER_HEAD });
+    expect(digestMarkIn(digests?.[0]?.body ?? "")).toEqual({ head: EARLIER_HEAD, asks: [] });
   });
 
   it("only Digests: a no-Digest line, a Verdict, any other comment of the Kit's and a person's quoting a Digest are never among them", async () => {

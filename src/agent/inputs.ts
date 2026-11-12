@@ -520,7 +520,7 @@ export async function readDigestPullRequest(
     readPullRequest(github, repo, number, { withComments: true, operator, deferred }),
     verdictsOn(github, repo, number),
     github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`),
-    readDigestThread(github, repo, number, operator),
+    readDigestThread(github, repo, number, operator, deferred),
   ]);
   const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges"> & {
     comments: { body: string; author: { __typename: string } | null }[];
