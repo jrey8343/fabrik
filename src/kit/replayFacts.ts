@@ -6,23 +6,70 @@
 import type { MergedFile, ReplayCandidate } from "./replay.ts";
 import { isLive, type RateLimitReading, type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
 
+/** A Subscription's last weekly-limit reading, as a Run record kept it, with when it was read and when its week resets. */
+export interface SubscriptionReading {
+  /** The Subscription's name, as its Run records give it. */
+  readonly subscription: string;
+  /** How much of its weekly limit was used, from 0 to 1. */
+  readonly share: number | null;
+  /** The reading's own word, such as "allowed". */
+  readonly said: string | null;
+  /** When the run that read it ended, as its Run record gives it. */
+  readonly readAt: string;
+  /** When its week resets, ISO 8601. */
+  readonly resetsAt: string | null;
+}
+
 /**
  * The newest weekly-limit reading on each Subscription among these Run
  * records, of every Product repo, a Replay run's included, from the store's
- * last two months: the month of `now` and the one before, by UTC. A record
- * that read none, or only the five-hour limit's, is skipped. A Subscription
- * none read one for isn't here.
+ * last two months: the month of `now` and the one before, by UTC, by
+ * Subscription name. A record that read none, or only the five-hour limit's,
+ * is skipped, so not every run reports one: a Subscription none read one for
+ * isn't here, and a reading is as old as its `readAt`. A reading counts
+ * everything run on its Subscription, not the factory's runs alone; whether
+ * its week has reset since is the reader's to tell from `resetsAt`.
  */
-export function newestWeeklyLimits(records: readonly RunRecord[], now: string): Record<string, RateLimitReading> {
+export function subscriptionReadingsOf(records: readonly RunRecord[], now: string): SubscriptionReading[] {
   const from = lastMonthStart(now);
-  const read = records.filter((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT && Date.parse(record.endedAt) >= from);
-  const newest: Record<string, { readonly at: number; readonly reading: RateLimitReading }> = {};
-  for (const record of read) {
+  const newest: Record<string, { readonly at: number; readonly record: RunRecord; readonly reading: RateLimitReading }> = {};
+  for (const record of records) {
     const at = Date.parse(record.endedAt);
     const seen = newest[record.subscription];
-    if (record.rateLimit !== null && (seen === undefined || at > seen.at)) newest[record.subscription] = { at, reading: record.rateLimit };
+    const reading = record.rateLimit;
+    if (reading?.rateLimitType !== WEEKLY_LIMIT || at < from) continue;
+    if (seen === undefined || at > seen.at) newest[record.subscription] = { at, record, reading };
   }
-  return Object.fromEntries(Object.entries(newest).map(([subscription, { reading }]) => [subscription, reading]));
+  return Object.values(newest)
+    .map(({ record, reading }) => ({
+      subscription: record.subscription,
+      share: reading.utilization,
+      said: reading.status,
+      readAt: record.endedAt,
+      resetsAt: resetTimeOf(reading.resetsAt),
+    }))
+    .toSorted((a, b) => (a.subscription < b.subscription ? -1 : a.subscription > b.subscription ? 1 : 0));
+}
+
+/** A reading's reset, in epoch seconds as the stream gives it, as a time; null for none, or one that is no time. */
+function resetTimeOf(resetsAt: number | null): string | null {
+  if (resetsAt === null) return null;
+  const at = new Date(resetsAt * 1000);
+  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+}
+
+/**
+ * The newest weekly-limit reading on each Subscription, raw, as the Replay
+ * gate's spare-capacity check weighs it: subscriptionReadingsOf, by
+ * Subscription.
+ */
+export function newestWeeklyLimits(records: readonly RunRecord[], now: string): Record<string, RateLimitReading> {
+  return Object.fromEntries(
+    subscriptionReadingsOf(records, now).map(({ subscription, share, said, resetsAt }): [string, RateLimitReading] => [
+      subscription,
+      { status: said, rateLimitType: WEEKLY_LIMIT, utilization: share, resetsAt: resetsAt === null ? null : Date.parse(resetsAt) / 1000 },
+    ]),
+  );
 }
 
 /**
