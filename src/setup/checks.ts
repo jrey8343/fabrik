@@ -206,7 +206,7 @@ async function checkBranch(
   if (current === defaultBranch) {
     const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
     if (head === originDefault) return origin;
-    return `${defaultBranch} here isn't the same as on origin (${short(head)} here, ${short(originDefault)} on origin). Pull or push so they match, then run setup again.`;
+    return `${defaultBranch} here isn't the same as on origin (${short(head)} here, ${short(originDefault)} on origin). Pull, or take the commits made here to origin through a pull request, then run setup again.`;
   }
   // A commit this clone lacks isn't its ancestor either: git says so by failing.
   const holds = async (sha: string) => (await run("git", ["merge-base", "--is-ancestor", sha, "HEAD"], { cwd })).code === 0;
