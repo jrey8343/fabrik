@@ -6,7 +6,7 @@
 // those facts, so a reader holds no rule of its own. Pure, no I/O, and plain
 // data: written as JSON and read back a row is equal.
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
+import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
 import { plainSinceOf } from "../kit/standingPlain.ts";
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
@@ -45,9 +45,14 @@ export interface Row {
    * the join with checks needs to settle the row as the rule does. `since` is
    * when the pull request came to stand as it is, the latest of its head, its
    * opening and its last draft change (plainSinceOf), the time the rule gives
-   * it when no report of its checks decides its name. Null on any other row.
+   * it when no report of its checks decides its name. `own`, on a Pairing
+   * session's row, is the issue's own Standing the pull request is joined to,
+   * as the rule gives it before the join (pairedOwnStandingsOf): what the row
+   * goes back to, carrying the pull request's name, once the pull request
+   * that took it over as yours to merge no longer is; null on any other.
+   * Null on any other row.
    */
-  readonly plainPullRequest: { readonly since: string } | null;
+  readonly plainPullRequest: { readonly since: string; readonly own: Standing | null } | null;
 }
 
 /** The last runs read (./runs.ts), or null when none is held. */
@@ -68,8 +73,11 @@ export function rowsOf(
   now: string,
 ): Row[] {
   if (facts.kind === "store") return storeRowsOf(facts, now);
-  const standings = standingsOf(ruleFactsOf(facts, runsFactOf(runs), checksFactOf(checks)), now);
-  return standings.map((standing) => rowOf(standing, facts));
+  const ruleFacts = ruleFactsOf(facts, runsFactOf(runs), checksFactOf(checks));
+  const standings = standingsOf(ruleFacts, now);
+  // Worked out only when a Pairing session's pull request was joined to its issue's own Standing.
+  const owns = standings.some(({ detail }) => detail.pullRequest !== undefined) ? pairedOwnStandingsOf(ruleFacts, now) : new Map<number, Standing>();
+  return standings.map((standing) => rowOf(standing, facts, owns));
 }
 
 /** The runs-in-flight fact the rule reads, through the runs read's one converter: unread with no read held. */
@@ -98,7 +106,7 @@ export function bareRowOf(standing: Standing, title: string, lastWord: Row["last
  * it, its Follow-ups and whether its Ticket is closed, and on an issue's row
  * the pull request it could be rolled in to.
  */
-function rowOf(standing: Standing, facts: Facts): Row {
+function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Standing>): Row {
   const { issue, pullRequest } = standing;
   return {
     ...bareRowOf(standing, titleOf(standing, facts.github), lastWordOf(standing, facts)),
@@ -107,14 +115,25 @@ function rowOf(standing: Standing, facts: Facts): Row {
     followUps: pullRequest === null ? [] : followUpsOf(facts, pullRequest),
     relatedTo: issue === null ? null : relatedToOf(facts, issue),
     ticketClosed: pullRequest === null ? null : ticketClosedOf(facts, pullRequest),
-    plainPullRequest: pullRequest === null ? null : plainPullRequestOf(facts, pullRequest),
+    plainPullRequest: pullRequest === null ? null : plainPullRequestOf(facts, pullRequest, standing.detail.pullRequest === undefined ? null : (owns.get(pullRequest) ?? null)),
   };
 }
 
-/** What the join with checks needs of open Plain pull request `pullRequest`; null when it is no open Plain pull request. */
-function plainPullRequestOf({ github }: Facts, pullRequest: number): Row["plainPullRequest"] {
+/**
+ * A row's `plainPullRequest` with the issue's own Standing it carries settled
+ * as a join settles the row's own Standing, so the two stay as the rule gives
+ * them; the same value when that leaves it as it was.
+ */
+export function withOwnSettled(plainPullRequest: Row["plainPullRequest"], settle: (own: Standing) => Standing): Row["plainPullRequest"] {
+  if (plainPullRequest === null || plainPullRequest.own === null) return plainPullRequest;
+  const own = settle(plainPullRequest.own);
+  return own === plainPullRequest.own ? plainPullRequest : { ...plainPullRequest, own };
+}
+
+/** What the join with checks needs of open Plain pull request `pullRequest`, with the issue's own Standing it is joined to; null when it is no open Plain pull request. */
+function plainPullRequestOf({ github }: Facts, pullRequest: number, own: Standing | null): Row["plainPullRequest"] {
   const plain = github.plainPullRequests.find(({ number }) => number === pullRequest);
-  return plain === undefined ? null : { since: plainSinceOf(plain) };
+  return plain === undefined ? null : { since: plainSinceOf(plain), own };
 }
 
 /** Whether open agent pull request `pullRequest`'s Ticket is closed; null when it is no open agent pull request. */

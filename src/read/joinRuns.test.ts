@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
 import { handBackMarker } from "../loop/markers.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunRead, aRunsRead, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aReview, aRunRead, aRunsRead, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { Facts } from "./gather.ts";
 import { joinRuns } from "./joinRuns.ts";
 import { type Row, rowsOf } from "./rows.ts";
@@ -108,6 +108,7 @@ const CASES = {
   passedDraftNumberless: aCase({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [A_PASSED_DRAFT] }, [A_NUMBERLESS_REVIEW("running")]),
   requestChanges: aCase(A_REQUEST_CHANGES, [AN_IMPLEMENT_JOB_ON_7]),
   requestChangesNumberless: aCase(A_REQUEST_CHANGES, [A_NUMBERLESS_IMPLEMENT]),
+  pairing: aCase({ openIssues: [aTicketAwaitingImplement(12)], plainPullRequests: [aPlainPullRequest({ number: 80, author: "operator", headRef: "fabrik/pair-12", closes: [12] })] }, [anImplementRunOn(12)]),
   requestChangesUnderWay: aCase(A_REQUEST_CHANGES, [{ ...AN_IMPLEMENT_JOB_ON_7, startedAt: "2026-11-08T19:55:00Z" }], { earlier: aRunsRead([AN_IMPLEMENT_JOB_ON_7]) }),
   unread: aCase({ openIssues: [aTicketAwaitingImplement(12, "2026-11-08T15:00:00Z"), aTicketAwaitingImplement(14, "2026-11-08T19:40:00Z")] }, "unread", {
     keptAt: "2026-11-08T15:30:00Z",
@@ -218,6 +219,12 @@ describe("rows settled against fresh runs with no gather", () => {
 
     expect(namesOf(keptOf(CASES.passedDraftNumberless))).toEqual([{ issue: 7, pullRequest: 50, name: "waiting-on-kit" }]);
     expect(joinedOf(CASES.passedDraftNumberless)).toEqual(keptOf(CASES.passedDraftNumberless));
+  });
+
+  it("start a Pairing session's row running on its issue's run, and the issue's own Standing it carries with it", () => {
+    expect(keptOf(CASES.pairing).map(({ standing, plainPullRequest }) => [standing.name, standing.detail.pullRequest, plainPullRequest?.own?.name])).toEqual([["not-started", "waiting-on-checks", "not-started"]]);
+
+    expect(joinedOf(CASES.pairing).map(({ standing, plainPullRequest }) => [standing.name, standing.detail.pullRequest, plainPullRequest?.own?.name])).toEqual([["running", "waiting-on-checks", "running"]]);
   });
 
   it("name a run that carries no kind by the run the kept row waits for, or the one it already names", () => {

@@ -14,7 +14,7 @@ import { type NotStartedSilence, notStartedStandingsOf } from "./standingClock.t
 import { handBackStandingsOf } from "./standingHandBacks.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
-import { joinPairing, plainStandingsOf } from "./standingPlain.ts";
+import { joinPairing, pairingsOf, plainStandingsOf } from "./standingPlain.ts";
 import { silenceStandingsOf, type WaitingOnKitSilence } from "./standingSilence.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
@@ -247,6 +247,29 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
  */
 export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: string): Standing[] {
   if (facts.kind === "store") return storeStandingsOf(facts, now);
+  return joinPairing(unjoinedStandingsOf(facts, now), facts.github)
+    .map((standing) => withHead(standing, facts.github))
+    .map((standing) => standingAt(standing, now))
+    .toSorted(standingOrder);
+}
+
+/**
+ * For each Pairing session's pull request joined to its issue's own Standing,
+ * by the pull request's number, that own Standing as it stands at `now` before
+ * the join: what the issue's Standing goes back to, carrying the pull
+ * request's name, once the pull request that took it over as yours to merge
+ * no longer is (src/read/joinChecks.ts).
+ */
+export function pairedOwnStandingsOf(facts: StandingFacts, now: string): ReadonlyMap<number, Standing> {
+  return new Map(
+    pairingsOf(unjoinedStandingsOf(facts, now), facts.github).flatMap(({ pairing, own }): [number, Standing][] =>
+      own === null || pairing.pullRequest === null ? [] : [[pairing.pullRequest, standingAt(own, now)]],
+    ),
+  );
+}
+
+/** One Standing for each piece of work, each carrying its open pull request, before a Pairing session's pull request is joined to its issue's. */
+function unjoinedStandingsOf(facts: StandingFacts, now: string): Standing[] {
   const candidates: Standing[] = [
     ...operatorStandingsOf(facts, now),
     ...inFlightStandingsOf(facts, now),
@@ -255,10 +278,7 @@ export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: stri
     ...handBackStandingsOf(facts, now),
     ...plainStandingsOf(facts, now),
   ];
-  return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github)
-    .map((standing) => withHead(standing, facts.github))
-    .map((standing) => standingAt(standing, now))
-    .toSorted(standingOrder);
+  return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github)));
 }
 
 /** The order the rule gives a repo's Standings in: oldest first, then by issue, then by pull request. */

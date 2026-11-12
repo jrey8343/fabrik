@@ -144,6 +144,24 @@ describe("the join of kept rows with a Required checks read", () => {
       expect(joined).toEqual(rule);
     });
 
+    it("taken over as yours to merge, gives the row back to the issue's own Standing, carrying the pull request's new name, once a Required check fails", () => {
+      const { kept, joined, rule } = joinedAndRule(pairingFacts, ALL_PASSED, LINT_FAILED);
+
+      expect(kept.map(({ standing }) => [standing.name, standing.detail.pullRequest])).toEqual([["yours-to-merge", "yours-to-merge"]]);
+      expect(joined.map(({ standing }) => [standing.issue, standing.pullRequest, standing.detail.pullRequest])).toEqual([[12, 80, "check-failing"]]);
+      expect(joined.map(({ standing }) => standing.name)).not.toEqual(["yours-to-merge"]);
+      expect(joined).toEqual(rule);
+    });
+
+    it("taken over as yours to merge, stays so since the last pass of a later read", () => {
+      const passedAgain = aChecksRead({ [head("1")]: [check("test", "passed", "2026-11-12T09:00:00Z"), check("lint", "passed", "2026-11-12T09:50:00Z")] });
+
+      const { joined, rule } = joinedAndRule(pairingFacts, ALL_PASSED, passedAgain);
+
+      expect(joined.map(({ standing }) => [standing.name, standing.since])).toEqual([["yours-to-merge", "2026-11-12T09:50:00Z"]]);
+      expect(joined).toEqual(rule);
+    });
+
     it("takes yours to merge on a branch requiring nothing, which no report decides, since the pull request's own time, as the rule gives it", () => {
       const { joined, rule } = joinedAndRule(pairingFacts, null, { ...aChecksRead({ [head("1")]: [] }), required: [] });
 

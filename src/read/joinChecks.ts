@@ -7,7 +7,7 @@
 import { type Standing, standingAt } from "../kit/standing.ts";
 import { joined, plainNameForChecks } from "../kit/standingPlain.ts";
 import { requiredChecksFactOf, type RequiredChecksRead } from "./requiredChecks.ts";
-import type { Row } from "./rows.ts";
+import { type Row, withOwnSettled } from "./rows.ts";
 
 /**
  * The kept rows as they stand at `now`, ISO 8601, with the Required checks of
@@ -24,7 +24,8 @@ import type { Row } from "./rows.ts";
 export function joinChecks(rows: readonly Row[], read: RequiredChecksRead, now: string): Row[] {
   return rows.map((row) => {
     const standing = standingAt(settledWith(row, read), now);
-    return standing === row.standing ? row : { ...row, standing };
+    const plainPullRequest = withOwnSettled(row.plainPullRequest, (own) => standingAt(own, now));
+    return standing === row.standing && plainPullRequest === row.plainPullRequest ? row : { ...row, standing, plainPullRequest };
   });
 }
 
@@ -49,15 +50,18 @@ function ownSinceOf(standing: Standing, plainPullRequest: Row["plainPullRequest"
  * An issue's own Standing joined with its Pairing session's pull request,
  * settled as the rule joins them: the issue's own Standing carrying the pull
  * request's new name, until that name is yours to merge, which it then takes.
- * One the pull request already took over, the issue's own Standing gone, and
- * one whose pull request is a draft or in conflict, are left as they were.
+ * One the pull request already took over goes back to the issue's own
+ * Standing the row carries once the name no longer is; a row that does not
+ * carry it, and one whose pull request is a draft or in conflict, are left as
+ * they were.
  */
 function pairingSettled(standing: Standing, checks: Exclude<ReturnType<typeof requiredChecksFactOf>, "unread">, head: string, plainPullRequest: Row["plainPullRequest"]): Standing {
   const was = standing.detail.pullRequest;
-  if (was === "yours-to-merge" || was === "draft" || was === "conflicts") return standing;
+  if (was === "draft" || was === "conflicts") return standing;
+  const own = was === "yours-to-merge" ? (plainPullRequest?.own ?? null) : standing;
+  if (own === null) return standing;
   const { name, decidedAt } = plainNameForChecks("pairing", checks);
-  if (name.name !== "yours-to-merge") return { ...standing, detail: { ...standing.detail, pullRequest: name.name } } as Standing;
   const pairing = { ...standing, ...name, since: decidedAt ?? ownSinceOf(standing, plainPullRequest) } as Standing;
-  const taken = joined(standing, pairing);
+  const taken = joined(own, pairing);
   return { ...taken, detail: { ...taken.detail, head } } as Standing;
 }

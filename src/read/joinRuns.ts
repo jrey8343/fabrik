@@ -11,7 +11,7 @@ import { type Standing, standingAt, type StandingNamed, standingOrder } from "..
 import { type RunningRun, runningRunOf, runningSince } from "../kit/standingInFlight.ts";
 import type { WaitingOnKitSilence } from "../kit/standingSilence.ts";
 import { DESIGN_LABEL, REPLAY_TRIGGER_LABEL, type TriggerLabel } from "../loop/labels.ts";
-import type { Row } from "./rows.ts";
+import { type Row, withOwnSettled } from "./rows.ts";
 import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 
 /**
@@ -24,9 +24,12 @@ import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
  */
 export function joinRuns(rows: readonly Row[], runs: RunsRead, now: string): Row[] {
   const inFlight = runsInFlightFactOf(runs);
-  if (inFlight === "unread") return rows.map((row) => ({ ...row, standing: standingAt(row.standing, now) }));
+  const settle = (standing: Standing) => standingAt(inFlight === "unread" ? standing : settled(standing, inFlight), now);
+  // The issue's own Standing a Pairing session's row carries is settled with it, as the rule gives both from the same runs.
+  const joined = rows.map((row) => ({ ...row, standing: settle(row.standing), plainPullRequest: withOwnSettled(row.plainPullRequest, settle) }));
+  if (inFlight === "unread") return joined;
   // A row started running takes its run's time, so the rows are put back in the rule's order.
-  return rows.map((row) => ({ ...row, standing: standingAt(settled(row.standing, inFlight), now) })).toSorted((a, b) => standingOrder(a.standing, b.standing));
+  return joined.toSorted((a, b) => standingOrder(a.standing, b.standing));
 }
 
 /**
