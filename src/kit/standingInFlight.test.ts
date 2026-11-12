@@ -234,6 +234,14 @@ describe("work that goes on without the Operator", () => {
         ]);
       });
 
+      it("keeps an agent draft whose Review is held held while another Review's wait for checks is in flight", () => {
+        const standings = standingsIn(
+          { openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8 })], kitIssues: [carrier([{ role: "review", issue: 51, label: "agent:review" }])] },
+          aKit([aRunInFlight({ role: "review", job: "waiting-on-checks", createdAt: "2026-11-08T19:40:00Z" })]),
+        );
+        expect(standings.map(({ issue, pullRequest, name }) => ({ issue, pullRequest, name }))).toEqual([{ issue: 8, pullRequest: 51, name: "held" }]);
+      });
+
       it("keeps a held Ticket held whatever else is true of it, a run named for nothing included, short of a move of the Operator's", () => {
         const heldTicket = ticket(7, ["ready-for-agent", "agent:implement"]);
         const standings = standingsIn(
