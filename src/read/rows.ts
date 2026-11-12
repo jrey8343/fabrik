@@ -10,6 +10,7 @@ import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weekl
 import { isHeldLine } from "../loop/heldLine.ts";
 import type { Facts } from "./gather.ts";
 import { type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
+import { type StoreFacts, storeRowsOf } from "./store.ts";
 
 /** One Standing, with what a reader shows beside it. */
 export interface Row {
@@ -36,14 +37,16 @@ type RowsChecks = RequiredChecksRead | null;
 /**
  * One Product repo's rows at `now`, ISO 8601: one for each Standing the rule
  * gives for `facts`, with these runs in flight and Required checks, in the
- * rule's order.
+ * rule's order. The store's rows, for the store's facts, are its own rule's
+ * (./store.ts), which reads no run and no check.
  */
 export function rowsOf(
-  facts: Facts,
+  facts: Facts | StoreFacts,
   runs: RowsRuns,
   checks: RowsChecks,
   now: string,
 ): Row[] {
+  if (facts.kind === "store") return storeRowsOf(facts, now);
   const standings = standingsOf(ruleFactsOf(facts, runsFactOf(runs), checksFactOf(checks)), now);
   return standings.map((standing) => rowOf(standing, facts));
 }
