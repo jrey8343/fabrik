@@ -114,6 +114,12 @@ export interface CrossReferenceFacts {
   readonly repo: string;
 }
 
+/** Whether an open agent pull request's Ticket is closed, as GitHub gives it with the pull request. */
+export interface TicketStateFacts {
+  readonly ticket: number;
+  readonly closed: boolean;
+}
+
 /**
  * What a gather reads of one Product repo: the facts the Standing rule reads,
  * and what a reader shows beside a Standing. Plain data: written as JSON and
@@ -134,6 +140,8 @@ export interface Facts {
   readonly mergedLastDay: readonly MergedLastDayFacts[];
   /** The issues GitHub cross-references to each open agent pull request. */
   readonly crossReferences: readonly CrossReferenceFacts[];
+  /** Whether each open agent pull request's Ticket is closed; a Ticket GitHub gave no state of is not here. */
+  readonly ticketStates: readonly TicketStateFacts[];
 }
 
 /**
@@ -261,6 +269,11 @@ async function gatherFacts(
           : [{ pullRequest: number, issue: source.number, title: source.title ?? "", open: source.state === "OPEN", repo: source.repository?.nameWithOwner ?? "" }],
       ),
     ),
+    ticketStates: agent.flatMap(({ closingIssuesReferences }) => {
+      // The Ticket is the first issue an agent pull request closes, as the Weekly summary's mapping takes it.
+      const ticket = closingIssuesReferences.nodes[0];
+      return ticket?.state === undefined ? [] : [{ ticket: ticket.number, closed: ticket.state === "CLOSED" }];
+    }),
   };
 }
 

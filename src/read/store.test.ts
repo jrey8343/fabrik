@@ -52,6 +52,7 @@ describe("the store's rows", () => {
         mentions: [],
         relatedTo: null,
         followUps: [],
+        ticketClosed: null,
       },
     ]);
   });

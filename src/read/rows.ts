@@ -27,6 +27,14 @@ export interface Row {
   readonly relatedTo: number | null;
   /** On a pull request's row: each Follow-up its pass named, and the issue it was filed as, or null. */
   readonly followUps: readonly { readonly title: string; readonly body: string; readonly filedAs: number | null }[];
+  /**
+   * On an open agent pull request's row, at the Merge gate and in draft
+   * alike: whether its Ticket is closed, "unknown" when it names no Ticket or
+   * its Ticket could not be read. Null on any other row. Closing a Ticket
+   * closes only its draft pull requests, so one at the Merge gate can stand
+   * with its Ticket closed.
+   */
+  readonly ticketClosed: "yes" | "no" | "unknown" | null;
 }
 
 /** The runs in flight, as the Standing rule reads them (Spec: Standing), or unread. */
@@ -63,17 +71,18 @@ function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredCheck
 
 /**
  * A row with every field but the Standing, its title and its last word at
- * its empty default: nothing related, mentioned or followed up.
+ * its empty default: nothing related, mentioned or followed up, and no
+ * Ticket's state.
  */
 export function bareRowOf(standing: Standing, title: string, lastWord: Row["lastWord"]): Row {
-  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [] };
+  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null };
 }
 
 /**
  * A Standing's row, with its title and the Fabrik App's last word on the
  * work; on an agent pull request's row what is related to it, what mentions
- * it and its Follow-ups, and on an issue's row the pull request it could be
- * rolled in to.
+ * it, its Follow-ups and whether its Ticket is closed, and on an issue's row
+ * the pull request it could be rolled in to.
  */
 function rowOf(standing: Standing, facts: Facts): Row {
   const { issue, pullRequest } = standing;
@@ -83,7 +92,16 @@ function rowOf(standing: Standing, facts: Facts): Row {
     mentions: pullRequest === null ? [] : mentionsOf(facts, pullRequest),
     followUps: pullRequest === null ? [] : followUpsOf(facts, pullRequest),
     relatedTo: issue === null ? null : relatedToOf(facts, issue),
+    ticketClosed: pullRequest === null ? null : ticketClosedOf(facts, pullRequest),
   };
+}
+
+/** Whether open agent pull request `pullRequest`'s Ticket is closed; null when it is no open agent pull request. */
+function ticketClosedOf({ github, ticketStates }: Facts, pullRequest: number): Row["ticketClosed"] {
+  const open = github.openPullRequests.find(({ number }) => number === pullRequest);
+  if (open === undefined) return null;
+  const state = ticketStates.find(({ ticket }) => ticket === open.ticket);
+  return state === undefined ? "unknown" : state.closed ? "yes" : "no";
 }
 
 /**

@@ -189,6 +189,12 @@ describe("a gather shaped for Home", () => {
       }
     });
 
+    it("asks for the state of each open pull request's Ticket with the pull request", async () => {
+      expect((await everyQuery()).filter((query) => query.includes("pullRequests(states: OPEN, first: 25"))).toEqual([
+        expect.stringMatching(/closingIssuesReferences\(first: 10\) \{ nodes \{ number state \} \}/),
+      ]);
+    });
+
     it("asks for no review line comments and no blockers' labels", async () => {
       for (const query of await everyQuery()) {
         expect(query).not.toMatch(/reviews\([^)]*\)\s*\{\s*nodes\s*\{[^}]*comments\(/);
@@ -275,6 +281,24 @@ describe("a gather shaped for Home", () => {
       ]);
       expect(facts.github.openPullRequests.map(({ number }) => number)).toEqual([50]);
       expect(facts.github.plainPullRequests.map(({ number }) => number)).toEqual([70]);
+    });
+
+    it("hold whether each open agent pull request's Ticket is closed, and no state of a Ticket GitHub gave none of or a Plain pull request's", async () => {
+      const closing = (number: number, state?: string) => ({ closingIssuesReferences: { nodes: [state === undefined ? { number } : { number, state }] } });
+      const facts = await factsOf({
+        openPullRequests: [
+          aRawOpenPullRequest({ number: 50, ...closing(7, "CLOSED") }),
+          aRawOpenPullRequest({ number: 51, headRefName: "fabrik/ticket-8", isDraft: false, ...closing(8, "OPEN") }),
+          aRawOpenPullRequest({ number: 52, headRefName: "fabrik/ticket-9", ...closing(9) }),
+          aRawOpenPullRequest({ number: 53, headRefName: "fabrik/ticket-10", closingIssuesReferences: { nodes: [] } }),
+          aRawOpenPullRequest({ number: 70, headRefName: "fix-typo", author: OPERATOR, ...closing(11, "CLOSED") }),
+        ],
+      });
+
+      expect(facts.ticketStates).toEqual([
+        { ticket: 7, closed: true },
+        { ticket: 8, closed: false },
+      ]);
     });
 
     it("count an issue closed in the middle of its Design session, which keeps needs-design, in no session", async () => {

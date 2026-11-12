@@ -36,7 +36,7 @@ const CROSS_REFERENCES = `
   }
 `;
 
-/** Every open pull request, agent and Plain, as the Weekly summary reads them, with each one's cross-references. */
+/** Every open pull request, agent and Plain, as the Weekly summary reads them, with each one's cross-references and whether the issues it closes are open. */
 export const OPEN_PULL_REQUESTS_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
     repository(owner: $owner, name: $name) {
@@ -45,7 +45,7 @@ export const OPEN_PULL_REQUESTS_QUERY = `
         nodes {
           number title isDraft headRefOid headRefName createdAt mergeable
           author ${ACTOR}
-          closingIssuesReferences(first: 10) { nodes { number } }
+          closingIssuesReferences(first: 10) { nodes { number state } }
           commits(last: 100) { nodes { ${COMMIT} } }
           ${REVIEWS}
           ${COMMENTS}
@@ -68,7 +68,9 @@ export interface RawCrossReference {
 }
 
 /** An open pull request as OPEN_PULL_REQUESTS_QUERY reads it. */
-export type RawHomePullRequest = Omit<RawOpenPullRequest, "reviews"> & {
+export type RawHomePullRequest = Omit<RawOpenPullRequest, "reviews" | "closingIssuesReferences"> & {
+  /** Each issue it closes, its Ticket first on an agent pull request, with its state when GitHub gives one. */
+  closingIssuesReferences: { nodes: { number: number; state?: "OPEN" | "CLOSED" }[] };
   reviews: { nodes: RawHomeReview[] };
   crossReferences: { nodes: RawCrossReference[] };
 };

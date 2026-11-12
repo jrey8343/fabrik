@@ -122,6 +122,56 @@ describe("a Product repo's rows", () => {
     });
   });
 
+  describe("whether an open agent pull request's Ticket is closed", () => {
+    const atTheMergeGate = anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [aVerdictComment("pass", HEAD, "2026-11-07T20:00:00Z")] });
+    const inDraft = anOpenPullRequest({ number: 50, ticket: 7, draft: true });
+    const ticketClosedOf = (facts: Facts) => rowsOf(facts, "unread", {}, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ ticketClosed }) => ticketClosed);
+
+    it.each([
+      ["at the Merge gate", atTheMergeGate],
+      ["in draft", inDraft],
+    ])("is yes on its row %s when its Ticket is closed", (_where, pullRequest) => {
+      const facts = homeFactsOf({ github: factsOf({ openPullRequests: [pullRequest] }), ticketStates: [{ ticket: 7, closed: true }] });
+
+      expect(ticketClosedOf(facts)).toEqual(["yes"]);
+    });
+
+    it.each([
+      ["at the Merge gate", atTheMergeGate],
+      ["in draft", inDraft],
+    ])("is no on its row %s when its Ticket is open", (_where, pullRequest) => {
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], openPullRequests: [pullRequest] }), ticketStates: [{ ticket: 7, closed: false }] });
+
+      expect(ticketClosedOf(facts)).toEqual(["no"]);
+    });
+
+    it("is unknown when the pull request names no Ticket", () => {
+      const facts = homeFactsOf({ github: factsOf({ openPullRequests: [{ ...atTheMergeGate, ticket: null }] }) });
+
+      expect(ticketClosedOf(facts)).toEqual(["unknown"]);
+    });
+
+    it("is unknown when its Ticket could not be read", () => {
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], openPullRequests: [atTheMergeGate] }), ticketStates: [] });
+
+      expect(ticketClosedOf(facts)).toEqual(["unknown"]);
+    });
+
+    it("is null on a row with no open agent pull request: an issue's, and a Plain pull request's", () => {
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], plainPullRequests: [aPlainPullRequest({ number: 70 })] }), ticketStates: [{ ticket: 7, closed: false }] });
+
+      const rows = rowsOf(facts, "unread", {}, NOW);
+
+      expect(rows.map(({ standing, ticketClosed }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, ticketClosed }))).toEqual(
+        expect.arrayContaining([
+          { issue: 7, pullRequest: null, ticketClosed: null },
+          { issue: null, pullRequest: 70, ticketClosed: null },
+        ]),
+      );
+      expect(rows).toHaveLength(2);
+    });
+  });
+
   it("take any bot's text for the Fabrik App's when the gather was given no App login", () => {
     const notice = handedBack("2026-11-08T19:30:00Z", { author: "some-app[bot]" });
     const issues = [{ ...TICKET, comments: [notice] }];

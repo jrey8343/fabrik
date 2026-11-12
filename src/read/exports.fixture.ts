@@ -599,6 +599,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     mentions: [{ issue: 40, title: "The cart is slow" }],
     relatedTo: 51,
     followUps: [{ title: "Cache the prices", body: "The prices are read on every request.", filedAs: 30 }],
+    ticketClosed: null,
   } satisfies Row,
   StoreFacts: {
     kind: "store",
