@@ -748,6 +748,7 @@ describe("The starters the Product repo then owns", () => {
       subscriptions: ["Claude token"],
       ui: null,
       preview: { url: null },
+      production: null,
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
       ok: true,
@@ -1118,6 +1119,112 @@ describe("Visual evidence, which setup leaves to /fabrik-visual-evidence", () =>
       expect(written(actions, ".fabrik/config.json")).toBeUndefined();
       expect(notes.join("\n")).not.toContain("Visual evidence");
     }
+  });
+});
+
+describe("The production block, which Setup proposes", () => {
+  const live = { url: "https://clinic.example.com", environment: "production" };
+  const why = (actions: readonly SetupAction[]) => {
+    const action = actions.find((a) => a.kind === "write-file" && a.path === ".fabrik/config.json");
+    return action === undefined ? undefined : describeAction(action);
+  };
+  const withConfig = (config: string) => aCleanProduct({ files: { ".fabrik/config.json": config } });
+  const declared = (config: string | undefined) => {
+    const resolved = resolveKitConfig({ config: config ?? null });
+    return resolved.ok ? resolved.config.production : resolved.errors;
+  };
+
+  it("writes the starter with its production member set where it stands, and names the block and both values in the plan", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, { production: live });
+
+    const config = written(actions, ".fabrik/config.json");
+    expect(config).toBe(
+      kit.templates.kitConfig.replace(
+        '  "production": null\n',
+        '  "production": {\n    "url": "https://clinic.example.com",\n    "environment": "production"\n  }\n',
+      ),
+    );
+    expect(declared(config)).toEqual(live);
+    expect(why(actions)).toBe(
+      'write .fabrik/config.json (a starter Kit config with every v1 default, and the production block: url "https://clinic.example.com", environment "production")',
+    );
+  });
+
+  it("writes an address with no environment as environment null, and names that", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, { production: { url: "https://clinic.example.com", environment: null } });
+
+    expect(declared(written(actions, ".fabrik/config.json"))).toEqual({ url: "https://clinic.example.com", environment: null });
+    expect(why(actions)).toContain('the production block: url "https://clinic.example.com", environment null');
+  });
+
+  it("adds the block as one member of an existing Kit config, every other byte kept, its tabs and CRLF line endings included", () => {
+    const own = '{\r\n\t"operator": "jrey8343",\r\n\t"max_in_flight": 1\r\n}\r\n';
+
+    const { actions } = planSetup(withConfig(own), kit, { production: live });
+
+    expect(written(actions, ".fabrik/config.json")).toBe(
+      '{\r\n\t"operator": "jrey8343",\r\n\t"max_in_flight": 1,\r\n\t"production": {\r\n\t\t"url": "https://clinic.example.com",\r\n\t\t"environment": "production"\r\n\t}\r\n}\r\n',
+    );
+    expect(why(actions)).toBe('write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production")');
+  });
+
+  it("sets a production member that is null where it stands", () => {
+    const config = '{\n  "production": null,\n  "max_in_flight": 1\n}\n';
+
+    expect(written(planSetup(withConfig(config), kit, { production: live }).actions, ".fabrik/config.json")).toBe(
+      '{\n  "production": {\n    "url": "https://clinic.example.com",\n    "environment": "production"\n  },\n  "max_in_flight": 1\n}\n',
+    );
+  });
+
+  it("writes nothing when setup runs again with the same answers", () => {
+    for (const state of [aCleanProduct(), withConfig('{\n  "max_in_flight": 1\n}\n')]) {
+      const setUp = afterApplying(state, planSetup(state, kit, { production: live }));
+
+      expect(written(planSetup(setUp, kit, { production: live }).actions, ".fabrik/config.json")).toBeUndefined();
+    }
+  });
+
+  it("leaves a Kit config that already declares production byte for byte, whatever the answer, and says nothing of it", () => {
+    const config = '{\n  "production": { "url": "https://www.clinic.example.com", "environment": "live" }\n}\n';
+
+    const { actions, notes } = planSetup(withConfig(config), kit, { production: live });
+
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+    expect(notes.join("\n")).not.toContain("production");
+  });
+
+  it("leaves a Kit config that is not a JSON object byte for byte, with one line saying why", () => {
+    for (const config of ["[]\n", "{ not json\n"]) {
+      const { actions, notes } = planSetup(withConfig(config), kit, { production: live });
+
+      expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+      expect(notes).toContainEqual(".fabrik/config.json isn't a JSON object, so setup didn't add the production block to it: fix it, then run setup again.");
+    }
+  });
+
+  it("never writes an address Kit config would refuse, and says why", () => {
+    const { actions, notes } = planSetup(aCleanProduct(), kit, { production: { url: "ftp://clinic.example.com", environment: null } });
+
+    expect(written(actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
+    expect(notes.find((note) => note.includes("production"))).toMatch(/^Setup didn't write the production block: .*http:\/\/ or https:\/\//);
+  });
+
+  it("writes it with the second Subscription and Dispatch paused in the plan's one write of the starter on setup's branch", () => {
+    const starter = aCleanProduct({ files: { ".fabrik/config.json": kit.templates.kitConfig }, vaults: ["Fabrik"], fabrikItems: ["Claude token", "Claude token 2"] });
+
+    const { actions } = planSetup(starter, kit, { production: live, paused: true, secondSubscription: true }, { wroteStarter: true });
+
+    const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
+    expect(config.ok && [config.config.production, config.config.maxInFlight, config.config.subscriptions]).toEqual([live, 0, ["Claude token", "Claude token 2"]]);
+    expect(why(actions)).toContain('the production block: url "https://clinic.example.com", environment "production"');
+    expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
+  });
+
+  it("adds it to the starter on setup's branch with nothing else to change", () => {
+    const { actions } = planSetup(withConfig(kit.templates.kitConfig), kit, { production: live }, { wroteStarter: true });
+
+    expect(declared(written(actions, ".fabrik/config.json"))).toEqual(live);
+    expect(why(actions)).toBe('write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production")');
   });
 });
 

@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
-import { designRoundMarker } from "../loop/markers.ts";
+import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { roundLineIn, roundLineOf, withoutRoundLines } from "../loop/roundLine.ts";
+import { planFor } from "../loop/rules.ts";
 import { AGENT_FAILURE_FILE } from "./failure.ts";
 import {
   readIssue,
@@ -110,6 +113,62 @@ describe("An agent job's inputs", () => {
     const alone = { repository: { issue: { ...page.repository.issue, parent: null } } };
 
     expect(await readIssue(graphqlReturning(alone), repo, 7, "operator")).toMatchObject({ spec: null, otherTickets: [] });
+  });
+
+  it("hands the agent a thread whose Rounds carry hidden lines just as it would the same thread without them (#635)", async () => {
+    const roundPosted = (n: number) => {
+      const output = JSON.stringify({ kind: "round", intro: `Round ${n} asks @someone <one> thing.`, questions: [{ question: "Chart this as a Map instead?", recommendation: "No." }], asksMap: true });
+      const plan = planFor({ kind: "agent-run-finished", role: "design", issue: 7, output }, snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: n - 1 })), kitConfig());
+      return plan.kind === "act" && plan.actions[0]?.kind === "comment" ? plan.actions[0].body : "";
+    };
+    const withLines = [roundPosted(1), roundPosted(2)];
+    expect(withLines.map(roundLineIn)).toEqual([expect.objectContaining({ round: 1 }), expect.objectContaining({ round: 2 })]);
+    const threadOf = (rounds: readonly string[]) => {
+      const page = issuePage([], null);
+      const bot = { login: "fabrik-app", __typename: "Bot" };
+      const operator = { login: "operator", __typename: "User" };
+      const nodes = [
+        { author: bot, body: rounds[0], createdAt: "2026-11-01T00:00:00Z" },
+        { author: operator, body: "yes", createdAt: "2026-11-02T00:00:00Z" },
+        { author: bot, body: rounds[1], createdAt: "2026-11-03T00:00:00Z" },
+      ];
+      return { repository: { issue: { ...page.repository.issue, comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } };
+    };
+
+    const carrying = await readIssue(graphqlReturning(threadOf(withLines)), repo, 7, "operator");
+    const without = await readIssue(graphqlReturning(threadOf(withLines.map(withoutRoundLines))), repo, 7, "operator");
+
+    expect(JSON.stringify(carrying)).toBe(JSON.stringify(without));
+    expect(JSON.stringify(carrying)).not.toContain("fabrik:round-line");
+  });
+
+  it("hands the agent a prototype round and a prototype failure round without their hidden third lines (#636)", async () => {
+    const question = (q: string) => [{ question: q, recommendation: "B." }];
+    const prototype = [
+      designRoundMarker(3),
+      PROTOTYPE_ROUND_MARKER,
+      roundLineOf({ v: 1, kind: "prototype", round: 3, intro: "Two ways.", questions: question("Which variant?"), route: "/book", recommended: "A", variants: [{ letter: "A", summary: "A form.", component: "https://github.com/acme/shop/blob/abc/src/A.tsx", preview: null }], captures: null }),
+      "@operator **Design session, round 3: the prototype.** …",
+    ].join("\n");
+    const failed = [
+      designRoundMarker(4),
+      PROTOTYPE_FAILURE_ROUND_MARKER,
+      roundLineOf({ v: 1, kind: "prototype-failed", round: 4, intro: "It failed.", questions: question("Carry on without a prototype, or try again?"), otherAnswers: ["Try again"] }),
+      "@operator **Design session, round 4: the prototype failed.** …",
+    ].join("\n");
+    expect([prototype, failed].map((body) => roundLineIn(body)?.kind)).toEqual(["prototype", "prototype-failed"]);
+    const threadOf = (rounds: readonly string[]) => {
+      const page = issuePage([], null);
+      const bot = { login: "fabrik-app", __typename: "Bot" };
+      const nodes = rounds.map((body, i) => ({ author: bot, body, createdAt: `2026-11-0${i + 1}T00:00:00Z` }));
+      return { repository: { issue: { ...page.repository.issue, comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } };
+    };
+
+    const carrying = await readIssue(graphqlReturning(threadOf([prototype, failed])), repo, 7, "operator");
+    const without = await readIssue(graphqlReturning(threadOf([prototype, failed].map(withoutRoundLines))), repo, 7, "operator");
+
+    expect(JSON.stringify(carrying)).toBe(JSON.stringify(without));
+    expect(JSON.stringify(carrying)).not.toContain("fabrik:round-line");
   });
 
   it("names the Operator once, and marks each comment by a bot or by the Operator, so a forged round reads as neither (#426)", async () => {

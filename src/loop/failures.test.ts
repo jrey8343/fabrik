@@ -375,7 +375,7 @@ describe("Failure notices", () => {
           "This is an Infrastructure failure, so the Loop won't retry it. GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, reply on this issue to run the turn again.",
           "",
           `[The run](${RUN})`,
-          '<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design","failure":"unread-inputs"} -->',
+          '<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design","failure":"unread-inputs","run":42} -->',
         ].join("\n"),
       );
     });

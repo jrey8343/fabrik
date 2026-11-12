@@ -9,7 +9,7 @@ import {
   snapshotOfPullRequest,
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
-import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
+import { anEvidence, CAPTURED, EVIDENCE_PAGE, UI } from "../__fixtures__/uiEvidence.ts";
 import { handBackMarkIn, requestChangesAnswersIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Action, ImplementEvidence, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
@@ -324,14 +324,14 @@ describe("A Request-changes run's branch", () => {
         "<!-- fabrik:ui-evidence-start -->",
         "## UI evidence",
         "",
-        `[Open the gallery](<${GALLERY}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
+        `[Open the Evidence page](<${EVIDENCE_PAGE}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
         "",
         "No preview link: Kit config declares no `preview.url`.",
         "",
         "Captured routes:",
         "",
         "- `/waitlist`, named by the Implementer",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/waitlist"],"preview":{"is":"none"},"missed":[]} -->`,
         "",
         "Closes #7",
       ].join("\n"),

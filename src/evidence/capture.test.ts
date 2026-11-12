@@ -421,7 +421,7 @@ describe("Capturing UI evidence", () => {
     ]);
   });
 
-  // The evidence section and the gallery flag it; it's still evidence, never a failure.
+  // The evidence section and the Evidence page flag it; it's still evidence, never a failure.
   it("records a page that answered a server error with its status, and still counts the capture as captured", async () => {
     const { capturer } = runner({ screenshot: async (shot) => (shot.side === "after" ? 500 : 200) });
 
@@ -668,7 +668,7 @@ describe("What the capture step leaves", () => {
     expect(captureStepOutputs(outcome)).toEqual({ "ui-capture-result": "" });
   });
 
-  it("writes the capture result, and a gallery holding every screenshot it took", () => {
+  it("writes the capture result, and an Evidence page holding every screenshot it took", () => {
     const images = new Map([
       [book.image, Uint8Array.of(1, 2, 3)],
       [bookWide.image, Uint8Array.of(4, 5, 6)],
@@ -677,15 +677,15 @@ describe("What the capture step leaves", () => {
     const files = captureStepFiles(captured, images, 12);
 
     expect(JSON.parse(files.result)).toEqual(captured);
-    expect(files.gallery).toContain("<title>UI evidence for #12 at ccccccc</title>");
-    expect(files.gallery).toContain(`src="data:image/png;base64,${Buffer.from([1, 2, 3]).toString("base64")}"`);
-    expect(files.gallery).toContain(`src="data:image/png;base64,${Buffer.from([4, 5, 6]).toString("base64")}"`);
+    expect(files.evidencePage).toContain("<title>Evidence page: UI evidence for #12 at ccccccc</title>");
+    expect(files.evidencePage).toContain(`src="data:image/png;base64,${Buffer.from([1, 2, 3]).toString("base64")}"`);
+    expect(files.evidencePage).toContain(`src="data:image/png;base64,${Buffer.from([4, 5, 6]).toString("base64")}"`);
   });
 
-  it("writes no gallery for a capture that took no screenshot, only its result", () => {
+  it("writes no Evidence page for a capture that took no screenshot, only its result", () => {
     const noRoutes: CaptureResult<Capture> = { outcome: "failed", reason: "no-routes", headSha: HEAD, captures: [] };
 
-    expect(captureStepFiles(noRoutes, new Map(), 12)).toEqual({ result: `${JSON.stringify(noRoutes, null, 2)}\n`, gallery: null });
+    expect(captureStepFiles(noRoutes, new Map(), 12)).toEqual({ result: `${JSON.stringify(noRoutes, null, 2)}\n`, evidencePage: null });
   });
 
   // Without a ui block, the Kit job's step summary has the quiet line instead (src/kit/kitJob.ts).

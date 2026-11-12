@@ -2,7 +2,7 @@
 // state: what one run creates, a later run finds. Its script answers every gh
 // and op command the run makes for acme/clinic, and git runs for real.
 import type { Allowances, BranchProtection } from "../setup/plan.ts";
-import type { Answer } from "./setupCommands.ts";
+import { type Answer, type CannedDeployment, deploymentsOf } from "./setupCommands.ts";
 
 export interface PullRequest {
   readonly number: number;
@@ -35,6 +35,8 @@ export interface World {
   readonly failingLabels: Set<string>;
   /** How many open issues are labelled ready-for-agent. */
   readyForAgent: number;
+  /** The repo's Deployments, newest first. */
+  readonly deployments: CannedDeployment[];
 }
 
 export function aWorld(): World {
@@ -48,6 +50,7 @@ export function aWorld(): World {
     prs: [],
     failingLabels: new Set(),
     readyForAgent: 0,
+    deployments: [],
   };
 }
 
@@ -143,8 +146,11 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
       world.ruleset = { id: 1, ...(JSON.parse(input ?? "{}") as Record<string, unknown>) };
       return {};
     },
-    // The compare's two commits follow its endpoint with no space, so no longer key can name it.
-    "gh api": ({ args }) => {
+    // The compare's two commits follow its endpoint with no space, so no longer key can name it, and so do the Deployments' query and id.
+    "gh api": (call) => {
+      const { args } = call;
+      const deployed = deploymentsOf("acme/clinic", world.deployments)[call.line];
+      if (deployed !== undefined) return typeof deployed === "function" ? deployed(call) : deployed;
       const compared = /^repos\/acme\/clinic\/compare\/(\w+)\.\.\.(\w+)$/.exec(args[1] ?? "");
       if (compared === null || origin?.compare === undefined) throw new Error(`The world has no answer for: gh ${args.join(" ")}`);
       const status = origin.compare(compared[1]!, compared[2]!);

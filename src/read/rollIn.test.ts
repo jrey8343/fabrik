@@ -63,7 +63,7 @@ function aRawPullRequest(overrides: Record<string, unknown> = {}): Record<string
 /** Agent pull request 50's row, its Ticket 7 open, as the rows give it, with these issues related and mentioning it. */
 function aRow(overrides: Partial<Pick<Row, "related" | "mentions">> = {}): Row {
   const facts = homeFactsOf({ github: factsOf({ openIssues: [anOpenIssue({ number: 7 })], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }) });
-  const row = rowsOf(facts, null, null, "2026-11-09T12:00:00Z").find(({ standing }) => standing.pullRequest === 50);
+  const row = rowsOf(facts, null, null, null, "2026-11-09T12:00:00Z").find(({ standing }) => standing.pullRequest === 50);
   if (row === undefined) throw new Error("no row for #50");
   return { ...row, ...overrides };
 }

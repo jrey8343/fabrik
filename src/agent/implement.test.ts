@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import { PENRITH_59_REPO, PENRITH_59_REQUEST, PENRITH_59_TICKET_PRACTITIONERS, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { verdictMarker } from "../loop/markers.ts";
@@ -50,17 +51,20 @@ describe("A run on an existing PR is shown the PR's current description, to rewr
   });
 
   it("a run on a UI PR sees it without the evidence section, which the Kit writes itself, so it never copies the old one forward", async () => {
-    const body = [
-      "Shows the empty state.",
-      "",
-      "<!-- fabrik:ui-evidence-start -->",
-      "## UI evidence",
-      "",
-      "[Open the gallery](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots.",
-      `<!-- fabrik:ui-evidence {"run":8000,"artifact":8002} -->`,
-      "",
-      "Closes #7",
-    ].join("\n");
+    // In an earlier release's words, as a body it opened still holds them.
+    const body = asAnEarlierReleaseWroteIt(
+      [
+        "Shows the empty state.",
+        "",
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        "[Open the Evidence page](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots.",
+        `<!-- fabrik:ui-evidence {"run":8000,"artifact":8002} -->`,
+        "",
+        "Closes #7",
+      ].join("\n"),
+    );
 
     const { parts } = await retryContext(await fileOf({ ...pullRequest, body }));
 

@@ -3,10 +3,14 @@ import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import {
   aComment,
+  aDeploymentsRead,
+  aDeployOf,
   aDesignRound,
   aDesignTurnFailedNotice,
   aLabelAdded,
   aMapCapRefusal,
+  aMergedLastDay,
+  aMergedPullRequest,
   anOpenAudit,
   anOpenIssue,
   anOpenPullRequest,
@@ -25,8 +29,9 @@ import { aTicket } from "../__fixtures__/snapshots.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { roundLineOf } from "../loop/roundLine.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
-import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { DEFAULT_KIT_CONFIG, type KitConfig } from "./config.ts";
 import { type Standing, standingAt, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import { isSpec } from "./standingInFlight.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
@@ -243,6 +248,13 @@ describe("the Standing rule", () => {
         { issue: 12, name: "design-round", detail: { round: 3, prototype: "ready" } },
         { issue: 13, name: "design-round", detail: { round: 4, prototype: "failed" } },
       ]);
+    });
+
+    it("reads a Round carrying its hidden line as an ordinary Round, not a prototype round", () => {
+      const line = roundLineOf({ v: 1, kind: "round", round: 3, intro: "Hi.", questions: [{ question: "Q?", recommendation: "R." }], asksMap: true });
+      const round = aComment(`${designRoundMarker(3)}\n${line}\n@operator **Design session, round 3.**`, "2026-11-05T20:00:00Z");
+      const standings = standingsIn({ openIssues: [designing(12, [round])] });
+      expect(standings.map(({ issue, name, detail }) => ({ issue, name, detail }))).toEqual([{ issue: 12, name: "design-round", detail: { round: 3, prototype: null } }]);
     });
 
     it("gives a Design session whose last word is the Kit's notice that a turn failed one Standing, yours to do at Design, stopping work, since the notice", () => {
@@ -833,6 +845,138 @@ describe("every other silence, and a draft the Operator parked (#608)", () => {
     const ready = anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", "2026-11-05T12:00:00Z")] });
     const releasing = { ...kit(), dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [] } } };
     expect(standingsIn({ openIssues: [ready] }, { kit: releasing })).toMatchObject([{ issue: 14, name: "waiting-on-kit", stuckAt: null, detail: { silence: "releasable" } }]);
+  });
+});
+
+describe("a merged agent pull request at Production (#634)", () => {
+  const MERGED = "2026-11-08T19:30:00Z";
+  const MERGE = "m".repeat(40);
+  const kit = (production: KitConfig["production"]) =>
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production } }, dispatch: null, runsInFlight: [], headChecks: {} }) as const;
+  const TRACKED = kit({ url: "https://shop.example", environment: "production" });
+  /** The Standings of agent pull request 50, merged at `mergedAt`, in a repo declaring production with environment `production`, with this Deployments fact. */
+  const atProduction = (deploys: StandingFacts["deployments"], { mergedAt = MERGED, now = NOW, overrides = {} as Partial<Omit<StandingFacts, "kind" | "github">> } = {}) =>
+    standingsIn({}, { kit: TRACKED, mergedLastDay: [aMergedLastDay(mergedAt)], deployments: deploys, ...overrides }, now);
+  const read = (deploy: Parameters<typeof aDeployOf>[0] | "unread") => aDeploymentsRead({ [MERGE]: deploy === "unread" ? "unread" : aDeployOf(deploy) });
+
+  it("is live once a deploy that counts succeeded, nobody's move, since the deciding report, carrying its Ticket though closed", () => {
+    expect(atProduction(read({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }))).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "production",
+        name: "live",
+        move: "nobody",
+        yours: false,
+        stopsWork: false,
+        since: "2026-11-08T19:40:00Z",
+        stuckAt: null,
+        awaits: null,
+        subscription: null,
+        detail: { mergeCommit: MERGE, mergedAt: MERGED, environment: "production", noDeployAt: null, deployment: 900, log: null, deploysUnread: false },
+      },
+    ]);
+  });
+
+  it("is deploying while a deploy that counts is running, the Kit's move, since the Deployment's creation; not live", () => {
+    expect(atProduction(read({ is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }))).toMatchObject([
+      { issue: 7, pullRequest: 50, place: "production", name: "deploying", move: "kit", yours: false, stopsWork: false, since: "2026-11-08T19:35:00Z", stuckAt: null, awaits: null, detail: { deployment: 901, noDeployAt: null, deploysUnread: false } },
+    ]);
+  });
+
+  it("is deploy failed when the newest that counts failed and none succeeded or is running, since the failed report, with its log; not deploying", () => {
+    const log = "https://github.com/owner/product/actions/runs/40/job/41";
+    expect(atProduction(read({ is: "failed", deployment: 902, commit: MERGE, at: "2026-11-08T19:45:00Z", log }))).toMatchObject([
+      { place: "production", name: "deploy-failed", move: "nobody", since: "2026-11-08T19:45:00Z", detail: { deployment: 902, log, noDeployAt: null, deploysUnread: false } },
+    ]);
+  });
+
+  it("is merged in the first hour with none started, since the merge, with when it turns no deploy seen; and no deploy seen a minute after the hour, since its end", () => {
+    const merged = atProduction(read({ is: "none" }), { now: "2026-11-08T20:29:00Z" });
+    expect(merged).toMatchObject([
+      { place: "production", name: "merged", move: "nobody", since: MERGED, detail: { noDeployAt: "2026-11-08T20:30:00.000Z", deployment: null, deploysUnread: false } },
+    ]);
+    const unseen = atProduction(read({ is: "none" }), { now: "2026-11-08T20:31:00Z" });
+    expect(unseen).toMatchObject([{ place: "production", name: "no-deploy-seen", move: "nobody", since: "2026-11-08T20:30:00.000Z", detail: { noDeployAt: null, deploysUnread: false } }]);
+    expect(merged.map((standing) => standingAt(standing, "2026-11-08T20:31:00Z"))).toStrictEqual(unseen);
+  });
+
+  it("turns no deploy seen into deploying when a deploy starts after the hour", () => {
+    const later = { now: "2026-11-08T21:00:00Z" };
+    expect(atProduction(read({ is: "none" }), later)).toMatchObject([{ name: "no-deploy-seen" }]);
+    expect(atProduction(read({ is: "running", deployment: 903, commit: MERGE, at: "2026-11-08T20:50:00Z" }), later)).toMatchObject([
+      { name: "deploying", since: "2026-11-08T20:50:00Z" },
+    ]);
+  });
+
+  it("is merged with its deploys unread, and never no deploy seen, when the Deployments read is missing, or unread for this merge", () => {
+    const unread = { place: "production", name: "merged", since: MERGED, detail: { noDeployAt: null, deploysUnread: true } };
+    expect(atProduction(undefined, { now: "2026-11-08T23:00:00Z" })).toMatchObject([unread]);
+    expect(atProduction(null, { now: "2026-11-08T23:00:00Z" })).toMatchObject([unread]);
+    expect(atProduction(read("unread"), { now: "2026-11-08T23:00:00Z" })).toMatchObject([unread]);
+    expect(atProduction(aDeploymentsRead({}), { now: "2026-11-08T23:00:00Z" })).toMatchObject([unread]);
+  });
+
+  it("is merged with place null, for 24 hours, in a repo that declares an address and no environment", () => {
+    const untracked = { kit: kit({ url: "https://shop.example", environment: null }) };
+    for (const now of ["2026-11-08T20:00:00Z", "2026-11-09T19:29:00Z"]) {
+      expect(atProduction(read({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }), { now, overrides: untracked })).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 7,
+          pullRequest: 50,
+          work: "ticket",
+          place: null,
+          name: "merged",
+          move: "nobody",
+          yours: false,
+          stopsWork: false,
+          since: MERGED,
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: { mergeCommit: MERGE, mergedAt: MERGED, environment: null, noDeployAt: null, deployment: null, log: null, deploysUnread: false },
+        },
+      ]);
+    }
+  });
+
+  it("carries a null issue when the merged pull request names no Ticket", () => {
+    expect(standingsIn({}, { kit: TRACKED, mergedLastDay: [aMergedLastDay(MERGED, { ticket: null })] })).toMatchObject([{ issue: null, pullRequest: 50, name: "merged" }]);
+  });
+
+  it("gives none with no production block, with an invalid Kit config even with ui.before_url set, or with the merges unread", () => {
+    const ui = { paths: ["src/**"], serve: "npm run dev", url: "http://localhost:3000", beforeUrl: "https://shop.example", defaultRoutes: ["/"] };
+    const merges = { mergedLastDay: [aMergedLastDay(MERGED)], deployments: read({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) };
+    expect(standingsIn({}, { ...merges, kit: { ...kit(null), config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, ui, production: null } } } })).toEqual([]);
+    expect(standingsIn({}, { ...merges, kit: { ...TRACKED, config: { ok: false, errors: ["max_in_flight must be a whole number"] } } })).toEqual([]);
+    expect(standingsIn({}, { ...merges, kit: null })).toEqual([]);
+    expect(standingsIn({}, { kit: TRACKED, deployments: merges.deployments })).toEqual([]);
+  });
+
+  it("stands at 24 hours from the merge and is gone a minute after, whatever the deploys say", () => {
+    const live = read({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
+    // Read straight from the rule: a minute later the rule drops it, which a kept Standing read later cannot.
+    const ruleAt = (now: string) => standingsOf(standingFactsOf({ kit: TRACKED, mergedLastDay: [aMergedLastDay(MERGED)], deployments: live }), now);
+    expect(ruleAt("2026-11-09T19:30:00Z")).toMatchObject([{ name: "live" }]);
+    expect(ruleAt("2026-11-09T19:31:00Z")).toEqual([]);
+    expect(atProduction(read({ is: "none" }), { now: "2026-11-09T19:31:00Z" })).toEqual([]);
+    expect(atProduction(undefined, { now: "2026-11-09T19:31:00Z" })).toEqual([]);
+  });
+
+  it("gives none from the Weekly summary's facts, whose merged pull requests reach back 97 days, with one merged an hour ago and production declared", () => {
+    expect(standingsIn({ pullRequests: [aMergedPullRequest("2026-11-08T19:00:00Z")] }, { kit: TRACKED })).toEqual([]);
+  });
+
+  it("is never yours, never stops work and never carries a stuckAt, whatever its name", () => {
+    const atAll = produced.flatMap(({ standings }) => standings).filter(({ pullRequest, work }) => work === "ticket" && pullRequest === 50);
+    const names = new Set(atAll.map(({ name }) => name));
+    expect([...names].filter((name) => ["deploying", "live", "deploy-failed", "no-deploy-seen", "merged"].includes(name)).toSorted()).toEqual(["deploy-failed", "deploying", "live", "merged", "no-deploy-seen"]);
+    for (const standing of atAll.filter(({ place }) => place === "production" || place === null)) expect(standing).toMatchObject({ yours: false, stopsWork: false, stuckAt: null, awaits: null });
   });
 });
 

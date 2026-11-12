@@ -8,6 +8,7 @@ import {
   ACME,
   aReadyOperator,
   APPLYING,
+  deploymentsOf,
   type Answer,
   type Call,
   fakeCommands,
@@ -26,7 +27,8 @@ const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 /** The usage line, as the Operator runs setup: through the bootstrap command, which fills in the checkout and takes the release either way. */
 const BOOTSTRAP_USAGE =
   "Usage: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- [release | --release=<release>] [--account=<1Password account>]" +
-  " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused] [--plan]";
+  " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
+  " [--production-url=<address> | --no-production] [--production-environment=<Deployments environment>] [--plan]";
 
 let productDir: string;
 
@@ -166,9 +168,10 @@ describe("The setup program", () => {
   });
 
   it("with several 1Password accounts, asks which, and every later op call uses it", async () => {
-    // The Operator answers the account, the three questions, then no to the plan.
-    const prompt = scripted("2", "no", "", "", "n");
-    const { code, said, calls } = await setup([".", "v1.4.2"], { script: { ...severalAccounts, ...withFabrikVault, ...NO_EARLIER_RUN }, prompt });
+    // The Operator answers the account, the four questions, then no to the plan.
+    const prompt = scripted("2", "no", "", "", "", "n");
+    const script = { ...severalAccounts, ...withFabrikVault, ...NO_EARLIER_RUN, ...deploymentsOf("acme/clinic", []) };
+    const { code, said, calls } = await setup([".", "v1.4.2"], { script, prompt });
 
     expect(code).toBe(0);
     expect(prompt.questions[0]).toBe("Which one holds this Product's secrets? [1-2] ");
@@ -179,7 +182,7 @@ describe("The setup program", () => {
   });
 
   it("with --account=, asks nothing about the account and sets OP_ACCOUNT from it", async () => {
-    const { calls } = await setup([".", "v1.4.2", "--plan", "--account=acme.1password.com", "--no-time-zone", "--no-second-subscription", "--no-paused"], {
+    const { calls } = await setup([".", "v1.4.2", "--plan", "--account=acme.1password.com", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production"], {
       script: severalAccounts,
       prompt: neverAsked,
     });
@@ -190,13 +193,69 @@ describe("The setup program", () => {
 
   it("with every answer given as a flag, asks nothing", async () => {
     const { code, said } = await setup(
-      [".", "v1.4.2", "--plan", "--account=my.1password.com", "--time-zone=Europe/London", "--second-subscription", "--paused"],
+      [
+        ".",
+        "v1.4.2",
+        "--plan",
+        "--account=my.1password.com",
+        "--time-zone=Europe/London",
+        "--second-subscription",
+        "--paused",
+        "--production-url=https://clinic.example.com",
+        "--production-environment=production",
+      ],
       { script: severalAccounts, prompt: neverAsked },
     );
 
     expect(code).toBe(0);
     expect(said).toContain("- create jrey8343/fabrik-runs, private, to hold Run records, their transcripts and the Weekly summary");
     expect(said.some((line) => line.includes("Dispatch paused (max_in_flight 0)"))).toBe(true);
+  });
+
+  describe("production's question", () => {
+    const PLANNED =
+      '- write .fabrik/config.json (a starter Kit config with every v1 default, and the production block: url "https://clinic.example.com", environment "production")';
+    const OTHERS = ["--no-time-zone", "--no-second-subscription", "--no-paused"];
+
+    it("with --plan in a terminal, offers the environment and address the repo's Deployments carry, names the block in the plan, and changes nothing", async () => {
+      const script = deploymentsOf("acme/clinic", [{ environment: "production", url: "https://clinic.example.com" }]);
+      const prompt = scripted("", "");
+
+      const { code, said, calls } = await setup([".", "v1.4.2", "--plan", ...OTHERS], { script, prompt });
+
+      expect(code).toBe(0);
+      expect(prompt.questions).toEqual([
+        "The environment production's deploys carry in GitHub's Deployments, or none [production]: ",
+        "Production's address, or no to leave production out [https://clinic.example.com]: ",
+      ]);
+      expect(said).toContain(PLANNED);
+      expect(calls.filter((call) => !isReadOnly(call)).map((call) => call.line)).toEqual([]);
+      expect(await readdir(productDir)).toEqual([]);
+    });
+
+    it("without a terminal, plans the block from --production-url= alone with environment null, reading no Deployments", async () => {
+      const { code, said, calls } = await setup([".", "v1.4.2", ...OTHERS, "--production-url=https://clinic.example.com"], { prompt: null });
+
+      expect(code).toBe(0);
+      expect(said).toContain(
+        '- write .fabrik/config.json (a starter Kit config with every v1 default, and the production block: url "https://clinic.example.com", environment null)',
+      );
+      expect(calls.some((call) => call.line.includes("deployments"))).toBe(false);
+    });
+
+    it("without a terminal and without its flags, plans no block", async () => {
+      const { said } = await setup([".", "v1.4.2", ...OTHERS], { prompt: null });
+
+      expect(said.join("\n")).not.toContain("production block");
+    });
+
+    it("stops the run with Kit config's reason when --production-url= gives an address it would refuse", async () => {
+      const { code, complaints, calls } = await setup([".", "v1.4.2", ...OTHERS, "--production-url=clinic.example.com"], { prompt: null });
+
+      expect(code).toBe(1);
+      expect(complaints[0]).toMatch(/^Kit config would refuse --production-url=clinic\.example\.com: production\.url is "clinic\.example\.com": /);
+      expect(calls.filter((call) => !isReadOnly(call)).map((call) => call.line)).toEqual([]);
+    });
   });
 
   it("without a terminal, asks nothing and takes the account from OP_ACCOUNT", async () => {
@@ -238,7 +297,7 @@ describe("The setup program", () => {
   });
 
   it("with --plan in a terminal, stops at the plan and says how to carry it out", async () => {
-    const { code, said } = await setup([".", "v1.4.2", "--plan", "--no-time-zone", "--no-second-subscription", "--no-paused"], { prompt: neverAsked });
+    const { code, said } = await setup([".", "v1.4.2", "--plan", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production"], { prompt: neverAsked });
 
     expect(code).toBe(0);
     expect(said).toContain("Run setup again without --plan to do it.");
@@ -287,7 +346,7 @@ describe("An old personal copy of the fabrik-setup skill", () => {
   const FOUND = () => `${copy} is an out-of-date copy of the fabrik-setup skill, which Setup no longer uses.`;
   const STALE = () => `It's stale: delete it with rm -rf '${copy}'.`;
   /** A run in a terminal with every question answered by a flag, that the Operator says no to at the plan. */
-  const ANSWERED = [".", "v1.4.2", "--no-time-zone", "--no-second-subscription", "--no-paused"];
+  const ANSWERED = [".", "v1.4.2", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production"];
 
   it("is offered for deletion once the checks pass, and deleted on a yes, leaving the other personal skills", async () => {
     const prompt = scripted("y", "n");

@@ -177,7 +177,7 @@ function guidance(release: string, paused: boolean): string[] {
       'It files one for each production error Sentry reports, once monitor.errors in .fabrik/config.json names the provider, org and project ({ "provider": "sentry", "org": "<org slug>", "project": "<project slug>" }) and 1Password holds the Sentry token. ' +
       "Until then each source stays dormant, with a quiet note in the hourly tick's step summary. " +
       `Once monitor.errors names it, running setup again walks the wizard's Sentry stage to store the token: ${command}`,
-    "With Visual evidence on, each PR whose diff touches ui.paths gets an evidence section linking a gallery of its screenshots, and the Reviewer sees them. " +
+    "With Visual evidence on, each PR whose diff touches ui.paths gets an evidence section linking an Evidence page of its screenshots, and the Reviewer sees them. " +
       "Once the setup PR is merged, turn it on, or change its answers, by running /fabrik-visual-evidence in a Claude session in this repo.",
     ...(paused
       ? [

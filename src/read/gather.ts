@@ -7,22 +7,27 @@
 // issues that moved in 37 days, default-branch commits, the issues the
 // Operator opened in 97 days), review line comments and blockers' labels. It
 // adds the bodies of the Operator's open issues, the agent pull requests
-// merged in the last 24 hours and each open agent pull request's
-// cross-references. The rows are worked out from its facts by ./rows.ts.
+// merged in the last 24 hours, each open agent pull request's
+// cross-references, the evidence marker of each agent pull request, open or
+// merged in the last 24 hours, and each comment's id (#639). The rows are
+// worked out from its facts by ./rows.ts.
 import { gatherWeeklyRunIssues, isAgent, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
-import { gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
+import { byAppOf, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
+import { type EvidenceMarker, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
 import { KIT_CONFIG_PATH, type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
-import type { GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
+import { MERGED_STANDS_HOURS, type MergedLastDayFacts } from "../kit/standingProduction.ts";
+import type { CommentFacts, GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
 import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import {
   MERGED_PULL_REQUESTS_QUERY,
   type MergedPullRequestsQueryResult,
   OPEN_ISSUES_QUERY,
+  type RawHomeComment,
   OPEN_PULL_REQUESTS_QUERY,
   type RawHomeIssue,
   type RawHomePullRequest,
@@ -31,8 +36,8 @@ import {
 } from "./homeQueries.ts";
 import { gatherStore, type StoreFacts } from "./store.ts";
 
-/** How far back the merged agent pull requests reach. */
-const MERGED_REACH_MS = 24 * 60 * 60 * 1000;
+/** How far back the merged agent pull requests reach: as long as a merged one stands. */
+const MERGED_REACH_MS = MERGED_STANDS_HOURS * 60 * 60 * 1000;
 
 /** A repo with no caller workflow that pins the Kit at its default branch's head: nothing more is read of it. */
 export interface RepoReadNotProduct {
@@ -91,18 +96,6 @@ export interface IssueBodyFacts {
   readonly body: string;
 }
 
-/** An agent pull request merged in the last 24 hours. */
-export interface MergedLastDayFacts {
-  readonly number: number;
-  readonly title: string;
-  /** The Ticket it closes, or null. */
-  readonly ticket: number | null;
-  /** Its merge commit's sha, or null when GitHub gives none. */
-  readonly mergeCommit: string | null;
-  /** ISO 8601. */
-  readonly mergedAt: string;
-}
-
 /** An issue GitHub cross-references to an open agent pull request. */
 export interface CrossReferenceFacts {
   /** The open agent pull request it is cross-referenced to. */
@@ -118,6 +111,12 @@ export interface CrossReferenceFacts {
 export interface TicketStateFacts {
   readonly ticket: number;
   readonly closed: boolean;
+}
+
+/** The evidence marker in the body of an agent pull request the Fabrik App opened, open or merged in the last 24 hours (#639). */
+export interface EvidenceMarkerFacts {
+  readonly pullRequest: number;
+  readonly marker: EvidenceMarker;
 }
 
 /**
@@ -142,6 +141,11 @@ export interface Facts {
   readonly crossReferences: readonly CrossReferenceFacts[];
   /** Whether each open agent pull request's Ticket is closed; a Ticket GitHub gave no state of is not here. */
   readonly ticketStates: readonly TicketStateFacts[];
+  /**
+   * The evidence marker of each agent pull request the Fabrik App opened,
+   * open or merged in the last 24 hours, that has one: a UI pull request's.
+   */
+  readonly evidenceMarkers: readonly EvidenceMarkerFacts[];
 }
 
 /**
@@ -213,6 +217,9 @@ async function gatherFacts(
   const open = issues.filter(({ state }) => state === "OPEN");
   const labelled = (label: string) => open.filter(({ labels }) => labels.nodes.some(({ name }) => name === label));
   const since = Date.parse(now) - MERGED_REACH_MS;
+  const mergedLastDay = merged.repository.pullRequests.nodes.flatMap(({ mergedAt, ...pullRequest }) =>
+    mergedAt === null || Date.parse(mergedAt) < since || !isAgent(pullRequest) ? [] : [{ ...pullRequest, mergedAt }],
+  );
   return {
     kind: "product",
     github: {
@@ -222,8 +229,14 @@ async function gatherFacts(
       specs: [],
       defaultBranchCommits: [],
       mergedPullRequestTitles: [],
-      openIssues: open.map((issue) => openIssueOf({ ...issue, blockedBy: { nodes: [] } })),
-      openPullRequests: agent.map((pullRequest) => openPullRequestOf(withoutLineComments(pullRequest))),
+      openIssues: open.map((issue) => {
+        const facts = openIssueOf({ ...issue, blockedBy: { nodes: [] } });
+        return { ...facts, comments: withIds(facts.comments, issue.comments.nodes) };
+      }),
+      openPullRequests: agent.map((pullRequest) => {
+        const facts = openPullRequestOf(withoutLineComments(pullRequest));
+        return { ...facts, comments: withIds(facts.comments, pullRequest.comments.nodes) };
+      }),
       plainPullRequests: pullRequests.filter((pullRequest) => !isAgent(pullRequest)).map((pullRequest) => plainPullRequestOf(withoutLineComments(pullRequest))),
       designQueue,
       monitorIssues: [],
@@ -244,19 +257,13 @@ async function gatherFacts(
     operator,
     appLogin,
     issueBodies: open.filter(({ author }) => loginOf(author) === operator).map(({ number, body }) => ({ issue: number, body })),
-    mergedLastDay: merged.repository.pullRequests.nodes.flatMap((pullRequest) =>
-      pullRequest.mergedAt === null || Date.parse(pullRequest.mergedAt) < since || !isAgent(pullRequest)
-        ? []
-        : [
-            {
-              number: pullRequest.number,
-              title: pullRequest.title,
-              ticket: pullRequest.closingIssuesReferences.nodes[0]?.number ?? null,
-              mergeCommit: pullRequest.mergeCommit?.oid ?? null,
-              mergedAt: pullRequest.mergedAt,
-            },
-          ],
-    ),
+    mergedLastDay: mergedLastDay.map(({ number, title, closingIssuesReferences, mergeCommit, mergedAt }) => ({
+      number,
+      title,
+      ticket: closingIssuesReferences.nodes[0]?.number ?? null,
+      mergeCommit: mergeCommit?.oid ?? null,
+      mergedAt,
+    })),
     crossReferences: agent.flatMap(({ number, crossReferences }) =>
       crossReferences.nodes.flatMap(({ source }) =>
         source?.__typename !== "Issue" || source.number === undefined
@@ -269,7 +276,20 @@ async function gatherFacts(
       const ticket = closingIssuesReferences.nodes[0];
       return ticket?.state === undefined ? [] : [{ ticket: ticket.number, closed: ticket.state === "CLOSED" }];
     }),
+    // A marker counts only in a body the Fabrik App wrote, as the Kit's other readers of it take it.
+    evidenceMarkers: [...agent, ...mergedLastDay].flatMap(({ number, body, author }) => {
+      const marker = byAppOf(author, appLogin) ? evidenceMarkerIn(body) : null;
+      return marker === null ? [] : [{ pullRequest: number, marker }];
+    }),
   };
+}
+
+/** The comments as the Weekly summary's mapping gives them, each with its id from the same nodes, in the same order. */
+function withIds(comments: readonly CommentFacts[], nodes: readonly RawHomeComment[]): CommentFacts[] {
+  return comments.map((comment, at) => {
+    const id = nodes[at]?.databaseId;
+    return typeof id === "number" ? { ...comment, id } : comment;
+  });
 }
 
 /** A pull request as the Weekly summary's mapping reads it: its reviews with no line comments, which this gather never asks for. */

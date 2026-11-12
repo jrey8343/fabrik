@@ -145,22 +145,33 @@ function designRoundStandingsOf(issue: OpenIssueFacts, repo: string, appLogin: s
 function stoppedDesignSessionStandingsOf(issue: OpenIssueFacts, repo: string, appLogin: string): StandingNamed<"yours-to-do">[] {
   const last = issue.comments.at(-1);
   if (!issue.labels.includes(NEEDS_DESIGN) || last === undefined || !last.byBot || last.author !== appLogin || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return [];
-  // Its hidden line names the trigger label the sweep took off, where the notice says so.
-  const mark = handBackOfNotice(last.body);
-  const handBack = mark?.kind === "trigger-swept" ? mark.kind : refusedByMapCap(last.body) ? "map-cap-refused" : "design-turn-failed";
-  const label = handBack === "trigger-swept" ? DESIGN_LABEL : null;
+  const standing = stoppedDesignSessionStandingOf(issue.number, repo, last);
   // Once the Operator adds the label the sweep took off again, the work is read like any other.
-  const readded = label === null ? null : lastAdded(issue.labelEvents, label);
+  const readded = standing.detail.label === null ? null : lastAdded(issue.labelEvents, standing.detail.label);
   if (readded !== null && Date.parse(readded) > Date.parse(last.at)) return [];
-  return [
-    {
-      ...theOperators(repo, issue.number, null, last.at),
-      work: "design-session",
-      place: "design",
-      name: "yours-to-do",
-      detail: { handBack, role: "design", failure: mark?.failure ?? null, label },
-    },
-  ];
+  return [standing];
+}
+
+/**
+ * The Standing of Design session `issue` that the Fabrik App's `notice`
+ * stopped, opening with DESIGN_TURN_FAILED_MARKER: a failed turn, a
+ * prototype turn's included, a Map the Map cap refused, or a trigger label
+ * the sweep took off. The Operator's, stopping work, since the notice. The
+ * read library's Round read (src/read/roundRead.ts) words a failed turn from
+ * it, so the sentence is the rule's own (#640).
+ */
+export function stoppedDesignSessionStandingOf(issue: number, repo: string, notice: { readonly body: string; readonly at: string }): StandingNamed<"yours-to-do"> {
+  // Its hidden line names the trigger label the sweep took off, where the notice says so.
+  const mark = handBackOfNotice(notice.body);
+  const handBack = mark?.kind === "trigger-swept" ? mark.kind : refusedByMapCap(notice.body) ? "map-cap-refused" : "design-turn-failed";
+  const label = handBack === "trigger-swept" ? DESIGN_LABEL : null;
+  return {
+    ...theOperators(repo, issue, null, notice.at),
+    work: "design-session",
+    place: "design",
+    name: "yours-to-do",
+    detail: { handBack, role: "design", failure: mark?.failure ?? null, label },
+  };
 }
 
 /**

@@ -57,11 +57,24 @@ describe("The hidden hand-back line", () => {
       const research = planFor(failed({ role: "research", issue: 12 }), snapshotOf(anIssue({ number: 12, labels: ["wayfinder:research"] })), kitConfig());
       const design = planFor(failed({ role: "design" }), snapshotOf(anIssue({ number: 7, labels: ["needs-design"] })), kitConfig());
       expect(handBackOf(commentsOf(research)[0])).toEqual({ kind: "research-failed", role: "research", failure: "crash" });
-      expect(handBackOf(commentsOf(design)[0])).toEqual({ kind: "design-turn-failed", role: "design", failure: "crash" });
+      expect(handBackOf(commentsOf(design)[0])).toEqual({ kind: "design-turn-failed", role: "design", failure: "crash", run: 42 });
     });
 
     it("names a prototype turn the Kit couldn't land as a failed Design-session turn", () => {
-      expect(handBackOf(commentsOf(prototypeTurnRefused(7, "operator", "its output broke the contract", RUN))[0])).toEqual({ kind: "design-turn-failed", role: "design" });
+      expect(handBackOf(commentsOf(prototypeTurnRefused(7, "operator", "its output broke the contract", RUN))[0])).toEqual({ kind: "design-turn-failed", role: "design", run: 42 });
+    });
+
+    it("names a failed Design-session turn's run, a prototype turn's included, and only theirs (#640)", () => {
+      const design = (prototype: boolean) => planFor(failed({ role: "design", prototype }), snapshotOf(anIssue({ number: 7, labels: ["needs-design"] })), kitConfig());
+      const implement = planFor(failed({ role: "implement" }), snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig());
+      expect(handBackOf(commentsOf(design(false))[0])?.run).toBe(42);
+      expect(handBackOf(commentsOf(design(true))[0])?.run).toBe(42);
+      expect(handBackOf(commentsOf(implement)[0])).not.toHaveProperty("run");
+    });
+
+    it("names no run where the run's address isn't an Actions run's, and the notice still hands the turn back", () => {
+      const plan = planFor(failed({ role: "design", runUrl: "https://example.com/somewhere" }), snapshotOf(anIssue({ number: 7, labels: ["needs-design"] })), kitConfig());
+      expect(handBackOf(commentsOf(plan)[0])).toEqual({ kind: "design-turn-failed", role: "design", failure: "crash" });
     });
 
     it("is on no counted Broken run, which is an Execution flaw the Kit re-runs itself", () => {

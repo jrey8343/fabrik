@@ -477,10 +477,12 @@ jobs:
       agent-timed-out: ${{ steps.agent-time.outputs.timed-out }}
       # The variants' capture, for the push job, under the names the Implement job
       # passes UI evidence out by: the capture result as one compact JSON line,
-      # empty when nothing was captured, and the numeric id of the unzipped
-      # gallery's artifact, which the push job links from its own run.
+      # empty when nothing was captured, the numeric id of the zipped captures'
+      # artifact, which the prototype round names with this run (#638), and
+      # that of the unzipped Evidence page's, which the push job links from its own run.
       ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}
-      ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
+      ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}
+      ui-evidence-page-artifact: ${{ steps.evidence-page.outputs.artifact-id }}
     steps:
       # A fresh clone, with every branch's history, for the bundle and the guard.
       - name: Check out the Product repo's default branch
@@ -577,7 +579,7 @@ jobs:
       # The variants, once the agent has ended, with #153's capture: it builds and
       # serves the branch, then screenshots and films each variant at the
       # approved route with ?variant= and its letter, at both Kit viewports, and
-      # writes them, the capture result and the prototype gallery under
+      # writes them, the capture result and the prototype's Evidence page under
       # fabrik-out (src/evidence/capture-main.ts). It records every failure in
       # the capture result, never the job's: continue-on-error, and its own
       # timeout, the Kit's CAPTURE_TIMEOUT_MINUTES. No secret reaches it, nor
@@ -621,19 +623,37 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # The prototype gallery, unzipped, so it opens in the browser in one click,
+      # What capture recorded, whether it captured or failed (#638): each
+      # variant's screenshots and video and the capture result, as capture
+      # wrote them, zipped, kept 30 days, as the Implement job keeps a PR's UI
+      # evidence; the prototype round names the run and this artifact. Named
+      # as the Implement job's upload is, since no run has both jobs. Not
+      # fabrik-agent-*: the push job downloads those and reads none as a
+      # timeout. continue-on-error: keeping it must never fail a turn that passed.
+      - name: Keep the prototype's captures
+        id: evidence
+        if: steps.capture.outputs.ui-capture-result != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-ui-evidence
+          path: ${{ runner.temp }}/fabrik-out/ui-evidence/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # The prototype's Evidence page, unzipped, so it opens in the browser in one click,
       # kept about 30 days; the prototype round is the lasting record. An
       # unzipped artifact is one file, named after it; a capture that took no
       # screenshot leaves none. Not fabrik-agent-*: the push job downloads those
       # and reads none as a timeout. continue-on-error: keeping it must never
       # fail a turn that passed.
-      - name: Keep the prototype gallery
-        id: gallery
+      - name: Keep the prototype's Evidence page
+        id: evidence-page
         if: steps.capture.outputs.ui-capture-result != ''
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: ${{ runner.temp }}/fabrik-out/fabrik-prototype-gallery.html
+          path: ${{ runner.temp }}/fabrik-out/fabrik-prototype-evidence-page.html
           archive: false
           if-no-files-found: ignore
           retention-days: 30
@@ -741,12 +761,12 @@ jobs:
       agent-timed-out: ${{ steps.agent-time.outputs.timed-out }}
       # UI evidence (#153), for the push job: the capture result as one compact
       # JSON line, empty when nothing was captured, and the numeric ids of the
-      # zipped screenshots-and-result artifact and the unzipped gallery's.
+      # zipped screenshots-and-result artifact and the unzipped Evidence page's.
       ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}
       # "true" when capture's own timeout stopped it before it recorded a result (src/kit/pushJob.ts).
       ui-capture-timed-out: ${{ steps.capture-time.outputs.timed-out }}
       ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}
-      ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}
+      ui-evidence-page-artifact: ${{ steps.evidence-page.outputs.artifact-id }}
     steps:
       # A fresh clone: no working directory or .env* files carried over. A first
       # run starts from main; a retry, or a Kept-branch start (#536), from the
@@ -844,7 +864,7 @@ jobs:
       # UI evidence (#153), once the agent has ended: with a ui block, and a
       # branch that changes a ui.paths file against the default branch, it
       # builds and serves the branch, screenshots its routes, and writes the
-      # screenshots, the capture result and the gallery under fabrik-out
+      # screenshots, the capture result and the Evidence page under fabrik-out
       # (src/evidence/capture-main.ts). It records every failure in the capture
       # result, never the job's: continue-on-error, and its own timeout, the
       # Kit's CAPTURE_TIMEOUT_MINUTES (src/evidence/capture.ts; a test holds the
@@ -926,16 +946,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # The gallery, unzipped, so it opens in the browser in one click. An
+      # The Evidence page, unzipped, so it opens in the browser in one click. An
       # unzipped artifact is one file, named after it; a capture that took no
       # screenshot leaves none.
-      - name: Keep the UI evidence gallery
-        id: gallery
+      - name: Keep the UI Evidence page
+        id: evidence-page
         if: steps.capture.outputs.ui-capture-result != ''
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: ${{ runner.temp }}/fabrik-out/fabrik-ui-gallery.html
+          path: ${{ runner.temp }}/fabrik-out/fabrik-ui-evidence-page.html
           archive: false
           if-no-files-found: ignore
           retention-days: 30

@@ -15,6 +15,7 @@ import type { GitHub, Repo } from "../github/client.ts";
 import { code, type PreviewLink, variantPage, withParensEscaped, withPreviewLink } from "../evidence/uiEvidence.ts";
 import { DESIGN_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
 import { PREVIEW_PENDING, VARIANT_LINE, WHICH_VARIANT } from "../loop/prototypeLanding.ts";
+import { GITHUB_COMMENT_LIMIT, roundLineIn, roundLineOf, withoutRoundLines } from "../loop/roundLine.ts";
 
 /**
  * How long the preview step polls before it says the preview never answered:
@@ -101,16 +102,34 @@ function withVariantPreviews(body: string, preview: Extract<PreviewLink, { kind:
   if (preview.kind === "never-answered") {
     lines[at] = { ...lines[at]!, text: `No preview links: the preview at ${code(preview.url)} never answered.` };
   } else {
+    const linked = new Map<string, string>();
     for (let i = at - 2; i >= 0; i--) {
       const line = lines[i]!;
       const letter = VARIANT_LINE.exec(line.text)?.[1];
       if (letter === undefined) break;
-      lines[i] = { ...line, text: `${line.text} · [Preview](${variantPreviewUrl(preview.url, letter)})` };
+      linked.set(letter, variantPreviewUrl(preview.url, letter));
+      lines[i] = { ...line, text: `${line.text} · [Preview](${linked.get(letter)})` };
     }
     // The pending line, and the blank line above it.
     lines.splice(at - 1, 2);
+    withPreviewsInLine(lines, linked);
   }
-  return lines.map(({ text, end }) => `${text}${end}`).join("\n");
+  const edited = lines.map(({ text, end }) => `${text}${end}`).join("\n");
+  // A round its links would take past GitHub's limit for a comment loses its line, as one posted too long has none.
+  return edited.length <= GITHUB_COMMENT_LIMIT ? edited : withoutRoundLines(edited);
+}
+
+/**
+ * The round's hidden line (#636), the third, with each variant's preview set
+ * to the address its visible line now links, in the same edit. A round an
+ * earlier release posted, which has no line, or one whose line doesn't read,
+ * is left as it is.
+ */
+function withPreviewsInLine(lines: { text: string; end: string }[], linked: ReadonlyMap<string, string>): void {
+  const roundLine = roundLineIn(lines.slice(0, 3).map(({ text }) => text).join("\n"));
+  if (roundLine?.kind !== "prototype") return;
+  const variants = roundLine.variants.map((variant) => ({ ...variant, preview: linked.get(variant.letter) ?? variant.preview }));
+  lines[2] = { ...lines[2]!, text: roundLineOf({ ...roundLine, variants }) };
 }
 
 /** The route's page showing one variant (variantPage), with a `(` or `)` escaped, so it can't end the link early. */

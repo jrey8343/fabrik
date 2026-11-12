@@ -1381,7 +1381,7 @@ describe("Gathering a pull request's UI evidence marker", () => {
   const uiBody = (run: number, artifact: number | null) =>
     [
       "Adds a waitlist to full days.",
-      evidenceSection({ result: captured, run, artifact, gallery: "https://github.com/acme/shop/actions/runs/9100/artifacts/9201", preview: { kind: "none" } }),
+      evidenceSection({ result: captured, run, artifact, evidencePage: "https://github.com/acme/shop/actions/runs/9100/artifacts/9201", preview: { kind: "none" } }),
       "Closes #7",
     ].join("\n\n");
 
@@ -1400,13 +1400,13 @@ describe("Gathering a pull request's UI evidence marker", () => {
 
   it("reads back the capture's outcome the marker records: null for a capture that captured, else why it failed", async () => {
     const failed: CaptureResult = { outcome: "failed", reason: "build-failed", headSha: HEAD_SHA, captures: [] };
-    const failedBody = evidenceSection({ result: failed, run: 9100, artifact: null, gallery: null, preview: { kind: "none" } });
+    const failedBody = evidenceSection({ result: failed, run: 9100, artifact: null, evidencePage: null, preview: { kind: "none" } });
 
-    expect((await gathered(uiBody(9100, 9202)))?.uiEvidenceMarker).toEqual({ run: 9100, artifact: 9202, failure: null });
+    expect((await gathered(uiBody(9100, 9202)))?.uiEvidenceMarker).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/book"], preview: { is: "none" }, missed: [] });
     expect((await gathered(`Adds a waitlist.\n\n${failedBody}\n\nCloses #7`))?.uiEvidenceMarker).toEqual({
       run: 9100,
       artifact: null,
-      failure: "build-failed",
+      failure: "build-failed", routes: [], preview: { is: "none" }, missed: [],
     });
   });
 
@@ -2671,7 +2671,8 @@ describe("Gathering a Design-session turn's starting reply", () => {
       branch: "prototype/7",
       changes: { net: [], commits: [] },
       headSha: null,
-      gallery: null,
+      captures: null,
+      evidencePage: null,
       runUrl: "https://github.com/acme/shop/actions/runs/9100/attempts/1",
       repoUrl: "https://github.com/acme/shop",
     }) as const;

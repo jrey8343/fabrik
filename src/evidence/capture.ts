@@ -8,7 +8,7 @@ import { type CaptureIdentity, captureIdentityOf, slug, UI_VIEWPORTS, type UiCon
 import type { PrototypeVariant } from "../loop/designOutput.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
 import { CAPTURE_TIMEOUT_MINUTES } from "./captureTimeout.ts";
-import { gallery, type GalleryShot, prototypeGallery, type VariantShot } from "./gallery.ts";
+import { evidencePage, type EvidencePageShot, prototypeEvidencePage, type VariantShot } from "./evidencePage.ts";
 import {
   type Capture,
   type CaptureFailure,
@@ -29,22 +29,19 @@ export { CAPTURE_TIMEOUT_MINUTES, implementJobTimeoutMinutes } from "./captureTi
 /**
  * Where the capture step writes, in the agent's output directory: this
  * folder holds the screenshots and the capture result, kept zipped for the
- * Reviewer, and the gallery sits beside it, kept unzipped (loop.yml). Not
+ * Reviewer, and the Evidence page sits beside it, kept unzipped (loop.yml). Not
  * `fabrik-agent-*`, which the push job downloads.
  */
 export const EVIDENCE_DIR = "ui-evidence";
 
-/** The capture result's file, in EVIDENCE_DIR beside the screenshots. */
-export const CAPTURE_RESULT_FILE = "capture-result.json";
-
-/** The gallery's file, beside EVIDENCE_DIR; its unzipped artifact is named after it. */
-export const GALLERY_FILE = "fabrik-ui-gallery.html";
+/** The Evidence page's file, beside EVIDENCE_DIR; its unzipped artifact is named after it. */
+export const EVIDENCE_PAGE_FILE = "fabrik-ui-evidence-page.html";
 
 /**
- * A prototype turn's gallery's file, beside EVIDENCE_DIR in the prototype
+ * A prototype turn's Evidence page's file, beside EVIDENCE_DIR in the prototype
  * job's output directory; its unzipped artifact is named after it.
  */
-export const PROTOTYPE_GALLERY_FILE = "fabrik-prototype-gallery.html";
+export const PROTOTYPE_EVIDENCE_PAGE_FILE = "fabrik-prototype-evidence-page.html";
 
 /** What capture is given: Kit config's blocks, the branch the Implementer left, and what names routes. */
 export interface CaptureInput {
@@ -469,29 +466,29 @@ export function captureStepOutputs(outcome: CaptureOutcome<Capture | VariantCapt
   return { "ui-capture-result": outcome.kind === "recorded" ? JSON.stringify(outcome.result) : "" };
 }
 
-/** What capture writes beside its screenshots: the capture result, and the gallery when it took any. */
+/** What capture writes beside its screenshots: the capture result, and the Evidence page when it took any. */
 export interface CaptureStepFiles {
   readonly result: string;
-  /** The gallery page, or null when capture took no screenshot. */
-  readonly gallery: string | null;
+  /** The Evidence page, or null when capture took no screenshot. */
+  readonly evidencePage: string | null;
 }
 
-/** The capture result's file text, and the gallery of every screenshot with its PNG's bytes in `images`, by file name. */
+/** The capture result's file text, and the Evidence page of every screenshot with its PNG's bytes in `images`, by file name. */
 export function captureStepFiles(result: CaptureResult<Capture>, images: ReadonlyMap<string, Uint8Array>, ticket: number): CaptureStepFiles {
-  const shots = result.captures.flatMap((capture): GalleryShot[] => {
+  const shots = result.captures.flatMap((capture): EvidencePageShot[] => {
     const png = images.get(capture.image);
     return png === undefined ? [] : [{ ...capture, png }];
   });
   return {
     result: `${JSON.stringify(result, null, 2)}\n`,
-    gallery: shots.length === 0 ? null : gallery(shots, { ticket, headSha: result.headSha }),
+    evidencePage: shots.length === 0 ? null : evidencePage(shots, { ticket, headSha: result.headSha }),
   };
 }
 
 /**
- * The capture result's file text, and the prototype gallery of every variant
+ * The capture result's file text, and the Prototype's Evidence page of every variant
  * under its letter and summary, with each screenshot and video capture took,
- * their bytes in `files` by file name; no gallery when it took no screenshot.
+ * their bytes in `files` by file name; no Evidence page when it took no screenshot.
  */
 export function prototypeCaptureFiles(
   result: CaptureResult<VariantCapture>,
@@ -507,7 +504,7 @@ export function prototypeCaptureFiles(
   });
   return {
     result: `${JSON.stringify(result, null, 2)}\n`,
-    gallery: shots.length === 0 ? null : prototypeGallery(shots, variants, { ...meta, headSha: result.headSha }),
+    evidencePage: shots.length === 0 ? null : prototypeEvidencePage(shots, variants, { ...meta, headSha: result.headSha }),
   };
 }
 

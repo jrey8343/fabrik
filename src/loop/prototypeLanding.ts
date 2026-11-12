@@ -16,6 +16,8 @@ import {
   type PrototypeRequestMarker,
 } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
+import { spelled } from "./readable.ts";
+import { GITHUB_COMMENT_LIMIT, ROUND_LINE_VERSION, roundLineOf, withoutRoundLines } from "./roundLine.ts";
 import type { Action, BranchChanges, IssueContext, LoopEvent, Plan, PostedComment, StartingComment } from "./types.ts";
 
 type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" }>;
@@ -106,7 +108,9 @@ export function applyPrototypeTurn(
   }
   const roundPreview = previewOfRound(preview);
   const body = prototypeRound(round, parsed.output, event, operator, roundPreview);
-  if (roundPreview.kind !== "pending") return { kind: "act", actions: [push, comment(body)] };
+  // A refused letter changes nothing on GitHub: the round lands as it would have, and the step summary says why its line advises none.
+  const notes = refusedLetter(event.issue, parsed.output);
+  if (roundPreview.kind !== "pending") return { kind: "act", actions: [push, comment(body)], ...notes };
   // The push job polls the preview once the round is posted, and links it there only once it answers.
   const { route } = event.request.request;
   return {
@@ -115,6 +119,18 @@ export function applyPrototypeTurn(
       push,
       { kind: "comment", issue: event.issue, body, key: ROUND_COMMENT.posted },
       { kind: "link-prototype-preview", issue: event.issue, round: ROUND_COMMENT, template: roundPreview.template, route },
+    ],
+    ...notes,
+  };
+}
+
+/** The plan's note of an advised letter the output reader refused, as it isn't one of the round's variants'; nothing when it refused none. */
+function refusedLetter(issue: number, { variants, refusedRecommended }: PrototypeRoundOutput): { notes?: string[] } {
+  if (refusedRecommended === undefined) return {};
+  const letters = spelled(variants.map(({ letter }) => letter));
+  return {
+    notes: [
+      `The prototype round on #${issue} advises no variant by letter: the prototype turn's recommended, ${refusedRecommended}, isn't one of its variants' letters (${letters})`,
     ],
   };
 }
@@ -145,22 +161,41 @@ function sameRequest({ request: a, reply: replyA }: PrototypeRequestMarker, { re
  * that `yes` never spends another prototype turn's Sandbox time.
  */
 function failureRound(round: number, operator: string, said: string): string {
-  return [
-    designRoundMarker(round),
-    PROTOTYPE_FAILURE_ROUND_MARKER,
-    `@${operator} **Design session, round ${round}: the prototype failed.** Reply with how you'd go on, or \`yes\` to take the recommendation.`,
-    "",
-    said,
-    "",
-    "**1. Carry on without a prototype, or try again?**",
-    "➡️ Recommended: Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.",
-  ].join("\n");
+  return withinCommentLimit(
+    [
+      designRoundMarker(round),
+      PROTOTYPE_FAILURE_ROUND_MARKER,
+      roundLineOf({
+        v: ROUND_LINE_VERSION,
+        kind: "prototype-failed",
+        round,
+        intro: said,
+        questions: [{ question: CARRY_ON_QUESTION, recommendation: CARRY_ON }],
+        otherAnswers: [TRY_AGAIN],
+      }),
+      `@${operator} **Design session, round ${round}: the prototype failed.** Reply with how you'd go on, or \`yes\` to take the recommendation.`,
+      "",
+      said,
+      "",
+      `**1. ${CARRY_ON_QUESTION}**`,
+      `➡️ Recommended: ${CARRY_ON}`,
+    ].join("\n"),
+  );
 }
+
+/** A prototype failure round's one question, which the Kit writes. */
+const CARRY_ON_QUESTION = "Carry on without a prototype, or try again?";
+
+/** What the Kit recommends on a prototype failure round. */
+const CARRY_ON = "Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.";
+
+/** The answer the Kit offers on a prototype failure round beside its recommendation. */
+const TRY_AGAIN = "Try again";
 
 /**
  * The prototype round: a round, so it opens with the next round's marker and
  * carries the session's one @-mention, with the prototype marker under it.
- * The agent's text mentions nobody. The gallery expires, so the round itself
+ * The agent's text mentions nobody. The Evidence page expires, so the round itself
  * describes each variant and links its component on the branch at the head
  * the push left, which outlives it.
  */
@@ -171,26 +206,50 @@ function prototypeRound(
   operator: string,
   preview: RoundPreview,
 ): string {
-  return [
-    designRoundMarker(round),
-    PROTOTYPE_ROUND_MARKER,
-    `@${operator} **Design session, round ${round}: the prototype.** Reply with the variant you'd build, and any changes to it, or \`yes\` to take the recommendation.`,
-    "",
-    withoutMentions(output.intro),
-    "",
-    `[The prototype branch](${branchUrl(event)}) · ${galleryLine(event)}`,
-    "",
-    ...variantLines(output, event),
-    "",
-    ...(preview.kind === "none" ? [] : [previewLine(preview), ""]),
-    WHICH_VARIANT,
-    // On one line, so the round ends where the preview step looks (withVariantPreviews, src/kit/previewLink.ts).
-    `➡️ Recommended: ${withoutMentions(output.recommendation.trim().replace(/\s*[\r\n]+\s*/g, " "))}`,
-  ].join("\n");
+  const intro = withoutMentions(output.intro);
+  const variants = variantsOf(output, event);
+  // On one line, so the round ends where the preview step looks (withVariantPreviews, src/kit/previewLink.ts).
+  const recommendation = withoutMentions(output.recommendation.trim().replace(/\s*[\r\n]+\s*/g, " "));
+  return withinCommentLimit(
+    [
+      designRoundMarker(round),
+      PROTOTYPE_ROUND_MARKER,
+      roundLineOf({
+        v: ROUND_LINE_VERSION,
+        kind: "prototype",
+        round,
+        intro,
+        questions: [{ question: WHICH_VARIANT_QUESTION, recommendation }],
+        route: event.request.request.route,
+        ...(output.recommended === undefined ? {} : { recommended: output.recommended }),
+        variants: variants.map(({ letter, summary, component }) => ({ letter, summary, component, preview: null })),
+        captures: event.captures,
+      }),
+      `@${operator} **Design session, round ${round}: the prototype.** Reply with the variant you'd build, and any changes to it, or \`yes\` to take the recommendation.`,
+      "",
+      intro,
+      "",
+      `[The prototype branch](${branchUrl(event)}) · ${evidencePageLine(event)}`,
+      "",
+      ...variants.map(({ letter, summary, path, component }) => `- **${letter}.** ${summary} [${code(path)}](${component})`),
+      "",
+      ...(preview.kind === "none" ? [] : [previewLine(preview), ""]),
+      WHICH_VARIANT,
+      `➡️ Recommended: ${recommendation}`,
+    ].join("\n"),
+  );
 }
 
+/** A round that, with its hidden line, would pass GitHub's limit for a comment, posted without the line, as it would have been; one within it as it is. */
+function withinCommentLimit(body: string): string {
+  return body.length <= GITHUB_COMMENT_LIMIT ? body : withoutRoundLines(body);
+}
+
+/** The prototype round's one question, as its hidden line holds it. */
+const WHICH_VARIANT_QUESTION = "Which variant?";
+
 /** The prototype round's one question, which the Kit writes. */
-export const WHICH_VARIANT = "**1. Which variant?**";
+export const WHICH_VARIANT = `**1. ${WHICH_VARIANT_QUESTION}**`;
 
 /** What the round says of its preview until the push job has polled it and linked it (src/kit/previewLink.ts). */
 export const PREVIEW_PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
@@ -209,27 +268,32 @@ function previewLine(preview: Exclude<RoundPreview, { kind: "none" }>): string {
 }
 
 /**
- * Where the variants can be seen: the gallery, which expires, or, when capture
+ * Where the variants can be seen: the Evidence page, which expires, or, when capture
  * failed after the build, why there's none. Either way the branch holds them.
  */
-function galleryLine({ capture, gallery }: PrototypeRunFinished): string {
+function evidencePageLine({ capture, evidencePage }: PrototypeRunFinished): string {
   if (capture === undefined || capture.outcome === "failed") {
     const why = capture === undefined ? "the prototype job passed out no capture result the push job could read" : `capture failed because ${CAPTURE_FAILED[capture.reason]}`;
-    return `There's no gallery: ${why}. The branch holds the variants, and this comment is the prototype's record.`;
+    return `There's no Evidence page: ${why}. The branch holds the variants, and this comment is the prototype's record.`;
   }
-  if (gallery === null) return "The Kit kept no gallery of the captures, so this comment is the prototype's record.";
-  return `[The gallery](${gallery}) of each variant's screenshots and videos. The gallery expires in about 30 days, so this comment is the prototype's record.`;
+  if (evidencePage === null) return "The Kit kept no Evidence page of the captures, so this comment is the prototype's record.";
+  return `[The Evidence page](${evidencePage}) of each variant's screenshots and videos. The Evidence page expires in about 30 days, so this comment is the prototype's record.`;
 }
 
 /** Why a prototype's capture failed, in plain words, the prototype job having captured. */
 const CAPTURE_FAILED = failureWords("the prototype job");
 
-/** Each variant: its letter, its summary, and its component on the branch at the pushed head. */
-function variantLines({ variants }: PrototypeRoundOutput, { repoUrl, headSha }: PrototypeRunFinished): string[] {
-  return variants.map(
-    ({ letter, summary, component }) =>
-      `- **${letter}.** ${withoutMentions(summary)} [${code(component)}](${repoUrl}/blob/${headSha}/${pathInUrl(component)})`,
-  );
+/** Each variant: its letter, its summary with no mention, its component's path, and its component's address on the branch at the pushed head. */
+function variantsOf(
+  { variants }: PrototypeRoundOutput,
+  { repoUrl, headSha }: PrototypeRunFinished,
+): { letter: string; summary: string; path: string; component: string }[] {
+  return variants.map(({ letter, summary, component }) => ({
+    letter,
+    summary: withoutMentions(summary),
+    path: component,
+    component: `${repoUrl}/blob/${headSha}/${pathInUrl(component)}`,
+  }));
 }
 
 function branchUrl({ repoUrl, branch }: PrototypeRunFinished): string {

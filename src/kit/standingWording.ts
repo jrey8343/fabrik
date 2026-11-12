@@ -163,6 +163,23 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       return { pill: "Blocked", sentence: `Blocked by ${spelled(standing.detail.blockers.map((blocker) => `#${blocker}`), "and")}.`, remedy: null };
     case "waiting-on-author":
       return { pill: "Waiting on its author", sentence: `Triage asked its author, ${standing.detail.author}, a question ${age} ago.`, remedy: null };
+    case "deploying":
+      return { pill: "Deploying", sentence: `A deploy to \`${standing.detail.environment}\` has been running for ${age}.`, remedy: null };
+    case "live":
+      return { pill: "Live", sentence: `Live in \`${standing.detail.environment}\` since ${age} ago.`, remedy: null };
+    case "deploy-failed":
+      return { pill: "Deploy failed", sentence: `The deploy to \`${standing.detail.environment}\` failed ${age} ago.`, remedy: null };
+    case "no-deploy-seen":
+      return {
+        pill: "No deploy seen",
+        sentence: `No deploy to \`${standing.detail.environment}\` has started since the merge ${ageSince(standing.detail.mergedAt, now)} ago.`,
+        remedy: null,
+      };
+    case "merged": {
+      const { environment, deploysUnread } = standing.detail;
+      const then = environment === null ? "Deploys are not tracked in this repo." : deploysUnread ? "Deployments could not be read." : "No deploy has started yet.";
+      return { pill: "Merged", sentence: `Merged ${age} ago. ${then}`, remedy: null };
+    }
   }
 }
 

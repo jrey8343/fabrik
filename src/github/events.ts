@@ -258,25 +258,25 @@ export function checkBuiltAsPlanned(
 
 /**
  * An Implement run's UI evidence, at `headSha`, the head the run built. Its
- * gallery is linked from the push job's own run, never from an address the
+ * Evidence page is linked from the push job's own run, never from an address the
  * agent's runner passed out: an unzipped artifact opens in the browser. A
  * capture step its own timeout stopped recorded no result, so the result is
  * that it ran out of time.
  */
-function implementEvidence({ result, timedOut, artifact, galleryArtifact, run, repoUrl }: PushJobEvidence, headSha: string): ImplementEvidence {
+function implementEvidence({ result, timedOut, artifact, evidencePageArtifact, run, repoUrl }: PushJobEvidence, headSha: string): ImplementEvidence {
   const recorded = result ?? (timedOut ? ({ outcome: "failed", reason: "timeout", headSha, captures: [] } as const) : null);
   return {
     ...(recorded === null ? {} : { result: recorded }),
     headSha,
     run,
     artifact,
-    gallery: galleryOf({ galleryArtifact, run, repoUrl }),
+    evidencePage: evidencePageOf({ evidencePageArtifact, run, repoUrl }),
   };
 }
 
-/** The gallery artifact's web address in the push job's own run, which opens in the browser since it's unzipped; null when the job kept none. */
-function galleryOf({ galleryArtifact, run, repoUrl }: Pick<PushJobEvidence, "galleryArtifact" | "run" | "repoUrl">): string | null {
-  return galleryArtifact === null ? null : `${repoUrl}/actions/runs/${run}/artifacts/${galleryArtifact}`;
+/** The Evidence page artifact's web address in the push job's own run, which opens in the browser since it's unzipped; null when the job kept none. */
+function evidencePageOf({ evidencePageArtifact, run, repoUrl }: Pick<PushJobEvidence, "evidencePageArtifact" | "run" | "repoUrl">): string | null {
+  return evidencePageArtifact === null ? null : `${repoUrl}/actions/runs/${run}/artifacts/${evidencePageArtifact}`;
 }
 
 /**
@@ -285,7 +285,7 @@ function galleryOf({ galleryArtifact, run, repoUrl }: Pick<PushJobEvidence, "gal
  * built the turn on, from its outputs, never from the agent's result; `branch`
  * is what the push job read rebuilding the result's prototype branch from its
  * bundle, and the head its push leaves; `evidence` is what the prototype job
- * passed out about capture, with the push job's own run, which the gallery is
+ * passed out about capture, with the push job's own run, which the Evidence page is
  * linked from; and `runUrl` is that run's attempt.
  */
 export function prototypeEventFrom(
@@ -306,7 +306,9 @@ export function prototypeEventFrom(
     changes: branch.changes,
     headSha: branch.head,
     ...(evidence.result === null ? {} : { capture: evidence.result }),
-    gallery: galleryOf(evidence),
+    // The zipped captures, which the job uploads to its own run, the push job's too.
+    captures: evidence.artifact === null ? null : { run: evidence.run, artifact: evidence.artifact },
+    evidencePage: evidencePageOf(evidence),
     runUrl,
     repoUrl: evidence.repoUrl,
   };

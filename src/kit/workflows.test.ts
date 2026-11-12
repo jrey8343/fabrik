@@ -12,7 +12,7 @@ import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
-import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "../evidence/capture.ts";
+import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EVIDENCE_PAGE_FILE } from "../evidence/capture.ts";
 import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
@@ -938,7 +938,8 @@ describe("loop.yml's prototype job", () => {
     const stepAt = (pattern: string) => steps().findIndex((step) => step.includes(pattern));
     const step = (pattern: string) => steps()[stepAt(pattern)] ?? "";
     const capture = () => step("id: capture\n");
-    const gallery = () => step("id: gallery\n");
+    const evidencePage = () => step("id: evidence-page\n");
+    const captures = () => step("id: evidence\n");
 
     it("captures after the agent step has ended and before its result goes to the push job, from the Kit's program in its prototype mode", () => {
       expect(stepAt("id: capture\n")).toBeGreaterThan(stepAt("id: agent\n"));
@@ -959,27 +960,52 @@ describe("loop.yml's prototype job", () => {
       expect(capture()).not.toMatch(/FABRIK_SECRETS|steps\.op\.|secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN/);
     });
 
-    it("keeps the gallery unzipped, so it opens in one click, for 30 days, apart from the push job's artifacts", () => {
-      expect(stepAt("id: gallery\n")).toBeGreaterThan(stepAt("id: capture\n"));
-      expect(gallery()).toContain("uses: actions/upload-artifact@");
-      expect(gallery()).toContain(`path: \${{ runner.temp }}/fabrik-out/${PROTOTYPE_GALLERY_FILE}\n`);
-      expect(gallery()).toContain("archive: false\n");
-      expect(gallery()).toContain("retention-days: 30\n");
-      expect(gallery()).not.toMatch(/name: fabrik-agent-/);
-      expect(PROTOTYPE_GALLERY_FILE).not.toMatch(/^fabrik-agent-/);
+    it("keeps the Evidence page unzipped, so it opens in one click, for 30 days, apart from the push job's artifacts", () => {
+      expect(stepAt("id: evidence-page\n")).toBeGreaterThan(stepAt("id: capture\n"));
+      expect(evidencePage()).toContain("uses: actions/upload-artifact@");
+      expect(evidencePage()).toContain(`path: \${{ runner.temp }}/fabrik-out/${PROTOTYPE_EVIDENCE_PAGE_FILE}\n`);
+      expect(evidencePage()).toContain("archive: false\n");
+      expect(evidencePage()).toContain("retention-days: 30\n");
+      expect(evidencePage()).not.toMatch(/name: fabrik-agent-/);
+      expect(PROTOTYPE_EVIDENCE_PAGE_FILE).not.toMatch(/^fabrik-agent-/);
     });
 
-    it("keeps the gallery only when capture recorded a result, never failing the job, and a capture that took no screenshot leaves none", () => {
-      expect(gallery()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
-      expect(gallery()).toContain("continue-on-error: true");
-      expect(gallery()).toContain("if-no-files-found: ignore");
+    it("keeps the Evidence page only when capture recorded a result, never failing the job, and a capture that took no screenshot leaves none", () => {
+      expect(evidencePage()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+      expect(evidencePage()).toContain("continue-on-error: true");
+      expect(evidencePage()).toContain("if-no-files-found: ignore");
     });
 
-    // The push job links the gallery from its own run by this id, never from an address the agent's runner passed out (src/github/events.ts).
-    it("passes out the capture result and the gallery's artifact id, under the names the Implement job passes them out by, for the push job", () => {
+    // #638: the captures folder as it is, so one variant's screenshot or video can be fetched from it, as the Implement job keeps a PR's.
+    it("keeps the captures folder zipped, as it is, for 30 days, under the name the Implement job's upload has, apart from the push job's artifacts", () => {
+      expect(stepAt("id: evidence\n")).toBeGreaterThan(stepAt("id: capture\n"));
+      expect(captures()).toContain("uses: actions/upload-artifact@");
+      expect(captures()).toContain("name: fabrik-ui-evidence\n");
+      expect(captures()).toContain(`path: \${{ runner.temp }}/fabrik-out/${EVIDENCE_DIR}/\n`);
+      expect(captures()).not.toContain("archive:");
+      expect(captures()).toContain("retention-days: 30\n");
+      expect(captures()).not.toMatch(/name: fabrik-agent-/);
+    });
+
+    it("keeps the captures whenever capture recorded a result, whether it captured or failed, never failing the job", () => {
+      expect(captures()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+      expect(captures()).toContain("continue-on-error: true");
+      expect(captures()).toContain("if-no-files-found: ignore");
+    });
+
+    // Stored, a player's byte range would pass straight to GitHub's storage; but every artifact kept so far is deflated, so a reader goes by each entry's own method either way.
+    it("sets no compression level on either job's uploads, leaving the upload's default", () => {
+      expect(prototype()).not.toContain("compression-level");
+      expect(job("implement")).not.toContain("compression-level");
+    });
+
+    // The push job links the Evidence page from its own run by this id, never from an address the agent's runner passed out (src/github/events.ts).
+    it("passes out the capture result and the ids of its two artifacts, under the names the Implement job passes them out by, for the push job", () => {
       expect(prototype()).toContain("ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}");
-      expect(prototype()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
-      expect(job("implement")).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
+      expect(prototype()).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
+      expect(prototype()).toContain("ui-evidence-page-artifact: ${{ steps.evidence-page.outputs.artifact-id }}");
+      expect(job("implement")).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
+      expect(job("implement")).toContain("ui-evidence-page-artifact: ${{ steps.evidence-page.outputs.artifact-id }}");
     });
   });
 
@@ -1233,7 +1259,7 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
   const step = (pattern: string) => steps()[stepAt(pattern)] ?? "";
   const capture = () => step("name: Capture UI evidence");
   const evidence = () => step("name: Keep the UI evidence\n");
-  const gallery = () => step("name: Keep the UI evidence gallery");
+  const evidencePage = () => step("name: Keep the UI Evidence page");
 
   it("captures after the Implementer's agent has ended and before its result goes to the push job, from the Kit's program", () => {
     expect(stepAt("name: Capture UI evidence")).toBeGreaterThan(stepAt("id: agent\n"));
@@ -1266,12 +1292,12 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
     expect(capture()).not.toMatch(/FABRIK_SECRETS|steps\.op\.|secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN/);
   });
 
-  it("keeps the gallery unzipped, so it opens in one click, and the screenshots and capture result zipped, both for 30 days", () => {
-    expect(gallery()).toContain("uses: actions/upload-artifact@");
-    expect(gallery()).toContain("id: gallery\n");
-    expect(gallery()).toContain(`path: \${{ runner.temp }}/fabrik-out/${GALLERY_FILE}\n`);
-    expect(gallery()).toContain("archive: false\n");
-    expect(gallery()).toContain("retention-days: 30\n");
+  it("keeps the Evidence page unzipped, so it opens in one click, and the screenshots and capture result zipped, both for 30 days", () => {
+    expect(evidencePage()).toContain("uses: actions/upload-artifact@");
+    expect(evidencePage()).toContain("id: evidence-page\n");
+    expect(evidencePage()).toContain(`path: \${{ runner.temp }}/fabrik-out/${EVIDENCE_PAGE_FILE}\n`);
+    expect(evidencePage()).toContain("archive: false\n");
+    expect(evidencePage()).toContain("retention-days: 30\n");
 
     expect(evidence()).toContain("uses: actions/upload-artifact@");
     expect(evidence()).toContain("id: evidence\n");
@@ -1283,28 +1309,28 @@ describe("loop.yml's UI evidence capture in the Implement job (#153)", () => {
 
   // The push job downloads fabrik-agent-* and reads an empty download as a timeout.
   it("keeps the evidence only when capture recorded a result, apart from the push job's artifacts, never failing the job", () => {
-    for (const upload of [evidence(), gallery()]) {
+    for (const upload of [evidence(), evidencePage()]) {
       expect(upload).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
       expect(upload).toContain("continue-on-error: true");
       expect(upload).toContain("if-no-files-found: ignore");
       expect(upload).not.toMatch(/name: fabrik-agent-/);
     }
-    expect(GALLERY_FILE).not.toMatch(/^fabrik-agent-/);
+    expect(EVIDENCE_PAGE_FILE).not.toMatch(/^fabrik-agent-/);
     expect(stepAt("name: Keep the UI evidence\n")).toBeGreaterThan(stepAt("name: Capture UI evidence"));
-    expect(stepAt("name: Keep the UI evidence gallery")).toBeGreaterThan(stepAt("name: Capture UI evidence"));
+    expect(stepAt("name: Keep the UI Evidence page")).toBeGreaterThan(stepAt("name: Capture UI evidence"));
   });
 
   it("passes out the capture result and the ids of both evidence artifacts, for the push job", () => {
     expect(implement()).toContain("ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}");
     expect(implement()).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
-    expect(implement()).toContain("ui-gallery-artifact: ${{ steps.gallery.outputs.artifact-id }}");
+    expect(implement()).toContain("ui-evidence-page-artifact: ${{ steps.evidence-page.outputs.artifact-id }}");
   });
 
   // Switched on (#239): no gate is left, so every UI PR in a repo with a ui block captures evidence.
   it("is active: capture runs on every Implement run whose agent ended well, and both uploads whenever it recorded a result", () => {
     expect(capture()).toContain("if: success()\n");
     expect(evidence()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
-    expect(gallery()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+    expect(evidencePage()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
     expect(implement()).not.toMatch(/if: false\b/);
   });
 

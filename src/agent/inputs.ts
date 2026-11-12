@@ -30,8 +30,9 @@ import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { isStateLabel, type StateLabel } from "../loop/labels.ts";
 import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
-import { mapCapFull } from "../loop/mapCap.ts";
+import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
 import { fromAuditIn } from "../loop/markers.ts";
+import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
 import { AGENT_FAILURE_FILE, inputsFailureReportFor } from "./failure.ts";
@@ -163,7 +164,8 @@ export async function readIssue(
     const byBot = author?.__typename === "Bot";
     return {
       author: author === null ? null : { login: author.login },
-      body,
+      // A Round's hidden line is for readers of the Kit, never an agent (#635): the thread is as it was without it.
+      body: withoutRoundLines(body),
       createdAt,
       byBot,
       isOperator: !byBot && author?.login === operator,
@@ -467,21 +469,15 @@ export async function readReview(github: Reader, repo: Repo, pullRequest: number
 /** Where the inputs step writes what a Design-session turn is told of the Map cap, beside issue.json. */
 export const MAP_INPUTS_FILE = "map.json";
 
-/**
- * What a Design-session turn is told of the Map cap: it may offer a Map; or
- * the cap is full, at `cap` (0 stops new Maps), and these open Maps hold it;
- * or the issue is a Ticket under the Spec `spec`, which never becomes a Map.
- */
-export type MapOffer =
-  | { readonly kind: "may-offer" }
-  | { readonly kind: "cap-full"; readonly cap: number; readonly openMaps: readonly OpenMap[] }
-  | { readonly kind: "under-a-spec"; readonly spec: number };
+/** What a Design-session turn is told of the Map cap (src/loop/mapCap.ts), each open Map named by its number and title. */
+export type MapOffer = MapOfferOf<OpenMap>;
 
 /**
- * Whether this turn may offer a Map, refusing as the push job's landing does
- * (src/loop/design.ts): never on a Ticket under `spec`, its parent; otherwise
- * while the open Maps leave the cap room (src/loop/mapCap.ts). So the turn
- * isn't asked a question the Operator can't say yes to.
+ * Whether this turn may offer a Map, by the Map cap's own predicate
+ * (mapOfferOf), which refuses as the push job's landing does
+ * (src/loop/design.ts): never on a Ticket under `spec`, its parent, whose
+ * open Maps it then doesn't read; otherwise while the open Maps leave the cap
+ * room. So the turn isn't asked a question the Operator can't say yes to.
  */
 export async function readMapOffer(
   github: Pick<Reader, "graphql">,
@@ -489,10 +485,7 @@ export async function readMapOffer(
   config: Pick<KitConfig, "caps">,
   spec: { readonly number: number } | null,
 ): Promise<MapOffer> {
-  if (spec !== null) return { kind: "under-a-spec", spec: spec.number };
-  const openMaps = await gatherOpenMaps(github, repo);
-  const full = mapCapFull(openMaps.map(({ number }) => number), config);
-  return full ? { kind: "cap-full", cap: config.caps.maps, openMaps } : { kind: "may-offer" };
+  return mapOfferOf(spec?.number ?? null, spec === null ? await gatherOpenMaps(github, repo) : [], config);
 }
 
 // --- A Design-session turn's Spec Tickets (#475) ---------------------------

@@ -525,6 +525,18 @@ export function designTurnFailedIn(comments: readonly KitComment[]): boolean {
   return failed;
 }
 
+/**
+ * An issue's comments, oldest first, since its current Design session
+ * started: after the last of the Fabrik App's comments that ended a session,
+ * async or live, or noted a Ticket's return, which starts a new one, as
+ * designSessionOf counts its rounds. All of them, when none has (#640). Only
+ * the App's comments start one, so a person quoting an end changes nothing.
+ */
+export function currentDesignSessionIn<Comment extends KitComment>(comments: readonly Comment[]): Comment[] {
+  const ended = comments.findLastIndex(({ body, byApp }) => byApp && endsDesignSession(body));
+  return comments.slice(ended + 1);
+}
+
 /** A comment on an issue, and whether the Fabrik App wrote it. */
 export interface KitComment {
   readonly body: string;

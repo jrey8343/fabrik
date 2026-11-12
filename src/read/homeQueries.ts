@@ -5,8 +5,21 @@
 // connection inside a connection, the shape GitHub charges for
 // (./queryShape.ts): the Weekly summary's open pull requests ask for review
 // line comments, and its open issues for blockers' labels; these ask for
-// neither.
-import { ACTOR, COMMENTS, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
+// neither. Beyond the Weekly summary's, they ask for each comment's id and the
+// body of each pull request, open or merged, for its evidence marker (#639).
+import { ACTOR, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
+
+/** An issue's or a pull request's last 100 comments, as the Weekly summary reads them, with each one's id: a Prototype's round is known by its comment. */
+export const COMMENTS_WITH_IDS = `comments(last: 100) { nodes { databaseId url body createdAt author ${ACTOR} } }`;
+
+/** A comment as COMMENTS_WITH_IDS reads it. */
+export interface RawHomeComment {
+  databaseId: number;
+  url: string;
+  body: string;
+  createdAt: string;
+  author: { login: string; __typename: string } | null;
+}
 
 /** The repo's owner, its default branch and that branch's head. */
 export const REPO_QUERY = `
@@ -36,19 +49,19 @@ const CROSS_REFERENCES = `
   }
 `;
 
-/** Every open pull request, agent and Plain, as the Weekly summary reads them, with each one's cross-references and whether the issues it closes are open. */
+/** Every open pull request, agent and Plain, as the Weekly summary reads them, with each one's body, cross-references and whether the issues it closes are open. */
 export const OPEN_PULL_REQUESTS_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
     repository(owner: $owner, name: $name) {
       pullRequests(states: OPEN, first: 25, after: $after) {
         ${PAGE_INFO}
         nodes {
-          number title isDraft headRefOid headRefName createdAt mergeable
+          number title body isDraft headRefOid headRefName createdAt mergeable
           author ${ACTOR}
           closingIssuesReferences(first: 10) { nodes { number state } }
           commits(last: 100) { nodes { ${COMMIT} } }
           ${REVIEWS}
-          ${COMMENTS}
+          ${COMMENTS_WITH_IDS}
           ${LABEL_EVENTS}
           ${DRAFT_EVENTS}
           ${CROSS_REFERENCES}
@@ -68,7 +81,10 @@ export interface RawCrossReference {
 }
 
 /** An open pull request as OPEN_PULL_REQUESTS_QUERY reads it. */
-export type RawHomePullRequest = Omit<RawOpenPullRequest, "reviews" | "closingIssuesReferences"> & {
+export type RawHomePullRequest = Omit<RawOpenPullRequest, "reviews" | "closingIssuesReferences" | "comments"> & {
+  /** Its body, where an agent pull request's evidence marker is. */
+  body: string;
+  comments: { nodes: RawHomeComment[] };
   /** Each issue it closes, its Ticket first on an agent pull request, with its state when GitHub gives one. */
   closingIssuesReferences: { nodes: { number: number; state?: "OPEN" | "CLOSED" }[] };
   reviews: { nodes: RawHomeReview[] };
@@ -85,7 +101,7 @@ export const OPEN_ISSUES_QUERY = `
           number title state createdAt closedAt lastEditedAt body
           author ${ACTOR}
           labels(first: 50) { nodes { name } }
-          ${COMMENTS}
+          ${COMMENTS_WITH_IDS}
           ${LABEL_EVENTS}
           subIssues(first: 100) { nodes { number } }
         }
@@ -95,15 +111,15 @@ export const OPEN_ISSUES_QUERY = `
 `;
 
 /** An open issue as OPEN_ISSUES_QUERY reads it. */
-export type RawHomeIssue = Omit<RawIssue, "blockedBy"> & { body: string; lastEditedAt: string | null };
+export type RawHomeIssue = Omit<RawIssue, "blockedBy" | "comments"> & { body: string; lastEditedAt: string | null; comments: { nodes: RawHomeComment[] } };
 
-/** The newest-updated merged pull requests, one page: the agent ones merged in the last 24 hours are kept. */
+/** The newest-updated merged pull requests, one page, with each one's body: the agent ones merged in the last 24 hours are kept. */
 export const MERGED_PULL_REQUESTS_QUERY = `
   query ($owner: String!, $name: String!) {
     repository(owner: $owner, name: $name) {
       pullRequests(states: MERGED, first: 25, orderBy: { field: UPDATED_AT, direction: DESC }) {
         nodes {
-          number title mergedAt headRefName
+          number title body mergedAt headRefName
           author ${ACTOR}
           mergeCommit { oid }
           closingIssuesReferences(first: 10) { nodes { number } }
@@ -117,6 +133,8 @@ export const MERGED_PULL_REQUESTS_QUERY = `
 export interface RawMergedPullRequest {
   number: number;
   title: string;
+  /** Where an agent pull request's evidence marker is. */
+  body: string;
   mergedAt: string | null;
   headRefName: string;
   author: { login: string; __typename: string } | null;

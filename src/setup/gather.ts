@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import { READY_FOR_AGENT } from "../loop/labels.ts";
 import { ok, type Run } from "./exec.ts";
-import { type Allowances, FABRIK_VAULT, MERGE_GATE_RULESET, type BranchProtection, type MergeGateRuleset, type ProductState, type RunStoreState } from "./plan.ts";
+import { type Allowances, type DeploymentsSeen, FABRIK_VAULT, MERGE_GATE_RULESET, type BranchProtection, type MergeGateRuleset, type ProductState, type RunStoreState } from "./plan.ts";
 import { DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
 
 /** Everything planSetup needs, for the repo the checks found. */
@@ -27,6 +27,67 @@ export async function gatherState(run: Run, productDir: string, repo: ProductSta
   ]);
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
   return { repo, files, labels, secrets, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+}
+
+/** A page of the repo's Deployments, as many as GitHub gives to one. */
+const DEPLOYMENTS_PAGE = 100;
+
+/**
+ * The environments the repo's Deployments carry, from every page of them, and
+ * each one's address on its newest successful Deployment where GitHub has one:
+ * a Deployment succeeded if any of its statuses was ever `success`, as GitHub
+ * turns an earlier success `inactive`. It reads an environment's Deployments'
+ * statuses newest first, stopping at the first that succeeded. A refused read
+ * is said, never thrown: production's question is no reason for setup to stop.
+ */
+export async function gatherDeployments(run: Run, cwd: string, repo: ProductState["repo"]): Promise<DeploymentsSeen> {
+  try {
+    return await readDeployments(run, cwd, repo);
+  } catch (error) {
+    return { read: false, why: firstLine(error instanceof Error ? error.message : String(error)) };
+  }
+}
+
+interface ListedDeployment {
+  readonly id: number;
+  readonly environment: string;
+  readonly created_at?: string;
+}
+
+async function readDeployments(run: Run, cwd: string, repo: ProductState["repo"]): Promise<DeploymentsSeen> {
+  const listed: ListedDeployment[] = [];
+  for (let page = 1; ; page++) {
+    const read = await run("gh", ["api", `repos/${repo.owner}/${repo.name}/deployments?per_page=${DEPLOYMENTS_PAGE}&page=${page}`], { cwd });
+    if (read.code !== 0) return { read: false, why: firstLine(read.stderr || read.stdout) };
+    const batch = JSON.parse(read.stdout) as ListedDeployment[];
+    listed.push(...batch);
+    if (batch.length < DEPLOYMENTS_PAGE) break;
+  }
+  const deployments = listed.toSorted((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+  const names = [...new Set(deployments.map((deployment) => deployment.environment))];
+  const environments = [];
+  for (const name of names) {
+    let url: string | null = null;
+    for (const { id } of deployments.filter((deployment) => deployment.environment === name)) {
+      const read = await run("gh", ["api", `repos/${repo.owner}/${repo.name}/deployments/${id}/statuses?per_page=100`], { cwd });
+      if (read.code !== 0) continue;
+      const success = (JSON.parse(read.stdout) as { state: string; environment_url?: string | null }[]).find((status) => status.state === "success");
+      if (success === undefined) continue;
+      url = isHttpAddress(success.environment_url ?? "") ? (success.environment_url ?? null) : null;
+      break;
+    }
+    environments.push({ name, url });
+  }
+  return { read: true, environments };
+}
+
+function isHttpAddress(text: string): boolean {
+  const protocol = URL.parse(text)?.protocol;
+  return protocol === "http:" || protocol === "https:";
+}
+
+function firstLine(text: string): string {
+  return text.trim().split("\n")[0]?.trim() ?? "";
 }
 
 /** The titles of the items in a vault the account has. */

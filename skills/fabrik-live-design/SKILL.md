@@ -39,7 +39,7 @@ An issue touches **Product intent** when it changes who the product serves or wh
 
 ## Building a Prototype
 
-Only once the Operator has said yes to a Prototype. You build it here, in this checkout: there's no Sandbox job, capture or gallery, and, as for the rest of the session, nothing is posted to the issue.
+Only once the Operator has said yes to a Prototype. You build it here, in this checkout: there's no Sandbox job, capture or Evidence page, and, as for the rest of the session, nothing is posted to the issue.
 
 1. Note the branch you're on (`git branch --show-current`), to come back to. If `git status --porcelain` lists changes, ask the Operator how to set them aside before you switch branches.
 2. Run `git fetch origin`. When `origin/prototype/<n>` exists, an earlier round, live or async, pushed it: build on it with `git switch -C prototype/<n> origin/prototype/<n>`. Otherwise cut it from the default branch (`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`): `git switch -C prototype/<n> origin/<default branch>`.

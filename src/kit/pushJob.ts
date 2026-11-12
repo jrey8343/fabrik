@@ -24,10 +24,10 @@ export type Needs = Readonly<Record<string, NeededJob>>;
 export interface CaptureOutputs {
   /** The capture step's result (`ui-capture-result`), or null when it passed out none that reads. */
   readonly result: CaptureResult | null;
-  /** The id of the zipped artifact of the screenshots and the capture result (`ui-evidence-artifact`). */
+  /** The id of the zipped artifact of the screenshots and the capture result (`ui-evidence-artifact`), a prototype's videos too (#638). */
   readonly artifact: number | null;
-  /** The id of the unzipped gallery artifact (`ui-gallery-artifact`). */
-  readonly galleryArtifact: number | null;
+  /** The id of the unzipped Evidence page artifact (`ui-evidence-page-artifact`). */
+  readonly evidencePageArtifact: number | null;
   /** Whether the capture step's own timeout stopped it (`ui-capture-timed-out`), so it recorded no result. */
   readonly timedOut: boolean;
 }
@@ -265,7 +265,7 @@ function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
   return {
     result: read?.ok === true ? read.result : null,
     artifact: numberOr(outputs["ui-evidence-artifact"]),
-    galleryArtifact: numberOr(outputs["ui-gallery-artifact"]),
+    evidencePageArtifact: numberOr(outputs["ui-evidence-page-artifact"]),
     timedOut: outputs["ui-capture-timed-out"] === "true",
   };
 }

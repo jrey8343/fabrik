@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { CAPTURE_FAILURES, captureFailureSentence, type EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";
-import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
+import type { CommentFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
-import { handBackMarker } from "../loop/markers.ts";
+import { designRoundMarker, handBackMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { roundLineOf } from "../loop/roundLine.ts";
 import {
   aComment,
+  aDeploymentsRead,
+  aDeployOf,
   aLabelAdded,
+  aMergedLastDay,
   anOpenIssue,
   anOpenPullRequest,
   aPlainPullRequest,
@@ -21,7 +27,7 @@ import {
 } from "./builders.ts";
 import type { Facts } from "./gather.ts";
 import type { RequiredChecksRead } from "./requiredChecks.ts";
-import { type Row, rowsOf } from "./rows.ts";
+import { bareRowOf, type Row, rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
 const HEAD = "h".repeat(40);
@@ -62,7 +68,7 @@ describe("a Product repo's rows", () => {
     const runs = aRunsRead([aRunRead({ issue: 7 })]);
     const checks = aChecksRead({ ["p".repeat(40)]: [{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-08T19:30:00Z" }] });
 
-    const rows = rowsOf(facts, runs, checks, NOW);
+    const rows = rowsOf(facts, runs, checks, null, NOW);
 
     expect(rows.map(({ standing }) => standing)).toEqual(ruleOf(facts, [aRunInFlight({ issue: 7 })], { ["p".repeat(40)]: [{ name: "test", is: "passed", at: "2026-11-08T19:30:00Z" }] }));
     expect(rows.length).toBeGreaterThan(4);
@@ -72,12 +78,12 @@ describe("a Product repo's rows", () => {
     const facts = homeFactsOf({ github: factsOf({ openIssues: [anOpenIssue({ number: 12, title: "Add the cart", labels: ["ready-for-agent", "agent:implement"] })] }) });
     const runs = aRunsRead([aRunRead({ issue: 12, exact: true, kind: "first", run: 4410, createdAt: "2026-11-08T19:20:00Z", startedAt: "2026-11-08T19:25:00Z" })]);
 
-    const rows = rowsOf(facts, runs, null, NOW);
+    const rows = rowsOf(facts, runs, null, null, NOW);
 
     expect(rows.map(({ standing }) => ({ name: standing.name, since: standing.since, detail: standing.detail }))).toEqual([
       { name: "running", since: "2026-11-08T19:25:00Z", detail: { run: "implement", retry: null, actionsRun: 4410 } },
     ]);
-    expect(rowsOf(facts, aRunsRead("unread"), null, NOW)).toEqual(rowsOf(facts, null, null, NOW));
+    expect(rowsOf(facts, aRunsRead("unread"), null, null, NOW)).toEqual(rowsOf(facts, null, null, null, NOW));
   });
 
   it("take a Plain pull request's name from the checks read, since the report that decided it", () => {
@@ -89,7 +95,7 @@ describe("a Product repo's rows", () => {
       ],
     });
 
-    expect(rowsOf(facts, null, checks, NOW).map(({ standing }) => standing)).toMatchObject([
+    expect(rowsOf(facts, null, checks, null, NOW).map(({ standing }) => standing)).toMatchObject([
       { pullRequest: 70, name: "check-failing", since: "2026-11-08T19:10:00Z", detail: { plain: "kit-bump", check: "lint", checkIs: "failing" } },
     ]);
   });
@@ -97,14 +103,14 @@ describe("a Product repo's rows", () => {
   it("take every Plain pull request as passed on a branch requiring nothing, and as waiting on checks it could not read with no checks read", () => {
     const facts = homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ number: 70 })] }) });
 
-    expect(rowsOf(facts, null, aChecksRead({ ["p".repeat(40)]: [] }, []), NOW).map(({ standing }) => standing.name)).toEqual(["yours-to-merge"]);
-    expect(rowsOf(facts, null, null, NOW).map(({ standing }) => standing.detail)).toEqual([{ plain: "kit-bump", check: null, checksUnread: true, head: "p".repeat(40) }]);
+    expect(rowsOf(facts, null, aChecksRead({ ["p".repeat(40)]: [] }, []), null, NOW).map(({ standing }) => standing.name)).toEqual(["yours-to-merge"]);
+    expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing.detail)).toEqual([{ plain: "kit-bump", check: null, checksUnread: true, head: "p".repeat(40) }]);
   });
 
   it("are the rule's Standings with the runs and the checks unread", () => {
     const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], plainPullRequests: [aPlainPullRequest()] }) });
 
-    expect(rowsOf(facts, null, null, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
+    expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
   });
 
   it("give each Standing its title, the issue's, or the pull request's for a Plain one with no issue, and nothing related yet", () => {
@@ -116,7 +122,7 @@ describe("a Product repo's rows", () => {
       }),
     });
 
-    const rows = rowsOf(facts, null, null, NOW);
+    const rows = rowsOf(facts, null, null, null, NOW);
 
     expect(rows.map(({ standing, title, related, mentions, relatedTo, followUps }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, title, related, mentions, relatedTo, followUps }))).toEqual(
       expect.arrayContaining([
@@ -128,8 +134,319 @@ describe("a Product repo's rows", () => {
     expect(rows).toHaveLength(3);
   });
 
+  describe("a merged agent pull request at Production (#634)", () => {
+    const MERGE = "m".repeat(40);
+    const production = homeFactsOf().kit;
+    const tracked = { ...production, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } } } as const;
+
+    it("take the Deployments read, giving the merged pull request a row with the rule's Standing for it, titled with its own title when its Ticket is closed", () => {
+      const facts = homeFactsOf({ kit: tracked, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z", { title: "Build the thing, merged" })] });
+      const read = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) });
+
+      const rows = rowsOf(facts, null, null, read, NOW);
+
+      expect(rows.map(({ standing }) => standing)).toEqual(
+        standingsOf(standingFactsOf({ github: facts.github, kit: { ...tracked, runsInFlight: "unread", headChecks: {} }, mergedLastDay: facts.mergedLastDay, deployments: read }), NOW),
+      );
+      expect(rows).toEqual([
+        {
+          ...bareRowOf(rows[0]!.standing, "Build the thing, merged", null),
+          related: [],
+          mentions: [],
+          followUps: [],
+          relatedTo: null,
+          ticketClosed: null,
+          plainPullRequest: null,
+          evidence: null,
+          production: { site: "https://shop.example", tracked: true, pages: [] },
+        },
+      ]);
+      expect(rows[0]!.standing).toMatchObject({ issue: 7, pullRequest: 50, name: "live" });
+      expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing)).toMatchObject([{ name: "merged", detail: { deploysUnread: true } }]);
+    });
+
+    it("title the row with its Ticket's title where the facts hold the Ticket", () => {
+      const facts = homeFactsOf({ kit: tracked, github: factsOf({ openIssues: [TICKET] }), mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z", { title: "Merged as" })] });
+
+      expect(rowsOf(facts, null, null, null, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ title }) => title)).toEqual(["Build the thing"]);
+    });
+
+    describe("its links to production (#639)", () => {
+      const UI_MARKER = { run: 4400, artifact: 900, failure: null, routes: ["/book", "/cart?step=2"], preview: { is: "linked", url: "https://fabrik-ticket-7.shop.example.dev/" } } as const;
+      const productionOf = (facts: Facts, read = aDeploymentsRead({})) => rowsOf(facts, null, null, read, NOW).map(({ standing, production }) => ({ name: standing.name, production }));
+
+      it("give the site, that it is tracked, and the live page of each captured route, whatever the row's name", () => {
+        const merged = homeFactsOf({ kit: tracked, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")], evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] });
+        const production = {
+          site: "https://shop.example",
+          tracked: true,
+          pages: [
+            { route: "/book", url: "https://shop.example/book" },
+            { route: "/cart?step=2", url: "https://shop.example/cart?step=2" },
+          ],
+        };
+
+        expect(productionOf(merged)).toEqual([{ name: "merged", production }]);
+        expect(productionOf(merged, aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) }))).toEqual([{ name: "live", production }]);
+        expect(productionOf(merged, aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) }))).toEqual([{ name: "deploying", production }]);
+      });
+
+      it("say a site whose Kit config names no environment is not tracked, with its pages built on its own path", () => {
+        const untracked = { ...production, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://example.dev/shop/", environment: null } } } } as const;
+        const facts = homeFactsOf({ kit: untracked, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")], evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] });
+
+        expect(productionOf(facts, aDeploymentsRead({}))).toEqual([
+          {
+            name: "merged",
+            production: {
+              site: "https://example.dev/shop/",
+              tracked: false,
+              pages: [
+                { route: "/book", url: "https://example.dev/shop/book" },
+                { route: "/cart?step=2", url: "https://example.dev/shop/cart?step=2" },
+              ],
+            },
+          },
+        ]);
+      });
+
+      it.each([
+        ["that is not UI", []],
+        ["whose marker an earlier release wrote, naming no routes", [{ pullRequest: 50, marker: { run: 4400, artifact: 900 } }]],
+        ["whose capture named no routes", [{ pullRequest: 50, marker: { ...UI_MARKER, routes: [] } }]],
+      ] as const)("give a merged pull request %s no pages, so a reader links the site alone", (_what, evidenceMarkers) => {
+        const facts = homeFactsOf({ kit: tracked, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")], evidenceMarkers });
+
+        expect(productionOf(facts).map(({ production }) => production)).toEqual([{ site: "https://shop.example", tracked: true, pages: [] }]);
+      });
+
+      it("are null on a row that is not a merged pull request's, an open UI pull request's among them", () => {
+        const facts = homeFactsOf({ kit: tracked, github: factsOf({ openIssues: [TICKET], openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8 })] }), evidenceMarkers: [{ pullRequest: 51, marker: UI_MARKER }] });
+
+        expect(rowsOf(facts, null, null, null, NOW).map(({ production }) => production)).toEqual([null, null]);
+      });
+    });
+  });
+
+  describe("an agent pull request's UI evidence (#639)", () => {
+    const PREVIEW = "https://fabrik-ticket-7.shop.example.dev/";
+    const evidenceOf = (marker: EvidenceMarker | null, pullRequest = anOpenPullRequest({ number: 50, ticket: 7 })) => {
+      const facts = homeFactsOf({ github: factsOf({ openPullRequests: [pullRequest] }), evidenceMarkers: marker === null ? [] : [{ pullRequest: 50, marker }] });
+      return rowsOf(facts, null, null, null, NOW)
+        .filter(({ standing }) => standing.pullRequest === 50)
+        .map(({ evidence }) => evidence);
+    };
+
+    it("is on an open UI pull request's row: its run, artifact and failure, what came of the preview, and a page for each captured route, in the marker's order", () => {
+      const marker = { run: 4410, artifact: 901, failure: null, routes: ["/cart?step=2", "/book"], preview: { is: "linked", url: PREVIEW }, missed: [] } as const;
+
+      expect(evidenceOf(marker)).toEqual([
+        {
+          run: 4410,
+          artifact: 901,
+          failure: null,
+          preview: "linked",
+          pages: [
+            { route: "/cart?step=2", preview: "https://fabrik-ticket-7.shop.example.dev/cart?step=2" },
+            { route: "/book", preview: "https://fabrik-ticket-7.shop.example.dev/book" },
+          ],
+          failureSentence: null,
+          missed: [],
+        },
+      ]);
+    });
+
+    it.each([
+      ["pending", { is: "pending" }],
+      ["never-answered", { is: "never-answered", url: PREVIEW }],
+      ["none", { is: "none" }],
+    ] as const)("gives no page a preview address when the preview is %s", (is, preview) => {
+      const marker = { run: 4410, artifact: 901, failure: null, routes: ["/book"], preview };
+
+      expect(evidenceOf(marker)).toEqual([{ run: 4410, artifact: 901, failure: null, preview: is, pages: [{ route: "/book", preview: null }], failureSentence: null, missed: null }]);
+    });
+
+    it("gives a failed capture's reason in the Kit's own sentence for it, and no pages when it captured no route", () => {
+      const marker = { run: 4410, artifact: null, failure: "server-did-not-start", routes: [], preview: { is: "pending" } } as const;
+
+      expect(evidenceOf(marker)).toEqual([
+        {
+          run: 4410,
+          artifact: null,
+          failure: "server-did-not-start",
+          preview: "pending",
+          pages: [],
+          failureSentence: "Capture failed: the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran.",
+          missed: null,
+        },
+      ]);
+    });
+
+    // The sentence is the Kit's, from the reason alone (#667): no route, which may be agent text, reaches it.
+    it.each(CAPTURE_FAILURES)("words a capture that failed for %s in the evidence section's sentence for it", (failure) => {
+      const [evidence] = evidenceOf({ run: 4410, artifact: 901, failure, routes: ["/book @octocat -->"], preview: { is: "none" } });
+
+      expect(evidence?.failureSentence).toBe(captureFailureSentence(failure));
+    });
+
+    it("names exactly the one shot a capture missed, by route, size and side, and leaves its pages and the other pull request's evidence as they were", () => {
+      const missedOne = { run: 4410, artifact: 901, failure: null, routes: ["/book", "/"], preview: { is: "linked", url: PREVIEW }, missed: [{ route: "/book", viewport: "mobile", side: "before" }] } as const;
+      const missedNone = { run: 4420, artifact: 902, failure: null, routes: ["/cart"], preview: { is: "none" }, missed: [] } as const;
+      const facts = homeFactsOf({
+        github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 }), anOpenPullRequest({ number: 51, ticket: 8 })] }),
+        evidenceMarkers: [
+          { pullRequest: 50, marker: missedOne },
+          { pullRequest: 51, marker: missedNone },
+        ],
+      });
+
+      const evidence = Object.fromEntries(rowsOf(facts, null, null, null, NOW).flatMap(({ standing, evidence }) => (standing.pullRequest === null ? [] : [[standing.pullRequest, evidence]])));
+
+      expect(evidence[50]).toEqual({
+        run: 4410,
+        artifact: 901,
+        failure: null,
+        preview: "linked",
+        pages: [
+          { route: "/book", preview: "https://fabrik-ticket-7.shop.example.dev/book" },
+          { route: "/", preview: "https://fabrik-ticket-7.shop.example.dev/" },
+        ],
+        failureSentence: null,
+        missed: [{ route: "/book", viewport: "mobile", side: "before" }],
+      });
+      expect(evidence[51]).toEqual({ run: 4420, artifact: 902, failure: null, preview: "none", pages: [{ route: "/cart", preview: null }], failureSentence: null, missed: [] });
+    });
+
+    it("gives a capture that failed outright after taking some pictures its sentence, and still lists what it missed", () => {
+      const marker = {
+        run: 4410,
+        artifact: 901,
+        failure: "timeout",
+        routes: ["/book", "/book/waitlist"],
+        preview: { is: "none" },
+        missed: [
+          { route: "/book/waitlist", viewport: "mobile", side: "after" },
+          { route: "/book/waitlist", viewport: "desktop", side: "after" },
+        ],
+      } as const;
+
+      expect(evidenceOf(marker)).toEqual([
+        {
+          run: 4410,
+          artifact: 901,
+          failure: "timeout",
+          preview: "none",
+          pages: [
+            { route: "/book", preview: null },
+            { route: "/book/waitlist", preview: null },
+          ],
+          failureSentence: "Capture failed: it ran out of time.",
+          missed: [
+            { route: "/book/waitlist", viewport: "mobile", side: "after" },
+            { route: "/book/waitlist", viewport: "desktop", side: "after" },
+          ],
+        },
+      ]);
+    });
+
+    it("reads a marker from an earlier release with its run, artifact and failure, its pages null and its preview unknown", () => {
+      expect(evidenceOf({ run: 4410, artifact: 901, failure: "timeout" })).toEqual([
+        { run: 4410, artifact: 901, failure: "timeout", preview: "unknown", pages: null, failureSentence: "Capture failed: it ran out of time.", missed: null },
+      ]);
+      expect(evidenceOf({ run: 4410, artifact: 901 })).toEqual([{ run: 4410, artifact: 901, failure: null, preview: "unknown", pages: null, failureSentence: null, missed: null }]);
+    });
+
+    it("is null on a pull request with no marker, and on a row with no pull request", () => {
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 8 })] }) });
+
+      expect(evidenceOf(null)).toEqual([null]);
+      expect(rowsOf(facts, null, null, null, NOW).map(({ evidence }) => evidence)).toEqual([null, null]);
+    });
+  });
+
+  describe("an issue's Prototype (#639)", () => {
+    const at = (minute: number) => `2026-11-08T19:${String(minute).padStart(2, "0")}:00Z`;
+    const posted = (id: number, body: string, minute: number, overrides: Parameters<typeof aComment>[2] = {}) =>
+      aComment(body, at(minute), { id, url: `https://github.com/owner/product/issues/21#issuecomment-${id}`, ...overrides });
+    const question = { question: "Which variant?", recommendation: "B, as it shows the price first." };
+    const variant = (letter: string) => ({ letter, summary: `Variant ${letter}`, component: `https://github.com/owner/product/blob/${HEAD}/src/Book${letter}.tsx`, preview: null });
+    /** A prototype round as this release posts it, its line third. */
+    const prototypeRound = (round: number, captures: { run: number; artifact: number } | null = { run: 4410, artifact: 902 }) =>
+      [
+        designRoundMarker(round),
+        PROTOTYPE_ROUND_MARKER,
+        roundLineOf({ v: 1, kind: "prototype", round, intro: "Two takes on the booking page.", questions: [question], route: "/book", variants: [variant("A"), variant("B")], captures }),
+        "Two takes on the booking page.",
+        "",
+        "**Which variant?**",
+      ].join("\n");
+    const earlierPrototypeRound = (round: number) => [designRoundMarker(round), PROTOTYPE_ROUND_MARKER, "Two takes on the booking page.", "", "**Which variant?**"].join("\n");
+    const failureRound = (round: number) =>
+      [
+        designRoundMarker(round),
+        PROTOTYPE_FAILURE_ROUND_MARKER,
+        roundLineOf({ v: 1, kind: "prototype-failed", round, intro: "The build failed.", questions: [{ question: "Carry on without a prototype, or try again?", recommendation: "Carry on." }], otherAnswers: ["Try again"] }),
+        "The build failed.",
+      ].join("\n");
+    const ordinaryRound = (round: number) => `${designRoundMarker(round)}\nWhich of these should it do?`;
+    const reply = (id: number, minute: number) => posted(id, "B, but with a bigger button.", minute, { author: "operator", byBot: false });
+    const prototypeOf = (comments: readonly CommentFacts[], appLogin: string | null = "fabrik-app[bot]") => {
+      const facts = homeFactsOf({ appLogin, github: factsOf({ openIssues: [anOpenIssue({ number: 21, title: "Rework the booking page", labels: ["needs-design"], comments })] }) });
+      return rowsOf(facts, null, null, null, NOW)
+        .filter(({ standing }) => standing.issue === 21)
+        .map(({ prototype }) => prototype);
+    };
+
+    it("is the session's newest prototype round: its number, comment, time, route and captures, waiting while the Operator has not replied after it", () => {
+      const comments = [posted(5001, ordinaryRound(1), 0), reply(5002, 5), posted(5003, prototypeRound(2), 10)];
+
+      expect(prototypeOf(comments)).toEqual([{ round: 2, comment: 5003, postedAt: at(10), waiting: true, route: "/book", captures: { run: 4410, artifact: 902 } }]);
+    });
+
+    it("gives no captures when the prototype job kept none", () => {
+      expect(prototypeOf([posted(5003, prototypeRound(1, null), 10)])).toMatchObject([{ round: 1, captures: null, waiting: true }]);
+    });
+
+    it("no longer waits once the Operator replies after it, and a bot's reply or another person's is not theirs", () => {
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), reply(5004, 20)])).toMatchObject([{ comment: 5003, waiting: false }]);
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), posted(5004, "Deployed a preview.", 20, { author: "vercel[bot]" })])).toMatchObject([{ comment: 5003, waiting: true }]);
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), posted(5004, "Looks good.", 20, { author: "kate", byBot: false })])).toMatchObject([{ comment: 5003, waiting: true }]);
+    });
+
+    it("no longer waits once a later Round is posted, an ordinary one or a prototype failure round", () => {
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), posted(5004, ordinaryRound(3), 20)])).toMatchObject([{ round: 2, comment: 5003, waiting: false }]);
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), reply(5004, 15), posted(5005, failureRound(3), 20)])).toMatchObject([{ round: 2, comment: 5003, waiting: false }]);
+    });
+
+    it("is null when the newest prototype round was posted by an earlier release, with no line, even after one that has one", () => {
+      expect(prototypeOf([posted(5003, earlierPrototypeRound(2), 10)])).toEqual([null]);
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), reply(5004, 15), posted(5005, earlierPrototypeRound(3), 20)])).toEqual([null]);
+    });
+
+    it("is never a prototype failure round, nor an issue with no prototype round", () => {
+      expect(prototypeOf([posted(5003, failureRound(2), 10)])).toEqual([null]);
+      expect(prototypeOf([posted(5001, ordinaryRound(1), 0)])).toEqual([null]);
+      expect(prototypeOf([])).toEqual([null]);
+    });
+
+    it("reads a round's line only from the Fabrik App's comment, any bot's when the gather was given no App login", () => {
+      const quoted = posted(5003, prototypeRound(2), 10, { author: "kate", byBot: false });
+      const anotherBot = posted(5003, prototypeRound(2), 10, { author: "helper[bot]" });
+
+      expect(prototypeOf([quoted])).toEqual([null]);
+      expect(prototypeOf([anotherBot])).toEqual([null]);
+      expect(prototypeOf([anotherBot], null)).toMatchObject([{ comment: 5003, waiting: true }]);
+    });
+
+    it("is null on a row with no open issue: a pull request's with no Ticket", () => {
+      const facts = homeFactsOf({ github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 51, ticket: null, comments: [posted(5003, prototypeRound(2), 10)] })] }) });
+
+      expect(rowsOf(facts, null, null, null, NOW).map(({ prototype }) => prototype)).toEqual([null]);
+    });
+  });
+
   describe("the last word", () => {
-    const lastWordOf = (facts: Facts) => rowsOf(facts, null, null, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
+    const lastWordOf = (facts: Facts) => rowsOf(facts, null, null, null, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
 
     it("is the Fabrik App's latest comment on the issue or its pull request, with when and where it was said", () => {
       const onIssue = aComment("The Kit opened #50 for this Ticket.", "2026-11-08T18:00:00Z", { url: "https://github.com/owner/product/issues/7#issuecomment-1" });
@@ -166,7 +483,7 @@ describe("a Product repo's rows", () => {
   describe("whether an open agent pull request's Ticket is closed", () => {
     const atTheMergeGate = anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [aVerdictComment("pass", HEAD, "2026-11-07T20:00:00Z")] });
     const inDraft = anOpenPullRequest({ number: 50, ticket: 7, draft: true });
-    const ticketClosedOf = (facts: Facts) => rowsOf(facts, null, null, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ ticketClosed }) => ticketClosed);
+    const ticketClosedOf = (facts: Facts) => rowsOf(facts, null, null, null, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ ticketClosed }) => ticketClosed);
 
     it.each([
       ["at the Merge gate", atTheMergeGate],
@@ -201,7 +518,7 @@ describe("a Product repo's rows", () => {
     it("is null on a row with no open agent pull request: an issue's, and a Plain pull request's", () => {
       const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], plainPullRequests: [aPlainPullRequest({ number: 70 })] }), ticketStates: [{ ticket: 7, closed: false }] });
 
-      const rows = rowsOf(facts, null, null, NOW);
+      const rows = rowsOf(facts, null, null, null, NOW);
 
       expect(rows.map(({ standing, ticketClosed }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, ticketClosed }))).toEqual(
         expect.arrayContaining([
@@ -217,7 +534,7 @@ describe("a Product repo's rows", () => {
     const notice = handedBack("2026-11-08T19:30:00Z", { author: "some-app[bot]" });
     const issues = [{ ...TICKET, comments: [notice] }];
 
-    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), null, null, NOW).map(({ standing }) => standing.name);
+    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), null, null, null, NOW).map(({ standing }) => standing.name);
 
     expect(named(null)).toEqual(["yours-to-do"]);
     expect(named("fabrik-app[bot]")).not.toEqual(["yours-to-do"]);
@@ -232,9 +549,47 @@ describe("a Product repo's rows", () => {
       }),
     });
 
-    const rows: Row[] = rowsOf(facts, aRunsRead([aRunRead({ issue: 7 })]), null, NOW);
+    const rows: Row[] = rowsOf(facts, aRunsRead([aRunRead({ issue: 7 })]), null, null, NOW);
 
     expect(rows.length).toBeGreaterThan(0);
+    expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
+    expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
+  });
+
+  it("carry their evidence, production and Prototype on every row, null where there is nothing, and survive a JSON round trip with each filled (#639)", () => {
+    const line = roundLineOf({
+      v: 1,
+      kind: "prototype",
+      round: 1,
+      intro: "Two takes.",
+      questions: [{ question: "Which variant?", recommendation: "A." }],
+      route: "/book",
+      variants: [{ letter: "A", summary: "Variant A", component: "https://github.com/owner/product/blob/h/src/A.tsx", preview: null }],
+      captures: { run: 4420, artifact: 902 },
+    });
+    const prototypeRound = aComment([designRoundMarker(1), PROTOTYPE_ROUND_MARKER, line, "Two takes."].join("\n"), "2026-11-08T19:00:00Z", { id: 5003 });
+    const marker = { run: 4410, artifact: 901, failure: null, routes: ["/book"], preview: { is: "linked", url: "https://fabrik-ticket-8.shop.example.dev/" } } as const;
+    const facts = homeFactsOf({
+      kit: { ...homeFactsOf().kit, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } } },
+      github: factsOf({
+        openIssues: [anOpenIssue({ number: 21, title: "Rework the booking page", labels: ["needs-design"], comments: [prototypeRound] }), TICKET],
+        openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8 })],
+        plainPullRequests: [aPlainPullRequest()],
+      }),
+      mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")],
+      evidenceMarkers: [
+        { pullRequest: 50, marker },
+        { pullRequest: 51, marker },
+      ],
+    });
+
+    const rows = rowsOf(facts, null, null, null, NOW);
+
+    for (const row of rows) expect(Object.keys(row)).toEqual(expect.arrayContaining(["evidence", "production", "prototype"]));
+    expect(rows.filter(({ evidence }) => evidence !== null).map(({ standing }) => standing.pullRequest)).toEqual(expect.arrayContaining([50, 51]));
+    expect(rows.filter(({ production }) => production !== null).map(({ standing }) => standing.pullRequest)).toEqual([50]);
+    expect(rows.filter(({ prototype }) => prototype !== null).map(({ standing }) => standing.issue)).toEqual([21]);
+    expect(rows.filter(({ evidence, production, prototype }) => evidence === null && production === null && prototype === null).length).toBeGreaterThan(0);
     expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
     expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
   });

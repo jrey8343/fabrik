@@ -516,12 +516,12 @@ function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boo
   const { evidence } = event;
   if (evidence === undefined) return null;
   if (!marked && !isUi(paths.map(({ path }) => path), config.ui)) return null;
-  const { result, headSha, run, artifact, gallery } = evidence;
+  const { result, headSha, run, artifact, evidencePage } = evidence;
   return evidenceSection({
     result: result ?? { outcome: "failed", reason: "no-result", headSha, captures: [] },
     run,
     artifact,
-    gallery,
+    evidencePage,
     // The push job polls a declared preview once it has pushed, and links it if it answers.
     preview: config.preview === null ? { kind: "none" } : { kind: "pending" },
   });

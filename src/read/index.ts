@@ -129,3 +129,33 @@ export type { IssuesToRollIn, IssueToRollIn } from "./rollIn.ts";
 export { costPerMergedPullRequestOf } from "../kit/mergedCost.ts";
 export { readOutcomes } from "./outcomes.ts";
 export type { MergedInWeek, OutcomesRead, WorkOutcome } from "./outcomes.ts";
+
+// The Deployments read
+
+export { readDeployments } from "./deployments.ts";
+export type { DeployOf, DeploymentsRead, MergeToRead } from "./deployments.ts";
+
+// The Standing at Production
+
+export { aDeploymentsRead, aDeployOf, aMergedLastDay } from "./builders.ts";
+export { MERGED_STANDS_HOURS, NO_DEPLOY_SEEN_MINUTES } from "../kit/standingProduction.ts";
+export { joinDeployments, mergesToRead } from "./joinDeployments.ts";
+export type { MergedLastDayFacts } from "../kit/standingProduction.ts";
+
+// The Round read
+
+export { readRound } from "./roundRead.ts";
+export type { RoundLine } from "../loop/roundLine.ts";
+export type { RoundRead } from "./roundRead.ts";
+
+// Captured routes and Prototypes on rows
+
+export { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+export { roundLineIn } from "../loop/roundLine.ts";
+export type { EvidenceMarker } from "../evidence/uiEvidence.ts";
+
+// Capture results and production addresses
+
+export { CAPTURE_RESULT_FILE, parseCaptureResult } from "../evidence/uiEvidence.ts";
+export { productionPageUrl } from "../kit/config.ts";
+export type { CaptureResult, CaptureResultRead } from "../evidence/uiEvidence.ts";

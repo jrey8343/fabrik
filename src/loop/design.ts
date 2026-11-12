@@ -44,6 +44,7 @@ import {
 import { spelled } from "./readable.ts";
 import type { MapCap } from "./mapCap.ts";
 import { withoutMentions } from "./mentions.ts";
+import { GITHUB_COMMENT_LIMIT, ROUND_LINE_VERSION, roundLineOf, withoutRoundLines } from "./roundLine.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
 import type {
@@ -298,7 +299,14 @@ export function applyTurn(
   const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap, noPrototype, reply);
   if (plan.kind !== "act") return plan;
   const considered = consideredSection(parsed.output.operatorCommentsConsidered ?? [], given);
-  return considered.length === 0 ? plan : { ...plan, actions: plan.actions.map((action) => endedWith(action, considered)) };
+  const ended = considered.length === 0 ? plan.actions : plan.actions.map((action) => endedWith(action, considered));
+  return { ...plan, actions: ended.map(roundWithinCommentLimit) };
+}
+
+/** A round that, with its hidden line, would pass GitHub's limit for a comment, posted without the line; any other action as it is. */
+function roundWithinCommentLimit(action: Action): Action {
+  if (action.kind !== "comment" || action.body.length <= GITHUB_COMMENT_LIMIT) return action;
+  return { ...action, body: withoutRoundLines(action.body) };
 }
 
 /** The turn's one comment on the issue (a round or a closing comment), ended with `lines`; any other action as it is. */
@@ -760,8 +768,22 @@ function roundComment(
   operator: string,
   sentBack: SentBack | null,
 ): string {
+  const intro = withoutMentions(output.intro);
+  const questions = output.questions.map(({ question, recommendation }) => ({
+    question: withoutMentions(question),
+    recommendation: withoutMentions(recommendation),
+  }));
   return [
     designRoundMarker(round),
+    roundLineOf({
+      v: ROUND_LINE_VERSION,
+      kind: "round",
+      round,
+      intro,
+      questions,
+      ...(sentBack === null ? {} : { sentBack: { pullRequest: sentBack.pullRequest, verdict: sentBack.verdictUrl } }),
+      ...(output.asksMap === true ? { asksMap: true } : {}),
+    }),
     `@${operator} **Design session, round ${round}.** Reply with the numbers you'd answer differently, or \`yes\` to take every recommendation.`,
     ...(sentBack === null
       ? []
@@ -772,12 +794,8 @@ function roundComment(
             : `This Ticket came back from #${sentBack.pullRequest}, which the Kit closed unmerged after [its Verdict](${sentBack.verdictUrl}).`,
         ]),
     "",
-    withoutMentions(output.intro),
-    ...output.questions.flatMap(({ question, recommendation }, i) => [
-      "",
-      `**${i + 1}. ${withoutMentions(question)}**`,
-      `➡️ Recommended: ${withoutMentions(recommendation)}`,
-    ]),
+    intro,
+    ...questions.flatMap(({ question, recommendation }, i) => ["", `**${i + 1}. ${question}**`, `➡️ Recommended: ${recommendation}`]),
   ].join("\n");
 }
 

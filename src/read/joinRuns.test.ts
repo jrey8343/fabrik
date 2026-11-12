@@ -67,11 +67,11 @@ const aCase = (github: Parameters<typeof factsOf>[0], later: readonly RunInFligh
 });
 
 /** The rows a reader keeps, worked out by the rows function from the case's facts and earlier runs read. */
-const keptOf = ({ facts, earlier, keptAt }: JoinCase): Row[] => rowsOf(facts, earlier, null, keptAt);
+const keptOf = ({ facts, earlier, keptAt }: JoinCase): Row[] => rowsOf(facts, earlier, null, null, keptAt);
 /** The kept rows joined with the later runs read. */
 const joinedOf = (join: JoinCase): Row[] => joinRuns(keptOf(join), join.later, join.now);
 /** What the rows function gives from the same facts with the later runs read. */
-const ruleOf = ({ facts, later, now }: JoinCase): Row[] => rowsOf(facts, later, null, now);
+const ruleOf = ({ facts, later, now }: JoinCase): Row[] => rowsOf(facts, later, null, null, now);
 /** What tells one row's Standing from another's, for the tests that say only what changed. */
 const namesOf = (rows: readonly Row[]) => rows.map(({ standing }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, name: standing.name }));
 

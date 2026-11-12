@@ -3,6 +3,7 @@ import { GitHubError, type ReadClient, type Repo } from "../github/client.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
 import { type Facts, gatherRepo } from "./gather.ts";
 import { threeDeepConnectionsIn } from "./queryShape.ts";
+import { rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-09T12:00:00Z";
 const APP = { __typename: "Bot", login: "fabrik-app" };
@@ -262,6 +263,19 @@ describe("a gather shaped for Home", () => {
       ]);
     });
 
+    it("give a row at Production to an agent pull request merged in the last 24 hours, in a repo declaring production, and none to a merged Plain pull request (#634)", async () => {
+      const facts = await factsOf({
+        files: { [CALLER_PATH]: CALLER, [CONFIG_PATH]: JSON.stringify({ production: { url: "https://shop.example", environment: "production" } }) },
+        mergedPullRequests: [
+          aRawMergedPullRequest({ number: 50, mergedAt: "2026-11-09T10:00:00Z" }),
+          aRawMergedPullRequest({ number: 52, mergedAt: "2026-11-09T11:00:00Z", headRefName: "fix-typo", author: OPERATOR }),
+          aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-09T11:10:00Z", headRefName: "dependabot/github_actions/fabrik-1.2.0", author: { __typename: "Bot", login: "dependabot" } }),
+        ],
+      });
+
+      expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => [standing.pullRequest, standing.name, standing.place])).toEqual([[50, "merged", "production"]]);
+    });
+
     it("hold the issues GitHub cross-references to each open agent pull request, with where each is and whether it is open", async () => {
       const issue = (number: number, state: string, repo = "jrey8343/shop") => ({
         __typename: "CrossReferencedEvent",
@@ -313,6 +327,77 @@ describe("a gather shaped for Home", () => {
       expect(facts.github.openIssues.map(({ number }) => number)).toEqual([41]);
     });
 
+    describe("the evidence marker of each agent pull request, open or merged in the last 24 hours (#639)", () => {
+      const marker = (value: Record<string, unknown>) => `<!-- fabrik:ui-evidence ${JSON.stringify(value)} -->`;
+      const body = (value: Record<string, unknown>) => ["The Implementer built the booking page.", "", "<!-- fabrik:ui-evidence-start -->", "## UI evidence", marker(value)].join("\n");
+      const OPEN = { run: 4410, artifact: 901, failure: null, routes: ["/book", "/cart?step=2"], preview: { is: "linked", url: "https://fabrik-ticket-7.shop.example.dev/" } };
+      const MERGED = { run: 4400, artifact: 900, failure: null, routes: ["/"], preview: { is: "never-answered", url: "https://fabrik-ticket-8.shop.example.dev/" } };
+
+      it("are held for the Fabrik App's open and merged agent pull requests, keyed by pull request", async () => {
+        const facts = await factsOf(
+          {
+            openPullRequests: [aRawOpenPullRequest({ number: 50, body: body(OPEN) }), aRawOpenPullRequest({ number: 51, headRefName: "fabrik/ticket-9", body: "No UI here." })],
+            mergedPullRequests: [aRawMergedPullRequest({ number: 49, headRefName: "fabrik/ticket-8", mergedAt: "2026-11-09T10:00:00Z", body: body(MERGED) })],
+          },
+          "fabrik-app[bot]",
+        );
+
+        expect(facts.evidenceMarkers).toEqual([
+          { pullRequest: 50, marker: OPEN },
+          { pullRequest: 49, marker: MERGED },
+        ]);
+      });
+
+      it("are read only from a pull request the Fabrik App opened, never another bot's or a Plain one's, nor one merged more than 24 hours ago", async () => {
+        const OTHER_BOT = { __typename: "Bot", login: "helper" };
+        const facts = await factsOf(
+          {
+            openPullRequests: [
+              aRawOpenPullRequest({ number: 50, author: OTHER_BOT, body: body(OPEN) }),
+              aRawOpenPullRequest({ number: 70, headRefName: "fix-typo", author: OPERATOR, body: body(OPEN) }),
+            ],
+            mergedPullRequests: [
+              aRawMergedPullRequest({ number: 49, author: OTHER_BOT, body: body(MERGED) }),
+              aRawMergedPullRequest({ number: 48, mergedAt: "2026-11-08T11:00:00Z", body: body(MERGED) }),
+            ],
+          },
+          "fabrik-app[bot]",
+        );
+
+        expect(facts.evidenceMarkers).toEqual([]);
+      });
+
+      it("take any bot's pull request for the Fabrik App's when the gather was given no App login, as the Kit job does", async () => {
+        const facts = await factsOf({ openPullRequests: [aRawOpenPullRequest({ number: 50, author: { __typename: "Bot", login: "helper" }, body: body(OPEN) })] });
+
+        expect(facts.evidenceMarkers).toEqual([{ pullRequest: 50, marker: OPEN }]);
+      });
+
+      it("are asked for with each open and each merged pull request's body", async () => {
+        const { client, calls } = repoWith({ files: { [CALLER_PATH]: CALLER } });
+        await gatherRepo(client, "jrey8343/shop", NOW);
+
+        for (const asked of ["pullRequests(states: OPEN, first: 25", "pullRequests(states: MERGED"]) {
+          expect(calls.queries.filter((query) => query.includes(asked))).toEqual([expect.stringMatching(/\bnumber title\b[^{}]*\bbody\b/)]);
+        }
+      });
+    });
+
+    it("hold each comment's id on an open issue and an open agent pull request (#639)", async () => {
+      const comment = (databaseId: number, at: string) => ({ databaseId, url: `https://github.com/jrey8343/shop/issues/7#issuecomment-${databaseId}`, body: `Said at ${at}.`, createdAt: at, author: APP });
+      const held = { databaseId: 3, url: "https://github.com/jrey8343/shop/issues/7#issuecomment-3", body: endedHeldLine("implement", 7, { kind: "resumed" }, "2026-11-09T09:30:00Z"), createdAt: "2026-11-09T09:30:00Z", author: APP };
+      const facts = await factsOf({
+        issues: [aRawIssue({ number: 7, comments: { nodes: [comment(1, "2026-11-09T09:00:00Z"), held, comment(2, "2026-11-09T10:00:00Z")] } })],
+        openPullRequests: [aRawOpenPullRequest({ comments: { nodes: [comment(5, "2026-11-09T11:00:00Z")] } })],
+      });
+
+      expect(facts.github.openIssues[0]?.comments.map(({ id, at }) => ({ id, at }))).toEqual([
+        { id: 1, at: "2026-11-09T09:00:00Z" },
+        { id: 2, at: "2026-11-09T10:00:00Z" },
+      ]);
+      expect(facts.github.openPullRequests[0]?.comments.map(({ id }) => id)).toEqual([5]);
+    });
+
     it("hold no line of the Weekly summary's history", async () => {
       const facts = await factsOf({ issues: [aRawIssue()], openPullRequests: [aRawOpenPullRequest()], mergedPullRequests: [aRawMergedPullRequest()] });
 
@@ -361,11 +446,12 @@ function aRawIssue(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-/** Open agent pull request 50, the Fabrik App's from Ticket 7's branch, a draft at head `b…b`, with nothing on it unless a test says so. */
+/** Open agent pull request 50, the Fabrik App's from Ticket 7's branch, a draft at head `b…b` with an empty body, with nothing on it unless a test says so. */
 function aRawOpenPullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     number: 50,
     title: "Build the thing",
+    body: "",
     isDraft: true,
     headRefOid: "b".repeat(40),
     headRefName: "fabrik/ticket-7",
@@ -383,11 +469,12 @@ function aRawOpenPullRequest(overrides: Record<string, unknown> = {}): Record<st
   };
 }
 
-/** Agent pull request 50, the Fabrik App's from Ticket 7's branch, closing #7, merged on 2026-11-09 at 10:00 as `c…c`. */
+/** Agent pull request 50, the Fabrik App's from Ticket 7's branch, closing #7, merged on 2026-11-09 at 10:00 as `c…c`, its body empty. */
 function aRawMergedPullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     number: 50,
     title: "Build the thing",
+    body: "",
     mergedAt: "2026-11-09T10:00:00Z",
     headRefName: "fabrik/ticket-7",
     author: APP,

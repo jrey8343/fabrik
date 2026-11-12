@@ -15,8 +15,8 @@ import { AGENT_RESULT_FILE } from "../agent/result.ts";
 import { KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
 import { kitJobSummary } from "../kit/kitJob.ts";
 import { planFor } from "../loop/rules.ts";
-import { CAPTURE_RESULT_FILE, EVIDENCE_DIR, GALLERY_FILE, PROTOTYPE_GALLERY_FILE } from "./capture.ts";
-import { parseCaptureResult } from "./uiEvidence.ts";
+import { EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EVIDENCE_PAGE_FILE } from "./capture.ts";
+import { CAPTURE_RESULT_FILE, parseCaptureResult } from "./uiEvidence.ts";
 
 const run = promisify(execFile);
 const KIT = resolve(import.meta.dirname, "..", "..");
@@ -44,7 +44,7 @@ async function git(dir: string, ...args: string[]): Promise<string> {
  * branch fetched as origin/main once its Kit config became `defaultConfig`.
  * The branch's own Kit config is `branchConfig`, the starter unless given. The
  * Ticket is `ticket`, and the Implementer named `routes`. The agent's runner
- * also holds a gallery the agent left where capture writes.
+ * also holds an Evidence page the agent left where capture writes.
  */
 async function anImplementJob({
   defaultConfig,
@@ -83,7 +83,7 @@ async function anImplementJob({
     branch: { name: "fabrik/ticket-7", base: { ref: "main", sha: "a".repeat(40) }, head },
   };
   await writeFile(join(out, AGENT_RESULT_FILE), JSON.stringify(result));
-  await writeFile(join(out, GALLERY_FILE), "<!doctype html><title>Planted by the agent</title>");
+  await writeFile(join(out, EVIDENCE_PAGE_FILE), "<!doctype html><title>Planted by the agent</title>");
   const runner = await tempDir("runner");
   const files = {
     issue: join(runner, "issue.json"),
@@ -194,7 +194,7 @@ async function aPrototypeJob({ defaultConfig, output, committed = true }: { defa
     branch: { name: "prototype/7", base: { ref: "main", sha: base }, head: committed ? head : null },
   };
   await writeFile(join(out, AGENT_RESULT_FILE), JSON.stringify(result));
-  await writeFile(join(out, PROTOTYPE_GALLERY_FILE), "<!doctype html><title>Planted by the agent</title>");
+  await writeFile(join(out, PROTOTYPE_EVIDENCE_PAGE_FILE), "<!doctype html><title>Planted by the agent</title>");
   const runner = await tempDir("runner");
   const files = { outputs: join(runner, "github-output"), summary: join(runner, "step-summary") };
   await writeFile(files.outputs, "");
@@ -242,11 +242,11 @@ describe("The capture step of a prototype turn", () => {
     expect(await readFile(job.files.summary, "utf8")).toBe(
       "### Prototype capture\n\nCapture failed (`no-variants`) after 0 screenshots; its log says where it stopped.\n",
     );
-    // No gallery: the one the agent left where capture writes is gone.
+    // No Evidence page: the one the agent left where capture writes is gone.
     expect((await readdir(job.out)).sort()).toEqual([AGENT_RESULT_FILE, EVIDENCE_DIR].sort());
   });
 
-  it("captures nothing when the turn committed nothing, and passes out no result, so no gallery is uploaded", async () => {
+  it("captures nothing when the turn committed nothing, and passes out no result, so no Evidence page is uploaded", async () => {
     const job = await aPrototypeJob({ defaultConfig: await withUi(), output: ROUND, committed: false });
 
     await capturePrototypeTurn(job);

@@ -127,6 +127,16 @@ describe("The prompts of the runs that read an agent PR", () => {
     expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "round", operatorCommentsConsidered: ["conversation-3"] } });
     expect(text).toContain("- `operatorCommentsConsidered`");
   });
+
+  it("design names asksMap beside its instruction to ask the Map question, and its round example carries it", async () => {
+    const text = await prompt("design");
+    const ask = lineStarting(section(text, "Maps"), "- **Ask in round 1 when the cap has room.**");
+    expect(ask).toContain('"Chart this as a Map instead?"');
+    expect(ask).toContain('`"asksMap": true`');
+    const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
+    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "round", asksMap: true } });
+    expect(text).toContain("- `asksMap`");
+  });
 });
 
 describe("The Coding standards", () => {
@@ -461,6 +471,18 @@ describe("The prototype turn's prompt", () => {
     expect(output).toContain('The Kit asks "Which variant?" itself');
     const example: unknown = JSON.parse(/<prototype>\n([\s\S]*?)\n<\/prototype>/.exec(text)?.[1] ?? "null");
     expect(readPrototypeTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "prototype-round" } });
+  });
+
+  it("asks for recommended, the letter of the variant its recommendation builds on, beside the recommendation, and its example carries one the Kit keeps", async () => {
+    const text = await prompt("prototype");
+    const output = section(text, "Your output");
+    const example: unknown = JSON.parse(/<prototype>\n([\s\S]*?)\n<\/prototype>/.exec(text)?.[1] ?? "null");
+    const read = readPrototypeTurnOutput(example);
+    expect(read).toMatchObject({ ok: true, output: { kind: "prototype-round", recommended: "B" } });
+    expect(read.ok && read.output).not.toHaveProperty("refusedRecommended");
+    const fields = Object.keys(example as object);
+    expect(fields.indexOf("recommended")).toBe(fields.indexOf("recommendation") + 1);
+    expect(lineStarting(output, "- `recommended`")).toContain("capital letter");
   });
 });
 

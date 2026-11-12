@@ -8,12 +8,15 @@ import {
   A_REPLAY,
   aComment,
   aCommit,
+  aDeploymentsRead,
+  aDeployOf,
   aDesignRound,
   aDesignTurnFailedNotice,
   aFollowUpIssue,
   AGROUP_STATS,
   aLabelAdded,
   aMapCapRefusal,
+  aMergedLastDay,
   aMergedPullRequest,
   aMonitorIssueBody,
   AN_UNKNOWN_COST,
@@ -41,10 +44,12 @@ import {
   factsOf,
   standingFactsOf,
   storeFactsOf,
+  CAPTURE_RESULT_FILE,
   checkCallerWorkflow,
   costOf,
   costPerMergedPullRequestOf,
   DEFAULT_KIT_CONFIG,
+  evidenceMarkerIn,
   gatherRepo,
   GitHub,
   GitHubError,
@@ -54,21 +59,30 @@ import {
   homeFactsOf,
   isLive,
   joinChecks,
+  joinDeployments,
   joinRuns,
   KIT_SAID_VERSION,
   kitSaidIn,
+  MERGED_STANDS_HOURS,
+  mergesToRead,
   newerSchemaOf,
+  NO_DEPLOY_SEEN_MINUTES,
+  parseCaptureResult,
+  productionPageUrl,
   readCaller,
+  readDeployments,
   readOutcomes,
   readIssuesToRollIn,
   readKitConfigSources,
   readRunRecord,
   readRequiredChecks,
+  readRound,
   readRuns,
   readSpend,
   refusalOf,
   requiredChecksFactOf,
   resolveKitConfig,
+  roundLineIn,
   rowsOf,
   RUN_RECORD_SCHEMA,
   runnerTimeOf,
@@ -89,7 +103,12 @@ import type {
   ActionsStep,
   CallerCheck,
   CallerRead,
+  CaptureResult,
+  CaptureResultRead,
   CostFigure,
+  DeploymentsRead,
+  DeployOf,
+  EvidenceMarker,
   Facts,
   HeadCheck,
   IssuesToRollIn,
@@ -99,6 +118,8 @@ import type {
   KitConfigSources,
   KitSaid,
   MergedInWeek,
+  MergedLastDayFacts,
+  MergeToRead,
   OutcomesRead,
   ReadClient,
   RepoRead,
@@ -108,6 +129,8 @@ import type {
   RunInFlight,
   RunKind,
   RunnerTime,
+  RoundLine,
+  RoundRead,
   RunRecord,
   RunsRead,
   Runway,
@@ -247,6 +270,15 @@ const A_CHECKS_READ = {
   heads: { ["p".repeat(40)]: [{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-09T11:30:00Z" }] },
 } as const satisfies RequiredChecksRead;
 
+/** Agent pull request 50 for Ticket 7, merged at 11:30 with merge commit `m…`, in a repo declaring production in environment `production`. */
+const A_MERGE_AT_PRODUCTION = homeFactsOf({
+  kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } }, dispatch: null },
+  mergedLastDay: [aMergedLastDay("2026-11-09T11:30:00Z")],
+});
+
+/** `owner/product`'s Deployments in `production` read at NOW: merge `m…` deploying since 11:40. */
+const A_DEPLOYMENTS_READ = aDeploymentsRead({ ["m".repeat(40)]: aDeployOf({ is: "running", deployment: 901, commit: "m".repeat(40), at: "2026-11-09T11:40:00Z" }) }, NOW) satisfies DeploymentsRead;
+
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
   const { brokenRun: _left, ...fields } = aRunRecord();
@@ -270,6 +302,103 @@ const A_PRODUCT_REPO_REFUSING_ITS_FACTS: ReadClient = {
 
 /** A weekly-limit reading, 42% used, its week resetting on 2026-11-13 at 04:00 UTC. */
 const A_WEEKLY_READING = { status: "allowed", rateLimitType: "seven_day", utilization: 0.42, resetsAt: Date.parse("2026-11-13T04:00:00Z") / 1000 };
+
+/**
+ * A client over issue 21 of `owner/product`, open in a Design session with no
+ * parent, its comments these, as the Round read asks for them, and no Map open.
+ */
+function aDesignSessionOf(comments: readonly ReturnType<typeof aComment>[]): ReadClient {
+  const nodes = comments.map(({ body, at, author, byBot }, index) => ({
+    databaseId: 5001 + index,
+    url: `https://github.com/owner/product/issues/21#issuecomment-${5001 + index}`,
+    body,
+    createdAt: at,
+    author: byBot ? { __typename: "Bot", login: author.replace(/\[bot\]$/, "") } : { __typename: "User", login: author },
+  }));
+  return {
+    rest: () => Promise.reject(REFUSAL),
+    fileText: () => Promise.reject(REFUSAL),
+    graphql: <T,>(_query: string, variables: Record<string, unknown>) =>
+      Promise.resolve(
+        (variables["map"] === undefined
+          ? { repository: { issue: { state: "OPEN", labels: { nodes: [{ name: "needs-design" }] }, parent: null, comments: { nodes } } } }
+          : { repository: { issues: { nodes: [] } } }) as T,
+      ),
+  };
+}
+
+/** The Operator's reply on issue 21 at `at`. */
+const anOperatorReply = (at: string) => aComment("The cart.", at, { author: "owner", byBot: false });
+
+/** A Round's line: the second Round of a session, asking one question and whether to chart a Map instead. */
+const A_ROUND_LINE = {
+  v: 1,
+  kind: "round",
+  round: 2,
+  intro: "One thing to settle.",
+  questions: [{ question: "Which page first?", recommendation: "The cart, as it's where people stop." }],
+  asksMap: true,
+} as const satisfies RoundLine;
+
+/** A UI pull request's evidence marker, as the push job writes it and the preview step completes it. */
+const A_UI_EVIDENCE_MARKER = {
+  run: 4410,
+  artifact: 901,
+  failure: null,
+  routes: ["/book?when=today", "/"],
+  preview: { is: "linked", url: "https://fabrik-ticket-7.shop.example.dev/" },
+  missed: [{ route: "/", viewport: "desktop", side: "before" }],
+} as const satisfies EvidenceMarker;
+
+/** The body of a UI pull request the Fabrik App opened, its evidence section closed by its marker. */
+const A_UI_PULL_REQUEST_BODY = [
+  "The Implementer built the booking page.",
+  "",
+  "<!-- fabrik:ui-evidence-start -->",
+  "## UI evidence",
+  `<!-- fabrik:ui-evidence ${JSON.stringify(A_UI_EVIDENCE_MARKER)} -->`,
+].join("\n");
+
+/** A prototype round as the Fabrik App posts it: the Round's marker, the prototype round's, then its line. */
+const A_PROTOTYPE_ROUND = [
+  "<!-- fabrik:design-round 2 -->",
+  "<!-- fabrik:prototype-round -->",
+  `<!-- fabrik:round-line ${JSON.stringify({
+    v: 1,
+    kind: "prototype",
+    round: 2,
+    intro: "Two takes on the booking page.",
+    questions: [{ question: "Which variant?", recommendation: "B, as it shows the price first." }],
+    route: "/book",
+    recommended: "B",
+    variants: [
+      { letter: "A", summary: "The calendar first.", component: "https://github.com/owner/product/blob/b1/src/BookA.tsx", preview: null },
+      { letter: "B", summary: "The price first.", component: "https://github.com/owner/product/blob/b1/src/BookB.tsx", preview: null },
+    ],
+    captures: { run: 4420, artifact: 902 },
+  })} -->`,
+  "Two takes on the booking page.",
+].join("\n");
+
+/** A UI pull request's capture result, as the Implement job's capture step writes it: a Before and an After of one route, signed in. */
+const A_CAPTURE_RESULT = {
+  outcome: "captured",
+  headSha: "h".repeat(40),
+  captures: [
+    { route: "/book", reason: "ticket", viewport: "mobile", side: "before", status: 200, image: "before-mobile-book.png", identity: "owner" },
+    { route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book.png", identity: "owner" },
+  ],
+} as const satisfies CaptureResult;
+
+/** A Prototype's capture result, as the prototype job writes it: variant A with its video, variant B whose video wasn't recorded. */
+const A_PROTOTYPE_CAPTURE_RESULT = {
+  outcome: "captured",
+  headSha: "b".repeat(40),
+  captures: [
+    { route: "/book", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png", video: "variant-a-mobile.webm" },
+    { route: "/book", variant: "B", viewport: "mobile", status: 200, image: "variant-b-mobile.png" },
+  ],
+} as const satisfies CaptureResult;
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -504,6 +633,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
       A_RUNS_READ,
       A_CHECKS_READ,
+      A_DEPLOYMENTS_READ,
       NOW,
     ),
 
@@ -511,7 +641,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   joinRuns: () =>
     joinRuns(
-      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null }],
+      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null, prototype: null }],
       { ...A_RUNS_READ, runs: [{ ...A_RUN_IN_FLIGHT, issue: 7, pullRequest: null, kind: "first", retry: null }] },
       NOW,
     ),
@@ -520,11 +650,11 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   headsToCheck: () =>
     headsToCheck(
-      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, NOW),
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, null, NOW),
     ),
   joinChecks: () =>
     joinChecks(
-      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, NOW),
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, null, NOW),
       A_CHECKS_READ,
       NOW,
     ),
@@ -634,6 +764,119 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       [aRunRecord({ totalCostUsd: 3 }), aReplayRunRecord({ totalCostUsd: 40 })],
       [{ repo: "owner/product", ticket: 7 }, { repo: "owner/product", ticket: null }],
     ),
+
+  // The Deployments read
+
+  readDeployments: () =>
+    readDeployments(
+      REFUSING_CLIENT,
+      "owner/product",
+      "production",
+      [{ mergeCommit: "m".repeat(40), mergedAt: "2026-11-12T08:00:00Z" }],
+      NOW,
+    ),
+
+  // The Standing at Production
+
+  aDeploymentsRead: () =>
+    aDeploymentsRead(
+      A_DEPLOYMENTS_READ.merges,
+      NOW,
+    ),
+  aDeployOf: () =>
+    aDeployOf(
+      { is: "succeeded", deployment: 900, commit: "m".repeat(40), at: "2026-11-09T11:40:00Z" },
+    ),
+  aMergedLastDay: () =>
+    aMergedLastDay(
+      "2026-11-09T11:30:00Z",
+      { title: "Build the thing" },
+    ),
+  joinDeployments: () =>
+    joinDeployments(
+      rowsOf(A_MERGE_AT_PRODUCTION, null, null, null, NOW),
+      A_DEPLOYMENTS_READ,
+      NOW,
+    ),
+  mergesToRead: () =>
+    mergesToRead(
+      rowsOf(A_MERGE_AT_PRODUCTION, null, null, null, NOW),
+    ),
+  MERGED_STANDS_HOURS: () => MERGED_STANDS_HOURS,
+  NO_DEPLOY_SEEN_MINUTES: () => NO_DEPLOY_SEEN_MINUTES,
+
+  // The Round read
+
+  readRound: () =>
+    Promise.all([
+      readRound(
+        aDesignSessionOf([aDesignRound(1, "2026-11-09T09:00:00Z")]),
+        "owner/product",
+        21,
+        { ok: true, config: DEFAULT_KIT_CONFIG },
+        "owner",
+        "fabrik-app[bot]",
+        NOW,
+      ),
+      readRound(
+        aDesignSessionOf([aDesignRound(1, "2026-11-09T09:00:00Z"), anOperatorReply("2026-11-09T10:00:00Z"), aDesignTurnFailedNotice("2026-11-09T11:00:00Z", 9100)]),
+        "owner/product",
+        21,
+        { ok: true, config: DEFAULT_KIT_CONFIG },
+        "owner",
+        "fabrik-app[bot]",
+        NOW,
+      ),
+      readRound(
+        aDesignSessionOf([aDesignRound(1, "2026-11-09T09:00:00Z"), anOperatorReply("2026-11-09T10:00:00Z")]),
+        "owner/product",
+        21,
+        { ok: true, config: DEFAULT_KIT_CONFIG },
+        "owner",
+        "fabrik-app[bot]",
+        NOW,
+      ),
+      readRound(
+        REFUSING_CLIENT,
+        "owner/product",
+        21,
+        { ok: true, config: DEFAULT_KIT_CONFIG },
+        "owner",
+        "fabrik-app[bot]",
+        NOW,
+      ),
+    ]),
+
+  // Captured routes and Prototypes on rows
+
+  evidenceMarkerIn: () =>
+    evidenceMarkerIn(
+      A_UI_PULL_REQUEST_BODY,
+    ),
+  roundLineIn: () =>
+    roundLineIn(
+      A_PROTOTYPE_ROUND,
+    ),
+
+  // Capture results and production addresses
+
+  CAPTURE_RESULT_FILE: () => CAPTURE_RESULT_FILE,
+  parseCaptureResult: () => [
+    parseCaptureResult(
+      `${JSON.stringify(A_CAPTURE_RESULT, null, 2)}\n`,
+    ),
+    parseCaptureResult(
+      `${JSON.stringify(A_PROTOTYPE_CAPTURE_RESULT, null, 2)}\n`,
+    ),
+    parseCaptureResult(
+      "<html>Not Found</html>",
+    ),
+  ],
+  productionPageUrl: () =>
+    productionPageUrl(
+      { url: "https://shop.example", environment: "production" },
+      "/book?when=today",
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -706,6 +949,17 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     followUps: [{ title: "Cache the prices", body: "The prices are read on every request.", filedAs: 30 }],
     ticketClosed: null,
     plainPullRequest: null,
+    evidence: {
+      run: 4410,
+      artifact: 901,
+      failure: "timeout",
+      preview: "linked",
+      pages: [{ route: "/book?when=today", preview: "https://fabrik-ticket-7.shop.example.dev/book?when=today" }],
+      failureSentence: "Capture failed: it ran out of time.",
+      missed: [{ route: "/book?when=today", viewport: "mobile", side: "before" }],
+    },
+    production: { site: "https://shop.example", tracked: true, pages: [{ route: "/book?when=today", url: "https://shop.example/book?when=today" }] },
+    prototype: { round: 2, comment: 5003, postedAt: "2026-11-08T21:00:00Z", waiting: true, route: "/book", captures: { run: 4420, artifact: 902 } },
   } satisfies Row,
   StoreFacts: {
     kind: "store",
@@ -794,6 +1048,52 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     url: "https://github.com/owner/product/pull/51",
   } satisfies WorkOutcome,
   MergedInWeek: { pullRequest: 52, ticket: null, mergedAt: "2026-11-06T10:00:00Z" } satisfies MergedInWeek,
+
+  // The Deployments read
+
+  DeploymentsRead: {
+    repo: "owner/product",
+    environment: "production",
+    readAt: NOW,
+    merges: {
+      ["m".repeat(40)]: { is: "succeeded", deployment: 900, commit: "n".repeat(40), at: "2026-11-12T08:06:00Z", log: null },
+      ["o".repeat(40)]: "unread",
+    },
+  } satisfies DeploymentsRead,
+  DeployOf: {
+    is: "failed",
+    deployment: 901,
+    commit: "o".repeat(40),
+    at: "2026-11-12T09:09:00Z",
+    log: "https://github.com/owner/product/actions/runs/40/job/41",
+  } satisfies DeployOf,
+  MergeToRead: { mergeCommit: "m".repeat(40), mergedAt: "2026-11-12T08:00:00Z" } satisfies MergeToRead,
+
+  // The Standing at Production
+
+  MergedLastDayFacts: { number: 50, title: "Build the thing", ticket: 7, mergeCommit: "m".repeat(40), mergedAt: "2026-11-09T11:30:00Z" } satisfies MergedLastDayFacts,
+
+  // The Round read
+
+  RoundLine: A_ROUND_LINE satisfies RoundLine,
+  RoundRead: {
+    repo: "owner/product",
+    issue: 21,
+    readAt: NOW,
+    waits: "round",
+    round: { comment: 5002, url: "https://github.com/owner/product/issues/21#issuecomment-5002", postedAt: "2026-11-09T11:00:00Z", round: 2, waiting: true, line: A_ROUND_LINE },
+    failedTurn: null,
+    mapMayBeOffered: true,
+  } satisfies RoundRead,
+
+  // Captured routes and Prototypes on rows
+
+  EvidenceMarker: A_UI_EVIDENCE_MARKER satisfies EvidenceMarker,
+
+  // Capture results and production addresses
+
+  CaptureResult: A_PROTOTYPE_CAPTURE_RESULT satisfies CaptureResult,
+  CaptureResultRead: { ok: true, result: A_CAPTURE_RESULT } satisfies CaptureResultRead,
 };
 
 /**

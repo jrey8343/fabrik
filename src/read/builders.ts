@@ -10,6 +10,7 @@ import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { type ReplayProgress, replayBody } from "../kit/replay.ts";
 import type { ReplayRun, RunRecord } from "../kit/runRecord.ts";
 import type { StandingFacts } from "../kit/standing.ts";
+import type { MergedLastDayFacts } from "../kit/standingProduction.ts";
 import type { StoreStandingFacts, WeeklySummaryIssueFacts } from "../kit/standingStore.ts";
 import type {
   AgentPullRequestFacts,
@@ -30,10 +31,11 @@ import type {
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
-import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, MAP_CAP_REFUSAL_OPENING, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, handBackMarker, MAP_CAP_REFUSAL_OPENING, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
 import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
+import type { DeploymentsRead, DeployOf } from "./deployments.ts";
 import type { Facts } from "./gather.ts";
 import type { RunInFlight, RunsRead } from "./runs.ts";
 
@@ -247,9 +249,14 @@ export function aDesignRound(round: number, at: string): CommentFacts {
   return aComment(`${designRoundMarker(round)}\nWhich of these should it do?`, at);
 }
 
-/** The Fabrik App's failure notice for a Design-session turn, at `at`. */
-export function aDesignTurnFailedNotice(at: string): CommentFacts {
-  return aComment(`${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn on #12 failed: it timed out.\n\nReply on this issue to run the turn again.`, at);
+/**
+ * The Fabrik App's failure notice for a Design-session turn, at `at`; when
+ * `run` is given, its hidden line names that Actions run, as this release
+ * writes it, and else it has none, as an earlier release's.
+ */
+export function aDesignTurnFailedNotice(at: string, run?: number): CommentFacts {
+  const said = `${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn on #12 failed: it timed out.\n\nReply on this issue to run the turn again.`;
+  return aComment(run === undefined ? said : `${said}\n${handBackMarker({ kind: "design-turn-failed", role: "design", failure: "timeout", run })}`, at);
 }
 
 /** The Fabrik App's refusal of a Map the Map cap holds, at `at`. */
@@ -368,7 +375,7 @@ export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> 
  * What a gather shaped for Home reads of `owner/product` (./gather.ts): its
  * Kit config the default at `main`, nothing for Dispatch to weigh, the
  * Operator `operator`, the Fabrik App `fabrik-app[bot]`, and no GitHub facts,
- * issue bodies, merges, cross-references or Tickets' states unless a test
+ * issue bodies, merges, cross-references, Tickets' states or evidence markers unless a test
  * says so.
  */
 export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts {
@@ -382,8 +389,24 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
     mergedLastDay: [],
     crossReferences: [],
     ticketStates: [],
+    evidenceMarkers: [],
     ...overrides,
   };
+}
+
+/** Agent pull request 50, titled "Build the thing", closing Ticket 7, merged at `mergedAt` with merge commit `m…`: one of the agent pull requests merged in the last 24 hours a gather keeps. */
+export function aMergedLastDay(mergedAt: string, overrides: Partial<MergedLastDayFacts> = {}): MergedLastDayFacts {
+  return { number: 50, title: "Build the thing", ticket: 7, mergeCommit: "m".repeat(40), mergedAt, ...overrides };
+}
+
+/** How one merge's deploy stands: none started, unless a test says otherwise. */
+export function aDeployOf(overrides: Partial<DeployOf> = {}): DeployOf {
+  return { is: "none", deployment: null, commit: null, at: null, log: null, ...overrides };
+}
+
+/** A Deployments read of `owner/product`'s `production` environment at the filing's time, holding these merges by merge commit. */
+export function aDeploymentsRead(merges: DeploymentsRead["merges"], readAt = "2026-11-08T20:00:00Z"): DeploymentsRead {
+  return { repo: "owner/product", environment: "production", readAt, merges };
 }
 
 /** An Implement run in flight on no Ticket the job names, told by its job's name, running, its workflow run (1, first attempt) created an hour before the filing, with no start read, unless a test says otherwise. */

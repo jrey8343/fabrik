@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Visual evidence
 
-The Operator is turning on Visual evidence in this Product repo, or changing its answers. On a pull request whose diff touches the repo's UI, the Implement job screenshots the routes the change shows on, at mobile and desktop widths. The PR links a gallery of them, and the Reviewer sees them. Your job is to suggest each answer from the repo, have the Operator confirm or correct each one, write them with the Kit's writer program, and open a PR for the Operator to merge.
+The Operator is turning on Visual evidence in this Product repo, or changing its answers. On a pull request whose diff touches the repo's UI, the Implement job screenshots the routes the change shows on, at mobile and desktop widths. The PR links an Evidence page of them, and the Reviewer sees them. Your job is to suggest each answer from the repo, have the Operator confirm or correct each one, write them with the Kit's writer program, and open a PR for the Operator to merge.
 
 This session runs with the Operator's own GitHub credentials and counts as the Operator, so you may change `.fabrik/config.json`, a Trust-root file no agent elsewhere touches. That's why no agent can turn Visual evidence off or narrow its paths. The writer needs no `gh` admin and no `op`. If `gh auth status` fails, stop and tell the Operator before doing anything else.
 
@@ -45,7 +45,7 @@ Propose each answer from the repo (its framework, its `package.json` scripts, th
 - `ui.paths`: globs of the files whose change makes a PR UI, such as `src/pages/**` and `src/components/**`.
 - `ui.serve`: the command the Sandbox runs in the background, after `sandbox.build`, to serve the branch, such as `npm run preview`.
 - `ui.url`: the local base URL that command serves on, such as `http://localhost:4321`. With a sign-in it must be a loopback address.
-- `ui.before_url`, optional: the production site's base URL, which Before screenshots of the same routes are taken from. Without it Before is skipped, and the answer is `null`.
+- `ui.before_url`, optional: the production site's base URL, which Before screenshots of the same routes are taken from. Without it Before is skipped, and the answer is `null`. When `.fabrik/config.json` has no `ui.before_url` but declares a `production` block, offer `production.url`, the address Setup's production question took, and say it came from the `production` block. The writer still writes only `ui` and `preview`, so the `production` block is left as it is.
 - `ui.default_routes`, optional: the routes captured when neither the Ticket nor the Implementer names any, each a path starting with `/`, such as `/`. Without them the answer is `[]`.
 - `preview.url`, optional: where the repo's preview deployment for a PR appears, as a template that may use only `{pr}`, the PR's number, `{sha}`, its full head commit, and `{branch_slug}`, its branch in lower case with each run of characters other than `a` to `z` and `0` to `9` made one `-`, and no `-` at either end, so `fabrik/ticket-12` is `fabrik-ticket-12`. For example `https://deploy-preview-{pr}--<site>.netlify.app`. Before using `{branch_slug}`, check the host slugs a branch the same way: the Kit never shortens it, though a host may shorten a long one. Without it no preview is linked, and the answer is `null`.
 
@@ -127,7 +127,7 @@ It writes only those two blocks of `.fabrik/config.json`, in place or before its
 2. Commit `.fabrik/config.json` alone. When step 4 found an earlier run's PR open, push with `git push origin fabrik/visual-evidence`, which updates that PR. Otherwise push with `git push --force-with-lease -u origin fabrik/visual-evidence`, which replaces a branch GitHub kept from a merged or closed PR, and open a PR to the default branch with `gh pr create`. Its body lists each answer, and says the check that `sandbox.build`, `ui.serve` and any sign-in command work without `sandbox.secrets` was made.
 3. Remove the temporary Fabrik folder.
 4. Tell the Operator to merge the PR themselves. The push job reads the `ui` block from the default branch, so capture starts on the first UI PR after the merge. Then tell them:
-   - That with Visual evidence on, each PR whose diff touches `ui.paths` gets an evidence section linking a gallery of its screenshots, and the Reviewer sees them.
+   - That with Visual evidence on, each PR whose diff touches `ui.paths` gets an evidence section linking an Evidence page of its screenshots, and the Reviewer sees them.
    - With a sign-in, that each signed-in screenshot names the Capture identity it was viewed as, and has no Before, and that a sign-in that fails, or a signed-in page that lands on `ui.sign_in_path`, shows in the evidence section as `sign-in-failed`.
    - That the merge is all it needs: Setup and its wizard needn't run again for it.
    - That running `/fabrik-visual-evidence` again changes its answers, and with the same answers it writes nothing.

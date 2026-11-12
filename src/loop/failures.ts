@@ -324,7 +324,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     resume: resumeAfter(failure, run, resume),
     pointer: repoWide?.pointer ?? null,
     runUrl: run.runUrl,
-    handBack: { kind: handBackOfFailed(run.role, broken), role: run.role, failure },
+    handBack: { kind: handBackOfFailed(run.role, broken), role: run.role, failure, ...(run.role === "design" ? namedRun(run.runUrl) : {}) },
   });
   return {
     kind: "act",
@@ -510,7 +510,7 @@ export function prototypeTurnRefused(issueNumber: number, operator: string, how:
     resume: CARRY_ON_AFTER_PROTOTYPE,
     pointer: null,
     runUrl,
-    handBack: { kind: "design-turn-failed", role: "design" },
+    handBack: { kind: "design-turn-failed", role: "design", ...namedRun(runUrl) },
   });
   return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body }] };
 }
@@ -549,6 +549,20 @@ function noticeBody(notice: {
     `[The run](${notice.runUrl})`,
     handBackMarker(notice.handBack),
   ].join("\n");
+}
+
+/** The Actions run's address the Kit's job builds for itself (`…/actions/runs/<id>/attempts/<n>`), whose id is GITHUB_RUN_ID. */
+const ACTIONS_RUN = /\/actions\/runs\/([1-9][0-9]*)(?:\/|$)/;
+
+/**
+ * The run a failed Design-session turn's notice names in its hidden line
+ * (#640), so a reader never parses the visible link: the number of the run
+ * whose address the push job built for itself, or nothing where the address
+ * isn't an Actions run's.
+ */
+function namedRun(runUrl: string): Pick<HandBackMark, "run"> {
+  const id = ACTIONS_RUN.exec(runUrl)?.[1];
+  return id === undefined ? {} : { run: Number(id) };
 }
 
 /**
