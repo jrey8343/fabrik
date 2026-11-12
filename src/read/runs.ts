@@ -15,6 +15,7 @@ import {
   REPLAY_RECORD_JOB_NAME,
   type RunJob,
   type RunKind,
+  runsByJobNamesOf,
 } from "../github/snapshot.ts";
 import { type KitSaid, kitSaidIn } from "../kit/kitSaid.ts";
 import type { AgentRole } from "../loop/types.ts";
@@ -80,9 +81,10 @@ async function readInFlight(client: Pick<ReadClient, "rest">, repo: Repo): Promi
 function inFlightOf(jobs: readonly ActionsJob[]): RunInFlight[] {
   const named = (jobName: string) => jobs.find((job) => job.conclusion !== "skipped" && isJobNamed(job.name, jobName));
   const kit = named(KIT_JOB_NAME);
-  if (kit === undefined || kit.status !== "completed") return [];
-  const said = kitSaidIn(kit.steps);
-  if (said === null) return [];
+  // Until the Kit job has completed, its closing step's name is the workflow file's text, and no agent job is listed.
+  if (kit !== undefined && kit.status !== "completed") return [];
+  const said = kit === undefined ? null : kitSaidIn(kit.steps);
+  if (said === null) return byJobNamesOf(jobs);
   if (said.replay !== null) return replayRunOf(said.replay, jobs, named(REPLAY_RECORD_JOB_NAME));
   if (said.run === null) return [];
   return exactRunOf(said.run, jobs, named(PUSH_JOB_NAME));
@@ -148,6 +150,30 @@ function exactRunOf(said: NonNullable<KitSaid["run"]>, jobs: readonly ActionsJob
   if (push !== undefined) return [];
   // Actions lists no job still waiting on those before it: a Review's wait for its checks, a Retro's evidence.
   return [{ ...base, job: said.role === "review" ? "waiting-on-checks" : "waiting-for-runner", startedAt: null, url: first.runUrl }];
+}
+
+/**
+ * The runs a workflow run's jobs' names tell, as the Standing tells them, for
+ * a run from a release before the closing step, or whose step can't be read:
+ * not exact, with no model, at the job's page, but a Review's wait for its
+ * checks, whose Review job isn't listed yet, at the run's.
+ */
+function byJobNamesOf(jobs: readonly ActionsJob[]): RunInFlight[] {
+  return runsByJobNamesOf(jobs).map(({ fact, job }) => ({
+    run: fact.run,
+    attempt: fact.attempt,
+    exact: false,
+    role: fact.role,
+    issue: fact.issue,
+    pullRequest: fact.pullRequest,
+    kind: fact.kind,
+    retry: fact.retry,
+    model: null,
+    job: fact.job,
+    createdAt: fact.createdAt,
+    startedAt: fact.startedAt,
+    url: fact.job === "waiting-on-checks" ? job.runUrl : job.url,
+  }));
 }
 
 /** Where an agent job is, from its status: done is landing. */

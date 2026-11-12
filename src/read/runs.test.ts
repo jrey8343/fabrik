@@ -353,6 +353,80 @@ describe("The runs read", () => {
     });
   });
 
+  describe("a run with no closing line", () => {
+    const releasedKit = (conclusion = "success"): CannedJob => ({
+      name: "fabrik / Kit",
+      status: "completed",
+      conclusion,
+      steps: [
+        { name: "Set up job", status: "completed", conclusion: "success" },
+        { name: "Route", status: "completed", conclusion },
+      ],
+    });
+
+    it("is told by its job's name, as a release before the closing step names it, not exact, with no model", async () => {
+      const actions = actionsOf([
+        {
+          id: 7,
+          status: "in_progress",
+          createdAt: "2026-11-12T09:00:00Z",
+          jobs: [releasedKit(), { id: 3, name: "fabrik / Implement #12 (Retry 1)", status: "in_progress", startedAt: "2026-11-12T09:02:00Z" }],
+        },
+        { id: 8, status: "in_progress", createdAt: "2026-11-12T09:10:00Z", jobs: [releasedKit(), { name: "fabrik / Review checks", status: "in_progress" }] },
+      ]);
+
+      expect((await readRuns(actions, "owner/product", NOW)).runs).toEqual([
+        {
+          run: 7,
+          attempt: 1,
+          exact: false,
+          role: "implement",
+          issue: 12,
+          pullRequest: null,
+          kind: "retry",
+          retry: 1,
+          model: null,
+          job: "running",
+          createdAt: "2026-11-12T09:00:00Z",
+          startedAt: "2026-11-12T09:02:00Z",
+          url: JOB_PAGE(7, 3),
+        },
+        {
+          run: 8,
+          attempt: 1,
+          exact: false,
+          role: "review",
+          issue: null,
+          pullRequest: null,
+          kind: null,
+          retry: null,
+          model: null,
+          job: "waiting-on-checks",
+          createdAt: "2026-11-12T09:10:00Z",
+          startedAt: null,
+          url: RUN_PAGE(8),
+        },
+      ]);
+    });
+
+    it("takes no skipped job, whatever its name, for a run", async () => {
+      const actions = actionsOf([
+        {
+          id: 7,
+          status: "in_progress",
+          jobs: [
+            releasedKit(),
+            { name: "fabrik / Implement #12", status: "completed", conclusion: "skipped" },
+            { name: "fabrik / Triage", status: "completed", conclusion: "skipped" },
+            { name: "fabrik / Review PR #${{ needs.kit.outputs.pull-request }}", status: "completed", conclusion: "skipped" },
+          ],
+        },
+      ]);
+
+      expect((await readRuns(actions, "owner/product", NOW)).runs).toEqual([]);
+    });
+  });
+
   describe("a run the Kit routed no agent run for", () => {
     it.each([
       ["declined", { fabrik: 1, route: "none", run: null, held: [], replay: null }],
