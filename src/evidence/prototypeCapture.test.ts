@@ -256,7 +256,7 @@ describe("What a prototype turn's capture step leaves", () => {
     expect(parseCaptureResult(line ?? "")).toEqual({ ok: true, result: captured });
   });
 
-  it("writes the capture result, and the prototype gallery of every variant under its summary, with each screenshot and video it took", () => {
+  it("writes the capture result, and the prototype's Evidence page of every variant under its summary, with each screenshot and video it took", () => {
     const files = new Map([
       [variantA.image, Uint8Array.of(1, 2, 3)],
       [variantA.video!, Uint8Array.of(4, 5, 6)],
@@ -266,19 +266,19 @@ describe("What a prototype turn's capture step leaves", () => {
     const written = prototypeCaptureFiles(captured, files, variants, meta);
 
     expect(JSON.parse(written.result)).toEqual(captured);
-    expect(written.gallery).toContain("<title>Prototype of /book for #7 at ccccccc</title>");
-    expect(written.gallery).toContain("<p>A list of the next open times.</p>");
-    expect(written.gallery).toContain(`src="data:image/png;base64,${Buffer.from([1, 2, 3]).toString("base64")}"`);
-    expect(written.gallery).toContain(`src="data:video/webm;base64,${Buffer.from([4, 5, 6]).toString("base64")}"`);
-    expect(written.gallery).toContain(`src="data:image/png;base64,${Buffer.from([7, 8, 9]).toString("base64")}"`);
-    // The desktop video was named but never written, so the gallery shows its screenshot alone.
-    expect(written.gallery?.match(/<video /g)).toHaveLength(1);
+    expect(written.evidencePage).toContain("<title>Evidence page: prototype of /book for #7 at ccccccc</title>");
+    expect(written.evidencePage).toContain("<p>A list of the next open times.</p>");
+    expect(written.evidencePage).toContain(`src="data:image/png;base64,${Buffer.from([1, 2, 3]).toString("base64")}"`);
+    expect(written.evidencePage).toContain(`src="data:video/webm;base64,${Buffer.from([4, 5, 6]).toString("base64")}"`);
+    expect(written.evidencePage).toContain(`src="data:image/png;base64,${Buffer.from([7, 8, 9]).toString("base64")}"`);
+    // The desktop video was named but never written, so the Evidence page shows its screenshot alone.
+    expect(written.evidencePage?.match(/<video /g)).toHaveLength(1);
   });
 
-  it("writes no gallery for a capture that took no screenshot, only its result", () => {
+  it("writes no Evidence page for a capture that took no screenshot, only its result", () => {
     const none: CaptureResult<VariantCapture> = { outcome: "failed", reason: "server-did-not-start", headSha: HEAD, captures: [] };
 
-    expect(prototypeCaptureFiles(none, new Map(), variants, meta)).toEqual({ result: `${JSON.stringify(none, null, 2)}\n`, gallery: null });
+    expect(prototypeCaptureFiles(none, new Map(), variants, meta)).toEqual({ result: `${JSON.stringify(none, null, 2)}\n`, evidencePage: null });
   });
 
   it.each([

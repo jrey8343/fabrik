@@ -184,7 +184,7 @@ export const UI_ROUTE_CAP = 4;
 
 /**
  * The most UI evidence images a Reviewer gets, so the ones that matter most fit
- * in its context: a Kit constant, not Kit config. The Operator's gallery is uncapped.
+ * in its context: a Kit constant, not Kit config. The Operator's Evidence page is uncapped.
  */
 export const REVIEWER_IMAGE_CAP = 8;
 

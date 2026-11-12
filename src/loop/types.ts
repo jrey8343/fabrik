@@ -179,8 +179,8 @@ export interface ImplementEvidence extends Pick<EvidenceMarker, "run" | "artifac
   readonly result?: CaptureResult;
   /** The head the Implement run built, which capture is of. */
   readonly headSha: string;
-  /** The gallery's web address, or null when the run kept none. */
-  readonly gallery: string | null;
+  /** The Evidence page's web address, or null when the run kept none. */
+  readonly evidencePage: string | null;
 }
 
 /**
@@ -418,8 +418,8 @@ export type LoopEvent =
       readonly headSha: string | null;
       /** What capture recorded, read from the prototype job's outputs; absent when the job passed out none the push job could read. */
       readonly capture?: CaptureResult;
-      /** The prototype gallery's web address, or null when the job kept none. */
-      readonly gallery: string | null;
+      /** The prototype's Evidence page's web address, or null when the job kept none. */
+      readonly evidencePage: string | null;
       /** The Actions run, which a failure round links to. */
       readonly runUrl: string;
       /** The Product repo's web address, by which the round links the branch and each variant's component. */

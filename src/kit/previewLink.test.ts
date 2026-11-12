@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
+import { CAPTURED, EVIDENCE_PAGE, UI } from "../__fixtures__/uiEvidence.ts";
 import { evidenceSection, type PreviewLink } from "../evidence/uiEvidence.ts";
 import { applyPlan } from "../github/apply.ts";
 import { planFor } from "../loop/rules.ts";
@@ -21,7 +21,7 @@ const URL_ = "https://deploy-preview-51--shop.netlify.app/";
 
 /** A UI PR's body as run 9100's push job opened it, its evidence section saying `preview`. */
 const bodySaying = (preview: PreviewLink, run = 9100) =>
-  `Adds a waitlist to full days.\n\n${evidenceSection({ result: CAPTURED, run, artifact: 9202, gallery: GALLERY, preview })}\n\nCloses #7`;
+  `Adds a waitlist to full days.\n\n${evidenceSection({ result: CAPTURED, run, artifact: 9202, evidencePage: EVIDENCE_PAGE, preview })}\n\nCloses #7`;
 
 /** A GitHub holding PR #51 with this body, which `edit` changes, recording every REST call. */
 function pullRequestWith(body: string | null) {
@@ -193,7 +193,7 @@ describe("Linking each variant's preview in a prototype round", () => {
       branch: "prototype/7",
       changes: { net: VARIANTS.map(({ component }) => ({ path: component })), commits: [] },
       headSha: HEAD,
-      gallery: null,
+      evidencePage: null,
       runUrl: `${REPO}/actions/runs/9100/attempts/1`,
       repoUrl: REPO,
     } as const;

@@ -56,7 +56,7 @@ describe("A run on an existing PR is shown the PR's current description, to rewr
       "<!-- fabrik:ui-evidence-start -->",
       "## UI evidence",
       "",
-      "[Open the gallery](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots.",
+      "[Open the Evidence page](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots.",
       `<!-- fabrik:ui-evidence {"run":8000,"artifact":8002} -->`,
       "",
       "Closes #7",

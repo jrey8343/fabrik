@@ -9,7 +9,7 @@ import {
   snapshotOfPullRequest,
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
-import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
+import { anEvidence, CAPTURED, EVIDENCE_PAGE, UI } from "../__fixtures__/uiEvidence.ts";
 import { planFor } from "./rules.ts";
 import { owedRetry, runInFlight } from "./retry.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
@@ -600,7 +600,7 @@ const OLD_SECTION = [
   "<!-- fabrik:ui-evidence-start -->",
   "## UI evidence",
   "",
-  "[Open the gallery](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots: this branch at `0000000`, at mobile and desktop widths.",
+  "[Open the Evidence page](<https://github.com/acme/shop/actions/runs/8000/artifacts/8001>) of 2 screenshots: this branch at `0000000`, at mobile and desktop widths.",
   `<!-- fabrik:ui-evidence {"run":8000,"artifact":8002} -->`,
 ].join("\n");
 
@@ -609,7 +609,7 @@ const NEW_SECTION = [
   "<!-- fabrik:ui-evidence-start -->",
   "## UI evidence",
   "",
-  `[Open the gallery](<${GALLERY}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
+  `[Open the Evidence page](<${EVIDENCE_PAGE}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
   "",
   "No preview link: Kit config declares no `preview.url`.",
   "",

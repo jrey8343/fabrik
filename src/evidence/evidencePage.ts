@@ -1,6 +1,6 @@
-// The UI evidence gallery (#153): one self-contained HTML page holding every
+// The UI evidence's Evidence page (#153): one self-contained HTML page holding every
 // screenshot capture took, for the Operator to open in one click. Uncapped,
-// unlike the Reviewer's images. Beside it, the prototype gallery (#155): one
+// unlike the Reviewer's images. Beside it, a Prototype's Evidence page (#155): one
 // such page of a Prototype's variants, with their videos. Pure, no I/O: the
 // capture step reads the images and videos and writes the page.
 import { Buffer } from "node:buffer";
@@ -19,12 +19,12 @@ import {
 } from "./uiEvidence.ts";
 
 /** A capture with its image's bytes, a PNG. */
-export interface GalleryShot extends Capture {
+export interface EvidencePageShot extends Capture {
   readonly png: Uint8Array;
 }
 
-/** What the gallery is of: the Ticket's pull request, at the commit captured. */
-export interface GalleryMeta {
+/** What the Evidence page is of: the Ticket's pull request, at the commit captured. */
+export interface EvidencePageMeta {
   readonly ticket: number;
   readonly headSha: string;
 }
@@ -35,14 +35,14 @@ export interface GalleryMeta {
  */
 const POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'";
 
-/** The style every gallery's page and sections share. */
+/** The style every Evidence page and its sections share. */
 const PAGE_STYLE = [
   ":root { color-scheme: light dark; font-family: system-ui, sans-serif; }",
   "body { margin: 0 auto; max-width: 1600px; padding: 16px; }",
   "section { margin-top: 32px; }",
 ];
 
-/** The style every gallery's figures share: a caption over each, flagged when its page answered a server error. */
+/** The style every Evidence page's figures share: a caption over each, flagged when its page answered a server error. */
 const FIGURE_STYLE = ["figure { margin: 0; }", "figcaption { margin-bottom: 4px; font-weight: 600; }", "figure.error figcaption { color: #c62828; }"];
 
 /** Before and After share a row, half each, and a side alone takes the whole row. */
@@ -54,11 +54,11 @@ const STYLE = [
 ].join(" ");
 
 /**
- * A gallery's page, which every gallery shares: self-contained under its
+ * An Evidence page's HTML, which every Evidence page shares: self-contained under its
  * content security `policy`, with its title, style, heading and note, then
  * its sections. Each is HTML, any text in it already escaped.
  */
-function galleryPage(page: {
+function evidencePageHtml(page: {
   readonly policy: string;
   readonly title: string;
   readonly style: string;
@@ -86,12 +86,12 @@ function galleryPage(page: {
   ].join("\n");
 }
 
-/** The gallery page: every capture's image inlined, so it refers to nothing outside itself. */
-export function gallery(captures: readonly GalleryShot[], meta: GalleryMeta): string {
+/** The Evidence page: every capture's image inlined, so it refers to nothing outside itself. */
+export function evidencePage(captures: readonly EvidencePageShot[], meta: EvidencePageMeta): string {
   const { ticket, headSha } = meta;
-  return galleryPage({
+  return evidencePageHtml({
     policy: POLICY,
-    title: `UI evidence for #${ticket} at ${headSha.slice(0, 7)}`,
+    title: `Evidence page: UI evidence for #${ticket} at ${headSha.slice(0, 7)}`,
     style: STYLE,
     heading: `UI evidence for #${ticket}`,
     note: `Captured at <code>${headSha}</code>. After is this branch, served in the Sandbox; Before, where there is one, is the production site.`,
@@ -100,12 +100,12 @@ export function gallery(captures: readonly GalleryShot[], meta: GalleryMeta): st
 }
 
 /** Each route once, in the order capture first took it. */
-function routesOf(captures: readonly GalleryShot[]): GalleryShot[] {
+function routesOf(captures: readonly EvidencePageShot[]): EvidencePageShot[] {
   return captures.filter(({ route }, at) => captures.findIndex((other) => other.route === route) === at);
 }
 
 /** A route's heading, then a row per viewport it was captured at, mobile first, with Before beside After. */
-function routeSection({ route, reason, identity }: GalleryShot, captures: readonly GalleryShot[]): string[] {
+function routeSection({ route, reason, identity }: EvidencePageShot, captures: readonly EvidencePageShot[]): string[] {
   const rows = UI_VIEWPORTS.flatMap((viewport) => {
     const row = CAPTURE_SIDES.flatMap((side) =>
       captures.filter((capture) => capture.route === route && capture.viewport === viewport.name && capture.side === side),
@@ -121,7 +121,7 @@ function routeSection({ route, reason, identity }: GalleryShot, captures: readon
 }
 
 /** One screenshot, inlined, captioned with its side, and flagged when its page answered a server error. */
-function figure({ route, viewport, side, status, png, identity }: GalleryShot): string {
+function figure({ route, viewport, side, status, png, identity }: EvidencePageShot): string {
   const named = `${SIDE_WORDS[side]}${signedInWords(identity, escaped)}`;
   const alt = escaped(`${route} at ${viewport}, ${SIDE_WORDS[side]}`);
   const source = `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
@@ -136,10 +136,10 @@ export interface VariantShot extends VariantCapture {
 }
 
 /** A Prototype's variant as its prototype round names it: its letter and one-line summary. */
-export type GalleryVariant = Pick<PrototypeVariant, "letter" | "summary">;
+export type EvidencePageVariant = Pick<PrototypeVariant, "letter" | "summary">;
 
-/** What a prototype gallery is of: the Design session's issue, the route prototyped, and the commit captured. */
-export interface PrototypeGalleryMeta {
+/** What a Prototype's Evidence page is of: the Design session's issue, the route prototyped, and the commit captured. */
+export interface PrototypeEvidencePageMeta {
   readonly issue: number;
   readonly route: string;
   readonly headSha: string;
@@ -163,16 +163,16 @@ const PROTOTYPE_STYLE = [
 ].join(" ");
 
 /**
- * The prototype gallery: every variant under its letter and one-line
+ * A Prototype's Evidence page: every variant under its letter and one-line
  * summary, its mobile and desktop screenshots side by side, each with its
  * video beneath it, all inlined so the page refers to nothing outside itself.
  * Uncapped, and never a pull request's: the Reviewer gets nothing from a Prototype.
  */
-export function prototypeGallery(captures: readonly VariantShot[], variants: readonly GalleryVariant[], meta: PrototypeGalleryMeta): string {
+export function prototypeEvidencePage(captures: readonly VariantShot[], variants: readonly EvidencePageVariant[], meta: PrototypeEvidencePageMeta): string {
   const { issue, route, headSha } = meta;
-  return galleryPage({
+  return evidencePageHtml({
     policy: PROTOTYPE_POLICY,
-    title: escaped(`Prototype of ${route} for #${issue} at ${headSha.slice(0, 7)}`),
+    title: escaped(`Evidence page: prototype of ${route} for #${issue} at ${headSha.slice(0, 7)}`),
     style: PROTOTYPE_STYLE,
     heading: `Prototype of <code>${escaped(route)}</code> for #${issue}`,
     note: `Captured at <code>${headSha}</code>, served in the Sandbox: each variant is the route with <code>?variant=</code> and its letter, with a short video of it loading and scrolling where capture recorded one.`,
@@ -181,7 +181,7 @@ export function prototypeGallery(captures: readonly VariantShot[], variants: rea
 }
 
 /** A variant's heading and summary, then its screenshots and videos, mobile beside desktop; none for a letter neither names. */
-function variantSection(letter: string, variants: readonly GalleryVariant[], captures: readonly VariantShot[]): string[] {
+function variantSection(letter: string, variants: readonly EvidencePageVariant[], captures: readonly VariantShot[]): string[] {
   const variant = variants.find((each) => each.letter === letter);
   const shots = UI_VIEWPORTS.flatMap(({ name }) => captures.filter((capture) => capture.variant === letter && capture.viewport === name));
   if (variant === undefined && shots.length === 0) return [];

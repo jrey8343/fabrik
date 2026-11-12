@@ -23,7 +23,7 @@ export const PROTOTYPE_MIN_VARIANTS = 2;
 /** How many variants a Prototype builds when the Operator didn't ask for another count, as the `prototype` skill does. */
 export const PROTOTYPE_DEFAULT_VARIANTS = 3;
 
-/** The most variants a Prototype builds: past five they stop being different and the gallery stops being quick to look through. */
+/** The most variants a Prototype builds: past five they stop being different and the Evidence page stops being quick to look through. */
 export const PROTOTYPE_VARIANT_CAP = 5;
 
 export interface RoundQuestion {
