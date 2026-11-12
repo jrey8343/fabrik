@@ -10,6 +10,7 @@ import {
   aCommit,
   aDeploymentsRead,
   aDeployOf,
+  aDigestComment,
   aDesignRound,
   aDesignTurnFailedNotice,
   aFollowUpIssue,
@@ -19,6 +20,7 @@ import {
   aMergedLastDay,
   aMergedPullRequest,
   aMonitorIssueBody,
+  aNoDigestLine,
   AN_UNKNOWN_COST,
   anAnswersComment,
   anAuditRunRecord,
@@ -71,6 +73,7 @@ import {
   productionPageUrl,
   readCaller,
   readDeployments,
+  readDigestPlaces,
   readOutcomes,
   readIssuesToRollIn,
   readKitConfigSources,
@@ -108,6 +111,8 @@ import type {
   CostFigure,
   DeploymentsRead,
   DeployOf,
+  DigestData,
+  DigestRead,
   EvidenceMarker,
   Facts,
   HeadCheck,
@@ -121,6 +126,7 @@ import type {
   MergedLastDayFacts,
   MergeToRead,
   OutcomesRead,
+  PlaceShown,
   ReadClient,
   RepoRead,
   Repo,
@@ -399,6 +405,85 @@ const A_PROTOTYPE_CAPTURE_RESULT = {
     { route: "/book", variant: "B", viewport: "mobile", status: 200, image: "variant-b-mobile.png" },
   ],
 } as const satisfies CaptureResult;
+
+/**
+ * A Digest's top as data: one thing that is the Operator's to judge,
+ * pointing at a line of the saved-basket rule inside the diff and at the
+ * words an End user reads, outside it, and one Follow-up.
+ */
+const A_DIGEST_DATA = {
+  v: 1,
+  items: [
+    {
+      kind: "yours-to-judge",
+      claim: "Prices hold for 24 hours.",
+      sentence: "The Ticket said for a while, and the Implementer chose a day.",
+      places: [
+        { path: "src/basket/save.ts", start: 3, end: 3, as: "code", inDiff: true, fingerprint: "6c4e64d92082" },
+        { path: "src/basket/copy.ts", start: 2, end: 2, as: "words", inDiff: false, fingerprint: "d600dea859bb" },
+      ],
+      picture: null,
+      suggestedRequest: null,
+    },
+  ],
+  whatItDoes: "A shopper can now save their basket from /basket.",
+  howItGotHere: "One Review passed it at the first head.",
+  followUps: [{ title: "Share a saved basket by link", url: "https://github.com/owner/product/issues/new?title=Share+a+saved+basket+by+link" }],
+} as const satisfies DigestData;
+
+/** The folds of a Digest, as a reader renders them: the comment's Markdown from the folds line down, the run's link last. */
+const A_DIGESTS_FOLDS = ["<details>", "<summary>Walk me through it</summary>", "", "1. The basket page's Save button.", "", "</details>", "", "[The run](https://github.com/owner/product/actions/runs/42/attempts/1)"].join("\n");
+
+/** The Digest of pull request 50's head, read back from the comment aDigestComment writes of it. */
+const A_READABLE_DIGEST = {
+  is: "readable",
+  head: "h".repeat(40),
+  carriedFrom: null,
+  at: "2026-11-09T11:05:00Z",
+  url: "https://github.com/owner/product/pull/50#issuecomment-9",
+  data: A_DIGEST_DATA,
+  folds: A_DIGESTS_FOLDS,
+} as const satisfies DigestRead;
+
+/** The place of that Digest's that is code inside the diff, as its diff hunk: the line as the head has it, under the line it replaced. */
+const A_PLACE_SHOWN = {
+  item: 0,
+  place: 0,
+  path: "src/basket/save.ts",
+  start: 3,
+  end: 3,
+  as: "code",
+  inDiff: true,
+  show: "hunk",
+  text: "-  store.expire(basket.id, HOUR);\n+  store.expire(basket.id, DAY);",
+} as const satisfies PlaceShown;
+
+/**
+ * A client over `owner/product` at that Digest's head: the two files its
+ * places name, and pull request 50's files, the saved-basket rule with its
+ * patch.
+ */
+const A_HEAD_WITH_THE_DIGESTS_PLACES: ReadClient = {
+  graphql: () => Promise.reject(REFUSAL),
+  rest: (_method, path) =>
+    path.startsWith("/repos/owner/product/pulls/50/files?")
+      ? Promise.resolve([
+          {
+            filename: "src/basket/save.ts",
+            patch: "@@ -1,4 +1,4 @@\n-export const HOUR = 60 * 60;\n+export const DAY = 24 * 60 * 60;\n export function save(basket) {\n-  store.expire(basket.id, HOUR);\n+  store.expire(basket.id, DAY);\n }",
+          },
+        ])
+      : Promise.reject(REFUSAL),
+  fileText: (_repo, path, ref) =>
+    Promise.resolve(
+      ref !== "h".repeat(40)
+        ? null
+        : ({
+            "src/basket/save.ts": "export const DAY = 24 * 60 * 60;\nexport function save(basket) {\n  store.expire(basket.id, DAY);\n}\n",
+            "src/basket/copy.ts": 'export const copy = {\n  saved: "Saved for 24 hours",\n};\n',
+          }[path] ?? null),
+    ),
+};
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -877,6 +962,29 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       { url: "https://shop.example", environment: "production" },
       "/book?when=today",
     ),
+
+  // The Digest read
+
+  aDigestComment: () =>
+    aDigestComment(
+      "h".repeat(40),
+      "2026-11-09T11:05:00Z",
+      { data: A_DIGEST_DATA, folds: A_DIGESTS_FOLDS },
+      { url: "https://github.com/owner/product/pull/50#issuecomment-9" },
+    ),
+  aNoDigestLine: () =>
+    aNoDigestLine(
+      "h".repeat(40),
+      "timed-out",
+      "2026-11-09T11:05:00Z",
+    ),
+  readDigestPlaces: () =>
+    readDigestPlaces(
+      A_HEAD_WITH_THE_DIGESTS_PLACES,
+      "owner/product",
+      50,
+      A_READABLE_DIGEST,
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -960,7 +1068,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     },
     production: { site: "https://shop.example", tracked: true, pages: [{ route: "/book?when=today", url: "https://shop.example/book?when=today" }] },
     prototype: { round: 2, comment: 5003, postedAt: "2026-11-08T21:00:00Z", waiting: true, route: "/book", captures: { run: 4420, artifact: 902 } },
-    digest: null,
+    digest: A_READABLE_DIGEST,
   } satisfies Row,
   StoreFacts: {
     kind: "store",
@@ -1095,6 +1203,23 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
 
   CaptureResult: A_PROTOTYPE_CAPTURE_RESULT satisfies CaptureResult,
   CaptureResultRead: { ok: true, result: A_CAPTURE_RESULT } satisfies CaptureResultRead,
+
+  // The Digest read
+
+  DigestData: A_DIGEST_DATA satisfies DigestData,
+  // One of each kind: readable, unreadable, not written, and none.
+  DigestRead: [
+    A_READABLE_DIGEST,
+    {
+      is: "unreadable",
+      why: "edited",
+      url: "https://github.com/owner/product/pull/50#issuecomment-9",
+      markdown: "**Digest** of #50, written as of `hhhhhhh`.\n\n### Needs your eyes\n\nNothing, I think.",
+    },
+    { is: "not-written", how: "timed-out", url: "https://github.com/owner/product/pull/50#issuecomment-10" },
+    { is: "none" },
+  ] satisfies readonly DigestRead[],
+  PlaceShown: A_PLACE_SHOWN satisfies PlaceShown,
 };
 
 /**

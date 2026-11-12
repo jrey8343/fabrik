@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { DigestData } from "../loop/digestContract.ts";
 import { aDigestComment, aNoDigestLine, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
-import type { DigestRead } from "./digestRead.ts";
+import type { DigestRead, PlaceShown } from "./digestRead.ts";
+import { EXPORT_CALLS, EXPORT_SHAPES } from "./exports.fixture.ts";
 import type { Facts } from "./gather.ts";
-import { rowsOf } from "./rows.ts";
+import { type Row, rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
 const HEAD = "h".repeat(40);
@@ -120,6 +121,33 @@ describe("The Digest on an open agent pull request's row", () => {
       ]),
     );
     expect(rows).toHaveLength(2);
+  });
+});
+
+describe("The Digest read in the read library", () => {
+  it("is held by the interface fixture: a DigestRead of each kind, one of them on its row, and a PlaceShown", () => {
+    const reads = EXPORT_SHAPES["DigestRead"] as readonly DigestRead[];
+
+    expect(reads.map(({ is }) => is)).toEqual(["readable", "unreadable", "not-written", "none"]);
+    expect((EXPORT_SHAPES["Row"] as Row).digest).toEqual(reads[0]);
+    expect(EXPORT_SHAPES["PlaceShown"]).toMatchObject({ item: 0, place: 0, show: "hunk" });
+  });
+
+  it("has the fixture's readable Digest read back from a comment its builder writes, and its no-Digest line read as not written", () => {
+    const [readable] = EXPORT_SHAPES["DigestRead"] as readonly Extract<DigestRead, { is: "readable" }>[];
+    const comment = EXPORT_CALLS["aDigestComment"]?.() as ReturnType<typeof aDigestComment>;
+    const line = EXPORT_CALLS["aNoDigestLine"]?.() as ReturnType<typeof aNoDigestLine>;
+    const onRow = (said: ReturnType<typeof aDigestComment>) =>
+      digestOn(homeFactsOf({ github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: readable?.head ?? "", comments: [said] })] }) }));
+
+    expect(onRow(comment)).toEqual(readable);
+    expect(onRow(line)).toMatchObject({ is: "not-written", how: "timed-out" });
+  });
+
+  it("has the fixture's place read give the lines of that Digest's places: the fixture's PlaceShown for the one inside the diff, plain lines for the words", async () => {
+    const shown = (await EXPORT_CALLS["readDigestPlaces"]?.()) as readonly PlaceShown[];
+
+    expect(shown).toEqual([EXPORT_SHAPES["PlaceShown"], expect.objectContaining({ item: 0, place: 1, as: "words", show: "lines" })]);
   });
 });
 
