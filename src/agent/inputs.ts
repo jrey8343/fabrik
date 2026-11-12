@@ -32,6 +32,7 @@ import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { fromAuditIn } from "../loop/markers.ts";
+import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
 import { AGENT_FAILURE_FILE, inputsFailureReportFor } from "./failure.ts";
@@ -163,7 +164,8 @@ export async function readIssue(
     const byBot = author?.__typename === "Bot";
     return {
       author: author === null ? null : { login: author.login },
-      body,
+      // A Round's hidden line is for readers of the Kit, never an agent (#635): the thread is as it was without it.
+      body: withoutRoundLines(body),
       createdAt,
       byBot,
       isOperator: !byBot && author?.login === operator,

@@ -7,7 +7,7 @@
 // which keeps both out of agent text. A prototype turn's capture of its
 // variants (#155) shares the capture result, and neither the Reviewer nor the
 // evidence section ever shows it. The galleries, the PR's and the prototype's,
-// are beside it (src/evidence/gallery.ts). Pure, no I/O.
+// are beside it (src/evidence/evidencePage.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { type CaptureIdentity, isCaptureIdentity, isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
@@ -372,7 +372,7 @@ function isOneOf<T extends string>(options: readonly T[], value: unknown): value
  * its context, the ones that matter most first: After before Before, mobile
  * before desktop, then routes in reason order (the Ticket's, the
  * Implementer's, the defaults), each reason's routes in the order they were
- * captured. The Operator's gallery has them all. None is ever of a
+ * captured. The Operator's Evidence page has them all. None is ever of a
  * Prototype's variant: the Reviewer gets nothing from a Prototype.
  */
 export function reviewerImages(captures: readonly (Capture | VariantCapture)[]): readonly Capture[] {
@@ -549,8 +549,8 @@ export interface EvidenceMarker {
 export interface UiEvidence extends Pick<EvidenceMarker, "run" | "artifact"> {
   /** What capture recorded. */
   readonly result: CaptureResult;
-  /** The gallery's web address, or null when the run kept none. */
-  readonly gallery: string | null;
+  /** The Evidence page's web address, or null when the run kept none. */
+  readonly evidencePage: string | null;
   readonly preview: PreviewLink;
 }
 
@@ -560,7 +560,7 @@ const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
 /**
  * The evidence section of a UI pull request's body, between a hidden start
  * line and the marker (evidenceMarkerIn): why capture failed, when it did;
- * the gallery link; the preview link, or why there is none; and each
+ * the Evidence page link; the preview link, or why there is none; and each
  * captured route with why it was chosen, flagged when it answered a server
  * error, or naming what of it wasn't captured and why. A failed capture
  * keeps the screenshots it took first, so the section shows those too. Its
@@ -568,7 +568,7 @@ const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
  * Prototype's variant: a Ticket's UI evidence gets nothing from a Prototype.
  */
 export function evidenceSection(evidence: UiEvidence): string {
-  const { result, gallery, preview } = evidence;
+  const { result, evidencePage, preview } = evidence;
   const captures = sideCaptures(result.captures);
   const missed = result.missed ?? [];
   // Each route once, in reason order as routes are chosen, though a route missed outright has no capture to come first by.
@@ -579,7 +579,7 @@ export function evidenceSection(evidence: UiEvidence): string {
     SECTION_START,
     "## UI evidence",
     ...(result.outcome === "failed" ? ["", failureLine(result.reason, captures)] : []),
-    ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result.headSha, captures)]),
+    ...(captures.length === 0 ? [] : ["", evidencePageLine(evidencePage, result.headSha, captures)]),
     "",
     previewLine(preview),
     ...(routes.length === 0 ? [] : ["", "Captured routes:", "", ...routes.map((chosen) => routeLine(chosen, captures, missed))]),
@@ -667,7 +667,7 @@ export function isServerError(status: number): boolean {
 
 /**
  * What a screenshot of a page that answered a server error shows, in the
- * words the evidence section, the gallery and the Reviewer's block share:
+ * words the evidence section, the Evidence page and the Reviewer's block share:
  * the page `answered` its status, so what `shows` it is of an error page.
  */
 export function serverErrorWords(answered: string, shows: string): string {
@@ -677,11 +677,11 @@ export function serverErrorWords(answered: string, shows: string): string {
 /** How the evidence names each side. */
 export const SIDE_WORDS: Readonly<Record<CaptureSide, string>> = { before: "Before", after: "After" };
 
-function galleryLine(url: string | null, headSha: string, captures: readonly Capture[]): string {
-  if (url === null) return `The Implement run kept no gallery of its ${screenshots(captures.length)}.`;
+function evidencePageLine(url: string | null, headSha: string, captures: readonly Capture[]): string {
+  if (url === null) return `The Implement run kept no Evidence page of its ${screenshots(captures.length)}.`;
   const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";
   const viewports = UI_VIEWPORTS.map(({ name }) => name).filter((name) => captures.some(({ viewport }) => viewport === name));
-  return `${link("Open the gallery", url)} of ${screenshots(captures.length)}: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} ${viewports.length === 1 ? "width" : "widths"}.`;
+  return `${link("Open the Evidence page", url)} of ${screenshots(captures.length)}: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} ${viewports.length === 1 ? "width" : "widths"}.`;
 }
 
 function previewLine(preview: PreviewLink): string {

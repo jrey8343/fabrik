@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
+import { roundLineIn } from "../loop/roundLine.ts";
 import { planFor } from "../loop/rules.ts";
 import type { LoopEvent, Plan, Snapshot } from "../loop/types.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
@@ -412,6 +413,29 @@ describe("Reading an issue's pending prototype request in the current session", 
   const prototypeRound = (n: number, marker: string) =>
     app([designRoundMarker(n), marker, `@jrey **Design session, round ${n}.** Here are the variants.`].join("\n"));
   const ordinaryRound = (n: number) => app(`${designRoundMarker(n)}\n@jrey **Design session, round ${n}.**`);
+
+  /** An ordinary round as the core posts it, with its hidden line (#635). */
+  function landedRound(n: number) {
+    const output = JSON.stringify({ kind: "round", intro: "Hi.", questions: [{ question: "Q?", recommendation: "R." }], asksMap: true });
+    const plan = planFor(
+      { kind: "agent-run-finished", role: "design", issue: 7, output },
+      snapshotOf(anIssue({ number: 7, labels: ["needs-design"], designRounds: n - 1 })),
+      kitConfig(),
+    );
+    return app(commentsOf(plan)[0] ?? "");
+  }
+
+  it("reads an ordinary round carrying its hidden line as an ordinary round: it counts, and neither ends a request nor answers one", () => {
+    const first = landedRound(1);
+    const request = requested();
+    const second = landedRound(2);
+    const thread = [first, other("Yes, prototype it."), request, other("Keep the header."), second];
+
+    expect(roundLineIn(second.body)).toMatchObject({ round: 2 });
+    expect(designSessionOf(thread).designRounds).toBe(2);
+    expect(pendingPrototypeIn(thread)).toMatchObject({ request: asked, comment: request.id });
+    expect(unansweredPrototypesIn(thread)).toEqual([{ request: asked, reply: null }]);
+  });
 
   it("reads the request the core posted as pending, through the Operator's replies and the session's ordinary rounds since, with its comment, its prototype turn not yet started", () => {
     const request = requested();

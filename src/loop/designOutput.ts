@@ -23,7 +23,7 @@ export const PROTOTYPE_MIN_VARIANTS = 2;
 /** How many variants a Prototype builds when the Operator didn't ask for another count, as the `prototype` skill does. */
 export const PROTOTYPE_DEFAULT_VARIANTS = 3;
 
-/** The most variants a Prototype builds: past five they stop being different and the gallery stops being quick to look through. */
+/** The most variants a Prototype builds: past five they stop being different and the Evidence page stops being quick to look through. */
 export const PROTOTYPE_VARIANT_CAP = 5;
 
 export interface RoundQuestion {
@@ -51,6 +51,12 @@ type DesignTurnOutcome =
       /** A short lead-in: where the session stands and what this round settles. */
       readonly intro: string;
       readonly questions: readonly RoundQuestion[];
+      /**
+       * True when the round asks "Chart this as a Map instead?", so a reader of
+       * its hidden line doesn't offer the Map twice (#635). Anything but true
+       * is no mark, and never fails the turn.
+       */
+      readonly asksMap?: true;
     }
   | {
       /** The small outcome: the issue is rewritten in place as an agent brief, or as an Operator brief. */
@@ -480,7 +486,7 @@ function readTurn(value: unknown): DesignTurnOutputResult {
       if (!isText(value.intro)) errors.push("a round needs non-empty intro text");
       const questions = readQuestions(value.questions, errors);
       if (errors.length > 0) return { ok: false, errors };
-      return { ok: true, output: { kind: "round", intro: value.intro as string, questions } };
+      return { ok: true, output: { kind: "round", intro: value.intro as string, questions, ...(value.asksMap === true ? { asksMap: true } : {}) } };
     }
     case "brief": {
       if (!isText(value.comment)) errors.push("a brief needs non-empty comment text");

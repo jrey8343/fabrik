@@ -27,7 +27,7 @@ An issue touches **Product intent** when it changes who the product serves or wh
 
 Some issues are too foggy for one Design session: what done looks like isn't settled, or the open questions hang on one another, so no single session could design them without guessing. Such an issue can be charted as a **Map** instead: the issue becomes the Map, which names the destination, and the first questions to settle on the way there become its Decisions, sub-issues each resolved on its own by research, a prototype, a grilling or a task, never by a pull request. "The Map cap", which follows the issue at the end of this prompt, says whether this session may offer one.
 
-- **Ask in round 1 when the cap has room.** When "The Map cap" says this session may offer a Map, and either Triage's comment carries the line `This looks too foggy for one Design session.` or you judge the destination can't be designed in one session, round 1 asks "Chart this as a Map instead?" with your recommendation. The Operator decides.
+- **Ask in round 1 when the cap has room.** When "The Map cap" says this session may offer a Map, and either Triage's comment carries the line `This looks too foggy for one Design session.` or you judge the destination can't be designed in one session, round 1 asks "Chart this as a Map instead?" with your recommendation, and that round's output carries `"asksMap": true`. The Operator decides.
 - **End in a Map in any later round when the Operator asks for one**, while "The Map cap" still says you may.
 - **Ask no Map question on an issue this session can design**, clear but large ones included: they finish with a brief or a Spec as usual.
 - **Ask no Map question on a Ticket under a Spec.** A Ticket under a Spec never becomes a Map: the Spec stays the single parent of its Tickets, so however foggy the Ticket, it finishes with a brief or a split into sibling Tickets. "The Map cap" says so for such a Ticket, whatever room the cap has.
@@ -63,6 +63,7 @@ End your reply with exactly one `<design>` tag holding a JSON object, and nothin
   "questions": [
     { "question": "The question, in one sentence.", "recommendation": "Your recommended answer, short enough to accept with yes." }
   ],
+  "asksMap": true,
   "operatorCommentsConsidered": ["conversation-3"]
 }
 </design>
@@ -152,6 +153,7 @@ To finish as not planned:
 - Every text field is non-empty Markdown, except a Map's `notes`, `notYetSpecified` and `outOfScope`, which may be empty.
 - Each Ticket's `key` is a short name unique among the Tickets, used only in other Tickets' `blockedBy`. A Ticket that can start straight away has an empty `blockedBy`. Blockers must not loop. The Kit links the Spec and the blockers natively, so don't write issue numbers, `Parent` or `Blocked by` sections into any body. The Kit numbers the round and the questions, and adds the one @-mention of the Operator, so don't number anything yourself and don't @-mention anyone.
 - `questions` holds at least one question, each with a recommendation.
+- `asksMap` goes on a round only, and only as `true`, when one of its questions is "Chart this as a Map instead?". Leave it out of every other round.
 - `acceptanceCriteria` holds at least one criterion.
 - An agent brief's `keptBranch` is `true` or `false`. `true` marks the Ticket for a Kept-branch start: its next Implement run carries on the Kept branch of the PR it came back from. Set it to `true` only for a Ticket back from its pull request whose session decided to carry on; `false`, or leaving it out, starts the run from `main`. It never goes on a Ticket in `spec` or `split`. An agent brief may also carry `"stepUp": true`, which marks the Ticket for a Stepped-up start: its Implement runs use the stronger model.
 - A `brief` is an agent brief (`summary` and `acceptanceCriteria`) when an Implementer builds it, or an Operator brief (`"operator": true`, `summary` and `steps`) when the whole issue is Operator work, never both.

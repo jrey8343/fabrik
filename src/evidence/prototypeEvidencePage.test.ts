@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PrototypeVariant } from "../loop/designOutput.ts";
-import { prototypeGallery, type VariantShot } from "./gallery.ts";
+import { prototypeEvidencePage, type VariantShot } from "./evidencePage.ts";
 import type { VariantCapture } from "./uiEvidence.ts";
 
 const HEAD = "4f2b9c0d1e3a5b7c9d0e1f2a3b4c5d6e7f8a9b0c";
@@ -39,9 +39,9 @@ const loaded = (html: string) => [...html.matchAll(/\s(?:src|href|srcset|action|
 
 const base64 = (data: Uint8Array) => Buffer.from(data).toString("base64");
 
-describe("The prototype gallery", () => {
+describe("The prototype's Evidence page", () => {
   it("is one page holding every variant's screenshots and videos inline", () => {
-    const html = prototypeGallery(shots, variants, meta);
+    const html = prototypeEvidencePage(shots, variants, meta);
 
     for (const { png, webm } of shots) {
       expect(html.split(`src="data:image/png;base64,${base64(png)}"`)).toHaveLength(2);
@@ -51,7 +51,7 @@ describe("The prototype gallery", () => {
   });
 
   it("refers to nothing outside itself, and its policy lets a browser load nothing else", () => {
-    const html = prototypeGallery(shots, variants, meta);
+    const html = prototypeEvidencePage(shots, variants, meta);
 
     expect(loaded(html).every((value) => value.startsWith("data:image/png;base64,") || value.startsWith("data:video/webm;base64,"))).toBe(true);
     expect(html).not.toMatch(/<script|<link|<iframe|<object|<embed|<source|@import|url\(/i);
@@ -60,10 +60,10 @@ describe("The prototype gallery", () => {
     );
   });
 
-  it("names the issue, the route prototyped and the commit it shows", () => {
-    const html = prototypeGallery(shots, variants, meta);
+  it("names itself the Evidence page, with the issue, the route prototyped and the commit it shows", () => {
+    const html = prototypeEvidencePage(shots, variants, meta);
 
-    expect(html).toContain("<title>Prototype of /book for #12 at 4f2b9c0</title>");
+    expect(html).toContain("<title>Evidence page: prototype of /book for #12 at 4f2b9c0</title>");
     expect(html).toContain("<h1>Prototype of <code>/book</code> for #12</h1>");
     expect(html).toContain(`<code>${HEAD}</code>`);
   });
@@ -87,9 +87,9 @@ const sectionsOf = (html: string, from: readonly VariantShot[]) => {
   }));
 };
 
-describe("The prototype gallery's variants", () => {
+describe("The prototype's Evidence page's variants", () => {
   it("each sit under its letter and summary, in letter order, with its mobile and desktop screenshots side by side and each one's video beneath it", () => {
-    expect(sectionsOf(prototypeGallery(shots, variants, meta), shots)).toEqual([
+    expect(sectionsOf(prototypeEvidencePage(shots, variants, meta), shots)).toEqual([
       {
         heading: "Variant A",
         summary: "The calendar first, times below it",
@@ -126,13 +126,13 @@ describe("The prototype gallery's variants", () => {
   it("sit the same way whatever order capture took them in, or the round names them in", () => {
     const reversed = shots.toReversed();
 
-    expect(prototypeGallery(reversed, variants.toReversed(), meta)).toBe(prototypeGallery(shots, variants, meta));
+    expect(prototypeEvidencePage(reversed, variants.toReversed(), meta)).toBe(prototypeEvidencePage(shots, variants, meta));
   });
 
   it("show a variant capture took nothing of under its letter and summary, saying so", () => {
     const stopped = shots.filter(({ variant }) => variant !== "C");
 
-    expect(sectionsOf(prototypeGallery(stopped, variants, meta), stopped)[2]).toEqual({
+    expect(sectionsOf(prototypeEvidencePage(stopped, variants, meta), stopped)[2]).toEqual({
       heading: "Variant C",
       summary: "Practitioner first, then their times",
       row: [],
@@ -144,14 +144,14 @@ describe("The prototype gallery's variants", () => {
   it("show a variant capture stopped before its desktop screenshot with its mobile one alone", () => {
     const stopped = shots.filter(({ variant, viewport }) => !(variant === "B" && viewport === "desktop"));
 
-    expect(sectionsOf(prototypeGallery(stopped, variants, meta), stopped)[1]?.row).toEqual([
+    expect(sectionsOf(prototypeEvidencePage(stopped, variants, meta), stopped)[1]?.row).toEqual([
       "Mobile, 390 × 844 (Variant B at mobile): variant-b-mobile.png, variant-b-mobile.webm",
     ]);
   });
 
-  // The gallery holds every capture, as the PR's does.
+  // The Evidence page holds every capture, as the PR's does.
   it("show a capture of a variant the round doesn't name, under its letter alone", () => {
-    const sections = sectionsOf(prototypeGallery(shots, variants.slice(0, 2), meta), shots);
+    const sections = sectionsOf(prototypeEvidencePage(shots, variants.slice(0, 2), meta), shots);
 
     expect(sections.map(({ heading, summary }) => [heading, summary])).toEqual([
       ["Variant A", "The calendar first, times below it"],
@@ -163,7 +163,7 @@ describe("The prototype gallery's variants", () => {
 
   it("flag a screenshot of a page that answered a server error, so it isn't mistaken for the design", () => {
     const failing = shots.map((shot) => (shot.variant === "B" && shot.viewport === "mobile" ? { ...shot, status: 500 } : shot));
-    const html = prototypeGallery(failing, variants, meta);
+    const html = prototypeEvidencePage(failing, variants, meta);
 
     expect(sectionsOf(html, failing)[1]?.row).toEqual([
       "Mobile, 390 × 844: answered 500, so this is an error page, not the design (Variant B at mobile): variant-b-mobile.png, variant-b-mobile.webm",
@@ -174,18 +174,18 @@ describe("The prototype gallery's variants", () => {
 });
 
 // A summary and the route are agent text: the page shows them and never runs or loads them.
-describe("The prototype gallery's text", () => {
+describe("The prototype's Evidence page's text", () => {
   const evil = `"><script>alert(1)</script><img src="https://evil.example/x.png">`;
 
   it("shows a variant's summary as text, whatever HTML it holds", () => {
-    const html = prototypeGallery(shots, [{ letter: "A", summary: `Calendar ${evil}` }], meta);
+    const html = prototypeEvidencePage(shots, [{ letter: "A", summary: `Calendar ${evil}` }], meta);
 
     expect(html).toContain("<p>Calendar &quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=&quot;https://evil.example/x.png&quot;&gt;</p>");
     expect(html).not.toMatch(/<script|evil\.example\/x\.png"/);
   });
 
   it("shows the route as text, whatever HTML it holds", () => {
-    const html = prototypeGallery(shots, variants, { ...meta, route: `/book${evil}` });
+    const html = prototypeEvidencePage(shots, variants, { ...meta, route: `/book${evil}` });
 
     expect(html).toContain("<h1>Prototype of <code>/book&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=&quot;https://evil.example/x.png&quot;&gt;</code> for #12</h1>");
     expect(html).not.toMatch(/<script|evil\.example\/x\.png"/);
@@ -193,11 +193,11 @@ describe("The prototype gallery's text", () => {
   });
 });
 
-describe("The prototype gallery of a route viewed signed in", () => {
+describe("The prototype's Evidence page of a route viewed signed in", () => {
   it("names the identity on each screenshot, and a public route's read as they do today", () => {
     const signedIn = shots.map((each) => ({ ...each, identity: "owner" }));
 
-    expect(prototypeGallery(signedIn, variants, meta)).toContain("<figcaption>Mobile, 390 × 844, signed in as owner</figcaption>");
-    expect(prototypeGallery(shots, variants, meta)).not.toContain("signed in");
+    expect(prototypeEvidencePage(signedIn, variants, meta)).toContain("<figcaption>Mobile, 390 × 844, signed in as owner</figcaption>");
+    expect(prototypeEvidencePage(shots, variants, meta)).not.toContain("signed in");
   });
 });

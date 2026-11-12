@@ -579,7 +579,7 @@ fi
 # so this stage writes nothing: it points to the skill and checks for the block.
 stage "Visual evidence"
 say "On a pull request that changes your UI, the Implement job screenshots the routes it"
-say "touched at mobile and desktop widths, the PR links a gallery of them, and the Reviewer sees them."
+say "touched at mobile and desktop widths, the PR links an Evidence page of them, and the Reviewer sees them."
 if node -e '
   const { ui } = JSON.parse(require("node:fs").readFileSync(".fabrik/config.json", "utf8"));
   process.exit(ui !== null && typeof ui === "object" && Array.isArray(ui.paths) && ui.paths.length > 0 ? 0 : 1);' 2>/dev/null; then

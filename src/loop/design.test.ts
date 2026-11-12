@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { roundLineIn, withoutRoundLines } from "./roundLine.ts";
 import { planFor } from "./rules.ts";
 
 const startsDesignTurn = {
@@ -155,7 +156,9 @@ describe("Posting a Design-session round", () => {
 
     const plan = planFor(turnFinished(round), snapshotOf(issue, { operator: "jrey" }), kitConfig());
 
-    expect(plan).toEqual({
+    // Its hidden line aside (#635), the comment is as it always was.
+    const withoutLine = plan.kind === "act" ? { ...plan, actions: plan.actions.map((action) => (action.kind === "comment" ? { ...action, body: withoutRoundLines(action.body) } : action)) } : plan;
+    expect(withoutLine).toEqual({
       kind: "act",
       actions: [
         {
@@ -231,6 +234,127 @@ describe("Posting a Design-session round", () => {
     const plan = planFor(turnFinished(round), snapshotOf(issue), kitConfig());
 
     expect(plan).toEqual({ kind: "nothing", reason: "#7 no longer has needs-design" });
+  });
+});
+
+describe("A Design-session round carries its fields in a hidden line", () => {
+  const turnFinished = (output: unknown) =>
+    ({ kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(output) }) as const;
+  const round = {
+    kind: "round",
+    intro: "Two questions on the waitlist before I draft the brief.",
+    questions: [
+      { question: "Should patients who are too slow stay on the list?", recommendation: "Yes, with no follow-up text." },
+      { question: "When does an entry end?", recommendation: "On booking, on STOP, or when the day passes." },
+    ],
+  };
+  const bodyOf = (plan: ReturnType<typeof planFor>): string =>
+    plan.kind === "act" && plan.actions[0]?.kind === "comment" ? plan.actions[0].body : "";
+
+  it("puts the line second, under the round's marker, and reads back the round's number, intro and questions", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-design"], designRounds: 2 });
+
+    const body = bodyOf(planFor(turnFinished(round), snapshotOf(issue, { operator: "jrey" }), kitConfig()));
+
+    expect(body.split("\n")[0]).toBe("<!-- fabrik:design-round 3 -->");
+    expect(body.split("\n")[1]).toMatch(/^<!-- fabrik:round-line \{.*\} -->$/);
+    expect(roundLineIn(body)).toEqual({
+      v: 1,
+      kind: "round",
+      round: 3,
+      intro: "Two questions on the waitlist before I draft the brief.",
+      questions: [
+        { question: "Should patients who are too slow stay on the list?", recommendation: "Yes, with no follow-up text." },
+        { question: "When does an entry end?", recommendation: "On booking, on STOP, or when the day passes." },
+      ],
+    });
+  });
+
+  it("writes fields holding -->, <, > or @ so they can't end the line's comment or mention anyone, and reads them back as the comment shows them", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-design"] });
+    const awkward = {
+      kind: "round",
+      intro: "Does `a --> b` close <details> for @someone?",
+      questions: [{ question: "Keep <!-- this --> in?", recommendation: "Ask @org/team, then -->" }],
+    };
+
+    const body = bodyOf(planFor(turnFinished(awkward), snapshotOf(issue, { operator: "jrey" }), kitConfig()));
+
+    const line = body.split("\n")[1] ?? "";
+    expect(line.indexOf("-->")).toBe(line.length - "-->".length);
+    expect(line.slice("<!--".length, -"-->".length)).not.toMatch(/[<>@]/);
+    expect(mentionsIn(body)).toEqual(["jrey"]);
+    const shown = withoutRoundLines(body).split("\n");
+    expect(roundLineIn(body)).toMatchObject({
+      intro: shown[3],
+      questions: [{ question: shown[5]?.replace(/^\*\*1\. (.*)\*\*$/, "$1"), recommendation: shown[6]?.replace(/^➡️ Recommended: /, "") }],
+    });
+    expect(roundLineIn(body)?.intro).toBe("Does `a --> b` close <details> for @​someone?");
+  });
+
+  describe("a round too long for GitHub with its line", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-design"] });
+    const bodyWith = (intro: string) => bodyOf(planFor(turnFinished({ ...round, intro }), snapshotOf(issue, { operator: "jrey" }), kitConfig()));
+    /** An intro whose round, with its line, is exactly GitHub's 65,536 characters: each `a` adds 2 (once shown, once in the line) and a `<` adds 7 (its escape is 6). */
+    const introAtTheLimit = (): string => {
+      const short = bodyWith("a").length;
+      const odd = (65_536 - short) % 2 === 1;
+      const left = 65_536 - short - (odd ? 7 - 2 : 0);
+      return `${odd ? "<" : "a"}${"a".repeat(left / 2)}`;
+    };
+
+    it("keeps its line at exactly 65,536 characters", () => {
+      const body = bodyWith(introAtTheLimit());
+
+      expect(body).toHaveLength(65_536);
+      expect(roundLineIn(body)).not.toBeNull();
+    });
+
+    it("is posted without its line one character past, as it would have been", () => {
+      const intro = `${introAtTheLimit()}b`;
+      const body = bodyWith(intro);
+
+      expect(roundLineIn(body)).toBeNull();
+      expect(body.split("\n")[1]).toBe(
+        "@jrey **Design session, round 1.** Reply with the numbers you'd answer differently, or `yes` to take every recommendation.",
+      );
+      expect(body.split("\n")[3]).toBe(intro);
+    });
+
+    it("counts the Operator comments it weighed toward the limit", () => {
+      const sentBack = anIssue({ number: 7, labels: ["needs-design"], sentBack: { pullRequest: 50, verdictUrl: null } });
+      const finished = {
+        ...turnFinished({ ...round, intro: introAtTheLimit(), operatorCommentsConsidered: ["inline-8"] }),
+        operatorComments: [{ id: "inline-8", url: "https://github.com/acme/shop/pull/50#discussion_r8" }],
+      };
+
+      const body = bodyOf(planFor(finished, snapshotOf(sentBack, { operator: "jrey" }), kitConfig()));
+
+      expect(body).toContain("### Operator comments considered");
+      expect(roundLineIn(body)).toBeNull();
+    });
+  });
+
+  it("marks a round whose output asks the Map question", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-design"] });
+
+    const body = bodyOf(planFor(turnFinished({ ...round, asksMap: true }), snapshotOf(issue), kitConfig()));
+
+    expect(roundLineIn(body)).toMatchObject({ round: 1, asksMap: true });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["false", false],
+    ["malformed", "yes"],
+  ])("leaves the mark out when asksMap is %s, and lands the round all the same", (_, asksMap) => {
+    const issue = anIssue({ number: 7, labels: ["needs-design"] });
+
+    const plan = planFor(turnFinished({ ...round, asksMap }), snapshotOf(issue), kitConfig());
+
+    expect(plan.kind).toBe("act");
+    expect(roundLineIn(bodyOf(plan))).not.toHaveProperty("asksMap");
+    expect(bodyOf(plan)).toBe(bodyOf(planFor(turnFinished(round), snapshotOf(issue), kitConfig())));
   });
 });
 

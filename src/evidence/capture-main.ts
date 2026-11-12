@@ -11,7 +11,7 @@
 // `ui.sign_in` commands the routes need (ADR-0012), screenshots each
 // shot headless, or, for a variant, screenshots it and films a short scripted
 // load-and-scroll, and writes the screenshots, any videos, the capture result
-// and the gallery into the agent's output directory, passing the result out
+// and the Evidence page into the agent's output directory, passing the result out
 // as the step output `ui-capture-result`. No model turns, no MCP. Capture's
 // own failures are in the capture result, never this step's exit code. Its
 // tests run it where it stops before the browser; playwrightCapturer.test.ts
@@ -48,9 +48,9 @@ import {
   captureStepOutputs,
   captureStepSummary,
   EVIDENCE_DIR,
-  GALLERY_FILE,
+  EVIDENCE_PAGE_FILE,
   implementerRoutesIn,
-  PROTOTYPE_GALLERY_FILE,
+  PROTOTYPE_EVIDENCE_PAGE_FILE,
   prototypeCaptureFiles,
   prototypeCaptureSummary,
 } from "./capture.ts";
@@ -114,7 +114,7 @@ async function main(): Promise<void> {
   const evidenceDir = join(outDir, EVIDENCE_DIR);
   // Whatever an agent left where capture writes isn't evidence.
   await rm(evidenceDir, { recursive: true, force: true });
-  await rm(join(outDir, GALLERY_FILE), { force: true });
+  await rm(join(outDir, EVIDENCE_PAGE_FILE), { force: true });
 
   const known = await defaultBranchKitOrSkip(productDir);
   if (known === null) return;
@@ -137,7 +137,7 @@ async function main(): Promise<void> {
     const files = captureStepFiles(outcome.result, images, result.issue);
     await mkdir(evidenceDir, { recursive: true });
     await writeFile(join(evidenceDir, CAPTURE_RESULT_FILE), files.result);
-    if (files.gallery !== null) await writeFile(join(outDir, GALLERY_FILE), files.gallery);
+    if (files.evidencePage !== null) await writeFile(join(outDir, EVIDENCE_PAGE_FILE), files.evidencePage);
   }
   await writeOutputs(captureStepOutputs(outcome));
   const summary = captureStepSummary(outcome);
@@ -155,7 +155,7 @@ async function prototypeMain(): Promise<void> {
   const evidenceDir = join(outDir, EVIDENCE_DIR);
   // Whatever the agent left where capture writes isn't a capture.
   await rm(evidenceDir, { recursive: true, force: true });
-  await rm(join(outDir, PROTOTYPE_GALLERY_FILE), { force: true });
+  await rm(join(outDir, PROTOTYPE_EVIDENCE_PAGE_FILE), { force: true });
 
   const known = await defaultBranchKitOrSkip(productDir);
   if (known === null) return;
@@ -177,7 +177,7 @@ async function prototypeMain(): Promise<void> {
     const files = prototypeCaptureFiles(outcome.result, taken, variants, { issue: result.issue, route });
     await mkdir(evidenceDir, { recursive: true });
     await writeFile(join(evidenceDir, CAPTURE_RESULT_FILE), files.result);
-    if (files.gallery !== null) await writeFile(join(outDir, PROTOTYPE_GALLERY_FILE), files.gallery);
+    if (files.evidencePage !== null) await writeFile(join(outDir, PROTOTYPE_EVIDENCE_PAGE_FILE), files.evidencePage);
   }
   await writeOutputs(captureStepOutputs(outcome));
   const summary = prototypeCaptureSummary(outcome);
