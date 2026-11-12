@@ -10,6 +10,7 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/__fixtures__/` holds the snapshot builders the core's tests use.
 - `src/kit/` holds the **Kit config** loader (`resolveKitConfig`: defaults and validation) and the caller workflow release check (`checkCallerWorkflow`), which `checkKit` makes together. All are pure; every run, the Kit job's included, calls them before anything else, so no agent starts on an invalid Kit. `src/kit/pushJob.ts` decides what the push job applies from how the jobs before it ended.
 - `src/github/` holds the thin **GitHub adapter**: `events.ts` maps an Actions event, or what an agent job passed out, to a Loop event; `snapshot.ts` gathers the snapshot, reading the Kit's comment markers back through `threads.ts`; `apply.ts` applies the plan; `client.ts` is the API client.
+- `src/read/` holds the **read library**: `index.ts`, its one entry, re-exports what another program may use to read the Kit, and nothing else (see [Reading the Kit from another program](#reading-the-kit-from-another-program)). `exports.fixture.ts` names every export with a call or a value of each, and the tests beside it hold the entry to it, walk the entry's imports, and run every call as a Worker would.
 - `src/main.ts` is what the push, claim and Dispatch jobs run (`node src/main.ts`, Node 24, no build step and no runtime dependencies). In the push job (`FABRIK_NEEDS`), it applies an agent job's output, or its failure notice, instead of the Actions event.
 - `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage`, `design`, `prototype`, `implement`, `review`, `audit`, `retro` or `research`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle, the Claude Code CLI and Playwright, pinned exactly).
 - `src/evidence/` holds **Visual evidence** (see `ui` in the [Kit config](#kit-config)): `uiEvidence.ts` is the pure UI evidence module (whether a PR is UI, which routes to capture and why, the capture result every later reader shares, the Reviewer's images, and the PR body's evidence section and its marker), `gallery.ts` the one-page gallery and a Prototype's, `capture.ts` the pure capture core, and `capture-main.ts` the capture step of the Implement job and of a prototype turn, the one Kit program that imports Playwright. `src/kit/previewLink.ts` is the push job's preview steps, which its `link-preview` action runs for a UI PR (`src/kit/preview-main.ts`) and its `link-prototype-preview` action for a prototype round, the same program given the round.
@@ -90,6 +91,22 @@ curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bas
 Setup never moves a caller workflow back to an earlier major, and within a major Dependabot owns the pin.
 
 Setup was once the `fabrik-setup` skill, copied by hand into `~/.claude/skills/`. A copy left there is stale: Setup offers to delete it, and the `SessionStart` hook warns while it's there.
+
+## Reading the Kit from another program
+
+Another program can know what the Kit knows (where each piece of work stands, the Run records, a repo's Kit config and the release its caller workflow pins) by running the Kit's own reading of it, with its own credential, rather than a second definition of what a label, a marker or a Verdict means. That reading is the **read library**, and its one entry is `src/read/index.ts`: the only address the Kit promises. Anything it doesn't export can move or change in any release.
+
+- **There is no package.** The Kit isn't published anywhere. A reader downloads the Kit's source at the release tag it pins (say `https://github.com/jrey8343/fabrik/archive/refs/tags/v1.3.0.tar.gz`) into a directory it does not commit, and imports the entry by path. The repo is public, so the download needs no credential. Moving the pin is the reader's own change, and its checks are where a break shows.
+- **Nothing to install.** No module the entry reaches imports an npm package, and the only Node built-ins it imports are `node:crypto`, `node:path` and `node:fs/promises`, the three seen to load in a Worker with Node.js compatibility on. None of its calls reaches `path.posix.matchesGlob`, which a Worker doesn't implement.
+- **Hand it a client.** Every read takes a `ReadClient`, the three calls the Kit's GitHub client makes: a REST call, a GraphQL query, and a file's text at a ref. The Kit's own `GitHub` class is one; a reader can hand in its own, one that counts what a read costs or refreshes its credential.
+- **Plain data.** Every value a read or a rule returns comes back equal after being written as JSON and read again, so a reader can keep it, or serve it from a fake GitHub in its own tests.
+- **What a reader's toolchain needs:**
+  - imports with a `.ts` suffix, as the Kit's modules import each other: TypeScript's `allowImportingTsExtensions`, with `noEmit` or a bundler that resolves them;
+  - Node.js compatibility on in the Worker (the `nodejs_compat` compatibility flag);
+  - Node's types beside the Workers types, since the Kit's modules import from `node:`;
+  - a `lib` of ES2023 or later;
+  - its own tests kept off the Kit's: the downloaded directory holds the Kit's `*.test.ts` files, which the reader's test runner leaves out.
+- **The promise.** The library reads whatever any earlier release wrote: a Run record of any earlier schema reads at the current one, and so does every marker the Loop already reads back. A test holds the name and a value of everything the entry exports. A release that removes any of it, or changes what one means, is a major ([Choosing the version](docs/releasing.md#choosing-the-version)); a new export, a new field or a new Standing name is not, so a reader leaves alone what it doesn't know.
 
 ## Vision and Roadmap
 
