@@ -51,4 +51,14 @@ describe("the runway", () => {
       expect(runway).toEqual({ kind: "held", until: null });
     });
   });
+
+  describe("when one Subscription rose from 30% to 40% in ten hours of one week", () => {
+    it("runs out sixty hours after the newest reading, held until its reset, when it resets in five days", () => {
+      const resets = hoursOn(5 * 24);
+
+      const runway = runwayOf([aReading("Claude token", 12, 0.3, resets), aReading("Claude token", 2, 0.4, resets)], [], NOW);
+
+      expect(runway).toEqual({ kind: "runs-out", at: hoursOn(-2 + 60), heldUntil: resets });
+    });
+  });
 });

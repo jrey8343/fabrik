@@ -2,7 +2,7 @@
 // they are then held. One pure function, the Kit's one rule for it, so it can
 // change in one place. It takes no clock of its own: the time is passed in.
 import { lastMonthStart } from "../kit/replayFacts.ts";
-import type { RunRecord } from "../kit/runRecord.ts";
+import { type RunRecord, WEEKLY_LIMIT } from "../kit/runRecord.ts";
 
 /** How long runs keep going at this pace, and how long they are then held. */
 export type Runway =
@@ -31,7 +31,49 @@ export function runwayOf(records: readonly RunRecord[], usedUp: readonly UsedUpS
   const known = new Set([...records.filter((record) => Date.parse(record.endedAt) >= from).map(({ subscription }) => subscription), ...usedUp.map(({ subscription }) => subscription)]);
   const spent = new Set(usedUp.map(({ subscription }) => subscription));
   if (known.size > 0 && [...known].every((subscription) => spent.has(subscription))) return { kind: "held", until: earliest(usedUp.map(({ until }) => until)) };
-  return { kind: "unknown" };
+
+  const readings = weeklyReadingsOf(records, from).filter(({ subscription }) => !spent.has(subscription));
+  const newest = readings.at(-1);
+  if (newest === undefined) return { kind: "unknown" };
+  const first = readings.find(({ subscription, resetsAt, at }) => subscription === newest.subscription && resetsAt === newest.resetsAt && at >= newest.at - DAY);
+  if (first === undefined || newest.at - first.at < HOUR) return { kind: "unknown" };
+  const rise = Math.max(0, newest.share - first.share);
+
+  const presentWeeks = [...known].filter((subscription) => !spent.has(subscription)).map((subscription) => presentWeekOf(readings, subscription, now));
+  const room = presentWeeks.reduce((sum, week) => sum + (week === null ? 1 : Math.max(0, 1 - week.share)), 0);
+  const at = newest.at + Math.round((room / rise) * (newest.at - first.at));
+  const resets = presentWeeks.flatMap((week) => (week === null ? [] : [week.resetsAt]));
+  return { kind: "runs-out", at: new Date(at).toISOString(), heldUntil: earliest([...usedUp.map(({ until }) => until), ...resets.map((reset) => new Date(reset).toISOString())]) };
+}
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+/** A weekly-limit reading with a share and a reset, as times in ms. */
+interface WeeklyReading {
+  readonly subscription: string;
+  readonly share: number;
+  /** When the run that read it ended. */
+  readonly at: number;
+  /** When its week resets: two readings on one Subscription with the same reset are of the same week. */
+  readonly resetsAt: number;
+}
+
+/** Every weekly-limit reading with a share and a reset among the records that ended from `from`, oldest first. */
+function weeklyReadingsOf(records: readonly RunRecord[], from: number): WeeklyReading[] {
+  return records
+    .flatMap(({ subscription, endedAt, rateLimit }): WeeklyReading[] => {
+      const at = Date.parse(endedAt);
+      if (rateLimit?.rateLimitType !== WEEKLY_LIMIT || rateLimit.utilization === null || rateLimit.resetsAt === null || !(at >= from)) return [];
+      return [{ subscription, share: rateLimit.utilization, at, resetsAt: rateLimit.resetsAt * 1000 }];
+    })
+    .toSorted((a, b) => a.at - b.at);
+}
+
+/** The newest reading of a Subscription's present week: null when it has none, or its week has reset since. */
+function presentWeekOf(readings: readonly WeeklyReading[], subscription: string, now: string): WeeklyReading | null {
+  const newest = readings.findLast((reading) => reading.subscription === subscription);
+  return newest === undefined || newest.resetsAt <= Date.parse(now) ? null : newest;
 }
 
 /** The earliest of these times, as given; null when none is a time. */
