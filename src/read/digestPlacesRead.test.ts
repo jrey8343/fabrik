@@ -133,6 +133,25 @@ describe("The read of a Digest's places, made when a screen opens", () => {
     ]);
   });
 
+  it("gives code inside the diff as its diff hunk in a file whose lines end as Windows lines do, each line without its carriage return, as the plain lines are", async () => {
+    const save = SAVE.replace(/\n/g, "\r\n");
+    // GitHub joins a patch's lines by a newline, and each keeps the carriage return its file ends the line with.
+    const patch = SAVE_PATCH.split("\n")
+      .map((line, at) => (at === 0 ? line : `${line}\r`))
+      .join("\n");
+    const place = placeAt({ path: "src/basket/save.ts", start: 5, end: 6, as: "code" }, { files: [{ path: "src/basket/save.ts", text: save }], changed: [{ path: "src/basket/save.ts", patch }] });
+    const { client } = gitHub({ "src/basket/save.ts": save }, [{ filename: "src/basket/save.ts", patch }]);
+
+    expect(place).toMatchObject({ inDiff: true });
+    expect(await readDigestPlaces(client, "acme/shop", 50, aDigestPointingAt(place === null ? [] : [place]))).toMatchObject([
+      {
+        inDiff: true,
+        show: "hunk",
+        text: ["+  store.put(`${basket.id}:prices`, basket.prices);", "-  store.expire(basket.id, HOUR);", "+  store.expire(basket.id, DAY);"].join("\n"),
+      },
+    ]);
+  });
+
   it("gives code outside the diff, and words wherever they are, as the plain lines from the head", async () => {
     const digest = aDigestPointingAt([written("src/basket/save.ts", 9, 10), written("src/basket/copy.ts", 2, 3, "words"), written("src/basket/save.ts", 5, 6, "words")]);
 

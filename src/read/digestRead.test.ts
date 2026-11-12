@@ -217,4 +217,14 @@ describe("A Digest no reader can draw", () => {
 
     expect(digestOn(atTheMergeGate(edited))).toEqual({ is: "unreadable", why: "edited", url: URL, markdown: RENDERED.replace("Nothing.", "Nothing, they say.") });
   });
+
+  it("is unreadable as edited when the edit left Windows line ends, as GitHub's web editor does: it is still the head's Digest, and no older no-Digest line speaks in its place", () => {
+    const body = written.body.replace("Nothing.", "Nothing, they say.").replace(/\n/g, "\r\n");
+    const edited = { ...written, body, bodyEditedAt: "2026-11-08T18:30:00Z" };
+    const earlierLine = aNoDigestLine(HEAD, "timed-out", "2026-11-08T18:01:00Z");
+    const unreadable = { is: "unreadable", why: "edited", url: URL, markdown: RENDERED.replace("Nothing.", "Nothing, they say.") };
+
+    expect(digestOn(atTheMergeGate(edited))).toEqual(unreadable);
+    expect(digestOn(atTheMergeGate(earlierLine, edited))).toEqual(unreadable);
+  });
 });

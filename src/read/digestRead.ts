@@ -70,11 +70,13 @@ export function digestReadOf({ headSha, comments }: Pick<OpenPullRequestFacts, "
 /**
  * A comment as GitHub would render it: its text with every hidden line left
  * out, a hidden line being one that is a single HTML comment and nothing
- * else, as each of the Kit's is.
+ * else, as each of the Kit's is. Its lines are joined by plain newlines,
+ * whichever way the comment ends them: one edited in GitHub's web editor
+ * ends each with a carriage return too.
  */
 function renderedOf(body: string): string {
   return body
-    .split("\n")
+    .split(/\r?\n/)
     .filter((line) => {
       const text = line.trim();
       return !(text.startsWith("<!--") && text.indexOf("-->") === text.length - "-->".length);
@@ -161,12 +163,17 @@ export async function readDigestPlaces(
  * the whole place, or the hunk's lines on the head's side are not `lines`,
  * the place's own at the Digest's head: the pull request has moved on since
  * the Digest was written, and its diff is no longer of that head.
+ *
+ * A patch's lines are joined by newlines, and in a file whose lines end as
+ * Windows lines do each keeps its carriage return. The place's own lines
+ * have none (linesOf), so the patch's lose theirs here, and a hunk comes
+ * back as the plain lines would: without them.
  */
 function hunkOf(patch: string, { start, end }: Pick<DigestPlace, "start" | "end">, lines: readonly string[]): string[] | null {
   const cut: string[] = [];
   // The head's line the next line of the patch that is not a removed one is; 0 outside the hunk that holds the place.
   let at = 0;
-  for (const line of patch.split("\n")) {
+  for (const line of patch.split("\n").map((one) => (one.endsWith("\r") ? one.slice(0, -1) : one))) {
     const [header, first, count] = HUNK_HEADER.exec(line) ?? [];
     if (header !== undefined) {
       const from = Number(first);

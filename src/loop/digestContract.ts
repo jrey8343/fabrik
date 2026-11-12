@@ -89,9 +89,19 @@ export function noDigestLine({ head, how, reason, runUrl }: NoDigest): string {
   ].join("\n");
 }
 
+/**
+ * A comment's lines, whichever way they end: the Kit posts a comment with
+ * plain newlines, and one a person has edited in GitHub's web editor comes
+ * back with a carriage return before each. Such a comment is still the
+ * Kit's to recognise, by its first line, as the Digest it was.
+ */
+function linesOfComment(body: string): string[] {
+  return body.split(/\r?\n/);
+}
+
 /** The JSON a comment's first line holds after `marker`, or null when its first line isn't that marker's. */
 function firstLineOf(body: string, marker: string): Record<string, unknown> | null {
-  const [first = ""] = body.split("\n");
+  const [first = ""] = linesOfComment(body);
   if (!first.startsWith(`${marker} `) || !first.endsWith(" -->")) return null;
   try {
     const value: unknown = JSON.parse(first.slice(marker.length + 1, -" -->".length));
@@ -455,14 +465,26 @@ function roundsTable(rounds: readonly Round[]): string[] {
   ];
 }
 
-/** The writer's plain text on one line, with no mention in it. */
-function oneLine(words: string): string {
-  return withoutMentions(words.trim().replace(/\s+/g, " "));
+/**
+ * The writer's words with no folds line among them. Only Kit code writes
+ * that line, once, between a Digest's top and its folds, and a reader finds
+ * the folds by the first one in the comment (readDigestComment): one in the
+ * writer's own words, in the top or in a fold, would move where they start.
+ * It is taken out wherever it sits, hidden as it is from whoever reads the
+ * Digest.
+ */
+function withNoFoldsLine(words: string): string {
+  return words.replaceAll(DIGEST_FOLDS_MARKER, "");
 }
 
-/** The writer's text as a Digest shows it: with no mention in it, as a Verdict's findings lose theirs. */
+/** The writer's plain text on one line, with no mention in it. */
+function oneLine(words: string): string {
+  return withoutMentions(withNoFoldsLine(words).trim().replace(/\s+/g, " "));
+}
+
+/** The writer's text as a Digest shows it: with no mention in it, as a Verdict's findings lose theirs, and no folds line. */
 function shown(words: string): string {
-  return withoutMentions(words.trim());
+  return withoutMentions(withNoFoldsLine(words).trim());
 }
 
 /** The writer's words as a cell of one of Kit code's tables: one line, with no mention, and no pipe that would end the cell. */
@@ -603,13 +625,15 @@ export type DigestCommentRead =
  * Reads a Digest's comment back from its text. The data comes from the
  * hidden second line alone, and the head, the asks and the carry from the
  * first: nothing is ever read, or guessed, from the Markdown, which is only
- * handed on as the folds. Only a comment the Fabrik App wrote is a Digest:
- * the caller checks that, as for the first line (digestMarkIn).
+ * handed on as the folds. The folds start under the first folds line, which
+ * is Kit code's own: no text of the writer's holds one (withNoFoldsLine).
+ * Only a comment the Fabrik App wrote is a Digest: the caller checks that,
+ * as for the first line (digestMarkIn).
  */
 export function readDigestComment(body: string): DigestCommentRead {
   const mark = digestMarkIn(body);
   if (mark === null) return { ok: false, why: "not-a-digest" };
-  const lines = body.split("\n");
+  const lines = linesOfComment(body);
   const second = lines[1] ?? "";
   if (!second.startsWith(`${DIGEST_DATA_MARKER} `) || !second.endsWith(" -->")) return { ok: false, why: "no-data" };
   let value: unknown;

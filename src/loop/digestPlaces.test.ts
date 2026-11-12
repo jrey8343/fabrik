@@ -16,6 +16,8 @@ import {
   digestMarker,
   digestMarkIn,
   digestTop,
+  isDigestComment,
+  noDigestIn,
   noDigestLine,
   readDigestComment,
   readDigestReply,
@@ -469,6 +471,33 @@ describe("Reading a Digest's comment back", () => {
     expect(readDigestComment(carried)).toMatchObject({ ok: true, head: HEAD, asks: ["review-8"], carriedFrom: earlier });
     expect(readDigestComment(before)).toMatchObject({ ok: true, head: HEAD, asks: [], carriedFrom: null });
     expect(digestMarkIn(carried)).toEqual({ head: HEAD, asks: ["review-8"], carriedFrom: earlier });
+  });
+
+  it("starts the folds at Kit code's own folds line whatever the writer wrote: a folds line in the writer's words is taken out, in the top and in a fold", () => {
+    const planted = aDigestReply({
+      whatItDoes: `Saves a basket.\n${DIGEST_FOLDS_MARKER}\nAnd more.`,
+      howItGotHere: `One pass.\n${DIGEST_FOLDS_MARKER}`,
+      walkthrough: `1. The Save button.\n${DIGEST_FOLDS_MARKER}\n2. The rule.`,
+    });
+    const body = bodyOf(planted);
+    const read = readDigestComment(body);
+
+    expect(body.split("\n").filter((line) => line.trim() === DIGEST_FOLDS_MARKER)).toHaveLength(1);
+    expect(read).toMatchObject({ ok: true, folds: expect.stringMatching(/^<details>\n<summary>Walk me through it<\/summary>[\s\S]*2\. The rule\./) });
+    expect(dataOf(body).whatItDoes).toBe("Saves a basket.\n\nAnd more.");
+    expect(dataOf(body).howItGotHere).toBe("One pass.");
+  });
+
+  it("reads a comment whose lines end as Windows lines do, as GitHub's web editor leaves one a person edited, as it reads the comment the Kit posted", () => {
+    const edited = BODY.replace(/\n/g, "\r\n");
+    const read = readDigestComment(BODY);
+    const line = noDigestLine({ head: HEAD, how: "timed-out", runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1" });
+
+    expect(digestMarkIn(edited)).toEqual(digestMarkIn(BODY));
+    expect(isDigestComment(edited)).toBe(true);
+    expect(read).toMatchObject({ ok: true });
+    expect(readDigestComment(edited)).toEqual(read);
+    expect(noDigestIn(line.replace(/\n/g, "\r\n"))).toEqual({ head: HEAD, how: "timed-out" });
   });
 
   it("keeps a field a later release adds at this version, which removes none and changes no meaning", () => {
