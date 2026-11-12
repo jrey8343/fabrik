@@ -25,7 +25,7 @@ The step is `/fabrik-visual-evidence`, run in a Claude session in the Product re
 
 1. **The Pilot first, if its pages sit behind a sign-in.** Merge this release's bump PR. If the Pilot has no sign-in command yet, file a Ticket for one: a command that signs a fake user in to the Sandbox's own server and writes a Playwright storage state to `FABRIK_STORAGE_STATE`, using no `sandbox.secrets`. Once it's merged, run `/fabrik-visual-evidence`, say its pages sit behind a sign-in, confirm the sign-in fields it suggests with a loopback `ui.url`, and merge the PR it opens.
 2. **Check it on a real UI issue** in the Pilot before the release goes anywhere else. Open an issue that changes a signed-in page and names its route in backticks, and let it run to its draft PR's Review:
-   - the PR's evidence section names the Capture identity on the signed-in route, and its gallery shows the signed-in page, not the sign-in page, with no Before;
+   - the PR's evidence section names the Capture identity on the signed-in route, and its Evidence page shows the signed-in page, not the sign-in page, with no Before;
    - a public route the issue also names keeps its Before;
    - breaking the sign-in command on a branch gives `sign-in-failed` in the evidence section, and the PR still opens.
 3. **Then the other Product repos whose pages sit behind a sign-in**, when they want it, the same way. A repo whose pages are public merges the bump PR and needs nothing more.

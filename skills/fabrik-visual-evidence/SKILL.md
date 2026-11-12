@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Visual evidence
 
-The Operator is turning on Visual evidence in this Product repo, or changing its answers. On a pull request whose diff touches the repo's UI, the Implement job screenshots the routes the change shows on, at mobile and desktop widths. The PR links a gallery of them, and the Reviewer sees them. Your job is to suggest each answer from the repo, have the Operator confirm or correct each one, write them with the Kit's writer program, and open a PR for the Operator to merge.
+The Operator is turning on Visual evidence in this Product repo, or changing its answers. On a pull request whose diff touches the repo's UI, the Implement job screenshots the routes the change shows on, at mobile and desktop widths. The PR links an Evidence page of them, and the Reviewer sees them. Your job is to suggest each answer from the repo, have the Operator confirm or correct each one, write them with the Kit's writer program, and open a PR for the Operator to merge.
 
 This session runs with the Operator's own GitHub credentials and counts as the Operator, so you may change `.fabrik/config.json`, a Trust-root file no agent elsewhere touches. That's why no agent can turn Visual evidence off or narrow its paths. The writer needs no `gh` admin and no `op`. If `gh auth status` fails, stop and tell the Operator before doing anything else.
 
@@ -127,7 +127,7 @@ It writes only those two blocks of `.fabrik/config.json`, in place or before its
 2. Commit `.fabrik/config.json` alone. When step 4 found an earlier run's PR open, push with `git push origin fabrik/visual-evidence`, which updates that PR. Otherwise push with `git push --force-with-lease -u origin fabrik/visual-evidence`, which replaces a branch GitHub kept from a merged or closed PR, and open a PR to the default branch with `gh pr create`. Its body lists each answer, and says the check that `sandbox.build`, `ui.serve` and any sign-in command work without `sandbox.secrets` was made.
 3. Remove the temporary Fabrik folder.
 4. Tell the Operator to merge the PR themselves. The push job reads the `ui` block from the default branch, so capture starts on the first UI PR after the merge. Then tell them:
-   - That with Visual evidence on, each PR whose diff touches `ui.paths` gets an evidence section linking a gallery of its screenshots, and the Reviewer sees them.
+   - That with Visual evidence on, each PR whose diff touches `ui.paths` gets an evidence section linking an Evidence page of its screenshots, and the Reviewer sees them.
    - With a sign-in, that each signed-in screenshot names the Capture identity it was viewed as, and has no Before, and that a sign-in that fails, or a signed-in page that lands on `ui.sign_in_path`, shows in the evidence section as `sign-in-failed`.
    - That the merge is all it needs: Setup and its wizard needn't run again for it.
    - That running `/fabrik-visual-evidence` again changes its answers, and with the same answers it writes nothing.

@@ -15,8 +15,8 @@ export const UI: UiConfig = {
 /** The head the Implement run built, and capture captured. */
 export const CAPTURED_SHA = "4f2b9c0e1d3a5b7c9e0f2a4b6c8d0e1f3a5b7c9d";
 
-/** The gallery the push job links: the unzipped artifact 9201 of its own run, 9100. */
-export const GALLERY = "https://github.com/acme/shop/actions/runs/9100/artifacts/9201";
+/** The Evidence page the push job links: the unzipped artifact 9201 of its own run, 9100. */
+export const EVIDENCE_PAGE = "https://github.com/acme/shop/actions/runs/9100/artifacts/9201";
 
 /** The Implementer's /waitlist, captured After at both viewports, 200 OK. */
 export const CAPTURED: CaptureResult = {
@@ -35,7 +35,7 @@ export function anEvidence(result?: CaptureResult, overrides: Partial<ImplementE
     headSha: CAPTURED_SHA,
     run: 9100,
     artifact: 9202,
-    gallery: GALLERY,
+    evidencePage: EVIDENCE_PAGE,
     ...overrides,
   };
 }

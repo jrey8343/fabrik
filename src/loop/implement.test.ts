@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { anEvidence, CAPTURED, CAPTURED_SHA, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
+import { anEvidence, CAPTURED, CAPTURED_SHA, EVIDENCE_PAGE, UI } from "../__fixtures__/uiEvidence.ts";
 import type { CaptureResult } from "../evidence/uiEvidence.ts";
 import { emptyDiffIn } from "../github/apply.ts";
 import { planFor } from "./rules.ts";
@@ -418,7 +418,7 @@ describe("The evidence section on a first run's draft PR", () => {
         "<!-- fabrik:ui-evidence-start -->",
         "## UI evidence",
         "",
-        `[Open the gallery](<${GALLERY}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
+        `[Open the Evidence page](<${EVIDENCE_PAGE}>) of 2 screenshots: this branch at \`4f2b9c0\`, at mobile and desktop widths.`,
         "",
         "No preview link: Kit config declares no `preview.url`.",
         "",
@@ -440,7 +440,7 @@ describe("The evidence section on a first run's draft PR", () => {
   });
 
   it("isn't there in a repo with no ui block, whose capture step passes out nothing, so the PR opens exactly as it did before UI evidence", () => {
-    const capturedNothing = uiRun(anEvidence(undefined, { artifact: null, gallery: null }));
+    const capturedNothing = uiRun(anEvidence(undefined, { artifact: null, evidencePage: null }));
     const { evidence: _, ...beforeUiEvidence } = capturedNothing;
 
     const plan = planFor(capturedNothing, snapshotOf(readyTicket()), kitConfig());
@@ -458,7 +458,7 @@ describe("The evidence section on a first run's draft PR", () => {
       "",
       "<!-- fabrik:ui-evidence-start -->",
       "## UI evidence",
-      "[Open the gallery](<https://example.com/planted>)",
+      "[Open the Evidence page](<https://example.com/planted>)",
       `<!-- fabrik:ui-evidence {"run":1,"artifact":1} -->`,
       "",
       "Tested on the booking page.",
@@ -485,7 +485,7 @@ describe("The evidence section on a first run's draft PR", () => {
   it("says why capture failed, and the PR still opens, using no Retry", () => {
     const failed: CaptureResult = { outcome: "failed", reason: "server-did-not-start", headSha: CAPTURED_SHA, captures: [] };
 
-    const plan = planFor(uiRun(anEvidence(failed, { artifact: null, gallery: null })), snapshotOf(readyTicket()), kitConfig({ ui: UI }));
+    const plan = planFor(uiRun(anEvidence(failed, { artifact: null, evidencePage: null })), snapshotOf(readyTicket()), kitConfig({ ui: UI }));
 
     expect(actionsOf(plan).map((action) => action.kind)).toEqual(["push-branch", "open-pull-request"]);
     expect(openedBody(plan)).toBe(
@@ -506,7 +506,7 @@ describe("The evidence section on a first run's draft PR", () => {
   });
 
   it("says capture left no result when the Implement job passed out none the push job could read, and the PR still opens, using no Retry", () => {
-    const plan = planFor(uiRun(anEvidence(undefined, { artifact: null, gallery: null })), snapshotOf(readyTicket()), kitConfig({ ui: UI }));
+    const plan = planFor(uiRun(anEvidence(undefined, { artifact: null, evidencePage: null })), snapshotOf(readyTicket()), kitConfig({ ui: UI }));
 
     expect(actionsOf(plan).map((action) => action.kind)).toEqual(["push-branch", "open-pull-request"]);
     expect(openedBody(plan).split("\n")).toEqual([
@@ -541,7 +541,7 @@ describe("The preview deployment of a first run's draft PR", () => {
   });
 
   it("is linked whatever capture passed out, failed or none, since the PR is UI all the same", () => {
-    const plan = planFor(uiRun(anEvidence(undefined, { artifact: null, gallery: null })), snapshotOf(readyTicket()), kitConfig({ ui: UI, preview: PREVIEW }));
+    const plan = planFor(uiRun(anEvidence(undefined, { artifact: null, evidencePage: null })), snapshotOf(readyTicket()), kitConfig({ ui: UI, preview: PREVIEW }));
 
     expect(actionsOf(plan).map((action) => action.kind)).toEqual(["push-branch", "open-pull-request", "link-preview"]);
   });
