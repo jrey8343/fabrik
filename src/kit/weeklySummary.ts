@@ -6,6 +6,7 @@ import type { RunInFlightFact } from "../github/snapshot.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import {
+  DISPATCH_LABEL,
   NEEDS_DESIGN,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
@@ -17,7 +18,7 @@ import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_TURN_FAILED_MARKER, flakyCheckMarksIn, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
-import { type AgentRole, type DesignQueueSnapshot, type DispatchSnapshot, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "./config.ts";
@@ -40,7 +41,7 @@ import {
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type PlainKind, type Standing, type StandingName, standingsOf, type StandingNamed } from "./standing.ts";
+import { type PlainKind, type Standing, standingsOf, type StandingNamed } from "./standing.ts";
 import { givenUpWeeksOf, maxInFlightHoldOf } from "./standingInFlight.ts";
 import { wordStanding } from "./standingWording.ts";
 import { passedMoveOf, readyForHumanStandingOf } from "./standingOperator.ts";
@@ -648,7 +649,23 @@ export type WaitingItem =
    */
   | (ItemBase & { readonly kind: "handed-back" })
   /** A Plain pull request ready to merge, every Required check passed, waiting since its head; a Pairing session's among them, joined to its issue or not. */
-  | (ItemBase & { readonly kind: "plain-ready"; readonly plain: PlainKind });
+  | (ItemBase & { readonly kind: "plain-ready"; readonly plain: PlainKind })
+  /**
+   * Work whose last run ended in an Infrastructure failure, since the Kit's
+   * notice said so (#610): the failure it names, null for an older notice that
+   * names none, and the label that runs it again, null where none does.
+   */
+  | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: string | null; readonly label: string | null })
+  /**
+   * A Ticket whose last run was a Broken run that used no retry (#434), a
+   * Request-changes or conflict-only run's, since the Kit's notice said so: the
+   * Broken run it names, null for an older notice that names none.
+   */
+  | (ItemBase & { readonly kind: "broken-run"; readonly brokenRun: BrokenRun | null })
+  /** An agent draft with a pass on its head that the Operator put back in draft, since they did. */
+  | (ItemBase & { readonly kind: "parked" })
+  /** Any other work the Kit handed back that had no line of its own, such as a label the sweep took off: its Standing's sentence. */
+  | (ItemBase & { readonly kind: "hand-back"; readonly sentence: string });
 
 /**
  * Work whose next move is the Kit's, silent since `since` past the repo's bar
@@ -1203,7 +1220,9 @@ function repoSectionOf(facts: GitHubFacts, { operator, appLogin, now: filedAt, t
     repo: facts.repo,
     invalidKitConfig: invalid,
     // Every Standing whose move is the Operator's: an open Audit, Retro, finished Replay or Map among them also keeps a quiet week from being skipped.
-    waitingOnYou: oldestFirst(standings.filter(listedInWaitingOnYou).flatMap((standing) => waitingItemOf(standing, facts, operator, appLogin, items) ?? [])),
+    waitingOnYou: oldestFirst(
+      standings.filter(listedInWaitingOnYou).flatMap((standing) => waitingItemOf(standing, facts, { repo: facts.repo, operator, appLogin, filedAt, timeZone }, items) ?? []),
+    ),
     // Every silence at the repo's bar, longest first.
     stuck: oldestFirst(standings.flatMap((standing) => (standing.name === "stuck" ? (stuckItemOf(standing, facts, items, filedAt, timeZone) ?? []) : []))),
     runsUnread: kit === null || kit.runsInFlight === "unread",
@@ -1381,9 +1400,6 @@ function oldestFirst<T extends ItemBase>(items: readonly T[]): T[] {
   return items.toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since));
 }
 
-/** The names whose Standings Waiting on you lists: a name a later rule adds waits for its own line. Which work handed back it lists, waitingItemOf says. */
-const LISTED_IN_WAITING_ON_YOU: ReadonlySet<StandingName> = new Set(["yours-to-merge", "design-round", "needs-your-answer", "yours-to-do", "token-refused", "yours-to-read"]);
-
 /**
  * Whether Waiting on you lists a Standing: every one whose move is the
  * Operator's, but a weekly-limit issue, which stays under Held, and a Map's
@@ -1392,7 +1408,7 @@ const LISTED_IN_WAITING_ON_YOU: ReadonlySet<StandingName> = new Set(["yours-to-m
  */
 function listedInWaitingOnYou(standing: Standing): boolean {
   if (standing.work === "plain") return standing.name === "yours-to-merge";
-  if (standing.move !== "operator" || !LISTED_IN_WAITING_ON_YOU.has(standing.name) || standing.work === "weekly-limit") return false;
+  if (standing.move !== "operator" || standing.work === "weekly-limit") return false;
   if (standing.name === "yours-to-read") return standing.detail.map === null;
   return true;
 }
@@ -1400,23 +1416,34 @@ function listedInWaitingOnYou(standing: Standing): boolean {
 /** What a research Decision's notice can hand back by, which Waiting on you lists as its failed run. */
 const RESEARCH_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-failed", "research-branch-refused", "trigger-swept", "landing-failed"]);
 
+/** What a Waiting on you line is read with, beside the Standing. */
+interface ListedWith {
+  readonly repo: string;
+  readonly operator: string;
+  readonly appLogin: string;
+  /** The filing time, ISO 8601, and the Operator's time zone, for a Standing's own sentence. */
+  readonly filedAt: string;
+  readonly timeZone: string;
+}
+
 /**
- * The Waiting on you line of work the Kit handed back, as the Monday issue
- * has always listed it, which a hand-back without a line of its own leaves
- * unchanged until the Stuck section moves to the Standings: a research
- * Decision whose latest Kit word is its failure notice, as its failed run; a
- * Design session whose last word is the Kit's failed turn or Map cap refusal,
- * as that; `ready-for-human` work, as such; an agent PR handed back at the
- * Merge gate after its pass, as handed back; and nothing else.
+ * The Waiting on you line of work the Kit handed back. As the Monday issue
+ * has always listed it: a research Decision whose latest Kit word is its
+ * failure notice, as its failed run; a Design session whose last word is the
+ * Kit's failed turn or Map cap refusal, as that; `ready-for-human` work, as
+ * such; an agent PR handed back at the Merge gate after its pass, as handed
+ * back. Else, at once, with no clock (#610): an Infrastructure failure and a
+ * Broken run that used no retry each by its own line, and any other hand-back
+ * by its Standing's sentence.
  */
 function handedBackItemOf(
   standing: StandingNamed<"yours-to-do">,
   issue: OpenIssueFacts | null,
   pullRequest: OpenPullRequestFacts | undefined,
-  { repo, operator, appLogin }: { readonly repo: string; readonly operator: string; readonly appLogin: string },
+  { repo, operator, appLogin, filedAt, timeZone }: ListedWith,
   items: Items,
 ): WaitingItem | null {
-  const { handBack } = standing.detail;
+  const { handBack, failure, label } = standing.detail;
   const onIssue = issue === null ? null : items.issue(issue, standing.since);
   if (handBack === null) {
     if (standing.work === "ticket") return pullRequest === undefined ? null : { kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) };
@@ -1424,17 +1451,26 @@ function handedBackItemOf(
     return onIssue === null ? null : { kind: "ready-for-human", ...onIssue };
   }
   const lastKitWord = issue?.comments.filter(({ author }) => author === appLogin).at(-1)?.body ?? "";
-  if (standing.work === "research-decision") {
-    return onIssue !== null && RESEARCH_HAND_BACKS.has(handBack) && lastKitWord.startsWith(RESEARCH_RUN_FAILED_MARKER) ? { kind: "research-failed", ...onIssue } : null;
+  if (onIssue !== null && standing.work === "research-decision" && RESEARCH_HAND_BACKS.has(handBack) && lastKitWord.startsWith(RESEARCH_RUN_FAILED_MARKER)) {
+    return { kind: "research-failed", ...onIssue };
   }
-  if (standing.work === "design-session") {
-    const last = issue?.comments.at(-1);
-    if (onIssue === null || last?.author !== appLogin || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return null;
+  const last = issue?.comments.at(-1);
+  if (onIssue !== null && standing.work === "design-session" && last?.author === appLogin && last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) {
     return { kind: handBack === "map-cap-refused" ? "design-map-cap" : "design-turn-failed", ...onIssue };
   }
   if (issue !== null && issue.labels.includes(READY_FOR_HUMAN)) return { kind: "ready-for-human", ...items.issue(issue, readyForHumanStandingOf(issue, repo, standing.since).since) };
   const move = pullRequest === undefined ? null : passedMoveOf(pullRequest, operator);
-  return pullRequest !== undefined && move?.kind === "handed-back" ? { kind: "handed-back", ...items.pullRequest(pullRequest, move.since) } : null;
+  if (pullRequest !== undefined && move?.kind === "handed-back") return { kind: "handed-back", ...items.pullRequest(pullRequest, move.since) };
+  const item = onIssue ?? (pullRequest === undefined ? null : items.pullRequest(pullRequest, standing.since));
+  if (item === null) return null;
+  switch (handBack) {
+    case "infrastructure-failure":
+      return { kind: "infrastructure-failure", ...item, failure, label };
+    case "broken-run-no-retry":
+      return { kind: "broken-run", ...item, brokenRun: isBrokenRun(failure) ? failure : null };
+    default:
+      return { kind: "hand-back", ...item, sentence: wordStanding(standing, filedAt, timeZone).sentence };
+  }
 }
 
 /**
@@ -1442,7 +1478,7 @@ function handedBackItemOf(
  * worded its kind. Titles come from the facts beside it, as a Standing holds
  * none: null when the facts hold no title for it.
  */
-function waitingItemOf(standing: Standing, facts: GitHubFacts, operator: string, appLogin: string, items: Items): WaitingItem | null {
+function waitingItemOf(standing: Standing, facts: GitHubFacts, listedWith: ListedWith, items: Items): WaitingItem | null {
   const pullRequest = facts.openPullRequests.find(({ number }) => number === standing.pullRequest);
   const issue =
     [...facts.openIssues, ...facts.openAudits, ...facts.openRetros, ...facts.openReplays].find(({ number }) => number === standing.issue) ?? null;
@@ -1460,12 +1496,14 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, operator: string,
     case "design-round":
       return onIssue === null ? null : { kind: "design-round", ...onIssue };
     case "needs-your-answer":
-      return onIssue === null ? null : { kind: standing.detail.author === appLogin ? "monitor-needs-info" : "needs-info", ...onIssue };
+      return onIssue === null ? null : { kind: standing.detail.author === listedWith.appLogin ? "monitor-needs-info" : "needs-info", ...onIssue };
     case "yours-to-do":
-      return handedBackItemOf(standing, facts.openIssues.find(({ number }) => number === standing.issue) ?? null, pullRequest, { repo: facts.repo, operator, appLogin }, items);
+      return handedBackItemOf(standing, facts.openIssues.find(({ number }) => number === standing.issue) ?? null, pullRequest, listedWith, items);
     // A token-rotation issue, which the Kit opens with ready-for-human.
     case "token-refused":
       return onIssue === null ? null : { kind: "ready-for-human", ...onIssue };
+    case "parked":
+      return pullRequest === undefined ? null : { kind: "parked", ...items.pullRequest(pullRequest, standing.since) };
     case "yours-to-read":
       if (onIssue === null) return null;
       switch (standing.work) {
@@ -1822,6 +1860,19 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `handed to you with \`${READY_FOR_HUMAN}\` ${duration(item.age)} ago`);
     case "plain-ready":
       return itemLine(item, `${PLAIN_PHRASES[item.plain]}, ready to merge for ${duration(item.age)}`);
+    case "infrastructure-failure": {
+      const failure = item.failure === null ? "" : ` (${item.failure})`;
+      const again = item.label === null ? "" : `; add \`${item.label}\` again to run it`;
+      return itemLine(item, `last run ended in an Infrastructure failure${failure} ${duration(item.age)} ago${again}`);
+    }
+    case "broken-run": {
+      const brokenRun = item.brokenRun === null ? "" : ` (${item.brokenRun})`;
+      return itemLine(item, `last run was a Broken run${brokenRun} ${duration(item.age)} ago, which uses no retry; re-add \`${DISPATCH_LABEL}\` to run it again`);
+    }
+    case "parked":
+      return itemLine(item, `parked by you in draft ${duration(item.age)} ago`);
+    case "hand-back":
+      return itemLine(item, item.sentence);
   }
 }
 

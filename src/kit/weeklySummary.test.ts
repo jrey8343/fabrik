@@ -611,7 +611,7 @@ describe("the Weekly summary", () => {
       ]);
     });
 
-    it("lists work the Kit handed back by a notice it now reads just as it listed it before the notice was read (#609)", () => {
+    it("lists work the Kit handed back by a notice it now reads just as it listed it before the notice was read, and what had no line (#609, #610)", () => {
       const handBack = (kind: string, role: string, at: string, opening: readonly string[] = []) =>
         aComment([...opening, "The Kit's notice.", `<!-- fabrik:hand-back {"kind":"${kind}","role":"${role}"} -->`].join("\n"), at);
       const labelled = aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z");
@@ -619,12 +619,12 @@ describe("the Weekly summary", () => {
         openIssues: [
           // A Ticket whose agent PR was closed by hand: today's ready-for-human line, since the label.
           anOpenIssue({ number: 7, labels: ["ready-for-human"], comments: [handBack("closed-by-hand", "implement", "2026-11-06T20:00:00Z")], labelEvents: [labelled] }),
-          // A Ticket whose run ended in an Infrastructure failure: no line under Waiting on you yet.
+          // A Ticket whose run ended in an Infrastructure failure, its notice naming none: the new line, with no bracket.
           anOpenIssue({ number: 8, labels: ["ready-for-agent"], comments: [handBack("infrastructure-failure", "implement", "2026-11-06T20:00:00Z", ["<!-- fabrik:implement-run-failed -->"])] }),
           anOpenIssue({ number: 9, labels: ["ready-for-agent"] }),
           // A Design session whose agent:design the sweep took off: today's failed-turn line.
           anOpenIssue({ number: 12, labels: ["needs-design"], comments: [handBack("trigger-swept", "design", "2026-11-07T20:00:00Z", ["<!-- fabrik:design-turn-failed -->"])] }),
-          // A Design session whose turn's landing failed: no line yet.
+          // A Design session whose turn's landing failed: it had no line, so it gets the Standing's sentence.
           anOpenIssue({ number: 13, labels: ["needs-design"], comments: [handBack("landing-failed", "design", "2026-11-07T20:00:00Z")] }),
         ],
         openPullRequests: [
@@ -634,9 +634,81 @@ describe("the Weekly summary", () => {
       });
       expect(waiting).toEqual([
         { kind: "ready-for-human", number: 7, title: "An open issue", url: "https://github.com/owner/product/issues/7", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR },
+        { kind: "infrastructure-failure", number: 8, title: "An open issue", url: "https://github.com/owner/product/issues/8", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR, failure: null, label: "agent:implement" },
         { kind: "handed-back", number: 61, title: "Build the thing", url: "https://github.com/owner/product/pull/61", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR },
         { kind: "design-turn-failed", number: 12, title: "An open issue", url: "https://github.com/owner/product/issues/12", since: "2026-11-07T20:00:00Z", age: 24 * HOUR },
+        {
+          kind: "hand-back",
+          number: 13,
+          title: "An open issue",
+          url: "https://github.com/owner/product/issues/13",
+          since: "2026-11-07T20:00:00Z",
+          age: 24 * HOUR,
+          sentence: "The Kit couldn't land a finished run 24 hours ago. Open the run and re-run its failed jobs.",
+        },
       ]);
+    });
+
+    // Work the Kit hands back is the Operator's the moment its notice says so, with no clock (#609, #610).
+    describe("work the Kit handed back, at once", () => {
+      const lineOf = (facts: Parameters<typeof factsOf>[0], number: number) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(facts)], kits: [aRepoKit()] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.body.split("\n").find((line) => line.startsWith(`- [#${number}]`));
+      };
+      const notice = (lines: readonly string[], at: string) => aComment(lines.join("\n"), at);
+      const anHourAgo = "2026-11-08T19:00:00Z";
+
+      it("lists a Ticket whose last run ended in an Infrastructure failure an hour ago, naming the failure and the label that runs it again", () => {
+        const failed = notice(
+          ["<!-- fabrik:implement-run-failed -->", "@operator The Implement run on #7 failed: it timed out.", "", handBackMarker({ kind: "infrastructure-failure", role: "implement", failure: "timeout" })],
+          anHourAgo,
+        );
+        expect(lineOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing", labels: ["ready-for-agent"], comments: [failed] })] }, 7)).toBe(
+          "- [#7](https://github.com/owner/product/issues/7) Build the thing: last run ended in an Infrastructure failure (timeout) 1 hour ago; add `agent:implement` again to run it",
+        );
+      });
+
+      it("leaves the failure out of an older notice's line, which names none", () => {
+        const failed = notice(["@operator The Implement run on #7 failed: it crashed.", "", "This is an Infrastructure failure, so the Loop won't retry it."], anHourAgo);
+        expect(lineOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing", labels: ["ready-for-agent"], comments: [failed] })] }, 7)).toBe(
+          "- [#7](https://github.com/owner/product/issues/7) Build the thing: last run ended in an Infrastructure failure 1 hour ago; add `agent:implement` again to run it",
+        );
+      });
+
+      it("lists a Broken run that used no retry with the line it has always had, its bracket left out where an older notice names no Broken run", () => {
+        const marked = notice(
+          ["@operator The Implement run on #7 failed: it left its branch.", "", handBackMarker({ kind: "broken-run-no-retry", role: "implement", failure: "left-branch" })],
+          "2026-11-07T04:00:00Z",
+        );
+        const old = notice(["@operator The Implement run on #8 failed.", "", "This is a Broken run, so the Loop won't run it again."], "2026-11-07T04:00:00Z");
+        const facts = { openIssues: [anOpenIssue({ number: 7, title: "Build the thing", comments: [marked] }), anOpenIssue({ number: 8, title: "Build the other thing", comments: [old] })] };
+        expect(lineOf(facts, 7)).toBe(
+          "- [#7](https://github.com/owner/product/issues/7) Build the thing: last run was a Broken run (left-branch) 40 hours ago, which uses no retry; re-add `agent:implement` to run it again",
+        );
+        expect(lineOf(facts, 8)).toBe(
+          "- [#8](https://github.com/owner/product/issues/8) Build the other thing: last run was a Broken run 40 hours ago, which uses no retry; re-add `agent:implement` to run it again",
+        );
+      });
+
+      it("lists a draft the Operator put back in draft after its pass as parked by them", () => {
+        const draft = anOpenPullRequest({
+          number: 50,
+          comments: [aVerdictComment("pass", head, "2026-11-08T10:00:00Z")],
+          draftEvents: [
+            { kind: "ready", actor: "fabrik-app[bot]", at: "2026-11-08T10:01:00Z" },
+            { kind: "draft", actor: "operator", at: "2026-11-08T17:00:00Z" },
+          ],
+        });
+        expect(lineOf({ openPullRequests: [draft] }, 50)).toBe("- [#50](https://github.com/owner/product/pull/50) Build the thing: parked by you in draft 3 hours ago");
+      });
+
+      it("lists a label the sweep took off with the Standing's sentence", () => {
+        const swept = notice(["<!-- fabrik:stuck-trigger-gave-up agent:implement -->", "Nothing ran.", handBackMarker({ kind: "trigger-swept", role: "implement" })], "2026-11-08T17:00:00Z");
+        expect(lineOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing", labels: ["ready-for-agent"], comments: [swept] })] }, 7)).toBe(
+          "- [#7](https://github.com/owner/product/issues/7) Build the thing: `agent:implement` came off 3 hours ago: nothing started when it was added, nor when the Kit added it again. Check the Loop's runs, then add it again.",
+        );
+      });
     });
 
     it("lists the App's needs-info issue nobody answered as the Operator's, waiting since it got needs-info (#425)", () => {
