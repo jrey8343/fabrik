@@ -16,6 +16,7 @@ import {
   type PrototypeRequestMarker,
 } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
+import { GITHUB_COMMENT_LIMIT, ROUND_LINE_VERSION, roundLineOf, withoutRoundLines } from "./roundLine.ts";
 import type { Action, BranchChanges, IssueContext, LoopEvent, Plan, PostedComment, StartingComment } from "./types.ts";
 
 type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" }>;
@@ -171,26 +172,49 @@ function prototypeRound(
   operator: string,
   preview: RoundPreview,
 ): string {
-  return [
-    designRoundMarker(round),
-    PROTOTYPE_ROUND_MARKER,
-    `@${operator} **Design session, round ${round}: the prototype.** Reply with the variant you'd build, and any changes to it, or \`yes\` to take the recommendation.`,
-    "",
-    withoutMentions(output.intro),
-    "",
-    `[The prototype branch](${branchUrl(event)}) · ${evidencePageLine(event)}`,
-    "",
-    ...variantLines(output, event),
-    "",
-    ...(preview.kind === "none" ? [] : [previewLine(preview), ""]),
-    WHICH_VARIANT,
-    // On one line, so the round ends where the preview step looks (withVariantPreviews, src/kit/previewLink.ts).
-    `➡️ Recommended: ${withoutMentions(output.recommendation.trim().replace(/\s*[\r\n]+\s*/g, " "))}`,
-  ].join("\n");
+  const intro = withoutMentions(output.intro);
+  const variants = variantsOf(output, event);
+  // On one line, so the round ends where the preview step looks (withVariantPreviews, src/kit/previewLink.ts).
+  const recommendation = withoutMentions(output.recommendation.trim().replace(/\s*[\r\n]+\s*/g, " "));
+  return withinCommentLimit(
+    [
+      designRoundMarker(round),
+      PROTOTYPE_ROUND_MARKER,
+      roundLineOf({
+        v: ROUND_LINE_VERSION,
+        kind: "prototype",
+        round,
+        intro,
+        questions: [{ question: WHICH_VARIANT_QUESTION, recommendation }],
+        route: event.request.request.route,
+        variants: variants.map(({ letter, summary, component }) => ({ letter, summary, component, preview: null })),
+        captures: null,
+      }),
+      `@${operator} **Design session, round ${round}: the prototype.** Reply with the variant you'd build, and any changes to it, or \`yes\` to take the recommendation.`,
+      "",
+      intro,
+      "",
+      `[The prototype branch](${branchUrl(event)}) · ${evidencePageLine(event)}`,
+      "",
+      ...variants.map(({ letter, summary, path, component }) => `- **${letter}.** ${summary} [${code(path)}](${component})`),
+      "",
+      ...(preview.kind === "none" ? [] : [previewLine(preview), ""]),
+      WHICH_VARIANT,
+      `➡️ Recommended: ${recommendation}`,
+    ].join("\n"),
+  );
 }
 
+/** A round that, with its hidden line, would pass GitHub's limit for a comment, posted without the line, as it would have been; one within it as it is. */
+function withinCommentLimit(body: string): string {
+  return body.length <= GITHUB_COMMENT_LIMIT ? body : withoutRoundLines(body);
+}
+
+/** The prototype round's one question, as its hidden line holds it. */
+const WHICH_VARIANT_QUESTION = "Which variant?";
+
 /** The prototype round's one question, which the Kit writes. */
-export const WHICH_VARIANT = "**1. Which variant?**";
+export const WHICH_VARIANT = `**1. ${WHICH_VARIANT_QUESTION}**`;
 
 /** What the round says of its preview until the push job has polled it and linked it (src/kit/previewLink.ts). */
 export const PREVIEW_PENDING = "Each variant's preview is linked beside it once the preview deployment answers.";
@@ -224,12 +248,17 @@ function evidencePageLine({ capture, evidencePage }: PrototypeRunFinished): stri
 /** Why a prototype's capture failed, in plain words, the prototype job having captured. */
 const CAPTURE_FAILED = failureWords("the prototype job");
 
-/** Each variant: its letter, its summary, and its component on the branch at the pushed head. */
-function variantLines({ variants }: PrototypeRoundOutput, { repoUrl, headSha }: PrototypeRunFinished): string[] {
-  return variants.map(
-    ({ letter, summary, component }) =>
-      `- **${letter}.** ${withoutMentions(summary)} [${code(component)}](${repoUrl}/blob/${headSha}/${pathInUrl(component)})`,
-  );
+/** Each variant: its letter, its summary with no mention, its component's path, and its component's address on the branch at the pushed head. */
+function variantsOf(
+  { variants }: PrototypeRoundOutput,
+  { repoUrl, headSha }: PrototypeRunFinished,
+): { letter: string; summary: string; path: string; component: string }[] {
+  return variants.map(({ letter, summary, component }) => ({
+    letter,
+    summary: withoutMentions(summary),
+    path: component,
+    component: `${repoUrl}/blob/${headSha}/${pathInUrl(component)}`,
+  }));
 }
 
 function branchUrl({ repoUrl, branch }: PrototypeRunFinished): string {
