@@ -21,6 +21,7 @@ import {
 import { CODING_STANDARDS_FILE } from "../guard/trust-root.ts";
 import { readIfPresent } from "../kit/checkout.ts";
 import { changedTestsIn, reviewerChangedTestsBlock } from "../loop/changedTests.ts";
+import { checkCode } from "../loop/flakyChecks.ts";
 import { ticketContext, type PullRequestRunContext } from "./implement.ts";
 import { operatorInputSections } from "./operatorComments.ts";
 
@@ -89,7 +90,7 @@ function ranNothingBlock(ranNothing: readonly string[]): string[] {
   return [
     "## Required checks that ran nothing",
     "Kit code read these from GitHub: these Required checks were skipped or reported neutral on this head, so they passed as GitHub's merge passes them but ran nothing. They vouch for nothing here.",
-    ranNothing.map((name) => `- \`${name.replaceAll("`", "'")}\``).join("\n"),
+    ranNothing.map((name) => `- ${checkCode(name)}`).join("\n"),
   ];
 }
 

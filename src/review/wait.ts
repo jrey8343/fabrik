@@ -30,6 +30,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
+import { checkCode } from "../loop/flakyChecks.ts";
 import type { FailureReport } from "../loop/types.ts";
 import { type ChecksOutcome, checksFromGh, requiredChecksOutcome } from "./checks.ts";
 import { type CheckDetail, type RerunnableCheck, redChecksOf, rerunOutcome, settledChecksOutcome } from "./rerun.ts";
@@ -248,7 +249,7 @@ async function main(productDir: string): Promise<void> {
  */
 export function ranNothingLine(ranNothing: readonly string[]): string | null {
   if (ranNothing.length === 0) return null;
-  const names = ranNothing.map((name) => `\`${name.replaceAll("`", "'")}\``).join(", ");
+  const names = ranNothing.map(checkCode).join(", ");
   return `These Required checks were skipped or reported neutral, so they passed but ran nothing on this head: ${names}`;
 }
 
