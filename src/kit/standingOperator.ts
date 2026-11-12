@@ -5,9 +5,11 @@
 // with their neighbours, the question that waits on someone else and a
 // weekly limit the Kit rides out on another Subscription.
 import { researchRunFailedIn } from "../github/threads.ts";
+import type { HandBack } from "../loop/handBacks.ts";
 import { earliestOf, resetsAtOf } from "../loop/kitIssueMarks.ts";
 import {
   DECISION_TYPES,
+  DESIGN_LABEL,
   decisionLabel,
   type DecisionLabel,
   MAP_LABEL,
@@ -24,6 +26,7 @@ import { whyNotResearchable } from "../loop/research.ts";
 import { freeSubscriptions, kitIssueSubscriptionOf, makesUnusable } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
+import { handBackOfNotice } from "./standingHandBacks.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts, RepoKitFacts } from "./weeklySummary.ts";
@@ -140,8 +143,19 @@ function designRoundStandingsOf(issue: OpenIssueFacts, repo: string, appLogin: s
 function stoppedDesignSessionStandingsOf(issue: OpenIssueFacts, repo: string, appLogin: string): StandingNamed<"yours-to-do">[] {
   const last = issue.comments.at(-1);
   if (!issue.labels.includes(NEEDS_DESIGN) || last === undefined || !last.byBot || last.author !== appLogin || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return [];
-  const handBack = refusedByMapCap(last.body) ? "map-cap-refused" : "design-turn-failed";
-  return [{ ...theOperators(repo, issue.number, null, last.at), work: "design-session", place: "design", name: "yours-to-do", detail: { handBack, role: "design", failure: null, label: null } }];
+  // Its hidden line names the trigger label the sweep took off, where the notice says so.
+  const mark = handBackOfNotice(last.body);
+  const handBack = mark?.kind === "trigger-swept" ? mark.kind : refusedByMapCap(last.body) ? "map-cap-refused" : "design-turn-failed";
+  const label = handBack === "trigger-swept" ? DESIGN_LABEL : null;
+  return [
+    {
+      ...theOperators(repo, issue.number, null, last.at),
+      work: "design-session",
+      place: "design",
+      name: "yours-to-do",
+      detail: { handBack, role: "design", failure: mark?.failure ?? null, label },
+    },
+  ];
 }
 
 /**
@@ -161,16 +175,22 @@ function failedResearchStandingsOf(decision: OpenIssueFacts, openIssues: readonl
   const notice = comments.findLast((comment) => comment.byApp);
   const readded = lastAdded(decision.labelEvents, RESEARCH_LABEL);
   if (notice === undefined || (readded !== null && Date.parse(readded) > Date.parse(notice.at))) return [];
+  // Its hidden line tells a refused branch, a label the sweep took off and a failed landing from a failed run.
+  const mark = handBackOfNotice(notice.body);
+  const handBack = mark !== null && RESEARCH_HAND_BACKS.has(mark.kind) ? mark.kind : "research-failed";
   return [
     {
       ...theOperators(repo, decision.number, null, notice.at),
       work: "research-decision",
       place: null,
       name: "yours-to-do",
-      detail: { handBack: "research-failed", role: "research", failure: null, label: RESEARCH_LABEL },
+      detail: { handBack, role: "research", failure: mark?.failure ?? null, label: RESEARCH_LABEL },
     },
   ];
 }
+
+/** What a research Decision's failure notice can hand back by, besides a failed run. */
+const RESEARCH_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-branch-refused", "trigger-swept", "landing-failed"]);
 
 /**
  * An open `needs-info` issue no person has answered since Triage asked: the
