@@ -151,7 +151,7 @@ export function appliedLines(defaultBranch: string, summary: RunSummary, upToDat
     "",
     upToDate
       ? `${noPr} Setup switched back to ${defaultBranch}.`
-      : `${noPr} Setup switched back to ${defaultBranch}, which here isn't the same as on origin: pull or push so they match, then run setup again.`,
+      : `${noPr} Setup switched back to ${defaultBranch}, which here isn't the same as on origin: pull, or take the commits made here to origin through a pull request, then run setup again.`,
   ];
 }
 

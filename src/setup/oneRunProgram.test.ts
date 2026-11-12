@@ -1431,7 +1431,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(complaints).toEqual([]);
     expect(code).toBe(0);
     expect(said).toContain(
-      "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main, which here isn't the same as on origin: pull or push so they match, then run setup again.",
+      "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main, which here isn't the same as on origin: pull, or take the commits made here to origin through a pull request, then run setup again.",
     );
     expect(git("branch", "--show-current").trim()).toBe("main");
     expect(git("log", "-1", "--format=%s").trim()).toBe("Notes, not pushed");
