@@ -9,6 +9,7 @@ import { type Standing, type StandingFacts, standingsOf } from "../kit/standing.
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
 import type { Facts } from "./gather.ts";
+import { followUpsOf, mentionsOf, relatedOf, relatedToOf } from "./related.ts";
 import { type StoreFacts, storeRowsOf } from "./store.ts";
 
 /** One Standing, with what a reader shows beside it. */
@@ -68,9 +69,21 @@ export function bareRowOf(standing: Standing, title: string, lastWord: Row["last
   return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [] };
 }
 
-/** A Standing's row, with its title and the Fabrik App's last word on the work. */
+/**
+ * A Standing's row, with its title and the Fabrik App's last word on the
+ * work; on an agent pull request's row what is related to it, what mentions
+ * it and its Follow-ups, and on an issue's row the pull request it could be
+ * rolled in to.
+ */
 function rowOf(standing: Standing, facts: Facts): Row {
-  return { ...bareRowOf(standing, titleOf(standing, facts.github), lastWordOf(standing, facts)) };
+  const { issue, pullRequest } = standing;
+  return {
+    ...bareRowOf(standing, titleOf(standing, facts.github), lastWordOf(standing, facts)),
+    related: pullRequest === null ? [] : relatedOf(facts, pullRequest),
+    mentions: pullRequest === null ? [] : mentionsOf(facts, pullRequest),
+    followUps: pullRequest === null ? [] : followUpsOf(facts, pullRequest),
+    relatedTo: issue === null ? null : relatedToOf(facts, issue),
+  };
 }
 
 /**
