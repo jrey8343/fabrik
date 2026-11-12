@@ -26,8 +26,9 @@
 // A Design-session turn takes the issue's parent Spec from FABRIK_SPEC_FILE (null if none),
 // for a Ticket under a Spec, the Spec's other Tickets from FABRIK_SPEC_TICKETS_FILE (#475),
 // for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
-// and whether it may offer a Map from FABRIK_MAP_FILE; on a repo with a `ui` block,
-// it is told it may offer a Prototype.
+// the pull request its issue was filed from, or that there is none, from
+// FABRIK_FILED_FROM_FILE (#659), and whether it may offer a Map from FABRIK_MAP_FILE;
+// on a repo with a `ui` block, it is told it may offer a Prototype.
 // A Design session's prototype turn (#155), `prototype`, is a design run with
 // prompts/prototype.md, on the Design model and effort within the Implement
 // timeout: it takes the request the Operator approved from
@@ -100,7 +101,7 @@ import { digestContext } from "./digest.ts";
 import { triageContext } from "./triage.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
-import { landedNothingContext, mapCapContext, prototypeContext, sentBackContext, specTicketsContext } from "./design.ts";
+import { filedFromContext, landedNothingContext, mapCapContext, prototypeContext, sentBackContext, specTicketsContext } from "./design.ts";
 import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import {
   claudeArgs,
@@ -162,7 +163,8 @@ interface RoleSpec<T> {
   /**
    * A Design session weighs the issue's parent Spec, from FABRIK_SPEC_FILE, if
    * it has one, with the Spec's other Tickets, from FABRIK_SPEC_TICKETS_FILE,
-   * and the agent PR it came back from, if it did, and is told
+   * and the agent PR it came back from, if it did, and is told where the pull
+   * request its issue was filed from stands, from FABRIK_FILED_FROM_FILE,
    * whether it may offer a Map, from FABRIK_MAP_FILE, and whether it may offer
    * a Prototype, from the Kit config.
    */
@@ -449,6 +451,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...landedNothingContext(issue));
     // A Design turn on an issue that was never sent back is given none, and its result says nothing of them.
     if (sentBackComments.length > 0) given = sentBackComments;
+    // Where the pull request the issue's `From PR` line names stands, read afresh this turn; nothing when it names none (#659).
+    extra.push(...filedFromContext(JSON.parse(await readFile(required("FABRIK_FILED_FROM_FILE"), "utf8"))));
     extra.push(...mapCapContext(JSON.parse(await readFile(required("FABRIK_MAP_FILE"), "utf8"))));
     extra.push(...prototypeContext(config, issueNumber));
   }

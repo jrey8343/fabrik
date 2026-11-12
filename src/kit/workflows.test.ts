@@ -13,7 +13,7 @@ import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { DIGEST_JOB_NAME, IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EVIDENCE_PAGE_FILE } from "../evidence/capture.ts";
-import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
+import { FILED_FROM_FILE, MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { RUN_BRIEF_FILE } from "../agent/transcript.ts";
@@ -307,6 +307,20 @@ describe("The Kit's workflows", () => {
 
     expect(agent).toContain(`FABRIK_SPEC_TICKETS_FILE: \${{ runner.temp }}/${SPEC_TICKETS_FILE}`);
     expect(loop.split("FABRIK_SPEC_TICKETS_FILE:").length - 1).toBe(1);
+  });
+
+  it("the Design job gives its agent the pull request its issue was filed from, which the agent-inputs step read for its role, and no other agent job does (#659)", () => {
+    const design = jobIn(loop, "design");
+    const agent = stepsOf(design).find((step) => step.includes("src/agent/run.ts design"));
+    const elsewhere = [loop.replace(design, ""), ...workflows.filter(({ text }) => text !== loop).map(({ text }) => text), ...actions.map(({ text }) => text)];
+
+    expect(agent).toContain(`FABRIK_FILED_FROM_FILE: \${{ runner.temp }}/${FILED_FROM_FILE}`);
+    // The prototype job reads the same inputs under the Design role, and hands its agent nothing of this one.
+    expect(stepsOf(jobIn(loop, PROTOTYPE_JOB)).find((step) => step.includes("src/agent/run.ts prototype"))).toBeDefined();
+    for (const text of elsewhere) {
+      expect(text).not.toContain("FABRIK_FILED_FROM_FILE");
+      expect(text).not.toContain(FILED_FROM_FILE);
+    }
   });
 
   it("the Triage job gives its agent the recent issues the agent-inputs step read for its role, and no other agent job does", () => {

@@ -342,6 +342,8 @@ jobs:
     # pull-requests: read for the input step: on a Ticket sent back from an agent
     # PR, it reads that closed PR into issue.json's sentBack (readSentBack in
     # src/agent/inputs.ts). Without it the turn fails before its agent starts (#328).
+    # On an issue filed from a pull request, it reads that pull request too
+    # (readFiledFrom, #659).
     permissions:
       contents: read
       issues: read
@@ -374,7 +376,8 @@ jobs:
           persist-credentials: false
 
       # Each turn rebuilds its context from the issue thread, and a Ticket's from its
-      # parent Spec too, so a Ticket sent back to design is split under it.
+      # parent Spec too, so a Ticket sent back to design is split under it. An issue
+      # filed from a pull request has that pull request read afresh here too (#659).
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
@@ -400,6 +403,7 @@ jobs:
           FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
           FABRIK_MAP_FILE: ${{ runner.temp }}/map.json
           FABRIK_SPEC_TICKETS_FILE: ${{ runner.temp }}/spec-tickets.json
+          FABRIK_FILED_FROM_FILE: ${{ runner.temp }}/filed-from.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
         run: node ../kit/src/agent/run.ts design
 
@@ -466,6 +470,8 @@ jobs:
       queue: max
     # pull-requests: read for the input step, as the design job's: a prototype
     # turn on a Ticket sent back from an agent PR reads that closed PR (#328).
+    # The step reads the pull request an issue was filed from here too, under the
+    # Design role, and this job hands its agent step nothing of it (#659).
     permissions:
       contents: read
       issues: read
