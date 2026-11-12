@@ -83,8 +83,9 @@ const MISSING_PULL_REQUEST: Plan = { kind: "fail", failure: "infrastructure", re
  * - refused, when the reply breaks its shape or Kit code refuses the Digest
  *   it would render: the no-Digest line is posted, with Kit code's reason,
  *   then the gate opens;
- * - otherwise the Digest is posted, once, and never edited, then the gate
- *   opens.
+ * - otherwise the Digest is posted, once, and never edited, the older
+ *   Digests on the thread are collapsed as outdated (`collapseOlder`), then
+ *   the gate opens.
  * The Loop waits for the attempt, never for its success, and nothing in it
  * moves because of what a Digest says.
  */
@@ -94,8 +95,23 @@ export function landDigest(event: Written, { pullRequest, operator }: Pick<Snaps
   if (dropped !== null) return drop(pullRequest, dropped);
   const reply = parseDigestReply(event.output);
   const comment = reply.ok ? digestCommentOf(reply.output, event.given) : { ok: false as const, refused: reply.errors.join("; ") };
-  const body = comment.ok ? comment.body : noDigestLine({ head: event.headSha, how: "refused", reason: comment.refused, runUrl: event.runUrl });
-  return attemptEnded(pullRequest, body, operator);
+  if (!comment.ok) {
+    return attemptEnded(pullRequest, noDigestLine({ head: event.headSha, how: "refused", reason: comment.refused, runUrl: event.runUrl }), operator);
+  }
+  return attemptEnded(pullRequest, comment.body, operator, collapseOlder(pullRequest));
+}
+
+/**
+ * Collapses each Digest already on the pull request's thread as outdated,
+ * once the Digest that follows them is posted and before the gate opens, so
+ * the thread shows one account: one action for each not collapsed yet. Only
+ * Digests: `digests` holds no no-Digest line, no Verdict and no other
+ * comment. Nothing is ever un-collapsed.
+ */
+export function collapseOlder(pullRequest: PullRequestSnapshot): Action[] {
+  return pullRequest.digests
+    .filter((digest) => !digest.minimized)
+    .map((digest) => ({ kind: "minimize-comment", pullRequest: pullRequest.number, node: digest.node, classifier: "OUTDATED" }));
 }
 
 /**
@@ -121,9 +137,9 @@ export function noDigestAfter(run: FailedRun, failure: InfrastructureFailure, pu
 /** Kit code's reason on a reply the agent job's check refused: its own words, never the agent's. */
 const REFUSED_IN_AGENT_JOB = "it broke the reply's shape in the agent job";
 
-/** What an attempt that ends with something to say comes to: its one comment, then the gate opens. */
-function attemptEnded(pullRequest: PullRequestSnapshot, body: string, operator: string): Plan {
-  return { kind: "act", actions: [{ kind: "comment", issue: pullRequest.number, body }, ...openGate(pullRequest, operator)] };
+/** What an attempt that ends with something to say comes to: its one comment, what follows a Digest's posting, then the gate opens. */
+function attemptEnded(pullRequest: PullRequestSnapshot, body: string, operator: string, afterPosting: readonly Action[] = []): Plan {
+  return { kind: "act", actions: [{ kind: "comment", issue: pullRequest.number, body }, ...afterPosting, ...openGate(pullRequest, operator)] };
 }
 
 /**

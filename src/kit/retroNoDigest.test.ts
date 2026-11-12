@@ -4,6 +4,7 @@
 // thread it carries only Verdicts and the Operator's words, so a Digest
 // comment and a no-Digest line are in none of it.
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { aRecordWithTranscript, aRetroEvidenceInput, aTranscript, transcriptsOf } from "../__fixtures__/retroEvidence.ts";
 import { digestCommentOf, noDigestLine } from "../loop/digestContract.ts";
 import { aComment, aMergedPullRequest, anEscapeMarkerIssue, aVerdictComment, factsOf } from "../read/builders.ts";
@@ -12,13 +13,8 @@ import { type EvidenceBundle, evidenceBundle, refsOf, retroEvidenceOf } from "./
 const HEAD = "a".repeat(40);
 const RUN = "https://github.com/owner/product/actions/runs/1002/attempts/1";
 
-const REPLY = {
-  whatItDoes: "A shopper can now save their basket overnight.",
-  howItGotHere: "One Review passed it at the first head.",
-  walkthrough: "1. The basket page's Save button.",
-  decided: "- Prices hold for a day.",
-};
-const rendered = digestCommentOf(REPLY, { repoUrl: "https://github.com/owner/product", pullRequest: 12, headSha: HEAD, runUrl: RUN });
+const REPLY = aDigestReply({ whatItDoes: "A shopper can now save their basket overnight.", decided: "- Prices hold for a day." });
+const rendered = digestCommentOf(REPLY, aDigestGiven({ repoUrl: "https://github.com/owner/product", pullRequest: 12, headSha: HEAD, runUrl: RUN }));
 if (!rendered.ok) throw new Error(`the fixture reply was refused: ${rendered.refused}`);
 
 /** What only a Digest, a no-Digest line or a Digest run's transcript says. */

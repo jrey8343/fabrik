@@ -2,6 +2,7 @@
 // line on a pull request's thread are in none of the agents' inputs. Each
 // test reads through the client the agent-inputs step reads through.
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { digestCommentOf, noDigestLine } from "../loop/digestContract.ts";
 import { agentInputsClient, type DigestPullRequest, readDigestPullRequest, readIssue, readPullRequest, type Reader } from "./inputs.ts";
 
@@ -14,13 +15,8 @@ const verdict = (verdict: string, headSha: string, rest: string) =>
   `<!-- fabrik:verdict {"verdict":"${verdict}","source":"reviewer","requestChanges":false,"headSha":"${headSha}"} -->\n## Verdict: ${rest}`;
 
 const rendered = digestCommentOf(
-  {
-    whatItDoes: "A shopper can now save their basket overnight.",
-    howItGotHere: "One Review passed it at the first head.",
-    walkthrough: "1. The basket page's Save button.",
-    decided: "- Prices hold for a day.",
-  },
-  { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: A, runUrl: RUN },
+  aDigestReply({ whatItDoes: "A shopper can now save their basket overnight.", decided: "- Prices hold for a day." }),
+  aDigestGiven({ headSha: A, runUrl: RUN }),
 );
 if (!rendered.ok) throw new Error(`the fixture reply was refused: ${rendered.refused}`);
 
@@ -96,6 +92,9 @@ function gitHub(): Reader {
                 headRefName: "fabrik/ticket-7",
                 headRefOid: B,
                 comments: { nodes: THREAD.map(({ body, user }) => ({ body, author: { __typename: user.type } })) },
+                // What the read of the thread for Kit code's facts asks of it.
+                createdAt: at(1),
+                closingIssuesReferences: { nodes: [] },
               },
             },
           }

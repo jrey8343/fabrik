@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { digestCommentOf, noDigestLine } from "../loop/digestContract.ts";
 import { verdictMarker } from "../loop/markers.ts";
 import { leavingOutDigests, withoutDigests } from "./digestComments.ts";
@@ -6,10 +7,7 @@ import { leavingOutDigests, withoutDigests } from "./digestComments.ts";
 const HEAD = "a".repeat(40);
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
-const rendered = digestCommentOf(
-  { whatItDoes: "A shopper can now save their basket.", howItGotHere: "One Review passed it.", walkthrough: "1. The Save button.", decided: "- Prices hold for a day." },
-  { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, runUrl: RUN },
-);
+const rendered = digestCommentOf(aDigestReply(), aDigestGiven({ headSha: HEAD, runUrl: RUN }));
 if (!rendered.ok) throw new Error(`the fixture reply was refused: ${rendered.refused}`);
 /** A Digest comment and a no-Digest line, as the Kit posts them. */
 const DIGEST = rendered.body;

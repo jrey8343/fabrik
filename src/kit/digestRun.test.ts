@@ -3,6 +3,7 @@
 // stands for it, and what a failed landing says.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import type { AgentRunResult } from "../agent/result.ts";
 import { agentFailureEventFrom, agentRunEventFrom, digestEventFrom } from "../github/events.ts";
@@ -111,7 +112,7 @@ describe("What the push job applies after a Digest run", () => {
 });
 
 describe("The Loop event a Digest run's push job applies", () => {
-  const given: DigestGiven = { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN };
+  const given: DigestGiven = aDigestGiven({ headSha: HEAD_SHA, runUrl: RUN });
   const result: AgentRunResult = { role: "digest", issue: 50, output: '{"whatItDoes":"…"}' };
 
   it("is the Digest writer's reply for the pull request and head the Kit job named, with what Kit code hands the contract", () => {
@@ -173,7 +174,7 @@ describe("The README's Digest section", () => {
   });
 
   it("says what the label is honoured on, what the writer is, and the first line of the comment and of the no-Digest line, as the contract writes them", () => {
-    const digest = digestCommentOf({ whatItDoes: "w", howItGotHere: "h", walkthrough: "t", decided: "d" }, { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN });
+    const digest = digestCommentOf(aDigestReply(), aDigestGiven({ headSha: HEAD_SHA, runUrl: RUN }));
     const firstLine = (body: string) => (body.split("\n")[0] ?? "").replace(/"[0-9a-f]{40}"/, "…").replace(/"how":"[a-z-]+"/, '"how":…');
 
     expect(section).toContain("- **The label**: adding `agent:digest` to an agent pull request");

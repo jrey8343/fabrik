@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import {
   anIssue,
   aPullRequest,
@@ -93,12 +94,12 @@ describe("The Digest: a pass", () => {
   });
 });
 
-const REPLY = {
+const REPLY = aDigestReply({
   whatItDoes: "A shopper can now save their basket.",
   howItGotHere: "One Review passed it at the first head.",
   walkthrough: "1. The basket page's Save button.",
   decided: "- Prices hold for a day.",
-};
+});
 
 type Written = Extract<LoopEvent, { kind: "digest-run-finished" }>;
 
@@ -109,7 +110,7 @@ function written(overrides: Partial<Written> = {}): Written {
     pullRequest: 50,
     headSha: HEAD_SHA,
     output: JSON.stringify(REPLY),
-    given: { repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN },
+    given: aDigestGiven({ repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN }),
     runUrl: RUN,
     ...overrides,
   };
@@ -162,7 +163,7 @@ const THE_GATE_OPENS: Action[] = [
 
 describe("The Digest: the Merge gate opens when the attempt ends", () => {
   it("a Digest that lands on a passed draft is posted, then the label comes off, the PR leaves draft and the Operator's review is requested", () => {
-    const rendered = digestCommentOf(REPLY, { repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN });
+    const rendered = digestCommentOf(REPLY, aDigestGiven({ repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN }));
     const plan = landedOn(aPassedDraft());
 
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "comment", issue: 50, body: rendered.ok ? rendered.body : "" }, ...THE_GATE_OPENS] });

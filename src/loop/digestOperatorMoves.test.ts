@@ -3,6 +3,7 @@
 // changes land at the time it ran, and the next snapshot reads them back as
 // the adapter does.
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import {
   conflictAttemptsIn,
@@ -123,12 +124,7 @@ const B = "b".repeat(40);
 
 const BUILT: BranchChanges = { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }], updatedFromMain: false };
 
-const REPLY = {
-  whatItDoes: "A shopper can now save their basket.",
-  howItGotHere: "One Review passed it at the first head.",
-  walkthrough: "1. The basket page's Save button.",
-  decided: "- Prices hold for a day.",
-};
+const REPLY = aDigestReply();
 
 /** Minutes after 05:00, as an ISO 8601 time. */
 function at(minutes: number): string {
@@ -221,7 +217,7 @@ class Thread {
 
   /** The Digest writer's attempt, started at `head`, ends with a Digest at `minutes`. */
   digestWritten(head: string, minutes: number): Plan {
-    const given = { repoUrl: REPO, pullRequest: 50, headSha: head, runUrl: RUN };
+    const given = aDigestGiven({ repoUrl: REPO, pullRequest: 50, headSha: head, runUrl: RUN });
     return this.plan({ kind: "digest-run-finished", pullRequest: 50, headSha: head, output: JSON.stringify(REPLY), given, runUrl: RUN }, minutes);
   }
 

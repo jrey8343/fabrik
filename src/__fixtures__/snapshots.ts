@@ -111,6 +111,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     url: "https://github.com/acme/shop/pull/50",
     uiEvidenceMarker: null,
     changedTests: [],
+    digests: [],
     ...overrides,
   };
 }

@@ -11,7 +11,7 @@ import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
 import { isEmptyDiffComment, withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
-import { allPages, type GitHub, type Repo } from "./client.ts";
+import { allPages, type GitHub, GitHubError, gitHubMessageOf, type Repo } from "./client.ts";
 
 /** The agent run a plan starts, which the workflow carries out by routing to that role's agent job. */
 export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run" }> | null {
@@ -71,13 +71,26 @@ export interface ReaddedLabel {
 }
 
 /**
+ * An older Digest GitHub refused to collapse as outdated (ADR-0022), which
+ * stopped nothing: the comment, and what GitHub said.
+ */
+export interface RefusedCollapse {
+  readonly pullRequest: number;
+  /** The comment's node id. */
+  readonly node: string;
+  readonly why: string;
+}
+
+/**
  * What the push job hands on from applying a plan: the preview deployment to
- * link, a UI PR's or a prototype round's, when the plan asked for one; and each
- * trigger label it re-added, for the step summary.
+ * link, a UI PR's or a prototype round's, when the plan asked for one; and,
+ * for the step summary, each trigger label it re-added and each older Digest
+ * GitHub refused to collapse.
  */
 export interface AppliedPlan {
   readonly preview: PreviewToLink | PrototypePreviewToLink | null;
   readonly readded: readonly ReaddedLabel[];
+  readonly refusedCollapses: readonly RefusedCollapse[];
 }
 
 /** The Actions run applying a plan, by its id, and when it applies it, as an ISO 8601 time. */
@@ -140,8 +153,8 @@ export async function applyPlan(
   run: ApplyingRun | null = null,
   rebaser: MainRebaser | null = null,
 ): Promise<AppliedPlan> {
-  if (plan.kind !== "act") return { preview: null, readded: [] };
-  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [] };
+  if (plan.kind !== "act") return { preview: null, readded: [], refusedCollapses: [] };
+  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [], refusedCollapses: [] };
   const applyEach = async (actions: readonly Action[]): Promise<void> => {
     for (const action of actions) {
       if (action.kind !== "rebase-onto-main") {
@@ -175,7 +188,7 @@ export async function applyPlan(
       throw new PlanNotApplied(action, plan.actions.slice(0, i), plan.actions.slice(i + 1), error);
     }
   }
-  return { preview: made.preview, readded: made.readded };
+  return { preview: made.preview, readded: made.readded, refusedCollapses: made.refusedCollapses };
 }
 
 /** What earlier actions in the plan made, for later ones to refer to. */
@@ -190,6 +203,8 @@ interface Made {
   readonly run: ApplyingRun | null;
   /** Each trigger label the plan re-added, having found it already on. */
   readonly readded: ReaddedLabel[];
+  /** Each older Digest GitHub refused to collapse. */
+  readonly refusedCollapses: RefusedCollapse[];
 }
 
 /** A comment a plan posted: its URL for links in text, its id for an edit. */
@@ -406,6 +421,21 @@ async function apply(
       return react(github, repo, action);
     case "end-held-line":
       return endHeldLine(github, repo, action, made.run?.at ?? new Date().toISOString());
+    case "minimize-comment": {
+      // Only GraphQL can collapse a comment, by its node id. A refusal is the step summary's to say and stops
+      // nothing: the calls after it are still made and the gate still opens, since the current Digest is found by its head.
+      const refused = await github
+        .graphql("mutation ($id: ID!, $classifier: ReportedContentClassifiers!) { minimizeComment(input: { subjectId: $id, classifier: $classifier }) { clientMutationId } }", {
+          id: action.node,
+          classifier: action.classifier,
+        })
+        .then(
+          () => null,
+          (error: unknown) => (error instanceof GitHubError ? gitHubMessageOf(error) : error instanceof Error ? error.message : String(error)),
+        );
+      if (refused !== null) made.refusedCollapses.push({ pullRequest: action.pullRequest, node: action.node, why: refused });
+      return;
+    }
     default:
       return applyToIssue(github, `${issues}/${action.issue}`, action, made);
   }
@@ -506,7 +536,8 @@ async function applyToIssue(
         | "mark-ready-for-review"
         | "request-review"
         | "react"
-        | "end-held-line";
+        | "end-held-line"
+        | "minimize-comment";
     }
   >,
   made: Made,

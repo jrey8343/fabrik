@@ -25,6 +25,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
 import { leavingOutDigests } from "../github/digestComments.ts";
+import { readDigestThread } from "../github/digestGiven.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
@@ -35,6 +36,7 @@ import { isStateLabel, type StateLabel } from "../loop/labels.ts";
 import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
+import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
 import { fromAuditIn } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
@@ -490,6 +492,8 @@ export interface DigestPullRequest {
   readonly kitNotes: readonly string[];
   /** Whether its body's evidence marker names screenshots its Implement run kept. */
   readonly uiEvidence: boolean;
+  /** Kit code's facts, worked out from its thread (src/loop/digestFacts.ts), which the writer words and never contradicts. */
+  readonly facts: DigestFacts;
 }
 
 /**
@@ -501,7 +505,10 @@ export interface DigestPullRequest {
  * evidence exists. Nobody else's words are in it, and nothing from the run
  * store: no transcript and no Run record. The Verdicts and the notes come
  * only from what readPullRequest and verdictsOn hand back, so whatever those
- * keep from an agent is kept from this one.
+ * keep from an agent is kept from this one. Beside them go Kit code's facts,
+ * worked out from the thread as the push job reads it again to render the
+ * Digest (readDigestThread): they are counts and names of Kit code's own,
+ * so a Verdict's fingerprint is behind them and its hidden line is not in them.
  */
 export async function readDigestPullRequest(
   github: Reader,
@@ -509,10 +516,11 @@ export async function readDigestPullRequest(
   number: number,
   { operator, deferred = [] }: { readonly operator: string; readonly deferred?: readonly number[] },
 ): Promise<DigestPullRequest> {
-  const [read, verdicts, rest] = await Promise.all([
+  const [read, verdicts, rest, thread] = await Promise.all([
     readPullRequest(github, repo, number, { withComments: true, operator, deferred }),
     verdictsOn(github, repo, number),
     github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`),
+    readDigestThread(github, repo, number, operator),
   ]);
   const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges"> & {
     comments: { body: string; author: { __typename: string } | null }[];
@@ -524,6 +532,7 @@ export async function readDigestPullRequest(
     // Only a bot's comments are the Kit's, as only a bot's markers are read; its Verdicts are given apart, whole.
     kitNotes: comments.filter(({ body, author }) => author?.__typename === "Bot" && verdictsIn([body]).length === 0).map(({ body }) => body),
     uiEvidence: (evidenceMarkerIn(pullRequest.body)?.artifact ?? null) !== null,
+    facts: digestFactsOf(thread),
   };
 }
 
