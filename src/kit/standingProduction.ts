@@ -7,7 +7,6 @@
 // (src/read/deployments.ts). The Weekly summary's gather fills neither, so no
 // Kit job works out a Standing past the merge. Pure, no I/O.
 import type { DeploymentsRead, DeployOf } from "../read/deployments.ts";
-import type { ProductionConfig } from "./config.ts";
 import type { Standing, StandingFacts, StandingNamed } from "./standing.ts";
 
 /** How long after its merge, in minutes, a merge no deploy has started for reads as no deploy seen. */
@@ -28,8 +27,17 @@ export interface MergedLastDayFacts {
   readonly mergedAt: string;
 }
 
-/** The names a Standing at Production can have. */
-export type ProductionName = "deploying" | "live" | "deploy-failed" | "no-deploy-seen" | "merged";
+/** The names a merged agent pull request's Standing can have. */
+const PRODUCTION_NAMES = ["deploying", "live", "deploy-failed", "no-deploy-seen", "merged"] as const;
+export type ProductionName = (typeof PRODUCTION_NAMES)[number];
+
+/** A merged agent pull request's Standing: at Production, or with no place in a repo that tracks no deploys. */
+export type ProductionStanding = StandingNamed<ProductionName>;
+
+/** Whether a Standing is a merged agent pull request's. */
+export function isProductionStanding(standing: Standing): standing is ProductionStanding {
+  return (PRODUCTION_NAMES as readonly string[]).includes(standing.name);
+}
 
 /** What every Standing at Production's wording is made of. */
 export interface ProductionDetail {
@@ -70,20 +78,30 @@ export function stillStands(mergedAt: string, now: string): boolean {
 export function productionStandingsOf(facts: StandingFacts, now: string): Standing[] {
   const config = facts.kit?.config;
   if (facts.mergedLastDay === undefined || config === undefined || !config.ok || config.config.production === null) return [];
-  const { production } = config.config;
+  const { repo } = facts.github;
+  const { environment } = config.config.production;
   return facts.mergedLastDay
     .filter(({ mergedAt }) => stillStands(mergedAt, now))
-    .map((merge) => productionStandingOf(facts.github.repo, merge, production, deployOf(merge, production, facts.github.repo, facts.deployments ?? null)));
+    .map((merge) => productionStandingOf(repo, merge, environment, deployIn(facts.deployments ?? null, repo, environment, merge.mergeCommit)));
 }
 
-/** What the Deployments fact says of one merge: unread when the read is missing, of another repo or environment, leaves it out, or the merge has no commit. */
-function deployOf({ mergeCommit }: MergedLastDayFacts, { environment }: ProductionConfig, repo: string, read: DeploymentsRead | null): DeployOf | "unread" {
+/**
+ * What a Deployments read says of one merge in `repo`'s `environment`:
+ * unread when there is no read, it is of another repo or environment, it
+ * leaves the merge out or gives it as unread, or the merge has no commit.
+ */
+export function deployIn(read: DeploymentsRead | null, repo: string, environment: string | null, mergeCommit: string | null): DeployOf | "unread" {
   if (mergeCommit === null || read === null || read.repo !== repo || read.environment !== environment) return "unread";
   return read.merges[mergeCommit] ?? "unread";
 }
 
-/** One merge's Standing at Production, for what its Deployments say, as it stands at the merge; standingAt reads it later. */
-export function productionStandingOf(repo: string, merge: MergedLastDayFacts, { environment }: ProductionConfig, deploy: DeployOf | "unread"): Standing {
+/** One merge's Standing, for what its Deployments say, before it is read at a time (standingAt). */
+export function productionStandingOf(
+  repo: string,
+  merge: Pick<MergedLastDayFacts, "number" | "ticket" | "mergeCommit" | "mergedAt">,
+  environment: string | null,
+  deploy: DeployOf | "unread",
+): ProductionStanding {
   const base = {
     schema: 1,
     repo,
