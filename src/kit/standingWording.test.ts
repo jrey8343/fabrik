@@ -64,6 +64,29 @@ describe("the wording of a Standing", () => {
   });
 });
 
+describe("the wording of a Standing in needs-info", () => {
+  const asked = (author: string) =>
+    theStandingIn({ openIssues: [anOpenIssue({ author, labels: ["needs-info"], labelEvents: [aLabelAdded("needs-info", SINCE)] })] });
+
+  it("says Triage waits for the Operator's answer to their own or the Monitor's issue", () => {
+    for (const author of ["operator", "fabrik-app[bot]"]) {
+      expect(wordStanding(asked(author), minutesAfter(3 * 60), ZONE)).toEqual({
+        pill: "Needs your answer",
+        sentence: "Triage asked a question 3 hours ago and is waiting for your answer.",
+        remedy: null,
+      });
+    }
+  });
+
+  it("names the author anyone else's issue waits on, with no @ so it mentions nobody", () => {
+    expect(wordStanding(asked("kate"), minutesAfter(40), ZONE)).toEqual({
+      pill: "Waiting on its author",
+      sentence: "Triage asked its author, kate, a question 40 minutes ago.",
+      remedy: null,
+    });
+  });
+});
+
 describe("an age", () => {
   it.each([
     [0, "under a minute"],

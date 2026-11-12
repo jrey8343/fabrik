@@ -225,6 +225,77 @@ describe("the Standing rule", () => {
     });
   });
 
+  describe("in needs-info", () => {
+    const asked = (number: number, author: string, overrides: Parameters<typeof anOpenIssue>[0] = {}) =>
+      anOpenIssue({ number, author, labels: ["needs-info"], labelEvents: [aLabelAdded("needs-info", "2026-11-06T20:00:00Z")], ...overrides });
+
+    it("gives an unanswered needs-info issue the Operator filed one Standing, needs your answer at Triage, stopping work, since the label", () => {
+      expect(standingsIn({ openIssues: [asked(18, "operator")] })).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 18,
+          pullRequest: null,
+          work: "issue",
+          place: "triage",
+          name: "needs-your-answer",
+          move: "operator",
+          yours: true,
+          stopsWork: true,
+          since: "2026-11-06T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: { author: "operator" },
+        },
+      ]);
+    });
+
+    it("gives one the Fabrik App filed as the Monitor the same, naming the App as its author", () => {
+      expect(standingsIn({ openIssues: [asked(15, "fabrik-app[bot]")] })).toEqual([
+        expect.objectContaining({ issue: 15, name: "needs-your-answer", move: "operator", stopsWork: true, detail: { author: "fabrik-app[bot]" } }),
+      ]);
+    });
+
+    it("never makes one anyone else filed the Operator's: it waits on its author, nobody's move, at Triage", () => {
+      expect(standingsIn({ openIssues: [asked(16, "kate")] })).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 16,
+          pullRequest: null,
+          work: "issue",
+          place: "triage",
+          name: "waiting-on-author",
+          move: "nobody",
+          yours: false,
+          stopsWork: false,
+          since: "2026-11-06T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: { author: "kate" },
+        },
+      ]);
+    });
+
+    it("gives none once a person answered after the question, though a bot's comment or an answer before it leaves it waiting", () => {
+      const standings = standingsIn({
+        openIssues: [
+          asked(18, "operator", { comments: [aComment("CSV.", "2026-11-07T20:00:00Z", { author: "operator", byBot: false })] }),
+          asked(19, "kate", { comments: [aComment("Since 2.3.", "2026-11-07T20:00:00Z", { author: "kate", byBot: false })] }),
+          asked(20, "operator", { comments: [aComment("Still looking.", "2026-11-07T20:00:00Z")] }),
+          asked(21, "operator", { comments: [aComment("Earlier.", "2026-11-05T20:00:00Z", { author: "operator", byBot: false })] }),
+          anOpenIssue({ number: 22, author: "operator", labels: ["needs-triage"] }),
+        ],
+      });
+      expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([
+        { issue: 20, name: "needs-your-answer" },
+        { issue: 21, name: "needs-your-answer" },
+      ]);
+    });
+  });
+
   describe("one piece of work", () => {
     it("is one Standing for a Ticket and the agent PR that closes it, carrying both numbers", () => {
       const standings = standingsIn({

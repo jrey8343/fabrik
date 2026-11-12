@@ -1,7 +1,8 @@
 // The Standings whose move is the Operator's (src/kit/standing.ts): an agent
 // pull request at the Merge gate, work handed to them with `ready-for-human`,
-// and a Design session's Round waiting on their answer.
-import { READY_FOR_HUMAN } from "../loop/labels.ts";
+// a Design session's Round waiting on their answer, and Triage's question,
+// with its neighbour, the question that waits on someone else.
+import { NEEDS_INFO, READY_FOR_HUMAN } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import { type LabelEvent, verdictsOn } from "./retroEvidence.ts";
@@ -12,6 +13,7 @@ export function operatorStandingsOf({ github, operator, appLogin }: StandingFact
   const { repo, openIssues, openPullRequests } = github;
   return [
     ...openIssues.flatMap((issue) => designRoundStandingsOf(issue, repo, appLogin)),
+    ...openIssues.flatMap((issue) => questionStandingsOf(issue, repo, operator, appLogin)),
     ...openIssues.flatMap((issue) => (issue.labels.includes(READY_FOR_HUMAN) ? [readyForHumanStandingOf(issue, repo, now)] : [])),
     ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, repo, operator)),
   ];
@@ -31,6 +33,37 @@ function designRoundStandingsOf(issue: OpenIssueFacts, repo: string, appLogin: s
   if (round === undefined) return [];
   const prototype = second.trim() === PROTOTYPE_ROUND_MARKER ? "ready" : second.trim() === PROTOTYPE_FAILURE_ROUND_MARKER ? "failed" : null;
   return [{ ...theOperators(repo, issue.number, null, last.at), work: "design-session", place: "design", name: "design-round", detail: { round: Number(round), prototype } }];
+}
+
+/**
+ * An open `needs-info` issue no person has answered since Triage asked: the
+ * Operator's answer, stopping work, when they filed it or the Fabrik App did
+ * as the Monitor, which can't answer itself (#425); anyone else's waits on
+ * its author, nobody's move. At Triage, since the question.
+ */
+function questionStandingsOf(issue: OpenIssueFacts, repo: string, operator: string, appLogin: string): StandingNamed<"needs-your-answer" | "waiting-on-author">[] {
+  const asked = unansweredQuestionOf(issue);
+  if (asked === null) return [];
+  const base = { ...theOperators(repo, issue.number, null, asked), work: "issue", place: "triage", detail: { author: issue.author } } as const;
+  if (issue.author === operator || issue.author === appLogin) return [{ ...base, name: "needs-your-answer" }];
+  return [{ ...base, move: "nobody", yours: false, stopsWork: false, name: "waiting-on-author" }];
+}
+
+/** When Triage asked about a `needs-info` issue, or null if it isn't one or a person has answered since. */
+function unansweredQuestionOf(issue: OpenIssueFacts): string | null {
+  if (!issue.labels.includes(NEEDS_INFO) || answerOf(issue) !== null) return null;
+  return lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt;
+}
+
+/**
+ * When a person first answered a `needs-info` issue's question, or null if
+ * nobody has. The question is when it last got `needs-info`: a later state
+ * change would have taken the label off, and asking again adds it anew. A
+ * bot's comment is no answer, as it never sends the issue back to Triage.
+ */
+export function answerOf(issue: OpenIssueFacts): string | null {
+  const asked = Date.parse(lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt);
+  return issue.comments.find((comment) => !comment.byBot && Date.parse(comment.at) > asked)?.at ?? null;
 }
 
 /** An open issue labelled `ready-for-human`: the Operator's to do, with no place on the Loop, since it got the label, or was opened with it. */

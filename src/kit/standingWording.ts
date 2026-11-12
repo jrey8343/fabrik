@@ -30,10 +30,14 @@ export function wordStanding(standing: Standing, now: string, _timeZone: string)
       const prototypeIs = prototype === "ready" ? ": the prototype is ready to look at" : prototype === "failed" ? ": the prototype failed" : "";
       return { pill: `Design round ${round}`, sentence: `Round ${round} has waited for your answer since ${age} ago${prototypeIs}.`, remedy: null };
     }
+    case "needs-your-answer":
+      return { pill: "Needs your answer", sentence: `Triage asked a question ${age} ago and is waiting for your answer.`, remedy: null };
     case "yours-to-do": {
       const handedBack = standing.detail.handBack === null ? undefined : HAND_BACK_SENTENCES[standing.detail.handBack];
       return { pill: "Yours to do", sentence: handedBack?.(standing, age) ?? `Handed to you with \`${READY_FOR_HUMAN}\` ${age} ago.`, remedy: null };
     }
+    case "waiting-on-author":
+      return { pill: "Waiting on its author", sentence: `Triage asked its author, ${standing.detail.author}, a question ${age} ago.`, remedy: null };
     default:
       throw new Error(`No wording for a ${standing.name} Standing yet.`);
   }

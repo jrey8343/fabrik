@@ -33,6 +33,23 @@
     "subscription": null,
     "detail": { "round": 2, "prototype": null }
   },
+  "needs-your-answer": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 18,
+    "pullRequest": null,
+    "work": "issue",
+    "place": "triage",
+    "name": "needs-your-answer",
+    "move": "operator",
+    "yours": true,
+    "stopsWork": true,
+    "since": "2026-11-06T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": null,
+    "detail": { "author": "operator" }
+  },
   "yours-to-do": {
     "schema": 1,
     "repo": "owner/product",
@@ -49,5 +66,22 @@
     "awaits": null,
     "subscription": null,
     "detail": { "handBack": null, "role": null, "failure": null, "label": null }
+  },
+  "waiting-on-author": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 16,
+    "pullRequest": null,
+    "work": "issue",
+    "place": "triage",
+    "name": "waiting-on-author",
+    "move": "nobody",
+    "yours": false,
+    "stopsWork": false,
+    "since": "2026-11-06T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": null,
+    "detail": { "author": "kate" }
   }
 }
