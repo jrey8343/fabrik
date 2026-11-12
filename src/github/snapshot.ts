@@ -61,6 +61,7 @@ import type {
   ResearchDecisionSnapshot,
   RetroSnapshot,
   RolesUnderWay,
+  RollInsSnapshot,
   Snapshot,
   SpecSnapshot,
   StartingComment,
@@ -100,6 +101,7 @@ import {
   verdictsIn,
 } from "./threads.ts";
 import { leavingOutHeldLines } from "./heldLines.ts";
+import { operatorsRequestChangesIn, type WrittenReview } from "./writtenOn.ts";
 
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -610,6 +612,11 @@ export async function gatherSnapshot(
   const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
+  // An agent pull request that merges or closes with a Roll-in unsent has that Roll-in's issue reopened for Triage (#663).
+  const rollIns =
+    event.kind === "pull-request-closed" && part?.pullRequest?.isAgent === true
+      ? await gatherRollIns(github, repo, event.pullRequest, theOperator, appLogin)
+      : null;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   const replay =
     event.kind === "scheduled-tick" && replayStore !== null
@@ -619,8 +626,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -924,6 +931,129 @@ async function readPullRequests(github: ReadClient, repo: Repo, named: readonly 
 }
 
 /**
+ * Every issue or pull request GitHub cross-references to a pull request, a
+ * page at a time, an issue's with where it is and how it stands. A query of
+ * its own, made only as an agent pull request closes: PULL_REQUEST_FIELDS is
+ * read of every open pull request by the conflict check too.
+ */
+const ROLL_IN_CROSS_REFERENCES_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        crossReferences: timelineItems(first: 100, after: $after, itemTypes: [CROSS_REFERENCED_EVENT]) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            __typename
+            ... on CrossReferencedEvent { source { __typename ... on Issue { number state stateReason repository { nameWithOwner } } } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/** A cross-reference as ROLL_IN_CROSS_REFERENCES_QUERY reads it: an issue's source, or a pull request's, of which only the kind is read. */
+interface RawRollInCrossReference {
+  __typename: string;
+  source?: { __typename: string; number?: number; state?: "OPEN" | "CLOSED"; stateReason?: RawStateReason; repository?: { nameWithOwner: string } };
+}
+
+/** Why an issue is in its state, as GitHub's GraphQL names it. */
+type RawStateReason = "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+
+/** How many of an issue's latest comments are read for its Roll-in's closing comment and the Kit's reopening note. */
+const ROLL_IN_ISSUE_COMMENTS = 100;
+
+/**
+ * These issues by number, each as it stands now, with its latest comments
+ * and who wrote them. One query however many they are, each issue under an
+ * alias of its own.
+ */
+function rollInIssuesQuery(numbers: readonly number[]): string {
+  const issue = (number: number): string =>
+    `issue${number}: issue(number: ${number}) { number title state stateReason comments(last: ${ROLL_IN_ISSUE_COMMENTS}) { nodes { body createdAt url author { login __typename } } } }`;
+  return `
+  query ($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      ${numbers.map(issue).join("\n      ")}
+    }
+  }
+`;
+}
+
+/** An issue as rollInIssuesQuery reads it. */
+interface RawRollInIssue {
+  number: number;
+  title: string;
+  state: "OPEN" | "CLOSED";
+  stateReason: RawStateReason;
+  comments: { nodes: { body: string; createdAt: string; url: string; author: { login: string; __typename: string } | null }[] };
+}
+
+/**
+ * For an agent pull request closing, merged or not (#663): what tells which
+ * Roll-ins were left unsent on it (src/loop/owedRollIn.ts). The Roll-in's
+ * closing comment names the pull request, so GitHub cross-references its
+ * issue to it: every cross-reference is read, and of those only the issues
+ * of this repo closed as not planned are read further, each with its latest
+ * comments, the Fabrik App's (see byAppOf) told from anyone else's. With
+ * them, the Operator's Request changes on the pull request, each review's
+ * own text, by the one rule for which reviews those are
+ * (operatorsRequestChangesIn): no line comment is read. A pull request no
+ * such issue names costs the one query and nothing more.
+ */
+async function gatherRollIns(github: ReadClient, repo: Repo, pullRequest: number, operator: string, appLogin: string | null): Promise<RollInsSnapshot> {
+  const here = `${repo.owner}/${repo.name}`;
+  const references = await pagesOf<RawRollInCrossReference>(
+    github,
+    ROLL_IN_CROSS_REFERENCES_QUERY,
+    repo,
+    { number: pullRequest },
+    (data) => data.repository.pullRequest?.crossReferences ?? null,
+  );
+  const numbers = [
+    ...new Set(
+      references.flatMap(({ source }) =>
+        source?.__typename === "Issue" &&
+        source.number !== undefined &&
+        source.state === "CLOSED" &&
+        source.stateReason === "NOT_PLANNED" &&
+        // GitHub tells repos apart whatever the case of their names.
+        source.repository?.nameWithOwner.toLowerCase() === here.toLowerCase()
+          ? [source.number]
+          : [],
+      ),
+    ),
+  ].sort((a, b) => a - b);
+  if (numbers.length === 0) return { repo: here, requestChanges: [], issues: [] };
+  const [data, reviews] = await Promise.all([
+    github.graphql<{ repository: Record<string, RawRollInIssue | null> }>(rollInIssuesQuery(numbers), { owner: repo.owner, name: repo.name }),
+    allPages<WrittenReview>(github, `/repos/${repo.owner}/${repo.name}/pulls/${pullRequest}/reviews`),
+  ]);
+  return {
+    repo: here,
+    requestChanges: operatorsRequestChangesIn({ lineComments: [], reviews }, operator).map(({ review, dismissed }) => ({ body: review.body ?? "", dismissed })),
+    issues: numbers.flatMap((number) => {
+      const issue = data.repository[`issue${number}`];
+      if (issue === null || issue === undefined) return [];
+      return [
+        {
+          number: issue.number,
+          title: issue.title,
+          repo: here,
+          // Read again with its comments, so one reopened or closed another way since the cross-reference was read is told as it stands.
+          closedAs: issue.state === "CLOSED" && issue.stateReason !== null && issue.stateReason !== "REOPENED" ? CLOSED_AS[issue.stateReason] : null,
+          comments: issue.comments.nodes.map(({ body, createdAt, url, author }) => ({ body, byApp: byAppOf(author, appLogin), at: createdAt, url })),
+        },
+      ];
+    }),
+  };
+}
+
+/** How the Kit names each reason GitHub closes an issue with. */
+const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
+
+/**
  * The open `wayfinder:map` issues, oldest first, whoever opened them. One
  * page is enough: the Map cap is never above its default of 1, so the first
  * 50 hold every Map that fills it.
@@ -1110,6 +1240,7 @@ type EventPart = Omit<
   | "weeklyIssues"
   | "replay"
   | "namedPullRequests"
+  | "rollIns"
   | "held"
   | "closedKitIssue"
   | "openMaps"

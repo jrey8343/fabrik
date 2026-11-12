@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { acceptedBody } from "../__fixtures__/replay.ts";
-import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { replayMarksIn } from "../kit/replay.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
 import { applyPlan, PlanNotApplied } from "./apply.ts";
 import { GitHubError } from "./client.ts";
+import { describePlan } from "./describePlan.ts";
 import { pendingPrototypeIn } from "./threads.ts";
 
 const repo = { owner: "acme", name: "shop" };
@@ -58,6 +59,60 @@ describe("Applying a close", () => {
     await applyPlan(github, repo, { kind: "act", actions: [{ kind: "close", issue: 7, reason }] });
 
     expect(github.calls).toEqual([{ method: "PATCH", path: `${issues}/7`, body: { state: "closed", state_reason: reason } }]);
+  });
+});
+
+describe("Applying a reopening (#663)", () => {
+  const settledOnto42 = "<!-- fabrik:roll-in 42 -->\n**Design session finished.** The Operator settled a Roll-in onto #42, so the Kit closes this issue as not planned.";
+  const unsent = {
+    repo: "acme/shop",
+    requestChanges: [],
+    issues: [
+      {
+        number: 7,
+        title: "Show the cart's total",
+        repo: "acme/shop",
+        closedAs: "not_planned" as const,
+        comments: [{ body: settledOnto42, byApp: true, at: "2026-11-10T09:00:00Z", url: "https://github.com/acme/shop/issues/7#issuecomment-1" }],
+      },
+    ],
+  };
+  const reopening = planFor(
+    { kind: "pull-request-closed", pullRequest: 42, merged: true, closedByBot: false },
+    snapshotOfPullRequest(aPullRequest({ number: 42, ticket: 30, open: false }), { rollIns: unsent }),
+    kitConfig(),
+  );
+
+  it("sends GitHub the open state, as the Fabrik App: an issue's own endpoint, which closing one already writes", async () => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, { kind: "act", actions: [{ kind: "reopen", issue: 7 }] });
+
+    expect(github.calls).toEqual([{ method: "PATCH", path: `${issues}/7`, body: { state: "open" } }]);
+  });
+
+  it("applies a Roll-in's reopening in the plan's order, writing only the issue, its labels and its comments", async () => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, reopening);
+
+    expect(github.calls.map(({ method, path }) => `${method} ${path}`)).toEqual([
+      `PATCH ${issues}/7`,
+      `DELETE ${issues}/7/labels/wontfix`,
+      `POST ${issues}/7/comments`,
+      `POST ${issues}/7/labels`,
+    ]);
+    expect(github.calls.at(-1)?.body).toEqual({ labels: ["needs-triage"] });
+  });
+
+  it("is named in the plan's summary", () => {
+    expect(describePlan(reopening).split("\n")).toEqual([
+      "- reopen #7",
+      "- remove label on #7: wontfix",
+      "- comment on #7",
+      "- add labels on #7: needs-triage",
+      "- run a Dispatch check",
+    ]);
   });
 });
 

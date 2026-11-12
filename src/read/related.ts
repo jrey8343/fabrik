@@ -21,6 +21,7 @@ import {
   RETRO_LABEL,
 } from "../loop/labels.ts";
 import { fromPullRequestIn } from "../loop/markers.ts";
+import { namesIssue } from "../loop/owedRollIn.ts";
 import type { Facts } from "./gather.ts";
 
 /** The kinds of issue never related to a pull request, whatever their `From PR` line says. */
@@ -92,16 +93,7 @@ function candidatesOf({ github, operator, appLogin, issueBodies }: Facts): Candi
  * read.
  */
 function namedInRequestChanges(pullRequest: OpenPullRequestFacts, operator: string, repo: string, issue: number): boolean {
-  const byNumber = new RegExp(`(?<![\\w/])#${issue}(?!\\d)`);
-  const byLink = new RegExp(`https://github\\.com/${escaped(repo)}/issues/${issue}(?!\\d)`, "i");
-  return pullRequest.reviews.some(
-    ({ author, state, body }) => author === operator && state === "changes-requested" && (byNumber.test(body) || byLink.test(body)),
-  );
-}
-
-/** `text` with every character a regular expression gives a meaning to escaped. */
-function escaped(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return pullRequest.reviews.some(({ author, state, body }) => author === operator && state === "changes-requested" && namesIssue(body, repo, issue));
 }
 
 /** The issues that could still be rolled in to open agent pull request `pullRequest`, in the order of the open issues. */

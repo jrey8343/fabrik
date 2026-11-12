@@ -627,6 +627,10 @@ async function applyToIssue(
     case "close":
       await github.rest("PATCH", issue, { state: "closed", state_reason: action.reason });
       return;
+    case "reopen":
+      // The issue's own endpoint, which a close writes too: Issues: write, and nothing the Fabrik App doesn't hold.
+      await github.rest("PATCH", issue, { state: "open" });
+      return;
     case "edit-issue-body":
       await github.rest("PATCH", issue, { body: action.body });
       return;
