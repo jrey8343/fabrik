@@ -11,10 +11,20 @@ import type { ReadClient } from "./client.ts";
 
 /** `github`, whose GraphQL answers carry no held line. Every other call is its own. */
 export function leavingOutHeldLines<Reader extends Pick<ReadClient, "graphql">>(github: Reader): Reader {
+  return answeringThrough(github, withoutHeldLines);
+}
+
+/** The value with every array element that is a comment whose body is a held line dropped, at any depth. */
+export function withoutHeldLines<T>(value: T): T {
+  return withoutNodes(value, isHeldLineNode);
+}
+
+/** `github`, each of whose GraphQL answers is passed through `through`. Every other call is its own. */
+export function answeringThrough<Reader extends Pick<ReadClient, "graphql">>(github: Reader, through: <T>(answer: T) => T): Reader {
   return new Proxy(github, {
     get(target, property) {
       if (property === "graphql") {
-        return async (query: string, variables: Record<string, unknown>) => withoutHeldLines(await target.graphql(query, variables));
+        return async (query: string, variables: Record<string, unknown>) => through(await target.graphql(query, variables));
       }
       const value: unknown = Reflect.get(target, property, target);
       // Bound to the client itself, whose private fields a call through the proxy couldn't reach.
@@ -23,13 +33,13 @@ export function leavingOutHeldLines<Reader extends Pick<ReadClient, "graphql">>(
   });
 }
 
-/** The value with every array element that is a comment whose body is a held line dropped, at any depth. */
-export function withoutHeldLines<T>(value: T): T {
+/** The value with every array element `leftOut` names dropped, at any depth. */
+export function withoutNodes<T>(value: T, leftOut: (item: unknown) => boolean): T {
   if (Array.isArray(value)) {
-    return value.filter((item) => !isHeldLineNode(item)).map((item) => withoutHeldLines(item)) as T;
+    return value.filter((item) => !leftOut(item)).map((item) => withoutNodes(item, leftOut)) as T;
   }
   if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, withoutHeldLines(field)])) as T;
+  return Object.fromEntries(Object.entries(value).map(([key, field]) => [key, withoutNodes(field, leftOut)])) as T;
 }
 
 function isHeldLineNode(item: unknown): boolean {
