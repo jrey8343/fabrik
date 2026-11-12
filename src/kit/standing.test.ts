@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aLabelAdded, aReview, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aReview, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
 import { type Standing, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
@@ -211,6 +211,47 @@ describe("the Standing rule", () => {
         { issue: 12, name: "design-round", detail: { round: 3, prototype: "ready" } },
         { issue: 13, name: "design-round", detail: { round: 4, prototype: "failed" } },
       ]);
+    });
+
+    it("gives a Design session whose last word is the Kit's notice that a turn failed one Standing, yours to do at Design, stopping work, since the notice", () => {
+      const standings = standingsIn({ openIssues: [designing(12, [aDesignRound(1, "2026-11-02T20:00:00Z"), operatorAnswer("2026-11-03T20:00:00Z"), aDesignTurnFailedNotice("2026-11-06T20:00:00Z")])] });
+      expect(standings).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 12,
+          pullRequest: null,
+          work: "design-session",
+          place: "design",
+          name: "yours-to-do",
+          move: "operator",
+          yours: true,
+          stopsWork: true,
+          since: "2026-11-06T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: { handBack: "design-turn-failed", role: "design", failure: null, label: null },
+        },
+      ]);
+    });
+
+    it("tells the Map cap's refusal apart from a failed turn", () => {
+      const standings = standingsIn({ openIssues: [designing(21, [aMapCapRefusal("2026-11-07T20:00:00Z")])] });
+      expect(standings).toEqual([
+        expect.objectContaining({ issue: 21, work: "design-session", place: "design", name: "yours-to-do", stopsWork: true, detail: { handBack: "map-cap-refused", role: "design", failure: null, label: null } }),
+      ]);
+    });
+
+    it("gives no Standing of the Operator's once they replied to the notice, once the session is over, or for a notice another bot posted", () => {
+      const standings = standingsIn({
+        openIssues: [
+          designing(12, [aDesignTurnFailedNotice("2026-11-06T20:00:00Z"), operatorAnswer("2026-11-07T20:00:00Z")]),
+          anOpenIssue({ number: 13, labels: ["ready-for-agent"], comments: [aDesignTurnFailedNotice("2026-11-06T20:00:00Z")] }),
+          designing(14, [{ ...aDesignTurnFailedNotice("2026-11-06T20:00:00Z"), author: "other-app[bot]" }]),
+        ],
+      });
+      expect(standings).toEqual([]);
     });
 
     it("gives no Design round once the Operator answered it, or for a Round marker another bot or a person posted", () => {

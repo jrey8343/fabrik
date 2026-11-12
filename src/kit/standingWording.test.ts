@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aLabelAdded, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { ageSince, wordStanding } from "./standingWording.ts";
-import type { GitHubFacts } from "./weeklySummary.ts";
+import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
 
 const SINCE = "2026-11-08T12:00:00Z";
 const minutesAfter = (minutes: number) => new Date(Date.parse(SINCE) + minutes * 60 * 1000).toISOString();
@@ -59,6 +59,22 @@ describe("the wording of a Standing", () => {
     expect(wordStanding(failed, minutesAfter(90), ZONE)).toEqual({
       pill: "Design round 4",
       sentence: "Round 4 has waited for your answer since 1 hour ago: the prototype failed.",
+      remedy: null,
+    });
+  });
+});
+
+describe("the wording of a Standing the Kit handed back", () => {
+  it("says a Design-session turn failed, or the Map cap refused the session's Map, and that a reply carries on", () => {
+    const stopped = (notice: CommentFacts) => theStandingIn({ openIssues: [anOpenIssue({ labels: ["needs-design"], comments: [notice] })] });
+    expect(wordStanding(stopped(aDesignTurnFailedNotice(SINCE)), minutesAfter(2 * 60), ZONE)).toEqual({
+      pill: "Yours to do",
+      sentence: "A Design-session turn failed 2 hours ago. Reply on the issue to run it again.",
+      remedy: null,
+    });
+    expect(wordStanding(stopped(aMapCapRefusal(SINCE)), minutesAfter(2 * 60), ZONE)).toEqual({
+      pill: "Yours to do",
+      sentence: "The Map cap refused this session's Map 2 hours ago. Reply on the issue to carry on.",
       remedy: null,
     });
   });
