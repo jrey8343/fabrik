@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aPullRequest, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import type { CommentFacts, OpenIssueFacts, OpenPullRequestFacts, ReviewFacts } from "../kit/weeklySummary.ts";
@@ -360,6 +361,33 @@ describe("the library's owed and the Loop's unsent", () => {
 
     expect(owed).toEqual([30, 37, 38]);
     expect(reopenedByTheLoop(merged)).toEqual(owed);
+  });
+});
+
+describe("the README's section on reading the Kit from another program", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("\n## Reading the Kit from another program\n")[1]?.split("\n## ")[0] ?? "";
+  const lines = section.split("\n");
+  const at = lines.findIndex((line) => line.startsWith("- **An owed Roll-in.**"));
+  /** The bullet with the bullets under it. */
+  const bullet = at === -1 ? "" : [lines[at], ...lines.slice(at + 1).filter((line, index, rest) => rest.slice(0, index + 1).every((under) => under.startsWith("  - ")))].join("\n");
+
+  it("names the owed Roll-in among what a row carries: under related, of kind owed, with its time, its address and its text", () => {
+    expect(bullet).toContain("the row of that pull request carries it under `related`");
+    for (const named of ['`kind: "owed"`', "`at`", "`url`", "`text`", "`summary`", "`acceptanceCriteria`"]) expect(bullet).toContain(named);
+  });
+
+  it("says the text is null when the hidden line cannot be read, and the Roll-in still owed", () => {
+    expect(bullet).toMatch(/`text` is null when that line is missing, does not parse or carries a version the library does not know; the Roll-in is still owed/);
+  });
+
+  it("says when it stops being owed, and that the issue's side is the exported list", () => {
+    expect(bullet).toMatch(/\*\*It stops being owed\*\* when a Request changes of the Operator's on the pull request, not dismissed, names the issue/);
+    expect(bullet).toContain("`owedRollInsOf`");
+  });
+
+  it("comes after the Digest's bullet, as a bullet of the section's own", () => {
+    expect(at).toBeGreaterThan(lines.findIndex((line) => line.startsWith("- **The Digest.**")));
   });
 });
 

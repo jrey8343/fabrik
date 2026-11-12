@@ -1,9 +1,11 @@
 // What a row carries beside an agent pull request (#619): the issues that
-// could still be rolled in to it, its candidates; the open issues that only
-// mention it; and the Follow-ups its pass named. Each is said by the Kit's own
-// readers, never guessed: a candidate's `From PR` line by the reader of that
-// line, a Follow-up by the reader of a Verdict's Follow-ups. Decided in #530
-// and #574. Pure, no I/O: worked out from a gather's facts (./gather.ts).
+// could still be rolled in to it, its candidates, and each Roll-in owed on it
+// (#664, ./owedRollIn.ts); the open issues that only mention it; and the
+// Follow-ups its pass named. Each is said by the Kit's own readers, never
+// guessed: a candidate's `From PR` line by the reader of that line, an owed
+// Roll-in by the Loop's owed rule, a Follow-up by the reader of a Verdict's
+// Follow-ups. Decided in #530 and #574. Pure, no I/O: worked out from a
+// gather's facts (./gather.ts).
 import { verdictsOn } from "../kit/retroEvidence.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
 import { followUpsIn } from "../loop/followUps.ts";
@@ -150,10 +152,11 @@ export function mentionsOf(facts: Facts, pullRequest: number): { readonly issue:
 /**
  * The Follow-ups the pass on open agent pull request `pullRequest`'s head
  * named, in the Verdict's order, each with its title, its body and the
- * number of the related issue that has exactly its title, compared as the
- * Retro's evidence compares a filed Follow-up's, else null. None when the
- * latest Verdict on its head is not a pass, or it has none there. A Verdict
- * is read from a bot's comment alone, so quoting one fakes nothing.
+ * number of the related issue, a candidate or an owed Roll-in's, that has
+ * exactly its title, compared as the Retro's evidence compares a filed
+ * Follow-up's, else null. None when the latest Verdict on its head is not a
+ * pass, or it has none there. A Verdict is read from a bot's comment alone,
+ * so quoting one fakes nothing.
  */
 export function followUpsOf(facts: Facts, pullRequest: number): { readonly title: string; readonly body: string; readonly filedAs: number | null }[] {
   const open = facts.github.openPullRequests.find(({ number }) => number === pullRequest);
