@@ -95,7 +95,8 @@ export type { Row } from "./rows.ts";
 
 // The Required checks
 
-export { readRequiredChecks, requiredChecksFactOf } from "./requiredChecks.ts";
+export { joinChecks } from "./joinChecks.ts";
+export { headsToCheck, readRequiredChecks, requiredChecksFactOf } from "./requiredChecks.ts";
 export type { HeadCheck, RequiredChecksRead } from "./requiredChecks.ts";
 
 // The caller read

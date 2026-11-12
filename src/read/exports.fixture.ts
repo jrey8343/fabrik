@@ -49,8 +49,10 @@ import {
   GitHubError,
   gitHubMessageOf,
   hasUnknownCostBasis,
+  headsToCheck,
   homeFactsOf,
   isLive,
+  joinChecks,
   KIT_SAID_VERSION,
   kitSaidIn,
   newerSchemaOf,
@@ -473,6 +475,16 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // The Required checks
 
+  headsToCheck: () =>
+    headsToCheck(
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), "unread", null, NOW),
+    ),
+  joinChecks: () =>
+    joinChecks(
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), "unread", null, NOW),
+      A_CHECKS_READ,
+      NOW,
+    ),
   readRequiredChecks: () =>
     readRequiredChecks(
       REFUSING_CLIENT,
