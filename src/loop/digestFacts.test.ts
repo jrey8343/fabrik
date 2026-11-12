@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { type ChangeFingerprint, changeFingerprintOf, changeLine } from "./changeFingerprint.ts";
 import { DIGEST_FOLDS_MARKER, type DigestGiven, type DigestReply, digestCommentOf, noDigestLine, readDigestReply } from "./digestContract.ts";
@@ -557,5 +558,32 @@ describe("The reply's Follow-ups and closing line", () => {
     ["no text", 7],
   ])("refuses a roundsLine that is %s", (_name, roundsLine) => {
     expect(readDigestReply({ ...aDigestReply(), roundsLine })).toEqual({ ok: false, errors: ["roundsLine must be non-empty text"] });
+  });
+});
+
+describe("The README's Digest section, on Kit code's facts", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("\n## Digest\n")[1]?.split("\n## ")[0] ?? "";
+  const facts = section.split("\n").find((line) => line.startsWith("- **Kit code's facts**")) ?? "";
+
+  it("says Kit code counts and the writer words, and names each fact", () => {
+    expect(facts).toContain("the Digest writer words it and may not contradict it");
+    for (const fact of ["the rounds", "each Verdict's effect on the code", "the counts", "how many Retries are left", "the Follow-ups of every pass", "whether the product code changed since the first Verdict"]) {
+      expect(facts).toContain(fact);
+    }
+    expect(facts).toContain("could not be established");
+  });
+
+  it("names the reply's two fields, the comment's Follow-ups and third fold as the contract renders them, and the refusal", () => {
+    const body = bodyOf(aDigestReply(), aDigestGiven());
+
+    expect(facts).toContain("`followUps`");
+    expect(facts).toContain("`roundsLine`");
+    expect(body).toContain("\n### Follow-ups\n\nNone named.\n");
+    expect(facts).toContain("**Follow-ups**");
+    expect(facts).toContain('"None named."');
+    expect(body).toContain("<summary>The rounds</summary>");
+    expect(facts).toContain("a third fold, **The rounds**");
+    expect(facts).toContain("A reply naming a Follow-up Kit code did not list is refused");
   });
 });
