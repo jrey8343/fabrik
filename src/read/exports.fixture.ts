@@ -49,36 +49,46 @@ import {
   gitHubMessageOf,
   hasUnknownCostBasis,
   isLive,
+  KIT_SAID_VERSION,
+  kitSaidIn,
   newerSchemaOf,
   readCaller,
   readKitConfigSources,
   readRunRecord,
+  readRuns,
   readSpend,
   refusalOf,
   resolveKitConfig,
   RUN_RECORD_SCHEMA,
   runnerTimeOf,
+  runsInFlightFactOf,
   STANDING_NAMES,
   STANDING_SCHEMA,
   standingAt,
   standingsOf,
   stuckBarMinutes,
   subscriptionReadingsOf,
+  TICK_DEAD_MINUTES,
   TICK_MINUTES,
   weeksEndingAt,
   wordStanding,
 } from "./index.ts";
 import type {
+  ActionsStep,
   CallerCheck,
   CallerRead,
   CostFigure,
   KitConfig,
   KitConfigResult,
   KitConfigSources,
+  KitSaid,
   ReadClient,
   Repo,
+  RunInFlight,
+  RunKind,
   RunnerTime,
   RunRecord,
+  RunsRead,
   SpendRead,
   Standing,
   StandingFacts,
@@ -139,6 +149,43 @@ const A_KEPT_STANDING = {
   subscription: null,
   detail: { silence: "trigger-label", label: "agent:implement" },
 } as const satisfies Standing;
+
+/** What the Kit job routed: a second Retry of the Implement run on Ticket 12, on its agent pull request 40. */
+const A_KIT_SAID = {
+  fabrik: 1,
+  route: "implement",
+  run: { role: "implement", issue: 12, pullRequest: 40, kind: "retry", retry: 2, model: "claude-opus-4-1" },
+  held: [],
+  replay: null,
+} as const satisfies KitSaid;
+
+/** The Kit job's closing step, completed, named for that line. */
+const A_CLOSING_STEP = { name: JSON.stringify(A_KIT_SAID), status: "completed", conclusion: "success" } as const satisfies ActionsStep;
+
+/** That run in flight in Actions run 7, its second attempt, its Implement job running. */
+const A_RUN_IN_FLIGHT = {
+  run: 7,
+  attempt: 2,
+  exact: true,
+  role: "implement",
+  issue: 12,
+  pullRequest: 40,
+  kind: "retry",
+  retry: 2,
+  model: "claude-opus-4-1",
+  job: "running",
+  createdAt: "2026-11-09T11:00:00Z",
+  startedAt: "2026-11-09T11:02:00Z",
+  url: "https://github.com/owner/product/actions/runs/7/job/3",
+} as const satisfies RunInFlight;
+
+/** `owner/product`'s Actions, read at NOW: that run in flight, and its Tick last started five minutes before. */
+const A_RUNS_READ = {
+  repo: "owner/product",
+  readAt: NOW,
+  runs: [A_RUN_IN_FLIGHT],
+  tick: { lastStartedAt: "2026-11-09T11:55:00Z" },
+} as const satisfies RunsRead;
 
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
@@ -347,6 +394,23 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // The closing line and the runs read
 
+  KIT_SAID_VERSION: () => KIT_SAID_VERSION,
+  kitSaidIn: () =>
+    kitSaidIn(
+      [A_CLOSING_STEP],
+    ),
+  readRuns: () =>
+    readRuns(
+      REFUSING_CLIENT,
+      "owner/product",
+      NOW,
+    ),
+  runsInFlightFactOf: () =>
+    runsInFlightFactOf(
+      A_RUNS_READ,
+    ),
+  TICK_DEAD_MINUTES: () => TICK_DEAD_MINUTES,
+
   // The gather and the rows
 
   // The join with runs
@@ -454,6 +518,12 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   Week: { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z"), monday: "2026-11-02" } satisfies Week,
 
   // The closing line and the runs read
+
+  ActionsStep: A_CLOSING_STEP satisfies ActionsStep,
+  KitSaid: A_KIT_SAID satisfies KitSaid,
+  RunKind: "retry" satisfies RunKind,
+  RunInFlight: A_RUN_IN_FLIGHT satisfies RunInFlight,
+  RunsRead: A_RUNS_READ satisfies RunsRead,
 
   // The gather and the rows
 
