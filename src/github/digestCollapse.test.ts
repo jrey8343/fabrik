@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { digestCommentOf, digestMarkIn, noDigestLine } from "../loop/digestContract.ts";
 import { verdictMarker } from "../loop/markers.ts";
@@ -11,19 +12,13 @@ import { gatherSnapshot } from "./snapshot.ts";
 
 const repo = { owner: "acme", name: "shop" };
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
-const REPO = "https://github.com/acme/shop";
 const EARLIER_HEAD = "b".repeat(40);
 
-const REPLY = {
-  whatItDoes: "Shoppers can save a cart and come back to it.",
-  howItGotHere: "One Review, which passed.",
-  walkthrough: "Start at `src/cart.ts`.",
-  decided: "- Prices hold for a day.",
-};
+const REPLY = aDigestReply();
 
 /** A Digest comment's body, written as of `head`. */
 function aDigestBody(head: string): string {
-  const rendered = digestCommentOf(REPLY, { repoUrl: REPO, pullRequest: 50, headSha: head, runUrl: RUN });
+  const rendered = digestCommentOf(REPLY, aDigestGiven({ headSha: head }));
   if (!rendered.ok) throw new Error(rendered.refused);
   return rendered.body;
 }
@@ -43,7 +38,7 @@ function landingPlan(digests: readonly DigestOnThread[]): Plan {
       pullRequest: 50,
       headSha: HEAD_SHA,
       output: JSON.stringify(REPLY),
-      given: { repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN },
+      given: aDigestGiven(),
       runUrl: RUN,
     },
     snapshotOfPullRequest(pullRequest, { operator: "jrey" }),
@@ -216,7 +211,7 @@ describe("Reading the Digests on a pull request's thread (ADR-0022)", () => {
       pullRequest: 50,
       headSha: HEAD_SHA,
       output: "{}",
-      given: { repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN },
+      given: aDigestGiven(),
       runUrl: RUN,
     } as const;
     return (await gatherSnapshot(github, repo, landing, null, "fabrik-app[bot]")).pullRequest?.digests;

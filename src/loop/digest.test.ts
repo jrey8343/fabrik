@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import {
   aLabelledTrigger,
   anIssue,
@@ -34,12 +35,12 @@ const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const REPO = "https://github.com/acme/shop";
 const MOVED_ON = "b".repeat(40);
 
-const REPLY = {
+const REPLY = aDigestReply({
   whatItDoes: "A shopper can now save their basket.",
   howItGotHere: "One Review passed it at the first head.",
   walkthrough: "1. The basket page's Save button.",
   decided: "- Prices hold for a day.",
-};
+});
 
 type Written = Extract<LoopEvent, { kind: "digest-run-finished" }>;
 type Failed = Extract<LoopEvent, { kind: "agent-run-failed" }>;
@@ -52,7 +53,7 @@ function written(overrides: Partial<Written> = {}): Written {
     pullRequest: 50,
     headSha,
     output: JSON.stringify(REPLY),
-    given: { repoUrl: REPO, pullRequest: 50, headSha, runUrl: RUN },
+    given: aDigestGiven({ repoUrl: REPO, pullRequest: 50, headSha, runUrl: RUN }),
     runUrl: RUN,
     ...overrides,
   };
@@ -93,7 +94,7 @@ const ONLY_THE_LABEL_OFF: Action[] = [{ kind: "remove-label", issue: 50, label: 
 
 describe("The Digest: landing", () => {
   it("a Digest that lands is one comment, rendered from the reply, and then the label comes off", () => {
-    const rendered = digestCommentOf(REPLY, { repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN });
+    const rendered = digestCommentOf(REPLY, aDigestGiven({ repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN }));
 
     expect(landed(written())).toEqual({
       kind: "act",

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import {
   DIGEST_FOLDS_MARKER,
   type DigestGiven,
@@ -17,17 +18,11 @@ import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 const HEAD = "a".repeat(40);
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
-const GIVEN: DigestGiven = { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, runUrl: RUN };
+const GIVEN: DigestGiven = aDigestGiven({ repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, runUrl: RUN });
 
-/** A reply as the Digest writer emits one, with the four fields of the first path. */
+/** A reply as the Digest writer emits one, keeping its shape, for a pull request one Review passed. */
 function aReply(overrides: Partial<DigestReply> = {}): DigestReply {
-  return {
-    whatItDoes: "A shopper can now save their basket from /basket. A saved basket keeps its prices for a day.",
-    howItGotHere: "One Review passed it at the first head.",
-    walkthrough: ["```", "on save:", "  store the lines", "  store the prices shown", "```", "", "1. The basket page's Save button.", "2. The saved-basket rule."].join("\n"),
-    decided: "- **Decided:** prices hold for a day; the Ticket did not say.\n- **Left alone:** sharing a saved basket by link.",
-    ...overrides,
-  };
+  return aDigestReply({ howItGotHere: "One Review passed it at the first head.", ...overrides });
 }
 
 function bodyOf(reply: DigestReply, given: DigestGiven = GIVEN): string {
@@ -37,7 +32,7 @@ function bodyOf(reply: DigestReply, given: DigestGiven = GIVEN): string {
 }
 
 describe("The Digest's comment", () => {
-  it("is rendered from the reply's fields: the hidden first line naming the head, an opening line, the two sections, the folds line and the two folds, and a link to the run", () => {
+  it("is rendered from the reply's fields and Kit code's facts: the hidden first line naming the head, an opening line, the three sections, the folds line and the three folds, and a link to the run", () => {
     expect(bodyOf(aReply())).toBe(
       [
         `<!-- fabrik:digest {"head":"${HEAD}"} -->`,
@@ -50,6 +45,10 @@ describe("The Digest's comment", () => {
         "### How it got here",
         "",
         "One Review passed it at the first head.",
+        "",
+        "### Follow-ups",
+        "",
+        "None named.",
         "",
         "<!-- fabrik:digest-folds -->",
         "<details>",
@@ -74,6 +73,18 @@ describe("The Digest's comment", () => {
         "",
         "</details>",
         "",
+        "<details>",
+        "<summary>The rounds</summary>",
+        "",
+        "| Who | What | Effect on the code |",
+        "| --- | --- | --- |",
+        "| The Implementer | The first run | |",
+        "| The Reviewer | Pass | |",
+        "",
+        "One Review, which passed it.",
+        "",
+        "</details>",
+        "",
         `[The run](${RUN})`,
       ].join("\n"),
     );
@@ -91,12 +102,16 @@ describe("The Digest's comment", () => {
 
     expect(top).toContain("### What it does");
     expect(top).not.toContain("<details>");
-    expect(folds?.match(/<summary>(.*)<\/summary>/g)).toEqual(["<summary>Walk me through it</summary>", "<summary>Decided without you, and left alone</summary>"]);
+    expect(folds?.match(/<summary>(.*)<\/summary>/g)).toEqual([
+      "<summary>Walk me through it</summary>",
+      "<summary>Decided without you, and left alone</summary>",
+      "<summary>The rounds</summary>",
+    ]);
   });
 
   it("takes every mention out, as a Verdict's findings lose theirs", () => {
     const body = bodyOf(
-      aReply({ whatItDoes: "Ask @octocat about it.", howItGotHere: "@acme/core passed it.", walkthrough: "1. cc @octocat", decided: "- @octocat decided" }),
+      aReply({ whatItDoes: "Ask @octocat about it.", howItGotHere: "@acme/core passed it.", walkthrough: "1. cc @octocat", decided: "- @octocat decided", roundsLine: "@octocat disagreed." }),
     );
 
     expect(body).not.toMatch(/(?<![\w`])@[A-Za-z0-9]/);
@@ -118,7 +133,7 @@ describe("The Digest's comment", () => {
 });
 
 describe("The Digest writer's reply", () => {
-  it("reads a reply with the four fields", () => {
+  it("reads a reply with every field", () => {
     expect(parseDigestReply(JSON.stringify(aReply()))).toEqual({ ok: true, output: aReply() });
   });
 

@@ -1,20 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { digestCommentOf, digestMarkIn, noDigestIn } from "./digestContract.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
-const REPO = "https://github.com/acme/shop";
 const EARLIER_HEAD = "b".repeat(40);
 
 /** A reply that keeps its shape. */
-const REPLY = {
-  whatItDoes: "Shoppers can save a cart and come back to it.",
-  howItGotHere: "One Review, which passed.",
-  walkthrough: "Start at `src/cart.ts`.",
-  decided: "- Prices hold for a day.",
-};
+const REPLY = aDigestReply();
 
 type Written = Extract<LoopEvent, { kind: "digest-run-finished" }>;
 
@@ -25,7 +20,7 @@ function written(overrides: Partial<Written> = {}): Written {
     pullRequest: 50,
     headSha: HEAD_SHA,
     output: JSON.stringify(REPLY),
-    given: { repoUrl: REPO, pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN },
+    given: aDigestGiven(),
     runUrl: RUN,
     ...overrides,
   };
@@ -35,7 +30,7 @@ type DigestOnThread = PullRequestSnapshot["digests"][number];
 
 /** A Digest already on #50's thread, written as of `head`, not yet collapsed unless a test says so. */
 function aDigestOnThread(node: string, overrides: Partial<DigestOnThread> = {}, head: string = EARLIER_HEAD): DigestOnThread {
-  const rendered = digestCommentOf(REPLY, { repoUrl: REPO, pullRequest: 50, headSha: head, runUrl: RUN });
+  const rendered = digestCommentOf(REPLY, aDigestGiven({ headSha: head }));
   if (!rendered.ok) throw new Error(rendered.refused);
   return { node, minimized: false, body: rendered.body, postedAt: "2026-11-10T09:00:00Z", ...overrides };
 }
