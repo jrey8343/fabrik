@@ -4,8 +4,54 @@
 // readers, never guessed: a candidate's `From PR` line by the reader of that
 // line, a Follow-up by the reader of a Verdict's Follow-ups. Decided in #530
 // and #574. Pure, no I/O: worked out from a gather's facts (./gather.ts).
+import type { OpenIssueFacts } from "../kit/weeklySummary.ts";
+import {
+  AUDIT_LABEL,
+  DECISION_TYPES,
+  decisionLabel,
+  FLAKY_CHECK_LABEL,
+  isKitIssueLabel,
+  MAP_LABEL,
+  MONITOR_LABEL,
+  READY_FOR_AGENT,
+  READY_FOR_HUMAN,
+  REPLAY_LABEL,
+  RETRO_LABEL,
+} from "../loop/labels.ts";
 import { fromPullRequestIn } from "../loop/markers.ts";
 import type { Facts } from "./gather.ts";
+
+/** The kinds of issue never related to a pull request, whatever their `From PR` line says. */
+export type NeverRelatedKind = "audit" | "retro" | "monitor" | "replay" | "kit-owned" | "map" | "decision" | "spec";
+
+/** Each kind told by a label of its own, in the order they are looked for. */
+const KIND_LABELS: readonly (readonly [NeverRelatedKind, (label: string) => boolean])[] = [
+  ["audit", (label) => label === AUDIT_LABEL],
+  ["retro", (label) => label === RETRO_LABEL],
+  ["monitor", (label) => label === MONITOR_LABEL],
+  ["replay", (label) => label === REPLAY_LABEL],
+  ["kit-owned", (label) => isKitIssueLabel(label) || label === FLAKY_CHECK_LABEL],
+  ["map", (label) => label === MAP_LABEL],
+  ["decision", (label) => DECISION_TYPES.some((type) => decisionLabel(type) === label)],
+];
+
+/**
+ * The kind of issue `issue` is when it is never related to a pull request: an
+ * Audit, a Retro, a Monitor issue, a Replay, any other Kit-owned issue (one
+ * carrying a Kit-owned label or the Flaky check label, or one the Fabrik App
+ * opened, any bot when its login `appLogin` is not known), a Map, a Decision
+ * or a Spec (an issue with sub-issues in the `ready-for-agent` or
+ * `ready-for-human` state, GLOSSARY.md). Null for any other issue, a Ticket
+ * waiting for Dispatch among them. The pull request's own Ticket and an issue
+ * with an open pull request of its own are told per pull request, not here.
+ */
+export function neverRelatedKindOf(issue: Pick<OpenIssueFacts, "author" | "labels" | "subIssues">, appLogin: string | null): NeverRelatedKind | null {
+  const labelled = KIND_LABELS.find(([, carries]) => issue.labels.some(carries))?.[0];
+  if (labelled !== undefined) return labelled;
+  if (appLogin === null ? issue.author.endsWith("[bot]") : issue.author === appLogin) return "kit-owned";
+  const inState = issue.labels.includes(READY_FOR_AGENT) || issue.labels.includes(READY_FOR_HUMAN);
+  return inState && issue.subIssues.length > 0 ? "spec" : null;
+}
 
 /** An issue that could still be rolled in to an open agent pull request. */
 interface Candidate {
@@ -17,12 +63,19 @@ interface Candidate {
 
 /**
  * Every candidate in the repo: each open issue the Operator opened whose body
- * has a whole line `From PR #n`, where `n` is an open agent pull request.
+ * has a whole line `From PR #n`, where `n` is an open agent pull request,
+ * unless it is a kind never related, that pull request's own Ticket, or an
+ * issue with an open pull request of its own, agent or Plain.
  */
-function candidatesOf({ github, operator, issueBodies }: Facts): Candidate[] {
-  return github.openIssues.flatMap(({ number, title, author }) => {
-    if (author !== operator) return [];
-    const body = issueBodies.find(({ issue }) => issue === number)?.body;
+function candidatesOf({ github, operator, appLogin, issueBodies }: Facts): Candidate[] {
+  const withPullRequests = new Set([
+    ...github.openPullRequests.flatMap(({ ticket }) => (ticket === null ? [] : [ticket])),
+    ...github.plainPullRequests.flatMap(({ closes }) => closes),
+  ]);
+  return github.openIssues.flatMap((issue) => {
+    const { number, title, author } = issue;
+    if (author !== operator || neverRelatedKindOf(issue, appLogin) !== null || withPullRequests.has(number)) return [];
+    const body = issueBodies.find((bodied) => bodied.issue === number)?.body;
     const named = body === undefined ? null : fromPullRequestIn(body);
     const pullRequest = github.openPullRequests.find((open) => open.number === named);
     return pullRequest === undefined ? [] : [{ issue: number, title, pullRequest: pullRequest.number }];

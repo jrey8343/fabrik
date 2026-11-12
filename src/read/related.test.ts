@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
 import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { Facts, IssueBodyFacts } from "./gather.ts";
+import { neverRelatedKindOf } from "./related.ts";
 import { type Row, rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -78,5 +79,97 @@ describe("a candidate", () => {
     it("naming a pull request that merged or closed, which is no longer open", () => {
       unrelated(repoWith({ issues: [FILED], bodies: [{ issue: 30, body: "From PR #49" }] }));
     });
+  });
+});
+
+describe("never a candidate", () => {
+  const filedWith = (overrides: Partial<OpenIssueFacts>, rest: Parameters<typeof repoWith>[0] = {}) =>
+    repoWith({ issues: [{ ...FILED, ...overrides }], bodies: [{ issue: overrides.number ?? 30, body: FROM_PR_50 }], ...rest });
+
+  it.each([
+    ["an Audit", ["fabrik:audit"]],
+    ["a Retro", ["fabrik:retro"]],
+    ["a Monitor issue", ["fabrik:monitor"]],
+    ["a Replay", ["fabrik:replay"]],
+    ["a Kit-owned issue", ["fabrik:weekly-limit"]],
+    ["a Flaky check issue", ["fabrik:flaky-check"]],
+    ["a Map", ["wayfinder:map"]],
+    ["a Decision", ["wayfinder:research"]],
+  ])("%s, though the Operator filed it From PR #50", (_kind, labels) => {
+    expect(pullRequestRow(filedWith({ labels }))?.related).toEqual([]);
+  });
+
+  it("a Spec, though the Operator filed it From PR #50", () => {
+    expect(pullRequestRow(filedWith({ labels: ["ready-for-agent"], subIssues: [31, 32] }))?.related).toEqual([]);
+  });
+
+  it("the pull request's own Ticket", () => {
+    const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], openPullRequests: [PULL_REQUEST] }), issueBodies: [{ issue: 7, body: FROM_PR_50 }] });
+
+    expect(pullRequestRow(facts)?.related).toEqual([]);
+    expect(rowsIn(facts).every(({ relatedTo }) => relatedTo === null)).toBe(true);
+  });
+
+  it("an issue with an open agent pull request of its own", () => {
+    const facts = filedWith({ labels: ["ready-for-agent"] }, { pullRequests: [anOpenPullRequest({ number: 51, ticket: 30 })] });
+
+    expect(pullRequestRow(facts)?.related).toEqual([]);
+    expect(rowsIn(facts).every(({ relatedTo }) => relatedTo === null)).toBe(true);
+  });
+
+  it("an issue a Plain pull request closes", () => {
+    const facts = filedWith({});
+    const withPlain = { ...facts, github: { ...facts.github, plainPullRequests: [aPlainPullRequest({ number: 70, author: "operator", headRef: "fix-prices", closes: [30] })] } };
+
+    expect(pullRequestRow(withPlain)?.related).toEqual([]);
+  });
+
+  it("but a ready-for-agent Ticket waiting for Dispatch can be one", () => {
+    const facts = filedWith({ labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", "2026-11-08T13:00:00Z")] });
+
+    expect(pullRequestRow(facts)?.related).toEqual([{ issue: 30, title: "Cache the prices", kind: "candidate" }]);
+    expect(rowsIn(facts).find(({ standing }) => standing.issue === 30)?.relatedTo).toBe(50);
+  });
+});
+
+describe("the kind of issue never related to a pull request", () => {
+  const issue = (labels: readonly string[], author = "operator", subIssues: readonly number[] = []) => ({ labels, author, subIssues });
+
+  it.each([
+    [["fabrik:audit"], "audit"],
+    [["fabrik:retro"], "retro"],
+    [["fabrik:monitor"], "monitor"],
+    [["fabrik:replay"], "replay"],
+    [["fabrik:weekly-limit"], "kit-owned"],
+    [["fabrik:token-rotation"], "kit-owned"],
+    [["fabrik:usage-credits"], "kit-owned"],
+    [["fabrik:dead-tick"], "kit-owned"],
+    [["fabrik:flaky-check"], "kit-owned"],
+    [["wayfinder:map"], "map"],
+    [["wayfinder:research"], "decision"],
+    [["wayfinder:prototype"], "decision"],
+    [["wayfinder:grilling"], "decision"],
+    [["wayfinder:task"], "decision"],
+  ])("is told by its label: %j is %s", (labels, kind) => {
+    expect(neverRelatedKindOf(issue(labels), "fabrik-app[bot]")).toBe(kind);
+  });
+
+  it("is a Spec's for a ready-for-agent or ready-for-human issue with sub-issues, and a Map's for a Map with Decisions", () => {
+    expect(neverRelatedKindOf(issue(["ready-for-agent"], "operator", [31]), "fabrik-app[bot]")).toBe("spec");
+    expect(neverRelatedKindOf(issue(["ready-for-human"], "operator", [31]), "fabrik-app[bot]")).toBe("spec");
+    expect(neverRelatedKindOf(issue(["wayfinder:map"], "operator", [31]), "fabrik-app[bot]")).toBe("map");
+  });
+
+  it("is Kit-owned for any issue the Fabrik App opened, or any bot when its login is not known", () => {
+    expect(neverRelatedKindOf(issue([], "fabrik-app[bot]"), "fabrik-app[bot]")).toBe("kit-owned");
+    expect(neverRelatedKindOf(issue([], "other-app[bot]"), "fabrik-app[bot]")).toBeNull();
+    expect(neverRelatedKindOf(issue([], "other-app[bot]"), null)).toBe("kit-owned");
+  });
+
+  it("is none for a Ticket, waiting for Dispatch or not, a Triage issue, and a parent that is no Spec", () => {
+    expect(neverRelatedKindOf(issue(["ready-for-agent"]), "fabrik-app[bot]")).toBeNull();
+    expect(neverRelatedKindOf(issue(["ready-for-agent", "agent:implement"]), "fabrik-app[bot]")).toBeNull();
+    expect(neverRelatedKindOf(issue(["needs-triage"]), "fabrik-app[bot]")).toBeNull();
+    expect(neverRelatedKindOf(issue([], "operator", [31]), "fabrik-app[bot]")).toBeNull();
   });
 });
