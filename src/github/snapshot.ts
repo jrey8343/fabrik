@@ -610,6 +610,7 @@ export async function gatherSnapshot(
   const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
+  const rollIns = null;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   const replay =
     event.kind === "scheduled-tick" && replayStore !== null
@@ -619,8 +620,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -1110,6 +1111,7 @@ type EventPart = Omit<
   | "weeklyIssues"
   | "replay"
   | "namedPullRequests"
+  | "rollIns"
   | "held"
   | "closedKitIssue"
   | "openMaps"

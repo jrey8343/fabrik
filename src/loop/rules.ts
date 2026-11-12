@@ -44,6 +44,7 @@ import { makesUnusable, onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
 import { recoveryWaits } from "./recoveryWaits.ts";
+import { reopenUnsentRollIns } from "./rollInReopening.ts";
 import { replayGate } from "./replayGate.ts";
 import { landReplayRun, startReplay } from "./replayRun.ts";
 import { retroGate } from "./retroGate.ts";
@@ -176,11 +177,12 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "pull-request-left-draft":
       return withAgentPullRequest(snapshot, () => ({ kind: "act", actions: [CHECK_DISPATCH] }));
     // One closed unmerged by hand stops its Ticket first, so the Dispatch check
-    // doesn't start it again (#428).
+    // doesn't start it again (#428). Merged or closed, whoever closed it, each
+    // Roll-in left unsent on it has its issue reopened for Triage (#663).
     case "pull-request-closed":
       return withAgentPullRequest(snapshot, (pullRequest) => ({
         kind: "act",
-        actions: [...stopTicketOf(event, pullRequest, snapshot.operator), CHECK_DISPATCH],
+        actions: [...stopTicketOf(event, pullRequest, snapshot.operator), ...reopenUnsentRollIns(event, pullRequest, snapshot.rollIns), CHECK_DISPATCH],
       }));
     case "dispatch-check":
       return snapshot.dispatch === null
