@@ -220,6 +220,30 @@ describe("the Operator's Request changes with no run started", () => {
       { issue: 7, pullRequest: 50, name: "running", detail: { run: "request-changes" } },
     ]);
   });
+
+  it("counts one given on the passed draft while its Merge gate had yet to open, as the Loop counts it (#653): the same silence once the gate opens, Stuck at the bar", () => {
+    // The pass at 12:00 kept the draft for its Digest, the Operator's review came at 12:05, and the gate opened at 12:40.
+    const GIVEN = plus(PASSED, 5);
+    const onTheWaitingDraft = atTheGate({
+      draftEvents: [{ kind: "ready", actor: "fabrik-app[bot]", at: plus(PASSED, 40) }],
+      reviews: [aReview(GIVEN, { id: 901 })],
+    });
+
+    expect(standingsIn({ openPullRequests: [onTheWaitingDraft] }, {}, plus(GIVEN, 60))).toMatchObject([
+      { issue: 7, pullRequest: 50, place: "implement", name: "waiting-on-kit", since: GIVEN, awaits: { role: "implement", on: "pullRequest" }, detail: { silence: "request-changes" } },
+    ]);
+    expect(standingsIn({ openPullRequests: [onTheWaitingDraft] }, {}, plus(GIVEN, 300))).toMatchObject([{ name: "stuck", detail: { was: "waiting-on-kit", silence: "request-changes" } }]);
+  });
+
+  it("counts none given on a draft whose head has moved on from its pass", () => {
+    const moved = atTheGate({
+      headSha: "m".repeat(40),
+      draftEvents: [{ kind: "ready", actor: "fabrik-app[bot]", at: plus(PASSED, 40) }],
+      reviews: [aReview(plus(PASSED, 5), { id: 901 })],
+    });
+
+    expect(standingsIn({ openPullRequests: [moved] })).not.toContainEqual(expect.objectContaining({ detail: expect.objectContaining({ silence: "request-changes" }) }));
+  });
 });
 
 describe("an issue waiting on Triage", () => {

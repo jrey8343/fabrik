@@ -153,12 +153,15 @@ function answeredRoundOf({ comments }: OpenIssueFacts, { appLogin, operator }: S
  * Request-changes run was started for, by the Loop's own reading of its
  * history (requestChangesSinceRunIn), as the undelivered-Request-changes
  * check reads it: not dismissed, not built, and not noted by the Kit. At
- * Implement, from when the oldest of them was submitted.
+ * Implement, from when the oldest of them was submitted. The pull request's
+ * head goes in as the Loop's snapshot gives it, so one given on a passed
+ * draft whose Merge gate had yet to open, as while its Digest was being
+ * written, counts here as it does there (ADR-0022).
  */
 function requestChangesSilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts, bar: number): StandingNamed<"waiting-on-kit">[] {
   if (pullRequest.ticket === null) return [];
   const history = historyOf(pullRequest, facts.appLogin);
-  const { unbuiltChangesRequests, notedChangesRequests } = requestChangesSinceRunIn(history, notDismissedIn(history), facts.operator);
+  const { unbuiltChangesRequests, notedChangesRequests } = requestChangesSinceRunIn(history, notDismissedIn(history), facts.operator, pullRequest.headSha);
   const unnoted = unbuiltChangesRequests.filter(({ review, reviewer, reviewerIsBot }) => !reviewerIsBot && reviewer === facts.operator && !notedChangesRequests.includes(review));
   const oldest = unnoted.map(({ submittedAt }) => submittedAt).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (oldest === undefined) return [];
