@@ -10,8 +10,9 @@
 // beside its rules (src/kit/replay.ts).
 import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { RequestChangesAnswers } from "./implementOutput.ts";
+import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
-import type { Strength, VerdictRecord } from "./types.ts";
+import { AGENT_ROLES, type AgentRole, type Strength, type VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -360,6 +361,44 @@ export function stuckTriggerReaddedMarker(label: TriggerLabel): string {
  */
 export function stuckTriggerGaveUpMarker(label: TriggerLabel): string {
   return `<!-- fabrik:stuck-trigger-gave-up ${label} -->`;
+}
+
+/**
+ * Which hand-back a notice is (src/loop/handBacks.ts): the Kit's word that
+ * work is the Operator's from here, read by the Standing (src/kit/standing.ts)
+ * from GitHub and not from Run records. For a run the Kit gave up on, it names
+ * the role and what happened: which Infrastructure failure, or which Broken
+ * run. `failure` is an InfrastructureFailure, of which a BrokenRun is one.
+ */
+export interface HandBackMark {
+  readonly kind: HandBack;
+  readonly role?: AgentRole;
+  readonly failure?: string;
+}
+
+const HAND_BACK_MARKER = /^<!-- fabrik:hand-back (\{.*?\}) -->$/;
+
+/** The hidden line, the last of each notice that hands work back, saying which hand-back it is. Nothing a person sees changes. */
+export function handBackMarker({ kind, role, failure }: HandBackMark): string {
+  return `<!-- fabrik:hand-back ${markerJson({ kind, ...(role === undefined ? {} : { role }), ...(failure === undefined ? {} : { failure }) })} -->`;
+}
+
+/** The hand-back a notice's hidden line names, on whichever line it is, or null: read only from the Fabrik App's own comments. */
+export function handBackMarkIn(body: string): HandBackMark | null {
+  for (const line of body.split("\n")) {
+    const json = HAND_BACK_MARKER.exec(line)?.[1];
+    if (json === undefined) continue;
+    try {
+      const { kind, role, failure } = JSON.parse(json) as Record<string, unknown>;
+      if (!(HAND_BACKS as readonly unknown[]).includes(kind)) return null;
+      if (role !== undefined && !(AGENT_ROLES as readonly unknown[]).includes(role)) return null;
+      if (failure !== undefined && typeof failure !== "string") return null;
+      return { kind: kind as HandBack, ...(role === undefined ? {} : { role: role as AgentRole }), ...(failure === undefined ? {} : { failure }) };
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 /** How the comment that ends a Design session starts, either way it ends. */
