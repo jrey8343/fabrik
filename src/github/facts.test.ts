@@ -1058,10 +1058,16 @@ describe("Reading the Required checks on each open Plain pull request's head", (
     });
   });
 
-  it("reads no check the Kit config doesn't list, loop / Kit among them", async () => {
+  it("reads no check the Kit config doesn't list, loop / Kit among them, and reads loop / Kit only when it is listed", async () => {
     const github = checksOn({ [head("1")]: [aCheckRun("loop / Kit", "completed", "failure"), aCheckRun("test", "completed", "success")] });
 
     expect(await gatherHeadChecks(github, repo, [head("1")], ["test"])).toEqual({ [head("1")]: [{ name: "test", is: "passed" }] });
+    expect(await gatherHeadChecks(github, repo, [head("1")], ["test", "loop / Kit"])).toEqual({
+      [head("1")]: [
+        { name: "test", is: "passed" },
+        { name: "loop / Kit", is: "failing" },
+      ],
+    });
   });
 
   it("leaves every head unread, asking nothing, when the Kit config lists no checks: it cannot tell which the branch requires", async () => {
