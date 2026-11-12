@@ -508,6 +508,23 @@ function rollInTextIn(line: string): RollInText | null {
 }
 
 /**
+ * The first line of the Kit's note that it reopened an issue for Triage
+ * because its pull request merged or closed with the Roll-in unsent (#663).
+ * It names no pull request: any such note after a Roll-in's closing comment
+ * says that Roll-in was acted on, so the reopening happens once.
+ */
+export const ROLL_IN_REOPENED_MARKER = "<!-- fabrik:roll-in-reopened -->";
+
+/**
+ * Whether the Kit's comment is its note that it reopened the issue for
+ * Triage: it opens with that note's mark, so quoting the mark further down
+ * counts for nothing. Pass it only the Fabrik App's comments.
+ */
+export function rollInReopenedIn(body: string): boolean {
+  return body.startsWith(ROLL_IN_REOPENED_MARKER);
+}
+
+/**
  * Opens the comment a live Design session ends with. Only the start of a
  * comment counts, so quoting it doesn't.
  */
