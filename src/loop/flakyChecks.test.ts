@@ -76,7 +76,8 @@ describe("A Flaky check the Kit's re-run found (#462)", () => {
 
   it("lets the Reviewer's Verdict land as usual, with the line and the issue", () => {
     const event: LoopEvent = { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: "verdict: pass\n\nGood.", flaky: [E2E], runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
-    const plan = planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig());
+    // The Digest off, so the pass opens the Merge gate itself (src/loop/digestGate.test.ts has it on).
+    const plan = planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig({ digest: { enabled: false } }));
     const actions = actionsOf(plan);
 
     expect(actions.some((action) => textOf(action).includes("<!-- fabrik:flaky-check "))).toBe(true);

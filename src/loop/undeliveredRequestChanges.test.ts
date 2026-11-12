@@ -64,7 +64,8 @@ class Thread {
   implementJobUnderWay: boolean | null = null;
   /** The Kit-owned issues every snapshot reads, a held run's weekly-limit issues among them; the tick closes them. */
   kitIssues: KitIssueSnapshot[] = [];
-  config: KitConfig = kitConfig();
+  /** The Digest off, so a pass on this thread opens the Merge gate itself; the wait on a Digest is src/loop/digestGate.test.ts's. */
+  config: KitConfig = kitConfig({ digest: { enabled: false } });
   /** What a mechanical rebase onto main pushes the PR to, when the conflict check plans one. */
   rebasedTo = E;
   /** When set, this action fails as the adapter applies it, and every action after it is never applied. */

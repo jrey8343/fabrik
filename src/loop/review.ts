@@ -7,6 +7,7 @@ import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { upToDateBeforeMergeGate } from "./conflicts.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
+import { digestOnPass } from "./digest.ts";
 import { checkCode, flakyCheckActions } from "./flakyChecks.ts";
 import { followUpsSection } from "./followUps.ts";
 import { type HeldOn, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
@@ -112,10 +113,12 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
 
 /**
  * The Reviewer's Verdict. A reply that breaks the contract is an
- * Infrastructure failure, never a pass. A pass takes the PR out of draft and
- * requests the Operator's review, the event's one notification, unless the
- * PR conflicts with main: then it stays in draft and is brought up to date,
- * and the pass on that head opens the Merge gate (#480).
+ * Infrastructure failure, never a pass. A pass starts the Digest writer,
+ * and the Merge gate opens when its attempt ends; with the Digest off it
+ * takes the PR out of draft and requests the Operator's review itself
+ * (src/loop/digest.ts). Unless the PR conflicts with main: then it stays in
+ * draft and is brought up to date, and the pass on that head does that
+ * (#480).
  */
 export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConfig): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
@@ -141,14 +144,8 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
     // One on a PR that conflicts with main brings it up to date first, in draft: the Operator's review couldn't land (#480).
     const bringUpToDate = upToDateBeforeMergeGate(pullRequest, snapshot.mergeable, held);
     if (bringUpToDate !== null) return { kind: "act", actions: [...actions, bringUpToDate] };
-    return {
-      kind: "act",
-      actions: [
-        ...actions,
-        { kind: "mark-ready-for-review", pullRequest: pullRequest.number },
-        { kind: "request-review", pullRequest: pullRequest.number, reviewer: snapshot.operator },
-      ],
-    };
+    // A pass that would open the Merge gate starts the Digest writer in its place, where the Digest is on (ADR-0022).
+    return { kind: "act", actions: [...actions, ...digestOnPass(event, pullRequest, snapshot, config)] };
   });
 }
 

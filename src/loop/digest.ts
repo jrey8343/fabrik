@@ -37,6 +37,32 @@ function whyNoDigest(pullRequest: PullRequestSnapshot, config: KitConfig): strin
   return null;
 }
 
+type Passed = Extract<LoopEvent, { kind: "review-run-finished" }>;
+
+/**
+ * What a pass that would open the Merge gate does in its place, after its
+ * Verdict: the first of these that holds.
+ * 1. The Digest is off in Kit config: the gate opens as it always has.
+ * 2. Otherwise the pass adds `agent:digest`, which starts the Digest writer,
+ *    and the pull request stays in draft with no review requested: the gate
+ *    opens when that attempt ends (`openGate`).
+ * A pass that keeps the pull request in draft, an Execution flaw and a
+ * Design flaw never come here.
+ */
+export function digestOnPass(_event: Passed, pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator">, config: KitConfig): Action[] {
+  // The pass is being given now, so its gate has not opened, whatever the snapshot says of the Verdict before it.
+  if (!config.digest.enabled) return gateOpening(pullRequest, snapshot.operator);
+  return [{ kind: "add-labels", issue: pullRequest.number, labels: [DIGEST_LABEL] }];
+}
+
+/** Out of draft, then the Operator's review requested: the review request is the event's one notification. */
+function gateOpening(pullRequest: PullRequestSnapshot, operator: string): Action[] {
+  return [
+    { kind: "mark-ready-for-review", pullRequest: pullRequest.number },
+    { kind: "request-review", pullRequest: pullRequest.number, reviewer: operator },
+  ];
+}
+
 type Written = Extract<LoopEvent, { kind: "digest-run-finished" }>;
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
