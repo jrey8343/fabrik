@@ -72,6 +72,7 @@ import {
   readKitConfigSources,
   readRunRecord,
   readRequiredChecks,
+  readRound,
   readRuns,
   readSpend,
   refusalOf,
@@ -120,6 +121,8 @@ import type {
   RunInFlight,
   RunKind,
   RunnerTime,
+  RoundLine,
+  RoundRead,
   RunRecord,
   RunsRead,
   Runway,
@@ -291,6 +294,43 @@ const A_PRODUCT_REPO_REFUSING_ITS_FACTS: ReadClient = {
 
 /** A weekly-limit reading, 42% used, its week resetting on 2026-11-13 at 04:00 UTC. */
 const A_WEEKLY_READING = { status: "allowed", rateLimitType: "seven_day", utilization: 0.42, resetsAt: Date.parse("2026-11-13T04:00:00Z") / 1000 };
+
+/**
+ * A client over issue 21 of `owner/product`, open in a Design session with no
+ * parent, its comments these, as the Round read asks for them, and no Map open.
+ */
+function aDesignSessionOf(comments: readonly ReturnType<typeof aComment>[]): ReadClient {
+  const nodes = comments.map(({ body, at, author, byBot }, index) => ({
+    databaseId: 5001 + index,
+    url: `https://github.com/owner/product/issues/21#issuecomment-${5001 + index}`,
+    body,
+    createdAt: at,
+    author: byBot ? { __typename: "Bot", login: author.replace(/\[bot\]$/, "") } : { __typename: "User", login: author },
+  }));
+  return {
+    rest: () => Promise.reject(REFUSAL),
+    fileText: () => Promise.reject(REFUSAL),
+    graphql: <T,>(_query: string, variables: Record<string, unknown>) =>
+      Promise.resolve(
+        (variables["map"] === undefined
+          ? { repository: { issue: { state: "OPEN", labels: { nodes: [{ name: "needs-design" }] }, parent: null, comments: { nodes } } } }
+          : { repository: { issues: { nodes: [] } } }) as T,
+      ),
+  };
+}
+
+/** The Operator's reply on issue 21 at `at`. */
+const anOperatorReply = (at: string) => aComment("The cart.", at, { author: "owner", byBot: false });
+
+/** A Round's line: the second Round of a session, asking one question and whether to chart a Map instead. */
+const A_ROUND_LINE = {
+  v: 1,
+  kind: "round",
+  round: 2,
+  intro: "One thing to settle.",
+  questions: [{ question: "Which page first?", recommendation: "The cart, as it's where people stop." }],
+  asksMap: true,
+} as const satisfies RoundLine;
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -696,6 +736,48 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     ),
   MERGED_STANDS_HOURS: () => MERGED_STANDS_HOURS,
   NO_DEPLOY_SEEN_MINUTES: () => NO_DEPLOY_SEEN_MINUTES,
+
+  // The Round read
+
+  readRound: () =>
+    Promise.all([
+      readRound(
+        aDesignSessionOf([aDesignRound(1, "2026-11-09T09:00:00Z")]),
+        "owner/product",
+        21,
+        { ok: true, config: DEFAULT_KIT_CONFIG },
+        "owner",
+        "fabrik-app[bot]",
+        NOW,
+      ),
+      readRound(
+        aDesignSessionOf([aDesignRound(1, "2026-11-09T09:00:00Z"), anOperatorReply("2026-11-09T10:00:00Z"), aDesignTurnFailedNotice("2026-11-09T11:00:00Z", 9100)]),
+        "owner/product",
+        21,
+        { ok: true, config: DEFAULT_KIT_CONFIG },
+        "owner",
+        "fabrik-app[bot]",
+        NOW,
+      ),
+      readRound(
+        aDesignSessionOf([aDesignRound(1, "2026-11-09T09:00:00Z"), anOperatorReply("2026-11-09T10:00:00Z")]),
+        "owner/product",
+        21,
+        { ok: true, config: DEFAULT_KIT_CONFIG },
+        "owner",
+        "fabrik-app[bot]",
+        NOW,
+      ),
+      readRound(
+        REFUSING_CLIENT,
+        "owner/product",
+        21,
+        { ok: true, config: DEFAULT_KIT_CONFIG },
+        "owner",
+        "fabrik-app[bot]",
+        NOW,
+      ),
+    ]),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -880,6 +962,19 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The Standing at Production
 
   MergedLastDayFacts: { number: 50, title: "Build the thing", ticket: 7, mergeCommit: "m".repeat(40), mergedAt: "2026-11-09T11:30:00Z" } satisfies MergedLastDayFacts,
+
+  // The Round read
+
+  RoundLine: A_ROUND_LINE satisfies RoundLine,
+  RoundRead: {
+    repo: "owner/product",
+    issue: 21,
+    readAt: NOW,
+    waits: "round",
+    round: { comment: 5002, url: "https://github.com/owner/product/issues/21#issuecomment-5002", postedAt: "2026-11-09T11:00:00Z", round: 2, waiting: true, line: A_ROUND_LINE },
+    failedTurn: null,
+    mapMayBeOffered: true,
+  } satisfies RoundRead,
 };
 
 /**

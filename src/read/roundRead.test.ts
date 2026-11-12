@@ -6,7 +6,8 @@ import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARK
 import { prototypeTurnRefused } from "../loop/failures.ts";
 import { type RoundLine, roundLineOf } from "../loop/roundLine.ts";
 import { aDesignTurnFailedNotice, aMapCapRefusal } from "./builders.ts";
-import { readRound, roundWaitsIn } from "./roundRead.ts";
+import { EXPORT_CALLS, EXPORT_SHAPES } from "./exports.fixture.ts";
+import { readRound, type RoundRead, roundWaitsIn } from "./roundRead.ts";
 
 const APP = { __typename: "Bot", login: "fabrik-app" };
 const OPERATOR = { __typename: "User", login: "jrey8343" };
@@ -435,6 +436,15 @@ describe("The Round read", () => {
     const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
 
     expect(JSON.parse(JSON.stringify(read))).toStrictEqual(read);
+  });
+});
+
+describe("The Round read in the read library", () => {
+  it("is held by the interface fixture, a read of each kind of wait", async () => {
+    const reads = (await EXPORT_CALLS["readRound"]?.()) as readonly RoundRead[];
+
+    expect(reads.map(({ waits }) => waits).toSorted()).toEqual(["failed-turn", "nothing", "round", "unread"]);
+    expect(EXPORT_SHAPES["RoundRead"]).toMatchObject({ waits: "round" });
   });
 });
 

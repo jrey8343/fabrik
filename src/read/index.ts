@@ -141,3 +141,9 @@ export { aDeploymentsRead, aDeployOf, aMergedLastDay } from "./builders.ts";
 export { MERGED_STANDS_HOURS, NO_DEPLOY_SEEN_MINUTES } from "../kit/standingProduction.ts";
 export { joinDeployments, mergesToRead } from "./joinDeployments.ts";
 export type { MergedLastDayFacts } from "../kit/standingProduction.ts";
+
+// The Round read
+
+export { readRound } from "./roundRead.ts";
+export type { RoundLine } from "../loop/roundLine.ts";
+export type { RoundRead } from "./roundRead.ts";

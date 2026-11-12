@@ -19,8 +19,6 @@ import { mapOfferOf } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, handBackMarkIn, refusedByMapCap } from "../loop/markers.ts";
 import { type RoundLine, roundLineIn } from "../loop/roundLine.ts";
 
-export type { RoundLine } from "../loop/roundLine.ts";
-
 /** What waits on the Operator in one issue's Design session, as a Round read gives it. */
 export interface RoundRead {
   /** `owner/name`. */
