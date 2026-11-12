@@ -487,6 +487,12 @@ describe("The Roll-in in the Design prompt", () => {
     expect(readDesignTurnOutput({ ...example, summary: "Read the limit from @scope/name." }, EXAMPLE_ISSUE)).toMatchObject({ ok: false });
     expect(readDesignTurnOutput({ ...example, summary: "Read the limit from `the @scope/name package`." }, EXAMPLE_ISSUE)).toMatchObject({ ok: false });
   });
+
+  it.each(["prototype", "triage"])("leaves the %s prompt saying nothing of a Roll-in or of the pull request an issue was filed from", async (role) => {
+    const text = await prompt(role);
+    expect(text).not.toMatch(/roll[- ]in/i);
+    expect(text).not.toContain(FILED_FROM_HEADING);
+  });
 });
 
 describe("Product intent in the Implement prompt", () => {
