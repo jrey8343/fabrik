@@ -35,6 +35,7 @@ import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
 import type { Facts } from "./gather.ts";
+import type { RunInFlight, RunsRead } from "./runs.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -388,6 +389,17 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
 /** An Implement run in flight on no Ticket the job names, told by its job's name, running, its workflow run (1, first attempt) created an hour before the filing, with no start read, unless a test says otherwise. */
 export function aRunInFlight(overrides: Partial<RunInFlightFact> = {}): RunInFlightFact {
   return { role: "implement", issue: null, pullRequest: null, retry: null, kind: null, job: "running", createdAt: "2026-11-08T19:00:00Z", exact: false, run: 1, attempt: 1, startedAt: null, ...overrides };
+}
+
+/** The runs read's run in flight, with aRunInFlight's defaults, no model, and the run's page as its link, unless a test says otherwise. */
+export function aRunRead(overrides: Partial<RunInFlight> = {}): RunInFlight {
+  const run = overrides.run ?? 1;
+  return { ...aRunInFlight(), model: null, url: `https://github.com/owner/product/actions/runs/${run}`, ...overrides };
+}
+
+/** A read of `owner/product`'s Actions at the filing's time with these runs in flight, and a Tick that started at the top of the hour. */
+export function aRunsRead(runs: readonly RunInFlight[] | "unread", readAt = "2026-11-08T20:00:00Z"): RunsRead {
+  return { repo: "owner/product", readAt, runs, tick: { lastStartedAt: "2026-11-08T20:00:00Z" } };
 }
 
 /** What the Standing rule reads of the store: nothing in it unless a test says so. */

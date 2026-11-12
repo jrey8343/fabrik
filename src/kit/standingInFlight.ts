@@ -4,7 +4,7 @@
 // (`waiting-for-slot`), and a Ticket or research Decision its blockers hold
 // (`blocked`). Each is read by the Loop's own rule for it, so the Standing and
 // the Loop can't disagree, and none can turn Stuck.
-import { dispatchedRunsOf, type RunInFlightFact } from "../github/snapshot.ts";
+import { dispatchedRunsOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
 import { conflictRunInFlightIn } from "../github/threads.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
@@ -225,9 +225,46 @@ function runningStandingsOf(facts: StandingFacts, runs: readonly RunInFlightFact
     const waiting = waits ? counted.filter((run) => !run.exact && run.role === "review" && run.pullRequest === null) : [];
     const run = firstOf(named, waiting);
     if (run === undefined) return [];
-    return [{ ...inFlight(github.repo, pullRequest.ticket, pullRequest.number, run.createdAt, "ticket", "review", { role: "review", on: "pullRequest" }), name: "running", detail: { run: "review", retry: null } }];
+    return [
+      {
+        ...inFlight(github.repo, pullRequest.ticket, pullRequest.number, runningSince(run), "ticket", "review", { role: "review", on: "pullRequest" }),
+        name: "running",
+        detail: { run: "review", retry: null, actionsRun: run.run },
+      },
+    ];
   });
   return [...issues, ...pullRequests];
+}
+
+/**
+ * When a `running` Standing came to stand so: when its run's agent job got a
+ * runner, or when Actions created the run while it has none (#621). The join
+ * with runs (src/read/joinRuns.ts) takes the same time, so the two agree.
+ */
+export function runningSince(run: Pick<RunInFlightFact, "startedAt" | "createdAt">): string {
+  return run.startedAt ?? run.createdAt;
+}
+
+/**
+ * What a `running` Standing's `detail.run` names for a run of this role, as
+ * the run's own kind tells it (#621): an exact run, read from the Kit job's
+ * closing line, always carries one. Null when the run carries no kind, or for
+ * a role no `running` Standing awaits.
+ */
+export function runningRunOf(role: AwaitedRole, kind: RunKind | null): RunningRun | null {
+  if (kind === null) return null;
+  switch (role) {
+    case "implement":
+      return kind === "first" || kind === "prototype" ? "implement" : kind;
+    case "design":
+      return kind === "prototype" ? "prototype" : "design";
+    case "review":
+    case "triage":
+    case "research":
+      return role;
+    default:
+      return null;
+  }
 }
 
 /** The run that counts: the oldest one the job names, else the oldest that counts for all waiting on its role. */
@@ -246,18 +283,18 @@ function runningOnIssue(
   appLogin: string,
 ): StandingNamed<"running"> | null {
   const running = (work: StandingWork, place: StandingPlace | null, role: AwaitedRole, kind: RunningRun, retry: number | null = null, pullRequest: number | null = null) => ({
-    ...inFlight(repo, issue.number, pullRequest, run.createdAt, work, place, { role, on: pullRequest === null ? "issue" : "pullRequest" }),
+    ...inFlight(repo, issue.number, pullRequest, runningSince(run), work, place, { role, on: pullRequest === null ? "issue" : "pullRequest" }),
     name: "running" as const,
-    detail: { run: kind, retry },
+    detail: { run: kind, retry, actionsRun: run.run },
   });
   switch (run.role) {
     case "implement": {
       const pullRequest = openPullRequests.filter(({ ticket }) => ticket === issue.number).toSorted((a, b) => a.number - b.number)[0];
-      const kind = run.retry !== null ? "retry" : pullRequest === undefined ? "implement" : implementRunOn(pullRequest, operator, appLogin);
+      const kind = runningRunOf("implement", run.kind) ?? (run.retry !== null ? "retry" : pullRequest === undefined ? "implement" : implementRunOn(pullRequest, operator, appLogin));
       return running("ticket", "implement", "implement", kind, run.retry, kind === "implement" ? null : (pullRequest?.number ?? null));
     }
     case "design":
-      return running("design-session", "design", "design", run.kind === "prototype" ? "prototype" : "design");
+      return running("design-session", "design", "design", runningRunOf("design", run.kind) ?? "design");
     case "triage":
       return running("issue", "triage", "triage", "triage");
     case "research":

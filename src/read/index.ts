@@ -94,7 +94,13 @@ export type { StoreFacts } from "./store.ts";
 
 // The join with runs
 
+export { joinRuns } from "./joinRuns.ts";
+
 // The Required checks
+
+export { joinChecks } from "./joinChecks.ts";
+export { headsToCheck, readRequiredChecks, requiredChecksFactOf } from "./requiredChecks.ts";
+export type { HeadCheck, RequiredChecksRead } from "./requiredChecks.ts";
 
 // The caller read
 

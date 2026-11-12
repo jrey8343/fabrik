@@ -1,6 +1,7 @@
 // The rows (#618): one Product repo's Standings, each with what a reader shows
 // beside it, worked out from a gather's facts (./gather.ts), the runs in
-// flight and the Required checks, either of which may be unread, at a time.
+// flight from the last runs read and the Required checks, either of which may
+// be unread, at a time.
 // Every row's Standing is the Standing rule's own (src/kit/standing.ts) for
 // those facts, so a reader holds no rule of its own. Pure, no I/O, and plain
 // data: written as JSON and read back a row is equal.
@@ -10,6 +11,8 @@ import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weekl
 import { isHeldLine } from "../loop/heldLine.ts";
 import type { Facts } from "./gather.ts";
 import { followUpsOf, mentionsOf, relatedOf, relatedToOf } from "./related.ts";
+import { type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
+import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 import { type StoreFacts, storeRowsOf } from "./store.ts";
 
 /** One Standing, with what a reader shows beside it. */
@@ -37,10 +40,10 @@ export interface Row {
   readonly ticketClosed: "yes" | "no" | "unknown" | null;
 }
 
-/** The runs in flight, as the Standing rule reads them (Spec: Standing), or unread. */
-type RowsRuns = readonly RunInFlightFact[] | "unread";
-/** The Required checks on each head, by its sha, as the Standing rule reads them: a head missing is unread. */
-type RowsChecks = Readonly<Record<string, RequiredChecksFact>>;
+/** The last runs read (./runs.ts), or null when none is held. */
+type RowsRuns = RunsRead | null;
+/** The last Required checks read, or null when none was made: every head is then unread. */
+type RowsChecks = RequiredChecksRead | null;
 
 /**
  * One Product repo's rows at `now`, ISO 8601: one for each Standing the rule
@@ -59,14 +62,15 @@ export function rowsOf(
   return standings.map((standing) => rowOf(standing, facts));
 }
 
-/** The runs-in-flight fact the rule reads. */
+/** The runs-in-flight fact the rule reads, through the runs read's one converter: unread with no read held. */
 function runsFactOf(runs: RowsRuns): readonly RunInFlightFact[] | "unread" {
-  return runs;
+  return runs === null ? "unread" : runsInFlightFactOf(runs);
 }
 
-/** The Required checks fact the rule reads, by head. */
+/** The Required checks fact the rule reads, by head, each through requiredChecksFactOf; a head the read does not hold is unread. */
 function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredChecksFact>> {
-  return checks;
+  if (checks === null) return {};
+  return Object.fromEntries(Object.keys(checks.heads).map((head) => [head, requiredChecksFactOf(checks, head)]));
 }
 
 /**
