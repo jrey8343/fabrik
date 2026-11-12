@@ -216,6 +216,30 @@ describe("The Design job's fetch of the pull request its issue was filed from", 
     expect(await git(checkout, "rev-parse", `${ref}^{commit}`)).toBe(head);
   });
 
+  it("fetches into a checkout that already holds the default branch's whole history, as a Product repo of one commit's does", async () => {
+    const whole = join(root, "whole");
+    await git(root, "clone", "--quiet", "--branch", "main", "--single-branch", `file://${remote}`, whole);
+    expect(await git(whole, "rev-parse", "--is-shallow-repository")).toBe("false");
+
+    const ref = (await fetchFiledFrom(whole, REMOTE(), filedFrom()))!;
+
+    expect(await git(whole, "rev-parse", `${ref}^{commit}`)).toBe(head);
+    expect(await git(whole, "merge-base", "HEAD", ref)).toBe(cutFrom);
+  });
+
+  it("fetches again on a checkout that already holds the ref, moving it to the head the inputs name now", async () => {
+    await fetchFiledFrom(checkout, REMOTE(), filedFrom());
+    // The branch was rewound and pushed anew: its head is no descendant of the one fetched before.
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "-B", BRANCH, cutFrom);
+    const rewritten = await commit(seed, { "src/waitlist.ts": "waitlist, again\n" }, "Start the waitlist again");
+    await git(seed, "push", "--quiet", "--force", "origin", BRANCH);
+
+    const ref = (await fetchFiledFrom(checkout, REMOTE(), filedFrom({ headSha: rewritten })))!;
+
+    expect(await git(checkout, "rev-parse", `${ref}^{commit}`)).toBe(rewritten);
+  });
+
   describe("when the head can't be fetched", () => {
     /** A head the remote doesn't hold, as after a force-push to the pull request's branch since the inputs were read. */
     const gone = "f".repeat(40);

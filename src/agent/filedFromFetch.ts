@@ -96,7 +96,11 @@ export async function fetchFiledFrom(checkout: string, remote: Remote, filedFrom
   const git = async (...args: string[]) => (await run("git", args, { cwd: checkout, env })).stdout.trim();
   try {
     const started = await git("rev-parse", "HEAD");
-    await git("fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "--unshallow", url, started, `+${filedFrom.headSha}:${ref}`);
+    // The job's checkout holds the default branch's head alone. Its whole history is fetched with the
+    // head's, the plain way to be certain their merge base is there. Git refuses to deepen a checkout
+    // that is already whole, as a Product repo of one commit's is.
+    const deepen = (await git("rev-parse", "--is-shallow-repository")) === "true" ? ["--unshallow"] : [];
+    await git("fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", ...deepen, url, started, `+${filedFrom.headSha}:${ref}`);
   } catch (error) {
     throw new UnfetchedHeadError(`fetching the head of #${filedFrom.number} (\`${filedFrom.headSha}\`) to \`${ref}\`: ${answerOf(error)}`, { cause: error });
   }
