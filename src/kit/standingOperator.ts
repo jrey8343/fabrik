@@ -138,8 +138,9 @@ function designRoundStandingsOf(issue: OpenIssueFacts, repo: string, appLogin: s
 /**
  * A Design session whose last comment is the Fabrik App's notice that its
  * turn failed, or that the Map cap refused its Map: the Operator's reply is
- * the next move, stopping work, since the notice. Either keeps the session's
- * slot (holdsSlot). Only the App's own comment counts, as for a Round.
+ * the next move, stopping work, since the notice, or until they add
+ * `agent:design` again where the sweep took it off. Either keeps the
+ * session's slot (holdsSlot). Only the App's own comment counts, as for a Round.
  */
 function stoppedDesignSessionStandingsOf(issue: OpenIssueFacts, repo: string, appLogin: string): StandingNamed<"yours-to-do">[] {
   const last = issue.comments.at(-1);
@@ -148,6 +149,9 @@ function stoppedDesignSessionStandingsOf(issue: OpenIssueFacts, repo: string, ap
   const mark = handBackOfNotice(last.body);
   const handBack = mark?.kind === "trigger-swept" ? mark.kind : refusedByMapCap(last.body) ? "map-cap-refused" : "design-turn-failed";
   const label = handBack === "trigger-swept" ? DESIGN_LABEL : null;
+  // Once the Operator adds the label the sweep took off again, the work is read like any other.
+  const readded = label === null ? null : lastAdded(issue.labelEvents, label);
+  if (readded !== null && Date.parse(readded) > Date.parse(last.at)) return [];
   return [
     {
       ...theOperators(repo, issue.number, null, last.at),

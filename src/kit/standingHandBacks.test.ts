@@ -299,6 +299,22 @@ describe("work the Kit hands back", () => {
         const session = anOpenIssue({ number: 12, labels: ["needs-design"], comments: [aComment(swept("agent:design", "<!-- fabrik:design-turn-failed -->", "design"), at)] });
         expect(standingsIn({ openIssues: [session] })[0]?.detail).toEqual({ handBack: "trigger-swept", role: "design", failure: null, label: "agent:design" });
       });
+
+      it("hands a Design session the sweep stopped back no more once the Operator adds agent:design again, though the notice is still its last word", () => {
+        const swept = [
+          "<!-- fabrik:design-turn-failed -->",
+          "<!-- fabrik:stuck-trigger-gave-up agent:design -->",
+          "@operator `agent:design` came off: nothing started when it was added, nor when the Kit added it again.",
+          handBackMarker({ kind: "trigger-swept", role: "design" }),
+        ].join("\n");
+        const session = anOpenIssue({
+          number: 12,
+          labels: ["needs-design", "agent:design"],
+          comments: [aComment(swept, at)],
+          labelEvents: [aLabelAdded("agent:design", "2026-11-08T19:10:00Z", { actor: "operator" })],
+        });
+        expect(standingsIn({ openIssues: [session] }).filter(({ name }) => name === "yours-to-do")).toEqual([]);
+      });
     });
   });
 });
