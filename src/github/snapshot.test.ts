@@ -28,8 +28,10 @@ import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, IMPLEMENT_RUN_FAILED_MARK
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import {
+  AUDIT_JOB_NAME,
   countDispatchedRuns,
   DESIGN_JOB_NAME,
+  dispatchedRunsOf,
   designTurnsInProgress,
   gatherSnapshot as gatherFrom,
   IMPLEMENT_JOB_NAME,
@@ -38,10 +40,16 @@ import {
   PROTOTYPE_JOB_NAME,
   PUSH_JOB_NAME,
   readKitConfigSources,
+  readRunsInFlight,
+  RERUN_CHECKS_JOB_NAME,
+  RERUN_WAIT_JOB_NAME,
   RESEARCH_JOB_NAME,
+  RETRO_JOB_NAME,
   REVIEW_CHECKS_JOB_NAME,
   REVIEW_JOB_NAME,
   CLAIM_JOB_NAME,
+  type RunInFlightFact,
+  TRIAGE_JOB_NAME,
 } from "./snapshot.ts";
 
 /** The conflict check's query (#304), which reads each open PR's mergeable state. */
@@ -73,12 +81,14 @@ function gatherSnapshot(github: GitHub, ...rest: Parameters<typeof gatherFrom> e
 const repo = { owner: "acme", name: "shop" };
 
 /** A read-only Actions API holding these workflow runs, each with its jobs. */
-function actionsWith(runs: { id: number; status: string; jobs: { name: string; status: string; conclusion?: string }[] }[]) {
+function actionsWith(runs: { id: number; status: string; createdAt?: string; jobs: { name: string; status: string; conclusion?: string }[] }[]) {
   return {
     async rest(method: string, path: string): Promise<unknown> {
       expect(method).toBe("GET");
       const listed = /^\/repos\/acme\/shop\/actions\/runs\?status=(\w+)&per_page=100$/.exec(path);
-      if (listed !== null) return { workflow_runs: runs.filter((run) => run.status === listed[1]).map(({ id }) => ({ id })) };
+      if (listed !== null) {
+        return { workflow_runs: runs.filter((run) => run.status === listed[1]).map(({ id, createdAt = "2026-11-08T19:00:00Z" }) => ({ id, created_at: createdAt })) };
+      }
       const jobs = /^\/repos\/acme\/shop\/actions\/runs\/(\d+)\/jobs\?filter=latest&per_page=100$/.exec(path);
       if (jobs !== null) return { jobs: runs.find((run) => run.id === Number(jobs[1]))?.jobs ?? [] };
       throw new Error(`Unexpected call: ${path}`);
@@ -166,6 +176,126 @@ describe("Counting the Research runs a Dispatch check sees in flight", () => {
     ]);
 
     expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0, implementTickets: [] });
+  });
+});
+
+describe("Reading the runs in flight, by the names the Loop gives its jobs (#606)", () => {
+  const run = (overrides: Partial<RunInFlightFact>): RunInFlightFact => ({
+    role: "implement",
+    issue: null,
+    pullRequest: null,
+    retry: null,
+    kind: null,
+    job: "running",
+    createdAt: "2026-11-08T19:00:00Z",
+    ...overrides,
+  });
+
+  it("reads an Implement job's Ticket and a Retry's number, and one an earlier release named for nothing, with when Actions created its run", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", createdAt: "2026-11-08T18:00:00Z", jobs: [{ name: "fabrik / Implement #12", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement #14 (Retry 2)", status: "in_progress" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "Implement", status: "in_progress" }] },
+    ]);
+
+    expect(await readRunsInFlight(actions, repo)).toEqual([
+      run({ issue: 12, createdAt: "2026-11-08T18:00:00Z" }),
+      run({ issue: 14, retry: 2, kind: "retry" }),
+      run({}),
+    ]);
+  });
+
+  it("reads a Review job's pull request, a Design-session or prototype turn's issue, and a Triage, Research, Audit or Retro job as naming nothing", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Review PR #50", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Design-session turn #7", status: "in_progress" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Prototype turn #9", status: "in_progress" }] },
+      { id: 4, status: "in_progress", jobs: [{ name: "fabrik / Triage", status: "in_progress" }] },
+      { id: 5, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "in_progress" }] },
+      { id: 6, status: "in_progress", jobs: [{ name: "fabrik / Audit", status: "in_progress" }] },
+      { id: 7, status: "in_progress", jobs: [{ name: "fabrik / Retro", status: "in_progress" }, { name: "fabrik / Retro evidence", status: "completed" }] },
+      { id: 8, status: "in_progress", jobs: [{ name: "fabrik / Review", status: "in_progress" }] },
+    ]);
+
+    expect(await readRunsInFlight(actions, repo)).toEqual([
+      run({ role: "review", pullRequest: 50 }),
+      run({ role: "design", issue: 7 }),
+      run({ role: "design", issue: 9, kind: "prototype" }),
+      run({ role: "triage" }),
+      run({ role: "research" }),
+      run({ role: "audit" }),
+      run({ role: "retro" }),
+      run({ role: "review" }),
+    ]);
+  });
+
+  it("reads a Review's wait for checks, or its re-run of red checks, while it is under way, naming nothing", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Review checks", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Review checks", status: "completed", conclusion: "success" }, { name: "fabrik / Re-run red checks", status: "in_progress" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Review checks", status: "completed", conclusion: "failure" }, { name: "fabrik / Re-run checks' wait", status: "queued" }] },
+    ]);
+
+    expect(await readRunsInFlight(actions, repo)).toEqual([
+      run({ role: "review", job: "waiting-on-checks" }),
+      run({ role: "review", job: "waiting-on-checks" }),
+      run({ role: "review", job: "waiting-on-checks" }),
+    ]);
+  });
+
+  it("takes no skipped job for a run, and an Implement job that's done as landing until its run's push job has", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement #12", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Implement #13", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "completed", conclusion: "success" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Triage", status: "completed", conclusion: "skipped" }, { name: "fabrik / Review PR #50", status: "completed", conclusion: "skipped" }] },
+      { id: 4, status: "completed", jobs: [{ name: "fabrik / Implement #14", status: "in_progress" }] },
+    ]);
+
+    expect(await readRunsInFlight(actions, repo)).toEqual([run({ issue: 12, job: "landing" })]);
+  });
+
+  it("says whether a job waits behind its concurrency group or for a runner", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "queued", jobs: [{ name: "fabrik / Implement #12", status: "queued" }] },
+      { id: 2, status: "waiting", jobs: [{ name: "fabrik / Implement #13", status: "waiting" }] },
+      { id: 3, status: "pending", jobs: [{ name: "fabrik / Implement #14", status: "pending" }] },
+    ]);
+
+    expect(await readRunsInFlight(actions, repo)).toEqual([
+      run({ issue: 12, job: "waiting-for-runner" }),
+      run({ issue: 13, job: "blocked" }),
+      run({ issue: 14, job: "blocked" }),
+    ]);
+  });
+
+  it("counts Dispatch's runs from the same read", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement #12", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "in_progress" }, { name: "fabrik / Implement", status: "queued" }] },
+    ]);
+
+    expect(dispatchedRunsOf(await readRunsInFlight(actions, repo))).toEqual(await countDispatchedRuns(actions, repo));
+    expect(dispatchedRunsOf(await readRunsInFlight(actions, repo))).toEqual({ implement: 2, research: 1, implementTickets: [12] });
+  });
+});
+
+describe("The names of the jobs the runs in flight are read by (#606)", () => {
+  it.each([
+    ["triage", () => TRIAGE_JOB_NAME],
+    ["audit", () => AUDIT_JOB_NAME],
+    ["retro", () => RETRO_JOB_NAME],
+    ["rerun-checks", () => RERUN_CHECKS_JOB_NAME],
+    ["rerun-wait", () => RERUN_WAIT_JOB_NAME],
+    ["review-checks", () => REVIEW_CHECKS_JOB_NAME],
+  ])("are the names loop.yml gives its %s job", async (job, name) => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    expect(new RegExp(`^ {2}${job}:\\n {4}name: (.+)$`, "m").exec(workflow)?.[1]).toBe(name());
+  });
+
+  it("is the Review job's name followed by its pull request", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    expect(/^ {2}review:\n {4}name: (.+)$/m.exec(workflow)?.[1]).toBe(`"${REVIEW_JOB_NAME} PR #\${{ needs.kit.outputs.pull-request }}"`);
   });
 });
 
