@@ -31,8 +31,8 @@ export interface MonitorInput {
   readonly sentry: SentryRead | null;
   /** Every issue in the Product repo carrying fabrik:monitor, open or closed. */
   readonly issues: readonly MonitorIssue[];
-  /** The Kit config's `sandbox.checks`: when it lists any, the only checks that decide whether the default branch is red. */
-  readonly gatingChecks: readonly string[];
+  /** The Required checks the Kit config's `sandbox.checks` lists: when it lists any, the only checks that decide whether the default branch is red. */
+  readonly listedChecks: readonly string[];
   /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
   readonly mainChecks: MainChecksRead | null;
   /**

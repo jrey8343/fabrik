@@ -39,7 +39,7 @@ describe("The Monitor's read of its issues", () => {
       [/\/commits\?/, () => []],
     ]);
 
-    const facts = await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, gatingChecks: [] });
+    const facts = await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, listedChecks: [] });
 
     expect(facts).toEqual({ kind: "rate-limited", error: "GitHub GET /repos/acme/shop/issues failed: 403 API rate limit exceeded" });
   });
@@ -54,7 +54,7 @@ describe("The Monitor's read of its issues", () => {
       ],
     ]);
 
-    await expect(gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: false, gatingChecks: [] })).rejects.toThrow("500 oops");
+    await expect(gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: false, listedChecks: [] })).rejects.toThrow("500 oops");
   });
 
   it("gives the issues and the default branch's checks it read", async () => {
@@ -63,7 +63,7 @@ describe("The Monitor's read of its issues", () => {
       [/\/commits\?/, () => []],
     ]);
 
-    expect(await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, gatingChecks: [] })).toEqual({
+    expect(await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, listedChecks: [] })).toEqual({
       kind: "read",
       issues: [],
       mainChecks: { kind: "read", commits: [] },
@@ -72,6 +72,7 @@ describe("The Monitor's read of its issues", () => {
 });
 
 describe("Whether the Monitor's closing note is already on an issue", () => {
+  // A note in the words of an earlier Kit: the Monitor finds its notes by their marker, not their prose.
   const note = `${RED_MAIN_GREEN_MARKER}\nGreen at \`bbbbbbb\`: its gating checks passed, so the default branch is no longer red and the Monitor closes this issue as completed.`;
   const timeline = (entries: unknown[]) => gitHubAnswering([[/\/issues\/9\/timeline\?/, () => entries]]);
   const comment = (login: string, body: string) => ({ event: "commented", user: { login }, body });

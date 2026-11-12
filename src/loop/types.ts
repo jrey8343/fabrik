@@ -29,7 +29,7 @@ export type ReportedFailure =
   | "unread-inputs"
   /** A GitHub request failed while the Review waited for its required checks. */
   | "unread-checks"
-  /** The Review gave up waiting on gating checks that never reported on the PR's head, which no re-run fixes. */
+  /** The Review gave up waiting on Required checks the Kit config lists that never reported on the PR's head, which no re-run fixes. */
   | "unreported-checks"
   /**
    * A cut branch built on commits it didn't start from, so the push job,
@@ -75,8 +75,9 @@ export interface FailureReport {
    */
   readonly refused?: true;
   /**
-   * For a Review that gave up waiting on its required checks: the gating
-   * checks that never reported, or for a timeout, the ones still running.
+   * For a Review that gave up waiting on its required checks: the Required
+   * checks the Kit config lists that never reported, or for a timeout, the
+   * ones still running.
    */
   readonly checks?: readonly string[];
   /**

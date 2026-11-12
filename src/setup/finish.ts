@@ -151,13 +151,13 @@ export function appliedLines(defaultBranch: string, summary: RunSummary, upToDat
     "",
     upToDate
       ? `${noPr} Setup switched back to ${defaultBranch}.`
-      : `${noPr} Setup switched back to ${defaultBranch}, which here isn't the same as on origin: pull or push so they match, then run setup again.`,
+      : `${noPr} Setup switched back to ${defaultBranch}, which here isn't the same as on origin: pull, or take the commits made here to origin through a pull request, then run setup again.`,
   ];
 }
 
 function mergeAsk(who: string, defaultBranch: string): string {
   return (
-    `${who} once its gating checks pass. It needs no approving review, and as the repo's admin you're the Merge gate ruleset's one bypass actor. ` +
+    `${who} once its Required checks pass. It needs no approving review, and as the repo's admin you're the Merge gate ruleset's one bypass actor. ` +
     `The Loop starts once the caller workflow is on ${defaultBranch}.`
   );
 }

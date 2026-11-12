@@ -193,6 +193,16 @@ describe("The Implementer's context", () => {
     expect(text).not.toContain("CODING_STANDARDS.md");
     expect(text).not.toContain("Name a test for the behaviour it checks.");
   });
+
+  it("names the Required checks on its PR under the Sandbox's commands", async () => {
+    const productDir = await mkdtemp(join(tmpdir(), "fabrik-implement-"));
+    const config = kitConfig();
+
+    const text = (await implementContext(productDir, await fileOf(null), { ...config, sandbox: { ...config.sandbox, checks: ["build", "e2e"] } })).join("\n");
+
+    expect(text).toContain("## This Product repo's Sandbox");
+    expect(text).toContain("- Required checks on the PR: `build`, `e2e`");
+  });
 });
 
 describe("A retry on a PR the Operator requested changes on is given the amended Ticket (ADR-0010)", () => {

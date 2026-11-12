@@ -540,32 +540,35 @@ function file(state: ProductState, path: string): string | null {
 
 /**
  * Only the Operator merges into the default branch (user stories 10 and 71).
- * Branch protection requires a PR and the gating checks, with no bypass
+ * Branch protection requires a PR and the Required checks, with no bypass
  * allowance for anyone, but no approving review: the Operator works alone and
  * can't approve their own PRs. What keeps the Fabrik App from merging is the
- * Merge gate ruleset (mergeGate below), not a review. Setup owns only those
- * settings, the required checks, the PR, its approving reviews and its bypass
- * allowances, and keeps every other one as it finds it, admin enforcement
- * included.
+ * Merge gate ruleset (mergeGate below), not a review. Admins are held to
+ * those rules, so GitHub refuses the Operator too a merge at a head whose
+ * Required checks haven't all passed, and any push straight to the branch.
+ * Setup owns only those settings, the required checks, the PR, its approving
+ * reviews, its bypass allowances and admin enforcement, and keeps every other
+ * one as it finds it.
  */
 function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
   const configText = state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig;
   const config = resolveKitConfig({ config: configText, skillsLock: file(state, SKILLS_SOURCES_LOCK_PATH) });
-  if (!config.ok) notes.push(`${KIT_CONFIG_PATH} is invalid, so its gating checks weren't required: ${config.errors.join("; ")}`);
-  const gating = config.ok ? config.config.sandbox.checks : [];
+  if (!config.ok) notes.push(`${KIT_CONFIG_PATH} is invalid, so the Required checks it lists weren't added to the branch: ${config.errors.join("; ")}`);
+  const listedChecks = config.ok ? config.config.sandbox.checks : [];
   const current = state.protection;
   const found = current ?? UNPROTECTED;
-  const required = [...new Set([...requiredChecks(found), ...gating])];
+  const required = [...new Set([...requiredChecks(found), ...listedChecks])];
   if (required.length === 0) {
     notes.push(
-      `${state.repo.defaultBranch} requires no gating checks yet: list the CI checks that must pass in sandbox.checks in ${KIT_CONFIG_PATH}, then run setup again.`,
+      `${state.repo.defaultBranch} has no Required checks yet: list the CI checks that must pass in sandbox.checks in ${KIT_CONFIG_PATH}, then run setup again.`,
     );
   }
   const satisfied =
     current !== null &&
     current.required_pull_request_reviews !== null &&
     bypassAllowances(current).length === 0 &&
-    gating.every((check) => requiredChecks(current).includes(check));
+    listedChecks.every((check) => requiredChecks(current).includes(check)) &&
+    current.enforce_admins;
   if (satisfied) return [];
   const checks = found.required_status_checks;
   // Empty lists take away any bypass. GitHub rejects the field (HTTP 422) on a
@@ -573,6 +576,7 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
   const { bypass_pull_request_allowances: _, ...reviews } = found.required_pull_request_reviews ?? NEW_PULL_REQUEST_RULE;
   const wanted: BranchProtection = {
     ...found,
+    enforce_admins: true,
     required_status_checks:
       required.length === 0
         ? null

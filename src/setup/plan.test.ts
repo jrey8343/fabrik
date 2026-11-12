@@ -480,7 +480,7 @@ describe("Branch protection", () => {
     ".fabrik/config.json": JSON.stringify({ sandbox: { checks } }),
   });
 
-  it("requires a PR and the Kit config's gating checks on the default branch, with no bypass and no approving review", () => {
+  it("requires a PR and the Required checks the Kit config lists on the default branch, with no bypass and no approving review, and holds admins to those rules", () => {
     const state = aCleanProduct({ files: withChecks(["build", "test"]) });
 
     expect(protects(state)).toEqual([
@@ -490,7 +490,7 @@ describe("Branch protection", () => {
         found: null,
         protection: {
           required_status_checks: { strict: false, checks: [{ context: "build" }, { context: "test" }] },
-          enforce_admins: false,
+          enforce_admins: true,
           required_pull_request_reviews: {
             required_approving_review_count: 0,
             dismiss_stale_reviews: true,
@@ -509,7 +509,7 @@ describe("Branch protection", () => {
       },
     ]);
     expect(describeAction(protects(state)[0]!)).toBe(
-      "protect main: a pull request: not required → required; required checks: none → build, test; every other setting stays as it is",
+      "protect main: a pull request: not required → required; required checks: none → build, test; admins held to the rules: no → yes; every other setting stays as it is",
     );
   });
 
@@ -519,7 +519,7 @@ describe("Branch protection", () => {
     expect(protects(state)[0]?.protection.required_status_checks?.checks).toEqual([{ context: "lint" }, { context: "build" }]);
   });
 
-  it("changes only the settings Setup owns, keeping every other one as it finds it, admin enforcement included", () => {
+  it("changes only the settings Setup owns, keeping every other one as it finds it, and says nothing of admins already held to the rules", () => {
     const state = aCleanProduct({
       files: withChecks(["ci", "lint"]),
       protection: aProtectedBranch(["ci"], {
@@ -563,24 +563,32 @@ describe("Branch protection", () => {
 
   it("takes away a bypass that would let the Fabrik App merge without the Operator, keeping an organization repo's push and dismissal restrictions", () => {
     const team = { users: [], teams: ["maintainers"], apps: [] };
+    const found = aProtectedBranch(["build"], {
+      required_pull_request_reviews: {
+        required_approving_review_count: 0,
+        dismiss_stale_reviews: true,
+        require_code_owner_reviews: false,
+        require_last_push_approval: false,
+        dismissal_restrictions: team,
+        bypass_pull_request_allowances: { users: ["octocat"], teams: [], apps: ["fabrik"] },
+      },
+      restrictions: team,
+      required_linear_history: true,
+      allow_deletions: true,
+    });
     const state = aCleanProduct({
       repo: { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: true },
       files: withChecks(["build"]),
-      protection: aProtectedBranch(["build"], {
-        required_pull_request_reviews: {
-          required_approving_review_count: 0,
-          dismiss_stale_reviews: true,
-          require_code_owner_reviews: false,
-          require_last_push_approval: false,
-          dismissal_restrictions: team,
-          bypass_pull_request_allowances: { users: ["octocat"], teams: [], apps: ["fabrik"] },
-        },
-        restrictions: team,
-      }),
+      protection: found,
     });
 
     const [action] = protects(state);
 
+    expect(action?.protection).toEqual({
+      ...found,
+      enforce_admins: true,
+      required_pull_request_reviews: { ...found.required_pull_request_reviews, bypass_pull_request_allowances: { users: [], teams: [], apps: [] } },
+    });
     expect(action?.protection.required_pull_request_reviews).toEqual({
       required_approving_review_count: 0,
       dismiss_stale_reviews: true,
@@ -590,17 +598,63 @@ describe("Branch protection", () => {
       bypass_pull_request_allowances: { users: [], teams: [], apps: [] },
     });
     expect(action?.protection.restrictions).toEqual(team);
-    expect(describeAction(action!)).toBe("protect main: bypass allowances: app:fabrik, user:octocat → none; every other setting stays as it is");
+    expect(describeAction(action!)).toBe("protect main: bypass allowances: app:fabrik, user:octocat → none; admins held to the rules: no → yes; every other setting stays as it is");
   });
 
-  it("tells the Operator when there's no gating check to require yet", () => {
+  it("tells the Operator when the branch has no Required check yet", () => {
     const plan = planSetup(aCleanProduct(), kit);
 
     expect(plan.notes.join("\n")).toContain("sandbox.checks");
+    expect(plan.notes).toContain("main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again.");
   });
 
-  it("leaves protection alone when it already requires all of that", () => {
-    const state = aCleanProduct({ files: withChecks(["build"]), protection: aProtectedBranch(["build", "lint"]) });
+  it("holds admins to the rules of a branch that has everything else, changing nothing more", () => {
+    const found = aProtectedBranch(["build", "lint"], { required_linear_history: true });
+    const state = aCleanProduct({ files: withChecks(["build"]), protection: found });
+
+    const [action] = protects(state);
+
+    expect(action?.protection).toEqual({ ...found, enforce_admins: true });
+    expect(describeAction(action!)).toBe("protect main: admins held to the rules: no → yes; every other setting stays as it is");
+  });
+
+  describe("a branch that asks for an approving review", () => {
+    const asksForAReview = (enforce_admins: boolean) =>
+      aProtectedBranch(["build"], {
+        enforce_admins,
+        required_pull_request_reviews: {
+          required_approving_review_count: 1,
+          dismiss_stale_reviews: true,
+          require_code_owner_reviews: false,
+          require_last_push_approval: false,
+        },
+      });
+
+    it("holds admins to the rules and asks for none, since the Operator can't approve their own pull request", () => {
+      const [action] = protects(aCleanProduct({ files: withChecks(["build"]), protection: asksForAReview(false) }));
+
+      expect(action?.protection.enforce_admins).toBe(true);
+      expect(action?.protection.required_pull_request_reviews?.required_approving_review_count).toBe(0);
+      expect(describeAction(action!)).toBe("protect main: approving reviews: 1 → 0; admins held to the rules: no → yes; every other setting stays as it is");
+    });
+
+    it("is left alone when it already holds admins to its rules", () => {
+      expect(protects(aCleanProduct({ files: withChecks(["build"]), protection: asksForAReview(true) }))).toEqual([]);
+    });
+  });
+
+  it("holds admins to the rules when the Kit config lists no checks, and still says to list them", () => {
+    const plan = planSetup(aCleanProduct({ protection: aProtectedBranch([]) }), kit);
+    const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+    expect(action?.protection.enforce_admins).toBe(true);
+    expect(action?.protection.required_status_checks).toBeNull();
+    expect(describeAction(action!)).toBe("protect main: admins held to the rules: no → yes; every other setting stays as it is");
+    expect(plan.notes).toContain("main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again.");
+  });
+
+  it("leaves protection alone when it already requires all of that and holds admins to its rules", () => {
+    const state = aCleanProduct({ files: withChecks(["build"]), protection: aProtectedBranch(["build", "lint"], { enforce_admins: true }) });
 
     expect(protects(state)).toEqual([]);
   });
@@ -608,7 +662,7 @@ describe("Branch protection", () => {
   it("leaves protection alone once its own step is applied, whatever else the branch had", () => {
     const state = aCleanProduct({
       files: withChecks(["build"]),
-      protection: aProtectedBranch([], { required_pull_request_reviews: null, enforce_admins: true, required_linear_history: true }),
+      protection: aProtectedBranch([], { required_pull_request_reviews: null, required_linear_history: true }),
     });
     const plan = planSetup(state, kit);
 
@@ -619,7 +673,7 @@ describe("Branch protection", () => {
     const config = JSON.stringify({ sandbox: { checks: ["build"] }, roles: { design: { skills: ["jrey8343/skills/event-storming"] } } });
     const pin = (repository: string) => JSON.stringify([{ repository, sha: "a".repeat(40) }]);
 
-    it("checks the config with its skills lock, so a config whose picks are pinned still has its gating checks required", () => {
+    it("checks the config with its skills lock, so a config whose picks are pinned still has the Required checks it lists required", () => {
       const state = aCleanProduct({ files: { ".fabrik/config.json": config, ".fabrik/skills.lock.json": pin("jrey8343/skills") } });
 
       expect(protects(state).map((a) => a.protection.required_status_checks?.checks)).toEqual([[{ context: "build" }]]);
@@ -632,7 +686,7 @@ describe("Branch protection", () => {
     ])("still calls the config invalid when %s", (_, lock) => {
       const plan = planSetup(aCleanProduct({ files: { ".fabrik/config.json": config, ...lock } }), kit);
 
-      expect(plan.notes.join("\n")).toContain(".fabrik/config.json is invalid, so its gating checks weren't required");
+      expect(plan.notes.join("\n")).toContain(".fabrik/config.json is invalid, so the Required checks it lists weren't added to the branch");
     });
   });
 });

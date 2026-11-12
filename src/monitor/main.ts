@@ -121,11 +121,11 @@ async function main(): Promise<void> {
     return;
   }
   const { errors, redMain } = config.monitor;
-  const gatingChecks = config.sandbox.checks;
+  const listedChecks = config.sandbox.checks;
   const sentryToken = process.env["FABRIK_SENTRY_TOKEN"] ?? "";
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
   const [gitHubFacts, sentryAsListed] = await Promise.all([
-    gatherMonitorFacts(github, repo, { appLogin, redMain, gatingChecks }),
+    gatherMonitorFacts(github, repo, { appLogin, redMain, listedChecks }),
     readSentry(errors, sentryToken),
   ]);
   if (gitHubFacts.kind === "rate-limited") {
@@ -136,7 +136,7 @@ async function main(): Promise<void> {
     monitor: config.monitor,
     sentry,
     issues: gitHubFacts.issues,
-    gatingChecks,
+    listedChecks,
     mainChecks: gitHubFacts.mainChecks,
     cap: config.caps.monitorIssues,
     // By default the Operator owns the Product repos they run Fabrik in, as the Loop has it.

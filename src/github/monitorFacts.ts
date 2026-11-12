@@ -23,8 +23,8 @@ export type MonitorGitHubFacts =
 
 /**
  * Reads the Monitor's GitHub facts: the issues, and with red main on the
- * default branch's commits and their check runs, through the gating checks
- * `sandbox.checks` lists, and who last closed the newest red-main issue.
+ * default branch's commits and their check runs, through the Required checks
+ * `sandbox.checks` lists (every check when it lists none), and who last closed the newest red-main issue.
  * `appLogin` is the Fabrik App's bot login, which names its issues and its own close.
  * When GitHub's rate limit stops the read of the issues, the Monitor can plan
  * nothing, so it's rate-limited, with a warning, rather than a failed run.
@@ -32,7 +32,7 @@ export type MonitorGitHubFacts =
 export async function gatherMonitorFacts(
   github: Pick<GitHub, "rest">,
   repo: Repo,
-  { appLogin, redMain, gatingChecks }: { readonly appLogin: string; readonly redMain: boolean; readonly gatingChecks: readonly string[] },
+  { appLogin, redMain, listedChecks }: { readonly appLogin: string; readonly redMain: boolean; readonly listedChecks: readonly string[] },
 ): Promise<MonitorGitHubFacts> {
   const [issuesRead, mainChecks] = await Promise.all([
     monitorIssues(github, repo, appLogin).then(
@@ -42,7 +42,7 @@ export async function gatherMonitorFacts(
         throw error;
       },
     ),
-    redMain ? mainChecksOf(github, repo, gatingChecks) : null,
+    redMain ? mainChecksOf(github, repo, listedChecks) : null,
   ]);
   if (issuesRead.kind === "rate-limited") {
     console.log(`::warning title=GitHub rate limit::${issuesRead.error}`);
@@ -106,13 +106,13 @@ interface RawCheckRun {
  * App hasn't been granted Checks: read, and rate-limited, with a warning,
  * when GitHub's rate limit stops the read. Every other error fails the run.
  */
-async function mainChecksOf(github: Pick<GitHub, "rest">, repo: Repo, gatingChecks: readonly string[]): Promise<MainChecksRead> {
+async function mainChecksOf(github: Pick<GitHub, "rest">, repo: Repo, listedChecks: readonly string[]): Promise<MainChecksRead> {
   try {
     // With no sha, GitHub lists the default branch's commits.
     const listed = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits?per_page=${MAIN_COMMITS}`)) as RawCommit[];
     const commits: MainCommit[] = [];
     for (const commit of listed) {
-      commits.push({ sha: commit.sha, url: commit.html_url, checkRuns: await checkRunsOf(github, repo, commit, gatingChecks) });
+      commits.push({ sha: commit.sha, url: commit.html_url, checkRuns: await checkRunsOf(github, repo, commit, listedChecks) });
     }
     return { kind: "read", commits };
   } catch (error) {
@@ -134,9 +134,9 @@ async function mainChecksOf(github: Pick<GitHub, "rest">, repo: Repo, gatingChec
  * when it lists any, else every one. Fabrik's own jobs add runs to the
  * default branch's head every hour, so asking by name keeps the read short.
  */
-async function checkRunsOf(github: Pick<GitHub, "rest">, repo: Repo, commit: RawCommit, gatingChecks: readonly string[]): Promise<CheckRun[]> {
+async function checkRunsOf(github: Pick<GitHub, "rest">, repo: Repo, commit: RawCommit, listedChecks: readonly string[]): Promise<CheckRun[]> {
   const path = `/repos/${repo.owner}/${repo.name}/commits/${commit.sha}/check-runs`;
-  const paths = gatingChecks.length === 0 ? [path] : gatingChecks.map((name) => `${path}?check_name=${encodeURIComponent(name)}`);
+  const paths = listedChecks.length === 0 ? [path] : listedChecks.map((name) => `${path}?check_name=${encodeURIComponent(name)}`);
   const runs: CheckRun[] = [];
   for (const named of paths) {
     for (const run of await allPages<RawCheckRun>(github, named, (page) => (page as { check_runs: RawCheckRun[] }).check_runs)) {

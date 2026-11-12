@@ -542,7 +542,7 @@ export async function implementContext(productDir: string, specFile: string, con
   const commands = [
     build === null ? "- Build: none configured" : `- Build: \`${build}\``,
     test === null ? "- Test: none configured" : `- Test: \`${test}\``,
-    ...(checks.length === 0 ? [] : [`- Gating checks on the PR: ${checks.map((check) => `\`${check}\``).join(", ")}`]),
+    ...(checks.length === 0 ? [] : [`- Required checks on the PR: ${checks.map((check) => `\`${check}\``).join(", ")}`]),
   ];
   parts.push("## This Product repo's Sandbox", ...commands);
   return parts;

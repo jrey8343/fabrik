@@ -14,8 +14,8 @@ export interface RedMainInput {
   readonly monitor: Pick<KitConfig["monitor"], "redMain">;
   /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
   readonly mainChecks: MainChecksRead | null;
-  /** The Kit config's `sandbox.checks`: when it lists any, the only checks that decide whether the default branch is red. */
-  readonly gatingChecks: readonly string[];
+  /** The Required checks the Kit config's `sandbox.checks` lists: when it lists any, the only checks that decide whether the default branch is red. */
+  readonly listedChecks: readonly string[];
   /** Every issue in the Product repo carrying fabrik:monitor, open or closed. */
   readonly issues: readonly MonitorIssue[];
 }
@@ -60,7 +60,7 @@ export interface CheckRun {
  * comment and only close. With no decided commit, or `monitor.red_main` off,
  * it does nothing. Its issue never counts toward the cap on error issues.
  */
-export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: RedMainInput): MonitorPlan {
+export function redMainPlan({ monitor, mainChecks, listedChecks, issues }: RedMainInput): MonitorPlan {
   const nothing = { open: [], rewrite: [], close: [], summary: [] };
   if (!monitor.redMain || mainChecks === null) return nothing;
   if (mainChecks.kind === "rate-limited") {
@@ -77,9 +77,9 @@ export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: RedMa
       ],
     };
   }
-  const decided = mainChecks.commits.flatMap((commit) => decisionOf(commit, gatingChecks) ?? []);
+  const decided = mainChecks.commits.flatMap((commit) => decisionOf(commit, listedChecks) ?? []);
   const state = decided[0];
-  if (state === undefined) return { ...nothing, summary: [undecidedNote(mainChecks.commits.length, gatingChecks)] };
+  if (state === undefined) return { ...nothing, summary: [undecidedNote(mainChecks.commits.length, listedChecks)] };
   const { commit } = state;
   const issue = newestByMarker(issues).redMain;
   if (state.kind === "green") {
@@ -109,10 +109,17 @@ export function redMainPlan({ monitor, mainChecks, gatingChecks, issues }: RedMa
   };
 }
 
-/** The quiet note that no commit within the bound is decided, naming the gating checks `sandbox.checks` lists. */
-function undecidedNote(commits: number, gatingChecks: readonly string[]): string {
-  const named = gatingChecks.length === 0 ? "" : ` (${gatingChecks.map((name) => bodyCode(name, CHECK_NAME_MAX)).join(", ")})`;
-  return `Red main is undecided: none of the default branch's ${commits} newest commits has finished its gating checks${named} with a pass or a failure.`;
+/**
+ * The quiet note that no commit within the bound is decided, naming the
+ * Required checks `sandbox.checks` lists, or saying it read every check but
+ * Fabrik's own when it lists none.
+ */
+function undecidedNote(commits: number, listedChecks: readonly string[]): string {
+  const checks =
+    listedChecks.length === 0
+      ? "its checks (every one but those of Fabrik's own jobs, as `sandbox.checks` lists none)"
+      : `the Required checks \`sandbox.checks\` lists (${listedChecks.map((name) => bodyCode(name, CHECK_NAME_MAX)).join(", ")})`;
+  return `Red main is undecided: none of the default branch's ${commits} newest commits has finished ${checks} with a pass or a failure.`;
 }
 
 /**
@@ -137,7 +144,7 @@ function decidedFirst(commit: Decided, newer: readonly Decided[]): boolean {
 }
 
 /**
- * A commit whose gating checks decided it: red, naming the ones that failed,
+ * A commit whose checks decided it: red, naming the ones that failed,
  * or green. It was decided when the last of them completed, which can be
  * after a newer commit landed, or after a close.
  */
@@ -149,14 +156,14 @@ type Decided =
 const FAILING = ["failure", "timed_out"];
 
 /**
- * How the commit's gating checks decided it, or null while they haven't: once
+ * How the commit's checks decided it, or null while they haven't: once
  * every one on it has completed, it's red if any failed or timed out, else
  * green if any passed. Cancelled, skipped, neutral, action_required and stale
  * checks decide nothing, so a commit whose checks all ended that way, or that
  * carries none of them, is undecided.
  */
-function decisionOf(commit: MainCommit, gatingChecks: readonly string[]): Decided | null {
-  const runs = newestRunOfEach(commit.checkRuns).filter((run) => gates(run.name, gatingChecks));
+function decisionOf(commit: MainCommit, listedChecks: readonly string[]): Decided | null {
+  const runs = newestRunOfEach(commit.checkRuns).filter((run) => decides(run.name, listedChecks));
   if (runs.some((run) => run.status !== "completed")) return null;
   const failed = runs.filter((run) => run.conclusion !== null && FAILING.includes(run.conclusion));
   const decidedAt = lastCompleted(runs);
@@ -178,11 +185,11 @@ const CHECK_NAME_MAX = 100;
 function redMainBodyOf(commit: MainCommit, failed: readonly CheckRun[]): string {
   return [
     monitorMarkerLine({ kind: "red-main" }),
-    "The default branch is red: the newest commit on it whose gating checks have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
+    "The default branch is red: the newest commit on it whose checks the Monitor reads have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
     "",
     ...monitorBlock(detailsOf(commit, failed)),
     "",
-    "The gating checks are `sandbox.checks` in `.fabrik/config.json`, or every check but Fabrik's own when it lists none.",
+    "The checks the Monitor reads are the Required checks `sandbox.checks` in `.fabrik/config.json` lists or, when it lists none, every check but those of Fabrik's own jobs.",
   ].join("\n");
 }
 
@@ -198,12 +205,13 @@ function detailsOf(commit: MainCommit, failed: readonly CheckRun[]): string[] {
 }
 
 /**
- * Whether a check gates the default branch: it's one `sandbox.checks` lists,
- * when it lists any, else any check but the ones Fabrik's own jobs report,
- * which run on the default branch's head for every Loop event and tick.
+ * Whether a check decides whether the default branch is red: it's a Required
+ * check `sandbox.checks` lists, when it lists any, else any check but the ones
+ * Fabrik's own jobs report, which run on the default branch's head for every
+ * Loop event and tick.
  */
-function gates(name: string, gatingChecks: readonly string[]): boolean {
-  if (gatingChecks.length > 0) return gatingChecks.includes(name);
+function decides(name: string, listedChecks: readonly string[]): boolean {
+  if (listedChecks.length > 0) return listedChecks.includes(name);
   return !CALLER_JOBS.some((job) => name === job || name.startsWith(`${job} / `));
 }
 
@@ -224,7 +232,7 @@ function newestRunOfEach(runs: readonly CheckRun[]): CheckRun[] {
 function greenNoteFor(commit: MainCommit): string {
   return [
     RED_MAIN_GREEN_MARKER,
-    `Green at [${shortSha(commit)}](${commit.url}): its gating checks passed, so the default branch is no longer red and the Monitor closes this issue as completed.`,
+    `Green at [${shortSha(commit)}](${commit.url}): the checks the Monitor reads passed (the Required checks \`sandbox.checks\` lists, or every check but those of Fabrik's own jobs when it lists none), so the default branch is no longer red and the Monitor closes this issue as completed.`,
   ].join("\n");
 }
 

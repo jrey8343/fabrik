@@ -360,8 +360,8 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
     const { said } = await setupOnce(world);
 
-    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
-    expect(world.prs[0]?.body).toContain("Merge this PR yourself once its gating checks pass.");
+    expect(said.some((line) => line.startsWith("Merge it yourself once its Required checks pass."))).toBe(true);
+    expect(world.prs[0]?.body).toContain("Merge this PR yourself once its Required checks pass.");
   });
 
   it("with the Claude token stage skipped, doesn't ask for the merge and says why", async () => {
@@ -388,7 +388,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const { code, said } = await setupOnce(world, { wizard: skipsTheClaudeToken });
 
     expect(code).toBe(0);
-    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
+    expect(said.some((line) => line.startsWith("Merge it yourself once its Required checks pass."))).toBe(true);
     expect(said).not.toContain('- the Claude token, in the "Fabrik" vault');
     expect(world.prs[0]?.body).not.toContain("Don't merge this yet.");
   });
@@ -410,13 +410,13 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       "Don't merge it yet. The Kit's first runs need these, which no wizard stage stores, so you store them yourself, as For the Operator says:",
       '- the "Claude backup" Subscription\'s token, in the "Fabrik" vault',
     ]);
-    expect(merging[2]).toMatch(/^Then merge it yourself once its gating checks pass\. /);
+    expect(merging[2]).toMatch(/^Then merge it yourself once its Required checks pass\. /);
     expect(said.join("\n")).not.toMatch(/the Claude token|walk the wizard for them/);
     const body = world.prs[0]?.body ?? "";
     expect(body).toContain(
       "Don't merge this yet. The Kit's first runs need these, which no wizard stage stores, so you store them yourself, as For the Operator says:\n\n" +
         '- the "Claude backup" Subscription\'s token, in the "Fabrik" vault\n\n' +
-        "Then merge this PR yourself once its gating checks pass.",
+        "Then merge this PR yourself once its Required checks pass.",
     );
     expect(body).not.toContain("Merge this PR yourself");
   });
@@ -432,11 +432,11 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const { code, said } = await setupOnce(world);
 
     expect(code).toBe(0);
-    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
+    expect(said.some((line) => line.startsWith("Merge it yourself once its Required checks pass."))).toBe(true);
     expect(said.some((line) => line.startsWith("Don't merge it yet."))).toBe(false);
     expect(said.some((line) => line.includes('lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name'))).toBe(true);
     const body = world.prs[0]?.body ?? "";
-    expect(body).toContain("Merge this PR yourself once its gating checks pass.");
+    expect(body).toContain("Merge this PR yourself once its Required checks pass.");
     expect(body).not.toContain("Don't merge this yet.");
   });
 
@@ -1105,6 +1105,75 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
   });
 
+  describe("holding admins to the default branch's rules", () => {
+    const HELD = "- protect main: admins held to the rules: no → yes; every other setting stays as it is";
+    const protectionPuts = (calls: { line: string; input?: string }[]) =>
+      calls.filter((call) => call.line.startsWith("gh api --method PUT repos/acme/clinic/branches/main/protection ")).map((call) => JSON.parse(call.input ?? ""));
+    /** Someone switches off "Do not allow bypassing the above settings" on github.com, or the install predates Setup owning it. */
+    const switchOffEnforcement = (world: World) => void ((world.protection as Record<string, unknown>)["enforce_admins"] = { enabled: false });
+
+    it("on a fresh repo, sends it on and lists the step as the plan worded it in the setup PR and the closing lines", async () => {
+      const world = aWorld();
+
+      const { said, calls } = await setupOnce(world);
+
+      const line = "- protect main: a pull request: not required → required; admins held to the rules: no → yes; every other setting stays as it is";
+      expect(protectionPuts(calls).map((put) => put.enforce_admins)).toEqual([true]);
+      expect(said).toContain("What setup did:");
+      expect(said.slice(said.indexOf("What setup did:"))).toContain(line);
+      expect(world.prs[0]!.body.split("\n")).toContain(line);
+    });
+
+    it("on an install made before Setup held admins to the rules, applies only that, pushes nothing, opens no PR and goes back to the default branch", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      switchOffEnforcement(world);
+      const before = structuredClone(world.protection);
+
+      const { code, said, complaints, log, calls } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said).toContain(HELD);
+      expect(world.protection).toEqual({ ...(before as object), enforce_admins: { enabled: true } });
+      expect(log.filter((line) => /^git (commit|push)|^gh pr (create|edit)/.test(line))).toEqual([]);
+      expect(world.prs).toHaveLength(1);
+      expect(said).toContain("Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.");
+      expect(git("branch", "--show-current").trim()).toBe("main");
+      expect(protectionPuts(calls)).toHaveLength(1);
+      expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+    });
+
+    it("puts it back when it is switched off between two runs", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+      switchOffEnforcement(world);
+
+      const { said, calls } = await setupOnce(world);
+
+      expect(said).toContain(HELD);
+      expect(protectionPuts(calls).map((put) => put.enforce_admins)).toEqual([true]);
+      expect((world.protection as Record<string, unknown>)["enforce_admins"]).toEqual({ enabled: true });
+    });
+
+    it("with --plan, shows the change and sends nothing", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      switchOffEnforcement(world);
+
+      const { code, said, calls } = await setupOnce(world, { args: [...FLAGS, "--plan"] });
+
+      expect(code).toBe(0);
+      expect(said).toContain(HELD);
+      expect(protectionPuts(calls)).toEqual([]);
+      expect((world.protection as Record<string, unknown>)["enforce_admins"]).toEqual({ enabled: false });
+    });
+  });
+
   it("after a squash merge, a repair run from the default branch gets past the leftover setup branch", async () => {
     const world = aWorld();
     await setupOnce(world);
@@ -1362,7 +1431,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(complaints).toEqual([]);
     expect(code).toBe(0);
     expect(said).toContain(
-      "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main, which here isn't the same as on origin: pull or push so they match, then run setup again.",
+      "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main, which here isn't the same as on origin: pull, or take the commits made here to origin through a pull request, then run setup again.",
     );
     expect(git("branch", "--show-current").trim()).toBe("main");
     expect(git("log", "-1", "--format=%s").trim()).toBe("Notes, not pushed");

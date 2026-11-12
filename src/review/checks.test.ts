@@ -40,13 +40,13 @@ describe("An agent PR's required checks", () => {
     expect(requiredChecksOutcome([check("e2e", "skipping"), check("e2e", "fail")], [])).toEqual({ kind: "red", failed: ["e2e"], skipped: [] });
   });
 
-  it("are only the Kit config's gating checks when it lists some", () => {
+  it("are only the Required checks the Kit config lists, when it lists some", () => {
     const checks = [check("build", "pass"), check("lint", "fail")];
 
     expect(requiredChecksOutcome(checks, ["build"])).toEqual({ kind: "green" });
   });
 
-  it("wait for a gating check that hasn't reported yet, naming it apart from the ones still running", () => {
+  it("wait for a Required check the Kit config lists that hasn't reported yet, naming it apart from the ones still running", () => {
     expect(requiredChecksOutcome([check("build", "pending")], ["build", "e2e"])).toEqual({
       kind: "pending",
       unreported: ["e2e"],
