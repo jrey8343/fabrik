@@ -66,6 +66,10 @@
 //                            and reply (the Operator's reply that started the turn which asked for it, or null);
 //                            else empty. The only output that holds agent text, the brief, so a job reads it
 //                            through `env:`, never in a `run:` script
+//   kit-said                 what this job routed, held and declined included, as one line of JSON
+//                            (src/kit/kitSaid.ts, #616): the route, the agent run's role, issue, pull request,
+//                            kind, Retry number and model, the runs held and a replay's issue and Ticket. It
+//                            holds no text a person or an agent wrote. The job's last step takes it for its name
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
 // Env: GH_TOKEN, a read-only token for gathering the snapshot.
@@ -85,6 +89,7 @@ import { callerChangeErrors } from "./callerPermissions.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import type { KitConfig } from "./config.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
+import { kitSaidOf, routeOf } from "./kitSaid.ts";
 import { readCandidate } from "./overlay.ts";
 import { rotationIsOn } from "../loop/subscriptions.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
@@ -102,13 +107,6 @@ function pullRequestHeadOf(eventName: string, payload: Record<string, unknown>):
   if (action !== "opened" && action !== "synchronize" && action !== "reopened") return null;
   const pullRequest = payload["pull_request"] as { head?: { sha?: unknown } } | undefined;
   return typeof pullRequest?.head?.sha === "string" ? pullRequest.head.sha : null;
-}
-
-function routeOf(plan: Plan): string {
-  const run = agentRunIn(plan);
-  if (run !== null) return run.role;
-  if (replayRunIn(plan) !== null) return "replay";
-  return plan.kind === "nothing" ? "none" : "push";
 }
 
 /** This Kit checkout, which holds the Base skills' lock and the Kit's own skills. */
@@ -211,9 +209,11 @@ export function kitJobOutputs(
   // A Review's subject is the PR itself; a retry is an Implement run on the Ticket that fixes its PR.
   const pullRequest = run?.role === "review" ? run.issue : (run?.pullRequest ?? null);
   const builds = run?.role === "implement" ? run.issue : ticket;
-  if (replay !== null) return { ...kitJobOutputs(null, null, config), ...replayOutputs(replay) };
+  // The closing step's line: what this job routed, held and declined included, as one line of JSON (#616).
+  const said = JSON.stringify(kitSaidOf(plan, ticket));
+  if (replay !== null) return { ...kitJobOutputs(null, null, config), ...replayOutputs(replay), "kit-said": said };
   return {
-    route: plan === null ? "none" : routeOf(plan),
+    route: routeOf(plan),
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
     "design-timeout-minutes": String(config.roles.design.timeoutMinutes),
     "implement-timeout-minutes": String(config.roles.implement.timeoutMinutes),
@@ -270,6 +270,7 @@ export function kitJobOutputs(
     "base-sha": "",
     "replay-arms": "",
     "replay-kit-sha-unavailable": "",
+    "kit-said": said,
   };
 }
 
