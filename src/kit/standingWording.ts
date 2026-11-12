@@ -3,7 +3,7 @@
 // Standing and a clock, so "40 minutes ago" is true then and the Standing
 // itself holds no relative time. The wording never quotes a repo's text.
 import type { HandBack } from "../loop/handBacks.ts";
-import { runNamed } from "../loop/heldRun.ts";
+import { RUN_NAMES, runNamed } from "../loop/heldRun.ts";
 import { DESIGN_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
@@ -82,6 +82,7 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       return { pill: "Waiting on checks", sentence, remedy: null };
     }
     case "held": {
+      if ("failed" in standing.detail) return { pill: "Held", sentence: `The next ${RUN_NAMES[standing.detail.role]} is held until next week: two runs failed.`, remedy: null };
       const { carrier, role } = standing.detail;
       return { pill: "Held", sentence: `Its ${runNamed(role)} is held${carrier === null ? "" : ` on #${carrier}`} until a Subscription is free.`, remedy: null };
     }

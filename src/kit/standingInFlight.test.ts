@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { aDesignQueueIssue, aResearchDecision, aTicket } from "../__fixtures__/snapshots.ts";
+import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
 import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import type { HeldRun } from "../loop/heldRun.ts";
 import { conflictAttemptMarker } from "../loop/markers.ts";
@@ -253,6 +253,63 @@ describe("work that goes on without the Operator", () => {
           null,
         );
         expect(standings).toEqual([]);
+      });
+    });
+
+    // Two failed runs in a week hold the next Audit or Retro back until the weekly gate's next week (#443).
+    describe("a given-up Audit or Retro week", () => {
+      const APP = "fabrik-app[bot]";
+      const run = (number: number, name: "Audit" | "Retro", createdAt: string, body: string, author = APP) => ({ number, title: `${name}: week of 2026-11-02`, author, createdAt, body });
+      const failedAudit = (number: number, createdAt: string, author = APP) => run(number, "Audit", createdAt, auditBody(AUDITED_SHA, "failed"), author);
+      const failedRetro = (number: number, createdAt: string) => run(number, "Retro", createdAt, retroBody(RETRO_WINDOW_END, "failed"));
+      const givenUpIn = (github: Partial<GitHubFacts>, now = NOW) => standingsOf(standingFactsOf({ github: factsOf(github) }), now);
+
+      it("gives the week one Standing, held, the Kit's, naming its last failed Audit, though closed, from that failure until the gate's next week begins", () => {
+        const standings = givenUpIn({ audits: [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z"), run(90, "Audit", "2026-11-01T00:05:00Z", auditBody(AUDITED_SHA))] });
+        expect(standings).toEqual([
+          {
+            schema: 1,
+            repo: "owner/product",
+            issue: 96,
+            pullRequest: null,
+            work: "audit",
+            place: null,
+            name: "held",
+            move: "kit",
+            yours: false,
+            stopsWork: false,
+            since: "2026-11-08T02:05:00Z",
+            stuckAt: null,
+            awaits: null,
+            subscription: null,
+            detail: { carrier: null, role: "audit", failed: [95, 96], until: "2026-11-09T00:00:00.000Z" },
+          },
+        ]);
+      });
+
+      it("gives a Retro week the same", () => {
+        const standings = givenUpIn({ retros: [failedRetro(121, "2026-11-07T01:05:00Z"), failedRetro(120, "2026-11-07T00:05:00Z")] });
+        expect(standings.map(({ issue, work, name, detail }) => ({ issue, work, name, detail }))).toEqual([
+          { issue: 121, work: "retro", name: "held", detail: { carrier: null, role: "retro", failed: [120, 121], until: "2026-11-09T00:00:00.000Z" } },
+        ]);
+      });
+
+      it("gives none once the gate's next week has begun", () => {
+        expect(givenUpIn({ audits: [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z")] }, "2026-11-09T00:00:00Z")).toEqual([]);
+      });
+
+      it.each([
+        ["only once", [failedAudit(96, "2026-11-08T02:05:00Z"), run(95, "Audit", "2026-11-03T00:05:00Z", auditBody(AUDITED_SHA))]],
+        ["twice, but in two weeks", [failedAudit(96, "2026-11-02T00:05:00Z"), failedAudit(95, "2026-11-01T12:05:00Z")]],
+        ["twice, one of them a person's issue", [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z", "someone")]],
+      ])("gives none for an Audit that failed %s", (_, audits) => {
+        expect(givenUpIn({ audits })).toEqual([]);
+      });
+
+      it("says the next run is held until next week", () => {
+        const [standing] = givenUpIn({ audits: [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z")] });
+        if (standing === undefined) throw new Error("no Standing");
+        expect(wordStanding(standing, NOW, "Australia/Sydney")).toEqual({ pill: "Held", sentence: "The next Audit is held until next week: two runs failed.", remedy: null });
       });
     });
 

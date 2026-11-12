@@ -19,19 +19,25 @@ import {
   RESEARCH_LABEL,
   REVIEW_LABEL,
 } from "../loop/labels.ts";
+import { auditMarksIn, retroMarksIn } from "../loop/markers.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { DAY, FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import { type AwaitedRole, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { addedAndStillOn, answerOf, lastAdded } from "./standingOperator.ts";
-import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
+import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts, WeeklyRunIssueFacts } from "./weeklySummary.ts";
 
 /** What a `running` Standing's `detail.run` names: the kind of run, as far as the facts tell it. */
 export type RunningRun = "implement" | "retry" | "request-changes" | "conflict-only" | "review" | "triage" | "research" | "design" | "prototype";
 
-/** Every Standing of the repo's work that goes on without the Operator, or that nothing moves while its blockers are open. A Spec has none. */
-export function inFlightStandingsOf(facts: StandingFacts, _now: string): Standing[] {
+/**
+ * Every Standing of the repo's work that goes on without the Operator, or that
+ * nothing moves while its blockers are open, an Audit or Retro week given up
+ * among them. A Spec has none.
+ */
+export function inFlightStandingsOf(facts: StandingFacts, now: string): Standing[] {
   const runs = facts.kit === null || facts.kit.runsInFlight === "unread" ? null : facts.kit.runsInFlight;
   const held = heldStandingsOf(facts);
   const heldWork = new Set(held.map(({ issue, pullRequest, detail }) => (detail.role === "review" ? `pr#${pullRequest}` : `#${issue}`)));
@@ -39,6 +45,7 @@ export function inFlightStandingsOf(facts: StandingFacts, _now: string): Standin
   return [
     ...(runs === null ? [] : [...runningStandingsOf(facts, runs, heldWork), ...waitingOnChecksStandingsOf(facts, runs)]),
     ...held,
+    ...givenUpStandingsOf(facts, now),
     ...slotStandingsOf(facts),
     ...blockedStandingsOf(facts),
   ].filter(({ issue }) => issue === null || !specs.has(issue));
@@ -353,6 +360,55 @@ function heldStandingsOf({ github }: StandingFacts): StandingNamed<"held">[] {
       name: "held",
       detail: { carrier: newest.on, role: run.role },
     };
+  });
+}
+
+/**
+ * An Audit or Retro week the weekly gate gave up on: enough of the Fabrik
+ * App's runs of it failed in one gate week, UTC Monday to Monday, that the next
+ * waits for the next week, counted by the gate's own rule (failedInWeek).
+ */
+export interface GivenUpWeek {
+  readonly role: "audit" | "retro";
+  /** When the gate's next week begins, Monday 00:00 UTC, ISO 8601: the next run is held until then. */
+  readonly until: string;
+  /** The week's failed runs that gave it up, oldest first: the last of them gave it up. */
+  readonly failed: readonly WeeklyRunIssueFacts[];
+}
+
+/**
+ * Every Audit and Retro week the weekly gate gave up on, among the repo's
+ * newest Audits and Retros, whenever it was: the one count the Standing and
+ * the Weekly summary both read, so the two can't disagree.
+ */
+export function givenUpWeeksOf({ audits, retros }: Pick<GitHubFacts, "audits" | "retros">, appLogin: string): GivenUpWeek[] {
+  const weeksOf = (role: GivenUpWeek["role"], issues: readonly WeeklyRunIssueFacts[], failed: (body: string) => boolean): GivenUpWeek[] => {
+    const runs = issues.filter(({ author }) => author === appLogin).map((issue) => ({ issue, number: issue.number, createdAt: issue.createdAt, failed: failed(issue.body) }));
+    const weeks = new Set(runs.map(({ createdAt }) => weekStart(createdAt)));
+    return [...weeks].flatMap((start) => {
+      const givenUp = failedInWeek(runs, start).slice(0, FAILED_RUNS_A_WEEK);
+      return givenUp.length < FAILED_RUNS_A_WEEK ? [] : [{ role, until: new Date(start + 7 * DAY).toISOString(), failed: givenUp.map(({ issue }) => issue) }];
+    });
+  };
+  return [...weeksOf("audit", audits, (body) => auditMarksIn(body).failed), ...weeksOf("retro", retros, (body) => retroMarksIn(body).failed)];
+}
+
+/**
+ * Each Audit or Retro week given up on (givenUpWeeksOf), held, the Kit's, from
+ * the last of its failed runs until the gate's next week begins, when the Kit
+ * opens the next by itself. It names that last run's issue, though closed.
+ */
+function givenUpStandingsOf({ github, appLogin }: StandingFacts, now: string): StandingNamed<"held">[] {
+  return givenUpWeeksOf(github, appLogin).flatMap(({ role, until, failed }): StandingNamed<"held">[] => {
+    const last = failed.at(-1);
+    if (last === undefined || Date.parse(now) < Date.parse(last.createdAt) || Date.parse(now) >= Date.parse(until)) return [];
+    return [
+      {
+        ...inFlight(github.repo, last.number, null, last.createdAt, role, null, null),
+        name: "held",
+        detail: { carrier: null, role, failed: failed.map(({ number }) => number), until },
+      },
+    ];
   });
 }
 

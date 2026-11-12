@@ -99,7 +99,14 @@ type WaitingOnKitDetail = { readonly silence: WaitingOnKitSilence; readonly roun
 export interface StandingDetails {
   readonly running: { readonly run: string; readonly retry: number | null };
   readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean };
-  readonly held: { readonly carrier: number | null; readonly role: AgentRole };
+  /**
+   * A Held run's role and the Carrier its newest held marker is on; or, for an
+   * Audit or Retro week given up, its failed runs, oldest first, and when the
+   * weekly gate's next week begins, ISO 8601.
+   */
+  readonly held:
+    | { readonly carrier: number | null; readonly role: AgentRole }
+    | { readonly carrier: null; readonly role: "audit" | "retro"; readonly failed: readonly number[]; readonly until: string };
   readonly "waiting-for-slot": { readonly slot: "max-in-flight" | "design-session"; readonly maxInFlight: number | null };
   readonly "waiting-for-reset": { readonly resetsAt: string | null };
   readonly "not-started": NotStartedDetail;
