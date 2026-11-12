@@ -237,6 +237,18 @@ describe("the Standing rule", () => {
       expect(standings).toEqual([expect.objectContaining({ issue: 7, pullRequest: 50, work: "ready-for-human", name: "yours-to-do" })]);
     });
 
+    it("keeps two open agent PRs that close the same Ticket apart, the Ticket's own Standing going with the lower", () => {
+      const pass = aVerdictComment("pass", HEAD, "2026-11-05T20:00:00Z");
+      const standings = standingsIn({
+        openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z")] })],
+        openPullRequests: [anOpenPullRequest({ number: 51, ticket: 7, draft: false, comments: [pass] }), anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [pass] })],
+      });
+      expect(standings.map(({ issue, pullRequest, name }) => ({ issue, pullRequest, name }))).toEqual([
+        { issue: 7, pullRequest: 51, name: "yours-to-merge" },
+        { issue: 7, pullRequest: 50, name: "yours-to-do" },
+      ]);
+    });
+
     it("is one Standing for an agent PR that closes no Ticket, keyed by its number", () => {
       const pass = aVerdictComment("pass", HEAD, "2026-11-05T20:00:00Z");
       const standings = standingsIn({
