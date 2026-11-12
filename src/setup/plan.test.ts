@@ -480,7 +480,7 @@ describe("Branch protection", () => {
     ".fabrik/config.json": JSON.stringify({ sandbox: { checks } }),
   });
 
-  it("requires a PR and the Kit config's gating checks on the default branch, with no bypass and no approving review", () => {
+  it("requires a PR and the Required checks the Kit config lists on the default branch, with no bypass and no approving review", () => {
     const state = aCleanProduct({ files: withChecks(["build", "test"]) });
 
     expect(protects(state)).toEqual([
@@ -593,10 +593,11 @@ describe("Branch protection", () => {
     expect(describeAction(action!)).toBe("protect main: bypass allowances: app:fabrik, user:octocat → none; every other setting stays as it is");
   });
 
-  it("tells the Operator when there's no gating check to require yet", () => {
+  it("tells the Operator when the branch has no Required check yet", () => {
     const plan = planSetup(aCleanProduct(), kit);
 
     expect(plan.notes.join("\n")).toContain("sandbox.checks");
+    expect(plan.notes).toContain("main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again.");
   });
 
   it("leaves protection alone when it already requires all of that", () => {
@@ -619,7 +620,7 @@ describe("Branch protection", () => {
     const config = JSON.stringify({ sandbox: { checks: ["build"] }, roles: { design: { skills: ["jrey8343/skills/event-storming"] } } });
     const pin = (repository: string) => JSON.stringify([{ repository, sha: "a".repeat(40) }]);
 
-    it("checks the config with its skills lock, so a config whose picks are pinned still has its gating checks required", () => {
+    it("checks the config with its skills lock, so a config whose picks are pinned still has the Required checks it lists required", () => {
       const state = aCleanProduct({ files: { ".fabrik/config.json": config, ".fabrik/skills.lock.json": pin("jrey8343/skills") } });
 
       expect(protects(state).map((a) => a.protection.required_status_checks?.checks)).toEqual([[{ context: "build" }]]);
@@ -632,7 +633,7 @@ describe("Branch protection", () => {
     ])("still calls the config invalid when %s", (_, lock) => {
       const plan = planSetup(aCleanProduct({ files: { ".fabrik/config.json": config, ...lock } }), kit);
 
-      expect(plan.notes.join("\n")).toContain(".fabrik/config.json is invalid, so its gating checks weren't required");
+      expect(plan.notes.join("\n")).toContain(".fabrik/config.json is invalid, so the Required checks it lists weren't added to the branch");
     });
   });
 });

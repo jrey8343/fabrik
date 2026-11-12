@@ -360,8 +360,8 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
     const { said } = await setupOnce(world);
 
-    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
-    expect(world.prs[0]?.body).toContain("Merge this PR yourself once its gating checks pass.");
+    expect(said.some((line) => line.startsWith("Merge it yourself once its Required checks pass."))).toBe(true);
+    expect(world.prs[0]?.body).toContain("Merge this PR yourself once its Required checks pass.");
   });
 
   it("with the Claude token stage skipped, doesn't ask for the merge and says why", async () => {
@@ -388,7 +388,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const { code, said } = await setupOnce(world, { wizard: skipsTheClaudeToken });
 
     expect(code).toBe(0);
-    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
+    expect(said.some((line) => line.startsWith("Merge it yourself once its Required checks pass."))).toBe(true);
     expect(said).not.toContain('- the Claude token, in the "Fabrik" vault');
     expect(world.prs[0]?.body).not.toContain("Don't merge this yet.");
   });
@@ -410,13 +410,13 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       "Don't merge it yet. The Kit's first runs need these, which no wizard stage stores, so you store them yourself, as For the Operator says:",
       '- the "Claude backup" Subscription\'s token, in the "Fabrik" vault',
     ]);
-    expect(merging[2]).toMatch(/^Then merge it yourself once its gating checks pass\. /);
+    expect(merging[2]).toMatch(/^Then merge it yourself once its Required checks pass\. /);
     expect(said.join("\n")).not.toMatch(/the Claude token|walk the wizard for them/);
     const body = world.prs[0]?.body ?? "";
     expect(body).toContain(
       "Don't merge this yet. The Kit's first runs need these, which no wizard stage stores, so you store them yourself, as For the Operator says:\n\n" +
         '- the "Claude backup" Subscription\'s token, in the "Fabrik" vault\n\n' +
-        "Then merge this PR yourself once its gating checks pass.",
+        "Then merge this PR yourself once its Required checks pass.",
     );
     expect(body).not.toContain("Merge this PR yourself");
   });
@@ -432,11 +432,11 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const { code, said } = await setupOnce(world);
 
     expect(code).toBe(0);
-    expect(said.some((line) => line.startsWith("Merge it yourself once its gating checks pass."))).toBe(true);
+    expect(said.some((line) => line.startsWith("Merge it yourself once its Required checks pass."))).toBe(true);
     expect(said.some((line) => line.startsWith("Don't merge it yet."))).toBe(false);
     expect(said.some((line) => line.includes('lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name'))).toBe(true);
     const body = world.prs[0]?.body ?? "";
-    expect(body).toContain("Merge this PR yourself once its gating checks pass.");
+    expect(body).toContain("Merge this PR yourself once its Required checks pass.");
     expect(body).not.toContain("Don't merge this yet.");
   });
 

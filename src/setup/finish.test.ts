@@ -7,7 +7,7 @@ import type { RunSummary } from "./oneRun.ts";
 
 const SUMMARY: RunSummary = {
   done: ["write .github/workflows/fabrik.yml (the caller workflow)", "create the label needs-triage"],
-  notes: ["main requires no gating checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again."],
+  notes: ["main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again."],
   blockers: [],
 };
 const BLOCKED: RunSummary = { ...SUMMARY, blockers: ['the Claude token, in the "Fabrik" vault'] };
@@ -21,7 +21,7 @@ describe("The setup PR's body", () => {
 
     expect(body).toContain("- write .github/workflows/fabrik.yml (the caller workflow)\n- create the label needs-triage");
     expect(body).toContain(`- ${SUMMARY.notes[0]}`);
-    expect(body).toContain("Merge this PR yourself once its gating checks pass.");
+    expect(body).toContain("Merge this PR yourself once its Required checks pass.");
   });
 
   it("with the Claude token skipped, says not to merge yet, why, and how to finish", () => {
@@ -93,7 +93,7 @@ describe("The closing lines", () => {
   it("ask for the merge once nothing holds it back", () => {
     const lines = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: SUMMARY });
 
-    expect(lines.join("\n")).toMatch(/^Merge it yourself once its gating checks pass\./m);
+    expect(lines.join("\n")).toMatch(/^Merge it yourself once its Required checks pass\./m);
   });
 
   it("with the Claude token skipped, don't ask for the merge, and say which and that the Kit's first runs need it", () => {
