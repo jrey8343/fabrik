@@ -7,8 +7,11 @@
 // line comments, and its open issues for blockers' labels; these ask for
 // neither. Beyond the Weekly summary's, they ask for each comment's id and the
 // body of each pull request, open or merged, for its evidence marker (#639),
-// and for GitHub's record of an edit to each of a pull request's comments (#655).
-import { ACTOR, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
+// for GitHub's record of an edit to each of a pull request's comments (#655),
+// and for why each issue cross-referenced to a pull request is in its state,
+// with one query more, by number, for the comments of those closed as not
+// planned (#664).
+import { ACTOR, COMMENTS, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
 
 /** An issue's last 100 comments, as the Weekly summary reads them, with each one's id: a Prototype's round is known by its comment. */
 export const COMMENTS_WITH_IDS = `comments(last: 100) { nodes { databaseId url body createdAt author ${ACTOR} } }`;
@@ -61,6 +64,29 @@ const CROSS_REFERENCES = `
     }
   }
 `;
+
+/**
+ * These issues by number, each with its latest hundred comments as the
+ * Weekly summary reads an issue's, under an alias of its own, `issue` and
+ * its number: one query however many they are. Made only for the issues of
+ * the repo, closed as not planned, that GitHub cross-references to an open
+ * agent pull request, where a Roll-in's closing comment is (#664): a repo
+ * with none makes no such query.
+ */
+export function closedIssueCommentsQuery(numbers: readonly number[]): string {
+  return `
+  query ($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      ${numbers.map((number) => `issue${number}: issue(number: ${number}) { number ${COMMENTS} }`).join("\n      ")}
+    }
+  }
+`;
+}
+
+/** What closedIssueCommentsQuery reads: each issue by its alias, null for a number GitHub has no issue of. */
+export interface ClosedIssueCommentsQueryResult {
+  repository: Record<string, { number: number; comments: { nodes: { url: string; body: string; createdAt: string; author: { login: string; __typename: string } | null }[] } } | null>;
+}
 
 /** Every open pull request, agent and Plain, as the Weekly summary reads them, with each one's body, cross-references and whether the issues it closes are open. */
 export const OPEN_PULL_REQUESTS_QUERY = `

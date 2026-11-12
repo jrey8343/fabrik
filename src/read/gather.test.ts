@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient, type Repo } from "../github/client.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
-import { aDigestComment } from "./builders.ts";
+import { aDigestComment, aRollInComment } from "./builders.ts";
 import { type Facts, gatherRepo } from "./gather.ts";
+import { closedIssueCommentsQuery } from "./homeQueries.ts";
 import { threeDeepConnectionsIn } from "./queryShape.ts";
 import { rowsOf } from "./rows.ts";
 
@@ -72,6 +73,12 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       if (query.includes("labels: $labels")) return answer({ repository: { owner: { login: "jrey8343" }, issues: { nodes: [] } } });
       if (query.includes("issues(labels: [$label], states: [OPEN, CLOSED]")) return answer({ repository: { defaultBranchRef: null, issues: { nodes: labelled(variables["label"]) } } });
       if (query.includes("issues(states: OPEN")) return answer({ repository: { issues: page(asked(issues)) } });
+      // Issues by number, each under an alias of its own: what the repo holds of it, or null for one it has none of.
+      const byNumber = [...query.matchAll(/(\w+): issue\(number: (\d+)\)/g)];
+      if (byNumber.length > 0) {
+        const held = ([, alias = "", number]: RegExpMatchArray) => [alias, issues.find((issue) => issue["number"] === Number(number)) ?? null];
+        return answer({ repository: Object.fromEntries(byNumber.map(held)) });
+      }
       throw new Error(`Unexpected query: ${query}`);
     },
   };
@@ -166,12 +173,21 @@ describe("a gather shaped for Home", () => {
   });
 
   describe("what it asks GitHub", () => {
-    /** Every query a gather of a Product repo with a valid Kit config makes, with something on each page. */
+    /**
+     * Every query a gather of a Product repo with a valid Kit config makes,
+     * with something on each page, and an issue closed as not planned that
+     * is cross-referenced to its open agent pull request, so the query for
+     * such issues' comments is among them.
+     */
     async function everyQuery(): Promise<string[]> {
       const { client, calls } = repoWith({
         files: { [CALLER_PATH]: CALLER },
-        issues: [aRawIssue({ number: 7, labels: { nodes: [{ name: "ready-for-agent" }] } }), aRawIssue({ number: 8, labels: { nodes: [{ name: "needs-design" }] } })],
-        openPullRequests: [aRawOpenPullRequest()],
+        issues: [
+          aRawIssue({ number: 7, labels: { nodes: [{ name: "ready-for-agent" }] } }),
+          aRawIssue({ number: 8, labels: { nodes: [{ name: "needs-design" }] } }),
+          aRawIssue({ number: 30, state: "CLOSED" }),
+        ],
+        openPullRequests: [aRawOpenPullRequest({ crossReferences: { nodes: [aRawCrossReference(30, "CLOSED", "NOT_PLANNED")] } })],
         mergedPullRequests: [aRawMergedPullRequest()],
       });
       const read = await gatherRepo(client, "jrey8343/shop", NOW);
@@ -206,6 +222,19 @@ describe("a gather shaped for Home", () => {
 
     it("asks for no connection inside a connection inside a connection, the shape GitHub charges for", async () => {
       for (const query of await everyQuery()) expect(threeDeepConnectionsIn(query)).toEqual([]);
+    });
+
+    it("asks for the comments of an issue closed as not planned by its number, a connection inside no other, among the queries held to that shape (#664)", async () => {
+      const byNumber = (await everyQuery()).filter((query) => query.includes("issue(number:"));
+
+      expect(byNumber).toEqual([closedIssueCommentsQuery([30])]);
+      expect(byNumber[0]).toMatch(/issue30: issue\(number: 30\) \{ number comments\(last: 100\) \{ nodes \{ url body createdAt author \{ login __typename \} \} \} \}/);
+    });
+
+    it("asks why each issue cross-referenced to an open pull request is in its state, with the cross-reference", async () => {
+      expect((await everyQuery()).filter((query) => query.includes("pullRequests(states: OPEN, first: 25"))).toEqual([
+        expect.stringMatching(/\.\.\. on Issue \{ number title state stateReason repository \{ nameWithOwner \} \}/),
+      ]);
     });
 
     it("asks the store, known by the Kit's own constant for it, nothing it asks a Product repo, and reads it as the store", async () => {
@@ -306,6 +335,112 @@ describe("a gather shaped for Home", () => {
       ]);
       expect(facts.github.openPullRequests.map(({ number }) => number)).toEqual([50]);
       expect(facts.github.plainPullRequests.map(({ number }) => number)).toEqual([70]);
+    });
+
+    describe("the comments of each issue closed as not planned that GitHub cross-references to an open agent pull request (#664)", () => {
+      const closed = (number: number, comments: Record<string, unknown>[]) => aRawIssue({ number, state: "CLOSED", comments: { nodes: comments } });
+      const said = (issue: number, id: number, body: string, at: string, author: Record<string, unknown> | null = APP) => ({
+        url: `https://github.com/jrey8343/shop/issues/${issue}#issuecomment-${id}`,
+        body,
+        createdAt: at,
+        author,
+      });
+      /** The repo's one query for issues by number, among those a gather made. */
+      const byNumber = (queries: readonly string[]) => queries.filter((query) => /issue\(number: \d+\)/.test(query));
+
+      it("are held with who wrote each, whether a bot did, its time and its address, oldest first", async () => {
+        const facts = await factsOf({
+          issues: [closed(30, [said(30, 1, "Could this go on the open PR?", "2026-11-09T09:00:00Z", OPERATOR), said(30, 2, aRollInComment(50, "2026-11-09T10:00:00Z").body, "2026-11-09T10:00:00Z")])],
+          openPullRequests: [aRawOpenPullRequest({ crossReferences: { nodes: [aRawCrossReference(30, "CLOSED", "NOT_PLANNED")] } })],
+        });
+
+        expect(facts.closedIssueComments).toEqual([
+          {
+            issue: 30,
+            comments: [
+              { url: "https://github.com/jrey8343/shop/issues/30#issuecomment-1", author: "jrey8343", byBot: false, body: "Could this go on the open PR?", at: "2026-11-09T09:00:00Z" },
+              { url: "https://github.com/jrey8343/shop/issues/30#issuecomment-2", author: "fabrik-app[bot]", byBot: true, body: aRollInComment(50, "2026-11-09T10:00:00Z").body, at: "2026-11-09T10:00:00Z" },
+            ],
+          },
+        ]);
+      });
+
+      it("are asked for in exactly one more query, by number, however many such issues and pull requests there are", async () => {
+        const { client, calls } = repoWith({
+          files: { [CALLER_PATH]: CALLER },
+          issues: [closed(30, []), closed(33, []), closed(34, [])],
+          openPullRequests: [
+            aRawOpenPullRequest({ crossReferences: { nodes: [aRawCrossReference(33, "CLOSED", "NOT_PLANNED"), aRawCrossReference(30, "CLOSED", "NOT_PLANNED"), aRawCrossReference(33, "CLOSED", "NOT_PLANNED")] } }),
+            aRawOpenPullRequest({ number: 51, headRefName: "fabrik/ticket-8", crossReferences: { nodes: [aRawCrossReference(34, "CLOSED", "NOT_PLANNED"), aRawCrossReference(30, "CLOSED", "NOT_PLANNED")] } }),
+          ],
+        });
+
+        const read = await gatherRepo(client, "jrey8343/shop", NOW);
+
+        expect(byNumber(calls.queries)).toHaveLength(1);
+        expect([...(byNumber(calls.queries)[0] ?? "").matchAll(/issue\(number: (\d+)\)/g)].map(([, number]) => Number(number))).toEqual([30, 33, 34]);
+        expect(read.product && read.facts?.closedIssueComments.map(({ issue }) => issue)).toEqual([30, 33, 34]);
+      });
+
+      it("are asked for in no query when no open agent pull request has such a cross-reference: an open issue's, one closed another way, another repo's and a Plain pull request's make none", async () => {
+        const { client: without, calls: asked } = repoWith({ files: { [CALLER_PATH]: CALLER }, issues: [aRawIssue({ number: 7 })], openPullRequests: [aRawOpenPullRequest()] });
+        const { client, calls } = repoWith({
+          files: { [CALLER_PATH]: CALLER },
+          issues: [aRawIssue({ number: 7 }), closed(32, []), closed(34, [])],
+          openPullRequests: [
+            aRawOpenPullRequest({
+              crossReferences: {
+                nodes: [
+                  aRawCrossReference(31, "OPEN", "REOPENED"),
+                  aRawCrossReference(32, "CLOSED", "COMPLETED"),
+                  aRawCrossReference(33, "CLOSED", "NOT_PLANNED", "jrey8343/blog"),
+                  aRawCrossReference(35, "CLOSED", "DUPLICATE"),
+                  aRawCrossReference(36, "CLOSED", null),
+                ],
+              },
+            }),
+            aRawOpenPullRequest({ number: 70, headRefName: "fix-typo", author: OPERATOR, crossReferences: { nodes: [aRawCrossReference(34, "CLOSED", "NOT_PLANNED")] } }),
+          ],
+        });
+
+        const read = await gatherRepo(client, "jrey8343/shop", NOW);
+        await gatherRepo(without, "jrey8343/shop", NOW);
+
+        expect(read.product && read.facts?.closedIssueComments).toEqual([]);
+        expect(byNumber(calls.queries)).toEqual([]);
+        expect(calls.queries).toHaveLength(asked.queries.length);
+      });
+
+      it("find an issue whatever the case GitHub gives the repo's name in, and hold none for an issue GitHub no longer has", async () => {
+        const facts = await factsOf({
+          issues: [closed(30, [])],
+          openPullRequests: [aRawOpenPullRequest({ crossReferences: { nodes: [aRawCrossReference(30, "CLOSED", "NOT_PLANNED", "Jrey8343/Shop"), aRawCrossReference(39, "CLOSED", "NOT_PLANNED")] } })],
+        });
+
+        expect(facts.closedIssueComments).toEqual([{ issue: 30, comments: [] }]);
+      });
+
+      it("give the row of the pull request an owed Roll-in, with the closing comment's time, address and text", async () => {
+        const settled = aRollInComment(50, "2026-11-09T10:00:00Z");
+        const facts = await factsOf(
+          {
+            issues: [aRawIssue({ number: 7, labels: { nodes: [{ name: "ready-for-agent" }] } }), closed(30, [said(30, 2, settled.body, "2026-11-09T10:00:00Z")])],
+            openPullRequests: [aRawOpenPullRequest({ crossReferences: { nodes: [{ ...aRawCrossReference(30, "CLOSED", "NOT_PLANNED"), source: { ...(aRawCrossReference(30, "CLOSED", "NOT_PLANNED")["source"] as object), title: "Cache the prices" } }] } })],
+          },
+          "fabrik-app[bot]",
+        );
+
+        expect(rowsOf(facts, null, null, null, NOW).find(({ standing }) => standing.pullRequest === 50)?.related).toEqual([
+          {
+            issue: 30,
+            title: "Cache the prices",
+            kind: "owed",
+            at: "2026-11-09T10:00:00Z",
+            url: "https://github.com/jrey8343/shop/issues/30#issuecomment-2",
+            text: { summary: "Read the prices once per page, so a page of forty products asks for them once.", acceptanceCriteria: ["A page that shows forty products reads the prices once."] },
+          },
+        ]);
+      });
     });
 
     it("hold whether each open agent pull request's Ticket is closed, and no state of a Ticket GitHub gave none of or a Plain pull request's", async () => {
@@ -477,13 +612,18 @@ describe("a gather shaped for Home", () => {
     it("survive a JSON round trip", async () => {
       const facts = await factsOf(
         {
-          issues: [aRawIssue({ number: 7, labels: { nodes: [{ name: "ready-for-agent" }] } }), aRawIssue({ number: 41, labels: { nodes: [{ name: "needs-design" }] } })],
-          openPullRequests: [aRawOpenPullRequest()],
+          issues: [
+            aRawIssue({ number: 7, labels: { nodes: [{ name: "ready-for-agent" }] } }),
+            aRawIssue({ number: 41, labels: { nodes: [{ name: "needs-design" }] } }),
+            aRawIssue({ number: 30, state: "CLOSED", comments: { nodes: [{ url: "https://github.com/jrey8343/shop/issues/30#issuecomment-2", body: aRollInComment(50, "2026-11-09T10:00:00Z").body, createdAt: "2026-11-09T10:00:00Z", author: APP }] } }),
+          ],
+          openPullRequests: [aRawOpenPullRequest({ crossReferences: { nodes: [aRawCrossReference(30, "CLOSED", "NOT_PLANNED")] } })],
           mergedPullRequests: [aRawMergedPullRequest()],
         },
         "fabrik-app[bot]",
       );
 
+      expect(facts.closedIssueComments).toHaveLength(1);
       expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
     });
   });
