@@ -2,6 +2,7 @@
 // a Digest run is never a Held run, a failure that stalls the whole repo
 // still opens its Kit-owned issue, and a start that is lost opens the gate at
 // the stuck-trigger sweep. Each through the Loop rules core.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   aLabelledTrigger,
@@ -394,5 +395,63 @@ describe("The Digest: a lost start, at the stuck-trigger sweep", () => {
       { kind: "comment", issue: 7, body: "<!-- fabrik:stuck-trigger-readded agent:implement -->\n`agent:implement` sat 60 minutes with no run behind it, so the Kit added it again." },
       ...QUEUE_CHECKS,
     ]);
+  });
+});
+
+describe("The README on a Digest run's edges", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const sectionOf = (heading: string): string => readme.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+  const bulletOf = (section: string, name: string): string => section.split("\n").find((line) => line.startsWith(`- **${name}**`)) ?? "";
+  const digest = sectionOf("Digest");
+
+  it("the Digest's section has Never held, A lost start and Spend, in that order after The gate", () => {
+    const at = ["The gate", "Never held", "A lost start", "Spend"].map((name) => digest.indexOf(`- **${name}**`));
+
+    expect(at.every((index) => index >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+  });
+
+  it("Never held says what a pass and the label do with every Subscription used up, and that a refusal still opens its Kit-owned issue", () => {
+    const neverHeld = bulletOf(digest, "Never held");
+
+    expect(neverHeld).toContain("A Digest run is never a Held run");
+    expect(neverHeld).toContain("a pass adds no label: it posts the no-Digest line with `no-subscription` and opens the gate in the same step");
+    expect(neverHeld).toContain("No Held line is written on the pull request and no held marker on a Kit-owned issue");
+    expect(neverHeld).toContain("With rotation off, the run starts and fails as any run does");
+    expect(neverHeld).toContain("still opens or comments on that Kit-owned issue");
+    expect(neverHeld).toContain("is not run again on another Subscription");
+  });
+
+  it("A lost start says the sweep neither adds the label again nor hands it to the Operator, and opens the gate after its 30 minutes", () => {
+    const lostStart = bulletOf(digest, "A lost start");
+
+    expect(lostStart).toContain("neither adds `agent:digest` again nor hands it to you");
+    expect(lostStart).toContain("on for 30 minutes with no `Digest PR #<that pull request>` job unfinished");
+    expect(lostStart).toContain("posts the no-Digest line with `never-started`, takes the label off and opens the gate");
+    expect(lostStart).toContain("A Digest job on another pull request doesn't count");
+    expect(lostStart).toContain("ADR-0015");
+  });
+
+  it("Spend says a Digest run's Run record is in role digest, that its cost counts toward the Ticket, and that no Scorer judges it", () => {
+    const spend = bulletOf(digest, "Spend");
+
+    expect(spend).toContain("a Run record in role `digest`, on its Ticket, naming its pull request");
+    expect(spend).toContain("The Run-record schema is unchanged");
+    expect(spend).toContain("A run that never started writes none");
+    expect(spend).toContain("count a Ticket's Digest runs beside its Implement and Review runs");
+    expect(spend).toContain("No Scorer judges a Digest run");
+  });
+
+  it("the Layout's line on the Weekly summary says which runs cost per merged PR and spend that never merged count", () => {
+    const summary = readme.split("\n").find((line) => line.startsWith("- `.github/workflows/weekly-summary.yml`")) ?? "";
+
+    expect(summary).toContain("Cost per merged PR and spend that never merged each sum a Ticket's Implement, Review and Digest runs");
+  });
+
+  it("the stuck-trigger paragraph points agent:digest at its own rule", () => {
+    const sweep = readme.split("\n").find((line) => line.startsWith("A trigger label (`agent:implement`")) ?? "";
+
+    expect(sweep).toContain("`agent:digest` is the one trigger label the tick never adds again or hands to you");
+    expect(sweep).toContain("[Digest](#digest)");
   });
 });
