@@ -68,3 +68,82 @@ describe("Taking a Round's hidden line out of a comment", () => {
     expect(withoutRoundLines(text)).toBe(text);
   });
 });
+
+// A prototype round and its failure round carry their line third, under the prototype marker (#636).
+describe("Reading a prototype round's hidden line", () => {
+  const PROTOTYPE = "<!-- fabrik:prototype-round -->";
+  const FAILED = "<!-- fabrik:prototype-failed -->";
+  const SHOWN = "@jrey **Design session, round 3: the prototype.** …\n\n**1. Which variant?**\n➡️ Recommended: B.";
+  const VARIANT = { letter: "A", summary: "One long form.", component: "https://github.com/acme/shop/blob/7e3d1c9/src/A.tsx", preview: null };
+  const PROTOTYPE_FIELDS = {
+    v: 1,
+    kind: "prototype",
+    round: 3,
+    intro: "Two ways.",
+    questions: [{ question: "Which variant?", recommendation: "B." }],
+    route: "/book",
+    recommended: "B",
+    variants: [VARIANT, { ...VARIANT, letter: "B", summary: "A stepper.", preview: "https://prototype-7--shop.netlify.app/book?variant=B" }],
+    captures: { run: 9100, artifact: 9201 },
+  };
+  const FAILED_FIELDS = {
+    v: 1,
+    kind: "prototype-failed",
+    round: 3,
+    intro: "`sandbox.build` failed.",
+    questions: [{ question: "Carry on without a prototype, or try again?", recommendation: "Carry on without a prototype." }],
+    otherAnswers: ["Try again"],
+  };
+  const prototypeWith = (line: string) => `<!-- fabrik:design-round 3 -->\n${PROTOTYPE}\n${line}\n${SHOWN}`;
+  const failedWith = (line: string) => `<!-- fabrik:design-round 3 -->\n${FAILED}\n${line}\n${SHOWN}`;
+
+  it("reads a prototype round's route, advised letter, variants and captures", () => {
+    expect(roundLineIn(prototypeWith(lineOf(PROTOTYPE_FIELDS)))).toEqual(PROTOTYPE_FIELDS);
+  });
+
+  it("reads one with no advised letter, and one whose captures are null", () => {
+    const { recommended: _, ...unadvised } = PROTOTYPE_FIELDS;
+
+    expect(roundLineIn(prototypeWith(lineOf(unadvised)))).toEqual(unadvised);
+    expect(roundLineIn(prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, captures: null })))).toEqual({ ...PROTOTYPE_FIELDS, captures: null });
+  });
+
+  it("reads a prototype failure round's question and other answers", () => {
+    expect(roundLineIn(failedWith(lineOf(FAILED_FIELDS)))).toEqual(FAILED_FIELDS);
+  });
+
+  it("reads them from a comment whose lines come back ending in CRLF, and takes the line out", () => {
+    const crlf = prototypeWith(lineOf(PROTOTYPE_FIELDS)).replaceAll("\n", "\r\n");
+
+    expect(roundLineIn(crlf)).toEqual(PROTOTYPE_FIELDS);
+    expect(withoutRoundLines(crlf)).toBe(`<!-- fabrik:design-round 3 -->\n${PROTOTYPE}\n${SHOWN}`.replaceAll("\n", "\r\n"));
+  });
+
+  it("takes the line out of each, leaving both markers and the rest as they were", () => {
+    expect(withoutRoundLines(prototypeWith(lineOf(PROTOTYPE_FIELDS)))).toBe(`<!-- fabrik:design-round 3 -->\n${PROTOTYPE}\n${SHOWN}`);
+    expect(withoutRoundLines(failedWith(lineOf(FAILED_FIELDS)))).toBe(`<!-- fabrik:design-round 3 -->\n${FAILED}\n${SHOWN}`);
+  });
+
+  it.each([
+    ["a prototype round with no line, as an earlier release posted", `<!-- fabrik:design-round 3 -->\n${PROTOTYPE}\n${SHOWN}`],
+    ["variants that are empty", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, recommended: undefined, variants: [] }))],
+    ["variants that aren't a list", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, variants: VARIANT }))],
+    ["a variant with no component", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, variants: [{ ...VARIANT, component: undefined }] }))],
+    ["a variant whose preview isn't text or null", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, variants: [{ ...VARIANT, preview: 3 }] }))],
+    ["a variant with no preview key", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, variants: [{ ...VARIANT, preview: undefined }] }))],
+    ["a route that isn't text", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, route: ["/book"] }))],
+    ["an advised letter that isn't one of its variants'", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, recommended: "C" }))],
+    ["an advised letter that isn't text", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, recommended: 2 }))],
+    ["captures with no artifact", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, captures: { run: 9100 } }))],
+    ["no captures key", prototypeWith(lineOf({ ...PROTOTYPE_FIELDS, captures: undefined }))],
+    ["a prototype line under the failure marker", failedWith(lineOf(PROTOTYPE_FIELDS))],
+    ["a failure line under the prototype marker", prototypeWith(lineOf(FAILED_FIELDS))],
+    ["an ordinary Round's line under the prototype marker", prototypeWith(lineOf(FIELDS))],
+    ["a prototype line second, where an ordinary Round's goes", roundWith(lineOf(PROTOTYPE_FIELDS))],
+    ["other answers that aren't a list of text", failedWith(lineOf({ ...FAILED_FIELDS, otherAnswers: "Try again" }))],
+    ["other answers holding something not text", failedWith(lineOf({ ...FAILED_FIELDS, otherAnswers: ["Try again", 2] }))],
+    ["a failure round's questions that aren't a list", failedWith(lineOf({ ...FAILED_FIELDS, questions: null }))],
+  ])("gives no data for %s", (_, body) => {
+    expect(roundLineIn(body)).toBeNull();
+  });
+});
