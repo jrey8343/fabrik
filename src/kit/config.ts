@@ -263,10 +263,29 @@ export function prototypePreviewUrl(template: string, { branch, headSha, route }
   if (previewNamesPullRequest(template)) throw new Error(`The preview.url template ${template} names the pull request, which a prototype hasn't got`);
   const url = URL.parse(fillPlaceholders(template, { pr: "", branch_slug: slug(branch), sha: headSha }));
   if (url === null) throw new Error(`The preview.url template ${template} doesn't fill in to a URL`);
+  return withRouteOn(url.href, route);
+}
+
+/**
+ * The page at `route` on the site served at `base`, an http(s) address: the
+ * route on the base's own path, with no doubled slash where they meet, and a
+ * query in the route kept beside any the base has. The route is set as the
+ * URL's path, so whatever it holds, the page stays on the base's host. A
+ * Prototype's preview, a pull request's preview pages and the live pages
+ * after a merge are all built so (#639). Throws when `base` is no URL.
+ */
+export function withRouteOn(base: string, route: string): string {
+  const url = URL.parse(base);
+  if (url === null) throw new Error(`${base} is not a URL`);
   const at = route.indexOf("?");
   url.pathname = `${url.pathname.replace(/\/+$/, "")}${at === -1 ? route : route.slice(0, at)}`;
   if (at !== -1) for (const [name, value] of new URLSearchParams(route.slice(at + 1))) url.searchParams.append(name, value);
   return url.href;
+}
+
+/** The page at `route` on the production site the `production` block declares, as a reader links it once a pull request is merged. */
+export function productionPageUrl(production: ProductionConfig, route: string): string {
+  return withRouteOn(production.url, route);
 }
 
 /**

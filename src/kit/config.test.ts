@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { captureIdentityOf, previewUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, type UiConfig, UI_VIEWPORTS } from "./config.ts";
+import { captureIdentityOf, previewUrl, productionPageUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, type UiConfig, UI_VIEWPORTS, withRouteOn } from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
@@ -1524,6 +1524,33 @@ describe("Filling in a preview.url template for a pull request", () => {
     ["/fabrik//ticket-7/", "fabrik-ticket-7"],
   ])("slugs the branch %s as %s: lower case, each run of anything but a letter or digit one -, none at either end", (branch, slug) => {
     expect(previewUrl("https://{branch_slug}.example.dev", { ...pullRequest, branch })).toBe(`https://${slug}.example.dev/`);
+  });
+});
+
+describe("A captured route's page on a site, as a reader links it (#639)", () => {
+  it.each([
+    ["a bare base address", "https://shop.example", "/book", "https://shop.example/book"],
+    ["a base address with a trailing slash", "https://shop.example/", "/book", "https://shop.example/book"],
+    ["a base address with a path", "https://example.dev/shop", "/book", "https://example.dev/shop/book"],
+    ["a base address with a path and a trailing slash", "https://example.dev/shop/", "/book", "https://example.dev/shop/book"],
+    ["a route with a query", "https://shop.example/", "/book?when=today&who=me", "https://shop.example/book?when=today&who=me"],
+    ["a route with a query, on a base with its own", "https://preview.example.dev/shop/?branch=fabrik-ticket-7", "/book?when=today", "https://preview.example.dev/shop/book?branch=fabrik-ticket-7&when=today"],
+    ["the root route", "https://shop.example/", "/", "https://shop.example/"],
+  ])("puts the route on the path of %s, with no doubled slash", (_what, base, route, page) => {
+    expect(withRouteOn(base, route)).toBe(page);
+  });
+
+  it.each([
+    ["an address on another host", "//evil.example/x"],
+    ["a backslashed host", "/\\evil.example/x"],
+    ["a full address", "/https://evil.example/x"],
+  ])("keeps a route that spells %s on the base's host", (_what, route) => {
+    expect(new URL(withRouteOn("https://shop.example", route)).host).toBe("shop.example");
+  });
+
+  it("builds a production page from the production block's address, whether or not it names an environment", () => {
+    expect(productionPageUrl({ url: "https://shop.example/", environment: "production" }, "/book?when=today")).toBe("https://shop.example/book?when=today");
+    expect(productionPageUrl({ url: "https://example.dev/shop", environment: null }, "/")).toBe("https://example.dev/shop/");
   });
 });
 
