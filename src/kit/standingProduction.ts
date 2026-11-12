@@ -7,7 +7,7 @@
 // (src/read/deployments.ts). The Weekly summary's gather fills neither, so no
 // Kit job works out a Standing past the merge. Pure, no I/O.
 import type { DeploymentsRead, DeployOf } from "../read/deployments.ts";
-import type { Standing, StandingFacts, StandingNamed } from "./standing.ts";
+import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 
 /** How long after its merge, in minutes, a merge no deploy has started for reads as no deploy seen. */
 export const NO_DEPLOY_SEEN_MINUTES = 60;
@@ -103,7 +103,7 @@ export function productionStandingOf(
   deploy: DeployOf | "unread",
 ): ProductionStanding {
   const base = {
-    schema: 1,
+    schema: STANDING_SCHEMA,
     repo,
     issue: merge.ticket,
     pullRequest: merge.number,
