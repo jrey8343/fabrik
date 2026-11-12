@@ -9,6 +9,7 @@
 // (gatherHeadChecks, src/github/facts.ts). It never throws: a head GitHub
 // refuses or fails is "unread", and the others are still given.
 import { allPages, type ReadClient, type Repo } from "../github/client.ts";
+import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
 
 /** What a read of a repo's Required checks says. */
 export interface RequiredChecksRead {
@@ -54,6 +55,18 @@ export async function readRequiredChecks(client: Pick<ReadClient, "rest">, repo:
   }
   const read = await Promise.all(asked.map(async (sha) => [sha, branch.required.length === 0 ? [] : await readHead(client, target, sha, branch.required)] as const));
   return { repo, branch: branch.name, readAt: now, required: branch.required, holdsAdmins: branch.holdsAdmins, heads: Object.fromEntries(read) };
+}
+
+/**
+ * The Required checks fact of the Standing rule (Spec: Standing) for one
+ * head, from a checks read: each Required check on it with when its deciding
+ * report was made, an empty list when none is required, or unread when the
+ * read holds the head as unread or does not hold it.
+ */
+export function requiredChecksFactOf(read: RequiredChecksRead, head: string): RequiredChecksFact {
+  const checks = read.heads[head];
+  if (checks === undefined || checks === "unread") return "unread";
+  return checks.map(({ name, is, at }) => ({ name, is, at }));
 }
 
 /** `owner/name` as a Repo. */

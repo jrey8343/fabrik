@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
-import { type HeadCheck, readRequiredChecks } from "./requiredChecks.ts";
+import { type HeadCheck, readRequiredChecks, type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
 
 const NOW = "2026-11-12T10:00:00Z";
 const head = (digit: string) => digit.repeat(40);
@@ -303,5 +303,39 @@ describe("the Required checks read", () => {
     const read = await readRequiredChecks(client, "owner/product", [head("1"), head("2")], NOW);
 
     expect(JSON.parse(JSON.stringify(read))).toStrictEqual(read);
+  });
+});
+
+describe("the Required checks fact of a head, for the Standing rule", () => {
+  const read: RequiredChecksRead = {
+    repo: "owner/product",
+    branch: "main",
+    readAt: NOW,
+    required: ["test", "lint"],
+    holdsAdmins: "yes",
+    heads: {
+      [head("1")]: [
+        { name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-12T09:05:00Z" },
+        { name: "lint", is: "never-reported", url: null, at: null },
+      ],
+      [head("2")]: "unread",
+      [head("3")]: [],
+    },
+  };
+
+  it("is each Required check on the head, with when its deciding report was made", () => {
+    expect(requiredChecksFactOf(read, head("1"))).toEqual([
+      { name: "test", is: "passed", at: "2026-11-12T09:05:00Z" },
+      { name: "lint", is: "never-reported", at: null },
+    ]);
+  });
+
+  it("is an empty list for a head of a branch requiring nothing", () => {
+    expect(requiredChecksFactOf(read, head("3"))).toEqual([]);
+  });
+
+  it("is unread for a head the read holds as unread, or does not hold", () => {
+    expect(requiredChecksFactOf(read, head("2"))).toBe("unread");
+    expect(requiredChecksFactOf(read, head("4"))).toBe("unread");
   });
 });

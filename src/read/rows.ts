@@ -9,6 +9,7 @@ import { type Standing, type StandingFacts, standingsOf } from "../kit/standing.
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
 import type { Facts } from "./gather.ts";
+import { type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
 
 /** One Standing, with what a reader shows beside it. */
 export interface Row {
@@ -29,8 +30,8 @@ export interface Row {
 
 /** The runs in flight, as the Standing rule reads them (Spec: Standing), or unread. */
 type RowsRuns = readonly RunInFlightFact[] | "unread";
-/** The Required checks on each head, by its sha, as the Standing rule reads them: a head missing is unread. */
-type RowsChecks = Readonly<Record<string, RequiredChecksFact>>;
+/** The last Required checks read, or null when none was made: every head is then unread. */
+type RowsChecks = RequiredChecksRead | null;
 
 /**
  * One Product repo's rows at `now`, ISO 8601: one for each Standing the rule
@@ -52,9 +53,10 @@ function runsFactOf(runs: RowsRuns): readonly RunInFlightFact[] | "unread" {
   return runs;
 }
 
-/** The Required checks fact the rule reads, by head. */
+/** The Required checks fact the rule reads, by head, each through requiredChecksFactOf; a head the read does not hold is unread. */
 function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredChecksFact>> {
-  return checks;
+  if (checks === null) return {};
+  return Object.fromEntries(Object.keys(checks.heads).map((head) => [head, requiredChecksFactOf(checks, head)]));
 }
 
 /**

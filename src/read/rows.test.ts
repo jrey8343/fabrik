@@ -18,6 +18,7 @@ import {
   standingFactsOf,
 } from "./builders.ts";
 import type { Facts } from "./gather.ts";
+import type { RequiredChecksRead } from "./requiredChecks.ts";
 import { type Row, rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -27,6 +28,11 @@ const HEAD = "h".repeat(40);
 function ruleOf(facts: Facts, runs: readonly RunInFlightFact[] | "unread", checks: Readonly<Record<string, RequiredChecksFact>>, now = NOW) {
   const { github, kit, operator, appLogin } = facts;
   return standingsOf(standingFactsOf({ github, kit: { ...kit, runsInFlight: runs, headChecks: checks }, operator, appLogin: appLogin ?? "fabrik-app[bot]" }), now);
+}
+
+/** A checks read of `owner/product`'s `main`, held for everyone to these Required checks, with these heads. */
+function aChecksRead(heads: RequiredChecksRead["heads"], required: readonly string[] = ["test", "lint"]): RequiredChecksRead {
+  return { repo: "owner/product", branch: "main", readAt: NOW, required, holdsAdmins: "yes", heads };
 }
 
 /** Ticket 7, `ready-for-agent`, given `agent:implement` an hour before now. */
@@ -52,18 +58,39 @@ describe("a Product repo's rows", () => {
       }),
     });
     const runs = [aRunInFlight({ issue: 7 })];
-    const checks = { ["p".repeat(40)]: [{ name: "test", is: "passed" }] } as const;
+    const checks = aChecksRead({ ["p".repeat(40)]: [{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-08T19:30:00Z" }] });
 
     const rows = rowsOf(facts, runs, checks, NOW);
 
-    expect(rows.map(({ standing }) => standing)).toEqual(ruleOf(facts, runs, checks));
+    expect(rows.map(({ standing }) => standing)).toEqual(ruleOf(facts, runs, { ["p".repeat(40)]: [{ name: "test", is: "passed", at: "2026-11-08T19:30:00Z" }] }));
     expect(rows.length).toBeGreaterThan(4);
+  });
+
+  it("take a Plain pull request's name from the checks read, since the report that decided it", () => {
+    const facts = homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ number: 70 })] }) });
+    const checks = aChecksRead({
+      ["p".repeat(40)]: [
+        { name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-08T19:00:00Z" },
+        { name: "lint", is: "failing", url: "https://github.com/owner/product/runs/2", at: "2026-11-08T19:10:00Z" },
+      ],
+    });
+
+    expect(rowsOf(facts, "unread", checks, NOW).map(({ standing }) => standing)).toMatchObject([
+      { pullRequest: 70, name: "check-failing", since: "2026-11-08T19:10:00Z", detail: { plain: "kit-bump", check: "lint", checkIs: "failing" } },
+    ]);
+  });
+
+  it("take every Plain pull request as passed on a branch requiring nothing, and as waiting on checks it could not read with no checks read", () => {
+    const facts = homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ number: 70 })] }) });
+
+    expect(rowsOf(facts, "unread", aChecksRead({ ["p".repeat(40)]: [] }, []), NOW).map(({ standing }) => standing.name)).toEqual(["yours-to-merge"]);
+    expect(rowsOf(facts, "unread", null, NOW).map(({ standing }) => standing.detail)).toEqual([{ plain: "kit-bump", check: null, checksUnread: true, head: "p".repeat(40) }]);
   });
 
   it("are the rule's Standings with the runs and the checks unread", () => {
     const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], plainPullRequests: [aPlainPullRequest()] }) });
 
-    expect(rowsOf(facts, "unread", {}, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
+    expect(rowsOf(facts, "unread", null, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
   });
 
   it("give each Standing its title, the issue's, or the pull request's for a Plain one with no issue, and nothing related yet", () => {
@@ -75,7 +102,7 @@ describe("a Product repo's rows", () => {
       }),
     });
 
-    const rows = rowsOf(facts, "unread", {}, NOW);
+    const rows = rowsOf(facts, "unread", null, NOW);
 
     expect(rows.map(({ standing, title, related, mentions, relatedTo, followUps }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, title, related, mentions, relatedTo, followUps }))).toEqual(
       expect.arrayContaining([
@@ -88,7 +115,7 @@ describe("a Product repo's rows", () => {
   });
 
   describe("the last word", () => {
-    const lastWordOf = (facts: Facts) => rowsOf(facts, "unread", {}, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
+    const lastWordOf = (facts: Facts) => rowsOf(facts, "unread", null, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
 
     it("is the Fabrik App's latest comment on the issue or its pull request, with when and where it was said", () => {
       const onIssue = aComment("The Kit opened #50 for this Ticket.", "2026-11-08T18:00:00Z", { url: "https://github.com/owner/product/issues/7#issuecomment-1" });
@@ -126,7 +153,7 @@ describe("a Product repo's rows", () => {
     const notice = handedBack("2026-11-08T19:30:00Z", { author: "some-app[bot]" });
     const issues = [{ ...TICKET, comments: [notice] }];
 
-    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), "unread", {}, NOW).map(({ standing }) => standing.name);
+    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), "unread", null, NOW).map(({ standing }) => standing.name);
 
     expect(named(null)).toEqual(["yours-to-do"]);
     expect(named("fabrik-app[bot]")).not.toEqual(["yours-to-do"]);
@@ -141,7 +168,7 @@ describe("a Product repo's rows", () => {
       }),
     });
 
-    const rows: Row[] = rowsOf(facts, [aRunInFlight({ issue: 7 })], {}, NOW);
+    const rows: Row[] = rowsOf(facts, [aRunInFlight({ issue: 7 })], null, NOW);
 
     expect(rows.length).toBeGreaterThan(0);
     expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
