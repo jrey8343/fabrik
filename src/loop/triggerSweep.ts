@@ -3,8 +3,11 @@
 // lost before its claim, held its slot and started nothing again, since GitHub
 // fires `labeled` once. On the scheduled tick, before its Dispatch and Design
 // queue checks, the Kit adds such a label again once, and on a second strike
-// takes it off and hands the work to the Operator.
-import type { TriggerLabel } from "./labels.ts";
+// takes it off and hands the work to the Operator. agent:digest alone gets
+// neither: a Digest run whose start was lost ends its attempt, and the Merge
+// gate opens with the no-Digest line (src/loop/digest.ts, ADR-0022).
+import { lostStart } from "./digest.ts";
+import { DIGEST_LABEL, type TriggerLabel } from "./labels.ts";
 import {
   DESIGN_TURN_FAILED_MARKER,
   handBackMarker,
@@ -13,7 +16,7 @@ import {
   stuckTriggerGaveUpMarker,
   stuckTriggerReaddedMarker,
 } from "./markers.ts";
-import type { Action, AgentRole, LabelledTrigger, Plan, RolesUnderWay, TriggerSweepSnapshot } from "./types.ts";
+import type { Action, AgentRole, LabelledTrigger, Plan, PullRequestSnapshot, RolesUnderWay, TriggerSweepSnapshot } from "./types.ts";
 
 /** The role whose run each trigger label starts; a Replay's starts no one role's. */
 export const TRIGGER_ROLES: Readonly<Record<TriggerLabel, AgentRole | null>> = {
@@ -53,8 +56,19 @@ const PARKING_MARKERS: Partial<Record<TriggerLabel, string>> = {
  * off, it gives up. The count resets whenever the label comes off, so only
  * the Operator adding it again restarts the work after a give-up. With the
  * Actions API unread, it leaves every label alone and says so.
+ *
+ * agent:digest gets neither strike: after the same wait with no Digest job
+ * under way on its pull request, its lost start ends the attempt (`lostStart`),
+ * weighed on `openAgentPullRequests`, every open agent PR as the tick read
+ * them, or null when it read none.
  */
-export function sweepStuckTriggers(now: string, { underWay, labelled }: TriggerSweepSnapshot, operator: string, waitMinutes: number): Plan {
+export function sweepStuckTriggers(
+  now: string,
+  { underWay, labelled }: TriggerSweepSnapshot,
+  operator: string,
+  waitMinutes: number,
+  openAgentPullRequests: readonly PullRequestSnapshot[] | null,
+): Plan {
   if (underWay === null) {
     return {
       kind: "act",
@@ -62,18 +76,28 @@ export function sweepStuckTriggers(now: string, { underWay, labelled }: TriggerS
       notes: ["The stuck-trigger sweep left every trigger label alone: the Actions API couldn't be read, so whether a run is behind one isn't known"],
     };
   }
-  const actions = labelled.flatMap((trigger) => {
+  const swept = labelled.map((trigger): Swept => {
     const minutes = minutesOn(now, trigger);
-    if (minutes === null || minutes < waitMinutes || hasRunBehind(trigger, underWay)) return [];
-    return trigger.readded ? giveUp(trigger, operator) : readd(trigger, minutes);
+    if (minutes === null || minutes < waitMinutes || hasRunBehind(trigger, underWay)) return { actions: [] };
+    // agent:digest is neither added again nor handed to the Operator: its lost start ends the attempt, and the Merge gate opens.
+    if (trigger.label === DIGEST_LABEL) return lostStart(trigger.number, openAgentPullRequests, operator);
+    return { actions: trigger.readded ? giveUp(trigger, operator) : readd(trigger, minutes) };
   });
-  return actions.length === 0 ? { kind: "nothing", reason: "No trigger label sits with no run behind it" } : { kind: "act", actions };
+  const actions = swept.flatMap((one) => one.actions);
+  const notes = swept.flatMap((one) => one.notes ?? []);
+  if (actions.length === 0 && notes.length === 0) return { kind: "nothing", reason: "No trigger label sits with no run behind it" };
+  return { kind: "act", actions, ...(notes.length === 0 ? {} : { notes }) };
 }
+
+/** What the sweep does about one trigger label, with anything it says in the step summary. */
+type Swept = Pick<Extract<Plan, { kind: "act" }>, "actions" | "notes">;
 
 /**
  * Whether a job of the label's role is under way. Implement and Review job
- * names carry no issue number, so any one of them, anywhere in the repo,
- * counts for every such label: the sweep errs toward leaving a label be.
+ * names carry no issue number the sweep reads, so any one of them, anywhere
+ * in the repo, counts for every such label: the sweep errs toward leaving a
+ * label be. A Digest job's name always carries its pull request's number, so
+ * only one on that pull request counts for agent:digest.
  */
 function hasRunBehind({ number, label }: LabelledTrigger, underWay: RolesUnderWay): boolean {
   switch (label) {
@@ -87,9 +111,8 @@ function hasRunBehind({ number, label }: LabelledTrigger, underWay: RolesUnderWa
       return underWay.designTurns.includes(number);
     case "agent:replay":
       return underWay.claim || underWay.implement || underWay.review;
-    // The sweep leaves agent:digest alone: it reads as always having a run behind it, until the sweep is given its rule for a lost start.
     case "agent:digest":
-      return true;
+      return underWay.digests.includes(number);
   }
 }
 

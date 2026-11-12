@@ -24,6 +24,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
+import { leavingOutDigests } from "../github/digestComments.ts";
 import { readDigestThread } from "../github/digestGiven.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
@@ -897,14 +898,23 @@ function optionalNumber(name: string): number | null {
 /** Where the agent job checks out the Product repo, beside the Kit at kit/. */
 const PRODUCT_DIR = "product";
 
+/**
+ * The client every agent's inputs are read through. No agent is handed a
+ * held line (#471), and no agent run is given a Digest or a no-Digest line
+ * (ADR-0022), the Digest writer's own included: both are left out of every
+ * GraphQL answer, which is how these reads take a thread's comments.
+ */
+export function agentInputsClient<Client extends Pick<Reader, "graphql">>(github: Client): Client {
+  return leavingOutDigests(leavingOutHeldLines(github));
+}
+
 async function main(outDir: string): Promise<void> {
   const [owner, name] = (process.env["GITHUB_REPOSITORY"] ?? "").split("/");
   if (owner === undefined || name === undefined) throw new Error("GITHUB_REPOSITORY is not owner/name");
   const token = process.env["GH_TOKEN"];
   if (token === undefined || token === "") throw new Error("GH_TOKEN is not set");
   const repo = { owner, name };
-  // No agent is handed a held line (#471).
-  const github = leavingOutHeldLines(new GitHub(token, process.env["GITHUB_API_URL"]));
+  const github = agentInputsClient(new GitHub(token, process.env["GITHUB_API_URL"]));
   const issueNumber = optionalNumber("FABRIK_ISSUE");
   if (issueNumber === null) throw new Error("FABRIK_ISSUE is not set");
   const pullRequest = optionalNumber("FABRIK_PULL_REQUEST");

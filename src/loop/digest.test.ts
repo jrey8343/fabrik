@@ -1,21 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
-import {
-  aLabelledTrigger,
-  anIssue,
-  aPullRequest,
-  HEAD_SHA,
-  kitConfig,
-  NOTHING_UNDER_WAY,
-  notificationsOf,
-  snapshotOf,
-  snapshotOfPullRequest,
-  tickSnapshot,
-  withoutNotes,
-} from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { digestCommentOf, noDigestLine } from "./digestContract.ts";
 import { planFor } from "./rules.ts";
-import type { Action, KitIssueSnapshot, LabelledTrigger, LoopEvent, Plan, PullRequestSnapshot, VerdictRecord } from "./types.ts";
+import type { Action, LoopEvent, Plan, PullRequestSnapshot, VerdictRecord } from "./types.ts";
 
 /** A Verdict as the snapshot reads one off the pull request, by default the Reviewer's pass on the head. */
 function aVerdict(overrides: Partial<VerdictRecord> = {}): VerdictRecord {
@@ -216,7 +204,8 @@ describe("The Digest: a run that fails", () => {
   it("no outcome of a failed run counts against the Ticket's Retries, hands anything back or touches the Ticket", () => {
     const actions = actionsOf(failedOn(failed({ report: { failure: "weekly-limit", detail: "limit reached" } })));
 
-    expect(actions.map(({ kind }) => kind)).toEqual(["comment", "remove-label"]);
+    // The weekly-limit issue it opens is the Kit's own, as any run's refusal opens it (src/loop/digestEdges.test.ts).
+    expect(actions.map(({ kind }) => kind)).toEqual(["comment", "remove-label", "open-issue"]);
     expect(actions.every((action) => !("issue" in action) || action.issue === 50)).toBe(true);
     expect(actions[0]?.kind === "comment" ? actions[0].body : "").not.toContain("fabrik:hand-back");
   });
@@ -233,26 +222,7 @@ describe("The Digest: a run that fails", () => {
   });
 });
 
-describe("The Digest: the stuck-trigger sweep", () => {
-  /** Monday 04:00 UTC: no Audit or Retro is due, so the tick's own plan is just its queue checks. */
-  const tick = { kind: "scheduled-tick", now: "2026-11-09T04:00:00.000Z" } as const;
-  const QUEUE_CHECKS: Action[] = [{ kind: "check-dispatch" }, { kind: "check-design-queue" }];
-  const swept = (labelled: readonly LabelledTrigger[]): Plan => withoutNotes(planFor(tick, tickSnapshot({ triggers: { underWay: NOTHING_UNDER_WAY, labelled } }), kitConfig()));
-
-  it.each([
-    ["an hour, with no job under way anywhere", aLabelledTrigger({ number: 50, label: "agent:digest", lastAddedAt: "2026-11-09T03:00:00Z" })],
-    ["a day, though the Kit's note says it was added again", aLabelledTrigger({ number: 50, label: "agent:digest", lastAddedAt: "2026-11-08T04:00:00Z", readded: true })],
-  ])("leaves agent:digest alone when it has sat %s: it neither adds it again nor takes it off", (_how, trigger) => {
-    expect(swept([trigger])).toEqual({ kind: "act", actions: QUEUE_CHECKS });
-  });
-
-  it("still sweeps another trigger label that sits beside it", () => {
-    const plan = swept([aLabelledTrigger({ number: 50, label: "agent:digest" }), aLabelledTrigger({ number: 7, label: "agent:implement" })]);
-
-    expect(actionsOf(plan).slice(0, 1)).toEqual([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]);
-    expect(actionsOf(plan).every((action) => !("issue" in action) || action.issue !== 50)).toBe(true);
-  });
-});
+// What the stuck-trigger sweep does about agent:digest, a lost start, is src/loop/digestEdges.test.ts's.
 
 describe("The Digest: agent:digest starting a run", () => {
   it("agent:digest on an agent pull request with a pass on its current head starts a Digest run at that head, on the Digest writer's model and time limit", () => {
@@ -292,27 +262,7 @@ describe("The Digest: agent:digest starting a run", () => {
   });
 });
 
-// Until a Digest run is given its own rule for a Subscription with none free, it is held as any run is.
-describe("The Digest: a run that would start with every Subscription used up", () => {
-  const usedUp = (number: number, subscription: string): KitIssueSnapshot => ({
-    number,
-    labels: ["fabrik:weekly-limit"],
-    body: [`The weekly usage limit of the \`${subscription}\` Subscription is reached.`, "", `<!-- fabrik:subscription ${subscription} -->`, "<!-- fabrik:resets-at 2026-11-09T04:00:00.000Z -->"].join("\n"),
-    comments: [],
-  });
-
-  it("is held through agent:digest on its pull request, as a Review is through agent:review, and starts no agent job", () => {
-    const plan = planFor(
-      { kind: "pull-request-labeled", pullRequest: 50, label: "agent:digest" },
-      snapshotOfPullRequest(aPassedPullRequest(), { kitIssues: [usedUp(40, "Claude token"), usedUp(41, "Claude token 2")] }),
-      kitConfig({ subscriptions: ["Claude token", "Claude token 2"] }),
-    );
-
-    expect(actionsOf(plan)).toContainEqual({ kind: "remove-label", issue: 50, label: "agent:digest" });
-    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "hold-agent-run", role: "digest", issue: 50, label: "agent:digest" }));
-    expect(actionsOf(plan).map(({ kind }) => kind)).not.toContain("start-agent-run");
-  });
-});
+// What the label does with every Subscription used up, where a run started now would be held, is src/loop/digestEdges.test.ts's.
 
 describe("The Digest: agent:digest declined", () => {
   /** The label off, and one line saying why nothing started. */

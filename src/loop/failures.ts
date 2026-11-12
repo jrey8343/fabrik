@@ -22,7 +22,9 @@
 // run is never re-run or held: the tick can't start one at a reset, so its
 // Audit or Retro fails, for the tick to try again. A failed Digest run gets
 // no failure notice at all: the no-Digest line says so on its PR, mentioning
-// nobody (src/loop/digest.ts).
+// nobody (src/loop/digest.ts). It is never re-run or held either, though one
+// refused on a weekly limit, killed for spending usage credits or refused a
+// dead token still opens or updates that Kit-owned issue.
 import { keptBranchOff } from "./backToDesign.ts";
 import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
@@ -223,10 +225,15 @@ function heldOnRefusal(
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig, pullRequest: PullRequestSnapshot | null = null): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
-  // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again. The gate opens all the same.
-  if (run.role === "digest") return noDigestAfter(run, failure, pullRequest, operator);
   const ranOn = ranOnOf(run, config);
   const failedRun = run.prototype === true ? `The prototype turn on #${run.issue}` : `The ${runNamed(run.role)} on #${run.issue}`;
+  if (run.role === "digest") {
+    // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again on another Subscription. The gate opens all the same.
+    const landed = noDigestAfter(run, failure, pullRequest, operator);
+    // One that stalls the whole repo still opens or updates its Kit-owned issue, as any run's does: that is how the Kit learns a Subscription is used up.
+    const repoWide = repoWideNotice(failure, context, { run: failedRun, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null, ...ranOn });
+    return landed.kind !== "act" || repoWide === null ? landed : { ...landed, actions: [...landed.actions, ...repoWide.actions] };
+  }
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.

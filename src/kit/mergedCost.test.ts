@@ -23,6 +23,34 @@ describe("what a merged pull request cost", () => {
     expect(costPerMergedPullRequestOf(WEEK, records, merged)).toEqual({ usd: 3, unknownCost: 0, merged: 2 });
   });
 
+  it("counts the Ticket's Digest runs beside its Implement and Review runs, and no other role's: a Ticket with one of each role", () => {
+    const records = [
+      aRunRecord({ runId: 1, role: "implement", issue: 7, totalCostUsd: 1 }),
+      aRunRecord({ runId: 2, role: "review", issue: 7, totalCostUsd: 2 }),
+      aRunRecord({ runId: 3, role: "digest", issue: 7, pullRequest: 50, totalCostUsd: 4 }),
+      aRunRecord({ runId: 4, role: "triage", issue: 7, totalCostUsd: 8 }),
+      aRunRecord({ runId: 5, role: "design", issue: 7, totalCostUsd: 16 }),
+      aRunRecord({ runId: 6, role: "audit", issue: 7, totalCostUsd: 32 }),
+      aRunRecord({ runId: 7, role: "retro", issue: 7, totalCostUsd: 64 }),
+      aRunRecord({ runId: 8, role: "research", issue: 7, totalCostUsd: 128 }),
+      aRunRecord({ runId: 9, role: "score", issue: 7, totalCostUsd: 256 }),
+    ];
+
+    // Implement $1, Review $2 and Digest $4.
+    expect(costPerMergedPullRequestOf(WEEK, records, [{ repo: "owner/product", ticket: 7 }])).toEqual({ usd: 7, unknownCost: 0, merged: 1 });
+  });
+
+  it("counts each Digest run on the Ticket, a failed one with no cost figure adding nothing", () => {
+    const records = [
+      aRunRecord({ runId: 1, role: "implement", issue: 7, totalCostUsd: 1 }),
+      aRunRecord({ runId: 2, role: "digest", issue: 7, pullRequest: 50, totalCostUsd: 0.25 }),
+      aRunRecord({ runId: 3, role: "digest", issue: 7, pullRequest: 50, totalCostUsd: 0.5 }),
+      aRunRecord({ runId: 4, role: "digest", issue: 7, pullRequest: 50, jobResult: "cancelled", infrastructureFailure: "timeout", totalCostUsd: null, modelUsage: {} }),
+    ];
+
+    expect(costPerMergedPullRequestOf(WEEK, records, [{ repo: "owner/product", ticket: 7 }])).toEqual({ usd: 1.75, unknownCost: 0, merged: 1 });
+  });
+
   it("counts a record that ended in an earlier week, and none that ended after the week did", () => {
     const records = [
       aRunRecord({ runId: 1, endedAt: "2026-10-20T12:00:00Z", totalCostUsd: 2 }),

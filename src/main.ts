@@ -12,7 +12,7 @@ import { prototypeBranchFor } from "./loop/designOutput.ts";
 import { applyPlan, emptyDiffIn, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { planWithChange, readChangeFingerprint } from "./github/changeRead.ts";
 import { GitHub, type Repo } from "./github/client.ts";
-import { describePlan } from "./github/describePlan.ts";
+import { describePlan, describeRefusedCollapses } from "./github/describePlan.ts";
 import {
   agentFailureEventFrom,
   agentRunEventFrom,
@@ -483,7 +483,7 @@ async function main(landing: Landing | null): Promise<void> {
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
   // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304), as may a Review's pass (#480).
   const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
-  const { preview, readded } = await applyPlan(
+  const { preview, readded, refusedCollapses } = await applyPlan(
     github,
     repo,
     plan,
@@ -514,7 +514,16 @@ async function main(landing: Landing | null): Promise<void> {
   const readdedLines = readded.map(
     ({ issue, label }) => `- ${label} was already on #${issue}, so it was taken off and added again, which starts its run`,
   );
-  await report([describePlan(plan), ...(readdedLines.length === 0 ? [] : ["", ...readdedLines]), ...(unread === null ? [] : ["", unread])].join("\n"));
+  // An older Digest GitHub refused to collapse held nothing up (ADR-0022): the summary is where it is said.
+  const refusedLines = describeRefusedCollapses(refusedCollapses);
+  await report(
+    [
+      describePlan(plan),
+      ...(readdedLines.length === 0 ? [] : ["", ...readdedLines]),
+      ...(refusedLines.length === 0 ? [] : ["", ...refusedLines]),
+      ...(unread === null ? [] : ["", unread]),
+    ].join("\n"),
+  );
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);
     if (landing !== null) await reportLandingFailure(landing, plan);

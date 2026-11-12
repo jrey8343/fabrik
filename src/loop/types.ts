@@ -893,6 +893,23 @@ export interface PullRequestSnapshot {
    * none, so a later run's push lists them beside its own.
    */
   readonly changedTests: readonly string[];
+  /**
+   * The Digests on its thread (ADR-0022), oldest first: each of the Fabrik
+   * App's comments whose first line is a `fabrik:digest` marker, never a
+   * no-Digest line. A collapsed one is here whole, as GitHub still returns it.
+   */
+  readonly digests: readonly DigestOnThread[];
+}
+
+/** A Digest comment on a pull request's thread, as the snapshot reads it. */
+export interface DigestOnThread {
+  /** GitHub's node id of the comment, which collapsing it takes. */
+  readonly node: string;
+  /** Whether it is collapsed already, as outdated or by anyone for any reason. */
+  readonly minimized: boolean;
+  readonly body: string;
+  /** When it was posted, as an ISO 8601 time. */
+  readonly postedAt: string;
 }
 
 /** A review requesting changes on an agent PR that no Request-changes run has built yet (#341). */
@@ -1241,6 +1258,8 @@ export interface RolesUnderWay {
   readonly claim: boolean;
   /** The issue of each `Design-session turn #N` or `Prototype turn #N` job, lowest first. */
   readonly designTurns: readonly number[];
+  /** The pull request of each `Digest PR #N` job, lowest first: the sweep reads exactly whether one is under way on a pull request. */
+  readonly digests: readonly number[];
 }
 
 /** A trigger label on an open issue or PR, as the stuck-trigger sweep reads it. */
@@ -1802,6 +1821,19 @@ export type Action =
       readonly template: string;
       /** The route every variant renders on. */
       readonly route: string;
+    }
+  | {
+      /**
+       * Collapses an older Digest on a pull request as outdated (ADR-0022),
+       * so its thread shows one account. GitHub may refuse it, which stops
+       * nothing: the step summary says so, and the current Digest is found
+       * by its head either way.
+       */
+      readonly kind: "minimize-comment";
+      readonly pullRequest: number;
+      /** The comment's node id. */
+      readonly node: string;
+      readonly classifier: "OUTDATED";
     };
 
 /**

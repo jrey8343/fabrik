@@ -19,6 +19,20 @@ describe("The scoring plan for a finished run", () => {
     expect(scoringPlan(implementRun({ role, retry: 1, stepUp: true }))).toEqual({ kind: "not-sampled" });
   });
 
+  // No Scorer judges a Digest (ADR-0022): only Implement runs are picked, and that stays.
+  it("never picks a Digest run for scoring, whatever its run id and however it ended", () => {
+    const runIds = [SAMPLED_RUN, UNSAMPLED_RUN, ...Array.from({ length: 400 }, (_, i) => 20_000_000_000 + i)];
+    const digestRuns = runIds.flatMap((runId) => [
+      implementRun({ role: "digest", runId, pullRequest: 50 }),
+      implementRun({ role: "digest", runId, pullRequest: 50, jobResult: "cancelled", infrastructureFailure: "timeout" }),
+      implementRun({ role: "digest", runId, pullRequest: 50, jobResult: "failure", infrastructureFailure: "weekly-limit", transcript: null }),
+    ]);
+
+    // The same run ids pick Implement runs, so it is the role that keeps a Digest run out.
+    expect(runIds.some((runId) => scoringPlan(implementRun({ runId })).kind === "score")).toBe(true);
+    expect(digestRuns.filter((run) => scoringPlan(run).kind !== "not-sampled")).toEqual([]);
+  });
+
   it("never samples a prototype turn, a Design-session turn like any other", () => {
     expect(scoringPlan(implementRun({ role: "design", prototype: true }))).toEqual({ kind: "not-sampled" });
   });

@@ -844,10 +844,13 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
   /**
    * What the metrics read of the input: only this repo's live records, whatever
    * the store gave. A Replay arm's record names the Ticket and PR it re-ran,
-   * but no Replay run built or let through what merged (#156).
+   * but no Replay run built or let through what merged (#156). And never a
+   * Digest run's record: its transcript holds the Digest, which no agent run
+   * is given, the Retro included (ADR-0022), so the record goes with it from
+   * every part of the bundle, as a judge's run goes from the sample.
    */
   function metricsOf({ records, facts, operator }: Pick<RetroEvidenceInput, "records" | "facts" | "operator">): MetricsInput {
-    return { records: records.filter((record) => record.repo === facts.repo && isLive(record)), facts: [facts], operator };
+    return { records: records.filter((record) => record.repo === facts.repo && isLive(record) && record.role !== "digest"), facts: [facts], operator };
   }
   
   /**
