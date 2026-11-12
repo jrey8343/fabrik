@@ -3,7 +3,7 @@
 // others (#641). While they are a draft they must say what the code does: the
 // figures they give are the ones the code holds. Once the release ships they
 // are a record, listed in RELEASED_NOTES, and keep the words of their day.
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { KIT, RELEASED_NOTES } from "../__fixtures__/repoScan.ts";
@@ -44,5 +44,13 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The production release notes, while 
     // The notes give No deploy seen's wait in words, as "an hour".
     expect(notes).toContain("within an hour of the merge");
     expect(NO_DEPLOY_SEEN_MINUTES).toBe(60);
+  });
+
+  it("agree with the README, whose production paragraph cites the ADR it follows by its number", async () => {
+    const readme = await read("README.md");
+    const production = readme.split("\n").find((line) => line.startsWith("- `production` (default `null`)"));
+    expect(production).toContain("(ADR-0021)");
+    const adrs = await readdir(join(KIT, "docs/adr"));
+    expect(adrs.some((name) => name.startsWith("0021-live-is-read-from-github-deployments"))).toBe(true);
   });
 });
