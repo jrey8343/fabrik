@@ -4,11 +4,11 @@
 // (stuckBarMinutes, src/loop/recoveryWaits.ts) has passed with no sign from
 // the Kit. Only the Kit's own signs restart the clock (ADR-0007): a person's
 // comment, label or review never does.
-import { stuckBarMinutes } from "../loop/recoveryWaits.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { countLandedNothing, pushedSinceVerdictIn, retryNoteSinceVerdictIn } from "../github/threads.ts";
 import { DESIGN_LABEL, DISPATCH_LABEL, READY_FOR_AGENT, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
 import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
+import { stuckBarMinutes } from "../loop/recoveryWaits.ts";
 import { MAX_RETRIES, retryNumber } from "../loop/retry.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
