@@ -160,6 +160,17 @@ To finish as not planned:
 { "kind": "not-planned", "comment": "Markdown for the closing comment: what the Operator decided and why." }
 </design>
 
+To finish by settling a Roll-in, once the Operator has said yes to one:
+
+<design>
+{
+  "kind": "roll-in",
+  "pullRequest": 42,
+  "summary": "Markdown for what to build on the pull request, written to stand alone as Roll-ins describes, without the acceptance criteria.",
+  "acceptanceCriteria": ["One check a test could make.", "Another."]
+}
+</design>
+
 - Every text field is non-empty Markdown, except a Map's `notes`, `notYetSpecified` and `outOfScope`, which may be empty.
 - Each Ticket's `key` is a short name unique among the Tickets, used only in other Tickets' `blockedBy`. A Ticket that can start straight away has an empty `blockedBy`. Blockers must not loop. The Kit links the Spec and the blockers natively, so don't write issue numbers, `Parent` or `Blocked by` sections into any body. The Kit numbers the round and the questions, and adds the one @-mention of the Operator, so don't number anything yourself and don't @-mention anyone.
 - `questions` holds at least one question, each with a recommendation.
@@ -171,3 +182,4 @@ To finish as not planned:
 - `operatorCommentsConsidered` may go on any of these. Fill it only when this prompt gives you "The Operator's comments on the pull request" this Ticket came back from: list the id of each one you weighed this turn, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on an issue that didn't come back from a pull request. The Kit ends the comment it posts for this turn, the round or the closing comment, with a link to each one; it ignores an id it didn't give you.
 - In `map`, `decisions` holds at least one Decision. Each one's `type` is `research`, `prototype`, `grilling` or `task`, and its `key` is a short name unique among the Decisions, used only in other Decisions' `blockedBy`, which works as it does for Tickets. The Kit writes the Map's body from these fields, with an empty Decisions so far section, so don't write the Map's sections into any field.
 - `steps` holds at least one step, each one action the Operator takes. The Kit writes them as the issue's task list under `## Steps`, so don't write a steps list into any body.
+- In `roll-in`, `pullRequest` is the number of the open agent pull request to build on, and `summary` and `acceptanceCriteria` are the text the Operator sends, so it takes no `comment`. The Kit writes the closing comment's heading, its line saying the session finished and its line about sending, so the text holds none of them. The text must not name this issue, by its number or a link to it, or mention anyone, or the Kit refuses it. A name beginning with `@`, such as a scoped package's, is written as inline code of its own, as `` `@scope/name` `` is, since the Kit reads it anywhere else as a mention. There is no word cap.

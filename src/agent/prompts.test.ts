@@ -450,6 +450,43 @@ describe("The Roll-in in the Design prompt", () => {
     expect(finish).toContain("Name that pull request and write what to build on it, with its acceptance criteria.");
     expect(finish).toContain("The Kit closes this issue under a closing comment that carries the text, and sends nothing: only the Operator does.");
   });
+
+  /** The `roll-in` output the prompt shows, as the session would write it. */
+  const shown = async (): Promise<Record<string, unknown>> =>
+    JSON.parse(/To finish by settling a Roll-in, once the Operator has said yes to one:\n\n<design>\n([\s\S]*?)\n<\/design>/.exec(await prompt("design"))?.[1] ?? "null");
+
+  it("shows a roll-in output the contract accepts as it stands: the pull request, the summary and the criteria beside the kind, and nothing else", async () => {
+    const example = await shown();
+
+    expect(Object.keys(example)).toEqual(["kind", "pullRequest", "summary", "acceptanceCriteria"]);
+    expect(readDesignTurnOutput(example, EXAMPLE_ISSUE)).toEqual({
+      ok: true,
+      output: { kind: "roll-in", pullRequest: 42, summary: example.summary, acceptanceCriteria: example.acceptanceCriteria },
+    });
+    expect(example.acceptanceCriteria).toHaveLength(2);
+    // It names no issue at all, so it reads on a turn of any issue, even one that shares the pull request's number.
+    expect(readDesignTurnOutput(example, 42)).toMatchObject({ ok: true });
+  });
+
+  it("says the Kit writes the heading, the session-finished line and the line about sending, what it refuses in the text, and that there is no word cap", async () => {
+    const note = lineStarting(section(await prompt("design"), "Your output"), "- In `roll-in`");
+    expect(note).toContain("`pullRequest` is the number of the open agent pull request to build on");
+    expect(note).toContain("The Kit writes the closing comment's heading, its line saying the session finished and its line about sending, so the text holds none of them");
+    expect(note).toContain("The text must not name this issue, by its number or a link to it, or mention anyone, or the Kit refuses it.");
+    expect(note).toContain("There is no word cap.");
+  });
+
+  it("says how to write a name beginning with @, in a way the contract accepts where it refuses the bare name", async () => {
+    const note = lineStarting(section(await prompt("design"), "Your output"), "- In `roll-in`");
+    expect(note).toContain(
+      "A name beginning with `@`, such as a scoped package's, is written as inline code of its own, as `` `@scope/name` `` is, since the Kit reads it anywhere else as a mention.",
+    );
+
+    const example = await shown();
+    expect(readDesignTurnOutput({ ...example, summary: "Read the limit from `@scope/name`." }, EXAMPLE_ISSUE)).toMatchObject({ ok: true });
+    expect(readDesignTurnOutput({ ...example, summary: "Read the limit from @scope/name." }, EXAMPLE_ISSUE)).toMatchObject({ ok: false });
+    expect(readDesignTurnOutput({ ...example, summary: "Read the limit from `the @scope/name package`." }, EXAMPLE_ISSUE)).toMatchObject({ ok: false });
+  });
 });
 
 describe("Product intent in the Implement prompt", () => {
