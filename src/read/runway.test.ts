@@ -60,5 +60,13 @@ describe("the runway", () => {
 
       expect(runway).toEqual({ kind: "runs-out", at: hoursOn(-2 + 60), heldUntil: resets });
     });
+
+    it("runs all week when it resets in two days, before runs would run out", () => {
+      const resets = hoursOn(2 * 24);
+
+      const runway = runwayOf([aReading("Claude token", 12, 0.3, resets), aReading("Claude token", 2, 0.4, resets)], [], NOW);
+
+      expect(runway).toEqual({ kind: "all-week" });
+    });
   });
 });

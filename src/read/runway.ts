@@ -43,6 +43,7 @@ export function runwayOf(records: readonly RunRecord[], usedUp: readonly UsedUpS
   const room = presentWeeks.reduce((sum, week) => sum + (week === null ? 1 : Math.max(0, 1 - week.share)), 0);
   const at = newest.at + Math.round((room / rise) * (newest.at - first.at));
   const resets = presentWeeks.flatMap((week) => (week === null ? [] : [week.resetsAt]));
+  if (resets.some((reset) => reset < at)) return { kind: "all-week" };
   return { kind: "runs-out", at: new Date(at).toISOString(), heldUntil: earliest([...usedUp.map(({ until }) => until), ...resets.map((reset) => new Date(reset).toISOString())]) };
 }
 
