@@ -466,15 +466,29 @@ function roundsTable(rounds: readonly Round[]): string[] {
 }
 
 /**
+ * The folds line as a writer's words could hold it: with any white space
+ * where its spaces are, since Kit code folds some of those words onto one
+ * line, each run of white space to one space, after taking it out.
+ */
+const FOLDS_LINE_IN_WORDS = new RegExp(DIGEST_FOLDS_MARKER.replaceAll(" ", "\\s+"), "g");
+
+/**
  * The writer's words with no folds line among them. Only Kit code writes
  * that line, once, between a Digest's top and its folds, and a reader finds
  * the folds by the first one in the comment (readDigestComment): one in the
  * writer's own words, in the top or in a fold, would move where they start.
  * It is taken out wherever it sits, hidden as it is from whoever reads the
- * Digest.
+ * Digest, and taken out again until none is left: one built around another
+ * is whole once the inner one is gone, and the top's words pass through
+ * here twice, into the data and out of it again (digestTop).
  */
 function withNoFoldsLine(words: string): string {
-  return words.replaceAll(DIGEST_FOLDS_MARKER, "");
+  let left = words;
+  for (let before = ""; before !== left; ) {
+    before = left;
+    left = left.replace(FOLDS_LINE_IN_WORDS, "");
+  }
+  return left;
 }
 
 /** The writer's plain text on one line, with no mention in it. */

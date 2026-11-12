@@ -488,6 +488,31 @@ describe("Reading a Digest's comment back", () => {
     expect(dataOf(body).howItGotHere).toBe("One pass.");
   });
 
+  it("leaves no folds line in the writer's words however one was built: nested in itself so that taking one out leaves another", () => {
+    const [before = "", after = ""] = DIGEST_FOLDS_MARKER.split("-folds");
+    const nested = (depth: number): string => (depth === 0 ? DIGEST_FOLDS_MARKER : `${before}${nested(depth - 1)}-folds${after}`);
+
+    for (const depth of [1, 2, 3]) {
+      const body = bodyOf(aDigestReply({ whatItDoes: `It adds a cart.\n${nested(depth)}\nAnd a total.`, howItGotHere: `One pass.\n${nested(depth)}` }));
+
+      expect(body.split("\n").filter((line) => line.trim() === DIGEST_FOLDS_MARKER)).toHaveLength(1);
+      expect(readDigestComment(body)).toMatchObject({ ok: true, folds: expect.stringMatching(/^<details>\n<summary>Walk me through it<\/summary>/) });
+      expect(dataOf(body).whatItDoes).toBe("It adds a cart.\n\nAnd a total.");
+      expect(dataOf(body).howItGotHere).toBe("One pass.");
+    }
+  });
+
+  it("leaves no folds line where Kit code puts the writer's words on one line: one whose spaces are tabs or line breaks is taken out too", () => {
+    const spaced = (gap: string): string => DIGEST_FOLDS_MARKER.replaceAll(" ", gap);
+
+    for (const gap of ["\t", "\n", "  ", " \r\n "]) {
+      const body = bodyOf(aDigestReply({ roundsLine: spaced(gap), whatItDoes: `It adds a cart.\n${spaced(gap)}\nAnd a total.` }));
+
+      expect(body.split("\n").filter((line) => line.trim() === DIGEST_FOLDS_MARKER)).toHaveLength(1);
+      expect(dataOf(body).whatItDoes).toBe("It adds a cart.\n\nAnd a total.");
+    }
+  });
+
   it("reads a comment whose lines end as Windows lines do, as GitHub's web editor leaves one a person edited, as it reads the comment the Kit posted", () => {
     const edited = BODY.replace(/\n/g, "\r\n");
     const read = readDigestComment(BODY);
