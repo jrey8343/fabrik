@@ -6,6 +6,7 @@
 // after a rebase. Nothing in the Loop acts on it. Pure, no I/O.
 import { createHash } from "node:crypto";
 import { isTestPath } from "./changedTests.ts";
+import { markerJson } from "./markers.ts";
 
 /** What a pull request's own change comes to, at the head a Verdict judged. */
 export interface ChangeFingerprint {
@@ -134,4 +135,101 @@ export function changeFingerprintOf(diff: string): ChangeFingerprint {
     product: over(files.filter(([path]) => !isTestPath(path))),
     files: files.length > MAX_FILES ? null : Object.fromEntries(files),
   };
+}
+
+/** A fingerprint a comparison is given: none for a Verdict that records none. */
+type Recorded = ChangeFingerprint | null | undefined;
+
+/** Whether the product code differs between two fingerprints, and where. */
+export type ProductChange =
+  | { readonly kind: "unchanged" }
+  /** The product paths that differ, sorted; null when either fingerprint names no files. */
+  | { readonly kind: "changed"; readonly files: readonly string[] | null }
+  /** Either fingerprint is missing. */
+  | { readonly kind: "not-established" };
+
+/**
+ * The product code between two fingerprints: unchanged, changed, or not
+ * established when either is missing. Changed names each product path whose
+ * hash differs or that only one of them has.
+ */
+export function productChangeBetween(from: Recorded, to: Recorded): ProductChange {
+  if (from == null || to == null) return { kind: "not-established" };
+  if (from.product === to.product) return { kind: "unchanged" };
+  if (from.files === null || to.files === null) return { kind: "changed", files: null };
+  const [before, after] = [from.files, to.files];
+  const paths = [...new Set([...Object.keys(before), ...Object.keys(after)])];
+  return {
+    kind: "changed",
+    files: paths.filter((path) => !isTestPath(path) && (!Object.hasOwn(before, path) || !Object.hasOwn(after, path) || before[path] !== after[path])).sort(),
+  };
+}
+
+/** What a Verdict's head changed of the code since the Verdict before it. */
+export type VerdictEffect = "product-code" | "tests-only" | "none" | "not-known";
+
+/** One Verdict's effect on the code, against the Verdict before it; not known when either records no fingerprint. */
+export function verdictEffect(before: Recorded, verdict: Recorded): VerdictEffect {
+  if (before == null || verdict == null) return "not-known";
+  if (before.product !== verdict.product) return "product-code";
+  return before.all === verdict.all ? "none" : "tests-only";
+}
+
+/** Whether two fingerprints are of the same change: `all` is equal. Never with either missing. */
+export function sameChange(one: Recorded, other: Recorded): boolean {
+  return one != null && other != null && one.all === other.all;
+}
+
+/** The hidden line, matched against a whole line with its outer whitespace trimmed. */
+const CHANGE_LINE = /^<!-- fabrik:change (.*) -->$/;
+
+/**
+ * The hidden line a Verdict comment records its fingerprint on, directly
+ * under its marker. A path in it can neither end the comment early nor
+ * mention anyone (markerJson).
+ */
+export function changeLine({ v, all, product, files }: ChangeFingerprint): string {
+  return `<!-- fabrik:change ${markerJson({ v, all, product, files })} -->`;
+}
+
+/**
+ * The fingerprint a comment records, or null when it records none, as every
+ * Verdict from before the line does. It is read only from the comment's
+ * second line, where the Kit writes it, so a line further down, which may be
+ * an agent's words, is never taken for one; and one that doesn't read is none.
+ */
+export function changeIn(body: string): ChangeFingerprint | null {
+  const json = CHANGE_LINE.exec(body.split("\n", 2)[1]?.trim() ?? "")?.[1];
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const { v, all, product, files } = value as Record<string, unknown>;
+  if (v !== 1 || !isHash(all) || !isHash(product) || !isFileHashes(files)) return null;
+  return { v, all, product, files };
+}
+
+function isHash(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{12}$/.test(value);
+}
+
+function isFileHashes(value: unknown): value is Record<string, string> | null {
+  if (value === null) return true;
+  return typeof value === "object" && !Array.isArray(value) && Object.values(value).every((hash) => typeof hash === "string");
+}
+
+/**
+ * This text with every change line taken out, and each other line as it was:
+ * what an agent is given of a Verdict, since the line is up to a few thousand
+ * characters of hashes and says nothing to it.
+ */
+export function withoutChangeLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !CHANGE_LINE.test(line.trim()))
+    .join("\n");
 }

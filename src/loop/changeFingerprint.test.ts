@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { changeFingerprintOf } from "./changeFingerprint.ts";
+import {
+  type ChangeFingerprint,
+  changeFingerprintOf,
+  changeIn,
+  changeLine,
+  productChangeBetween,
+  sameChange,
+  verdictEffect,
+  withoutChangeLines,
+} from "./changeFingerprint.ts";
 
 const INDEX = "1111111111111111111111111111111111111111..2222222222222222222222222222222222222222";
 
@@ -262,5 +271,163 @@ describe("The change fingerprint: a change of many files", () => {
 
   it("a change of nothing has no files", () => {
     expect(changeFingerprintOf("")).toMatchObject({ v: 1, files: {} });
+  });
+});
+
+const VERDICT_LINE = '<!-- fabrik:verdict {"verdict":"pass","source":"reviewer","requestChanges":false,"headSha":"abc"} -->';
+const FINGERPRINT: ChangeFingerprint = { v: 1, all: "0123456789ab", product: "ba9876543210", files: { "src/cart.ts": "aaaaaaaaaaaa", "src/cart.test.ts": "bbbbbbbbbbbb" } };
+
+describe("The change line under a Verdict's marker", () => {
+  it("is one hidden line, which reads back as the fingerprint it was written from", () => {
+    const line = changeLine(FINGERPRINT);
+
+    expect(line).toBe(
+      '<!-- fabrik:change {"v":1,"all":"0123456789ab","product":"ba9876543210","files":{"src/cart.ts":"aaaaaaaaaaaa","src/cart.test.ts":"bbbbbbbbbbbb"}} -->',
+    );
+    expect(changeIn([VERDICT_LINE, line, "## Verdict: Pass"].join("\n"))).toEqual(FINGERPRINT);
+  });
+
+  it("reads back a fingerprint that names no files", () => {
+    const unnamed: ChangeFingerprint = { ...FINGERPRINT, files: null };
+
+    expect(changeIn([VERDICT_LINE, changeLine(unnamed)].join("\n"))).toEqual(unnamed);
+  });
+
+  it("holds a path that would end the comment, or mention someone, as one line that reads back", () => {
+    const awkward: ChangeFingerprint = { ...FINGERPRINT, files: { "docs/--> @operator\nnotes.md": "cccccccccccc" } };
+    const line = changeLine(awkward);
+
+    expect(line).not.toContain("\n");
+    expect(line.slice(0, -" -->".length)).not.toMatch(/-->|@/);
+    expect(changeIn([VERDICT_LINE, line].join("\n"))).toEqual(awkward);
+  });
+
+  it("is read only from the line under the first, so text further down is never taken for one", () => {
+    const line = changeLine(FINGERPRINT);
+
+    expect(changeIn([VERDICT_LINE, "## Verdict: Pass", "", line].join("\n"))).toBeNull();
+    expect(changeIn(line)).toBeNull();
+  });
+
+  it("reads none from a comment with no line, as every Verdict from an earlier release", () => {
+    expect(changeIn([VERDICT_LINE, "## Verdict: Pass", "", "Looks right."].join("\n"))).toBeNull();
+    expect(changeIn("")).toBeNull();
+  });
+
+  it.each([
+    ["is no JSON", "{oops"],
+    ["is another version's", '{"v":2,"all":"0123456789ab","product":"ba9876543210","files":null}'],
+    ["has no product", '{"v":1,"all":"0123456789ab","files":null}'],
+    ["has a hash that is no 12 hex characters", '{"v":1,"all":"0123","product":"ba9876543210","files":null}'],
+    ["has files that are no hashes by path", '{"v":1,"all":"0123456789ab","product":"ba9876543210","files":{"src/cart.ts":7}}'],
+    ["has a list for its files", '{"v":1,"all":"0123456789ab","product":"ba9876543210","files":["src/cart.ts"]}'],
+    ["has no files field", '{"v":1,"all":"0123456789ab","product":"ba9876543210"}'],
+  ])("reads none from a line that %s", (_, json) => {
+    expect(changeIn([VERDICT_LINE, `<!-- fabrik:change ${json} -->`].join("\n"))).toBeNull();
+  });
+});
+
+describe("A Verdict's text without its change line", () => {
+  it("keeps every other line as it was, the marker first", () => {
+    const body = [VERDICT_LINE, changeLine(FINGERPRINT), "## Verdict: Pass", "", "Looks right."].join("\n");
+
+    expect(withoutChangeLines(body)).toBe([VERDICT_LINE, "## Verdict: Pass", "", "Looks right."].join("\n"));
+  });
+
+  it("leaves text with no such line alone", () => {
+    const body = [VERDICT_LINE, "## Verdict: Pass", "", "It mentions fabrik:change in passing."].join("\n");
+
+    expect(withoutChangeLines(body)).toBe(body);
+  });
+
+  it("takes the line out wherever it sits, and out of text with Windows line ends", () => {
+    const line = changeLine({ ...FINGERPRINT, files: null });
+
+    expect(withoutChangeLines(["Quoted:", line, "Done."].join("\n"))).toBe("Quoted:\nDone.");
+    expect(withoutChangeLines([VERDICT_LINE, line, "## Verdict: Pass"].join("\r\n"))).toBe([VERDICT_LINE, "## Verdict: Pass"].join("\r\n"));
+  });
+});
+
+/** A fingerprint of these files' hashes, with all and product worked out as the Kit does from a diff. */
+function fingerprintOf(files: Readonly<Record<string, string>>, named = true): ChangeFingerprint {
+  const diff = Object.entries(files)
+    .map(([path, line]) => fileDiff(path, [{ at: 1, added: [line] }]))
+    .join("");
+  const fingerprint = changeFingerprintOf(diff);
+  return named ? fingerprint : { ...fingerprint, files: null };
+}
+
+const FIRST = fingerprintOf({ "src/cart.ts": "v1", "src/price.ts": "v1", "src/cart.test.ts": "v1" });
+
+describe("The product code between two fingerprints", () => {
+  it("is unchanged when only a test file differs", () => {
+    const later = fingerprintOf({ "src/cart.ts": "v1", "src/price.ts": "v1", "src/cart.test.ts": "v2", "src/price.test.ts": "v1" });
+
+    expect(productChangeBetween(FIRST, later)).toEqual({ kind: "unchanged" });
+    expect(productChangeBetween(FIRST, FIRST)).toEqual({ kind: "unchanged" });
+  });
+
+  it("is changed, naming each product path whose hash differs or that only one of them has", () => {
+    const later = fingerprintOf({ "src/cart.ts": "v2", "src/tax.ts": "v1", "src/cart.test.ts": "v2", "src/a.test.ts": "v1" });
+
+    expect(productChangeBetween(FIRST, later)).toEqual({ kind: "changed", files: ["src/cart.ts", "src/price.ts", "src/tax.ts"] });
+  });
+
+  it("is changed with no files named when either names none", () => {
+    const later = fingerprintOf({ "src/cart.ts": "v2", "src/price.ts": "v1", "src/cart.test.ts": "v1" });
+
+    expect(productChangeBetween(fingerprintOf({ "src/cart.ts": "v1" }, false), later)).toEqual({ kind: "changed", files: null });
+    expect(productChangeBetween(FIRST, { ...later, files: null })).toEqual({ kind: "changed", files: null });
+  });
+
+  it("is unchanged between two that name no files but agree", () => {
+    expect(productChangeBetween({ ...FIRST, files: null }, { ...FIRST, files: null })).toEqual({ kind: "unchanged" });
+  });
+
+  it("could not be established when either is missing", () => {
+    expect(productChangeBetween(null, FIRST)).toEqual({ kind: "not-established" });
+    expect(productChangeBetween(FIRST, undefined)).toEqual({ kind: "not-established" });
+    expect(productChangeBetween(null, null)).toEqual({ kind: "not-established" });
+  });
+});
+
+describe("One Verdict's effect on the code, against the Verdict before it", () => {
+  it("is product code when a file that is no test differs", () => {
+    expect(verdictEffect(FIRST, fingerprintOf({ "src/cart.ts": "v2", "src/price.ts": "v1", "src/cart.test.ts": "v2" }))).toBe("product-code");
+  });
+
+  it("is tests only when only test files differ", () => {
+    expect(verdictEffect(FIRST, fingerprintOf({ "src/cart.ts": "v1", "src/price.ts": "v1", "src/cart.test.ts": "v2" }))).toBe("tests-only");
+  });
+
+  it("is none when the change is the same, as after a rebase onto a moved default branch", () => {
+    expect(verdictEffect(FIRST, { ...FIRST })).toBe("none");
+  });
+
+  it("needs no file named to tell", () => {
+    const later = fingerprintOf({ "src/cart.ts": "v1", "src/price.ts": "v1", "src/cart.test.ts": "v2" }, false);
+
+    expect(verdictEffect({ ...FIRST, files: null }, later)).toBe("tests-only");
+  });
+
+  it("is not known when either Verdict records no fingerprint", () => {
+    expect(verdictEffect(undefined, FIRST)).toBe("not-known");
+    expect(verdictEffect(FIRST, null)).toBe("not-known");
+  });
+});
+
+describe("The same change", () => {
+  it("is one whose all is equal, whether or not its files are named", () => {
+    expect(sameChange(FIRST, { ...FIRST, files: null })).toBe(true);
+  });
+
+  it("is not one with a test file changed", () => {
+    expect(sameChange(FIRST, fingerprintOf({ "src/cart.ts": "v1", "src/price.ts": "v1", "src/cart.test.ts": "v2" }))).toBe(false);
+  });
+
+  it("is never one with a fingerprint missing", () => {
+    expect(sameChange(FIRST, null)).toBe(false);
+    expect(sameChange(undefined, FIRST)).toBe(false);
+    expect(sameChange(null, null)).toBe(false);
   });
 });
