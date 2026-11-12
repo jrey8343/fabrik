@@ -68,6 +68,60 @@ describe("The Visual evidence writer", () => {
     });
   });
 
+  describe("a Kit config that declares production", () => {
+    // The Operator's own spacing, so a block reprinted as Prettier prints it would differ.
+    const production = '"production": {"url": "https://clinic.example.com",   "environment": "production"}';
+
+    it("replaces the ui and preview blocks around it, leaving the production block byte for byte as it was", () => {
+      const theirs = lines("{", '  "operator": "jrey8343",', `  ${production},`, '  "ui": null,', '  "preview": { "url": null }', "}", "");
+
+      const result = write(theirs, pilot);
+
+      expect(result).toEqual({
+        ok: true,
+        written: ["ui", "preview"],
+        config: lines(
+          "{",
+          '  "operator": "jrey8343",',
+          `  ${production},`,
+          '  "ui": {',
+          '    "paths": ["src/pages/**", "src/components/**"],',
+          '    "serve": "npm run preview",',
+          '    "url": "http://localhost:4321",',
+          '    "before_url": "https://clinic.example.com",',
+          '    "default_routes": ["/"]',
+          "  },",
+          '  "preview": {',
+          '    "url": "https://deploy-preview-{pr}--clinic.netlify.app"',
+          "  }",
+          "}",
+          "",
+        ),
+      });
+    });
+
+    it("adds the ui and preview blocks after a production block that closes the Kit config, the block's own bytes kept", () => {
+      const theirs = lines("{", '  "operator": "jrey8343",', `  ${production}`, "}", "");
+
+      const result = write(theirs, { preview: { url: null } });
+
+      expect(result).toEqual({
+        ok: true,
+        written: ["preview"],
+        config: lines("{", '  "operator": "jrey8343",', `  ${production},`, '  "preview": {', '    "url": null', "  }", "}", ""),
+      });
+    });
+
+    it("never writes production, which isn't a block it writes", () => {
+      const theirs = lines("{", `  ${production}`, "}", "");
+
+      expect(write(theirs, { ...answers, production: { url: "https://elsewhere.example", environment: null } })).toEqual({
+        ok: false,
+        problems: ['The answers hold "production", which isn\'t a block this writes: it writes only ui and preview'],
+      });
+    });
+  });
+
   it("replaces the starter's ui and preview blocks where they stand, leaving the rest of it as setup wrote it", () => {
     const starter = readFileSync(resolve(KIT, "templates", "fabrik-config.json"), "utf8");
     // The starter with these answers written in by hand. Prettier 3.6.2 prints its ui and preview blocks exactly so.
