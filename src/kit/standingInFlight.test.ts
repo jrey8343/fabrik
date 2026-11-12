@@ -6,6 +6,7 @@ import type { HeldRun } from "../loop/heldRun.ts";
 import { conflictAttemptMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf } from "./standing.ts";
+import { wordStanding } from "./standingWording.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -400,6 +401,62 @@ describe("work that goes on without the Operator", () => {
         dispatching([{ number: 3, subIssues: 1, openBlockers: [2] }, { number: 14, openBlockers: [2] }], {}, [aRunInFlight()]),
       );
       expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([{ issue: 14, name: "blocked" }]);
+    });
+  });
+
+  describe("their wording", () => {
+    const ZONE = "Australia/Sydney";
+    const words = (standings: readonly Standing[], issue: number) => {
+      const standing = standings.find((read) => read.issue === issue);
+      if (standing === undefined) throw new Error(`no Standing for #${issue}`);
+      return wordStanding(standing, NOW, ZONE);
+    };
+
+    it("says which run is running, and for how long", () => {
+      const pass = aVerdictComment("pass", "h".repeat(40), "2026-11-07T18:00:00Z");
+      const standings = standingsIn(
+        {
+          openIssues: [ticket(7), ticket(8), ticket(9), anOpenIssue({ number: 12, labels: ["needs-triage"] })],
+          openPullRequests: [anOpenPullRequest({ number: 50, ticket: 8, comments: [pass], reviews: [aReview("2026-11-08T08:00:00Z")] }), anOpenPullRequest({ number: 51, ticket: 10 })],
+        },
+        aKit([
+          aRunInFlight({ issue: 7, createdAt: "2026-11-08T19:20:00Z" }),
+          aRunInFlight({ issue: 9, retry: 1, kind: "retry", createdAt: "2026-11-08T17:00:00Z" }),
+          aRunInFlight({ issue: 8 }),
+          aRunInFlight({ role: "review", pullRequest: 51 }),
+          aRunInFlight({ role: "triage" }),
+        ]),
+      );
+      expect(words(standings, 7)).toEqual({ pill: "Running", sentence: "An Implement run has been running for 40 minutes.", remedy: null });
+      expect(words(standings, 9).sentence).toBe("Retry 1 has been running for 3 hours.");
+      expect(words(standings, 8).sentence).toBe("A Request-changes run has been running for 1 hour.");
+      expect(words(standings, 10).sentence).toBe("A Review has been running for 1 hour.");
+      expect(words(standings, 12).sentence).toBe("A Triage run has been running for 1 hour.");
+    });
+
+    it("says a draft's Review is waiting for the Required checks on its head", () => {
+      const standings = standingsIn({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }, aKit([aRunInFlight({ role: "review", job: "waiting-on-checks" })]));
+      expect(words(standings, 7)).toEqual({ pill: "Waiting on checks", sentence: "Its Review is waiting for the Required checks on its head.", remedy: null });
+    });
+
+    it("says which run is held, and on which Carrier", () => {
+      const standings = standingsIn({ openIssues: [ticket(7)], kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 7, label: "agent:implement" }])] }, null);
+      expect(words(standings, 7)).toEqual({ pill: "Held", sentence: "Its Implement run is held on #20 until a Subscription is free.", remedy: null });
+    });
+
+    it("says what slot work waits for, and how long it has", () => {
+      const full = standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], { runsInFlight: "unread" }));
+      expect(words(full, 14)).toEqual({ pill: "Waiting for a slot", sentence: "Waiting for a slot for 3 days: `max_in_flight` is 2.", remedy: null });
+      const paused = standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(0)));
+      expect(words(paused, 14).sentence).toBe("Dispatch is paused: `max_in_flight` is 0.");
+      const design = standingsIn({ designQueue: { issues: [aDesignQueueIssue({ number: 21, neededDesignAt: "2026-11-06T20:00:00Z" })], designTurnsInProgress: [] } }, null);
+      expect(words(design, 21).sentence).toBe("Waiting for a Design session slot for 2 days.");
+    });
+
+    it("names the blockers", () => {
+      const standings = standingsIn({ openIssues: [ready(14), ready(15)] }, dispatching([{ number: 14, openBlockers: [9, 3] }, { number: 15, openBlockers: [4] }]));
+      expect(words(standings, 14)).toEqual({ pill: "Blocked", sentence: "Blocked by #3 and #9.", remedy: null });
+      expect(words(standings, 15).sentence).toBe("Blocked by #4.");
     });
   });
 });
