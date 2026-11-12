@@ -1,5 +1,6 @@
-// The Digest's rules (ADR-0022): when `agent:digest` starts the Digest writer
-// on a pull request, and how its attempt lands. Pure, no I/O.
+// The Digest's rules (ADR-0022): what a pass does about a Digest, when
+// `agent:digest` starts the Digest writer on a pull request, how its attempt
+// lands, and when the Merge gate opens. Pure, no I/O.
 import { declineTrigger } from "./declineTrigger.ts";
 import { digestCommentOf, noDigestLine, parseDigestReply } from "./digestContract.ts";
 import { DIGEST_LABEL } from "./labels.ts";
@@ -12,7 +13,8 @@ import type { Action, InfrastructureFailure, KitConfig, LoopEvent, Plan, PullReq
  * whose latest Verdict is a pass on its current head, with no run in flight
  * on it and the Digest on. Otherwise the label comes off with one line
  * saying why, as a declined `agent:review` does. In draft or at the Merge
- * gate alike: the label never moves the gate.
+ * gate alike: a pass adds the label to its draft, and the Operator may add it
+ * to a pull request at the gate, which it never moves (`openGate`).
  */
 export function startDigestOnLabel(pullRequest: PullRequestSnapshot, config: KitConfig): Plan {
   const why = whyNoDigest(pullRequest, config);
@@ -70,54 +72,82 @@ const MISSING_PULL_REQUEST: Plan = { kind: "fail", failure: "infrastructure", re
 
 /**
  * How a finished Digest run lands, in the push job. Whichever way, the label
- * comes off, last, so adding it again is a fresh event:
+ * comes off, so adding it again is a fresh event:
  * - dropped, when the pull request is closed, its head has moved, a run is
  *   now in flight on it, or its latest Verdict is no longer that pass:
- *   nothing is posted;
+ *   nothing is posted and the gate stays closed;
  * - refused, when the reply breaks its shape or Kit code refuses the Digest
- *   it would render: the no-Digest line is posted, with Kit code's reason;
- * - otherwise the Digest is posted, once, and never edited.
- * Nothing else moves: not the pull request's draft state, not a review
- * request. Nothing in the Loop moves because of what a Digest says.
+ *   it would render: the no-Digest line is posted, with Kit code's reason,
+ *   then the gate opens;
+ * - otherwise the Digest is posted, once, and never edited, then the gate
+ *   opens.
+ * The Loop waits for the attempt, never for its success, and nothing in it
+ * moves because of what a Digest says.
  */
-export function landDigest(event: Written, { pullRequest }: Pick<Snapshot, "pullRequest">): Plan {
+export function landDigest(event: Written, { pullRequest, operator }: Pick<Snapshot, "pullRequest" | "operator">): Plan {
   if (pullRequest === null) return MISSING_PULL_REQUEST;
   const dropped = whyDropped(pullRequest, event.headSha);
   if (dropped !== null) return drop(pullRequest, dropped);
   const reply = parseDigestReply(event.output);
   const comment = reply.ok ? digestCommentOf(reply.output, event.given) : { ok: false as const, refused: reply.errors.join("; ") };
   const body = comment.ok ? comment.body : noDigestLine({ head: event.headSha, how: "refused", reason: comment.refused, runUrl: event.runUrl });
-  return attemptEnded(pullRequest, body);
+  return attemptEnded(pullRequest, body, operator);
 }
 
 /**
  * A Digest run that failed or ran past its time limit, in the push job:
- * the no-Digest line says how, on the pull request, and the label comes
- * off. No failure notice follows, nobody is mentioned, nothing is handed to
- * the Operator and nothing counts against the Ticket's Retries. A reply
- * the agent job's own check refused reads as refused here too. One for a
- * pull request that has moved on is dropped, as a finished one is.
+ * the no-Digest line says how, on the pull request, and then the gate opens
+ * as it does after a Digest. No failure notice follows, the line mentions
+ * nobody, nothing is handed to the Operator and nothing counts against the
+ * Ticket's Retries. A reply the agent job's own check refused reads as
+ * refused here too. One for a pull request that has moved on is dropped, as
+ * a finished one is.
  */
-export function noDigestAfter(run: FailedRun, failure: InfrastructureFailure, pullRequest: PullRequestSnapshot | null): Plan {
+export function noDigestAfter(run: FailedRun, failure: InfrastructureFailure, pullRequest: PullRequestSnapshot | null, operator: string): Plan {
   if (pullRequest === null || run.digest === undefined || run.digest.pullRequest !== pullRequest.number) return MISSING_PULL_REQUEST;
   const head = run.digest.headSha;
   const dropped = whyDropped(pullRequest, head);
   if (dropped !== null) return drop(pullRequest, dropped);
   const { runUrl } = run;
-  if (failure === "timeout") return attemptEnded(pullRequest, noDigestLine({ head, how: "timed-out", runUrl }));
-  if (failure === "missing-output") return attemptEnded(pullRequest, noDigestLine({ head, how: "refused", reason: REFUSED_IN_AGENT_JOB, runUrl }));
-  return attemptEnded(pullRequest, noDigestLine({ head, how: "failed", runUrl }));
+  if (failure === "timeout") return attemptEnded(pullRequest, noDigestLine({ head, how: "timed-out", runUrl }), operator);
+  if (failure === "missing-output") return attemptEnded(pullRequest, noDigestLine({ head, how: "refused", reason: REFUSED_IN_AGENT_JOB, runUrl }), operator);
+  return attemptEnded(pullRequest, noDigestLine({ head, how: "failed", runUrl }), operator);
 }
 
 /** Kit code's reason on a reply the agent job's check refused: its own words, never the agent's. */
 const REFUSED_IN_AGENT_JOB = "it broke the reply's shape in the agent job";
 
-/** What an attempt that ends with something to say comes to: its one comment, then the label off. */
-function attemptEnded(pullRequest: PullRequestSnapshot, body: string): Plan {
-  return { kind: "act", actions: [{ kind: "comment", issue: pullRequest.number, body }, labelOff(pullRequest)] };
+/** What an attempt that ends with something to say comes to: its one comment, then the gate opens. */
+function attemptEnded(pullRequest: PullRequestSnapshot, body: string, operator: string): Plan {
+  return { kind: "act", actions: [{ kind: "comment", issue: pullRequest.number, body }, ...openGate(pullRequest, operator)] };
 }
 
-/** A dropped attempt: nothing is posted, the label comes off, and the step summary says why. */
+/**
+ * The gate opens, after anything posted: `agent:digest` off, the pull
+ * request out of draft, the Operator's review requested, in that order. The
+ * last two only when the gate has not opened for this pass
+ * (`gateUnopened`): on a pull request already at the Merge gate, or one the
+ * Operator put back in draft, the label comes off and nothing else moves.
+ */
+export function openGate(pullRequest: PullRequestSnapshot, operator: string): Action[] {
+  return [labelOff(pullRequest), ...(gateUnopened(pullRequest) ? gateOpening(pullRequest, operator) : [])];
+}
+
+/**
+ * Whether the Merge gate has yet to open for the pass on the pull request's
+ * head: a draft whose latest Verdict is that pass, and which has not left
+ * draft since it.
+ */
+export function gateUnopened(pullRequest: PullRequestSnapshot): boolean {
+  return pullRequest.draft && passedAt(pullRequest, pullRequest.headSha) && !pullRequest.leftDraftSinceVerdict;
+}
+
+/**
+ * A dropped attempt: nothing is posted, the label comes off, the gate stays
+ * closed and the step summary says why. A head that moved gets a Review of
+ * its own, whose pass brings the next Digest; a run in flight lands first; a
+ * closed pull request has no gate.
+ */
 function drop(pullRequest: PullRequestSnapshot, why: string): Plan {
   return { kind: "act", actions: [labelOff(pullRequest)], notes: [`The Digest of #${pullRequest.number} was dropped: ${why}`] };
 }
