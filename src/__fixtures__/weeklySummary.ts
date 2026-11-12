@@ -342,6 +342,7 @@ export function aPlainPullRequest(overrides: Partial<PlainPullRequestFacts> = {}
     draft: false,
     mergeable: true,
     closes: [],
+    draftChangedAt: null,
     createdAt: "2026-11-06T20:00:00Z",
     ...overrides,
   };

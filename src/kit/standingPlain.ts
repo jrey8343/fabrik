@@ -80,9 +80,13 @@ function joined(own: Standing, pairing: Standing): Standing {
   return { ...own, pullRequest: pairing.pullRequest, detail: { ...own.detail, pullRequest: pairing.name } } as Standing;
 }
 
-/** Since when it stands so: its head, whose checks it is read by, or its opening when that came later. */
-function sinceOf({ createdAt, headCommittedAt }: PlainPullRequestFacts): string {
-  return headCommittedAt !== null && Date.parse(headCommittedAt) > Date.parse(createdAt) ? headCommittedAt : createdAt;
+/**
+ * Since when it stands so, the latest of: its head, whose checks it is read
+ * by; its opening; and when it last left draft or went into it, so one marked
+ * ready an hour ago has been ready to merge for an hour.
+ */
+function sinceOf({ createdAt, headCommittedAt, draftChangedAt }: PlainPullRequestFacts): string {
+  return [headCommittedAt, draftChangedAt].reduce<string>((latest, at) => (at !== null && Date.parse(at) > Date.parse(latest) ? at : latest), createdAt);
 }
 
 /** What a Plain pull request's Standing is named, with its move and detail. */

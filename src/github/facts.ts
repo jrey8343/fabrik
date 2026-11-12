@@ -777,7 +777,7 @@ function draftEventsOf(nodes: readonly RawDraftEvent[]): DraftEvent[] {
     .toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
-/** An open Plain pull request: who opened it, its branch and head, and whether it is a draft and merges cleanly. Its reviews, labels and comments, which the Kit never acts on, are left out. */
+/** An open Plain pull request: who opened it, its branch and head, whether it is a draft and merges cleanly, and when its draft state last changed. Its reviews, labels and comments, which the Kit never acts on, are left out. */
 function plainPullRequestOf(pr: RawOpenPullRequest): PlainPullRequestFacts {
   return {
     number: pr.number,
@@ -789,6 +789,7 @@ function plainPullRequestOf(pr: RawOpenPullRequest): PlainPullRequestFacts {
     draft: pr.isDraft,
     mergeable: mergeableOf(pr.mergeable),
     closes: pr.closingIssuesReferences.nodes.map(({ number }) => number),
+    draftChangedAt: draftEventsOf(pr.draftEvents.nodes).at(-1)?.at ?? null,
     createdAt: pr.createdAt,
   };
 }

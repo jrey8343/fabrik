@@ -139,6 +139,13 @@ describe("a Plain pull request's Standing", () => {
     expect(sinceOf({ createdAt: "2026-11-07T00:00:00Z", headCommittedAt: null })).toBe("2026-11-07T00:00:00Z");
   });
 
+  it("stands since it last left draft or went into it, when that came after its head and its opening", () => {
+    const sinceOf = (overrides: Parameters<typeof aPlainPullRequest>[0]) => standingsIn({ plainPullRequests: [aPlainPullRequest({ headSha: HEAD, ...overrides })] })[0];
+    const readied = sinceOf({ createdAt: "2026-11-01T00:00:00Z", headCommittedAt: "2026-11-02T09:00:00Z", draftChangedAt: "2026-11-08T19:00:00Z" });
+    expect(readied).toMatchObject({ name: "yours-to-merge", since: "2026-11-08T19:00:00Z" });
+    expect(sinceOf({ createdAt: "2026-11-01T00:00:00Z", headCommittedAt: "2026-11-07T09:00:00Z", draftChangedAt: "2026-11-02T00:00:00Z" })?.since).toBe("2026-11-07T09:00:00Z");
+  });
+
   describe("a Pairing session's, joined to its issue", () => {
     const pairing = (overrides: Parameters<typeof aPlainPullRequest>[0] = {}) =>
       aPlainPullRequest({ number: 80, author: "operator", headRef: "fabrik/pair-12", closes: [12], createdAt: "2026-11-07T10:00:00Z", headCommittedAt: "2026-11-07T10:00:00Z", ...overrides });

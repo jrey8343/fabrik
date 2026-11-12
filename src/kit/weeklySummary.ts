@@ -205,6 +205,8 @@ export interface PlainPullRequestFacts {
   readonly mergeable: boolean | null;
   /** Every issue it closes, as GitHub links them: its body's closing keywords and the sidebar's, the first ten. */
   readonly closes: readonly number[];
+  /** When it last went into draft or out of it, ISO 8601, or null when it never has. */
+  readonly draftChangedAt: string | null;
   readonly createdAt: string;
 }
 
