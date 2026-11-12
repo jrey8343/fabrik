@@ -1,5 +1,7 @@
 // The setup program's command line: each question has a flag, an empty value
 // or a --no- form answers no, and anything else is refused with the usage line.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
 
@@ -143,6 +145,17 @@ describe("The setup program's flags", () => {
 
     expect(SETUP_USAGE.split("\n")).toHaveLength(1);
     expect([...SETUP_USAGE.matchAll(/--[a-z-]+=?/g)].map((match) => match[0]).sort()).toEqual([...flags].sort());
+  });
+
+  it("are each named in the README's account of Setup's flags", () => {
+    const readme = readFileSync(resolve(import.meta.dirname, "..", "..", "README.md"), "utf8");
+    const account = readme.split("\n").find((line) => line.startsWith("Setup's flags go after the release")) ?? "";
+
+    for (const [flag] of SETUP_USAGE.matchAll(/--[a-z-]+=?/g)) {
+      if (flag === "--release=" || flag.startsWith("--no-")) continue;
+      expect(account, flag).toContain(`\`${flag}`);
+    }
+    expect(account).toContain("`--no-production`");
   });
 
   it("takes every flag its usage line lists, but the one the bootstrap takes itself", () => {
