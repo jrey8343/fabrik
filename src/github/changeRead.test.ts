@@ -179,6 +179,17 @@ describe("Reading a pull request's change fingerprint with git", () => {
     expect(afterProduct.product).not.toBe(before.product);
   });
 
+  it("names a file whose path has a space in it, and one Git quotes, as they are", async () => {
+    await git(work, "checkout", "--quiet", BRANCH);
+    const head = await commit(work, { "docs/read me.md": "Hello\n", 'docs/café "menu".md': "Bonjour\n" }, "Add the docs");
+    await git(work, "push", "--quiet", "origin", BRANCH);
+
+    const { files } = await readChangeFingerprint(head, REMOTE());
+
+    expect(Object.keys(files ?? {})).toEqual(expect.arrayContaining(["docs/read me.md", 'docs/café "menu".md']));
+    expect(Object.keys(files ?? {})).toHaveLength(8);
+  });
+
   it("is of nothing for a head the default branch already holds", async () => {
     expect(await readChangeFingerprint(mainHead, REMOTE())).toMatchObject({ files: {} });
   });
