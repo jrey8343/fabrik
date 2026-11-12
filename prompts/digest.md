@@ -70,6 +70,14 @@ What an item holds:
 - There is no fourth kind for lines that are only worth reading: those go in the second fold. A refactor's list may well be empty.
 - The Kit refuses a fifth item. When more than four things qualify, keep every `asked-not-here` item, putting asks that share a cause in one item, then what a merge would be hardest to undo.
 
+`places`, on any item: the lines it is about, as up to three places, or an empty list when it is about no lines.
+
+- A place is a file and a range of its lines at this head: `path`, from the repo's root; `start` and `end`, its first and last line, both included, counting the file's first line as 1; and `as`.
+- `as` is `code` for code, and `words` for words an End user reads, such as a label, a message or how a price is worded.
+- At most three places on an item, and at most 40 lines in each. Name the fewest lines that show the thing. The Kit cuts a longer place to its first 40 lines, and refuses a Digest with a fourth place on an item.
+- Take each line number from the file as it stands at this head, as `grep -n` or `git blame` gives it, never from a diff, a Verdict or the pull request's body. The Kit drops a place whose file or lines the head does not have, and keeps the item.
+- Point; never quote. The Kit links each place after the item's sentence, and the Operator is shown the real lines from the head. Don't retype them in `claim` or `sentence`, or anywhere in the top.
+
 `suggestedRequest`, on an item that is `asked-not-here` or `not-proven`: the request the Operator could send as it stands, in at most 40 words, or `null` when you have none. The Kit does not show it in the Digest.
 
 - Always an instruction that would get the thing built or shown, such as "Add …", "Rename …" or "Test …". Never a question to the Operator, and never a choice between two courses.
@@ -149,6 +157,10 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
       "claim": "The heading still says \"Saved cart\".",
       "sentence": "You asked for \"basket\" throughout. The Request-changes run renamed the button and left the page's heading as it was; its notes give no reason.",
       "asks": ["review-311"],
+      "places": [
+        { "path": "src/pages/saved-basket.tsx", "start": 14, "end": 16, "as": "words" },
+        { "path": "src/pages/saved-basket.test.tsx", "start": 22, "end": 25, "as": "code" }
+      ],
       "suggestedRequest": "Rename the saved-basket page's heading from \"Saved cart\" to \"Saved basket\", and update the test that reads it."
     },
     {
@@ -156,6 +168,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
       "claim": "Prices hold for 24 hours.",
       "sentence": "The Ticket said \"for a while\" and the Implementer chose a day. How long a shopper's price holds is a pricing call.",
       "asks": [],
+      "places": [{ "path": "src/basket/saved.ts", "start": 31, "end": 38, "as": "code" }],
       "suggestedRequest": null
     },
     {
@@ -163,6 +176,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
       "claim": "Repricing after a day has no end-to-end test.",
       "sentence": "A unit test moves the clock; nothing drives the page a shopper returns to.",
       "asks": [],
+      "places": [{ "path": "src/basket/saved.test.ts", "start": 48, "end": 71, "as": "code" }],
       "suggestedRequest": "Add an end-to-end test that saves a basket, moves the clock a day, returns to /basket and checks the repriced total and the list of what changed."
     }
   ],
@@ -176,10 +190,10 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
 </digest>
 
 - `asks` holds your answer to every ask of Kit code's, under Kit code's id for it, and to every criterion, under an id of your own. Each has `id`, `answer`, `where` and `checkedBy`, and a criterion has `criterion` too. No id twice.
-- `items` is a list of at most four items, and an empty list when nothing needs the Operator's eyes. Each has `kind`, `claim`, `sentence`, `asks` and `suggestedRequest`: `asks` is a list, empty on any kind but `asked-not-here`, and `suggestedRequest` is text or `null`. `claim` and `sentence` are plain text.
+- `items` is a list of at most four items, and an empty list when nothing needs the Operator's eyes. Each has `kind`, `claim`, `sentence`, `asks`, `places` and `suggestedRequest`: `asks` is a list, empty on any kind but `asked-not-here`; `places` is a list of at most three places, each with `path`, `start`, `end` and `as`, and an empty list when the item is about no lines; and `suggestedRequest` is text or `null`. `claim` and `sentence` are plain text.
 - `whatItDoes` and `howItGotHere` are plain text: no Markdown, no code, and each within its 40 words.
 - `followUps` is a list of Kit code's ids, such as `f1`, and an empty list when there is none to show.
 - `walkthrough` and `decided` are Markdown, with only what GitHub renders in a pull request: lists, tables, code blocks and Mermaid. No headings and no HTML: the Kit gives each fold its title.
 - `roundsLine` is plain text on one line.
 - Every field is required, and no text may be empty. The Kit checks the reply's shape, and a reply that breaks it posts no Digest.
-- Write no layout of your own around the JSON: the Kit adds the opening line, the headings, the Follow-ups' titles and links, the folds, the table of the rounds, the table of the asks and the link to the run.
+- Write no layout of your own around the JSON: the Kit adds the opening line, the headings, the link to each place, the Follow-ups' titles and links, the folds, the table of the rounds, the table of the asks and the link to the run.

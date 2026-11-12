@@ -5,6 +5,7 @@
 // read library is to read one through it, so this module imports no package
 // and nothing that runs an agent or a job. Pure.
 import type { DigestAsk, DigestFacts, Round } from "./digestFacts.ts";
+import { MAX_PLACES, type NamedPlace, PLACE_KINDS } from "./digestPlaces.ts";
 import { markerJson } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
@@ -161,6 +162,12 @@ export interface DigestItem {
   /** On an asked-not-here item: the ids of the asks it is about. Empty on every other kind. */
   readonly asks: readonly string[];
   /**
+   * The lines the item is about: none, or up to three places in the head.
+   * The item points at them and never quotes them. Kit code checks each
+   * against the head before the Digest lands (src/loop/digestPlaces.ts).
+   */
+  readonly places: readonly NamedPlace[];
+  /**
    * A request the Operator could send as it stands: an instruction that
    * would get the thing built or shown. Never on a yours-to-judge item. It
    * is not rendered on GitHub.
@@ -231,6 +238,32 @@ function readAnswer(value: unknown, where: string, errors: string[]): DigestAnsw
   return { id: (id as string).trim(), ...(ofCriterion ? { criterion: criterion as string } : {}), answer, where: looked as string, checkedBy };
 }
 
+/** One place of an item's `places`, or null with what is wrong with it added to `errors`. A line number that is wrong is no broken shape: the place is dropped when the Digest lands. */
+function readPlace(value: unknown, where: string, errors: string[]): NamedPlace | null {
+  if (!isObject(value)) {
+    errors.push(`${where} must be an object`);
+    return null;
+  }
+  const errorsBefore = errors.length;
+  const { path, start, end } = value;
+  if (!isText(path)) errors.push(`${where}.path must be non-empty text`);
+  if (!Number.isInteger(start)) errors.push(`${where}.start must be a whole number`);
+  if (!Number.isInteger(end)) errors.push(`${where}.end must be a whole number`);
+  const as = oneOf(value["as"], PLACE_KINDS, `${where}.as`, errors);
+  if (errors.length > errorsBefore || as === undefined) return null;
+  return { path: (path as string).trim(), start: start as number, end: end as number, as };
+}
+
+/** An item's `places`, with what is wrong with them added to `errors`: a list of at most three. */
+function readPlaces(value: unknown, where: string, errors: string[]): NamedPlace[] {
+  if (!Array.isArray(value)) {
+    errors.push(`${where} must be a list of at most ${MAX_PLACES} places`);
+    return [];
+  }
+  if (value.length > MAX_PLACES) errors.push(`${where} must be a list of at most ${MAX_PLACES} places, not ${value.length}`);
+  return value.map((place, index) => readPlace(place, `${where}[${index}]`, errors)).filter((place) => place !== null);
+}
+
 /** One item of the reply's `items`, or null with what is wrong with it added to `errors`. */
 function readItem(value: unknown, where: string, errors: string[]): DigestItem | null {
   if (!isObject(value)) {
@@ -243,6 +276,7 @@ function readItem(value: unknown, where: string, errors: string[]): DigestItem |
   if (!isText(claim)) errors.push(`${where}.claim must be non-empty text`);
   if (!isText(sentence)) errors.push(`${where}.sentence must be non-empty text`);
   if (!Array.isArray(asks) || !asks.every(isText)) errors.push(`${where}.asks must be a list of ask ids`);
+  const places = readPlaces(value["places"], `${where}.places`, errors);
   if (suggestedRequest !== null && typeof suggestedRequest !== "string") errors.push(`${where}.suggestedRequest must be text or null`);
   if (errors.length > errorsBefore || kind === undefined) return null;
   return {
@@ -250,6 +284,7 @@ function readItem(value: unknown, where: string, errors: string[]): DigestItem |
     claim: claim as string,
     sentence: sentence as string,
     asks: (asks as string[]).map((id) => id.trim()),
+    places,
     suggestedRequest: isText(suggestedRequest) ? suggestedRequest : null,
   };
 }
