@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { aPullRequest, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import type { CommentFacts, OpenIssueFacts, OpenPullRequestFacts, ReviewFacts } from "../kit/weeklySummary.ts";
 import { followUpsSection } from "../loop/followUps.ts";
+import { planFor } from "../loop/rules.ts";
+import type { RollInsSnapshot } from "../loop/types.ts";
 import { aComment, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aReview, aRollInComment, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { ClosedIssueCommentsFacts, CrossReferenceFacts, Facts } from "./gather.ts";
 import { owedRollInsOf } from "./owedRollIn.ts";
@@ -286,6 +289,76 @@ describe("every owed Roll-in of a repo, from its rows", () => {
     expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
     expect(JSON.parse(JSON.stringify(owed))).toStrictEqual(owed);
     expect(owedRollInsOf(JSON.parse(JSON.stringify(rows)) as Row[])).toEqual(owed);
+  });
+});
+
+describe("the library's owed and the Loop's unsent", () => {
+  /** An issue GitHub cross-references to pull request 50, with what tells whether its Roll-in stands. */
+  interface Held {
+    readonly number: number;
+    readonly closedAs: CrossReferenceFacts["closedAs"];
+    readonly comments: readonly CommentFacts[];
+  }
+  const settled = (number: number, onto = 50): CommentFacts => aRollInComment(onto, SETTLED_AT, { issue: number });
+  const finishedAnotherWay = aComment("**Design session finished.** The Kit rewrote this issue as an agent brief.", "2026-11-12T11:00:00Z");
+  const reopeningNote = aComment("<!-- fabrik:roll-in-reopened -->\n#49 merged before this Roll-in was sent, so the Kit reopened this issue for Triage.", "2026-11-12T11:00:00Z");
+  const unreadable = { ...settled(37), body: settled(37).body.split("\n").toSpliced(1, 1).join("\n") };
+
+  /** One of each: three whose Roll-in stands on pull request 50, and one for each way it does not. */
+  const HELD: readonly Held[] = [
+    { number: 30, closedAs: "not_planned", comments: [settled(30)] },
+    { number: 31, closedAs: "not_planned", comments: [settled(31)] },
+    { number: 32, closedAs: "completed", comments: [settled(32)] },
+    { number: 33, closedAs: "not_planned", comments: [{ ...settled(33), author: "operator", byBot: false }] },
+    { number: 34, closedAs: "not_planned", comments: [settled(34), finishedAnotherWay] },
+    { number: 35, closedAs: "not_planned", comments: [settled(35, 49)] },
+    { number: 36, closedAs: "not_planned", comments: [settled(36), reopeningNote] },
+    { number: 37, closedAs: "not_planned", comments: [unreadable] },
+    { number: 38, closedAs: "not_planned", comments: [settled(38)] },
+    { number: 39, closedAs: null, comments: [settled(39)] },
+  ];
+  const REVIEWS: readonly ReviewFacts[] = [
+    aReview("2026-11-12T12:00:00Z", { id: 901, body: "Roll in #31: read the prices once per page." }),
+    aReview("2026-11-12T12:10:00Z", { id: 902, state: "dismissed", body: "Roll in #38." }),
+    aReview("2026-11-12T12:20:00Z", { id: 903, author: "someone", body: "Roll in #30 and #37 too." }),
+  ];
+
+  /** The issues the library reports as owed on pull request 50, from a gather's facts of the repo. */
+  function owedByTheLibrary(): number[] {
+    const facts = repoWith({
+      reviews: REVIEWS,
+      crossReferences: HELD.map(({ number, closedAs }) => crossReference({ issue: number, title: `Issue ${number}`, open: closedAs === null, closedAs })),
+      closedIssueComments: HELD.map(({ number, comments }) => ({ issue: number, comments })),
+    });
+    return owedRollInsOf(rowsIn(facts)).flatMap(({ issue, pullRequest }) => (pullRequest === 50 ? [issue] : []));
+  }
+
+  /** The issues the Loop reopens when pull request 50 closes, from its snapshot of the same repo. */
+  function reopenedByTheLoop(merged: boolean): number[] {
+    const rollIns: RollInsSnapshot = {
+      repo: "owner/product",
+      requestChanges: REVIEWS.filter(({ author, state }) => author === "operator" && (state === "changes-requested" || state === "dismissed")).map(({ body, state }) => ({ body, dismissed: state === "dismissed" })),
+      issues: HELD.map(({ number, closedAs, comments }) => ({
+        number,
+        title: `Issue ${number}`,
+        repo: "owner/product",
+        closedAs,
+        comments: comments.map(({ body, author, at, url }) => ({ body, byApp: author === "fabrik-app[bot]", at, url })),
+      })),
+    };
+    const closed = aPullRequest({ number: 50, ticket: 7, open: false, draft: false, url: "https://github.com/owner/product/pull/50" });
+    const plan = planFor({ kind: "pull-request-closed", pullRequest: 50, merged, closedByBot: false }, snapshotOfPullRequest(closed, { rollIns }), kitConfig());
+    return plan.kind === "act" ? plan.actions.flatMap((action) => (action.kind === "reopen" ? [action.issue] : [])) : [];
+  }
+
+  it.each([
+    ["merge", true],
+    ["close unmerged", false],
+  ])("are the same issues for the same facts: those the library reports as owed on a pull request are exactly those the Loop would reopen were it to %s now", (_how, merged) => {
+    const owed = owedByTheLibrary();
+
+    expect(owed).toEqual([30, 37, 38]);
+    expect(reopenedByTheLoop(merged)).toEqual(owed);
   });
 });
 
