@@ -320,7 +320,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     detail: run.report?.detail ?? "",
     commits: run.report?.commits === undefined ? null : commitsLeft(run.report.commits),
-    standing: broken === null ? `This is an Infrastructure failure, so ${notRetried(run.role)}.` : freeBrokenRun(pullRequest),
+    failureKind: broken === null ? `This is an Infrastructure failure, so ${notRetried(run.role)}.` : freeBrokenRun(pullRequest),
     resume: resumeAfter(failure, run, resume),
     pointer: repoWide?.pointer ?? null,
     runUrl: run.runUrl,
@@ -505,7 +505,7 @@ export function prototypeTurnRefused(issueNumber: number, operator: string, how:
     failed: `The prototype turn on #${issueNumber} failed: ${how}.`,
     detail: "",
     commits: null,
-    standing: `This is an Infrastructure failure, so ${NOT_RETRIED}.`,
+    failureKind: `This is an Infrastructure failure, so ${NOT_RETRIED}.`,
     resume: CARRY_ON_AFTER_PROTOTYPE,
     pointer: null,
     runUrl,
@@ -527,7 +527,7 @@ function noticeBody(notice: {
   readonly detail: string;
   readonly commits: string | null;
   /** What kind of failure it was and what the Loop does about it, as one sentence. */
-  readonly standing: string;
+  readonly failureKind: string;
   readonly resume: string;
   readonly pointer: string | null;
   readonly runUrl: string;
@@ -539,7 +539,7 @@ function noticeBody(notice: {
     ...(detail === "" ? [] : ["", `> ${detail}`]),
     ...(notice.commits === null ? [] : ["", notice.commits]),
     "",
-    `${notice.standing} ${notice.resume}`,
+    `${notice.failureKind} ${notice.resume}`,
     ...(notice.pointer === null ? [] : ["", notice.pointer]),
     "",
     `[The run](${notice.runUrl})`,
