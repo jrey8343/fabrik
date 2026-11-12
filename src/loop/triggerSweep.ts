@@ -56,6 +56,11 @@ const PARKING_MARKERS: Partial<Record<TriggerLabel, string>> = {
  * off, it gives up. The count resets whenever the label comes off, so only
  * the Operator adding it again restarts the work after a give-up. With the
  * Actions API unread, it leaves every label alone and says so.
+ *
+ * agent:digest gets neither strike: after the same wait with no Digest job
+ * under way on its pull request, its lost start ends the attempt (`lostStart`),
+ * weighed on `openAgentPullRequests`, every open agent PR as the tick read
+ * them, or null when it read none.
  */
 export function sweepStuckTriggers(
   now: string,
