@@ -1,13 +1,14 @@
 // A Digest run's way through the Kit's jobs (ADR-0022): what the Kit job
 // passes out for it, what the push job applies after it, the event that
 // stands for it, and what a failed landing says.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import type { AgentRunResult } from "../agent/result.ts";
 import { agentFailureEventFrom, agentRunEventFrom, digestEventFrom } from "../github/events.ts";
-import { isAgentJobNamed } from "../github/snapshot.ts";
+import { DIGEST_JOB_NAME, isAgentJobNamed } from "../github/snapshot.ts";
 import { planFor } from "../loop/rules.ts";
-import type { DigestGiven } from "../loop/digestContract.ts";
+import { DIGEST_FOLDS_MARKER, type DigestGiven, digestCommentOf, noDigestLine } from "../loop/digestContract.ts";
 import type { Plan } from "../loop/types.ts";
 import { kitJobOutputs } from "./jobs.ts";
 import { kitSaidOf } from "./kitSaid.ts";
@@ -159,5 +160,37 @@ describe("What a Digest run's push job says it is landing", () => {
     );
 
     expect(landing).toEqual({ job: "push", runUrl: RUN, doing: "the no-Digest line of the Digest run on #50", target: 50, agentWork: false, role: "digest" });
+  });
+});
+
+describe("The README's Digest section", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const headings = [...readme.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+  const section = readme.split("\n## Digest\n")[1]?.split("\n## ")[0] ?? "";
+
+  it("comes straight after Review's", () => {
+    expect(headings[headings.indexOf("Review") + 1]).toBe("Digest");
+  });
+
+  it("says what the label is honoured on, what the writer is, and the first line of the comment and of the no-Digest line, as the contract writes them", () => {
+    const digest = digestCommentOf({ whatItDoes: "w", howItGotHere: "h", walkthrough: "t", decided: "d" }, { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN });
+    const firstLine = (body: string) => (body.split("\n")[0] ?? "").replace(/"[0-9a-f]{40}"/, "…").replace(/"how":"[a-z-]+"/, '"how":…');
+
+    expect(section).toContain("- **The label**: adding `agent:digest` to an agent pull request");
+    expect(section).toContain("whose latest Verdict is a pass on its current head");
+    expect(section).toContain(`\`${DIGEST_JOB_NAME} PR #<agent PR>\``);
+    expect(section).toContain("`roles.digest`");
+    expect(section).toContain("`.fabrik/digest.md`");
+    expect(section).toContain(`\`${firstLine(digest.ok ? digest.body : "")}\``);
+    expect(section).toContain(`\`${DIGEST_FOLDS_MARKER}\``);
+    expect(section).toContain(`\`${firstLine(noDigestLine({ head: HEAD_SHA, how: "failed" }))}\``);
+    expect(section).toContain('"No Digest could be written for this head"');
+  });
+
+  it("names every way an attempt that ran can end with no Digest", () => {
+    const noDigest = section.split("\n").find((line) => line.startsWith("- **No Digest**")) ?? "";
+
+    for (const how of ["failed", "timed-out", "refused"]) expect(noDigest).toContain(`\`${how}\``);
+    expect(noDigest).toContain("mentions nobody");
   });
 });
