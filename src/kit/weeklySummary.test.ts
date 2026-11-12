@@ -70,6 +70,7 @@ function aRepoKit(overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
     branch: "main",
     config: { ok: true, config: DEFAULT_KIT_CONFIG },
     dispatch: { candidates: { tickets: [], researchDecisions: [] }, runs: { implement: 0, research: 0, implementTickets: [] } },
+    headChecks: {},
     ...overrides,
   };
 }

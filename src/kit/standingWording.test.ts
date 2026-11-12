@@ -101,7 +101,7 @@ describe("the wording of a failed research run", () => {
 
 describe("the wording of a Subscription's issue", () => {
   const listing = (...subscriptions: readonly string[]) =>
-    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null }) as const;
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, headChecks: {} }) as const;
   const kitIssue = (number: number, labels: readonly string[], subscription: string, resetsAt: string | null = null) => ({
     open: anOpenIssue({ number, labels, createdAt: SINCE }),
     kit: { number, labels, body: [subscriptionMarker(subscription), ...(resetsAt === null ? [] : [resetsAtMarker(resetsAt)])].join("\n"), comments: [] },

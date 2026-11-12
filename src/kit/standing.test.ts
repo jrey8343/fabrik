@@ -271,7 +271,7 @@ describe("the Standing rule", () => {
 
   describe("a Subscription's issue", () => {
     const listing = (...subscriptions: readonly string[]) =>
-      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null } }) as const;
+      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, headChecks: {} } }) as const;
     /** Open Kit-owned issue `number`, labelled `labels`, naming `subscription` in its body (none when null), opened at `createdAt`: as the open issues and as the Kit's issues. */
     const kitIssue = (number: number, labels: readonly string[], subscription: string | null, createdAt: string, body = "") => ({
       open: anOpenIssue({ number, labels, createdAt, labelEvents: labels.map((label) => aLabelAdded(label, createdAt)) }),

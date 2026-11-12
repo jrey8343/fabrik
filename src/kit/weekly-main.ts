@@ -14,10 +14,11 @@
 // with Checks, Contents and Issues read, and FABRIK_ACTIONS_TOKEN, with
 // Actions read, each on every installed repo and each unset when its mint
 // failed. The Actions token also reads the runs in progress that Held's
-// max_in_flight line counts (#476). FABRIK_STORE_DIR is the store's checkout, and
+// max_in_flight line counts (#476), and the Ticks token, with its Checks read,
+// the Required checks on each open Plain pull request's head. FABRIK_STORE_DIR is the store's checkout, and
 // FABRIK_APP_SLUG the Fabrik App's slug, which names its label events.
 import { appendFile } from "node:fs/promises";
-import { gatherEveryRepoFacts, productReposOf } from "../github/facts.ts";
+import { gatherEveryRepoFacts, gatherHeadChecks, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError, type Repo } from "../github/client.ts";
 import { readCallerRuns } from "../github/loopHealthFacts.ts";
 import { countDispatchedRuns, defaultBranchOf, type DispatchedRuns, gatherDispatchCandidates, readKitConfigSources } from "../github/snapshot.ts";
@@ -186,18 +187,24 @@ async function readLoopHealth(repos: readonly Repo[], appLogin: string, now: num
 /**
  * One Product repo's Kit config at its default branch's head, read and
  * resolved as the Loop reads it, and, when it's valid, what a Dispatch check
- * weighs there (#476). Null for a repo with no default branch yet. The runs in
+ * weighs there (#476), with the Required checks it lists on each open Plain
+ * pull request's head. Null for a repo with no default branch yet. The runs in
  * progress are null when the Actions token wasn't minted or GitHub wouldn't
- * list them.
+ * list them; the checks are unread when the Ticks token, the one holding
+ * Checks read, wasn't minted.
  */
-async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo, appLogin: string): Promise<RepoKitFacts | null> {
+async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo, appLogin: string, checks: GitHub | null, plainHeads: readonly string[]): Promise<RepoKitFacts | null> {
   const branch = await defaultBranchOf(products, repo);
   if (branch === null) return null;
   const config = resolveKitConfig(await readKitConfigSources(products, repo, branch.head));
   const name = `${repo.owner}/${repo.name}`;
-  if (!config.ok) return { repo: name, branch: branch.name, config, dispatch: null };
-  const [candidates, runs] = await Promise.all([gatherDispatchCandidates(products, repo, appLogin), readDispatchedRuns(actions, repo)]);
-  return { repo: name, branch: branch.name, config, dispatch: { candidates, runs } };
+  if (!config.ok) return { repo: name, branch: branch.name, config, dispatch: null, headChecks: {} };
+  const [candidates, runs, headChecks] = await Promise.all([
+    gatherDispatchCandidates(products, repo, appLogin),
+    readDispatchedRuns(actions, repo),
+    checks === null ? {} : gatherHeadChecks(checks, repo, plainHeads, config.config.sandbox.checks),
+  ]);
+  return { repo: name, branch: branch.name, config, dispatch: { candidates, runs }, headChecks };
 }
 
 /** The Implement and Research runs in progress, as Dispatch counts them, or null when they can't be read. */
@@ -224,13 +231,15 @@ async function readRepoKits(
   appLogin: string,
 ): Promise<{ facts: GitHubFacts[]; unread: UnreadRepo[]; kits: RepoKitFacts[] }> {
   const actions = optionalGitHub("FABRIK_ACTIONS_TOKEN", process.env["GITHUB_API_URL"]);
+  const checks = optionalGitHub("FABRIK_TICKS_TOKEN", process.env["GITHUB_API_URL"]);
   const facts: GitHubFacts[] = [];
   const unread = [...gathered.unread];
   const kits: RepoKitFacts[] = [];
   for (const repoFacts of gathered.facts) {
     const repo = repos.find(({ owner, name }) => `${owner}/${name}` === repoFacts.repo);
     try {
-      const kit = repo === undefined ? null : await readRepoKit(products, actions, repo, appLogin);
+      const plainHeads = repoFacts.plainPullRequests.map(({ headSha }) => headSha);
+      const kit = repo === undefined ? null : await readRepoKit(products, actions, repo, appLogin, checks, plainHeads);
       if (kit !== null) kits.push(kit);
       facts.push(repoFacts);
     } catch (error) {

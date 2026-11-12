@@ -155,6 +155,8 @@ export interface OpenReplayFacts {
 
 /** What the summary reads of one Product repo on GitHub: what the metrics read, and the rest. */
 export interface GitHubFacts extends MetricFacts {
+  /** The repo's open Plain pull requests: every open one that is no agent PR, whoever opened it. Never in the metrics, which read agent PRs alone. */
+  readonly plainPullRequests: readonly PlainPullRequestFacts[];
   readonly specs: readonly SpecFacts[];
   /** The repo's open issues. */
   readonly openIssues: readonly OpenIssueFacts[];
@@ -188,6 +190,34 @@ export interface GitHubFacts extends MetricFacts {
   readonly kitIssues: readonly KitIssueSnapshot[];
 }
 
+/** An open Plain pull request (GLOSSARY.md): one that is no agent PR, whoever opened it. */
+export interface PlainPullRequestFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: a login, a bot's ending `[bot]`, with no `@`. */
+  readonly author: string;
+  /** Its branch's name. */
+  readonly headRef: string;
+  readonly headSha: string;
+  /** When its head commit was made, ISO 8601, or null when that commit wasn't read. */
+  readonly headCommittedAt: string | null;
+  readonly draft: boolean;
+  /** Whether it merges cleanly; null while GitHub hasn't worked it out, which is read as merging cleanly. */
+  readonly mergeable: boolean | null;
+  /** The issue its body closes, or null. */
+  readonly closes: number | null;
+  readonly createdAt: string;
+}
+
+/** One Required check the Kit config lists, as it stands on a head. */
+export interface RequiredCheckFact {
+  readonly name: string;
+  readonly is: "passed" | "running" | "failing" | "never-reported";
+}
+
+/** Each Required check the Kit config lists, on one head, in the order it lists them; or the whole fact unread. */
+export type RequiredChecksFact = readonly RequiredCheckFact[] | "unread";
+
 /**
  * One Product repo's Kit config, read at its default branch's head as the
  * Loop reads it, which drives the caps Held reports, and what Dispatch weighs
@@ -201,6 +231,12 @@ export interface RepoKitFacts {
   readonly config: KitConfigResult;
   /** What a Dispatch check weighs, read as it reads it; null when the Kit config is invalid, as then nothing is read. */
   readonly dispatch: DispatchFacts | null;
+  /**
+   * The Required checks on each open Plain pull request's head, by its sha. A
+   * head missing is unread: the checks token wasn't minted, the read failed,
+   * or the Kit config is invalid or lists no checks.
+   */
+  readonly headChecks: Readonly<Record<string, RequiredChecksFact>>;
 }
 
 /** What a Dispatch check weighs in one Product repo, as the Weekly summary reads it. */
