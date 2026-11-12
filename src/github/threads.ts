@@ -317,7 +317,16 @@ export type PullRequestHistoryItem =
  * while a Retry is in flight (#427), from the Execution flaw that called for
  * it until the next Verdict, as its push's Review is: it's deferred, so neither
  * that Review nor a Retry is given it, and that Verdict, pass or flaw, gives
- * way to it. Anyone else's on a draft does nothing.
+ * way to it. And so does the Operator's own on a passed draft whose Merge
+ * gate has yet to open, as while its Digest is being written (ADR-0022): a
+ * draft whose latest Verdict is a pass on `head`, the PR's head now, which
+ * has not left draft since that pass and has no run in flight on it. It
+ * counts as one given at the Merge gate does, unbuilt and not noted, so the
+ * event path acts on it at once and the undelivered check finds it once the
+ * PR is out of draft. The history holds no push but the Kit's own, so a pass
+ * on a head the PR has moved on from is told by `head` alone, and with no
+ * `head` given no review counts this way. Anyone else's on a draft does
+ * nothing.
  * A run is started by the Kit's note naming its reviews, or by an Execution
  * flaw that gave way to them, and is in flight until it pushes, is given a
  * Verdict or ends, or the PR leaves draft. Its push or Verdict settles the
@@ -335,6 +344,7 @@ export function requestChangesSinceRunIn(
   history: readonly PullRequestHistoryItem[],
   notDismissed: ReadonlySet<number> = notDismissedIn(history),
   operator: string | null = null,
+  head: string | null = null,
 ): Pick<
   PullRequestSnapshot,
   "unbuiltChangesRequests"
@@ -362,6 +372,9 @@ export function requestChangesSinceRunIn(
   let retrying = false;
   // The Operator's reviews on the draft while a Retry was in flight, that no run has been started for yet (#427).
   let deferred: number[] = [];
+  // The head of the pass whose Merge gate has yet to open (ADR-0022): from a pass until the PR leaves draft, the next
+  // Verdict, or the Kit's attempt to bring the PR up to date with main, which moves its head or puts a run in flight.
+  let passed: string | null = null;
   for (const item of ordered) {
     switch (item.kind) {
       case "draft":
@@ -373,12 +386,16 @@ export function requestChangesSinceRunIn(
         // The Operator took the PR back, so a review deferred for the Retry amends the Ticket for every later run as usual.
         retrying = false;
         deferred = [];
+        // The gate opened, or the Operator opened it by hand: a draft again after this is one they parked.
+        passed = null;
         break;
       case "changes-requested": {
         const operators = operator !== null && item.reviewer === operator && !item.reviewerIsBot;
         const joins = draft && inFlight !== null && operators;
         const defers = draft && inFlight === null && retrying && operators;
-        if (!draft || joins || defers) {
+        // On a passed draft waiting for its gate to open, with no run in flight: as one given at the Merge gate.
+        const waits = draft && inFlight === null && operators && passed !== null && passed === head;
+        if (!draft || joins || defers || waits) {
           reviews.push({ review: item.review, reviewer: item.reviewer, reviewerIsBot: item.reviewerIsBot, submittedAt: item.at });
         }
         if (joins || defers) noted = [...noted, item.review];
@@ -390,6 +407,9 @@ export function requestChangesSinceRunIn(
         const verdict = verdictsIn([item.body])[0];
         if (verdict !== undefined) {
           retrying = verdict.verdict === "execution-flaw" && verdict.requestChangesFirst === undefined && verdict.ticketNotReady !== true;
+          passed = verdict.verdict === "pass" ? verdict.headSha : null;
+        } else if (conflictAttemptIn(item.body) !== null) {
+          passed = null;
         } else if (item.body.startsWith(RETRY_ENDED_MARKER)) {
           // No Retry started, so no Verdict of its gives way: the deferred reviews amend the Ticket as usual, still noted.
           retrying = false;

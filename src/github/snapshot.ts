@@ -1671,7 +1671,8 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     retryNoteSinceVerdict: retryNoteSinceVerdictIn(botComments),
     verdictPostedAt: verdictPostedAtIn(history),
     headPushedAt: headPushedAtOf(pullRequest, fromBots, isAgent),
-    ...requestChangesSinceRunIn(history, notDismissed, operator),
+    // Its head tells a passed draft whose gate has yet to open, where the Operator's Request changes counts (ADR-0022).
+    ...requestChangesSinceRunIn(history, notDismissed, operator, pullRequest.headRefOid),
     leftDraftSinceVerdict: leftDraftSinceVerdictIn(history),
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
