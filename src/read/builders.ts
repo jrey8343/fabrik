@@ -6,6 +6,7 @@
 // import walk refuses, and everything they build survives being written as
 // JSON and read back.
 import type { RunInFlightFact } from "../github/snapshot.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { type ReplayProgress, replayBody } from "../kit/replay.ts";
 import type { ReplayRun, RunRecord } from "../kit/runRecord.ts";
 import type { StandingFacts } from "../kit/standing.ts";
@@ -33,6 +34,7 @@ import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, MAP_
 import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
+import type { Facts } from "./gather.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -359,6 +361,26 @@ export function anOpenMonitorIssue(overrides: Partial<MonitorIssueFacts> = {}): 
 /** What the Standing rule reads of `owner/product`: its GitHub facts, nothing in them unless a test says so, no Kit config read, and the Operator and the Fabrik App by login. */
 export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> = {}): StandingFacts {
   return { kind: "product", github: factsOf(), kit: null, operator: "operator", appLogin: "fabrik-app[bot]", runsEnded: [], ...overrides };
+}
+
+/**
+ * What a gather shaped for Home reads of `owner/product` (./gather.ts): its
+ * Kit config the default at `main`, nothing for Dispatch to weigh, the
+ * Operator `operator`, the Fabrik App `fabrik-app[bot]`, and no GitHub facts,
+ * issue bodies, merges or cross-references unless a test says so.
+ */
+export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts {
+  return {
+    kind: "product",
+    github: factsOf(),
+    kit: { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null },
+    operator: "operator",
+    appLogin: "fabrik-app[bot]",
+    issueBodies: [],
+    mergedLastDay: [],
+    crossReferences: [],
+    ...overrides,
+  };
 }
 
 /** An Implement run in flight on no Ticket the job names, running, its workflow run created an hour before the filing, unless a test says otherwise. */

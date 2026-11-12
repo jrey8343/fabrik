@@ -1,0 +1,150 @@
+import { describe, expect, it } from "vitest";
+import type { RunInFlightFact } from "../github/snapshot.ts";
+import { standingsOf } from "../kit/standing.ts";
+import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
+import { endedHeldLine } from "../loop/heldLine.ts";
+import { handBackMarker } from "../loop/markers.ts";
+import {
+  aComment,
+  aLabelAdded,
+  anOpenIssue,
+  anOpenPullRequest,
+  aPlainPullRequest,
+  aRunInFlight,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  homeFactsOf,
+  standingFactsOf,
+} from "./builders.ts";
+import type { Facts } from "./gather.ts";
+import { type Row, rowsOf } from "./rows.ts";
+
+const NOW = "2026-11-08T20:00:00Z";
+const HEAD = "h".repeat(40);
+
+/** The Standing rule's own answer for the same facts, runs and checks. */
+function ruleOf(facts: Facts, runs: readonly RunInFlightFact[] | "unread", checks: Readonly<Record<string, RequiredChecksFact>>, now = NOW) {
+  const { github, kit, operator, appLogin } = facts;
+  return standingsOf(standingFactsOf({ github, kit: { ...kit, runsInFlight: runs, headChecks: checks }, operator, appLogin: appLogin ?? "fabrik-app[bot]" }), now);
+}
+
+/** Ticket 7, `ready-for-agent`, given `agent:implement` an hour before now. */
+const TICKET = anOpenIssue({ number: 7, title: "Build the thing", labels: ["ready-for-agent", "agent:implement"], labelEvents: [aLabelAdded("agent:implement", "2026-11-08T19:00:00Z")] });
+
+/** A Kit-owned failure notice on Ticket 7: the Kit hands it back. */
+const handedBack = (at: string, overrides: Parameters<typeof aComment>[2] = {}) =>
+  aComment(["<!-- fabrik:implement-run-failed -->", "@operator The Implement run on #7 failed: it crashed.", handBackMarker({ kind: "infrastructure-failure", role: "implement", failure: "crash" })].join("\n"), at, overrides);
+
+describe("a Product repo's rows", () => {
+  it("are the Standing rule's own Standings for the same facts, one row for each, in its order", () => {
+    const facts = homeFactsOf({
+      github: factsOf({
+        openIssues: [
+          TICKET,
+          anOpenIssue({ number: 8, title: "Fix the cart", labels: ["ready-for-agent"] }),
+          anOpenIssue({ number: 9, title: "Tidy the footer", labels: ["needs-triage"], labelEvents: [aLabelAdded("needs-triage", "2026-11-07T09:00:00Z")] }),
+          anOpenIssue({ number: 20, title: "Weekly limit reached", labels: ["fabrik:weekly-limit"], author: "fabrik-app[bot]" }),
+        ],
+        openPullRequests: [anOpenPullRequest({ number: 50, ticket: 8, draft: false, comments: [aVerdictComment("pass", HEAD, "2026-11-07T20:00:00Z")] })],
+        plainPullRequests: [aPlainPullRequest({ number: 70 }), aPlainPullRequest({ number: 71, headSha: "q".repeat(40), draft: true })],
+        kitIssues: [aWeeklyLimitIssue("2026-11-10T00:00:00Z")],
+      }),
+    });
+    const runs = [aRunInFlight({ issue: 7 })];
+    const checks = { ["p".repeat(40)]: [{ name: "test", is: "passed" }] } as const;
+
+    const rows = rowsOf(facts, runs, checks, NOW);
+
+    expect(rows.map(({ standing }) => standing)).toEqual(ruleOf(facts, runs, checks));
+    expect(rows.length).toBeGreaterThan(4);
+  });
+
+  it("are the rule's Standings with the runs and the checks unread", () => {
+    const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], plainPullRequests: [aPlainPullRequest()] }) });
+
+    expect(rowsOf(facts, "unread", {}, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
+  });
+
+  it("give each Standing its title, the issue's, or the pull request's for a Plain one with no issue, and nothing related yet", () => {
+    const facts = homeFactsOf({
+      github: factsOf({
+        openIssues: [TICKET],
+        openPullRequests: [anOpenPullRequest({ number: 51, ticket: null, title: "Speed up the build", draft: false, comments: [aVerdictComment("pass", HEAD, "2026-11-07T20:00:00Z")] })],
+        plainPullRequests: [aPlainPullRequest({ number: 70, title: "fabrik: bump the fabrik group" })],
+      }),
+    });
+
+    const rows = rowsOf(facts, "unread", {}, NOW);
+
+    expect(rows.map(({ standing, title, related, mentions, relatedTo, followUps }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, title, related, mentions, relatedTo, followUps }))).toEqual(
+      expect.arrayContaining([
+        { issue: 7, pullRequest: null, title: "Build the thing", related: [], mentions: [], relatedTo: null, followUps: [] },
+        { issue: null, pullRequest: 51, title: "Speed up the build", related: [], mentions: [], relatedTo: null, followUps: [] },
+        { issue: null, pullRequest: 70, title: "fabrik: bump the fabrik group", related: [], mentions: [], relatedTo: null, followUps: [] },
+      ]),
+    );
+    expect(rows).toHaveLength(3);
+  });
+
+  describe("the last word", () => {
+    const lastWordOf = (facts: Facts) => rowsOf(facts, "unread", {}, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
+
+    it("is the Fabrik App's latest comment on the issue or its pull request, with when and where it was said", () => {
+      const onIssue = aComment("The Kit opened #50 for this Ticket.", "2026-11-08T18:00:00Z", { url: "https://github.com/owner/product/issues/7#issuecomment-1" });
+      const onPullRequest = aComment("Review passed.", "2026-11-08T19:00:00Z", { url: "https://github.com/owner/product/pull/50#issuecomment-2" });
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [{ ...TICKET, comments: [onIssue] }], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, comments: [onPullRequest] })] }) });
+
+      expect(lastWordOf(facts)).toEqual({ text: "Review passed.", at: "2026-11-08T19:00:00Z", url: "https://github.com/owner/product/pull/50#issuecomment-2" });
+    });
+
+    it("is never a held line, and a person's later comment does not replace it", () => {
+      const said = aComment("The Implement run failed.", "2026-11-08T17:00:00Z");
+      const held = aComment(endedHeldLine("implement", 7, { kind: "resumed" }, "2026-11-08T18:00:00Z"), "2026-11-08T18:00:00Z");
+      const person = aComment("Any news?", "2026-11-08T19:00:00Z", { author: "operator", byBot: false });
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [{ ...TICKET, comments: [said, held, person] }] }) });
+
+      expect(lastWordOf(facts)).toMatchObject({ text: "The Implement run failed.", at: "2026-11-08T17:00:00Z" });
+    });
+
+    it("is null when the Fabrik App has said nothing on the work, and another bot's comment is not its word", () => {
+      const other = aComment("Deployed a preview.", "2026-11-08T19:00:00Z", { author: "vercel[bot]" });
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [{ ...TICKET, comments: [other] }] }) });
+
+      expect(lastWordOf(facts)).toBeNull();
+    });
+
+    it("is any bot's latest comment when the gather was given no App login, as the Kit job takes any bot's text for the App's", () => {
+      const other = aComment("Deployed a preview.", "2026-11-08T19:00:00Z", { author: "vercel[bot]" });
+      const facts = homeFactsOf({ appLogin: null, github: factsOf({ openIssues: [{ ...TICKET, comments: [other] }] }) });
+
+      expect(lastWordOf(facts)).toMatchObject({ text: "Deployed a preview." });
+    });
+  });
+
+  it("take any bot's text for the Fabrik App's when the gather was given no App login", () => {
+    const notice = handedBack("2026-11-08T19:30:00Z", { author: "some-app[bot]" });
+    const issues = [{ ...TICKET, comments: [notice] }];
+
+    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), "unread", {}, NOW).map(({ standing }) => standing.name);
+
+    expect(named(null)).toEqual(["yours-to-do"]);
+    expect(named("fabrik-app[bot]")).not.toEqual(["yours-to-do"]);
+  });
+
+  it("survive a JSON round trip", () => {
+    const facts = homeFactsOf({
+      github: factsOf({
+        openIssues: [{ ...TICKET, comments: [aComment("Started.", "2026-11-08T19:10:00Z")] }],
+        openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })],
+        plainPullRequests: [aPlainPullRequest()],
+      }),
+    });
+
+    const rows: Row[] = rowsOf(facts, [aRunInFlight({ issue: 7 })], {}, NOW);
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
+    expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
+  });
+});
