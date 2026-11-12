@@ -223,7 +223,7 @@ function prototypeRound(
         route: event.request.request.route,
         ...(output.recommended === undefined ? {} : { recommended: output.recommended }),
         variants: variants.map(({ letter, summary, component }) => ({ letter, summary, component, preview: null })),
-        captures: null,
+        captures: event.captures,
       }),
       `@${operator} **Design session, round ${round}: the prototype.** Reply with the variant you'd build, and any changes to it, or \`yes\` to take the recommendation.`,
       "",

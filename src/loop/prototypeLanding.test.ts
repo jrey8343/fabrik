@@ -14,6 +14,8 @@ type PrototypeRunFinished = Extract<LoopEvent, { kind: "prototype-run-finished" 
 const REPO = "https://github.com/acme/shop";
 const RUN = `${REPO}/actions/runs/9100/attempts/1`;
 const EVIDENCE_PAGE = `${REPO}/actions/runs/9100/artifacts/9201`;
+/** Where run 9100's prototype job kept the folder capture wrote, zipped (#638). */
+const CAPTURES = { run: 9100, artifact: 9202 };
 /** The head the prototype turn left prototype/7 at, which its push leaves the branch at. */
 const HEAD = "7e3d1c9b5a4f2e0d8c6b4a2f0e9d7c5b3a1f0e2d";
 
@@ -63,6 +65,7 @@ function finished(overrides: Partial<PrototypeRunFinished> = {}): PrototypeRunFi
     changes: { net: variants, commits: variants },
     headSha: HEAD,
     capture: CAPTURED,
+    captures: CAPTURES,
     evidencePage: EVIDENCE_PAGE,
     runUrl: RUN,
     repoUrl: REPO,
@@ -705,8 +708,29 @@ describe("A prototype round's hidden line", () => {
         { letter: "B", summary: "A stepper: class, time, then details.", component: blob("src/pages/book/Stepper.tsx"), preview: null },
         { letter: "C", summary: "A calendar first, the form beside it.", component: blob("src/pages/book/CalendarFirst.tsx"), preview: null },
       ],
-      captures: null,
+      captures: { run: 9100, artifact: 9202 },
     });
+  });
+
+  // #638: the run and the artifact of the folder capture wrote, as a PR's evidence marker names its run and artifact.
+  it("names the captures the prototype job kept, by its run and the artifact's id", () => {
+    expect(roundLineIn(roundOf(planFor(finished(), inSession(), kitConfig())))).toMatchObject({ kind: "prototype", captures: { run: 9100, artifact: 9202 } });
+  });
+
+  it("carries captures as null when the prototype job kept none, the round otherwise the same", () => {
+    const kept = roundOf(planFor(finished(), inSession(), kitConfig()));
+    const none = roundOf(planFor(finished({ captures: null }), inSession(), kitConfig()));
+
+    expect(roundLineIn(none)).toEqual({ ...roundLineIn(kept), captures: null });
+    expect(withoutRoundLines(none)).toBe(withoutRoundLines(kept));
+  });
+
+  it("still names the captures it kept when capture failed once the variants were served", () => {
+    const capture: CaptureResult = { ...CAPTURED, outcome: "failed", reason: "timeout", captures: [] };
+    const body = roundOf(planFor(finished({ capture, evidencePage: null }), inSession(), kitConfig()));
+
+    expect(body.split("\n")[1]).toBe("<!-- fabrik:prototype-round -->");
+    expect(roundLineIn(body)).toMatchObject({ kind: "prototype", captures: { run: 9100, artifact: 9202 } });
   });
 
   it("leaves the round, its line taken out, byte for byte as it was with a preview that names a pull request, and every preview in the line null", () => {
