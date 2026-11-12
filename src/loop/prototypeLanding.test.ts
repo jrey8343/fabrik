@@ -5,6 +5,7 @@ import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import type { CaptureResult } from "../evidence/uiEvidence.ts";
 import { designSessionOf, designTurnFailedIn, pendingPrototypeIn, unansweredPrototypesIn } from "../github/threads.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
+import { roundLineIn, withoutRoundLines } from "./roundLine.ts";
 import { planFor } from "./rules.ts";
 import type { IssueSnapshot, LoopEvent, Plan, Snapshot } from "./types.ts";
 
@@ -86,6 +87,15 @@ function commentsOf(plan: Plan): string[] {
   return plan.actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []));
 }
 
+/** The plan with each comment's Round line taken out (#636): what the Kit posted before the line, which it still shows. */
+function shownBy(plan: Plan): Plan {
+  if (plan.kind !== "act") return plan;
+  return { ...plan, actions: plan.actions.map((action) => (action.kind === "comment" ? { ...action, body: withoutRoundLines(action.body) } : action)) };
+}
+
+/** The comments the plan posts, each as it shows: its Round line taken out. */
+const shownCommentsOf = (plan: Plan): string[] => commentsOf(shownBy(plan));
+
 const DESIGN = DEFAULT_KIT_CONFIG.roles.design;
 
 const blob = (path: string) => `${REPO}/blob/${HEAD}/${path}`;
@@ -94,7 +104,8 @@ describe("Landing a captured prototype turn", () => {
   it("pushes prototype/7, then posts the prototype round numbered after the last: its intro, the branch and the Evidence page, every variant with its component at the pushed head, and \"Which variant?\" with the recommendation", () => {
     const plan = planFor(finished(), inSession(), kitConfig());
 
-    expect(plan).toEqual({
+    // Its hidden line aside (#636), the round is as it always was.
+    expect(shownBy(plan)).toEqual({
       kind: "act",
       actions: [
         { kind: "push-prototype-branch", issue: 7 },
@@ -169,7 +180,7 @@ describe("Landing a prototype turn whose capture failed after it built", () => {
     const plan = planFor(finished({ capture: failed(reason), evidencePage: null }), inSession(), kitConfig());
 
     expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
-    const [round] = commentsOf(plan);
+    const [round] = shownCommentsOf(plan);
     expect(round).toMatch(/^<!-- fabrik:design-round 3 -->\n<!-- fabrik:prototype-round -->\n@jrey \*\*Design session, round 3: the prototype\.\*\*/);
     expect(round).toContain(
       `\n[The prototype branch](${REPO}/tree/prototype/7) · There's no Evidence page: ${words}. The branch holds the variants, and this comment is the prototype's record.\n`,
@@ -194,7 +205,7 @@ describe("Landing a prototype turn whose build or dev server failed", () => {
   it("pushes the branch, then posts a prototype failure round numbered after the last, saying what failed, linking the branch, and asking whether to carry on without a prototype, recommending it", () => {
     const plan = planFor(finished({ capture: failed("build-failed"), evidencePage: null }), inSession(), kitConfig());
 
-    expect(plan).toEqual({
+    expect(shownBy(plan)).toEqual({
       kind: "act",
       actions: [
         { kind: "push-prototype-branch", issue: 7 },
@@ -234,7 +245,8 @@ describe("The preview of each variant, when Kit config declares preview.url", ()
   it("says in the round that each variant's preview is linked beside it once it answers, and asks the push job to link it in that round once it has pushed", () => {
     const plan = planFor(finished(), inSession(), kitConfig({ ui: UI, preview: PREVIEW }));
 
-    expect(plan).toEqual({
+    // Its hidden line aside (#636), the round is as it always was.
+    expect(shownBy(plan)).toEqual({
       kind: "act",
       actions: [
         { kind: "push-prototype-branch", issue: 7 },
@@ -293,7 +305,7 @@ describe("The preview of each variant, when Kit config declares preview.url", ()
     const plan = planFor(finished(), inSession(), kitConfig({ ui: UI }));
 
     expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
-    expect(commentsOf(plan)[0]).not.toMatch(/preview/i);
+    expect(shownCommentsOf(plan)[0]).not.toMatch(/preview/i);
   });
 
   it.each([
@@ -318,7 +330,7 @@ describe("The trust-root guard on a prototype branch (ADR-0005)", () => {
 
     const plan = planFor(finished({ changes }), inSession(), kitConfig());
 
-    expect(plan).toEqual({
+    expect(shownBy(plan)).toEqual({
       kind: "act",
       actions: [
         {
@@ -360,7 +372,7 @@ describe("Landing a prototype turn that made no commit", () => {
   it("pushes nothing, and posts a prototype failure round saying nothing was built", () => {
     const plan = planFor(finished({ changes: { net: [], commits: [] }, headSha: null, capture: undefined, evidencePage: null }), inSession(), kitConfig());
 
-    expect(plan).toEqual({
+    expect(shownBy(plan)).toEqual({
       kind: "act",
       actions: [
         {
@@ -669,5 +681,174 @@ describe("A failed prototype turn", () => {
 
   it("ends the pending request, so the Operator's reply starts an ordinary turn", () => {
     expect(pendingPrototypeIn(requestThen(planFor(failedTurn({ jobResult: "failure" }), inSession(), kitConfig())))).toBeNull();
+  });
+});
+
+// A prototype round's fields as data (#636): its hidden line, the third, under the round's two markers.
+describe("A prototype round's hidden line", () => {
+  const roundOf = (plan: Plan): string => commentsOf(plan)[0] ?? "";
+
+  it("puts the line third, under both markers, and reads back the route, the variants with their component addresses, the Kit's question and the recommendation, as the comment shows them", () => {
+    const body = roundOf(planFor(finished(), inSession(), kitConfig()));
+
+    expect(body.split("\n").slice(0, 2)).toEqual(["<!-- fabrik:design-round 3 -->", "<!-- fabrik:prototype-round -->"]);
+    expect(body.split("\n")[2]).toMatch(/^<!-- fabrik:round-line \{.*\} -->$/);
+    expect(roundLineIn(body)).toEqual({
+      v: 1,
+      kind: "prototype",
+      round: 3,
+      intro: "Three ways to book a class, all on `/book`.",
+      questions: [{ question: "Which variant?", recommendation: "B, with the calendar from C on its first step." }],
+      route: "/book",
+      variants: [
+        { letter: "A", summary: "One long form, every field on the page.", component: blob("src/pages/book/LongForm.tsx"), preview: null },
+        { letter: "B", summary: "A stepper: class, time, then details.", component: blob("src/pages/book/Stepper.tsx"), preview: null },
+        { letter: "C", summary: "A calendar first, the form beside it.", component: blob("src/pages/book/CalendarFirst.tsx"), preview: null },
+      ],
+      captures: null,
+    });
+  });
+
+  it("leaves the round, its line taken out, byte for byte as it was with a preview that names a pull request, and every preview in the line null", () => {
+    const plan = planFor(finished(), inSession(), kitConfig({ ui: UI, preview: { url: "https://deploy-preview-{pr}--shop.netlify.app" } }));
+
+    expect(withoutRoundLines(roundOf(plan))).toBe(
+      [
+        "<!-- fabrik:design-round 3 -->",
+        "<!-- fabrik:prototype-round -->",
+        "@jrey **Design session, round 3: the prototype.** Reply with the variant you'd build, and any changes to it, or `yes` to take the recommendation.",
+        "",
+        "Three ways to book a class, all on `/book`.",
+        "",
+        `[The prototype branch](${REPO}/tree/prototype/7) · [The Evidence page](${EVIDENCE_PAGE}) of each variant's screenshots and videos. The Evidence page expires in about 30 days, so this comment is the prototype's record.`,
+        "",
+        `- **A.** One long form, every field on the page. [\`src/pages/book/LongForm.tsx\`](${blob("src/pages/book/LongForm.tsx")})`,
+        `- **B.** A stepper: class, time, then details. [\`src/pages/book/Stepper.tsx\`](${blob("src/pages/book/Stepper.tsx")})`,
+        `- **C.** A calendar first, the form beside it. [\`src/pages/book/CalendarFirst.tsx\`](${blob("src/pages/book/CalendarFirst.tsx")})`,
+        "",
+        "There's no preview for prototypes: Kit config's `preview.url` names the pull request, as `{pr}`, and a prototype has none.",
+        "",
+        "**1. Which variant?**",
+        "➡️ Recommended: B, with the calendar from C on its first step.",
+      ].join("\n"),
+    );
+    const line = roundLineIn(roundOf(plan));
+    expect(line?.kind === "prototype" && line.variants.map(({ preview }) => preview)).toEqual([null, null, null]);
+  });
+
+  it("carries the advised variant's letter when the turn's recommended is one of its variants', the round shown as it would have been", () => {
+    const plan = planFor(finished({ output: JSON.stringify({ ...ROUND, recommended: "B" }) }), inSession(), kitConfig());
+
+    expect(roundLineIn(roundOf(plan))).toMatchObject({ kind: "prototype", recommended: "B" });
+    expect(withoutRoundLines(roundOf(plan))).toBe(withoutRoundLines(roundOf(planFor(finished(), inSession(), kitConfig()))));
+    expect(plan.kind === "act" && plan.notes).toBeUndefined();
+  });
+
+  it("lands an output with no recommended as before: no letter in the line and nothing noted", () => {
+    const plan = planFor(finished(), inSession(), kitConfig());
+
+    expect(roundLineIn(roundOf(plan))).not.toHaveProperty("recommended");
+    expect(plan.kind === "act" && plan.notes).toBeUndefined();
+  });
+
+  it.each([
+    ["a letter past the last variant", "D", '"D"'],
+    ["a lower-case letter", "b", '"b"'],
+    ["a word", "Stepper", '"Stepper"'],
+    ["not text", 2, "2"],
+  ])("refuses %s: the round lands as it would have, its line carries no recommended, and the plan's notes name the refusal", (_, recommended, given) => {
+    const plan = planFor(finished({ output: JSON.stringify({ ...ROUND, recommended }) }), inSession(), kitConfig());
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+    expect(roundOf(plan)).toBe(roundOf(planFor(finished(), inSession(), kitConfig())));
+    expect(roundLineIn(roundOf(plan))).not.toHaveProperty("recommended");
+    expect(plan.kind === "act" && plan.notes).toEqual([
+      `The prototype round on #7 advises no variant by letter: the prototype turn's recommended, ${given}, isn't one of its variants' letters (A, B or C)`,
+    ]);
+  });
+
+  it("notes the refusal beside the preview it asks the push job to link", () => {
+    const plan = planFor(finished({ output: JSON.stringify({ ...ROUND, recommended: "D" }) }), inSession(), kitConfig({ ui: UI, preview: { url: "https://{branch_slug}--shop.netlify.app" } }));
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment", "link-prototype-preview"]);
+    expect(plan.kind === "act" && plan.notes).toHaveLength(1);
+  });
+
+  it("takes the route the Operator said yes to from the request, never from what the turn said", () => {
+    const output = JSON.stringify({ ...ROUND, intro: "Built on `/checkout` instead.", route: "/checkout" });
+
+    expect(roundLineIn(roundOf(planFor(finished({ output }), inSession(), kitConfig())))).toMatchObject({ route: "/book" });
+  });
+
+  it("writes agent text holding @, <, > or --> so it mentions nobody and can't end the line early, and reads it back as the comment shows it, a component's address as its link has it", () => {
+    const round = {
+      ...ROUND,
+      intro: "As @jrey asked, three ways --> <here>.",
+      variants: [{ summary: "The form @design-team sketched.", component: "src/pages/book/Long Form (wide).tsx" }, ...ROUND.variants.slice(1)],
+      recommendation: "A,\nas @jrey said.",
+    };
+
+    const plan = planFor(finished({ output: JSON.stringify(round) }), inSession(), kitConfig());
+
+    const body = roundOf(plan);
+    const line = body.split("\n")[2] ?? "";
+    expect(line.indexOf("-->")).toBe(line.length - "-->".length);
+    expect(line.slice("<!--".length, -"-->".length)).not.toMatch(/[<>@]/);
+    expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
+    const shown = withoutRoundLines(body).split("\n");
+    const read = roundLineIn(body);
+    expect(read?.intro).toBe(shown[4]);
+    expect(read?.questions).toEqual([{ question: "Which variant?", recommendation: shown.at(-1)?.replace(/^➡️ Recommended: /, "") }]);
+    expect(read?.kind === "prototype" && read.variants[0]).toEqual({
+      letter: "A",
+      summary: "The form @​design-team sketched.",
+      component: blob("src/pages/book/Long%20Form%20%28wide%29.tsx"),
+      preview: null,
+    });
+    expect(shown[8]).toBe(`- **A.** The form @​design-team sketched. [\`src/pages/book/Long Form (wide).tsx\`](${blob("src/pages/book/Long%20Form%20%28wide%29.tsx")})`);
+  });
+
+  it("leaves a round the existing readers of a thread read as a prototype round that answers its request", () => {
+    const thread = [
+      { id: 9003, body: `<!-- fabrik:prototype-request ${JSON.stringify({ ...REQUEST.request, reply: REQUEST.reply })} -->\n**Prototype requested.** …`, byApp: true },
+      { id: 9100, body: roundOf(planFor(finished(), inSession(), kitConfig())), byApp: true },
+    ];
+
+    expect(roundLineIn(thread[1]!.body)).not.toBeNull();
+    expect(unansweredPrototypesIn(thread.slice(0, 1))).toHaveLength(1);
+    expect(unansweredPrototypesIn(thread)).toEqual([]);
+    expect(pendingPrototypeIn(thread)).toBeNull();
+    expect(designSessionOf(thread).designRounds).toBe(1);
+  });
+});
+
+// A prototype failure round's fields as data (#636): its hidden line, the third, under the round's marker and the failure marker.
+describe("A prototype failure round's hidden line", () => {
+  const CARRY_ON = "Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.";
+
+  it.each([
+    ["whose build failed", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "build-failed", captures: [] }, evidencePage: null })],
+    ["whose dev server didn't start", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "server-did-not-start", captures: [] }, evidencePage: null })],
+    ["that changes a Trust-root file", finished({ changes: { net: [{ path: "AGENTS.md" }], commits: [{ path: "AGENTS.md" }] } })],
+    ["that built nothing", finished({ changes: { net: [], commits: [] }, headSha: null, output: JSON.stringify({ ...ROUND, intro: "Built nothing, as @jrey's `.claude/` <rule> said." }) })],
+  ])("puts the line third on the failure round of a prototype %s: what stopped it, the Kit's question and recommendation, and \"Try again\"", (_name, event) => {
+    const plan = planFor(event, inSession(), kitConfig());
+
+    const body = commentsOf(plan).at(-1) ?? "";
+    expect(body.split("\n").slice(0, 2)).toEqual(["<!-- fabrik:design-round 3 -->", "<!-- fabrik:prototype-failed -->"]);
+    expect(body.split("\n")[2]).toMatch(/^<!-- fabrik:round-line \{.*\} -->$/);
+    const shown = withoutRoundLines(body).split("\n");
+    // What stopped the prototype, as the round says it: between the round's opening line and its question.
+    const said = shown.slice(4, -3).join("\n");
+    expect(roundLineIn(body)).toEqual({
+      v: 1,
+      kind: "prototype-failed",
+      round: 3,
+      intro: said,
+      questions: [{ question: "Carry on without a prototype, or try again?", recommendation: CARRY_ON }],
+      otherAnswers: ["Try again"],
+    });
+    expect(shown.slice(-2)).toEqual(["**1. Carry on without a prototype, or try again?**", `➡️ Recommended: ${CARRY_ON}`]);
+    expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
   });
 });

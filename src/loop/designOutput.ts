@@ -125,6 +125,18 @@ type DesignTurnOutcome =
       readonly variants: readonly PrototypeVariant[];
       /** The variant the agent recommends, with any tweak it suggests, so the Operator can reply in a word. */
       readonly recommendation: string;
+      /**
+       * The letter of the variant the recommendation builds on (#636), kept only
+       * when it is one of the variants' letters. Optional: an output with none
+       * is read as it always was.
+       */
+      readonly recommended?: string;
+      /**
+       * What the agent gave as `recommended`, as JSON, when it isn't one of the
+       * variants' letters: refused, which never fails the turn, and left for the
+       * landing to note in the run's step summary.
+       */
+      readonly refusedRecommended?: string;
     };
 
 /** What the Operator approved a prototype turn to build. */
@@ -398,6 +410,21 @@ function readVariants(value: unknown, errors: string[]): PrototypeVariant[] {
   return variants;
 }
 
+/**
+ * A prototype-round's advised variant: its letter when `recommended` is one
+ * of the variants', exactly; what the agent gave, as JSON, when it is
+ * anything else, so the landing can say what it refused; nothing when the
+ * output names none.
+ */
+function advisedOf(
+  { recommended }: Record<string, unknown>,
+  variants: readonly PrototypeVariant[],
+): { recommended: string } | { refusedRecommended: string } | Record<string, never> {
+  if (recommended === undefined) return {};
+  if (typeof recommended === "string" && variants.some(({ letter }) => letter === recommended)) return { recommended };
+  return { refusedRecommended: JSON.stringify(recommended) };
+}
+
 /** A path from the repo root, on one line: never an absolute path on the runner. */
 function isRepoPath(value: unknown): value is string {
   return isLine(value) && !value.startsWith("/");
@@ -548,7 +575,13 @@ function readTurn(value: unknown): DesignTurnOutputResult {
       if (errors.length > 0) return { ok: false, errors };
       return {
         ok: true,
-        output: { kind: "prototype-round", intro: value.intro as string, variants, recommendation: value.recommendation as string },
+        output: {
+          kind: "prototype-round",
+          intro: value.intro as string,
+          variants,
+          recommendation: value.recommendation as string,
+          ...advisedOf(value, variants),
+        },
       };
     }
     default:
