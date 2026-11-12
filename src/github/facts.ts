@@ -259,7 +259,7 @@ export async function gatherRetroFacts(
 }
 
 /** The newest issues with a weekly gate's label, `fabrik:audit` or `fabrik:retro`, open and closed, read as the gate reads them (weeklyIssuesQuery). */
-async function gatherWeeklyRunIssues(github: Pick<ReadClient, "graphql">, repo: Repo, label: string): Promise<WeeklyRunIssueFacts[]> {
+export async function gatherWeeklyRunIssues(github: Pick<ReadClient, "graphql">, repo: Repo, label: string): Promise<WeeklyRunIssueFacts[]> {
   const data = await github.graphql<WeeklyIssuesQueryResult>(weeklyIssuesQuery(), { owner: repo.owner, name: repo.name, label });
   return data.repository.issues.nodes.map(({ number, title, author, createdAt, body }) => ({ number, title, author: loginOf(author), createdAt, body }));
 }
@@ -364,8 +364,8 @@ async function patchOf(github: Pick<ReadClient, "rest">, repo: Repo, sha: string
 
 // --- The queries --------------------------------------------------------------
 
-const ACTOR = "{ login __typename }";
-const LABEL_EVENTS = `
+export const ACTOR = "{ login __typename }";
+export const LABEL_EVENTS = `
   timelineItems(last: 100, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
     nodes {
       __typename
@@ -375,7 +375,7 @@ const LABEL_EVENTS = `
   }
 `;
 // Aliased, as the label events read the same connection with other arguments.
-const DRAFT_EVENTS = `
+export const DRAFT_EVENTS = `
   draftEvents: timelineItems(last: 100, itemTypes: [CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
     nodes {
       __typename
@@ -384,10 +384,10 @@ const DRAFT_EVENTS = `
     }
   }
 `;
-const COMMENTS = `comments(last: 100) { nodes { url body createdAt author ${ACTOR} } }`;
-const COMMIT = "commit { oid message committedDate author { email user { login } } }";
+export const COMMENTS = `comments(last: 100) { nodes { url body createdAt author ${ACTOR} } }`;
+export const COMMIT = "commit { oid message committedDate author { email user { login } } }";
 const REVIEWS = `reviews(first: 100) { nodes { databaseId url author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
-const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
+export const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
 
 const OPEN_ISSUE_BODIES_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
@@ -541,7 +541,7 @@ const DEFAULT_BRANCH_QUERY = `
   }
 `;
 
-interface RawActor {
+export interface RawActor {
   login: string;
   __typename: string;
 }
@@ -564,7 +564,7 @@ interface RawCommit {
   commit: { oid: string; message: string; committedDate: string; author: { email: string | null; user: { login: string } | null } | null };
 }
 
-interface RawReview {
+export interface RawReview {
   databaseId: number;
   url: string;
   author: RawActor | null;
@@ -592,7 +592,7 @@ interface RawClosedPullRequest {
   files: { nodes: { path: string }[] };
 }
 
-interface RawOpenPullRequest {
+export interface RawOpenPullRequest {
   number: number;
   title: string;
   isDraft: boolean;
@@ -616,7 +616,7 @@ interface RawDraftEvent {
   actor: RawActor | null;
 }
 
-interface RawIssue {
+export interface RawIssue {
   number: number;
   title: string;
   author: RawActor | null;
@@ -648,7 +648,7 @@ interface RawOpenedIssue {
   author: RawActor | null;
 }
 
-interface RawOpenKitIssue {
+export interface RawOpenKitIssue {
   number: number;
   title: string;
   createdAt: string;
@@ -698,7 +698,7 @@ async function gatherOperatorIssues(github: Pick<ReadClient, "graphql">, repo: R
 
 // --- Into the summary's facts -------------------------------------------------
 
-function isAgent(pullRequest: { headRefName: string; author: RawActor | null }): boolean {
+export function isAgent(pullRequest: { headRefName: string; author: RawActor | null }): boolean {
   return isAgentPullRequest({ headRef: pullRequest.headRefName, authorIsBot: pullRequest.author?.__typename === "Bot" });
 }
 
@@ -753,7 +753,7 @@ function commitOf({ commit }: RawCommit): CommitFacts {
   };
 }
 
-function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
+export function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
   return {
     number: pr.number,
     ticket: pr.closingIssuesReferences.nodes[0]?.number ?? null,
@@ -778,7 +778,7 @@ function draftEventsOf(nodes: readonly RawDraftEvent[]): DraftEvent[] {
 }
 
 /** An open Plain pull request: who opened it, its branch and head, whether it is a draft and merges cleanly, and when its draft state last changed. Its reviews, labels and comments, which the Kit never acts on, are left out. */
-function plainPullRequestOf(pr: RawOpenPullRequest): PlainPullRequestFacts {
+export function plainPullRequestOf(pr: RawOpenPullRequest): PlainPullRequestFacts {
   return {
     number: pr.number,
     title: pr.title,
@@ -811,7 +811,7 @@ function specOf(issue: RawIssue): SpecFacts {
   };
 }
 
-function openIssueOf(issue: RawIssue): OpenIssueFacts {
+export function openIssueOf(issue: RawIssue): OpenIssueFacts {
   return {
     number: issue.number,
     title: issue.title,
@@ -840,7 +840,7 @@ function monitorIssueOf(issue: RawMonitorIssue): MonitorIssueFacts {
   return { number: issue.number, author: loginOf(issue.author), body: issue.body };
 }
 
-function openKitIssueOf(issue: RawOpenKitIssue): OpenAuditFacts & OpenRetroFacts {
+export function openKitIssueOf(issue: RawOpenKitIssue): OpenAuditFacts & OpenRetroFacts {
   return { number: issue.number, title: issue.title, author: loginOf(issue.author), createdAt: issue.createdAt };
 }
 
