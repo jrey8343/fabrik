@@ -277,7 +277,8 @@ function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): 
       const job = failedJob(end.needs, role);
       const failure = failureOf(jobResult, secretsStep, end.failureReport);
       const kit = end.needs["kit"]?.outputs ?? {};
-      const pullRequest = role === "review" || role === "implement" ? countOf(kit["pull-request"]) : null;
+      // A failed Digest run names its pull request as a passing one does: its cost counts toward the same Ticket.
+      const pullRequest = role === "review" || role === "implement" || role === "digest" ? countOf(kit["pull-request"]) : null;
       // A prototype turn's role is design, so it's never a Broken run.
       const broken = failure === null ? null : brokenRunOf({ role }, failure);
       return { role, issue, pullRequest, job, failure: broken === null ? failure : null, broken };
