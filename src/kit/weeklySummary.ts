@@ -1431,10 +1431,10 @@ function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, operator: s
     if (asked !== null) waiting.push({ kind: issue.author === appLogin ? "monitor-needs-info" : "needs-info", ...items.issue(issue, asked) });
   }
   for (const pullRequest of openPullRequests) {
-    const standing = passedStandingOf(pullRequest, operator);
-    if (standing?.kind === "handed-back") waiting.push({ kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) });
-    if (standing?.kind !== "merge-gate") continue;
-    const item = items.pullRequest(pullRequest, standing.since);
+    const move = passedMoveOf(pullRequest, operator);
+    if (move?.kind === "handed-back") waiting.push({ kind: "handed-back", ...items.pullRequest(pullRequest, move.since) });
+    if (move?.kind !== "merge-gate") continue;
+    const item = items.pullRequest(pullRequest, move.since);
     waiting.push({ kind: "merge-gate", ...item, operatorWait: item.age });
   }
   return oldestFirst(waiting);
@@ -1467,8 +1467,8 @@ function stuck(
   for (const pullRequest of openPullRequests) {
     if (isHeld(pullRequest.number, pullRequest.ticket)) continue;
     if (pullRequest.draft) found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
-    const standing = passedStandingOf(pullRequest, operator);
-    if (standing?.kind === "reviewed") found.push({ kind: "reviewed", ...items.pullRequest(pullRequest, standing.since) });
+    const move = passedMoveOf(pullRequest, operator);
+    if (move?.kind === "reviewed") found.push({ kind: "reviewed", ...items.pullRequest(pullRequest, move.since) });
   }
   return oldestFirst(found.filter((item) => now - Date.parse(item.since) > STUCK_AFTER_MS));
 }
@@ -1540,19 +1540,19 @@ function stoppedDesignSessionOf(issue: OpenIssueFacts): { readonly kind: "design
 }
 
 /**
- * Where an agent PR out of draft with a passing Verdict at its head stands,
+ * Who moves next on an agent PR out of draft with a passing Verdict at its head,
  * and since when. After the pass, the Kit's `ready-for-human`, still on it,
  * hands it to the Operator (`handed-back`); else the Operator's latest review
  * since leaves the next move to the Kit (`reviewed`); else it's at the Merge
  * gate, waiting on the Operator since the pass (`merge-gate`).
  */
-interface PassedPullRequestStanding {
+interface PassedPullRequestMove {
   readonly kind: "merge-gate" | "handed-back" | "reviewed";
   readonly since: string;
 }
 
-/** Where an agent PR with a passing Verdict at its head stands, or null for a draft or one without. */
-function passedStandingOf(pullRequest: OpenPullRequestFacts, operator: string): PassedPullRequestStanding | null {
+/** Who moves next on an agent PR with a passing Verdict at its head, or null for a draft or one without. */
+function passedMoveOf(pullRequest: OpenPullRequestFacts, operator: string): PassedPullRequestMove | null {
   const passed = passAtHeadOf(pullRequest);
   if (pullRequest.draft || passed === null) return null;
   const reviewed = operatorReviewsAfter(pullRequest.reviews, operator, passed).at(-1);
