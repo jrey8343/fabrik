@@ -116,3 +116,7 @@ export type { Runway } from "./runway.ts";
 // The issues to roll in by hand
 
 // Outcomes
+
+export { costPerMergedPullRequestOf } from "../kit/mergedCost.ts";
+export { readOutcomes } from "./outcomes.ts";
+export type { MergedInWeek, OutcomesRead, WorkOutcome } from "./outcomes.ts";

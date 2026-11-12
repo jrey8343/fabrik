@@ -43,6 +43,7 @@ import {
   storeFactsOf,
   checkCallerWorkflow,
   costOf,
+  costPerMergedPullRequestOf,
   DEFAULT_KIT_CONFIG,
   gatherRepo,
   GitHub,
@@ -55,6 +56,7 @@ import {
   kitSaidIn,
   newerSchemaOf,
   readCaller,
+  readOutcomes,
   readKitConfigSources,
   readRunRecord,
   readRuns,
@@ -87,6 +89,8 @@ import type {
   KitConfigResult,
   KitConfigSources,
   KitSaid,
+  MergedInWeek,
+  OutcomesRead,
   ReadClient,
   RepoRead,
   Repo,
@@ -106,6 +110,7 @@ import type {
   StoreStandingFacts,
   SubscriptionReading,
   Week,
+  WorkOutcome,
 } from "./index.ts";
 
 /** A refusal for want of a permission, as GitHub answers an App that lacks one. */
@@ -131,6 +136,32 @@ function clientWithFiles(files: Readonly<Record<string, string>>): ReadClient {
 }
 
 const NOW = "2026-11-09T12:00:00Z";
+
+/** Agent pull request 50 for Ticket 7, merged on 2026-11-04, as GitHub's GraphQL answers it. */
+const A_MERGED_PULL_REQUEST = {
+  number: 50,
+  url: "https://github.com/owner/product/pull/50",
+  state: "MERGED",
+  mergedAt: "2026-11-04T10:00:00Z",
+  closedAt: "2026-11-04T10:00:00Z",
+  headRefName: "fabrik/ticket-7",
+  author: { login: "fabrik-app", __typename: "Bot" },
+  closingIssuesReferences: { nodes: [{ number: 7 }] },
+};
+
+/** Ticket 7, closed by the merge of A_MERGED_PULL_REQUEST, as GitHub's GraphQL answers it. */
+const A_MERGED_TICKET = {
+  number: 7,
+  title: "Build the thing",
+  url: "https://github.com/owner/product/issues/7",
+  state: "CLOSED",
+  closedAt: "2026-11-04T10:00:00Z",
+  author: { login: "operator", __typename: "User" },
+  labels: { nodes: [{ name: "ready-for-agent" }] },
+  subIssues: { nodes: [] },
+  timelineItems: { nodes: [] },
+  closedByPullRequestsReferences: { nodes: [A_MERGED_PULL_REQUEST] },
+};
 
 /** Ticket 7, `ready-for-agent`, given `agent:implement` on 2026-11-08 at 19:20, with no run started on it since. */
 const A_TICKET_WAITING = anOpenIssue({
@@ -529,6 +560,21 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   // The issues to roll in by hand
 
   // Outcomes
+
+  readOutcomes: () =>
+    readOutcomes(
+      { graphql: <T>(query: string) => Promise.resolve((query.includes("search(") ? { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [A_MERGED_PULL_REQUEST] } } : { repository: { i7: A_MERGED_TICKET } }) as T) },
+      "owner/product",
+      weeksEndingAt(Date.parse(NOW), "UTC").thisWeek,
+      [7],
+      NOW,
+    ),
+  costPerMergedPullRequestOf: () =>
+    costPerMergedPullRequestOf(
+      weeksEndingAt(Date.parse(NOW), "UTC").thisWeek,
+      [aRunRecord({ totalCostUsd: 3 }), aReplayRunRecord({ totalCostUsd: 40 })],
+      [{ repo: "owner/product", ticket: 7 }, { repo: "owner/product", ticket: null }],
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -656,6 +702,23 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The issues to roll in by hand
 
   // Outcomes
+
+  OutcomesRead: {
+    repo: "owner/product",
+    readAt: NOW,
+    work: [{ issue: 7, title: "Build the thing", is: "merged", pullRequest: 50, at: "2026-11-04T10:00:00Z", url: "https://github.com/owner/product/pull/50" }],
+    merged: [{ pullRequest: 50, ticket: 7, mergedAt: "2026-11-04T10:00:00Z" }],
+    unread: null,
+  } satisfies OutcomesRead,
+  WorkOutcome: {
+    issue: 8,
+    title: "Fix the other thing",
+    is: "never-merged",
+    pullRequest: 51,
+    at: "2026-11-05T10:00:00Z",
+    url: "https://github.com/owner/product/pull/51",
+  } satisfies WorkOutcome,
+  MergedInWeek: { pullRequest: 52, ticket: null, mergedAt: "2026-11-06T10:00:00Z" } satisfies MergedInWeek,
 };
 
 /**
