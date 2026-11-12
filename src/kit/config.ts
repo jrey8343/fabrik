@@ -77,7 +77,7 @@ export interface KitConfig {
   readonly ui: UiConfig | null;
   /** Where a pull request's preview deployment appears (#153); null links none. */
   readonly preview: PreviewConfig | null;
-  /** Where the Product repo's production is (#520); null declares nothing, and nothing in the Loop reads it. */
+  /** Where the Product repo's production is (ADR-0021); null declares nothing, and nothing in the Loop reads it. */
   readonly production: ProductionConfig | null;
 }
 
