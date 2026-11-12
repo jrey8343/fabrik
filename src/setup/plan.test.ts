@@ -346,6 +346,7 @@ describe("Labels", () => {
     "agent:implement",
     "agent:design",
     "agent:review",
+    "agent:digest",
     "bug",
     "enhancement",
     "fabrik:token-rotation",
@@ -381,7 +382,7 @@ describe("Labels", () => {
     const created = planSetup(aCleanProduct(), kit).actions.flatMap((a) => (a.kind === "create-label" ? [a] : []));
     const triggers = created.filter((label) => label.name.startsWith("agent:"));
 
-    expect(triggers.map((label) => label.name).sort()).toEqual(["agent:design", "agent:implement", "agent:replay", "agent:research", "agent:review"]);
+    expect(triggers.map((label) => label.name).sort()).toEqual(["agent:design", "agent:digest", "agent:implement", "agent:replay", "agent:research", "agent:review"]);
     for (const label of triggers) expect(label.description).toMatch(/\boff\b/);
     for (const label of created) expect(label.description.length).toBeLessThanOrEqual(100);
   });
@@ -736,6 +737,8 @@ describe("The starters the Product repo then owns", () => {
         audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         research: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
+        // The Digest writer's model is left to roles.review.
+        digest: { timeout_minutes: 10 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: null },
       },
@@ -744,6 +747,7 @@ describe("The starters the Product repo then owns", () => {
       monitor: { errors: null, red_main: true },
       audit: { day: "sunday" },
       retro: { day: "saturday" },
+      digest: { enabled: true },
       operator: null,
       subscriptions: ["Claude token"],
       ui: null,

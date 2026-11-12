@@ -35,6 +35,10 @@ describe("The reader of a Kit job's closing step (#616)", () => {
       "a Review, whose Ticket is unknown",
       { fabrik: 1, route: "review", run: { role: "review", issue: null, pullRequest: 50, kind: null, retry: 0, model: "claude-opus-5-5" }, held: [], replay: null },
     ],
+    [
+      "a Digest run, routed to the role with its Ticket and its pull request (#655)",
+      { fabrik: 1, route: "digest", run: { role: "digest", issue: 7, pullRequest: 50, kind: null, retry: 0, model: "claude-opus-5-5" }, held: [{ role: "digest", issue: 51 }], replay: null },
+    ],
   ])("reads %s", (_, said) => {
     expect(kitSaidIn(kitJob({ name: JSON.stringify(said), status: "completed", conclusion: "success" }))).toEqual(said);
   });

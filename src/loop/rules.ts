@@ -1,13 +1,15 @@
 import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
-import { issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts";
+import { digestLabelOnIssue, issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts";
+import { landDigest, startDigestOnLabel } from "./digest.ts";
 import { failureNotice } from "./failures.ts";
 import { checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
+  DIGEST_LABEL,
   DISPATCH_LABEL,
   isCategoryLabel,
   isKitIssueLabel,
@@ -141,6 +143,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "pull-request-labeled":
       return withPullRequest(snapshot, (pullRequest) => {
         if (event.label === REVIEW_LABEL) return startReviewOnLabel(pullRequest, config);
+        if (event.label === DIGEST_LABEL) return startDigestOnLabel(pullRequest, snapshot, config);
         if (event.label === NEEDS_DESIGN) return sendBackToDesign(pullRequest);
         const misplaced = issueLabelOnPullRequest(event.label, pullRequest);
         return misplaced === null
@@ -151,6 +154,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return applyRedChecks(event, snapshot, config);
     case "review-run-finished":
       return applyReview(event, snapshot, config);
+    case "digest-run-finished":
+      return landDigest(event, snapshot);
     case "audit-run-finished":
       return withIssue(snapshot, (context) => landAudit(event, context, snapshot.namedPullRequests));
     case "retro-run-finished":
@@ -245,11 +250,16 @@ function thenCheckQueues(plan: Plan): Plan {
   }
 }
 
-/** The stuck-trigger sweep (src/loop/triggerSweep.ts) on the snapshot's trigger-sweep slice, which only the tick gathers. */
+/**
+ * The stuck-trigger sweep (src/loop/triggerSweep.ts) on the snapshot's
+ * trigger-sweep slice, which only the tick gathers. A lost Digest start is
+ * weighed on the open agent PRs the tick's conflict slice already read.
+ */
 function stuckTriggers(now: string, snapshot: Snapshot, config: KitConfig): Plan {
+  const openAgentPullRequests = snapshot.conflicts === null ? null : snapshot.conflicts.pullRequests.map(({ pullRequest }) => pullRequest);
   return snapshot.triggers === null
     ? missingFromSnapshot("the trigger labels the stuck-trigger sweep weighs")
-    : sweepStuckTriggers(now, snapshot.triggers, snapshot.operator, recoveryWaits(config).stuckTrigger);
+    : sweepStuckTriggers(now, snapshot.triggers, snapshot.operator, recoveryWaits(config).stuckTrigger, openAgentPullRequests);
 }
 
 /** The conflict check (src/loop/conflicts.ts) on the snapshot's conflict slice, which a push to main and the tick gather. */
@@ -362,7 +372,7 @@ function missingFromSnapshot(what: string): Plan {
  * Implement run; and adding agent:research starts a Researcher run, whether
  * Dispatch added it to release a research Decision or the Operator re-added
  * it by hand; and adding ready-for-agent asks for a Dispatch check.
- * agent:review, which goes on a PR, comes off with one line saying so.
+ * agent:review and agent:digest, which go on a PR, come off with one line saying so.
  */
 function labelAdded(
   issueNumber: number,
@@ -379,6 +389,8 @@ function labelAdded(
   if (label === READY_FOR_AGENT) return checkDispatchWhenReady(issueNumber, context.issue);
   // agent:review starts a Review only on a PR, so it comes off an issue, saying where it goes (#479).
   if (label === REVIEW_LABEL) return { kind: "act", actions: reviewLabelOnIssue(issueNumber, context.issue.openPullRequests) };
+  // Nor does agent:digest start the Digest writer anywhere but on a PR.
+  if (label === DIGEST_LABEL) return { kind: "act", actions: digestLabelOnIssue(issueNumber, context.issue.openPullRequests) };
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

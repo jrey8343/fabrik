@@ -20,10 +20,15 @@
 // that Subscription (#433), held even with no weekly-limit issue open, its
 // marker on a usage-credits or token-rotation issue (#470). An Auditor or Retro
 // run is never re-run or held: the tick can't start one at a reset, so its
-// Audit or Retro fails, for the tick to try again.
+// Audit or Retro fails, for the tick to try again. A failed Digest run gets
+// no failure notice at all: the no-Digest line says so on its PR, mentioning
+// nobody (src/loop/digest.ts). It is never re-run or held either, though one
+// refused on a weekly limit, killed for spending usage credits or refused a
+// dead token still opens or updates that Kit-owned issue.
 import { keptBranchOff } from "./backToDesign.ts";
 import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
+import { noDigestAfter } from "./digest.ts";
 import { heldLineOn, heldRunName } from "./heldLine.ts";
 import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
 import { heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
@@ -222,6 +227,13 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const failure = infrastructureFailureOf(run);
   const ranOn = ranOnOf(run, config);
   const failedRun = run.prototype === true ? `The prototype turn on #${run.issue}` : `The ${runNamed(run.role)} on #${run.issue}`;
+  if (run.role === "digest") {
+    // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again on another Subscription. The gate opens all the same.
+    const landed = noDigestAfter(run, failure, pullRequest, operator);
+    // One that stalls the whole repo still opens or updates its Kit-owned issue, as any run's does: that is how the Kit learns a Subscription is used up.
+    const repoWide = repoWideNotice(failure, context, { run: failedRun, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null, ...ranOn });
+    return landed.kind !== "act" || repoWide === null ? landed : { ...landed, actions: [...landed.actions, ...repoWide.actions] };
+  }
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
@@ -274,6 +286,8 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
           operator,
           `${broken === null ? "it failed, as an Infrastructure failure" : "it was a Broken run"}: ${howItFailed(failure, run, config)}${detail === "" ? "" : ` (${detail})`}`,
           run.runUrl,
+          true,
+          failure,
         ),
       ],
     };

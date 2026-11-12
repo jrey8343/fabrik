@@ -6,14 +6,29 @@ import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, Repl
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
+import type { ChangeFingerprint } from "./changeFingerprint.ts";
+import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
-export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research";
+export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research" | "digest";
 
-export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research"];
+export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research", "digest"];
+
+/** The roles whose run is of a pull request itself, which the run names where any other role's names an issue: a Review, and a Digest run. */
+const PULL_REQUEST_ROLES: readonly string[] = ["review", "digest"] satisfies readonly AgentRole[];
+
+/**
+ * Whether a run in `role` is of a pull request itself: its `issue` is then
+ * the pull request's number, its Ticket is the one the pull request was cut
+ * for, and it is read on the pull request, never on the issue. An Implement
+ * run that fixes a pull request is still of its Ticket.
+ */
+export function isOfPullRequest(role: string | undefined): boolean {
+  return role !== undefined && PULL_REQUEST_ROLES.includes(role);
+}
 
 /** How an agent job, or the Review checks job (src/review/wait.ts), says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
@@ -213,10 +228,10 @@ export type LoopEvent =
   | {
       readonly kind: "agent-run-finished";
       /**
-       * Implement, Review, Auditor, Retro and Researcher runs finish through
-       * their own events, which carry what their push jobs hold.
+       * Implement, Review, Auditor, Retro, Researcher and Digest runs finish
+       * through their own events, which carry what their push jobs hold.
        */
-      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro" | "research">;
+      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro" | "research" | "digest">;
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;
@@ -313,6 +328,12 @@ export type LoopEvent =
        * PR it was on, and the default branch's head it was started for.
        */
       readonly conflict?: { readonly pullRequest: number; readonly main: string };
+      /**
+       * For a Digest run, from the Kit job's outputs: the agent PR it was
+       * on, and the head it was to write the Digest as of. `issue` is that
+       * PR's Ticket.
+       */
+      readonly digest?: { readonly pullRequest: number; readonly headSha: string };
     }
   | { readonly kind: "issue-closed"; readonly issue: number }
   /** A PR was opened or pushed to, so its required checks start; a Review waits for them. */
@@ -348,6 +369,19 @@ export type LoopEvent =
       readonly repoUrl: string;
       /** The Operator comments the Reviewer was given; none when left out. */
       readonly operatorComments?: readonly GivenOperatorComment[];
+    }
+  | {
+      /** The Digest writer finished on an agent PR; its push job holds the reply, not yet posted (ADR-0022). */
+      readonly kind: "digest-run-finished";
+      readonly pullRequest: number;
+      /** The head the run was started at, which the pass was given on: from the Kit job's plan, never from the agent. */
+      readonly headSha: string;
+      /** The Digest writer's structured output, the `<digest>` tag's JSON, unparsed (src/loop/digestContract.ts). */
+      readonly output: string;
+      /** What Kit code hands the contract beside the reply, which the push job read (src/github/digestGiven.ts), never the agent. */
+      readonly given: DigestGiven;
+      /** The Actions run, which the Digest and a no-Digest line link to. */
+      readonly runUrl: string;
     }
   | {
       /** The Auditor finished on a pending Audit; its push job holds the reply, not yet landed (#150). */
@@ -748,6 +782,22 @@ export interface PullRequestSnapshot {
   readonly labels: readonly string[];
   /** The Verdicts the Fabrik App has posted on it, oldest first, read from their markers (src/loop/verdict.ts). */
   readonly verdicts: readonly VerdictRecord[];
+  /**
+   * The fingerprint of its own change at `headSha` (#643), which a Verdict on
+   * that head records under its marker. No snapshot read from GitHub holds
+   * it: the push job reads it with git once its plan posts a Verdict, and
+   * plans again with it (src/github/changeRead.ts). Absent when it wasn't
+   * read, or couldn't be: the Verdict is posted without it.
+   */
+  readonly change?: ChangeFingerprint;
+  /**
+   * The fingerprint of its own change at a head it has since moved on from,
+   * for the Verdict the plan posts on that head: the Kit's own on a Retry
+   * that changed nothing, when the branch moved while the Retry ran. Read as
+   * `change` is, and kept apart from it, which is always of `headSha`.
+   * Absent on every other snapshot.
+   */
+  readonly changeAt?: { readonly headSha: string; readonly change: ChangeFingerprint };
   /** Whether its latest push came from a Request-changes run, so a Verdict on it is marked as one. */
   readonly requestChangesRun: boolean;
   /** Whether its latest push came from a conflict-only run (#304), so a Verdict on it is marked as one. */
@@ -864,6 +914,33 @@ export interface PullRequestSnapshot {
    * none, so a later run's push lists them beside its own.
    */
   readonly changedTests: readonly string[];
+  /**
+   * The Digests on its thread (ADR-0022), oldest first: each of the Fabrik
+   * App's comments whose first line is a `fabrik:digest` marker, never a
+   * no-Digest line. A collapsed one is here whole, as GitHub still returns it.
+   */
+  readonly digests: readonly DigestOnThread[];
+  /**
+   * The Kit's list of asks on it now, by id, oldest first: each Request
+   * changes of the Operator's a Review is given and each line comment in it,
+   * as a Digest's first line records the ones it answered
+   * (src/loop/digestFacts.ts). No snapshot read from GitHub holds it: the
+   * push job reads it for a Reviewer's Verdict, only where the last Digest
+   * could be carried forward (src/github/digestCarry.ts). Absent when it
+   * wasn't read, or couldn't be: nothing is carried forward then.
+   */
+  readonly asks?: readonly string[];
+}
+
+/** A Digest comment on a pull request's thread, as the snapshot reads it. */
+export interface DigestOnThread {
+  /** GitHub's node id of the comment, which collapsing it takes. */
+  readonly node: string;
+  /** Whether it is collapsed already, as outdated or by anyone for any reason. */
+  readonly minimized: boolean;
+  readonly body: string;
+  /** When it was posted, as an ISO 8601 time. */
+  readonly postedAt: string;
 }
 
 /** A review requesting changes on an agent PR that no Request-changes run has built yet (#341). */
@@ -973,6 +1050,12 @@ export interface VerdictRecord {
    * the Kit's Flaky check line, never from the Verdict's own marker.
    */
   readonly flaky?: true;
+  /**
+   * The fingerprint of the PR's own change at `headSha` (#643), read from the
+   * hidden line under the Verdict's marker, never from the marker itself;
+   * absent on a Verdict with no such line, as every one from before it.
+   */
+  readonly change?: ChangeFingerprint;
   /** The head commit it was given on. */
   readonly headSha: string;
 }
@@ -1206,6 +1289,8 @@ export interface RolesUnderWay {
   readonly claim: boolean;
   /** The issue of each `Design-session turn #N` or `Prototype turn #N` job, lowest first. */
   readonly designTurns: readonly number[];
+  /** The pull request of each `Digest PR #N` job, lowest first: the sweep reads exactly whether one is under way on a pull request. */
+  readonly digests: readonly number[];
 }
 
 /** A trigger label on an open issue or PR, as the stuck-trigger sweep reads it. */
@@ -1544,6 +1629,8 @@ export type Action =
       readonly keptBranch?: KeptBranchStart;
       /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
       readonly commit?: string;
+      /** For a Digest run: the head its pass was given on, which its job checks out and its Digest is written as of. */
+      readonly headSha?: string;
       /**
        * For a Review of a UI PR: where its marker says the UI evidence is kept,
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.
@@ -1765,6 +1852,41 @@ export type Action =
       readonly template: string;
       /** The route every variant renders on. */
       readonly route: string;
+    }
+  | {
+      /**
+       * Collapses an older Digest on a pull request as outdated (ADR-0022),
+       * so its thread shows one account. GitHub may refuse it, which stops
+       * nothing: the step summary says so, and the current Digest is found
+       * by its head either way.
+       */
+      readonly kind: "minimize-comment";
+      readonly pullRequest: number;
+      /** The comment's node id. */
+      readonly node: string;
+      readonly classifier: "OUTDATED";
+    }
+  | {
+      /**
+       * Posts a pull request's last Digest again for a new head, carried
+       * forward because only `main` moved (ADR-0022), with no model run. The
+       * adapter reads what `headSha` holds of the files that Digest's places
+       * name, posts the carried comment, each place re-pointed to where its
+       * lines now are (src/loop/digestCarry.ts), then applies `carried`.
+       * When the files cannot be read there, or the carried comment would be
+       * too long for GitHub, it posts nothing and applies `otherwise`: what
+       * the pass does with no Digest to carry.
+       */
+      readonly kind: "carry-digest";
+      readonly pullRequest: number;
+      /** The head the pass was given on, which the carried Digest is posted for. */
+      readonly headSha: string;
+      /** The Product repo's web address, which the carried Digest's links start from. */
+      readonly repoUrl: string;
+      /** The last Digest's comment, as it was posted. */
+      readonly digest: string;
+      readonly carried: readonly Action[];
+      readonly otherwise: readonly Action[];
     };
 
 /**

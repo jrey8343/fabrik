@@ -1,5 +1,5 @@
 // The one reader of an agent's `claude -p` stream-json. The step summary, the
-// failure report, the Run record and the judge prompt's transcript digest all
+// failure report, the Run record and the judge prompt's trimmed transcript all
 // read the stream through it, so none parses lines of its own. Lines that
 // aren't JSON objects are skipped. Pure, no I/O.
 

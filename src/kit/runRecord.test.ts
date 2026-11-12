@@ -716,6 +716,76 @@ describe("The Run record a run's end yields", () => {
     });
   });
 
+  describe("a Digest run's record is in role digest, on its Ticket, naming its pull request (ADR-0022)", () => {
+    /** The Digest writer's job on PR #50, Ticket #7, ended as given. */
+    const digestRun = (writer: Needs[string] | undefined, overrides: Partial<RunEnd> = {}) =>
+      runRecordFor(
+        runEnd({
+          needs: needs("digest", writer === undefined ? {} : { digest: writer }, { ticket: "7", "pull-request": "50", "head-sha": HEAD_SHA }),
+          eventIssue: 50,
+          agentResult: agentResult("digest", 50, '{"whatItDoes":"A shopper can save their basket."}'),
+          ...overrides,
+        }),
+      );
+
+    it("a Digest run that passes writes one, at the current schema, with its model, cost, outcome and transcript", () => {
+      const files = digestRun(job("success", { "base-sha": HEAD_SHA }));
+
+      expect(files?.record).toMatchObject({
+        schema: 8,
+        role: "digest",
+        issue: 7,
+        pullRequest: 50,
+        model: "claude-opus-5-5",
+        baseSha: HEAD_SHA,
+        jobResult: "success",
+        subtype: "success",
+        infrastructureFailure: null,
+        brokenRun: null,
+        verdict: null,
+        retry: 0,
+        totalCostUsd: 1.25,
+        transcript: "transcripts/acme/widgets/2026-11/9001-1-digest.jsonl.gz",
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-digest.json");
+    });
+
+    it("the record is the current schema's, with no field of its own: the role is a new value, not a new field", () => {
+      const triage = runRecordFor(runEnd())?.record ?? {};
+      const digest = digestRun(job("success"))?.record ?? {};
+
+      expect(Object.keys(digest)).toEqual(Object.keys(triage));
+    });
+
+    it.each([
+      ["was refused on its Subscription's weekly limit", job("failure"), JSON.stringify({ failure: "weekly-limit", detail: "limit reached" }), "weekly-limit"],
+      ["was cancelled at its time limit", job("cancelled"), null, "timeout"],
+      ["crashed", job("failure"), null, "crash"],
+    ])("a Digest run that %s writes one too, on the same Ticket and pull request, with its Infrastructure failure", (_how, writer, failureReport, failure) => {
+      const files = digestRun(writer, { agentResult: null, failureReport, transcript: [init] });
+
+      expect(files?.record).toMatchObject({
+        schema: 8,
+        role: "digest",
+        issue: 7,
+        pullRequest: 50,
+        jobResult: writer.result,
+        infrastructureFailure: failure,
+        brokenRun: null,
+        totalCostUsd: null,
+        transcript: "transcripts/acme/widgets/2026-11/9001-1-digest.jsonl.gz",
+      });
+      expect(files?.recordPath).toBe("runs/acme/widgets/2026-11/9001-1-digest.json");
+    });
+
+    it.each([
+      ["was skipped", { result: "skipped", outputs: {} }],
+      ["is not among the push job's needs", undefined],
+    ])("a Digest run that never started, whose job %s, writes none", (_how, writer) => {
+      expect(digestRun(writer, { agentResult: null, transcript: null })).toBeNull();
+    });
+  });
+
   describe("no agent run ended, so there's no record", () => {
     it("red required checks: the Reviewer never ran", () => {
       const red = { result: "success", outputs: { checks: "red", "head-sha": HEAD_SHA, failed: '["build"]' } };
@@ -1103,6 +1173,13 @@ describe("A Run record read back from the store", () => {
   it("of a schema the Kit doesn't know reads as no record", () => {
     expect(readRunRecord({ ...written, schema: 9 }, ["Claude token"])).toBeNull();
     expect(readRunRecord("not a record", ["Claude token"])).toBeNull();
+  });
+
+  // A role is a value, not a field, so a new one needs no new schema: a store on the release before the Digest's reads a `digest` record this way (#646).
+  it("in a role the Kit doesn't know, at a schema it does, reads as written: a later release's new role never makes a record unreadable", () => {
+    const later = { ...JSON.parse(JSON.stringify(written)), role: "a-later-release's-role", issue: 7, pullRequest: 50 };
+
+    expect(readRunRecord(later, ["Claude token"])).toEqual(later);
   });
 });
 

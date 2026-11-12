@@ -5,12 +5,16 @@
 import type { CostFigure, Week } from "./weeklySummary.ts";
 import { isLive, type RunRecord, UNKNOWN_COST_BASIS } from "./runRecord.ts";
 
-/** The roles whose runs build a Ticket: Implement (Retries and Step-ups among them) and Review. */
-export const BUILD_ROLES: readonly RunRecord["role"][] = ["implement", "review"];
+/**
+ * The roles whose runs build a Ticket: Implement (Retries and Step-ups among
+ * them), Review, and Digest, whose run writes the account the Ticket's pull
+ * request reaches the Merge gate with (ADR-0022).
+ */
+export const BUILD_ROLES: readonly RunRecord["role"][] = ["implement", "review", "digest"];
 
 /**
  * What a pull request merged in `week` cost on average, with how many merged:
- * for each of `merged`, the summed cost of every Implement and Review record
+ * for each of `merged`, the summed cost of every Implement, Review and Digest record
  * on the Ticket it names, in its repo, that ended before the week did,
  * whatever week it ended in. A pull request that names no Ticket counts as
  * merged at no cost, and a Ticket with two merged in the week has its records

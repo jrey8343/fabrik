@@ -16,6 +16,7 @@ import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
+import { digestMarkIn } from "../loop/digestContract.ts";
 import { heldRunsIn, isCarrier } from "../loop/heldRun.ts";
 import { makesUnusable } from "../loop/subscriptions.ts";
 import {
@@ -178,7 +179,12 @@ function openIssueNumbersIn(repo: Repo, edges: DependencyEdges): number[] {
     .map((issue) => issue.number);
 }
 
-const PULL_REQUEST_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { __typename } }";
+/**
+ * What the snapshot reads of each comment on a PR, the latest 100 and each
+ * earlier page alike: with its node id and whether it is minimized, which
+ * collapsing an older Digest as outdated goes by (ADR-0022).
+ */
+const PULL_REQUEST_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { id isMinimized body createdAt author { __typename } }";
 
 /** What the snapshot reads of a PR, by itself or as one of the open agent PRs the conflict check weighs. */
 const PULL_REQUEST_FIELDS = `
@@ -214,7 +220,7 @@ const PULL_REQUEST_QUERY = `
 
 interface PullRequestComments {
   pageInfo: { hasPreviousPage: boolean; startCursor?: string | null };
-  nodes: { body: string; createdAt: string; author: { __typename: string } | null }[];
+  nodes: { id: string; isMinimized: boolean; body: string; createdAt: string; author: { __typename: string } | null }[];
 }
 
 const DEFAULT_BRANCH_QUERY = `
@@ -471,6 +477,14 @@ export const PUSH_JOB_NAME = "Push";
 export const CLAIM_JOB_NAME = "Claim the work";
 export const REVIEW_CHECKS_JOB_NAME = "Review checks";
 export const REVIEW_JOB_NAME = "Review";
+
+/**
+ * The name of the Digest job in .github/workflows/loop.yml, which follows it
+ * with ` PR #<agent PR>`, as the Review job does (a test holds the two
+ * together). Called from a Product repo's caller workflow, it shows up as
+ * `<caller job> / Digest PR #50`.
+ */
+export const DIGEST_JOB_NAME = "Digest";
 
 /**
  * The name of the Design job in .github/workflows/loop.yml, which follows it
@@ -1023,6 +1037,7 @@ async function gatherEventPart(
     case "pull-request-labeled":
     case "required-checks-finished":
     case "review-run-finished":
+    case "digest-run-finished":
     case "pull-request-left-draft":
     case "pull-request-closed":
     case "pull-request-changes-requested":
@@ -1047,7 +1062,8 @@ async function gatherEventPart(
     case "agent-run-failed": {
       // A failed Implement run on a Ticket with an open PR may be a Broken Retry, which posts a Verdict there (#434).
       const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
-      const open = event.role === "implement" && event.prototype !== true ? ticket.issue?.openPullRequests[0] : undefined;
+      // A failed Digest run's no-Digest line goes on the PR the Kit job named, closed by now or not.
+      const open = event.digest?.pullRequest ?? (event.role === "implement" && event.prototype !== true ? ticket.issue?.openPullRequests[0] : undefined);
       if (open === undefined) return ticket;
       const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);
       return { ...ticket, pullRequest };
@@ -1598,6 +1614,23 @@ export async function deferredChangesRequestsOn(github: ReadClient, repo: Repo, 
   return (await gatherPullRequest(github, repo, number, operator, null)).pullRequest?.deferredChangesRequests ?? [];
 }
 
+/**
+ * What the push job takes from the Loop's snapshot of a PR to land its
+ * Digest (src/github/digestGiven.ts), in the one read: the Operator's Request
+ * changes deferred while a Retry was in flight, as deferredChangesRequestsOn
+ * gives them, and its evidence marker, read only from a body a bot wrote
+ * (byAppOf), so nobody else can name a route as captured.
+ */
+export async function digestSnapshotOn(
+  github: ReadClient,
+  repo: Repo,
+  number: number,
+  operator: string,
+): Promise<Pick<PullRequestSnapshot, "deferredChangesRequests" | "uiEvidenceMarker">> {
+  const { pullRequest } = await gatherPullRequest(github, repo, number, operator, null);
+  return { deferredChangesRequests: pullRequest?.deferredChangesRequests ?? [], uiEvidenceMarker: pullRequest?.uiEvidenceMarker ?? null };
+}
+
 async function gatherPullRequest(
   github: ReadClient,
   repo: Repo,
@@ -1661,13 +1694,19 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     retryNoteSinceVerdict: retryNoteSinceVerdictIn(botComments),
     verdictPostedAt: verdictPostedAtIn(history),
     headPushedAt: headPushedAtOf(pullRequest, fromBots, isAgent),
-    ...requestChangesSinceRunIn(history, notDismissed, operator),
+    // Its head tells a passed draft whose gate has yet to open, where the Operator's Request changes counts (ADR-0022).
+    ...requestChangesSinceRunIn(history, notDismissed, operator, pullRequest.headRefOid),
     leftDraftSinceVerdict: leftDraftSinceVerdictIn(history),
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
     // Likewise, so nobody else can plant or hide the existing tests its runs changed (#463).
     changedTests: byAppOf(pullRequest.author, appLogin) ? changedTestsIn(pullRequest.body) : [],
+    // Only a bot's comment whose first line is the Digest's marker, as for a Verdict: never a no-Digest line, and
+    // never a person's quoting one. A collapsed Digest is read whole, as GitHub still returns it.
+    digests: fromBots
+      .filter((comment) => digestMarkIn(comment.body) !== null)
+      .map(({ id, isMinimized, body, createdAt }) => ({ node: id, minimized: isMinimized, body, postedAt: createdAt })),
   };
 }
 
@@ -2172,7 +2211,8 @@ export type RunJob = "blocked" | "waiting-for-runner" | "waiting-on-checks" | "r
 
 /**
  * A run in flight, as its job's name tells it (#606): its role, the issue or
- * pull request the name carries, or null where it carries none (a Triage,
+ * pull request the name carries, a Digest job's always its pull request
+ * (#655), or null where it carries none (a Triage,
  * Research, Audit or Retro job, a Review's wait for checks, and an Implement or
  * Review job an earlier release named for nothing), a Retry's number, and when
  * Actions created its workflow run.
@@ -2248,6 +2288,9 @@ export function runsByJobNamesOf(jobs: readonly ActionsJob[]): RunByJobName[] {
     if ([REVIEW_CHECKS_JOB_NAME, RERUN_CHECKS_JOB_NAME, RERUN_WAIT_JOB_NAME].some((name) => isJobNamed(job.name, name))) {
       return job.status === "completed" ? [] : fact({ ...ran, role: "review", job: "waiting-on-checks", startedAt: null });
     }
+    // A Digest job's name always carries its pull request's number, and never its Ticket's (#655).
+    const digestName = DIGEST_JOB.exec(job.name);
+    if (digestName !== null) return fact({ ...ran, role: "digest", pullRequest: numberOrNull(digestName[1]) });
     const designName = DESIGN_JOB.exec(job.name);
     if (designName !== null) {
       const prototype = isJobNamed(job.name.replace(/ #[0-9]+$/, ""), PROTOTYPE_JOB_NAME);
@@ -2309,8 +2352,8 @@ export function isJobNamed(name: string, jobName: string): boolean {
 
 /**
  * Whether a job's name is that of the agent job a route to `role` starts: an
- * Implement or Review job, named for its work or not, a Design-session or
- * prototype turn, or a Triage, Audit, Retro or Research job. Never asked of a
+ * Implement or Review job, named for its work or not, a Digest job, a
+ * Design-session or prototype turn, or a Triage, Audit, Retro or Research job. Never asked of a
  * skipped job, whose name is never worked out.
  */
 export function isAgentJobNamed(role: AgentRole, name: string): boolean {
@@ -2319,6 +2362,8 @@ export function isAgentJobNamed(role: AgentRole, name: string): boolean {
       return IMPLEMENT_JOB.test(name);
     case "review":
       return REVIEW_JOB.test(name);
+    case "digest":
+      return DIGEST_JOB.test(name);
     case "design":
       return DESIGN_JOB.test(name);
     default:
@@ -2333,6 +2378,9 @@ export function isAgentJobNamed(role: AgentRole, name: string): boolean {
  */
 const IMPLEMENT_JOB = new RegExp(`^(?:.+ / )?${IMPLEMENT_JOB_NAME}(?: #([1-9][0-9]*)(?: \\(Retry ([1-9][0-9]*)\\))?)?$`);
 const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #([1-9][0-9]*))?$`);
+
+/** A Digest job's name, as a caller workflow shows it or not: always named for its pull request, since no release ran one unnamed. */
+const DIGEST_JOB = new RegExp(`^(?:.+ / )?${DIGEST_JOB_NAME} PR #([1-9][0-9]*)$`);
 
 /**
  * Whether an Implement job is under way anywhere in the repo (#387), as
@@ -2409,12 +2457,15 @@ async function readRolesUnderWay(github: Pick<ReadClient, "rest">, repo: Repo): 
   const anyJobNamed = (...names: string[]) => jobs.some(({ name }) => names.some((jobName) => isJobNamed(name, jobName)));
   const anyReviewJob = jobs.some(({ name }) => REVIEW_JOB.test(name));
   const designTurns = new Set(jobs.flatMap((job) => DESIGN_JOB.exec(job.name)?.[1] ?? []).map(Number));
+  // A Digest job's name always carries its pull request's number, so the sweep reads exactly whether one is under way there.
+  const digests = new Set(jobs.flatMap((job) => DIGEST_JOB.exec(job.name)?.[1] ?? []).map(Number));
   return {
     implement: implementJobsUnderWay(jobs).length > 0,
     research: anyJobNamed(RESEARCH_JOB_NAME),
     review: anyReviewJob || anyJobNamed(REVIEW_CHECKS_JOB_NAME),
     claim: anyJobNamed(CLAIM_JOB_NAME),
     designTurns: [...designTurns].sort((a, b) => a - b),
+    digests: [...digests].sort((a, b) => a - b),
   };
 }
 

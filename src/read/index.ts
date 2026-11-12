@@ -159,3 +159,10 @@ export type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 export { CAPTURE_RESULT_FILE, parseCaptureResult } from "../evidence/uiEvidence.ts";
 export { productionPageUrl } from "../kit/config.ts";
 export type { CaptureResult, CaptureResultRead } from "../evidence/uiEvidence.ts";
+
+// The Digest read
+
+export { aDigestComment, aNoDigestLine } from "./builders.ts";
+export { readDigestPlaces } from "./digestRead.ts";
+export type { DigestData } from "../loop/digestContract.ts";
+export type { DigestRead, PlaceShown } from "./digestRead.ts";

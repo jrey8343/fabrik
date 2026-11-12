@@ -7,7 +7,7 @@
 // of a Replay's model names. Pure, with no runtime import but the Loop's
 // types, so the read library can read it anywhere.
 import type { RunKind } from "../github/snapshot.ts";
-import { AGENT_ROLES, type Action, type AgentRole, type Plan } from "../loop/types.ts";
+import { AGENT_ROLES, type Action, type AgentRole, isOfPullRequest, type Plan } from "../loop/types.ts";
 
 /** This line's version. A reader takes a line at no other. */
 export const KIT_SAID_VERSION = 1;
@@ -26,7 +26,7 @@ export interface KitSaid {
   /** The agent run the plan starts, or null. */
   readonly run: {
     readonly role: AgentRole;
-    /** The Ticket of an Implement or Review run, else the issue the run is on. */
+    /** The Ticket of an Implement, Review or Digest run, else the issue the run is on. */
     readonly issue: number | null;
     /** Its agent pull request; null for a first Implement run, a Kept-branch start included. */
     readonly pullRequest: number | null;
@@ -82,13 +82,16 @@ function kindOf(run: StartAgentRun): RunKind | null {
 
 /**
  * The line for `plan` (null for an event the Loop doesn't act on); `ticket` is
- * the Ticket the snapshot's pull request was cut for, which a Review is of.
+ * the Ticket the snapshot's pull request was cut for, which a Review is of,
+ * and a Digest run too.
  */
 export function kitSaidOf(plan: Plan | null, ticket: number | null): KitSaid {
   const actions = actionsOf(plan);
   const run = actions.find((action): action is StartAgentRun => action.kind === "start-agent-run");
   const replay = actions.find((action): action is StartReplay => action.kind === "start-replay");
   const held = actions.filter((action): action is HoldAgentRun => action.kind === "hold-agent-run");
+  // A Review's subject is the pull request itself, whose Ticket the snapshot names; a Digest run reads the same way.
+  const onPullRequest = isOfPullRequest(run?.role);
   return {
     fabrik: KIT_SAID_VERSION,
     route: routeOf(plan),
@@ -97,9 +100,8 @@ export function kitSaidOf(plan: Plan | null, ticket: number | null): KitSaid {
         ? null
         : {
             role: run.role,
-            // A Review's subject is the pull request itself, whose Ticket the snapshot names.
-            issue: run.role === "review" ? ticket : run.issue,
-            pullRequest: run.role === "review" ? run.issue : run.role === "implement" ? (run.pullRequest ?? null) : null,
+            issue: onPullRequest ? ticket : run.issue,
+            pullRequest: onPullRequest ? run.issue : run.role === "implement" ? (run.pullRequest ?? null) : null,
             kind: kindOf(run),
             retry: run.retry ?? 0,
             model: run.model,

@@ -95,7 +95,9 @@ export function heldWhileUsedUp(
  * rotation on, while every listed Subscription is used up, through any mix of
  * weekly-limit, usage-credits and token-rotation issues (#470). An Auditor or
  * Retro run is never held: its pending issue fails instead
- * (src/loop/weeklyRuns.ts).
+ * (src/loop/weeklyRuns.ts). Nor is a Digest run: where this says a run
+ * would be held, the Merge gate opens with the no-Digest line instead
+ * (src/loop/digest.ts).
  */
 export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {
   return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && holdingOn(kitIssues) !== null;

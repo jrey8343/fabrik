@@ -4,7 +4,7 @@
 // itself holds no relative time. The wording never quotes a repo's text.
 import type { HandBack } from "../loop/handBacks.ts";
 import { RUN_NAMES, runNamed } from "../loop/heldRun.ts";
-import { DESIGN_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
+import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
@@ -20,8 +20,8 @@ export interface StandingWords {
   readonly remedy: string | null;
 }
 
-/** How a `running` Standing's sentence names its run, at the start of a sentence; a Retry is named by its number. */
-const RUNNING_RUNS: Readonly<Record<RunningRun, string>> = {
+/** How a `running` Standing's sentence names its run, at the start of a sentence; a Retry is named by its number, and a Digest run's sentence is its own. */
+const RUNNING_RUNS: Readonly<Record<Exclude<RunningRun, "digest">, string>> = {
   implement: "An Implement run",
   retry: "A Retry",
   "request-changes": "A Request-changes run",
@@ -68,7 +68,12 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
   switch (standing.name) {
     case "running": {
       const { run, retry } = standing.detail;
-      const named = run === "retry" && retry !== null ? `Retry ${retry}` : (RUNNING_RUNS[run as RunningRun] ?? "A run");
+      // A passed draft's Digest run (#654): the pass is given, and the Merge gate waits on nothing but the run's end.
+      if (run === "digest") {
+        const sentence = `The Reviewer passed #${standing.pullRequest}, and the Digest writer is writing its Digest. The Merge gate opens when it ends, with a Digest or without.`;
+        return { pill: "Running", sentence, remedy: null };
+      }
+      const named = run === "retry" && retry !== null ? `Retry ${retry}` : (RUNNING_RUNS[run as keyof typeof RUNNING_RUNS] ?? "A run");
       return { pill: "Running", sentence: `${named} has been running for ${age}.`, remedy: null };
     }
     case "waiting-on-checks": {
@@ -183,8 +188,8 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
   }
 }
 
-/** The run each trigger label asks for, as a not-started Standing's sentence names it. */
-const ASKED_RUNS: Readonly<Record<TriggerLabel, string>> = {
+/** The run each trigger label asks for, as a not-started Standing's sentence names it: every one but `agent:digest`, whose wording is its own. */
+const ASKED_RUNS: Readonly<Record<Exclude<TriggerLabel, typeof DIGEST_LABEL>, string>> = {
   [DISPATCH_LABEL]: "an Implement run",
   [DESIGN_LABEL]: "a Design-session turn",
   [REVIEW_LABEL]: "a Review",
@@ -197,8 +202,17 @@ const ASKED_RUNS: Readonly<Record<TriggerLabel, string>> = {
  * the bar or at it (`stuck`), aged from when it was asked for. "The Loop's
  * runs" links to the repo's Actions runs.
  */
-function notStartedWords({ repo, issue, detail }: StandingNamed<"not-started">, age: string, stuck: boolean): Omit<StandingWords, "pill"> {
+function notStartedWords({ repo, issue, pullRequest, detail }: StandingNamed<"not-started">, age: string, stuck: boolean): Omit<StandingWords, "pill"> {
   const runs = `Check [the Loop's runs](https://github.com/${repo}/actions)`;
+  // A passed draft waiting on its Digest (#654). The stuck-trigger sweep never adds this label again: it opens the Merge gate
+  // with no Digest, so nothing is the Operator's to do before the bar.
+  if (detail.label === DIGEST_LABEL) {
+    if (stuck) {
+      return { sentence: `No Digest was started for #${pullRequest} after its pass, ${age} ago, and the Merge gate never opened.`, remedy: `${runs}, then mark #${pullRequest} ready for review.` };
+    }
+    const asked = `The Reviewer passed #${pullRequest} and the Kit asked for its Digest ${age} ago; nothing has started.`;
+    return { sentence: `${asked} At its next hourly check the Kit opens the Merge gate without one.`, remedy: null };
+  }
   if (detail.silence === "retry") {
     return {
       sentence: stuck

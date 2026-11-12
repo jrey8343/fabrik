@@ -5,13 +5,15 @@
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
+import { carriedDigest, placedFilesIn } from "../loop/digestCarry.ts";
+import type { DigestHead } from "../loop/digestPlaces.ts";
 import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
 import { isEmptyDiffComment, withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
-import { allPages, type GitHub, type Repo } from "./client.ts";
+import { allPages, type GitHub, GitHubError, gitHubMessageOf, type Repo } from "./client.ts";
 
 /** The agent run a plan starts, which the workflow carries out by routing to that role's agent job. */
 export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run" }> | null {
@@ -49,6 +51,15 @@ export interface MainRebaser {
   rebase(branch: string, onto: string): Promise<MainRebase>;
 }
 
+/**
+ * Reads what a pull request's head holds of the files a Digest's places
+ * name, and the pull request's files there (src/github/digestHead.ts), for a
+ * Digest carried forward to that head. It rejects when they cannot be read.
+ */
+export interface DigestHeadReader {
+  read(pullRequest: number, headSha: string, paths: readonly string[]): Promise<DigestHead>;
+}
+
 /** A UI PR's preview deployment, which the push job's preview step polls and links (src/kit/previewLink.ts). */
 export interface PreviewToLink {
   readonly pullRequest: number;
@@ -71,13 +82,26 @@ export interface ReaddedLabel {
 }
 
 /**
+ * An older Digest GitHub refused to collapse as outdated (ADR-0022), which
+ * stopped nothing: the comment, and what GitHub said.
+ */
+export interface RefusedCollapse {
+  readonly pullRequest: number;
+  /** The comment's node id. */
+  readonly node: string;
+  readonly why: string;
+}
+
+/**
  * What the push job hands on from applying a plan: the preview deployment to
- * link, a UI PR's or a prototype round's, when the plan asked for one; and each
- * trigger label it re-added, for the step summary.
+ * link, a UI PR's or a prototype round's, when the plan asked for one; and,
+ * for the step summary, each trigger label it re-added and each older Digest
+ * GitHub refused to collapse.
  */
 export interface AppliedPlan {
   readonly preview: PreviewToLink | PrototypePreviewToLink | null;
   readonly readded: readonly ReaddedLabel[];
+  readonly refusedCollapses: readonly RefusedCollapse[];
 }
 
 /** The Actions run applying a plan, by its id, and when it applies it, as an ISO 8601 time. */
@@ -108,7 +132,7 @@ export class ReplayTicketTaken extends Error {
  * A plan applied only in part (#421): `failed` threw `cause`, after the
  * actions `applied` had landed, so those in `unapplied` never did. Each is
  * one of the plan's own actions: a failure inside a rebase onto main names
- * the rebase.
+ * the rebase, and one inside a Digest carried forward names the carry.
  */
 export class PlanNotApplied extends Error {
   readonly failed: Action;
@@ -131,6 +155,8 @@ export class PlanNotApplied extends Error {
  * branch to push. `run` is the Actions run applying it, which a replay
  * Ticket's claim marks it in progress in, from then. `rebaser` carries out a
  * rebase onto main, which a push to main's or the tick's plan may ask for.
+ * `heads` reads what a head holds, which a pass's plan that carries the last
+ * Digest forward asks for (ADR-0022).
  */
 export async function applyPlan(
   github: GitHubApi,
@@ -139,11 +165,32 @@ export async function applyPlan(
   branches: BranchPusher | null = null,
   run: ApplyingRun | null = null,
   rebaser: MainRebaser | null = null,
+  heads: DigestHeadReader | null = null,
 ): Promise<AppliedPlan> {
-  if (plan.kind !== "act") return { preview: null, readded: [] };
-  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [] };
+  if (plan.kind !== "act") return { preview: null, readded: [], refusedCollapses: [] };
+  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [], refusedCollapses: [] };
   const applyEach = async (actions: readonly Action[]): Promise<void> => {
     for (const action of actions) {
+      if (action.kind === "carry-digest") {
+        if (heads === null) throw new Error(`This job can't read #${action.pullRequest}'s head to carry its Digest forward`);
+        const { pullRequest, headSha, repoUrl } = action;
+        // With the files unread at the new head no place could be re-pointed, so nothing is carried.
+        const body = await heads.read(pullRequest, headSha, placedFilesIn(action.digest)).then(
+          (head) => carriedDigest(action.digest, { repoUrl, pullRequest, headSha }, head),
+          (error: unknown) => {
+            console.log(`::warning title=Digest not carried::#${pullRequest} at ${headSha.slice(0, 7)}: ${error instanceof Error ? error.message : String(error)}`);
+            return null;
+          },
+        );
+        if (body === null) {
+          await applyEach(action.otherwise);
+          continue;
+        }
+        // The carried Digest first, then what follows any Digest's posting: the older ones collapsed and the gate opened.
+        await apply(github, repo, { kind: "comment", issue: pullRequest, body }, made, branches);
+        await applyEach(action.carried);
+        continue;
+      }
       if (action.kind !== "rebase-onto-main") {
         await apply(github, repo, action, made, branches);
         continue;
@@ -175,7 +222,7 @@ export async function applyPlan(
       throw new PlanNotApplied(action, plan.actions.slice(0, i), plan.actions.slice(i + 1), error);
     }
   }
-  return { preview: made.preview, readded: made.readded };
+  return { preview: made.preview, readded: made.readded, refusedCollapses: made.refusedCollapses };
 }
 
 /** What earlier actions in the plan made, for later ones to refer to. */
@@ -190,6 +237,8 @@ interface Made {
   readonly run: ApplyingRun | null;
   /** Each trigger label the plan re-added, having found it already on. */
   readonly readded: ReaddedLabel[];
+  /** Each older Digest GitHub refused to collapse. */
+  readonly refusedCollapses: RefusedCollapse[];
 }
 
 /** A comment a plan posted: its URL for links in text, its id for an edit. */
@@ -345,6 +394,8 @@ async function apply(
     // applyPlan carries it out, since what follows it depends on how the rebase went.
     case "rebase-onto-main":
       throw new Error("A rebase onto main is applied by applyPlan");
+    case "carry-digest":
+      throw new Error("A Digest is carried forward by applyPlan");
     case "push-branch":
       if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
       await branches.push(action.branch);
@@ -406,6 +457,21 @@ async function apply(
       return react(github, repo, action);
     case "end-held-line":
       return endHeldLine(github, repo, action, made.run?.at ?? new Date().toISOString());
+    case "minimize-comment": {
+      // Only GraphQL can collapse a comment, by its node id. A refusal is the step summary's to say and stops
+      // nothing: the calls after it are still made and the gate still opens, since the current Digest is found by its head.
+      const refused = await github
+        .graphql("mutation ($id: ID!, $classifier: ReportedContentClassifiers!) { minimizeComment(input: { subjectId: $id, classifier: $classifier }) { clientMutationId } }", {
+          id: action.node,
+          classifier: action.classifier,
+        })
+        .then(
+          () => null,
+          (error: unknown) => (error instanceof GitHubError ? gitHubMessageOf(error) : error instanceof Error ? error.message : String(error)),
+        );
+      if (refused !== null) made.refusedCollapses.push({ pullRequest: action.pullRequest, node: action.node, why: refused });
+      return;
+    }
     default:
       return applyToIssue(github, `${issues}/${action.issue}`, action, made);
   }
@@ -506,7 +572,8 @@ async function applyToIssue(
         | "mark-ready-for-review"
         | "request-review"
         | "react"
-        | "end-held-line";
+        | "end-held-line"
+        | "minimize-comment";
     }
   >,
   made: Made,

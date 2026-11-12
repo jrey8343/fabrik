@@ -36,6 +36,13 @@ export const DESIGN_LABEL = "agent:design";
 /** The trigger label on an agent PR that starts its Review, so re-adding it resumes one after a failure. */
 export const REVIEW_LABEL = "agent:review";
 
+/**
+ * The trigger label on an agent PR that starts the Digest writer on it
+ * (ADR-0022): honoured only with a pass on the PR's current head, and on
+ * until that attempt ends, with a Digest or without (src/loop/digest.ts).
+ */
+export const DIGEST_LABEL = "agent:digest";
+
 /** The label on the Kit's token-rotation issue, by which the adapter finds it. */
 export const TOKEN_ROTATION_LABEL = "fabrik:token-rotation";
 
@@ -156,6 +163,7 @@ export type Label =
   | typeof DISPATCH_LABEL
   | typeof DESIGN_LABEL
   | typeof REVIEW_LABEL
+  | typeof DIGEST_LABEL
   | KitIssueLabel
   | typeof MONITOR_LABEL
   | typeof FLAKY_CHECK_LABEL
@@ -172,6 +180,7 @@ export const ALL_LABELS: readonly Label[] = [
   DISPATCH_LABEL,
   DESIGN_LABEL,
   REVIEW_LABEL,
+  DIGEST_LABEL,
   RESEARCH_LABEL,
   REPLAY_TRIGGER_LABEL,
   ...CATEGORY_LABELS,
@@ -200,6 +209,7 @@ export const LOOP_LABELS: Readonly<Record<Label, { readonly color: string; reado
   [DISPATCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes an Implementer (the Kit adds it; it comes off as the run starts)" },
   [DESIGN_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Design session's first turn (the Kit adds it; it comes off as the turn starts)" },
   [REVIEW_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes a Review (it comes off with the Verdict)" },
+  [DIGEST_LABEL]: { color: "c2e0c6", description: "Fabrik: starts the Digest writer on a passed PR (it comes off when the attempt ends)" },
   [RESEARCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Researcher on a research Decision (the Kit adds it; off as the run starts)" },
   [REPLAY_TRIGGER_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Replay's next Ticket (the Kit adds it; it comes off as the run starts)" },
   [BUG]: { color: "d73a4a", description: "Something isn't working" },
@@ -223,7 +233,7 @@ export const LOOP_LABELS: Readonly<Record<Label, { readonly color: string; reado
 };
 
 /** Every label whose `labeled` event starts a run (ADR-0001). GitHub fires none for a label already on. */
-export const TRIGGER_LABELS = [DISPATCH_LABEL, DESIGN_LABEL, REVIEW_LABEL, RESEARCH_LABEL, REPLAY_TRIGGER_LABEL] as const;
+export const TRIGGER_LABELS = [DISPATCH_LABEL, DESIGN_LABEL, REVIEW_LABEL, RESEARCH_LABEL, REPLAY_TRIGGER_LABEL, DIGEST_LABEL] as const;
 export type TriggerLabel = (typeof TRIGGER_LABELS)[number];
 
 export function isTriggerLabel(label: string): label is TriggerLabel {

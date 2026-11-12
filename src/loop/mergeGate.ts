@@ -3,8 +3,9 @@
 // model with their review as input (it isn't a retry), or add needs-design to
 // the PR, which sends its Ticket back to design as a Design flaw does.
 import { sentBackByOperator } from "./backToDesign.ts";
+import { gateUnopened } from "./digest.ts";
 import { heldOn, heldUntilReset } from "./hold.ts";
-import { REVIEW_LABEL } from "./labels.ts";
+import { DIGEST_LABEL, REVIEW_LABEL } from "./labels.ts";
 import { requestChangesRunStartedMarker } from "./markers.ts";
 import { runInFlight, runName } from "./retry.ts";
 import { reviewLinks, unnotedChangesRequests } from "./undelivered.ts";
@@ -18,6 +19,13 @@ type ChangesRequested = Extract<LoopEvent, { kind: "pull-request-changes-request
  * Operator's review again. A conflict with main after another PR merged
  * doesn't need it: the Kit resolves that itself (src/loop/conflicts.ts,
  * ADR-0011), and hands the PR back here only when it can't.
+ *
+ * One on a passed draft whose gate has yet to open (`gateWaits`), as while
+ * its Digest is being written, is acted on the same way, at once (ADR-0022):
+ * the PR is a draft already and stays one, and `agent:digest` comes off. The
+ * note puts the run in flight, so the Digest attempt under way is dropped
+ * when it lands (src/loop/digest.ts), and the pass on the run's push brings
+ * the next Digest.
  */
 export function requestChanges(event: ChangesRequested, snapshot: Snapshot, config: KitConfig): Plan {
   const { pullRequest, operator } = snapshot;
@@ -35,6 +43,8 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
   const why = whyNotAtMergeGate(pullRequest);
   if (why !== null || pullRequest.ticket === null) return { kind: "nothing", reason: why ?? "" };
   const { number } = pullRequest;
+  // A draft here is one whose gate has yet to open: it stays in draft, and the Digest being written for this head is thrown away.
+  const waiting = pullRequest.draft;
   // Any earlier one of the Operator's no run was started for, as one GitHub never delivered, goes in this run too:
   // the run reads every Request changes of theirs, so neither check notes that one later.
   const earlier = unnotedChangesRequests(pullRequest, operator)
@@ -56,10 +66,10 @@ export function requestChanges(event: ChangesRequested, snapshot: Snapshot, conf
         issue: number,
         body: [
           requestChangesRunStartedMarker(reviews),
-          `${starting} It runs on the Step-up model and uses no retry. The PR is back in draft, and Review runs again on the run's push.`,
+          `${starting} It runs on the Step-up model and uses no retry. ${waiting ? "The PR stays in draft, with no Digest for this head" : "The PR is back in draft"}, and Review runs again on the run's push.`,
         ].join("\n"),
       },
-      { kind: "convert-to-draft", pullRequest: number },
+      waiting ? { kind: "remove-label", issue: number, label: DIGEST_LABEL } : { kind: "convert-to-draft", pullRequest: number },
       requestChangesRun(pullRequest.ticket, number, event.review, config),
     ],
   };
@@ -211,11 +221,29 @@ export function sendBackToDesign(pullRequest: PullRequestSnapshot): Plan {
 }
 
 
-/** Why this PR isn't an open agent PR waiting at the Merge gate, or null when it is. */
+/**
+ * Why this PR isn't an open agent PR where the Operator's Request changes is
+ * acted on, or null when it is: one waiting at the Merge gate, or a passed
+ * draft whose gate has yet to open (`gateWaits`).
+ */
 function whyNotAtMergeGate(pullRequest: PullRequestSnapshot): string | null {
   if (!pullRequest.isAgent) return `#${pullRequest.number} isn't an agent PR`;
   if (pullRequest.ticket === null) return `#${pullRequest.number}'s branch names no Ticket`;
   if (!pullRequest.open) return `#${pullRequest.number} is closed`;
-  if (pullRequest.draft) return `#${pullRequest.number} is still a draft in the Loop, not at the Merge gate`;
+  if (pullRequest.draft && !gateWaits(pullRequest)) return `#${pullRequest.number} is still a draft in the Loop, not at the Merge gate`;
   return null;
+}
+
+/**
+ * Whether the PR is a passed draft waiting for its Merge gate to open, as it
+ * does while its Digest is written and in the moment after that attempt
+ * ends (ADR-0022): a draft whose latest Verdict is a pass on its head, which
+ * has not left draft since that pass (`gateUnopened`) and has no run in
+ * flight on it. So never a draft with no pass on its head; nor one the
+ * Operator put back in draft after the gate opened; nor one a pass kept in
+ * draft for a run, to be brought up to date with main or for a Request
+ * changes deferred during a Retry.
+ */
+function gateWaits(pullRequest: PullRequestSnapshot): boolean {
+  return gateUnopened(pullRequest) && runInFlight(pullRequest) === null;
 }

@@ -13,6 +13,9 @@ import type { Action, LoopEvent, Plan } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
+/** The Digest off in Kit config, so a pass opens the Merge gate itself; what it does with the Digest on is src/loop/digestGate.test.ts's. */
+const DIGEST_OFF = kitConfig({ digest: { enabled: false } });
+
 function redChecks(overrides: Partial<Extract<LoopEvent, { kind: "required-checks-finished" }>> = {}): LoopEvent {
   return { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN, ...overrides };
 }
@@ -250,7 +253,7 @@ describe("Review: the Reviewer's Verdict", () => {
     const plan = planFor(
       reviewed("verdict: pass\n\nLooks good, @someone."),
       snapshotOfPullRequest(aPullRequest(), { operator: "jrey" }),
-      kitConfig(),
+      DIGEST_OFF,
     );
 
     expect(actionsOf(plan).filter((action) => action.kind !== "comment")).toEqual([
@@ -321,7 +324,7 @@ describe("Review: the Reviewer's Verdict", () => {
       const plan = planFor(
         reviewed("verdict: pass\n\nLooks good."),
         snapshotOfPullRequest(aPullRequest({ conflictAttempts }), { operator: "jrey", mergeable }),
-        kitConfig(),
+        DIGEST_OFF,
       );
 
       expect(actionsOf(plan).filter((action) => action.kind !== "comment")).toEqual([

@@ -89,10 +89,11 @@ export type StandingName = (typeof STANDING_NAMES)[number];
 /**
  * What a `not-started` Standing's wording is made of: which run was asked for
  * and how (src/kit/standingClock.ts), and the trigger label that asked, null
- * for a Retry a Verdict announced.
+ * for a Retry a Verdict announced. `passed` is on a passed draft's alone, one
+ * waiting on its Digest, and true: the Reviewer's pass is given.
  */
 type NotStartedDetail =
-  | { readonly silence: Exclude<NotStartedSilence, "retry">; readonly label: TriggerLabel }
+  | { readonly silence: Exclude<NotStartedSilence, "retry">; readonly label: TriggerLabel; readonly passed?: true }
   | { readonly silence: Extract<NotStartedSilence, "retry">; readonly label: null };
 
 /**
@@ -103,8 +104,12 @@ type WaitingOnKitDetail = { readonly silence: WaitingOnKitSilence; readonly roun
 
 /** What each name's wording is made of: numbers, labels, check names and logins, never a repo's text. */
 export interface StandingDetails {
-  /** `run` is the kind of run and `retry` its Retry number; `actionsRun` is its Actions run's number (#621). */
-  readonly running: { readonly run: string; readonly retry: number | null; readonly actionsRun: number };
+  /**
+   * `run` is the kind of run and `retry` its Retry number; `actionsRun` is its
+   * Actions run's number (#621). `passed` is on a Digest run's alone, and true:
+   * the Reviewer's pass is given, and the run is what the Merge gate waits on.
+   */
+  readonly running: { readonly run: string; readonly retry: number | null; readonly actionsRun: number; readonly passed?: true };
   readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean };
   /**
    * A Held run's role and the Carrier its newest held marker is on; or, for an

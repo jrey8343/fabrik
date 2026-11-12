@@ -2,7 +2,7 @@
 // `needs`, as `toJSON(needs)` gives it), so the workflow holds no routing of
 // its own: the Actions event itself, an agent job's result, a Review's red
 // checks or Verdict, or, when the routed agent job failed or was cancelled,
-// its failure notice. Pure, no I/O.
+// its failure notice, or for a Digest run its no-Digest line. Pure, no I/O.
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import type { AgentRole, FlakyCheck, KeptBranchStart, RerunReport } from "../loop/types.ts";
@@ -84,6 +84,15 @@ export type PushJobInput =
       readonly rerun?: RerunReport;
     }
   | {
+      /** The Digest writer's reply is there to land (ADR-0022). */
+      readonly kind: "digest";
+      readonly pullRequest: number;
+      /** The Ticket the PR builds, which the run's Run record is on. */
+      readonly ticket: number;
+      /** The head the Kit job's plan started the run at, which the Digest is written as of. */
+      readonly headSha: string;
+    }
+  | {
       readonly kind: "agent-failure";
       readonly role: AgentRole;
       readonly issue: number;
@@ -95,6 +104,8 @@ export type PushJobInput =
       readonly prototype?: true;
       /** For a conflict-only run (#304): its PR and the default branch head it was started for. */
       readonly conflict?: { readonly pullRequest: number; readonly main: string };
+      /** For a Digest run: its PR and the head it was started at. `issue` is the PR's Ticket. */
+      readonly digest?: { readonly pullRequest: number; readonly headSha: string };
     }
   | { readonly kind: "nothing"; readonly reason: string };
 
@@ -142,8 +153,9 @@ export function routedJob(needs: Needs, route: AgentRole): NeededJob | undefined
  * Researcher (whose subjects are the pending Audit and the pending Retro the
  * App opened, and the research Decision agent:research went on), and
  * `eventComment` its comment's id when a comment on that issue started the
- * run; an Implement or Review run's Ticket and PR come from the Kit job's
- * plan, which no agent can rewrite.
+ * run; an Implement, Review or Digest run's Ticket and PR come from the Kit
+ * job's plan, which no agent can rewrite, as does the head a Digest run
+ * writes its Digest as of.
  */
 export function pushJobInput(needs: Needs, eventIssue: number | null, eventComment: number | null = null): PushJobInput {
   const kit = needs["kit"];
@@ -220,10 +232,23 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };
     }
+    case "digest": {
+      if (pullRequest === null || ticket === null) return { kind: "nothing", reason: "the Digest run names no PR" };
+      const headSha = shaOr(kit.outputs["head-sha"]);
+      if (headSha === null) return { kind: "nothing", reason: "the Digest run names no head to write a Digest as of" };
+      const writer = needs[DIGEST_JOB];
+      // A failed or cancelled run posts no failure notice: its no-Digest line goes on the PR, at that head.
+      if (writer !== undefined && FAILED.includes(writer.result)) return { ...failure("digest", ticket, writer, kit), digest: { pullRequest, headSha } };
+      if (writer?.result !== "success") return { kind: "nothing", reason: `the digest job ended ${writer?.result ?? "unknown"}` };
+      return { kind: "digest", pullRequest, ticket, headSha };
+    }
     default:
       return { kind: "nothing", reason: `the Kit job routed to ${route || "nothing"}` };
   }
 }
+
+/** The key of the job that runs the Digest writer, as loop.yml names it. */
+export const DIGEST_JOB = "digest";
 
 /** The Review's job that re-runs red checks (#462), and the wait on them that follows, as loop.yml names them. */
 export const RERUN_CHECKS_JOB = "rerun-checks";

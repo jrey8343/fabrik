@@ -111,6 +111,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     url: "https://github.com/acme/shop/pull/50",
     uiEvidenceMarker: null,
     changedTests: [],
+    digests: [],
     ...overrides,
   };
 }
@@ -265,7 +266,7 @@ export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
 }
 
 /** No role's job under way anywhere in the repo. */
-export const NOTHING_UNDER_WAY: RolesUnderWay = { implement: false, research: false, review: false, claim: false, designTurns: [] };
+export const NOTHING_UNDER_WAY: RolesUnderWay = { implement: false, research: false, review: false, claim: false, designTurns: [], digests: [] };
 
 /** A trigger label on an open issue: by default agent:implement on #7, added an hour before the tick at 04:00, never re-added by the Kit. */
 export function aLabelledTrigger(overrides: Partial<LabelledTrigger> = {}): LabelledTrigger {

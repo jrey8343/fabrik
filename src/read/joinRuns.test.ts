@@ -42,6 +42,12 @@ const A_NUMBERLESS_IMPLEMENT = aRunRead({ role: "implement", exact: false, issue
 /** Ticket 7's agent draft 50, quiet since its last push, a pass on its head. */
 const A_PASSED_DRAFT: OpenPullRequestFacts = { ...A_QUIET_DRAFT, comments: [aVerdictComment("pass", "h".repeat(40), "2026-11-08T19:35:00Z")] };
 
+/** Ticket 7's passed draft 50 with `agent:digest` on since 19:36, no Digest run started on it: waiting on its Digest (#654). */
+const A_DRAFT_WAITING_ON_ITS_DIGEST: OpenPullRequestFacts = { ...A_PASSED_DRAFT, labelEvents: [aLabelAdded("agent:digest", "2026-11-08T19:36:00Z")] };
+
+/** The Fabrik App's exact Digest run on a pull request that closes Ticket 7: a Digest run carries no kind. */
+const aDigestRunOn = (pullRequest: number, overrides: Partial<RunInFlight> = {}) => anExactRun({ role: "digest", issue: 7, pullRequest, kind: null, ...overrides });
+
 /** An Implement job on Ticket 7 told by its name, from a release before the closing line: it carries no kind. */
 const AN_IMPLEMENT_JOB_ON_7 = aRunRead({ role: "implement", issue: 7, exact: false, run: 4430, createdAt: "2026-11-08T19:50:00Z" });
 
@@ -114,6 +120,18 @@ const CASES = {
     keptAt: "2026-11-08T15:30:00Z",
     now: "2026-11-08T23:00:00Z",
   }),
+  digestStarted: aCase({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [A_DRAFT_WAITING_ON_ITS_DIGEST] }, [aDigestRunOn(50)]),
+  digestWithNoTicket: aCase({ openPullRequests: [{ ...A_DRAFT_WAITING_ON_ITS_DIGEST, ticket: null }] }, [aDigestRunOn(50, { issue: null })]),
+  digestOnAnotherPullRequest: aCase(
+    { openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [A_DRAFT_WAITING_ON_ITS_DIGEST, { ...A_DRAFT_WAITING_ON_ITS_DIGEST, number: 51 }] },
+    [aDigestRunOn(51)],
+  ),
+  // No Digest job goes unnumbered, but were a run of the role read with no number, it would count for no draft, as the rule counts none.
+  digestNumberless: aCase({ openPullRequests: [A_DRAFT_WAITING_ON_ITS_DIGEST] }, [aRunRead({ role: "digest", exact: false, run: 4460, createdAt: "2026-11-08T19:50:00Z" })]),
+  digestStuck: aCase(
+    { openPullRequests: [{ ...A_PASSED_DRAFT, comments: [aVerdictComment("pass", "h".repeat(40), "2026-11-08T09:59:00Z")], labelEvents: [aLabelAdded("agent:digest", "2026-11-08T10:00:00Z")] }] },
+    [aDigestRunOn(50)],
+  ),
 } as const satisfies Readonly<Record<string, JoinCase>>;
 
 describe("rows settled against fresh runs with no gather", () => {
@@ -154,6 +172,36 @@ describe("rows settled against fresh runs with no gather", () => {
 
     expect(joinedOf(CASES.stuck).map(({ standing }) => standing)).toEqual([
       expect.objectContaining({ name: "running", move: "kit", yours: false, stopsWork: false, stuckAt: null, since: "2026-11-08T19:52:00Z", detail: { run: "implement", retry: null, actionsRun: 4410 } }),
+    ]);
+  });
+
+  it("make a kept passed draft waiting on its Digest running once a Digest run is in flight on its pull request, the pass still shown as given, Stuck or not, with a Ticket or none", () => {
+    expect(keptOf(CASES.digestStarted).map(({ standing }) => standing)).toMatchObject([{ name: "not-started", awaits: { role: "digest", on: "pullRequest" }, detail: { passed: true } }]);
+    expect(namesOf(keptOf(CASES.digestStuck))).toEqual([{ issue: 7, pullRequest: 50, name: "stuck" }]);
+
+    const running = {
+      issue: 7,
+      pullRequest: 50,
+      work: "ticket",
+      place: "review",
+      name: "running",
+      move: "kit",
+      yours: false,
+      stopsWork: false,
+      since: "2026-11-08T19:52:00Z",
+      stuckAt: null,
+      awaits: { role: "digest", on: "pullRequest" },
+      detail: { run: "digest", retry: null, actionsRun: 4410, passed: true, head: "h".repeat(40) },
+    };
+    expect(joinedOf(CASES.digestStarted).map(({ standing }) => standing)).toEqual([expect.objectContaining(running)]);
+    expect(joinedOf(CASES.digestStuck).map(({ standing }) => standing)).toEqual([expect.objectContaining(running)]);
+    expect(joinedOf(CASES.digestWithNoTicket).map(({ standing }) => standing)).toEqual([expect.objectContaining({ ...running, issue: null })]);
+  });
+
+  it("leave a passed draft waiting on its Digest as it was when the Digest run is on another pull request, though both close one Ticket", () => {
+    expect(namesOf(joinedOf(CASES.digestOnAnotherPullRequest))).toEqual([
+      { issue: 7, pullRequest: 50, name: "not-started" },
+      { issue: 7, pullRequest: 51, name: "running" },
     ]);
   });
 

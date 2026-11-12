@@ -18,7 +18,12 @@ export interface ReadClient {
   rest(method: string, path: string, body?: unknown, options?: { allowNotFound?: boolean }): Promise<unknown>;
   /** A GraphQL query's data; a query GitHub answers with errors throws a GitHubError. */
   graphql<T>(query: string, variables: Record<string, unknown>): Promise<T>;
-  /** A file's text from the repo at `ref`, or null if it doesn't exist there. */
+  /**
+   * A file's text from the repo at `ref`, or null if no file exists there.
+   * A directory or a submodule at that path is no file: GitHub answers a read
+   * of one with JSON that describes it, which is never to be handed back as
+   * a file's text.
+   */
   fileText(repo: Repo, path: string, ref: string): Promise<string | null>;
 }
 
@@ -218,7 +223,14 @@ export class GitHub implements ReadClient {
     return result.data;
   }
 
-  /** A file's text from the repo at `ref`, or null if it doesn't exist there. Reads only; never runs it. */
+  /**
+   * A file's text from the repo at `ref`, or null if no file exists there.
+   * Reads only; never runs it. The read asks for the file raw, and GitHub
+   * answers a file under that media type whatever the file holds. A path
+   * that is a directory or a submodule there it answers with 200 too, as
+   * plain JSON that lists or describes it: that is no file's text, so it is
+   * null, as a path with nothing at it is.
+   */
   async fileText(repo: Repo, path: string, ref: string): Promise<string | null> {
     const url = `${this.#apiUrl}/repos/${repo.owner}/${repo.name}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`;
     const response = await this.#answered(`GET ${path}@${ref}`, url, {
@@ -226,7 +238,9 @@ export class GitHub implements ReadClient {
       notFoundIsNull: true,
       init: { headers: { ...this.#headers(), accept: "application/vnd.github.raw+json" } },
     });
-    return response === null ? null : response.text();
+    if (response === null) return null;
+    const described = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() === "application/json";
+    return described ? null : response.text();
   }
 
   /**

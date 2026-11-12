@@ -7,6 +7,7 @@ import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { upToDateBeforeMergeGate } from "./conflicts.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
+import { digestOnPass } from "./digest.ts";
 import { checkCode, flakyCheckActions } from "./flakyChecks.ts";
 import { followUpsSection } from "./followUps.ts";
 import { type HeldOn, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
@@ -15,6 +16,8 @@ import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
+import { changeLine } from "./changeFingerprint.ts";
+import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import { parseVerdict } from "./verdict.ts";
 import type {
   Action,
@@ -110,10 +113,12 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
 
 /**
  * The Reviewer's Verdict. A reply that breaks the contract is an
- * Infrastructure failure, never a pass. A pass takes the PR out of draft and
- * requests the Operator's review, the event's one notification, unless the
- * PR conflicts with main: then it stays in draft and is brought up to date,
- * and the pass on that head opens the Merge gate (#480).
+ * Infrastructure failure, never a pass. A pass starts the Digest writer,
+ * and the Merge gate opens when its attempt ends; with the Digest off it
+ * takes the PR out of draft and requests the Operator's review itself
+ * (src/loop/digest.ts). Unless the PR conflicts with main: then it stays in
+ * draft and is brought up to date, and the pass on that head does that
+ * (#480).
  */
 export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConfig): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
@@ -139,14 +144,8 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
     // One on a PR that conflicts with main brings it up to date first, in draft: the Operator's review couldn't land (#480).
     const bringUpToDate = upToDateBeforeMergeGate(pullRequest, snapshot.mergeable, held);
     if (bringUpToDate !== null) return { kind: "act", actions: [...actions, bringUpToDate] };
-    return {
-      kind: "act",
-      actions: [
-        ...actions,
-        { kind: "mark-ready-for-review", pullRequest: pullRequest.number },
-        { kind: "request-review", pullRequest: pullRequest.number, reviewer: snapshot.operator },
-      ],
-    };
+    // A pass that would open the Merge gate starts the Digest writer in its place, where the Digest is on (ADR-0022).
+    return { kind: "act", actions: [...actions, ...digestOnPass(event, pullRequest, snapshot, config)] };
   });
 }
 
@@ -202,7 +201,9 @@ export interface AnswerLines {
  * left; a Design flaw, or an Execution flaw with none left, sends the Ticket
  * back to design. A pass's Follow-ups (src/loop/followUps.ts) follow its
  * findings. A Reviewer's Verdict ends with the Operator comments it
- * weighed, as `considered` (src/loop/considered.ts) renders them.
+ * weighed, as `considered` (src/loop/considered.ts) renders them. Whatever
+ * its source, the comment's second line is the fingerprint of the PR's own
+ * change (src/loop/changeFingerprint.ts), when the snapshot holds one (#643).
  */
 export function verdictActions(
   event: { readonly headSha: string; readonly runUrl: string },
@@ -240,8 +241,7 @@ export function verdictActions(
     headSha: event.headSha,
   };
   const by = BY[source];
-  const body = [
-    verdictMarker(record),
+  const lines = [
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run" : ""}.`,
@@ -251,7 +251,14 @@ export function verdictActions(
     "",
     `[The run](${event.runUrl})`,
     ...considered,
-  ].join("\n");
+  ];
+  // The fingerprint of the PR's own change (#643), when the push job read one at the head this Verdict is on:
+  // the PR's own head, or the head a Retry that changed nothing started at, which the PR may have moved on from.
+  const read = pullRequest.headSha === event.headSha ? pullRequest.change : pullRequest.changeAt?.headSha === event.headSha ? pullRequest.changeAt.change : undefined;
+  const change = read === undefined ? [] : [changeLine(read)];
+  const withChange = [verdictMarker(record), ...change, ...lines].join("\n");
+  // A Verdict never fails for want of one: a line that would take the comment past GitHub's limit is left out.
+  const body = withChange.length <= GITHUB_COMMENT_LIMIT ? withChange : [verdictMarker(record), ...lines].join("\n");
   // ready-for-human, which the Kit put on the PR when a run it started there ended without pushing, comes off too:
   // with a Verdict, the PR is back in the Loop.
   const labelsOff: Action[] = ([REVIEW_LABEL, READY_FOR_HUMAN] as const)

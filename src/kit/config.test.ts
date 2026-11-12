@@ -16,6 +16,7 @@ const DEFAULTS = {
     audit: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
     retro: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
     research: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
+    digest: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 10 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
@@ -24,9 +25,10 @@ const DEFAULTS = {
   monitor: { errors: null, redMain: true },
   audit: { day: "sunday" },
   retro: { day: "saturday" },
+  digest: { enabled: true },
   operator: null,
   subscriptions: ["Claude token"],
-  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null, research: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null, research: null, digest: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
   ui: null,
@@ -225,6 +227,7 @@ describe("Kit config", () => {
       audit: null,
       retro: null,
       research: null,
+      digest: null,
     });
   });
 
@@ -266,6 +269,7 @@ describe("Kit config", () => {
         audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
         research: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
+        digest: { model: "claude-opus-5-5", effort: null, timeout_minutes: 10 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: null },
       },
@@ -274,6 +278,7 @@ describe("Kit config", () => {
       monitor: { errors: null, red_main: true },
       audit: { day: "sunday" },
       retro: { day: "saturday" },
+      digest: { enabled: true },
       operator: null,
       production: null,
     };
@@ -727,6 +732,66 @@ describe("The Researcher's Kit config", () => {
   });
 });
 
+describe("The Digest's Kit config (ADR-0022)", () => {
+  it("is valid with none of its keys: the Digest is on, and the Digest writer runs on the Reviewer's default model and effort for 10 minutes", () => {
+    const result = resolveKitConfig({ config: `{ "max_in_flight": 4 }` });
+
+    expect(result.ok && result.config.digest).toEqual({ enabled: true });
+    expect(result.ok && result.config.roles.digest).toEqual({ model: "claude-opus-5-5", effort: null, timeoutMinutes: 10 });
+  });
+
+  it("defaults roles.digest's model and effort to the repo's own roles.review, and its time limit to 10, never the Reviewer's", () => {
+    const result = resolveKitConfig({
+      config: `{ "roles": { "review": { "model": "claude-sonnet-5-5", "effort": "high", "timeout_minutes": 45 } } }`,
+    });
+
+    expect(result.ok && result.config.roles.digest).toEqual({ model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 10 });
+  });
+
+  it("honours overrides of the Digest writer's model, effort and time limit, whatever roles.review says", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        roles: {
+          review: { model: "claude-sonnet-5-5", effort: "high" },
+          digest: { model: "claude-haiku-5-5", effort: "low", timeout_minutes: 4 },
+        },
+      }),
+    });
+
+    expect(result.ok && result.config.roles.digest).toEqual({ model: "claude-haiku-5-5", effort: "low", timeoutMinutes: 4 });
+    expect(result.ok && result.config.roles.review).toEqual({ model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 30 });
+  });
+
+  it("lets a null effort on roles.digest pass none, though roles.review sets one", () => {
+    const result = resolveKitConfig({ config: `{ "roles": { "review": { "effort": "high" }, "digest": { "effort": null } } }` });
+
+    expect(result.ok && result.config.roles.digest.effort).toBeNull();
+  });
+
+  it.each([true, false])("reads digest.enabled %j as written", (enabled) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ digest: { enabled } }) });
+
+    expect(result.ok && result.config.digest).toEqual({ enabled });
+  });
+
+  it("carries the Digest writer's own instructions from .fabrik/digest.md", () => {
+    const result = resolveKitConfig({ config: null, instructions: { digest: "Name the shop's pages as its shoppers do." } });
+
+    expect(result.ok && result.config.instructions.digest).toBe("Name the shop's pages as its shoppers do.");
+  });
+
+  it.each([
+    [`{ "roles": { "digest": { "model": "fable" } } }`, `roles.digest.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "digest": { "timeout_minutes": 0 } } }`, "roles.digest.timeout_minutes must be a whole number of at least 1"],
+    [`{ "roles": { "digest": { "skills": ["jrey8343/skills/event-storming"] } } }`, "roles.digest.skills is not a Kit config field"],
+    [`{ "digest": { "enabled": "no" } }`, "digest.enabled must be true or false"],
+    [`{ "digest": { "enabled": null } }`, "digest.enabled must be true or false"],
+    [`{ "digest": { "on": true } }`, "digest.on is not a Kit config field"],
+  ])("fails a bad Digest field, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+});
+
 describe("The Kit config template", () => {
   // Setup writes it as it is, so a Product repo's prettier --check sees it: Prettier breaks any object past 80 columns.
   it("fits every line in Prettier's 80 columns", () => {
@@ -760,6 +825,13 @@ describe("The Kit config template", () => {
       roles: { research: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 } },
       caps: { maps: 1 },
     });
+  });
+
+  it("names the Digest's switch and the Digest writer's time limit at their Kit defaults, and leaves its model to roles.review", () => {
+    const starter = JSON.parse(template) as { roles: { digest: unknown }; digest: unknown };
+
+    expect(starter.digest).toEqual({ enabled: true });
+    expect(starter.roles.digest).toEqual({ timeout_minutes: 10 });
   });
 
   it("spells out subscriptions at its Kit default, the one V1 Subscription", () => {

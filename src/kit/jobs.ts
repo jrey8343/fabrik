@@ -7,7 +7,7 @@
 // (#422); asks the Loop rules core what this event calls for; and tells the
 // workflow which job it routes to and the settings its jobs need before they
 // start, such as their timeout-minutes. Writes step outputs:
-//   route                    "triage", "design", "implement", "review", "audit", "retro" or "research" when the
+//   route                    "triage", "design", "implement", "review", "audit", "retro", "research" or "digest" when the
 //                            plan starts that agent run (a Retro run's evidence job, then its Retro job),
 //                            "replay" when it starts a replay Ticket's two arms (#156), its claim and then
 //                            its replay jobs,
@@ -21,7 +21,8 @@
 //   audit-timeout-minutes    the Auditor's Kit config timeout
 //   retro-timeout-minutes    the Retro's Kit config timeout
 //   research-timeout-minutes the Researcher's Kit config timeout
-//   pull-request, ticket     for a Review or a retry, the agent PR and the Ticket its branch was cut for;
+//   digest-timeout-minutes   the Digest writer's Kit config time limit
+//   pull-request, ticket     for a Review, a Digest run or a retry, the agent PR and the Ticket its branch was cut for;
 //                            for a first Implement run, an empty PR and its Ticket; for a replay, its merged
 //                            PR and the Ticket it replays; else empty
 //   replay-issue, base-sha   for a replay, the replay issue and the Ticket's baseSha, which both arms start
@@ -44,6 +45,8 @@
 //                            read before the run started (#341), a full sha; else empty
 //   audit-commit             for an Auditor run, the pending Audit's marked commit, which the Audit job
 //                            checks out; else empty
+//   head-sha                 for a Digest run, the head its pass was given on, a full sha, which the Digest job
+//                            checks out and the push job lands the Digest for; else empty
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
 //   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
@@ -82,7 +85,7 @@ import { defaultBranchOf, gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { prototypeRequestJson } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
-import type { Action, Plan } from "../loop/types.ts";
+import { type Action, isOfPullRequest, type Plan } from "../loop/types.ts";
 import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { callerChangeErrors } from "./callerPermissions.ts";
@@ -206,8 +209,9 @@ export function kitJobOutputs(
 ): Readonly<Record<string, string>> {
   const run = plan === null ? null : agentRunIn(plan);
   const replay = plan === null ? null : replayRunIn(plan);
-  // A Review's subject is the PR itself; a retry is an Implement run on the Ticket that fixes its PR.
-  const pullRequest = run?.role === "review" ? run.issue : (run?.pullRequest ?? null);
+  // A Review's subject is the PR itself, as a Digest run's is; a retry is an Implement run on the Ticket that fixes its PR.
+  const onPullRequest = isOfPullRequest(run?.role);
+  const pullRequest = run !== null && onPullRequest ? run.issue : (run?.pullRequest ?? null);
   const builds = run?.role === "implement" ? run.issue : ticket;
   // The closing step's line: what this job routed, held and declined included, as one line of JSON (#616).
   const said = JSON.stringify(kitSaidOf(plan, ticket));
@@ -223,8 +227,9 @@ export function kitJobOutputs(
     // Both of a Retro run's jobs, its evidence job and its Retro job, run within it.
     "retro-timeout-minutes": String(config.roles.retro.timeoutMinutes),
     "research-timeout-minutes": String(config.roles.research.timeoutMinutes),
+    "digest-timeout-minutes": String(config.roles.digest.timeoutMinutes),
     "pull-request": pullRequest === null ? "" : String(pullRequest),
-    ticket: (run?.role === "review" || run?.role === "implement") && builds !== null ? String(builds) : "",
+    ticket: (onPullRequest || run?.role === "implement") && builds !== null ? String(builds) : "",
     // A retry, and a Kept-branch start (#536), check out the Ticket's agent branch; any other first Implement run cuts it
     // from the default branch.
     branch: run?.role === "implement" && (run.pullRequest !== undefined || run.keptBranch !== undefined) ? agentBranchFor(run.issue) : "",
@@ -241,6 +246,8 @@ export function kitJobOutputs(
     "main-at-start": mainAtStart ?? "",
     // An Auditor run reads the Product repo up to the commit its pending Audit marks.
     "audit-commit": run?.role === "audit" ? (run.commit ?? "") : "",
+    // A Digest run reads the PR at the head its pass was given on, and its Digest lands only while that is still the PR's head.
+    "head-sha": run?.role === "digest" ? (run.headSha ?? "") : "",
     model: run?.model ?? "",
     effort: run?.effort ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.

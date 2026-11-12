@@ -167,7 +167,8 @@ function givenBackSince({ run, heldAt }: Waiting, on: HeldTargetSnapshot): boole
  * label (needs-triage came off), a Design-session turn on a needs-design one,
  * an Implement run on a ready-for-agent Ticket, a Review on a draft agent PR,
  * an Auditor run on the App's pending Audit, and a Researcher run on a
- * research Decision.
+ * research Decision. A Retro run and a Digest run are never held, so a held
+ * marker naming one is always dropped.
  */
 function movedOn(run: HeldRun, on: HeldTargetSnapshot): string | null {
   const name = `The ${runNamed(run.role)}'s`;
@@ -193,5 +194,8 @@ function movedOn(run: HeldRun, on: HeldTargetSnapshot): string | null {
     case "research":
       // Its Map isn't read here: agent:research, given back, starts nothing under a closed one (src/loop/research.ts).
       return on.labels.includes(RESEARCH_DECISION_LABEL) ? null : `${name} #${on.number} is no longer a research Decision`;
+    case "digest":
+      // A Digest run opens the Merge gate with the no-Digest line rather than wait for a Subscription (src/loop/digest.ts).
+      return `The Kit never holds a Digest run, so it starts none on #${on.number}`;
   }
 }

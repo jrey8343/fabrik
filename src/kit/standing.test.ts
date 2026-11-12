@@ -980,6 +980,150 @@ describe("a merged agent pull request at Production (#634)", () => {
   });
 });
 
+describe("a passed draft waiting on its Digest (#654)", () => {
+  const PASSED = "2026-11-08T19:20:00Z";
+  const ASKED = "2026-11-08T19:21:00Z";
+  const kit = (runsInFlight: readonly RunInFlightFact[] = [], config: KitConfig = DEFAULT_KIT_CONFIG) =>
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config }, dispatch: { candidates: { tickets: [], researchDecisions: [] } }, runsInFlight, headChecks: {} }) as const;
+  /** Agent draft #50 for Ticket 7, passed on its head at PASSED, the Fabrik App adding `agent:digest` at ASKED. */
+  const waiting = (overrides: Parameters<typeof anOpenPullRequest>[0] = {}) =>
+    anOpenPullRequest({ number: 50, ticket: 7, comments: [aVerdictComment("pass", HEAD, PASSED)], labelEvents: [aLabelAdded("agent:digest", ASKED)], ...overrides });
+  /** A Digest run in flight on a pull request, read exactly: Actions run 4410, its job given a runner at 19:23. */
+  const aDigestRunOn = (pullRequest: number, overrides: Partial<RunInFlightFact> = {}) =>
+    aRunInFlight({ role: "digest", issue: 7, pullRequest, exact: true, run: 4410, createdAt: "2026-11-08T19:22:00Z", startedAt: "2026-11-08T19:23:00Z", ...overrides });
+
+  it("is running while a Digest job is in flight on it: at Review, the Kit's, awaiting the role digest on the pull request, the pass shown as given", () => {
+    expect(standingsIn({ openPullRequests: [waiting()] }, { kit: kit([aDigestRunOn(50)]) })).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "review",
+        name: "running",
+        move: "kit",
+        yours: false,
+        stopsWork: false,
+        since: "2026-11-08T19:23:00Z",
+        stuckAt: null,
+        awaits: { role: "digest", on: "pullRequest" },
+        subscription: null,
+        detail: { run: "digest", retry: null, actionsRun: 4410, passed: true, head: HEAD },
+      },
+    ]);
+  });
+
+  it("is not-started while the label is on and no Digest job is in flight, from when the label was last added, turning Stuck at the bar after it", () => {
+    expect(standingsIn({ openPullRequests: [waiting()] }, { kit: kit() })).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "review",
+        name: "not-started",
+        move: "kit",
+        yours: false,
+        stopsWork: false,
+        since: ASKED,
+        stuckAt: "2026-11-08T22:51:00.000Z",
+        awaits: { role: "digest", on: "pullRequest" },
+        subscription: null,
+        detail: { silence: "trigger-label", label: "agent:digest", passed: true, head: HEAD },
+      },
+    ]);
+  });
+
+  it("reads as not-started a minute before the bar and as Stuck a minute after it, the Operator's to act on and stopping work, the pass still shown as given", () => {
+    const [before] = standingsIn({ openPullRequests: [waiting()] }, { kit: kit() }, "2026-11-08T22:50:00Z");
+    const [after] = standingsIn({ openPullRequests: [waiting()] }, { kit: kit() }, "2026-11-08T22:52:00Z");
+    expect(before).toMatchObject({ name: "not-started", move: "kit", yours: false, stopsWork: false });
+    expect(after).toEqual({ ...before, name: "stuck", yours: true, stopsWork: true, detail: { was: "not-started", silence: "trigger-label", label: "agent:digest", passed: true, head: HEAD } });
+  });
+
+  it("keeps the bar where the recovery waits put it, 210 minutes on default timeouts, whatever time the Digest role is given", () => {
+    const longDigest = { ...DEFAULT_KIT_CONFIG, roles: { ...DEFAULT_KIT_CONFIG.roles, digest: { ...DEFAULT_KIT_CONFIG.roles.digest, timeoutMinutes: 240 } } };
+    expect(standingsIn({ openPullRequests: [waiting()] }, { kit: kit([], longDigest) })).toMatchObject([{ name: "not-started", since: ASKED, stuckAt: "2026-11-08T22:51:00.000Z" }]);
+  });
+
+  it("is not-started with the runs in flight unread, as no run is known then", () => {
+    expect(standingsIn({ openPullRequests: [waiting()] }, { kit: { ...kit(), runsInFlight: "unread" } })).toMatchObject([{ name: "not-started", awaits: { role: "digest", on: "pullRequest" } }]);
+  });
+
+  it("is not made running by a Digest job on another pull request, though both close one Ticket", () => {
+    const other = waiting({ number: 51, labelEvents: [aLabelAdded("agent:digest", "2026-11-08T19:21:30Z")] });
+    expect(standingsIn({ openPullRequests: [waiting(), other] }, { kit: kit([aDigestRunOn(51)]) }).map(({ pullRequest, name, awaits }) => ({ pullRequest, name, awaits }))).toEqual([
+      { pullRequest: 50, name: "not-started", awaits: { role: "digest", on: "pullRequest" } },
+      { pullRequest: 51, name: "running", awaits: { role: "digest", on: "pullRequest" } },
+    ]);
+  });
+
+  it("gives way to a run on its Ticket in flight beside the Digest's, which overtakes it", () => {
+    const ticket = anOpenIssue({ number: 7, labels: ["ready-for-agent"] });
+    const requestChanges = aRunInFlight({ role: "implement", issue: 7, pullRequest: 50, exact: true, kind: "request-changes", run: 4420, createdAt: "2026-11-08T19:30:00Z" });
+    expect(standingsIn({ openIssues: [ticket], openPullRequests: [waiting()] }, { kit: kit([aDigestRunOn(50), requestChanges]) })).toMatchObject([
+      { issue: 7, pullRequest: 50, name: "running", place: "implement", awaits: { role: "implement", on: "pullRequest" }, detail: { run: "request-changes", actionsRun: 4420 } },
+    ]);
+  });
+
+  it("moves no clock on the Operator's comment", () => {
+    const commented = waiting({ comments: [aVerdictComment("pass", HEAD, PASSED), aComment("Is this coming?", "2026-11-08T19:50:00Z", { author: "operator", byBot: false })] });
+    expect(standingsIn({ openPullRequests: [commented] }, { kit: kit() })).toMatchObject([{ name: "not-started", since: ASKED, stuckAt: "2026-11-08T22:51:00.000Z" }]);
+  });
+
+  it("starts its clock again when the label is added again, whoever adds it", () => {
+    const again = [aLabelAdded("agent:digest", ASKED), aLabelAdded("agent:digest", "2026-11-08T19:40:00Z", { action: "unlabeled" }), aLabelAdded("agent:digest", "2026-11-08T19:45:00Z", { actor: "operator" })];
+    expect(standingsIn({ openPullRequests: [waiting({ labelEvents: again })] }, { kit: kit() })).toMatchObject([{ name: "not-started", since: "2026-11-08T19:45:00Z", stuckAt: "2026-11-08T23:15:00.000Z" }]);
+  });
+
+  describe("with no label and no run", () => {
+    const TAKEN_OFF = "2026-11-08T19:50:00Z";
+    const takenOff = [aLabelAdded("agent:digest", ASKED), aLabelAdded("agent:digest", TAKEN_OFF, { action: "unlabeled" })];
+
+    it("is the silence of a passed draft whose Merge gate never opened, from the pass", () => {
+      expect(standingsIn({ openPullRequests: [waiting({ labelEvents: [] })] }, { kit: kit() })).toMatchObject([
+        { name: "waiting-on-kit", since: PASSED, stuckAt: "2026-11-08T22:50:00.000Z", awaits: { role: "review", on: "pullRequest" }, detail: { silence: "passed-draft" } },
+      ]);
+    });
+
+    it("restarts that silence's clock when the Fabrik App takes agent:digest off, so a draft whose Digest attempt just ended gets the full bar", () => {
+      const [standing] = standingsIn({ openPullRequests: [waiting({ labelEvents: takenOff })] }, { kit: kit() });
+      expect(standing).toMatchObject({ name: "waiting-on-kit", since: PASSED, stuckAt: "2026-11-08T23:20:00.000Z", detail: { silence: "passed-draft" } });
+      expect(standing?.detail).not.toHaveProperty("passed");
+    });
+
+    it("leaves that clock where it was when a person takes the label off", () => {
+      const byOperator = [aLabelAdded("agent:digest", ASKED, { actor: "operator" }), aLabelAdded("agent:digest", TAKEN_OFF, { action: "unlabeled", actor: "operator" })];
+      expect(standingsIn({ openPullRequests: [waiting({ labelEvents: byOperator })] }, { kit: kit() })).toMatchObject([{ name: "waiting-on-kit", stuckAt: "2026-11-08T22:50:00.000Z" }]);
+    });
+
+    it("stays that silence though a Digest job is in flight on it, the label being what asks for one", () => {
+      expect(standingsIn({ openPullRequests: [waiting({ labelEvents: takenOff })] }, { kit: kit([aDigestRunOn(50)]) })).toMatchObject([{ name: "waiting-on-kit", detail: { silence: "passed-draft" } }]);
+    });
+  });
+
+  it("is yours to merge once the gate opens: the label off and the pull request out of draft, since the pass", () => {
+    const opened = waiting({
+      draft: false,
+      labelEvents: [aLabelAdded("agent:digest", ASKED), aLabelAdded("agent:digest", "2026-11-08T19:30:00Z", { action: "unlabeled" })],
+      draftEvents: [{ kind: "ready", actor: "fabrik-app[bot]", at: "2026-11-08T19:30:01Z" }],
+    });
+    expect(standingsIn({ openPullRequests: [opened] }, { kit: kit() })).toMatchObject([
+      { name: "yours-to-merge", place: "merge-gate", move: "operator", yours: true, stopsWork: true, since: PASSED, stuckAt: null, awaits: null, detail: { plain: null } },
+    ]);
+  });
+
+  it("reads a pull request at the Merge gate with the label on as yours to merge, and a draft whose head moved since its pass as any quiet draft", () => {
+    expect(standingsIn({ openPullRequests: [waiting({ draft: false })] }, { kit: kit([aDigestRunOn(50)]) })).toMatchObject([{ name: "yours-to-merge" }]);
+    const moved = waiting({ headSha: "n".repeat(40), commits: [{ at: "2026-11-08T19:40:00Z", byApp: true }] });
+    const [standing] = standingsIn({ openPullRequests: [moved] }, { kit: kit() });
+    expect(standing).toMatchObject({ name: "waiting-on-kit", awaits: { role: "review", on: "pullRequest" }, detail: { silence: "quiet-draft" } });
+    expect(standing?.detail).not.toHaveProperty("passed");
+  });
+});
+
 // After every test above: these read what they produced.
 describe("a Standing, as plain data", () => {
   const MINUTE = 60 * 1000;
@@ -1036,18 +1180,34 @@ describe("a Standing, as plain data", () => {
     expect(crossed).toBeGreaterThan(0);
   });
 
-  it("has one of each name so far in the schema fixture, in the order of the names", () => {
+  // A passed draft waiting on its Digest has no name of its own (#654): the fixture holds it under each name it takes, after one of each name.
+  const WAITING_ON_ITS_DIGEST = ["running (digest)", "not-started (digest)", "stuck (digest)"];
+
+  it("has one of each name so far in the schema fixture, in the order of the names, then a passed draft waiting on its Digest under each name it takes", () => {
     const names = new Set(all().map(({ name }) => name));
-    expect(Object.keys(fixture)).toEqual(STANDING_NAMES.filter((name) => names.has(name)));
+    expect(Object.keys(fixture)).toEqual([...STANDING_NAMES.filter((name) => names.has(name)), ...WAITING_ON_ITS_DIGEST]);
+  });
+
+  it("holds, for a passed draft waiting on its Digest, Standings the rule gave above, each awaiting the role digest on the pull request with the pass shown as given", () => {
+    for (const key of WAITING_ON_ITS_DIGEST) {
+      expect(all(), key).toContainEqual(fixture[key]);
+      expect(fixture[key], key).toMatchObject({ place: "review", move: "kit", awaits: { role: "digest", on: "pullRequest" }, detail: { passed: true } });
+    }
   });
 
   it("has the fixture's fields, and its detail's, so removing or renaming one fails here", () => {
-    for (const [name, kept] of Object.entries(fixture)) {
+    for (const [key, kept] of Object.entries(fixture)) {
+      const name = key.replace(/ \(digest\)$/, "");
       // A stuck Standing's detail is the name it was's: the fixture's is matched by its `was`.
       const was = (kept.detail as { was?: string }).was;
       // `detail.head` is on a Standing with an open pull request only: the fixture's is matched by whether it has one.
+      // `detail.passed` is on a passed draft waiting on its Digest only: the fixture's is matched by whether it has it.
       const standing = all().find(
-        (read) => read.name === name && (was === undefined || ("was" in read.detail && read.detail.was === was)) && (read.pullRequest === null) === (kept["pullRequest"] === null),
+        (read) =>
+          read.name === name &&
+          (was === undefined || ("was" in read.detail && read.detail.was === was)) &&
+          (read.pullRequest === null) === (kept["pullRequest"] === null) &&
+          "passed" in read.detail === "passed" in (kept.detail as object),
       );
       if (standing === undefined) throw new Error(`no test above produces a ${name} Standing`);
       expect(Object.keys(kept).toSorted()).toEqual(Object.keys(standing).toSorted());

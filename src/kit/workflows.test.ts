@@ -5,12 +5,12 @@ import { describe, expect, it } from "vitest";
 import { kitJobOutputs } from "./jobs.ts";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
-import { PROTOTYPE_JOB, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
+import { DIGEST_JOB, PROTOTYPE_JOB, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { REPLAY_ARMS } from "./runRecord.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
-import { IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
+import { DIGEST_JOB_NAME, IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EVIDENCE_PAGE_FILE } from "../evidence/capture.ts";
 import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
@@ -109,7 +109,7 @@ describe("The Kit's workflows", () => {
 
   // Kept for reading a failed or timed-out run. Never fabrik-agent-*: the push job
   // downloads those, and reads an empty download as a timeout.
-  it.each(["triage", "design", "implement", "review", "audit", "research"])(
+  it.each(["triage", "design", "implement", "review", "audit", "research", "digest"])(
     "loop.yml's %s job always uploads its gzipped transcript, apart from the push job's artifacts",
     (job) => {
       const body = loop.split(/\n(?=  [a-z-]+:\n)/).find((section) => section.startsWith(`  ${job}:\n`))!;
@@ -232,7 +232,7 @@ describe("The Kit's workflows", () => {
     });
   });
 
-  it.each(["triage", "design", "implement", "review", "audit", "research"])(
+  it.each(["triage", "design", "implement", "review", "audit", "research", "digest"])(
     "loop.yml's %s job passes out the model and effort it ran and the commit it started from",
     (job) => {
       const body = jobIn(loop, job);
@@ -274,7 +274,7 @@ describe("The Kit's workflows", () => {
   });
 
   // A Step-up run is an Implement run on a stronger model, so it gets implement's Extra skills.
-  it.each(["triage", "design", "implement", "review", "audit", "research"])(
+  it.each(["triage", "design", "implement", "review", "audit", "research", "digest"])(
     "loop.yml's %s job passes its role to prepare-agent, which fetches the skills before any secret loads",
     (role) => {
       const steps = stepsOf(jobIn(loop, role));
@@ -635,6 +635,100 @@ describe("loop.yml's Audit job", () => {
     const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
 
     expect(needs).toContain("audit");
+  });
+});
+
+// The Digest writer (ADR-0022): shaped as the Review's own job is (ADR-0002), with no checks to wait for and no UI evidence to download.
+describe("loop.yml's Digest job", () => {
+  const digest = (): string => job(DIGEST_JOB);
+  const checkout = (): string => stepsOf(digest()).find((step) => step.includes("uses: actions/checkout@") && !step.includes("repository:"))!;
+  const agent = (): string => stepsOf(digest()).find((step) => step.includes("src/agent/run.ts digest"))!;
+
+  it("is named Digest PR and the pull request's number, as the Review job is named for its own", () => {
+    // Quoted, since an unquoted ` #` starts a YAML comment.
+    expect(/\n    name: (.+)\n/.exec(digest())?.[1]).toBe(`"${DIGEST_JOB_NAME} PR #\${{ needs.kit.outputs.pull-request }}"`);
+  });
+
+  it("holds only read permissions, none of them beyond what the Review's job asks the caller for", () => {
+    const permissionsOfJob = (text: string) => (/\n    permissions:\n((?: {6}.*\n)+)/.exec(text)?.[1] ?? "").split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#"));
+
+    expect(permissionsOfJob(digest())).toEqual(["contents: read", "issues: read", "pull-requests: read"]);
+    for (const permission of permissionsOfJob(digest())) expect(permissionsOfJob(job("review"))).toContain(permission);
+  });
+
+  it("holds only the agent service account, which loads the Claude token, and no GitHub credential for the agent", () => {
+    expect(digest()).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}");
+    expect(digest()).not.toContain("OP_PUSH_TOKEN");
+    expect(digest()).not.toContain("OP_IMPLEMENT_TOKEN");
+    expect(digest()).not.toContain("id-token");
+    expect(agent()).not.toMatch(/GH_TOKEN|GITHUB_TOKEN|github\.token/);
+    expect(digest()).not.toContain("create-github-app-token");
+  });
+
+  it("checks out the head the pass was given on, from the Kit job's plan, with its history and no credential left behind", () => {
+    expect(checkout()).toContain("path: product");
+    expect(checkout()).toContain("ref: ${{ needs.kit.outputs.head-sha }}");
+    expect(checkout()).toContain("fetch-depth: 0");
+    expect(checkout()).toContain("persist-credentials: false");
+    expect(job("kit")).toContain("head-sha: ${{ steps.route.outputs.head-sha }}");
+  });
+
+  it("runs only when the Kit job routed to it, within the Digest writer's time limit, one per pull request at a time", () => {
+    expect(digest()).toContain("\n    needs: kit\n");
+    expect(digest()).toContain("if: needs.kit.outputs.route == 'digest'");
+    expect(digest()).toContain("timeout-minutes: ${{ fromJSON(needs.kit.outputs.digest-timeout-minutes) }}");
+    expect(job("kit")).toContain("digest-timeout-minutes: ${{ steps.route.outputs.digest-timeout-minutes }}");
+    expect(digest()).toContain("\n    concurrency:\n      group: fabrik-digest-${{ needs.kit.outputs.pull-request }}\n      cancel-in-progress: false\n      queue: max\n");
+  });
+
+  it("reads the writer's inputs for the Ticket and the pull request the Kit job named, with the job's read-only token", () => {
+    const prepare = stepsOf(digest()).find((step) => step.includes("uses: ./kit/.github/actions/prepare-agent"));
+
+    expect(prepare).toContain("role: digest");
+    expect(prepare).toContain("github-token: ${{ github.token }}");
+    expect(prepare).toContain("issue: ${{ needs.kit.outputs.ticket }}");
+    expect(prepare).toContain("pull-request: ${{ needs.kit.outputs.pull-request }}");
+  });
+
+  it("gives the writer the Ticket, its Spec, the pull request and the head its Digest is written as of, on the model the plan chose", () => {
+    expect(agent()).toContain("FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json");
+    expect(agent()).toContain("FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json");
+    expect(agent()).toContain("FABRIK_PULL_REQUEST_FILE: ${{ runner.temp }}/pull-request.json");
+    expect(agent()).toContain("FABRIK_HEAD_SHA: ${{ needs.kit.outputs.head-sha }}");
+    expect(agent()).toContain("FABRIK_MODEL: ${{ needs.kit.outputs.model }}");
+    expect(agent()).toContain("FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}");
+  });
+
+  it("passes out its reply, a failure report when it fails and its transcript, as the other agent jobs do", () => {
+    const steps = stepsOf(digest());
+    const result = steps.find((step) => step.includes("name: fabrik-agent-result"));
+    const failure = steps.find((step) => step.includes("name: fabrik-agent-failure"));
+
+    expect(result).toContain(`path: \${{ runner.temp }}/fabrik-out/${AGENT_RESULT_FILE}`);
+    expect(result).toContain("if-no-files-found: error");
+    expect(failure).toContain("if: failure()");
+    expect(failure).toContain(`path: \${{ runner.temp }}/fabrik-out/${AGENT_FAILURE_FILE}`);
+    expect(steps.find((step) => step.includes("name: fabrik-transcript-digest"))).toContain("if: always()");
+    expect(digest()).toContain("secrets-step: ${{ steps.op.outcome }}");
+  });
+
+  it("downloads no UI evidence and waits for no checks: the pass it writes of already did", () => {
+    expect(digest()).not.toContain("download-artifact");
+    expect(digest()).not.toContain("review-checks");
+  });
+
+  it("is in the push job's needs, so the push job lands the Digest, or the no-Digest line, once it has ended", () => {
+    const needs = /\n    needs: \[(.*)\]\n/.exec(job("push"))?.[1]?.split(", ");
+
+    expect(needs).toContain(DIGEST_JOB);
+  });
+
+  it("is claimed by no claim job: agent:digest stays on until the attempt ends", () => {
+    expect(job("implement-claim")).not.toContain("digest");
+  });
+
+  it("is a role prepare-agent names among those it readies", () => {
+    expect(/\n  role:\n\s+description: (.*)\n/.exec(prepareAgent)?.[1]).toContain("digest");
   });
 });
 
@@ -2158,7 +2252,7 @@ describe("The Subscription each agent job runs on", () => {
     expect(jobIn(loop, "kit")).toContain("subscription: ${{ steps.route.outputs.subscription }}");
   });
 
-  it.each(["triage", "design", "prototype", "implement", "review", "audit", "research"])(
+  it.each(["triage", "design", "prototype", "implement", "review", "audit", "research", "digest"])(
     "loop.yml's %s job loads one Claude token: the Kit job's Subscription's",
     (name) => {
       const job = jobIn(loop, name);

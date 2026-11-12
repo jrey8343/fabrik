@@ -17,10 +17,12 @@ import {
   aPlainPullRequest,
   aReplayBody,
   aReview,
+  aRunInFlight,
   aVerdictComment,
   factsOf,
   standingFactsOf,
 } from "../read/builders.ts";
+import type { RunInFlightFact } from "../github/snapshot.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
@@ -380,6 +382,45 @@ describe("the wording of a silence that waits on the Kit (#608)", () => {
       pill: "Parked by you",
       sentence: "You put #50 back in draft 40 minutes ago, after its pass.",
       remedy: null,
+    });
+  });
+});
+
+describe("the wording of a passed draft waiting on its Digest (#654)", () => {
+  const RUNS = "Check [the Loop's runs](https://github.com/owner/product/actions)";
+  /** Agent draft #50 for Ticket 7, passed on its head a minute before SINCE, with `agent:digest` added at SINCE. */
+  const waiting = anOpenPullRequest({ number: 50, ticket: 7, comments: [aVerdictComment("pass", "h".repeat(40), "2026-11-08T11:59:00Z")], labelEvents: [aLabelAdded("agent:digest", SINCE)] });
+  const kit = (runsInFlight: readonly RunInFlightFact[]) =>
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight, headChecks: {} }) as const;
+  /** The one Standing of the waiting draft with these runs in flight, as the rule reads it `minutes` after SINCE, in words. */
+  const read = (runsInFlight: readonly RunInFlightFact[], minutes: number) => {
+    const [standing, ...rest] = standingsOf(standingFactsOf({ github: factsOf({ openPullRequests: [waiting] }), kit: kit(runsInFlight) }), minutesAfter(minutes));
+    if (standing === undefined || rest.length > 0) throw new Error("expected one Standing");
+    return wordStanding(standing, minutesAfter(minutes), ZONE);
+  };
+
+  it("says, while its Digest run is in flight, that the pass is given and the Merge gate opens when the Digest writer ends, with a Digest or without", () => {
+    const run = aRunInFlight({ role: "digest", issue: 7, pullRequest: 50, exact: true, createdAt: minutesAfter(1), startedAt: minutesAfter(2) });
+    expect(read([run], 5)).toEqual({
+      pill: "Running",
+      sentence: "The Reviewer passed #50, and the Digest writer is writing its Digest. The Merge gate opens when it ends, with a Digest or without.",
+      remedy: null,
+    });
+  });
+
+  it("says, with the label on and no run begun, that the pass is given and the Kit opens the Merge gate without a Digest at its next hourly check, never that it adds the label again", () => {
+    expect(read([], 40)).toEqual({
+      pill: "Not started",
+      sentence: "The Reviewer passed #50 and the Kit asked for its Digest 40 minutes ago; nothing has started. At its next hourly check the Kit opens the Merge gate without one.",
+      remedy: null,
+    });
+  });
+
+  it("says, at the bar, that no Digest was started and the Merge gate never opened, with marking the pull request ready for review as the remedy", () => {
+    expect(read([], 4 * 60)).toEqual({
+      pill: "Stuck",
+      sentence: "No Digest was started for #50 after its pass, 4 hours ago, and the Merge gate never opened.",
+      remedy: `${RUNS}, then mark #50 ready for review.`,
     });
   });
 });

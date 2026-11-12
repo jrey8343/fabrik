@@ -3,7 +3,7 @@
 // Operator doesn't watch the label vanish with no word (#417). A trigger
 // label put on the wrong object, such as agent:review on a Ticket, comes off
 // the same way, with one line saying where it goes (#479).
-import { DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
+import { DIGEST_LABEL, DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
 import type { Action, PullRequestSnapshot } from "./types.ts";
 
 /** Takes `label` off `issue` and says in one line why nothing started. `why` reads as a clause, with no full stop. */
@@ -16,12 +16,22 @@ export function declineTrigger(issue: number, label: Label, why: string): Action
 
 /** agent:review added to an issue: it goes on the Ticket's PR, which the Loop reads it on. */
 export function reviewLabelOnIssue(issue: number, openPullRequests: readonly number[]): Action[] {
+  return pullRequestLabelOnIssue(issue, REVIEW_LABEL, openPullRequests);
+}
+
+/** agent:digest added to an issue: it goes on the Ticket's PR too, where the Digest writer writes. */
+export function digestLabelOnIssue(issue: number, openPullRequests: readonly number[]): Action[] {
+  return pullRequestLabelOnIssue(issue, DIGEST_LABEL, openPullRequests);
+}
+
+/** A trigger label that starts its run only on a PR, added to an issue: it comes off, naming the Ticket's open PR when it has one. */
+function pullRequestLabelOnIssue(issue: number, label: Label, openPullRequests: readonly number[]): Action[] {
   const [pullRequest] = openPullRequests;
   const where =
     pullRequest === undefined
       ? `goes on an agent PR, not an issue, and #${issue} has no open PR`
       : `goes on the PR, not the Ticket: add it to #${pullRequest}`;
-  return misplaced(issue, REVIEW_LABEL, where);
+  return misplaced(issue, label, where);
 }
 
 /** agent:implement or needs-triage added to a PR, or null for any other label: each goes on an issue. */

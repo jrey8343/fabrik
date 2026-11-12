@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Rubric } from "./rubrics.ts";
 import type { JudgedRun } from "./scorer.ts";
-import { DIGEST_BUDGET, JUDGE_OUTPUT_TAG, type JudgePromptInput, judgeOutputSchema, judgePrompt as judgePromptOf } from "./scorerPrompt.ts";
+import { JUDGE_OUTPUT_TAG, type JudgePromptInput, judgeOutputSchema, judgePrompt as judgePromptOf, TRIMMED_TRANSCRIPT_BUDGET } from "./scorerPrompt.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 
@@ -127,9 +127,9 @@ describe("The judge prompt", () => {
       line({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "task", content: "Found a.ts" }] } }),
     ];
 
-    const digest = transcriptOf(judgePrompt({ transcript, ticket, rubrics }).prompt);
+    const shown = transcriptOf(judgePrompt({ transcript, ticket, rubrics }).prompt);
 
-    expect(digest).toContain(
+    expect(shown).toContain(
       [
         '#1 Task {"prompt":"explore"}',
         "#1 result: Found a.ts",
@@ -181,6 +181,12 @@ describe("The judge prompt", () => {
     expect(prompt).toContain("Result: none; the run never reached its result message");
   });
 
+  it("tells the judge it's handed the run's trimmed transcript", () => {
+    const { prompt } = judgePrompt({ transcript: shortRun, ticket, rubrics });
+
+    expect(prompt).toContain("what the run's prompt carried beyond it, and the run's trimmed transcript come next, each in its own fenced block.");
+  });
+
   it("gives a transcript under budget whole, untrimmed", () => {
     const { prompt, trimmed } = judgePrompt({ transcript: shortRun, ticket, rubrics });
 
@@ -191,34 +197,34 @@ describe("The judge prompt", () => {
 
   it("trims a transcript over budget by cutting its bulky tool results first, keeping every tool call and its text whole", () => {
     const text = `I'll read every file. ${"Planning. ".repeat(500)}`;
-    const transcript = [line(init), assistantText(text), ...readCalls(40, (n) => (n === 7 ? "tiny" : `${n}:`.padEnd(DIGEST_BUDGET / 10, "y")))];
+    const transcript = [line(init), assistantText(text), ...readCalls(40, (n) => (n === 7 ? "tiny" : `${n}:`.padEnd(TRIMMED_TRANSCRIPT_BUDGET / 10, "y")))];
 
     const { prompt, trimmed } = judgePrompt({ transcript, ticket, rubrics });
 
     expect(trimmed).toBe(true);
-    const digest = transcriptOf(prompt);
-    expect(digest.length).toBeLessThanOrEqual(DIGEST_BUDGET);
-    for (let n = 1; n <= 40; n++) expect(digest).toContain(`#${n} Read {"file_path":"src/file-${n}.ts"}\n#${n} result: `);
-    expect(digest).toContain(`Assistant: ${text}\n`);
-    expect(digest).toContain("#7 result: tiny\n");
-    expect(digest).toMatch(/^#8 result: 8:y+\[… \d+ characters cut …\]y+$/m);
+    const shown = transcriptOf(prompt);
+    expect(shown.length).toBeLessThanOrEqual(TRIMMED_TRANSCRIPT_BUDGET);
+    for (let n = 1; n <= 40; n++) expect(shown).toContain(`#${n} Read {"file_path":"src/file-${n}.ts"}\n#${n} result: `);
+    expect(shown).toContain(`Assistant: ${text}\n`);
+    expect(shown).toContain("#7 result: tiny\n");
+    expect(shown).toMatch(/^#8 result: 8:y+\[… \d+ characters cut …\]y+$/m);
     expect(prompt).toMatch(/trimmed/);
   });
 
   it("cuts long assistant text only once cutting every tool result can't make the transcript fit, still keeping every tool call", () => {
-    const texts = [1, 2, 3, 4].map((n) => `Thought ${n}: `.padEnd(DIGEST_BUDGET * 0.6, "z"));
-    const transcript = [line(init), ...texts.map(assistantText), ...readCalls(30, (n) => `${n}:`.padEnd(DIGEST_BUDGET / 60, "y")), assistantText("Done.")];
+    const texts = [1, 2, 3, 4].map((n) => `Thought ${n}: `.padEnd(TRIMMED_TRANSCRIPT_BUDGET * 0.6, "z"));
+    const transcript = [line(init), ...texts.map(assistantText), ...readCalls(30, (n) => `${n}:`.padEnd(TRIMMED_TRANSCRIPT_BUDGET / 60, "y")), assistantText("Done.")];
 
     const { prompt, trimmed } = judgePrompt({ transcript, ticket, rubrics });
 
     expect(trimmed).toBe(true);
-    const digest = transcriptOf(prompt);
-    expect(digest.length).toBeLessThanOrEqual(DIGEST_BUDGET);
+    const shown = transcriptOf(prompt);
+    expect(shown.length).toBeLessThanOrEqual(TRIMMED_TRANSCRIPT_BUDGET);
     for (let n = 1; n <= 30; n++) {
-      expect(digest).toMatch(new RegExp(`^#${n} Read \\{"file_path":"src/file-${n}.ts"\\}\\n#${n} result: \\[… \\d+ characters cut …\\]$`, "m"));
+      expect(shown).toMatch(new RegExp(`^#${n} Read \\{"file_path":"src/file-${n}.ts"\\}\\n#${n} result: \\[… \\d+ characters cut …\\]$`, "m"));
     }
-    for (let n = 1; n <= 4; n++) expect(digest).toMatch(new RegExp(`^Assistant: Thought ${n}: z+\\[… \\d+ characters cut …\\]z+$`, "m"));
-    expect(digest).toContain("Assistant: Done.\n");
+    for (let n = 1; n <= 4; n++) expect(shown).toMatch(new RegExp(`^Assistant: Thought ${n}: z+\\[… \\d+ characters cut …\\]z+$`, "m"));
+    expect(shown).toContain("Assistant: Done.\n");
   });
 
   it("asks for one answer per rubric in one output tag, against the schema the rubrics make", () => {

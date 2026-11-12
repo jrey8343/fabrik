@@ -10,19 +10,23 @@ import { type AgentBranchGit, rebaseBranchOntoMain, rebuildAgentBranch } from ".
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
 import { applyPlan, emptyDiffIn, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
+import { planWithChange, readChangeFingerprint } from "./github/changeRead.ts";
 import { GitHub, type Repo } from "./github/client.ts";
-import { describePlan } from "./github/describePlan.ts";
+import { describePlan, describeRefusedCollapses } from "./github/describePlan.ts";
 import {
   agentFailureEventFrom,
   agentRunEventFrom,
   checkBuiltAsPlanned,
   auditEventFrom,
+  digestEventFrom,
   loopEventFrom,
   prototypeEventFrom,
   researchEventFrom,
   retroEventFrom,
   reviewEventFrom,
 } from "./github/events.ts";
+import { digestHeadReader, snapshotWithAsks } from "./github/digestCarry.ts";
+import { readDigestGiven } from "./github/digestGiven.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
@@ -53,8 +57,10 @@ type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranc
  * (FABRIK_REPLAY_RUN_ENDED), how its run ended; a Dispatch check in the
  * Dispatch job (FABRIK_DISPATCH_CHECK); a Design queue check in the Design
  * queue job (FABRIK_DESIGN_QUEUE_CHECK); otherwise the Actions event itself.
+ * `github` is the Fabrik App's client, which a Digest run's push job reads
+ * what Kit code hands the Digest's contract through.
  */
-async function loopEvent(repo: Repo, config: KitConfig): Promise<EventSource> {
+async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise<EventSource> {
   const replayEnded = process.env["FABRIK_REPLAY_RUN_ENDED"];
   if (replayEnded !== undefined && replayEnded !== "") return replayRunEvent(replayEnded, config);
   if (process.env["FABRIK_DISPATCH_CHECK"] === "true") {
@@ -93,6 +99,8 @@ async function loopEvent(repo: Repo, config: KitConfig): Promise<EventSource> {
       return { ...(await failedRunEvent(input, join(agentDir, AGENT_FAILURE_FILE))), branch: null };
     case "review":
       return { ...(await finishedReviewEvent(input, join(agentDir, AGENT_RESULT_FILE))), branch: null };
+    case "digest":
+      return { ...(await finishedDigestEvent(input, join(agentDir, AGENT_RESULT_FILE), github, repo, config.operator)), branch: null };
     case "agent-result":
       return agentResultEvent(input, join(agentDir, AGENT_RESULT_FILE), repo);
   }
@@ -203,6 +211,7 @@ async function failedRunEvent(
     ...(input.subscription === undefined ? {} : { subscription: input.subscription }),
     ...(input.prototype === undefined ? {} : { prototype: input.prototype }),
     ...(input.conflict === undefined ? {} : { conflict: input.conflict }),
+    ...(input.digest === undefined ? {} : { digest: input.digest }),
   });
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
@@ -274,6 +283,25 @@ async function finishedReviewEvent(
     event,
     source: result === null ? `the red required checks on #${input.pullRequest}` : `the Review of #${input.pullRequest}`,
   };
+}
+
+/**
+ * The Digest writer's reply, from its result, for the pull request and the
+ * head the Kit job's plan named, with what Kit code hands the Digest's
+ * contract beside it (src/github/digestGiven.ts), none of it the agent's word.
+ * `operator` is the Kit config's, whose Request changes Kit code's facts count.
+ */
+async function finishedDigestEvent(
+  input: Extract<PushJobInput, { kind: "digest" }>,
+  resultPath: string,
+  github: GitHub,
+  repo: Repo,
+  operator: string | null,
+): Promise<{ event: LoopEvent; source: string }> {
+  const result = readAgentRunResult(await readFile(resultPath, "utf8"));
+  const { pullRequest, headSha } = input;
+  const given = await readDigestGiven(github, repo, { repoUrl: thisRepoUrl(), pullRequest, headSha, runUrl: thisRunUrl(), operator, output: result.output });
+  return { event: digestEventFrom(result, { pullRequest, headSha }, given, thisRunUrl()), source: `the Digest of #${pullRequest}` };
 }
 
 /**
@@ -421,7 +449,7 @@ async function main(landing: Landing | null): Promise<void> {
   }
   operator = config.operator;
 
-  const { event, source, branch, why } = await loopEvent(repo, config);
+  const { event, source, branch, why } = await loopEvent(repo, config, github);
   if (event === null) {
     await report(`Nothing to do: ${why ?? `the Loop doesn't act on ${source}`}`);
     return;
@@ -444,19 +472,30 @@ async function main(landing: Landing | null): Promise<void> {
   // summary does, and only while a replay issue the Operator filed is open (gatherReplaySlice). The tick
   // job checks the store out only while a replay issue is open (.github/actions/replay-store).
   const replayStore = storeCheckoutAt(process.env["FABRIK_STORE_DIR"], config);
-  const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
-  const plan = planFor(event, snapshot, config);
+  const gathered = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
+  // A Reviewer's pass carries the last Digest forward when only main moved (ADR-0022), which takes the Kit's list of
+  // asks on the PR now: read only where its last Digest might be carried, and a Verdict never fails for want of it.
+  const { snapshot, unread: asksUnread } = await snapshotWithAsks(github, repo, event, gathered, config);
+  const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
+  // A plan that posts a Verdict records the fingerprint of the PR's own change with it (#643), read with git as the
+  // Fabrik App. Any other plan fetches nothing, and one whose fingerprint can't be read posts its Verdict without it.
+  const { plan, unread } = await planWithChange(
+    snapshot,
+    (given) => planFor(event, given, config),
+    (headSha) => readChangeFingerprint(headSha, remote),
+  );
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
   // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304), as may a Review's pass (#480).
-  const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
   const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
-  const { preview, readded } = await applyPlan(
+  // A pass that carries the last Digest forward reads what the new head holds of the files its places name, as it is applied.
+  const { preview, readded, refusedCollapses } = await applyPlan(
     github,
     repo,
     plan,
     branch,
     { id: Number(required("GITHUB_RUN_ID")), at: new Date().toISOString() },
     rebaser,
+    digestHeadReader(github, repo),
   );
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
@@ -481,7 +520,17 @@ async function main(landing: Landing | null): Promise<void> {
   const readdedLines = readded.map(
     ({ issue, label }) => `- ${label} was already on #${issue}, so it was taken off and added again, which starts its run`,
   );
-  await report([describePlan(plan), ...(readdedLines.length === 0 ? [] : ["", ...readdedLines])].join("\n"));
+  // An older Digest GitHub refused to collapse held nothing up (ADR-0022): the summary is where it is said.
+  const refusedLines = describeRefusedCollapses(refusedCollapses);
+  await report(
+    [
+      describePlan(plan),
+      ...(readdedLines.length === 0 ? [] : ["", ...readdedLines]),
+      ...(refusedLines.length === 0 ? [] : ["", ...refusedLines]),
+      ...(unread === null ? [] : ["", unread]),
+      ...(asksUnread === null ? [] : ["", asksUnread]),
+    ].join("\n"),
+  );
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);
     if (landing !== null) await reportLandingFailure(landing, plan);

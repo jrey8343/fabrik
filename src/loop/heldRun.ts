@@ -6,6 +6,7 @@
 // new issue kind, label or shared state. Pure, no I/O.
 import {
   DESIGN_LABEL,
+  DIGEST_LABEL,
   DISPATCH_LABEL,
   type Label,
   NEEDS_TRIAGE,
@@ -60,7 +61,10 @@ export function heldLineIssue({ issue, lineOn }: HeldRun): number {
  * (src/loop/design.ts). An Auditor run and a Retro run have none, and neither
  * is held: its Audit or Retro fails instead (src/loop/failures.ts). Only a held
  * marker an Auditor run left before that (#268) is still read, and its Audit
- * fails at the reset (src/loop/resume.ts).
+ * fails at the reset (src/loop/resume.ts). A Digest run's is agent:digest,
+ * on its PR, as a Review's is agent:review, though a Digest run is never
+ * held either: where one would be, its attempt ends with the no-Digest line
+ * and the Merge gate opens (src/loop/digest.ts).
  */
 export const RESUME_LABELS = {
   triage: NEEDS_TRIAGE,
@@ -70,6 +74,7 @@ export const RESUME_LABELS = {
   audit: null,
   retro: null,
   research: RESEARCH_LABEL,
+  digest: DIGEST_LABEL,
 } as const satisfies Readonly<Record<AgentRole, Label | null>>;
 
 /** How the Kit names each role's run, as in "The Triage run on #7", in its comments and step summaries alike (runNamed). */
@@ -81,6 +86,7 @@ export const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
   audit: "Audit",
   retro: "Retro",
   research: "Research",
+  digest: "Digest",
 };
 
 /** A role's run named in full, as in "The Triage run on #7": a Design session's is "Design-session turn", never "turn run" (#436). */
@@ -94,7 +100,8 @@ export function runNamed(role: AgentRole): string {
  * included, on its Ticket, where agent:implement resumes it, though one on an
  * agent PR has its held line there. An Auditor or
  * Retro run never gets here: its pending issue fails before it's planned
- * (src/loop/weeklyRuns.ts).
+ * (src/loop/weeklyRuns.ts). Nor does a Digest run: while a run due is held,
+ * its rules plan no start (src/loop/digest.ts).
  */
 export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): HoldableRun {
   const label = RESUME_LABELS[start.role];

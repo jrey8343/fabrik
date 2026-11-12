@@ -67,7 +67,7 @@ async function main(): Promise<void> {
   // With rotation on, a judge whose stream shows overage is stopped, as an agent run is.
   const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: process.env["FABRIK_ROTATION"] === "true" });
   // Unknown until the prompt is built: a judge that fails before then can't say.
-  let digestTrimmed: boolean | null = null;
+  let transcriptTrimmed: boolean | null = null;
   try {
     const transcriptDir = required("FABRIK_TRANSCRIPT_DIR");
     const gzip = await readBytesIfPresent(join(transcriptDir, `${TRANSCRIPT_FILE}.gz`));
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
     const brief = (await readIfPresent(join(transcriptDir, RUN_BRIEF_FILE)))?.trimEnd() ?? null;
     const rubrics = await loadRubrics();
     const { prompt, trimmed } = judgePrompt({ transcript: scored.lines, ticket, run: judged, brief, rubrics });
-    digestTrimmed = trimmed;
+    transcriptTrimmed = trimmed;
 
     // The agent inherits this process's env (noSandbox), so set what it needs here.
     setAgentEnv(judgeClaudeArgs(JUDGE_MODEL));
@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     console.log(`The judge scored the run on ${rubrics.map((rubric) => rubric.name).join(", ")}${trimmed ? ", from a trimmed transcript" : ""}`);
   } catch (error) {
     // Left for the score-record job, which writes the judge's record and a judge-failed or judge-output-invalid score file.
-    const text = (report: FailureReport) => judgeFailureText(report, digestTrimmed);
+    const text = (report: FailureReport) => judgeFailureText(report, transcriptTrimmed);
     await leaveFailureReport(error, watch, { path: join(outDir, JUDGE_FAILURE_FILE), title: "The judge failed", text });
     throw error;
   } finally {

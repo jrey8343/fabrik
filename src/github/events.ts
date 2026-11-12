@@ -7,6 +7,7 @@ import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import type { CaptureOutputs, PlannedKeptBranchStart } from "../kit/pushJob.ts";
 import { type EvidenceBundle, retroEvidenceOf } from "../kit/retroEvidence.ts";
+import type { DigestGiven } from "../loop/digestContract.ts";
 import type { PrototypeRequestMarker } from "../loop/markers.ts";
 import type {
   AgentRole,
@@ -192,6 +193,7 @@ export function agentRunEventFrom(
   if (result.role === "audit") throw new Error("An Auditor's result is applied through auditEventFrom");
   if (result.role === "retro") throw new Error("A Retro's result is applied through retroEventFrom");
   if (result.role === "research") throw new Error("A Researcher's result is applied through researchEventFrom");
+  if (result.role === "digest") throw new Error("A Digest writer's result is applied through digestEventFrom");
   if (result.role !== "implement") {
     const finished = {
       kind: "agent-run-finished",
@@ -354,6 +356,24 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
 }
 
 /**
+ * Turns the Digest writer's result into the Loop event its push job applies,
+ * which lands its Digest. `run` is the pull request and the head the Kit
+ * job's plan started the run at, never the agent's word for either; `given`
+ * is what Kit code hands the contract beside the reply
+ * (src/github/digestGiven.ts); and `runUrl` is that push job's run.
+ */
+export function digestEventFrom(
+  result: AgentRunResult,
+  run: { readonly pullRequest: number; readonly headSha: string },
+  given: DigestGiven,
+  runUrl: string,
+): LoopEvent {
+  if (result.role !== "digest") throw new Error(`A Digest's push job was handed a ${result.role} result`);
+  if (result.issue !== run.pullRequest) throw new Error(`The Digest writer's result is for #${result.issue}, not #${run.pullRequest}`);
+  return { kind: "digest-run-finished", pullRequest: run.pullRequest, headSha: run.headSha, output: result.output, given, runUrl };
+}
+
+/**
  * Turns an Auditor's result into the Loop event its push job applies, which
  * fills its Audit; `runUrl` is that push job's run, and `repoUrl` the Product
  * repo its candidates open issues on.
@@ -411,6 +431,8 @@ export interface FailedJob {
   readonly prototype?: true;
   /** For a conflict-only run (#304): its PR and the main head it was started for, from the Kit job's outputs. */
   readonly conflict?: { readonly pullRequest: number; readonly main: string };
+  /** For a Digest run: its PR and the head it was started at, from the Kit job's outputs. */
+  readonly digest?: { readonly pullRequest: number; readonly headSha: string };
 }
 
 const SECRETS_OUTCOMES = ["success", "failure", "cancelled", "skipped"] as const;
@@ -429,5 +451,6 @@ export function agentFailureEventFrom(job: FailedJob): LoopEvent {
     ...(job.subscription === undefined ? {} : { subscription: job.subscription }),
     ...(job.prototype === true ? { prototype: true } : {}),
     ...(job.conflict === undefined ? {} : { conflict: job.conflict }),
+    ...(job.digest === undefined ? {} : { digest: job.digest }),
   };
 }

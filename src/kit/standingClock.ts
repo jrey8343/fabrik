@@ -6,13 +6,14 @@
 // comment, label or review never does.
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { countLandedNothing, pushedSinceVerdictIn, retryNoteSinceVerdictIn } from "../github/threads.ts";
-import { DESIGN_LABEL, DISPATCH_LABEL, READY_FOR_AGENT, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
+import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, READY_FOR_AGENT, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
 import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
 import { stuckBarMinutes } from "../loop/recoveryWaits.ts";
 import { MAX_RETRIES, retryNumber } from "../loop/retry.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import { type AwaitedRole, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
+import { digestAskedOn, digestRunOn } from "./standingInFlight.ts";
 import { addedAndStillOn, lastAdded } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
@@ -34,6 +35,7 @@ const ROLES_BEHIND: Readonly<Record<TriggerLabel, readonly AwaitedRole[]>> = {
   [REVIEW_LABEL]: ["review"],
   [RESEARCH_LABEL]: ["research"],
   [REPLAY_TRIGGER_LABEL]: ["replay", "implement", "review"],
+  [DIGEST_LABEL]: ["digest"],
 };
 
 /**
@@ -49,6 +51,7 @@ export function notStartedStandingsOf(facts: StandingFacts, _now: string): Stand
     ...facts.github.openPullRequests.flatMap((pullRequest) => retrySilencesOn(pullRequest, facts, runs, bar)),
     ...facts.github.openIssues.flatMap((issue) => triggerSilencesOn(issue, facts, runs, bar)),
     ...facts.github.openPullRequests.flatMap((pullRequest) => reviewSilencesOn(pullRequest, facts, runs, bar)),
+    ...facts.github.openPullRequests.flatMap((pullRequest) => digestSilencesOn(pullRequest, facts, runs, bar)),
   ];
 }
 
@@ -113,6 +116,26 @@ function reviewSilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFact
   const clock = clockOf(since, pullRequest.ticket, [pullRequest], facts);
   return [
     notStarted(facts.github.repo, pullRequest.ticket, pullRequest.number, "ticket", "review", since, stuckAtOf(clock, bar), { role: "review", on: "pullRequest" }, { silence, label: REVIEW_LABEL }),
+  ];
+}
+
+/**
+ * `agent:digest` on a passed draft (digestAskedOn) with no Digest run in
+ * flight on that pull request, since the label was last added (#654): the
+ * pass is given, and the Merge gate waits on the Digest's attempt. The
+ * stuck-trigger sweep never adds this label again: it opens the Merge gate
+ * without a Digest, so the bar is reached only when that never happened.
+ */
+function digestSilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts, runs: readonly RunInFlightFact[], bar: number): StandingNamed<"not-started">[] {
+  const since = digestAskedOn(pullRequest);
+  if (since === null || digestRunOn(runs, pullRequest.number) !== undefined) return [];
+  const clock = clockOf(since, pullRequest.ticket, [pullRequest], facts);
+  return [
+    notStarted(facts.github.repo, pullRequest.ticket, pullRequest.number, "ticket", "review", since, stuckAtOf(clock, bar), { role: "digest", on: "pullRequest" }, {
+      silence: "trigger-label",
+      label: DIGEST_LABEL,
+      passed: true,
+    }),
   ];
 }
 

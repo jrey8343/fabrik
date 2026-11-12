@@ -16,7 +16,7 @@ import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, reque
 import type { Recovery } from "./recoveryWaits.ts";
 import { runInFlight, runName, unstartedRetry } from "./retry.ts";
 import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
-import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, MergeableSnapshot, Plan, PullRequestSnapshot } from "./types.ts";
+import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure, KitConfig, MergeableSnapshot, Plan, PullRequestSnapshot } from "./types.ts";
 
 /**
  * The conflict check, on a push to the default branch or the scheduled tick:
@@ -304,7 +304,10 @@ export function owedConflictRun(pullRequest: PullRequestSnapshot, config: KitCon
  * run's time in flight, adds ready-for-human to the PR, and brings it back
  * out of draft to the Merge gate, where the Operator takes it from here. It
  * never closes the PR, and it doesn't try again until main moves to a new
- * head. The comment's @-mention is its one notification.
+ * head. The comment's @-mention is its one notification. `failure` is how it
+ * failed, when it did: the notice's hand-back names it, as a failed run's
+ * does, so a reader of the thread can tell a run that failed from one that
+ * ended with nothing to push (src/loop/digestFacts.ts).
  */
 export function conflictRunEnded(
   pullRequest: number,
@@ -313,6 +316,7 @@ export function conflictRunEnded(
   why: string,
   runUrl: string | null = null,
   draft = true,
+  failure: InfrastructureFailure | null = null,
 ): Action[] {
   return [
     {
@@ -324,7 +328,7 @@ export function conflictRunEnded(
         "",
         `The PR still conflicts with \`main\`, so it's yours to resolve: the Kit won't try again until \`main\` moves past ${main.slice(0, 7)}. No retry was used.`,
         ...(runUrl === null ? [] : ["", `[The run](${runUrl})`]),
-        handBackMarker({ kind: "conflict-run-unlanded", role: "implement" }),
+        handBackMarker({ kind: "conflict-run-unlanded", role: "implement", ...(failure === null ? {} : { failure }) }),
       ].join("\n"),
     },
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },

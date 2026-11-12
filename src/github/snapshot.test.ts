@@ -15,6 +15,7 @@ import {
   snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
+import { aDigestGiven } from "../__fixtures__/digests.ts";
 import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { aRunRecord } from "../read/builders.ts";
@@ -1288,6 +1289,54 @@ describe("Gathering the labels of the Ticket a pull request was cut for", () => 
     expect(await gathered([{ number: 7, labels: ["ready-for-agent"] }])).toMatchObject({ ticketOpen: true });
     expect(await gathered([{ number: 7, labels: ["ready-for-agent"], state: "CLOSED" }])).toMatchObject({ ticketOpen: false });
     expect(await gathered([{ number: 3, labels: [] }])).toMatchObject({ ticketOpen: false });
+  });
+});
+
+describe("Gathering what a Digest run's push job lands on (ADR-0022)", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+
+  /** A GitHub holding a Ticket and the pull request cut for it: each query is answered by the fake that holds what it asks for. */
+  function ticketAndPullRequest(): GitHub {
+    const issues = issueGitHub({ labels: ["ready-for-agent"] });
+    const pullRequests = pullRequestGitHub({ body: "Saves the cart.\n\nCloses #7", closing: [{ number: 7, labels: ["ready-for-agent"] }] });
+    return {
+      graphql: (query: string, variables: Record<string, unknown>) => (query.includes("pullRequest(number: $number)") ? pullRequests : issues).graphql(query, variables),
+    } as unknown as GitHub;
+  }
+
+  it("gathers the pull request a finished Digest run wrote of", async () => {
+    const written = {
+      kind: "digest-run-finished",
+      pullRequest: 50,
+      headSha: HEAD_SHA,
+      output: "{}",
+      given: aDigestGiven({ headSha: HEAD_SHA, runUrl: RUN }),
+      runUrl: RUN,
+    } as const;
+
+    const snapshot = await gatherSnapshot(ticketAndPullRequest(), repo, written, null, APP_LOGIN);
+
+    expect(snapshot.pullRequest).toMatchObject({ number: 50, isAgent: true, ticket: 7, headSha: HEAD_SHA });
+    expect(snapshot.issue).toBeNull();
+  });
+
+  // The Ticket's own list of open pull requests may no longer hold it: a failed run's line goes where the Kit job's plan said.
+  it("gathers the Ticket and the pull request a failed Digest run names, though the Ticket lists no open pull request", async () => {
+    const failed = {
+      kind: "agent-run-failed",
+      role: "digest",
+      issue: 98,
+      runUrl: RUN,
+      jobResult: "cancelled",
+      secretsStep: "success",
+      report: null,
+      digest: { pullRequest: 50, headSha: HEAD_SHA },
+    } as const;
+
+    const snapshot = await gatherSnapshot(ticketAndPullRequest(), repo, failed, null, APP_LOGIN);
+
+    expect(snapshot.issue).toMatchObject({ number: 98, openPullRequests: [] });
+    expect(snapshot.pullRequest).toMatchObject({ number: 50, headSha: HEAD_SHA });
   });
 });
 
@@ -3499,7 +3548,7 @@ describe("Gathering a scheduled tick's trigger-sweep slice (#419)", () => {
     ]);
     // Closed ones are never swept.
     expect(asked.map(({ query }) => /(issues|pullRequests)\(states: OPEN, labels: \$triggers/.exec(query)?.[1])).toEqual(["issues", "pullRequests"]);
-    expect(asked[0]?.variables["triggers"]).toEqual(["agent:implement", "agent:design", "agent:review", "agent:research", "agent:replay"]);
+    expect(asked[0]?.variables["triggers"]).toEqual(["agent:implement", "agent:design", "agent:review", "agent:research", "agent:replay", "agent:digest"]);
   });
 
   it("reads which roles have a job under way in an unfinished run, called from a caller workflow or not, leaving out jobs their run skipped", async () => {
@@ -3512,7 +3561,23 @@ describe("Gathering a scheduled tick's trigger-sweep slice (#419)", () => {
 
     const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
 
-    expect(snapshot.triggers?.underWay).toEqual({ implement: false, research: false, review: true, claim: true, designTurns: [3, 12] });
+    expect(snapshot.triggers?.underWay).toEqual({ implement: false, research: false, review: true, claim: true, designTurns: [3, 12], digests: [] });
+  });
+
+  it("reads the pull request of each Digest job under way from its name, lowest first, leaving out one its run skipped and one whose run has finished", async () => {
+    const { github } = githubWith([]);
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Digest PR #60", status: "queued" }, { name: "fabrik / Review PR #61", status: "completed", conclusion: "skipped" }] },
+      { id: 2, status: "queued", jobs: [{ name: "Digest PR #52", status: "in_progress" }] },
+      // Done, with its push job still to land the Digest: under way until its run finishes.
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Digest PR #70", status: "completed", conclusion: "success" }] },
+      { id: 4, status: "in_progress", jobs: [{ name: "fabrik / Digest PR #80", status: "completed", conclusion: "skipped" }] },
+      { id: 5, status: "completed", jobs: [{ name: "fabrik / Digest PR #90", status: "completed", conclusion: "success" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.triggers?.underWay).toMatchObject({ review: false, digests: [52, 60, 70] });
   });
 
   // #477: the Review job names its agent PR; a run of an earlier Kit release names none.
