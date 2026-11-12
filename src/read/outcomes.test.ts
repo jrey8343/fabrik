@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import type { Week } from "../kit/weeklySummary.ts";
 import { readOutcomes } from "./outcomes.ts";
+import { threeDeepConnectionsIn } from "./queryShape.ts";
 
 const NOW = "2026-11-12T09:00:00Z";
 /** The week of Monday 2 November 2026, in UTC. */
@@ -151,5 +152,262 @@ describe("the outcomes read", () => {
       { issue: 7, title: "Issue 7", is: "merged", pullRequest: 50, at: "2026-11-04T10:00:00Z", url: "https://github.com/owner/product/pull/50" },
     ]);
     expect(read).toMatchObject({ repo: "owner/product", readAt: NOW, unread: null });
+  });
+
+  it("reads an open Ticket as open, with its open pull request, or with none yet", async () => {
+    const { client } = gitHubWith({ issues: [aTicket(7), aTicket(8)], pullRequests: [aPullRequest(50, 7)] });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [7, 8], NOW);
+
+    expect(read.work).toEqual([
+      { issue: 7, title: "Issue 7", is: "open", pullRequest: 50, at: null, url: "https://github.com/owner/product/pull/50" },
+      { issue: 8, title: "Issue 8", is: "open", pullRequest: null, at: null, url: "https://github.com/owner/product/issues/8" },
+    ]);
+  });
+
+  it("reads a Ticket closed with no merged agent pull request as never merged, with its newest closed pull request and when the Ticket closed", async () => {
+    const { client } = gitHubWith({
+      issues: [aTicket(7, { state: "CLOSED", closedAt: "2026-11-06T10:00:00Z" })],
+      pullRequests: [closed(aPullRequest(50, 7), "2026-11-01T10:00:00Z"), closed(aPullRequest(51, 7), "2026-11-05T10:00:00Z"), closed(aPullRequest(49, 7), "2026-10-31T10:00:00Z")],
+    });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+    expect(read.work).toEqual([
+      { issue: 7, title: "Issue 7", is: "never-merged", pullRequest: 51, at: "2026-11-06T10:00:00Z", url: "https://github.com/owner/product/pull/51" },
+    ]);
+  });
+
+  it.each([
+    ["a Replay's issue", anIssue(30, ["fabrik:replay", "agent:replay"], { timelineItems: { nodes: [labelled("ready-for-agent", "2026-10-29T09:00:00Z")] } })],
+    ["a Map", anIssue(30, ["wayfinder:map", "ready-for-agent"])],
+    ["a Decision", anIssue(30, ["wayfinder:research", "ready-for-agent"])],
+    ["a Spec", anIssue(30, ["ready-for-agent"], { subIssues: { nodes: [{ number: 31 }] } })],
+    ["an issue in a Design session", anIssue(30, ["needs-design", "agent:design"])],
+    ["a closed issue Triage never made a Ticket", anIssue(30, ["wontfix"], { state: "CLOSED", closedAt: "2026-11-03T10:00:00Z" })],
+    ["a Retro", anIssue(30, ["fabrik:retro", "ready-for-agent"], { author: APP })],
+    ["an issue the Fabrik App filed to be read", anIssue(30, ["fabrik:weekly-limit", "ready-for-agent"], { author: APP })],
+    ["an Operator brief", anIssue(30, ["ready-for-human"])],
+  ])("reads %s as no Ticket, with the issue's page", async (_, issue) => {
+    const { client } = gitHubWith({ issues: [issue] });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [30], NOW);
+
+    expect(read.work).toEqual([{ issue: 30, title: "Issue 30", is: "not-a-ticket", pullRequest: null, at: null, url: "https://github.com/owner/product/issues/30" }]);
+  });
+
+  it.each([
+    [
+      "a Ticket sent back to design",
+      anIssue(7, ["needs-design"], {
+        timelineItems: { nodes: [labelled("ready-for-agent", "2026-10-29T09:00:00Z"), labelled("ready-for-agent", "2026-11-03T09:00:00Z", "UnlabeledEvent"), labelled("needs-design", "2026-11-03T09:00:00Z")] },
+      }),
+    ],
+    [
+      "a Ticket now ready-for-human",
+      anIssue(7, ["ready-for-human"], {
+        timelineItems: { nodes: [labelled("ready-for-agent", "2026-10-29T09:00:00Z"), labelled("ready-for-agent", "2026-11-03T09:00:00Z", "UnlabeledEvent"), labelled("ready-for-human", "2026-11-03T09:00:00Z")] },
+      }),
+    ],
+    ["a Ticket labelled as it was opened", anIssue(7, ["ready-for-agent"])],
+    ["a Monitor issue that carried ready-for-agent", anIssue(7, ["fabrik:monitor", "bug", "ready-for-agent"], { author: APP })],
+  ])("reads %s as a Ticket", async (_, issue) => {
+    const { client } = gitHubWith({ issues: [issue] });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+    expect(read.work).toEqual([{ issue: 7, title: "Issue 7", is: "open", pullRequest: null, at: null, url: "https://github.com/owner/product/issues/7" }]);
+  });
+
+  it("reads an issue an agent pull request names as a Ticket, whatever its labels", async () => {
+    const { client } = gitHubWith({ issues: [anIssue(7, ["needs-triage"])], pullRequests: [aPullRequest(50, 7)] });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+    expect(read.work).toEqual([{ issue: 7, title: "Issue 7", is: "open", pullRequest: 50, at: null, url: "https://github.com/owner/product/pull/50" }]);
+  });
+
+  it("reads an issue only a Plain pull request names, or one that names it second, as no Ticket", async () => {
+    const plain = aPullRequest(60, 30, { author: OPERATOR, headRefName: "fix-it" });
+    const second = aPullRequest(61, 31, { closingIssuesReferences: { nodes: [{ number: 31 }, { number: 30 }] } });
+    const { client } = gitHubWith({ issues: [anIssue(30)], pullRequests: [plain, second] });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [30], NOW);
+
+    expect(read.work).toEqual([{ issue: 30, title: "Issue 30", is: "not-a-ticket", pullRequest: null, at: null, url: "https://github.com/owner/product/issues/30" }]);
+  });
+
+  it("reads a Ticket closed unmerged and reopened as open", async () => {
+    const { client } = gitHubWith({ issues: [aTicket(7)], pullRequests: [closed(aPullRequest(50, 7), "2026-11-03T10:00:00Z")] });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+    expect(read.work).toEqual([{ issue: 7, title: "Issue 7", is: "open", pullRequest: 50, at: null, url: "https://github.com/owner/product/pull/50" }]);
+  });
+
+  it("reads a Ticket with one agent pull request closed and another merged as merged, by the merged one", async () => {
+    const { client } = gitHubWith({
+      issues: [aTicket(7, { state: "CLOSED", closedAt: "2026-11-05T10:00:00Z" })],
+      pullRequests: [closed(aPullRequest(50, 7), "2026-11-03T10:00:00Z"), merged(aPullRequest(51, 7), "2026-11-05T10:00:00Z")],
+    });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+    expect(read.work).toEqual([{ issue: 7, title: "Issue 7", is: "merged", pullRequest: 51, at: "2026-11-05T10:00:00Z", url: "https://github.com/owner/product/pull/51" }]);
+  });
+
+  it("reads a Ticket merged after the week as merged, its time showing the merge fell outside the week", async () => {
+    const { client } = gitHubWith({
+      issues: [aTicket(7, { state: "CLOSED", closedAt: "2026-11-10T10:00:00Z" })],
+      pullRequests: [merged(aPullRequest(50, 7), "2026-11-10T10:00:00Z")],
+    });
+
+    const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+    expect(read.work).toEqual([{ issue: 7, title: "Issue 7", is: "merged", pullRequest: 50, at: "2026-11-10T10:00:00Z", url: "https://github.com/owner/product/pull/50" }]);
+    expect(read.merged).toEqual([]);
+  });
+
+  describe("the week's merged agent pull requests", () => {
+    it("bring in a Ticket whose agent pull request merged in the week though it wasn't asked for, and not one merged outside the week", async () => {
+      const { client } = gitHubWith({
+        issues: [aTicket(7), aTicket(8, { state: "CLOSED", closedAt: "2026-11-04T10:00:00Z" }), aTicket(9, { state: "CLOSED", closedAt: "2026-11-10T10:00:00Z" })],
+        pullRequests: [merged(aPullRequest(50, 8), "2026-11-04T10:00:00Z"), merged(aPullRequest(51, 9), "2026-11-10T10:00:00Z")],
+      });
+
+      const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+      expect(read.work).toEqual([
+        { issue: 7, title: "Issue 7", is: "open", pullRequest: null, at: null, url: "https://github.com/owner/product/issues/7" },
+        { issue: 8, title: "Issue 8", is: "merged", pullRequest: 50, at: "2026-11-04T10:00:00Z", url: "https://github.com/owner/product/pull/50" },
+      ]);
+    });
+
+    it("are every agent pull request merged in the week as the Weekly summary reads it, oldest first, one naming no Ticket and one naming an issue GitHub no longer has among them", async () => {
+      const { client } = gitHubWith({
+        issues: [aTicket(7, { state: "CLOSED", closedAt: "2026-11-06T10:00:00Z" })],
+        pullRequests: [
+          merged(aPullRequest(52, 7), "2026-11-06T10:00:00Z"),
+          merged(aPullRequest(50, null, { headRefName: "fabrik/ticket-5" }), "2026-11-02T00:00:00Z"),
+          merged(aPullRequest(51, 404), "2026-11-03T10:00:00Z"),
+          merged(aPullRequest(53, 8), "2026-11-09T00:00:00Z"),
+          merged(aPullRequest(54, 8), "2026-11-01T23:59:59Z"),
+          merged(aPullRequest(55, 30, { author: OPERATOR, headRefName: "fix-it" }), "2026-11-04T10:00:00Z"),
+        ],
+      });
+
+      const read = await readOutcomes(client, "owner/product", WEEK, [], NOW);
+
+      expect(read.merged).toEqual([
+        { pullRequest: 50, ticket: null, mergedAt: "2026-11-02T00:00:00Z" },
+        { pullRequest: 51, ticket: 404, mergedAt: "2026-11-03T10:00:00Z" },
+        { pullRequest: 52, ticket: 7, mergedAt: "2026-11-06T10:00:00Z" },
+      ]);
+      expect(read.work).toEqual([{ issue: 7, title: "Issue 7", is: "merged", pullRequest: 52, at: "2026-11-06T10:00:00Z", url: "https://github.com/owner/product/pull/52" }]);
+    });
+
+    it("are searched for by the days around the week, a day wider each side", async () => {
+      const { client, calls } = gitHubWith({});
+
+      await readOutcomes(client, "owner/product", WEEK, [], NOW);
+
+      expect(calls.queries.map(({ variables }) => variables["q"])).toEqual(["repo:owner/product is:pr is:merged merged:2026-11-01..2026-11-10"]);
+    });
+  });
+
+  describe("an issue GitHub no longer has", () => {
+    it("is left out of the work, the rest given, after the query is asked again without it", async () => {
+      const { client, calls } = gitHubWith({ issues: [aTicket(7), aTicket(9)] });
+
+      const read = await readOutcomes(client, "owner/product", WEEK, [7, 404, 9], NOW);
+
+      expect(read.work).toEqual([
+        { issue: 7, title: "Issue 7", is: "open", pullRequest: null, at: null, url: "https://github.com/owner/product/issues/7" },
+        { issue: 9, title: "Issue 9", is: "open", pullRequest: null, at: null, url: "https://github.com/owner/product/issues/9" },
+      ]);
+      expect(read.unread).toBeNull();
+      const byNumber = calls.queries.filter(({ query }) => query.includes("issue(number:"));
+      expect(byNumber).toHaveLength(2);
+      expect(byNumber[1]?.query).not.toContain("issue(number: 404)");
+    });
+
+    it("leaves a read of nothing but missing issues with no work", async () => {
+      const { client } = gitHubWith({});
+
+      const read = await readOutcomes(client, "owner/product", WEEK, [404, 410], NOW);
+
+      expect(read).toEqual({ repo: "owner/product", readAt: NOW, work: [], merged: [], unread: null });
+    });
+  });
+
+  describe("what it asks GitHub", () => {
+    it("asks for the numbers given and the Tickets of the week's merged agent pull requests, and nothing more", async () => {
+      const { client, calls } = gitHubWith({
+        issues: [aTicket(7), aTicket(8), aTicket(12)],
+        pullRequests: [merged(aPullRequest(50, 8), "2026-11-04T10:00:00Z"), aPullRequest(51, 12)],
+      });
+
+      await readOutcomes(client, "owner/product", WEEK, [7, 7], NOW);
+
+      const asked = calls.queries.flatMap(({ query }) => [...query.matchAll(/issue\(number: (\d+)\)/g)].map(([, number]) => Number(number)));
+      expect(asked.toSorted((a, b) => a - b)).toEqual([7, 8]);
+      expect(calls.queries.every(({ query }) => query.includes("search(") || query.includes("issue(number:"))).toBe(true);
+    });
+
+    it("asks for many issues 25 to a query", async () => {
+      const numbers = Array.from({ length: 30 }, (_, i) => i + 1);
+      const { client, calls } = gitHubWith({ issues: numbers.map((number) => aTicket(number)) });
+
+      const read = await readOutcomes(client, "owner/product", WEEK, numbers, NOW);
+
+      expect(read.work).toHaveLength(30);
+      expect(calls.queries.filter(({ query }) => query.includes("issue(number:")).map(({ query }) => query.match(/issue\(number:/g)?.length)).toEqual([25, 5]);
+    });
+
+    it("has no connection inside a connection inside a connection in any query", async () => {
+      const { client, calls } = gitHubWith({ issues: [aTicket(7)], pullRequests: [merged(aPullRequest(50, 7), "2026-11-04T10:00:00Z")] });
+
+      await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+      expect(calls.queries.length).toBeGreaterThanOrEqual(2);
+      for (const { query } of calls.queries) expect(threeDeepConnectionsIn(query)).toEqual([]);
+    });
+  });
+
+  describe("a read GitHub refuses or fails", () => {
+    it("returns the work and the merged pull requests unread, with why", async () => {
+      const refusal = new GitHubError("GitHub POST /graphql failed: 403", 403, {
+        body: JSON.stringify({ message: "Resource not accessible by integration" }),
+        request: "POST /graphql",
+      });
+      const { client } = gitHubWith({ issues: [aTicket(7)], failing: refusal });
+
+      const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+      expect(read).toEqual({
+        repo: "owner/product",
+        readAt: NOW,
+        work: "unread",
+        merged: "unread",
+        unread: "POST /graphql failed with 403: Resource not accessible by integration",
+      });
+    });
+
+    it("returns a failure GitHub never answered unread, with why", async () => {
+      const { client } = gitHubWith({ failing: new GitHubError("GitHub POST /graphql failed: socket hang up", 0, { body: "socket hang up", request: "POST /graphql" }) });
+
+      const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+      expect(read).toMatchObject({ work: "unread", merged: "unread", unread: "POST /graphql got no answer from GitHub: GitHub POST /graphql failed: socket hang up" });
+    });
+
+    it("returns unread a query GitHub answers NOT_FOUND for the repo, not an issue", async () => {
+      const notFound = new GitHubError("GitHub GraphQL query failed", 404, { body: JSON.stringify({ errors: [{ type: "NOT_FOUND", path: ["repository"], message: "Could not resolve to a Repository." }] }) });
+      const { client } = gitHubWith({ failing: notFound });
+
+      const read = await readOutcomes(client, "owner/product", WEEK, [7], NOW);
+
+      expect(read).toMatchObject({ work: "unread", merged: "unread", unread: "A read of the outcomes failed with 404: Could not resolve to a Repository." });
+    });
   });
 });

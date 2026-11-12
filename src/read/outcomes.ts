@@ -220,26 +220,23 @@ async function issuesByNumber(client: Pick<ReadClient, "graphql">, repo: string,
 
 /**
  * The issues among `asked` that a failed query's answer says GitHub could not
- * find, by the alias each was asked under; none for any other failure. When
- * the answer names no alias, the first issue asked is taken as missing when it
- * was asked alone, so a query of several is narrowed one issue at a time.
+ * find, NOT_FOUND at the alias each was asked under; none for any other
+ * failure, a repo GitHub can't find among them.
  */
 function notFoundIn(error: unknown, asked: readonly number[]): number[] {
-  if (!(error instanceof GitHubError) || (error.status !== 404 && error.status !== 410)) return [];
+  if (!(error instanceof GitHubError) || error.status !== 404) return [];
   let errors: unknown = [];
   try {
     errors = (JSON.parse(error.body) as { errors?: unknown }).errors;
   } catch {
     // Not GitHub's GraphQL answer: no alias to read.
   }
-  const named = (Array.isArray(errors) ? errors : []).flatMap((entry) => {
+  return (Array.isArray(errors) ? errors : []).flatMap((entry) => {
     const { type, path } = (typeof entry === "object" && entry !== null ? entry : {}) as { type?: unknown; path?: unknown };
     const alias = Array.isArray(path) ? path[1] : undefined;
     const number = typeof alias === "string" && /^i\d+$/.test(alias) ? Number(alias.slice(1)) : null;
     return type === "NOT_FOUND" && number !== null && asked.includes(number) ? [number] : [];
   });
-  if (named.length > 0) return named;
-  return asked.length === 1 ? [...asked] : [];
 }
 
 /** What became of `issue`, by its agent pull requests, `merged` among them as the week's search found them. */
