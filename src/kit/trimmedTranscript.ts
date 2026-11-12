@@ -1,4 +1,4 @@
-// The transcript digest (#149, #151): a finished run's transcript, read
+// The trimmed transcript (#149, #151): a finished run's transcript, read
 // through the stream reader, as compact lines held to a character budget.
 // The judge reads one in its prompt (src/kit/scorerPrompt.ts) and the Retro
 // one per run in its evidence (src/kit/retroEvidence.ts), each at its own
@@ -6,22 +6,22 @@
 // Retro's evidence budget makes too. Pure, no I/O.
 import { readStream, type StreamMessage, type StreamStep } from "../agent/stream.ts";
 
-/** A transcript's digest, and whether it had to be trimmed to fit its budget. */
-export interface TranscriptDigest {
-  readonly digest: string;
+/** A trimmed transcript: its text, and whether it had to be trimmed to fit its budget. */
+export interface TrimmedTranscript {
+  readonly text: string;
   readonly trimmed: boolean;
 }
 
 /**
- * The transcript, read once through the stream reader, as the digest held to
- * whatever budget it's asked for: whole if it fits, else trimmed, its tool
- * results first, then its long assistant text, never its tool calls. Even a
- * budget of 0 keeps every tool call, so a digest can come out longer than
- * its budget.
+ * The transcript, read once through the stream reader, as the trimmed
+ * transcript held to whatever budget it's asked for: whole if it fits, else
+ * trimmed, its tool results first, then its long assistant text, never its
+ * tool calls. Even a budget of 0 keeps every tool call, so a trimmed
+ * transcript can come out longer than its budget.
  */
-export function digestOf(transcript: readonly string[]): (budget: number) => TranscriptDigest {
+export function trimmedTranscriptOf(transcript: readonly string[]): (budget: number) => TrimmedTranscript {
   const stream = readStream(transcript);
-  const fixed = (lines: readonly string[]): DigestLine[] => lines.map((head) => ({ head }));
+  const fixed = (lines: readonly string[]): TranscriptLine[] => lines.map((head) => ({ head }));
   const lines = [
     ...fixed(headerLines(stream.init, stream.steps)),
     { head: "" },
@@ -63,8 +63,8 @@ export function largestCap(fits: (cap: number) => boolean, max: number): number 
 /** What the budget may cut, in the order it cuts them: tool results, then assistant text. */
 type Cuttable = "result" | "text";
 
-/** One line of the digest: a head kept whole, then a body the budget may cut. */
-interface DigestLine {
+/** One line of the trimmed transcript: a head kept whole, then a body the budget may cut. */
+interface TranscriptLine {
   readonly head: string;
   readonly body?: { readonly kind: Cuttable; readonly text: string };
 }
@@ -74,15 +74,15 @@ type Caps = Readonly<Record<Cuttable, number>>;
 
 const WHOLE: Caps = { result: Infinity, text: Infinity };
 
-const bodyCap = (line: DigestLine, caps: Caps): number => (line.body === undefined ? Infinity : caps[line.body.kind]);
+const bodyCap = (line: TranscriptLine, caps: Caps): number => (line.body === undefined ? Infinity : caps[line.body.kind]);
 
 /**
- * The digest's lines held to `budget` characters: whole if they fit, else
+ * The trimmed transcript's lines held to `budget` characters: whole if they fit, else
  * with the longest tool results cut to one shared cap, and only when even
  * cutting every result can't make them fit, every result cut and the longest
  * assistant text cut too. Heads, and so every tool call, are never cut.
  */
-function fitted(lines: readonly DigestLine[], budget: number): TranscriptDigest {
+function fitted(lines: readonly TranscriptLine[], budget: number): TrimmedTranscript {
   const length = (caps: Caps) =>
     lines.reduce((sum, line) => sum + line.head.length + (line.body === undefined ? 0 : cutLength(line.body.text.length, bodyCap(line, caps))), lines.length - 1);
   const longest = (kind: Cuttable) => lines.reduce((max, line) => (line.body?.kind === kind ? Math.max(max, line.body.text.length) : max), 0);
@@ -97,17 +97,17 @@ function fitted(lines: readonly DigestLine[], budget: number): TranscriptDigest 
         : { result: 0, text: largestCap((cap) => fits({ result: 0, text: cap }), longest("text")) ?? 0 };
   }
   const trimmed = lines.some((line) => line.body !== undefined && cutLength(line.body.text.length, bodyCap(line, caps)) < line.body.text.length);
-  const digest = lines.map((line) => line.head + (line.body === undefined ? "" : cutTo(line.body.text, bodyCap(line, caps)))).join("\n");
-  return { digest, trimmed };
+  const text = lines.map((line) => line.head + (line.body === undefined ? "" : cutTo(line.body.text, bodyCap(line, caps)))).join("\n");
+  return { text, trimmed };
 }
 
 const quoted = (names: readonly string[]): string => names.map((name) => `\`${name}\``).join(", ");
 
-/** Each step as digest lines: tool calls numbered `#n` in order, each followed by its result, and a subagent's steps marked with the call that started it. */
-function stepLines(steps: readonly StreamStep[]): DigestLine[] {
+/** Each step as the trimmed transcript's lines: tool calls numbered `#n` in order, each followed by its result, and a subagent's steps marked with the call that started it. */
+function stepLines(steps: readonly StreamStep[]): TranscriptLine[] {
   const numbers = new Map<string, number>();
   let calls = 0;
-  return steps.flatMap((step): DigestLine[] => {
+  return steps.flatMap((step): TranscriptLine[] => {
     const parent = step.parentToolUseId === null ? undefined : numbers.get(step.parentToolUseId);
     const by = step.parentToolUseId === null ? "" : `[subagent${parent === undefined ? "" : ` of #${parent}`}] `;
     if (step.kind === "text") return [{ head: `${by}Assistant: `, body: { kind: "text", text: step.text } }];
