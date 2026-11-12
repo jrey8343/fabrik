@@ -23,7 +23,7 @@ import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { auditMarksIn, DESIGN_ROUND_MARKER, flakyCheckMarksIn, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
+import { auditMarksIn, flakyCheckMarksIn, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, type InfrastructureFailure, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
@@ -45,13 +45,14 @@ import {
   requestChangesIn,
   type RequestChangesReview,
   type ReviewFacts,
-  verdictsOn,
   type Window,
   within,
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
+import { type Standing, standingsOf } from "./standing.ts";
+import { lastAdded, passedMoveOf } from "./standingOperator.ts";
 import {
   firstRunOf,
   isLive,
@@ -582,7 +583,8 @@ export type WaitingItem =
   | (ItemBase & { readonly kind: "research-failed" })
   /**
    * An agent PR out of draft with a passing Verdict at its head and no
-   * Operator review since, waiting since that Verdict.
+   * Request changes from the Operator since that is not dismissed, waiting
+   * since that Verdict: its `yours-to-merge` Standing.
    */
   | (ItemBase & {
       readonly kind: "merge-gate";
@@ -602,7 +604,7 @@ export type StuckItem =
   | (ItemBase & { readonly kind: "needs-info-answered" })
   /** A draft agent PR with no commit, comment or label event since `since`. */
   | (ItemBase & { readonly kind: "idle-draft" })
-  /** An agent PR out of draft the Operator reviewed at `since`, after its passing Verdict, that the Kit hasn't acted on. */
+  /** An agent PR out of draft the Operator requested changes on at `since`, after its passing Verdict, not dismissed, that the Kit hasn't acted on. */
   | (ItemBase & { readonly kind: "reviewed" })
   /** An open Ticket whose latest record, ended at `since`, was an Infrastructure failure or timeout. */
   | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure })
@@ -1157,11 +1159,13 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
   const { thisWeek } = weeksEndingAt(now, timeZone);
+  const standings = standingsOf({ kind: "product", github: facts, kit, operator, appLogin }, filedAt);
   return {
     repo: facts.repo,
     invalidKitConfig: invalid,
     // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst([
+      ...standings.flatMap((standing) => waitingItemsOf(standing, facts, items)),
       ...waitingOnYou(facts, operator, appLogin, items),
       ...openAuditsOf(facts, appLogin, items),
       ...openRetrosOf(facts, appLogin, items),
@@ -1416,26 +1420,38 @@ function unansweredQuestionOf(issue: OpenIssueFacts): string | null {
   return lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt;
 }
 
-function waitingOnYou({ openIssues, openPullRequests }: GitHubFacts, operator: string, appLogin: string, items: Items): WaitingItem[] {
+/**
+ * The Waiting on you line of a Standing whose kind the summary takes from the
+ * Standing rule (src/kit/standing.ts): a Design round, `ready-for-human` work
+ * and an agent PR at the Merge gate. Titles come from the facts beside it, as
+ * a Standing holds none. None for any other Standing yet.
+ */
+function waitingItemsOf(standing: Standing, { openIssues, openPullRequests }: GitHubFacts, items: Items): WaitingItem[] {
+  const issue = openIssues.find(({ number }) => number === standing.issue);
+  const pullRequest = openPullRequests.find(({ number }) => number === standing.pullRequest);
+  switch (standing.name) {
+    case "design-round":
+      return issue === undefined ? [] : [{ kind: "design-round", ...items.issue(issue, standing.since) }];
+    case "yours-to-do":
+      if (standing.work === "ready-for-human") return issue === undefined ? [] : [{ kind: "ready-for-human", ...items.issue(issue, standing.since) }];
+      return pullRequest === undefined ? [] : [{ kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) }];
+    case "yours-to-merge": {
+      if (pullRequest === undefined) return [];
+      const item = items.pullRequest(pullRequest, standing.since);
+      return [{ kind: "merge-gate", ...item, operatorWait: item.age }];
+    }
+    default:
+      return [];
+  }
+}
+
+function waitingOnYou({ openIssues }: GitHubFacts, operator: string, appLogin: string, items: Items): WaitingItem[] {
   const waiting: WaitingItem[] = [];
   for (const issue of openIssues) {
-    const round = unansweredRoundOf(issue);
-    if (round !== null) waiting.push({ kind: "design-round", ...items.issue(issue, round) });
     const stopped = stoppedDesignSessionOf(issue);
     if (stopped !== null) waiting.push({ kind: stopped.kind, ...items.issue(issue, stopped.at) });
-    if (issue.labels.includes(READY_FOR_HUMAN)) {
-      const since = lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt;
-      waiting.push({ kind: "ready-for-human", ...items.issue(issue, since) });
-    }
     const asked = issue.author === appLogin || issue.author === operator ? unansweredQuestionOf(issue) : null;
     if (asked !== null) waiting.push({ kind: issue.author === appLogin ? "monitor-needs-info" : "needs-info", ...items.issue(issue, asked) });
-  }
-  for (const pullRequest of openPullRequests) {
-    const move = passedMoveOf(pullRequest, operator);
-    if (move?.kind === "handed-back") waiting.push({ kind: "handed-back", ...items.pullRequest(pullRequest, move.since) });
-    if (move?.kind !== "merge-gate") continue;
-    const item = items.pullRequest(pullRequest, move.since);
-    waiting.push({ kind: "merge-gate", ...item, operatorWait: item.age });
   }
   return oldestFirst(waiting);
 }
@@ -1468,7 +1484,7 @@ function stuck(
     if (isHeld(pullRequest.number, pullRequest.ticket)) continue;
     if (pullRequest.draft) found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
     const move = passedMoveOf(pullRequest, operator);
-    if (move?.kind === "reviewed") found.push({ kind: "reviewed", ...items.pullRequest(pullRequest, move.since) });
+    if (move?.kind === "changes-requested") found.push({ kind: "reviewed", ...items.pullRequest(pullRequest, move.since) });
   }
   return oldestFirst(found.filter((item) => now - Date.parse(item.since) > STUCK_AFTER_MS));
 }
@@ -1521,12 +1537,6 @@ function lastActivityOf(pullRequest: OpenPullRequestFacts): string {
   return times.toSorted((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? pullRequest.createdAt;
 }
 
-/** When the App posted the Design round an issue's thread ends on, or null if its last comment is anything else. */
-function unansweredRoundOf(issue: OpenIssueFacts): string | null {
-  const last = issue.comments.at(-1);
-  return last !== undefined && last.byBot && DESIGN_ROUND_MARKER.test(last.body) ? last.at : null;
-}
-
 /**
  * A Design session whose last comment is the App's failure notice for its
  * turn, or its refusal of a Map the Map cap holds, with when it was posted, or
@@ -1537,47 +1547,6 @@ function stoppedDesignSessionOf(issue: OpenIssueFacts): { readonly kind: "design
   const last = issue.comments.at(-1);
   if (!issue.labels.includes(NEEDS_DESIGN) || last === undefined || !last.byBot || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return null;
   return { kind: refusedByMapCap(last.body) ? "design-map-cap" : "design-turn-failed", at: last.at };
-}
-
-/**
- * Who moves next on an agent PR out of draft with a passing Verdict at its head,
- * and since when. After the pass, the Kit's `ready-for-human`, still on it,
- * hands it to the Operator (`handed-back`); else the Operator's latest review
- * since leaves the next move to the Kit (`reviewed`); else it's at the Merge
- * gate, waiting on the Operator since the pass (`merge-gate`).
- */
-interface PassedPullRequestMove {
-  readonly kind: "merge-gate" | "handed-back" | "reviewed";
-  readonly since: string;
-}
-
-/** Who moves next on an agent PR with a passing Verdict at its head, or null for a draft or one without. */
-function passedMoveOf(pullRequest: OpenPullRequestFacts, operator: string): PassedPullRequestMove | null {
-  const passed = passAtHeadOf(pullRequest);
-  if (pullRequest.draft || passed === null) return null;
-  const reviewed = operatorReviewsAfter(pullRequest.reviews, operator, passed).at(-1);
-  const handedBack = addedAndStillOn(pullRequest.labelEvents, READY_FOR_HUMAN);
-  if (handedBack !== null && Date.parse(handedBack) > Date.parse(reviewed ?? passed)) return { kind: "handed-back", since: handedBack };
-  if (reviewed !== undefined) return { kind: "reviewed", since: reviewed };
-  return { kind: "merge-gate", since: passed };
-}
-
-/** When `label` was last added, if it's still on: the latest event for it added it. Otherwise null. */
-function addedAndStillOn(events: readonly LabelEvent[], label: string): string | null {
-  const latest = events.filter((event) => event.label === label).toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at)).at(-1);
-  return latest?.action === "labeled" ? latest.at : null;
-}
-
-/** When a PR's latest Verdict on its head was posted, if that Verdict is a pass; otherwise null. */
-function passAtHeadOf(pullRequest: OpenPullRequestFacts): string | null {
-  const latest = verdictsOn(pullRequest.comments).filter(({ record }) => record.headSha === pullRequest.headSha).at(-1);
-  return latest?.record.verdict === "pass" ? latest.at : null;
-}
-
-/** When `label` was last added, or null. */
-function lastAdded(events: readonly LabelEvent[], label: string): string | null {
-  const added = events.filter((event) => event.label === label && event.action === "labeled");
-  return added.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at)).at(-1)?.at ?? null;
 }
 
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.

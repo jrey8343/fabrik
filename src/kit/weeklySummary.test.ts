@@ -553,18 +553,22 @@ describe("the Weekly summary", () => {
       ]);
     });
 
-    it("doesn't list a PR the Operator reviewed after its pass at the Merge gate: the next move is the Kit's (#481)", () => {
+    it("doesn't list a PR the Operator requested changes on after its pass at the Merge gate: the next move is the Kit's (#481, #604)", () => {
       const passed = aVerdictComment("pass", head, "2026-11-05T20:00:00Z");
       const waiting = waitingIn({
         openPullRequests: [
+          // An approving review is an Operator comment (ADR-0007): the Kit never acts on it, so it stays at the Merge gate.
           anOpenPullRequest({ number: 60, draft: false, comments: [passed], reviews: [aReview("2026-11-07T06:00:00Z", { state: "approved", body: "Rebase, please." })] }),
           // The Operator's review came before the pass: the pass answered it.
           anOpenPullRequest({ number: 61, draft: false, comments: [passed], reviews: [aReview("2026-11-04T20:00:00Z")] }),
           // Someone else's review doesn't move it off the Operator.
           anOpenPullRequest({ number: 62, draft: false, comments: [passed], reviews: [aReview("2026-11-07T06:00:00Z", { author: "someone" })] }),
+          // The Operator's Request changes after the pass: the Kit's move.
+          anOpenPullRequest({ number: 63, draft: false, comments: [passed], reviews: [aReview("2026-11-07T06:00:00Z")] }),
         ],
       });
       expect(waiting).toMatchObject([
+        { kind: "merge-gate", number: 60 },
         { kind: "merge-gate", number: 61 },
         { kind: "merge-gate", number: 62 },
       ]);
@@ -1020,14 +1024,24 @@ describe("the Weekly summary", () => {
     it.each([
       [23, []],
       [38, [{ kind: "reviewed", number: 60, title: "Build the thing", url: "https://github.com/owner/product/pull/60", since: hoursAgo(38), age: 38 * HOUR }]],
-    ])("lists a PR the Operator reviewed %i hours ago, after its pass, only past 24 hours (#481)", (hours, stuck) => {
+    ])("lists a PR the Operator requested changes on %i hours ago, after its pass, only past 24 hours (#481, #604)", (hours, stuck) => {
       const pullRequest = anOpenPullRequest({
         number: 60,
         draft: false,
         comments: [aVerdictComment("pass", "h".repeat(40), hoursAgo(60))],
-        reviews: [aReview(hoursAgo(50), { state: "commented" }), aReview(hoursAgo(hours), { state: "approved", body: "Rebase, please." })],
+        reviews: [aReview(hoursAgo(50), { state: "commented" }), aReview(hoursAgo(hours), { body: "Rebase, please." })],
       });
       expect(stuckIn({ openPullRequests: [pullRequest] })).toEqual(stuck);
+    });
+
+    it("doesn't list a PR the Operator only commented on or approved after its pass: it is still at the Merge gate (#604)", () => {
+      const pullRequest = anOpenPullRequest({
+        number: 60,
+        draft: false,
+        comments: [aVerdictComment("pass", "h".repeat(40), hoursAgo(60))],
+        reviews: [aReview(hoursAgo(50), { state: "commented" }), aReview(hoursAgo(38), { state: "approved", body: "Rebase, please." })],
+      });
+      expect(stuckIn({ openPullRequests: [pullRequest] })).toEqual([]);
     });
 
     it("doesn't list an agent PR out of draft, however long it has been quiet", () => {
@@ -2254,19 +2268,21 @@ describe("the Weekly summary", () => {
       expect(body).toContain(["## owner/other", "", "### Waiting on you", "", "Nothing waiting on you.", ""].join("\n"));
     });
 
-    it("says a PR handed back with ready-for-human is handed to the Operator, and one they reviewed is Stuck on the Kit (#481)", () => {
+    it("says a PR handed back with ready-for-human is handed to the Operator, one they approved is still at the Merge gate, and one they requested changes on is Stuck on the Kit (#481, #604)", () => {
       const passed = aVerdictComment("pass", head, hoursAgo(60));
       const body = bodyOf(
         factsOf({
           openPullRequests: [
             anOpenPullRequest({ number: 60, draft: false, comments: [passed], labelEvents: [aLabelAdded("ready-for-human", hoursAgo(30))] }),
             anOpenPullRequest({ number: 61, draft: false, comments: [passed], reviews: [aReview(hoursAgo(38), { state: "approved" })] }),
+            anOpenPullRequest({ number: 62, draft: false, comments: [passed], reviews: [aReview(hoursAgo(38))] }),
           ],
         }),
       );
       expect(body).toContain("- [#60](https://github.com/owner/product/pull/60) Build the thing: handed to you with `ready-for-human` 30 hours ago\n");
-      expect(body).toContain(["### Stuck", "", "- [#61](https://github.com/owner/product/pull/61) Build the thing: reviewed by you 38 hours ago; the Kit hasn't acted"].join("\n"));
-      expect(body).not.toContain("at the Merge gate");
+      expect(body).toContain("- [#61](https://github.com/owner/product/pull/61) Build the thing: at the Merge gate, Operator wait 2 days\n");
+      expect(body).toContain(["### Stuck", "", "- [#62](https://github.com/owner/product/pull/62) Build the thing: reviewed by you 38 hours ago; the Kit hasn't acted"].join("\n"));
+      expect(body).not.toContain("[#61](https://github.com/owner/product/pull/61) Build the thing: reviewed by you");
     });
 
     it("lists an open Audit with how long it has been open", () => {
