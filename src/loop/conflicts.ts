@@ -12,7 +12,7 @@
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
-import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, requestChangesRunEndedMarker } from "./markers.ts";
+import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
 import type { Recovery } from "./recoveryWaits.ts";
 import { runInFlight, runName, unstartedRetry } from "./retry.ts";
 import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
@@ -324,6 +324,7 @@ export function conflictRunEnded(
         "",
         `The PR still conflicts with \`main\`, so it's yours to resolve: the Kit won't try again until \`main\` moves past ${main.slice(0, 7)}. No retry was used.`,
         ...(runUrl === null ? [] : ["", `[The run](${runUrl})`]),
+        handBackMarker({ kind: "conflict-run-unlanded", role: "implement" }),
       ].join("\n"),
     },
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },
@@ -356,6 +357,7 @@ export function requestChangesRunEnded(pullRequest: number, main: string, operat
         `The Kit judged the run against \`main\` at ${head}, and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
         "",
         `[The run](${runUrl})`,
+        handBackMarker({ kind: "request-changes-unlanded", role: "implement" }),
       ].join("\n"),
     },
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },

@@ -10,7 +10,7 @@ import {
   verdictsPostedIn,
 } from "../__fixtures__/snapshots.ts";
 import { anEvidence, CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
-import { requestChangesAnswersIn } from "./markers.ts";
+import { handBackMarkIn, requestChangesAnswersIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Action, ImplementEvidence, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
@@ -514,6 +514,21 @@ describe("A Request-changes run's answers about the review it was started for (#
 
     expect(outcome).toContain("Adds the order total, named as the Operator asked.");
     expect(outcome).toContain(`[The run](${RUN})`);
+  });
+
+  it.each([
+    ["didn't move, which hands the PR back, ends with the hidden line naming the hand-back", HEAD_SHA, { kind: "request-changes-empty", role: "implement" }],
+    ["moved, which hands nothing back, has no such line", "b".repeat(40), null],
+  ])("an outcome on a head that %s (#609)", (_, headSha, handBack) => {
+    const plan = planFor(
+      requestChangesPushed({ net: [], commits: [] }),
+      pushSnapshot(aPullRequest({ headSha, verdicts: [earlier("pass", { headSha: HEAD_SHA })] })),
+      kitConfig(),
+    );
+    const [outcome = ""] = commentsOf(plan);
+
+    expect(handBackMarkIn(outcome)).toEqual(handBack);
+    if (handBack !== null) expect(outcome.split("\n").at(-2)).toBe(`[The run](${RUN})`);
   });
 
   it("are owed: a Request-changes run's output without them is an Infrastructure failure, never pushed", () => {

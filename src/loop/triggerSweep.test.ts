@@ -101,6 +101,7 @@ describe("The stuck-trigger sweep on the scheduled tick", () => {
             "<!-- fabrik:implement-run-failed -->",
             "<!-- fabrik:stuck-trigger-gave-up agent:implement -->",
             "@operator `agent:implement` came off: nothing started when it was added, nor when the Kit added it again. Check the Loop's Actions runs (an invalid Kit config is the usual cause), then add `agent:implement` again once it's fixed.",
+            '<!-- fabrik:hand-back {"kind":"trigger-swept","role":"implement"} -->',
           ].join("\n"),
         },
         { kind: "check-dispatch" },

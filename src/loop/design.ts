@@ -30,6 +30,7 @@ import {
 import {
   DECISIONS_SO_FAR_HEADING,
   DESIGN_TURN_FAILED_MARKER,
+  handBackMarker,
   designRoundMarker,
   LIVE_OUTCOME_MARKER,
   MAP_CAP_REFUSAL_OPENING,
@@ -428,7 +429,7 @@ function heldByMapCap(issueNumber: number, { openMaps, cap }: Extract<MapCap, { 
     cap === 0
       ? `${MAP_CAP_REFUSAL_OPENING} \`caps.maps\` is 0, so the Kit charts no new Map in this repo. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way.`
       : `${MAP_CAP_REFUSAL_OPENING} the Map cap is full: ${spelled(maps, "and")} ${maps.length === 1 ? "is the open Map" : "are the open Maps"}, and \`caps.maps\` is ${cap}. The Kit left #${issueNumber} as it is, and the Design session carries on: reply to finish it another way, or close ${maps.length === 1 ? maps[0] : "an open Map"} first and ask for the Map again.`;
-  return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said].join("\n") }] };
+  return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said, handBackMarker({ kind: "map-cap-refused", role: "design" })].join("\n") }] };
 }
 
 /**

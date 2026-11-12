@@ -14,7 +14,7 @@ import { UnverifiedBundle } from "../github/branch.ts";
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
 import { actionPhrase, describeAction } from "../github/describePlan.ts";
 import { RESUME_LABELS } from "../loop/heldRun.ts";
-import { IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Action, AgentRole } from "../loop/types.ts";
 import type { PushJobInput } from "./pushJob.ts";
 
@@ -40,6 +40,8 @@ export interface Landing {
    * again can't change the outcome (#535). Absent with no agent's work.
    */
   readonly again?: string;
+  /** The role whose run it was landing, which the comment's hidden hand-back line names; absent where it isn't known, as for a claim. */
+  readonly role?: AgentRole;
 }
 
 /** How a landing failed: an exception, or a `fail` plan. */
@@ -96,6 +98,7 @@ export function pushLanding(input: PushJobInput, runUrl: string): Landing | null
         doing: run,
         target: input.pullRequest ?? input.issue,
         agentWork: true,
+        role: input.role,
         ...againOf(input.role, input.issue),
         ...markerOf(input.role, onPullRequest),
       };
@@ -106,6 +109,7 @@ export function pushLanding(input: PushJobInput, runUrl: string): Landing | null
         doing: input.withResult ? `the Review of #${input.pullRequest}` : `the red required checks on #${input.pullRequest}`,
         target: input.pullRequest,
         agentWork: input.withResult,
+        role: "review",
       };
     case "agent-failure":
       return {
@@ -113,6 +117,7 @@ export function pushLanding(input: PushJobInput, runUrl: string): Landing | null
         doing: `the failure notice of the ${RUN_NAMES[input.role]} on #${input.issue}`,
         target: input.conflict?.pullRequest ?? input.issue,
         agentWork: false,
+        role: input.role,
         // A failed Implement run's notice carries its marker on the PR too, holding a conflict-only run off its hourly restart (#424).
         ...markerOf(input.role, input.conflict !== undefined && input.role !== "implement"),
       };
@@ -170,7 +175,9 @@ export function landingFailureReport(
   const rest = [`**What failed:** ${what}`, ...lists, `**To recover:** ${recovery}`];
   const mention = operator === null ? "" : `@${operator} `;
   const opening = landing.marker === undefined ? "" : `${landing.marker}\n`;
-  const body = [`${opening}${mention}**The Kit couldn't land ${landing.doing}.** The [${landing.job} job](${landing.runUrl}) failed.`, ...rest].join("\n\n");
+  const said = [`${opening}${mention}**The Kit couldn't land ${landing.doing}.** The [${landing.job} job](${landing.runUrl}) failed.`, ...rest].join("\n\n");
+  // Its last line, hidden, says which hand-back it is (src/loop/markers.ts).
+  const body = `${said}\n${handBackMarker({ kind: "landing-failed", ...(landing.role === undefined ? {} : { role: landing.role }) })}`;
   return { summary: [headline, ...rest].join("\n\n"), comment: landing.target === null ? null : { issue: landing.target, body } };
 }
 

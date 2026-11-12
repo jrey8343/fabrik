@@ -7,12 +7,27 @@
 import type { TriggerLabel } from "./labels.ts";
 import {
   DESIGN_TURN_FAILED_MARKER,
+  handBackMarker,
   IMPLEMENT_RUN_FAILED_MARKER,
   RESEARCH_RUN_FAILED_MARKER,
   stuckTriggerGaveUpMarker,
   stuckTriggerReaddedMarker,
 } from "./markers.ts";
-import type { Action, LabelledTrigger, Plan, RolesUnderWay, TriggerSweepSnapshot } from "./types.ts";
+import type { Action, AgentRole, LabelledTrigger, Plan, RolesUnderWay, TriggerSweepSnapshot } from "./types.ts";
+
+/** The role whose run each trigger label starts; a Replay's starts no one role's. */
+const TRIGGER_ROLES: Readonly<Record<TriggerLabel, AgentRole | null>> = {
+  "agent:implement": "implement",
+  "agent:design": "design",
+  "agent:review": "review",
+  "agent:research": "research",
+  "agent:replay": null,
+};
+
+function roleOfTrigger(label: TriggerLabel): { readonly role?: AgentRole } {
+  const role = TRIGGER_ROLES[label];
+  return role === null ? {} : { role };
+}
 
 /**
  * The first line of the give-up comment for each role whose failed run parks
@@ -112,6 +127,7 @@ function giveUp({ number, label }: LabelledTrigger, operator: string): Action[] 
         ...(parking === undefined ? [] : [parking]),
         stuckTriggerGaveUpMarker(label),
         `@${operator} \`${label}\` came off: nothing started when it was added, nor when the Kit added it again. Check the Loop's Actions runs (an invalid Kit config is the usual cause), then add \`${label}\` again once it's fixed.`,
+        handBackMarker({ kind: "trigger-swept", ...roleOfTrigger(label) }),
       ].join("\n"),
     },
   ];
