@@ -67,9 +67,22 @@ export async function digestContext(
       FACTS_ARE_KIT_CODES,
       ...jsonBlock(facts),
       `## ${DIGEST_SECTIONS.uiEvidence}`,
-      given.uiEvidence === true
-        ? "This pull request has UI evidence: screenshots of its pages, which its body links."
-        : "This pull request has no UI evidence.",
+      ...uiEvidenceParts(given),
     ],
   };
+}
+
+/**
+ * What the writer is told of the pull request's UI evidence: whether it has
+ * any, and its captured routes, which Kit code read from the evidence marker
+ * in its body (capturedRoutesOf, src/evidence/uiEvidence.ts) and checks each
+ * item's picture against before the Digest lands. With no UI evidence, or a
+ * marker that names no routes, it is told there are none.
+ */
+function uiEvidenceParts({ uiEvidence, capturedRoutes }: Partial<DigestPullRequest>): string[] {
+  if (uiEvidence !== true) return ["This pull request has no UI evidence, and so no captured routes: no item may name a picture."];
+  const has = "This pull request has UI evidence: screenshots of its pages, which its body links.";
+  const routes = Array.isArray(capturedRoutes) ? capturedRoutes.filter((route) => typeof route === "string") : [];
+  if (routes.length === 0) return [`${has} It has no captured routes, so no item may name a picture.`];
+  return [`${has} Its captured routes, the only routes an item may name as its picture:`, ...jsonBlock(routes)];
 }

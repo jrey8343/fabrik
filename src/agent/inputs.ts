@@ -18,7 +18,8 @@
 //   FABRIK_AUDIT_COMMIT          for an Auditor run, the pending Audit's marked commit (FABRIK_ISSUE is the
 //                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
 //   FABRIK_ROLE=digest           writes pull-request.json as the Digest writer is given the PR (readDigestPullRequest):
-//                                with the Operator's words, every Verdict, the Kit's notes and whether UI evidence exists
+//                                with the Operator's words, every Verdict, the Kit's notes, whether UI evidence exists
+//                                and the routes it captured
 //   FABRIK_OUT_DIR               optional, where a failed GitHub call leaves its failure report
 //                                (AGENT_FAILURE_FILE), for the push job's notice to name (#328)
 import { mkdir, writeFile } from "node:fs/promises";
@@ -27,7 +28,7 @@ import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
 import { leavingOutDigests } from "../github/digestComments.ts";
 import { readDigestThread } from "../github/digestGiven.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
-import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { capturedRoutesOf, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
@@ -492,6 +493,13 @@ export interface DigestPullRequest {
   readonly kitNotes: readonly string[];
   /** Whether its body's evidence marker names screenshots its Implement run kept. */
   readonly uiEvidence: boolean;
+  /**
+   * The routes its UI evidence captured, as its body's evidence marker names
+   * them, in the marker's order (capturedRoutesOf): the routes an item may
+   * name as its picture. None with no UI evidence, and with a marker that
+   * names no routes, as one written before markers recorded them.
+   */
+  readonly capturedRoutes: readonly string[];
   /** Kit code's facts, worked out from its thread (src/loop/digestFacts.ts), which the writer words and never contradicts. */
   readonly facts: DigestFacts;
 }
@@ -501,8 +509,10 @@ export interface DigestPullRequest {
  * the Operator's Request changes with their line comments and the Operator's
  * comments, as readPullRequest gives a Reviewer them, `deferred` ones left
  * out; every Verdict with the head it judged; the Kit's own notes on the
- * thread, oldest first, among its latest hundred comments; and whether UI
- * evidence exists. Nobody else's words are in it, and nothing from the run
+ * thread, oldest first, among its latest hundred comments; whether UI
+ * evidence exists; and the routes it captured, as the evidence marker in the
+ * body names them, which the push job reads again to check each item's
+ * picture against. Nobody else's words are in it, and nothing from the run
  * store: no transcript and no Run record. The Verdicts and the notes come
  * only from what readPullRequest and verdictsOn hand back, so whatever those
  * keep from an agent is kept from this one. Beside them go Kit code's facts,
@@ -532,6 +542,7 @@ export async function readDigestPullRequest(
     // Only a bot's comments are the Kit's, as only a bot's markers are read; its Verdicts are given apart, whole.
     kitNotes: comments.filter(({ body, author }) => author?.__typename === "Bot" && verdictsIn([body]).length === 0).map(({ body }) => body),
     uiEvidence: (evidenceMarkerIn(pullRequest.body)?.artifact ?? null) !== null,
+    capturedRoutes: capturedRoutesOf(evidenceMarkerIn(pullRequest.body)),
     facts: digestFactsOf(thread),
   };
 }

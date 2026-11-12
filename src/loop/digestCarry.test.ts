@@ -5,7 +5,7 @@ import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullReque
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { carriedDigest, placedFilesIn } from "./digestCarry.ts";
-import { type DigestCommentRead, type DigestItem, digestCommentOf, digestDataMarker, digestMarker, digestMarkIn, digestTop, noDigestLine, readDigestComment } from "./digestContract.ts";
+import { type DigestCommentRead, type DigestItem, digestCommentOf, digestMarkIn, digestTop, noDigestLine, readDigestComment } from "./digestContract.ts";
 import type { DigestAsk } from "./digestFacts.ts";
 import type { DigestHead, NamedPlace } from "./digestPlaces.ts";
 import { planFor } from "./rules.ts";
@@ -178,8 +178,8 @@ const NEW_HEAD = HEAD_SHA;
 const WHERE = { repoUrl: REPO, pullRequest: 50, headSha: NEW_HEAD };
 const BLOB = `${REPO}/blob/${NEW_HEAD}`;
 
-function anItem(claim: string, places: readonly NamedPlace[]): DigestItem {
-  return { kind: "yours-to-judge", claim, sentence: "The Ticket did not say.", asks: [], places, suggestedRequest: null };
+function anItem(claim: string, places: readonly NamedPlace[], picture: string | null = null): DigestItem {
+  return { kind: "yours-to-judge", claim, sentence: "The Ticket did not say.", asks: [], places, picture, suggestedRequest: null };
 }
 
 function inSave(start: number, end: number): NamedPlace {
@@ -268,18 +268,18 @@ describe("The Digest carried forward: the comment posted for the new head", () =
     expect(data.items.map(({ claim, sentence }) => ({ claim, sentence }))).toEqual(was.items.map(({ claim, sentence }) => ({ claim, sentence })));
   });
 
-  it("keeps an item's picture as it was", () => {
-    const was = readBack(writtenDigest([anItem("The saved basket page is new.", [])]));
-    const withAPicture = [
-      digestMarker({ head: WRITTEN_AT, asks: [], carriedFrom: null }),
-      digestDataMarker({ ...was.data, items: was.data.items.map((item) => ({ ...item, picture: "/basket/saved" })) }),
-      digestTop(was.data, { ...WHERE, headSha: WRITTEN_AT }),
-      "",
-      "<!-- fabrik:digest-folds -->",
-      was.folds,
-    ].join("\n");
+  it("keeps an item's picture as it was, whatever the new head holds", () => {
+    const rendered = digestCommentOf(
+      aDigestReply({ items: [anItem("The saved basket page is new.", [inSave(10, 12)], "/basket/saved")] }),
+      aDigestGiven({ repoUrl: REPO, headSha: WRITTEN_AT, runUrl: RUN, head: aHead(), capturedRoutes: ["/basket/saved"] }),
+    );
+    if (!rendered.ok) throw new Error(rendered.refused);
+    // Its place is gone at the new head, and its picture stays.
+    const body = carried(rendered.body, aHead(null));
 
-    expect(readBack(carried(withAPicture)).data.items.map(({ picture }) => picture)).toEqual(["/basket/saved"]);
+    expect(readBack(body).data.items).toMatchObject([{ claim: "The saved basket page is new.", places: [], picture: "/basket/saved" }]);
+    expect(needsYourEyesIn(body)).toEqual(needsYourEyesIn(rendered.body).filter((line) => !line.includes("src/basket/save.ts")));
+    expect(needsYourEyesIn(body).join("\n")).toContain("/basket/saved");
   });
 
   it("is none for a comment that does not read back as a Digest, and for one too long for GitHub once carried", () => {

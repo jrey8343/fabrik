@@ -31,7 +31,7 @@ const SAVE_MOVED_DOWN_12 = `${[...Array.from({ length: 12 }, (_, index) => `// f
 /** The last Digest on #50, written as of WRITTEN_AT: one item, pointing at lines 10 to 12 of the saved-basket rule. */
 const LAST_DIGEST = (() => {
   const reply = aDigestReply({
-    items: [{ kind: "yours-to-judge", claim: "Prices hold for 24 hours.", sentence: "The Ticket did not say.", asks: [], places: [{ path: "src/basket/save.ts", start: 10, end: 12, as: "code" }], suggestedRequest: null }],
+    items: [{ kind: "yours-to-judge", claim: "Prices hold for 24 hours.", sentence: "The Ticket did not say.", asks: [], places: [{ path: "src/basket/save.ts", start: 10, end: 12, as: "code" }], picture: null, suggestedRequest: null }],
   });
   const rendered = digestCommentOf(reply, aDigestGiven({ repoUrl: REPO, headSha: WRITTEN_AT, runUrl: RUN, head: { files: [{ path: "src/basket/save.ts", text: SAVE }], changed: [] } }));
   if (!rendered.ok) throw new Error(rendered.refused);

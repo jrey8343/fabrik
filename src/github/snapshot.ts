@@ -1614,6 +1614,23 @@ export async function deferredChangesRequestsOn(github: ReadClient, repo: Repo, 
   return (await gatherPullRequest(github, repo, number, operator, null)).pullRequest?.deferredChangesRequests ?? [];
 }
 
+/**
+ * What the push job takes from the Loop's snapshot of a PR to land its
+ * Digest (src/github/digestGiven.ts), in the one read: the Operator's Request
+ * changes deferred while a Retry was in flight, as deferredChangesRequestsOn
+ * gives them, and its evidence marker, read only from a body a bot wrote
+ * (byAppOf), so nobody else can name a route as captured.
+ */
+export async function digestSnapshotOn(
+  github: ReadClient,
+  repo: Repo,
+  number: number,
+  operator: string,
+): Promise<Pick<PullRequestSnapshot, "deferredChangesRequests" | "uiEvidenceMarker">> {
+  const { pullRequest } = await gatherPullRequest(github, repo, number, operator, null);
+  return { deferredChangesRequests: pullRequest?.deferredChangesRequests ?? [], uiEvidenceMarker: pullRequest?.uiEvidenceMarker ?? null };
+}
+
 async function gatherPullRequest(
   github: ReadClient,
   repo: Repo,
