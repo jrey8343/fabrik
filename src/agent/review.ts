@@ -7,8 +7,8 @@
 // PR's code.
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CAPTURE_RESULT_FILE } from "../evidence/capture.ts";
 import {
+  CAPTURE_RESULT_FILE,
   type Capture,
   type CaptureFailure,
   type CaptureResult,

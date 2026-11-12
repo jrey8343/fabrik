@@ -41,7 +41,6 @@ import { parsePrototypeTurnOutput } from "../loop/designOutput.ts";
 import { parsePrototypeRequest } from "../loop/markers.ts";
 import {
   buildAndServeEnv,
-  CAPTURE_RESULT_FILE,
   captureEvidence,
   capturePrototype,
   captureStepFiles,
@@ -55,6 +54,7 @@ import {
   prototypeCaptureSummary,
 } from "./capture.ts";
 import { PlaywrightCapturer } from "./playwrightCapturer.ts";
+import { CAPTURE_RESULT_FILE } from "./uiEvidence.ts";
 
 const run = promisify(execFile);
 

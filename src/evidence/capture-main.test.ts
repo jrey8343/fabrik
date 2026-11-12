@@ -15,8 +15,8 @@ import { AGENT_RESULT_FILE } from "../agent/result.ts";
 import { KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
 import { kitJobSummary } from "../kit/kitJob.ts";
 import { planFor } from "../loop/rules.ts";
-import { CAPTURE_RESULT_FILE, EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EVIDENCE_PAGE_FILE } from "./capture.ts";
-import { parseCaptureResult } from "./uiEvidence.ts";
+import { EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EVIDENCE_PAGE_FILE } from "./capture.ts";
+import { CAPTURE_RESULT_FILE, parseCaptureResult } from "./uiEvidence.ts";
 
 const run = promisify(execFile);
 const KIT = resolve(import.meta.dirname, "..", "..");

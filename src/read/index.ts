@@ -153,3 +153,9 @@ export type { RoundRead } from "./roundRead.ts";
 export { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 export { roundLineIn } from "../loop/roundLine.ts";
 export type { EvidenceMarker } from "../evidence/uiEvidence.ts";
+
+// Capture results and production addresses
+
+export { CAPTURE_RESULT_FILE, parseCaptureResult } from "../evidence/uiEvidence.ts";
+export { productionPageUrl } from "../kit/config.ts";
+export type { CaptureResult, CaptureResultRead } from "../evidence/uiEvidence.ts";

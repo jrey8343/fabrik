@@ -44,6 +44,7 @@ import {
   factsOf,
   standingFactsOf,
   storeFactsOf,
+  CAPTURE_RESULT_FILE,
   checkCallerWorkflow,
   costOf,
   costPerMergedPullRequestOf,
@@ -66,6 +67,8 @@ import {
   mergesToRead,
   newerSchemaOf,
   NO_DEPLOY_SEEN_MINUTES,
+  parseCaptureResult,
+  productionPageUrl,
   readCaller,
   readDeployments,
   readOutcomes,
@@ -100,6 +103,8 @@ import type {
   ActionsStep,
   CallerCheck,
   CallerRead,
+  CaptureResult,
+  CaptureResultRead,
   CostFigure,
   DeploymentsRead,
   DeployOf,
@@ -374,6 +379,26 @@ const A_PROTOTYPE_ROUND = [
   })} -->`,
   "Two takes on the booking page.",
 ].join("\n");
+
+/** A UI pull request's capture result, as the Implement job's capture step writes it: a Before and an After of one route, signed in. */
+const A_CAPTURE_RESULT = {
+  outcome: "captured",
+  headSha: "h".repeat(40),
+  captures: [
+    { route: "/book", reason: "ticket", viewport: "mobile", side: "before", status: 200, image: "before-mobile-book.png", identity: "owner" },
+    { route: "/book", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-book.png", identity: "owner" },
+  ],
+} as const satisfies CaptureResult;
+
+/** A Prototype's capture result, as the prototype job writes it: variant A with its video, variant B whose video wasn't recorded. */
+const A_PROTOTYPE_CAPTURE_RESULT = {
+  outcome: "captured",
+  headSha: "b".repeat(40),
+  captures: [
+    { route: "/book", variant: "A", viewport: "mobile", status: 200, image: "variant-a-mobile.png", video: "variant-a-mobile.webm" },
+    { route: "/book", variant: "B", viewport: "mobile", status: 200, image: "variant-b-mobile.png" },
+  ],
+} as const satisfies CaptureResult;
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -832,6 +857,26 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     roundLineIn(
       A_PROTOTYPE_ROUND,
     ),
+
+  // Capture results and production addresses
+
+  CAPTURE_RESULT_FILE: () => CAPTURE_RESULT_FILE,
+  parseCaptureResult: () => [
+    parseCaptureResult(
+      `${JSON.stringify(A_CAPTURE_RESULT, null, 2)}\n`,
+    ),
+    parseCaptureResult(
+      `${JSON.stringify(A_PROTOTYPE_CAPTURE_RESULT, null, 2)}\n`,
+    ),
+    parseCaptureResult(
+      "<html>Not Found</html>",
+    ),
+  ],
+  productionPageUrl: () =>
+    productionPageUrl(
+      { url: "https://shop.example", environment: "production" },
+      "/book?when=today",
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -1044,6 +1089,11 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // Captured routes and Prototypes on rows
 
   EvidenceMarker: A_UI_EVIDENCE_MARKER satisfies EvidenceMarker,
+
+  // Capture results and production addresses
+
+  CaptureResult: A_PROTOTYPE_CAPTURE_RESULT satisfies CaptureResult,
+  CaptureResultRead: { ok: true, result: A_CAPTURE_RESULT } satisfies CaptureResultRead,
 };
 
 /**
