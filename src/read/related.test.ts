@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import type { OpenIssueFacts, OpenPullRequestFacts, ReviewFacts } from "../kit/weeklySummary.ts";
+import { aComment, aLabelAdded, aReview, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { Facts, IssueBodyFacts } from "./gather.ts";
 import { neverRelatedKindOf } from "./related.ts";
 import { type Row, rowsOf } from "./rows.ts";
@@ -129,6 +129,50 @@ describe("never a candidate", () => {
 
     expect(pullRequestRow(facts)?.related).toEqual([{ issue: 30, title: "Cache the prices", kind: "candidate" }]);
     expect(rowsIn(facts).find(({ standing }) => standing.issue === 30)?.relatedTo).toBe(50);
+  });
+});
+
+describe("a candidate stops being one", () => {
+  /** Issue 30 filed From PR #50, with these reviews on pull request 50. */
+  const reviewed = (...reviews: ReviewFacts[]): Facts =>
+    homeFactsOf({ github: factsOf({ openIssues: [TICKET, FILED], openPullRequests: [{ ...PULL_REQUEST, reviews }] }), issueBodies: [{ issue: 30, body: FROM_PR_50 }] });
+  const stillRelated = (facts: Facts) => {
+    expect(pullRequestRow(facts)?.related).toEqual([{ issue: 30, title: "Cache the prices", kind: "candidate" }]);
+    expect(issueRow(facts)?.relatedTo).toBe(50);
+  };
+  const noLonger = (facts: Facts) => {
+    expect(pullRequestRow(facts)?.related).toEqual([]);
+    expect(issueRow(facts)?.relatedTo).toBeNull();
+  };
+
+  it("once the Operator's Request changes on the pull request names it by its number", () => {
+    noLonger(reviewed(aReview("2026-11-08T15:00:00Z", { body: "Roll #30 in to this one, please." })));
+  });
+
+  it("once the Operator's Request changes on the pull request names it by its link", () => {
+    noLonger(reviewed(aReview("2026-11-08T15:00:00Z", { body: "Roll in https://github.com/owner/product/issues/30 as well." })));
+  });
+
+  it("but not for a Request changes that names another issue whose number starts the same, or one in another repo", () => {
+    stillRelated(reviewed(aReview("2026-11-08T15:00:00Z", { body: "Roll in #301, https://github.com/owner/product/issues/302 and https://github.com/owner/other/issues/30." })));
+  });
+
+  it("but not for a dismissed one", () => {
+    stillRelated(reviewed(aReview("2026-11-08T15:00:00Z", { state: "dismissed", body: "Roll #30 in to this one, please." })));
+  });
+
+  it("but not for one that names it only in a comment pinned to a line", () => {
+    stillRelated(reviewed(aReview("2026-11-08T15:00:00Z", { body: "", comments: [{ path: "src/prices.ts", line: 12, body: "Roll #30 in here." }] })));
+  });
+
+  it("but not for someone else's, nor a review of the Operator's that only comments or approves", () => {
+    stillRelated(
+      reviewed(
+        aReview("2026-11-08T15:00:00Z", { author: "someone", body: "Roll #30 in." }),
+        aReview("2026-11-08T15:10:00Z", { state: "commented", body: "Maybe #30 too?" }),
+        aReview("2026-11-08T15:20:00Z", { state: "approved", body: "Leave #30 for later." }),
+      ),
+    );
   });
 });
 

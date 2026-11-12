@@ -4,7 +4,7 @@
 // readers, never guessed: a candidate's `From PR` line by the reader of that
 // line, a Follow-up by the reader of a Verdict's Follow-ups. Decided in #530
 // and #574. Pure, no I/O: worked out from a gather's facts (./gather.ts).
-import type { OpenIssueFacts } from "../kit/weeklySummary.ts";
+import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
 import {
   AUDIT_LABEL,
   DECISION_TYPES,
@@ -78,8 +78,28 @@ function candidatesOf({ github, operator, appLogin, issueBodies }: Facts): Candi
     const body = issueBodies.find((bodied) => bodied.issue === number)?.body;
     const named = body === undefined ? null : fromPullRequestIn(body);
     const pullRequest = github.openPullRequests.find((open) => open.number === named);
-    return pullRequest === undefined ? [] : [{ issue: number, title, pullRequest: pullRequest.number }];
+    if (pullRequest === undefined || namedInRequestChanges(pullRequest, operator, github.repo, number)) return [];
+    return [{ issue: number, title, pullRequest: pullRequest.number }];
   });
+}
+
+/**
+ * Whether a Request changes of the Operator's on `pullRequest`, not dismissed,
+ * names issue `issue` of `repo`, `owner/name`, in the review's own text: by
+ * its number after a `#`, or by its link. A comment pinned to a line is not
+ * read.
+ */
+function namedInRequestChanges(pullRequest: OpenPullRequestFacts, operator: string, repo: string, issue: number): boolean {
+  const byNumber = new RegExp(`(?<![\\w/])#${issue}(?!\\d)`);
+  const byLink = new RegExp(`https://github\\.com/${escaped(repo)}/issues/${issue}(?!\\d)`, "i");
+  return pullRequest.reviews.some(
+    ({ author, state, body }) => author === operator && state === "changes-requested" && (byNumber.test(body) || byLink.test(body)),
+  );
+}
+
+/** `text` with every character a regular expression gives a meaning to escaped. */
+function escaped(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** The issues that could still be rolled in to open agent pull request `pullRequest`, in the order of the open issues. */
