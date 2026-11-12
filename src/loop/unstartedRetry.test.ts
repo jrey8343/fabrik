@@ -16,7 +16,7 @@ import {
   requestChangesRunIn,
   requestChangesSinceRunIn,
   retryNoteSinceVerdictIn,
-  standingIn,
+  notDismissedIn,
   verdictPostedAtIn,
   verdictsIn,
 } from "../github/threads.ts";
@@ -65,7 +65,7 @@ class Thread {
       conflictRunInFlight: conflictRunInFlightIn(comments),
       pushedSinceVerdict: pushedSinceVerdictIn(comments),
       retryNoteSinceVerdict: retryNoteSinceVerdictIn(comments),
-      ...requestChangesSinceRunIn(this.history, standingIn(this.history), "operator"),
+      ...requestChangesSinceRunIn(this.history, notDismissedIn(this.history), "operator"),
       leftDraftSinceVerdict: leftDraftSinceVerdictIn(this.history),
     });
   }

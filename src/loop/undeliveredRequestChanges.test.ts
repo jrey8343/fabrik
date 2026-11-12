@@ -18,7 +18,7 @@ import {
   pushedSinceVerdictIn,
   requestChangesRunIn,
   requestChangesSinceRunIn,
-  standingIn,
+  notDismissedIn,
   verdictsIn,
 } from "../github/threads.ts";
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
@@ -86,7 +86,7 @@ class Thread {
       conflictAttempts: conflictAttemptsIn(comments),
       conflictRunInFlight: conflictRunInFlightIn(comments),
       pushedSinceVerdict: pushedSinceVerdictIn(comments),
-      ...requestChangesSinceRunIn(this.history, standingIn(this.history), "operator"),
+      ...requestChangesSinceRunIn(this.history, notDismissedIn(this.history), "operator"),
       leftDraftSinceVerdict: leftDraftSinceVerdictIn(this.history),
       url: PR_URL,
     });

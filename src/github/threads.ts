@@ -322,13 +322,13 @@ export type PullRequestHistoryItem =
  * pushing settles nothing: its reviews stay unbuilt, and noted, so the Kit
  * doesn't note them again. Nor does one that ended in an Infrastructure
  * failure, whose notice leaves it in flight, marked failed until a later note
- * starts a run again (#424). A dismissed review isn't `standing`, and a run
- * whose every review was dismissed isn't in flight; `standing` is read from
+ * starts a run again (#424). A dismissed review isn't in `notDismissed`, and a run
+ * whose every review was dismissed isn't in flight; `notDismissed` is read from
  * the history unless given.
  */
 export function requestChangesSinceRunIn(
   history: readonly PullRequestHistoryItem[],
-  standing: ReadonlySet<number> = standingIn(history),
+  notDismissed: ReadonlySet<number> = notDismissedIn(history),
   operator: string | null = null,
 ): Pick<
   PullRequestSnapshot,
@@ -418,7 +418,7 @@ export function requestChangesSinceRunIn(
       }
     }
   }
-  const live = (inFlight ?? []).filter((review) => standing.has(review));
+  const live = (inFlight ?? []).filter((review) => notDismissed.has(review));
   return {
     unbuiltChangesRequests: reviews,
     notedChangesRequests: noted,
@@ -434,7 +434,7 @@ export function requestChangesSinceRunIn(
         ? reviews.filter(({ reviewer, reviewerIsBot }) => operator !== null && reviewer === operator && !reviewerIsBot).map(({ review }) => review)
         : [],
     requestChangesRunDismissed: inFlight !== null && live.length === 0,
-    deferredChangesRequests: deferred.filter((review) => standing.has(review)),
+    deferredChangesRequests: deferred.filter((review) => notDismissed.has(review)),
   };
 }
 
@@ -468,7 +468,7 @@ function isPass(body: string): boolean {
 }
 
 /** The reviews still requesting changes: GitHub lists a dismissed one no longer. */
-export function standingIn(history: readonly PullRequestHistoryItem[]): ReadonlySet<number> {
+export function notDismissedIn(history: readonly PullRequestHistoryItem[]): ReadonlySet<number> {
   return new Set(history.flatMap((item) => (item.kind === "changes-requested" ? [item.review] : [])));
 }
 
@@ -618,7 +618,7 @@ function endsDesignSession(body: string): boolean {
  * on it, with no later run's word, such as a resolution, since. Only the App's
  * own comments count (`byApp`), so nobody, another bot included, can fake a
  * failure by quoting the notice, and a reply after it, a person's or another
- * bot's, leaves it standing.
+ * bot's, leaves it in place.
  */
 export function researchRunFailedIn(comments: readonly KitComment[]): boolean {
   return latestKitWordIs(RESEARCH_RUN_FAILED_MARKER, comments);

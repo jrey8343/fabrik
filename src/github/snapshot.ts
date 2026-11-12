@@ -1605,7 +1605,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
   );
   const botComments = fromBots.map((comment) => comment.body);
   // Every review still requesting changes, however old: GitHub lists a dismissed one no longer.
-  const standing = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
+  const notDismissed = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
   const history = historyOf(pullRequest, fromBots);
   const ticket = ticketOfAgentBranch(pullRequest.headRefName);
   const isAgent = isAgentPullRequest({ headRef: pullRequest.headRefName, authorIsBot: pullRequest.author?.__typename === "Bot" });
@@ -1631,7 +1631,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     retryNoteSinceVerdict: retryNoteSinceVerdictIn(botComments),
     verdictPostedAt: verdictPostedAtIn(history),
     headPushedAt: headPushedAtOf(pullRequest, fromBots, isAgent),
-    ...requestChangesSinceRunIn(history, standing, operator),
+    ...requestChangesSinceRunIn(history, notDismissed, operator),
     leftDraftSinceVerdict: leftDraftSinceVerdictIn(history),
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
