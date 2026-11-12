@@ -11,7 +11,7 @@
 // work is never Stuck), the Flaky-check sweep and closing merged Tickets act
 // on what they read at once, and the replay step's release of a run past its
 // limit moves a Replay, which never turns Stuck between its steps.
-import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
+import { implementJobTimeoutMinutes } from "../evidence/captureTimeout.ts";
 import type { KitConfig } from "./types.ts";
 
 /** Each recovery the Tick runs that waits on a clock before the Kit moves work on. */

@@ -8,7 +8,7 @@
 import { RUN_STORE_REPO } from "./runStore.ts";
 import { type Standing, STANDING_SCHEMA, type StandingNamed } from "./standing.ts";
 import { readyForHumanStandingOf } from "./standingOperator.ts";
-import { isWeeklyFailureNotice } from "./weeklyFiling.ts";
+import { isWeeklyFailureNotice } from "./weeklyMarks.ts";
 import type { OpenIssueFacts } from "./weeklySummary.ts";
 
 /** A Weekly summary issue in the store, open or closed. */

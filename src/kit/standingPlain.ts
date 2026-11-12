@@ -5,7 +5,7 @@
 // whether it merges cleanly and its Required checks. None stops work and none
 // turns Stuck: it leaves at its merge or close. The Kit never acts on a
 // Request changes, `needs-design` or a comment on one, so none is read.
-import { setupBranch } from "../setup/setupBranch.ts";
+import { setupBranch } from "../setup/setupBranchName.ts";
 import { SKILLS_BUMP_BRANCH } from "../skills/bump.ts";
 import { type PlainKind, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import type { GitHubFacts, PlainPullRequestFacts, RequiredCheckFact, RequiredChecksFact } from "./weeklySummary.ts";
