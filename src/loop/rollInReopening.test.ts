@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aNamedPullRequest, anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { mentionsSomeone } from "./mentions.ts";
@@ -77,6 +78,33 @@ const reopened = (issue: number, line: string): Action[] => [
   { kind: "add-labels", issue, labels: ["needs-triage"] },
 ];
 
+describe("The README's account of an unsent Roll-in", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const sectionOf = (heading: string) => readme.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+  const finish = sectionOf("Design session (async)").split("\n").find((line) => line.startsWith("- **A Roll-in**")) ?? "";
+  const closingByHand = sectionOf("Implementation").split("\n").find((line) => line.startsWith("Closing by hand stops the work")) ?? "";
+
+  it("says, where it describes the Roll-in's finish, that the issue is reopened for Triage when its pull request merges or closes with the Roll-in unsent", () => {
+    expect(finish).toMatch(/A Roll-in never sent is not lost: when that pull request merges or closes with it unsent, the Kit reopens the issue for Triage \(see \[Implementation\]\(#implementation\)\)\.$/);
+  });
+
+  it("says, where it describes closing by hand, what the Kit does to the issue, in the labels its plan uses and the order it uses them", () => {
+    const sentence = closingByHand.slice(closingByHand.indexOf("Whoever closes an agent PR"));
+    const [reopen, offWontfix, , addTriage] = actionsOf(closing(merged));
+
+    expect(closingByHand).toMatch(/has its issue reopened for Triage[^.]*\.$/);
+    expect(sentence).toContain("merged or unmerged");
+    expect(sentence).toContain("no Request changes of yours on it, not dismissed, names the issue by `#` and its number or by its link");
+    expect(reopen).toEqual({ kind: "reopen", issue: 7 });
+    expect(offWontfix).toMatchObject({ kind: "remove-label", label: "wontfix" });
+    expect(addTriage).toMatchObject({ kind: "add-labels", labels: ["needs-triage"] });
+    const said = ["reopens it", "takes `wontfix` off", "one line that mentions nobody", "adds `needs-triage`"].map((words) => sentence.indexOf(words));
+    expect(said.every((at) => at > -1)).toBe(true);
+    expect(said).toEqual([...said].sort((a, b) => a - b));
+    expect(sentence).toContain("the code the text names may not be on `main`");
+  });
+});
+
 describe("An agent pull request merges with a Roll-in unsent", () => {
   it("reopens the issue, takes wontfix off, says why in one line and adds needs-triage, before the Dispatch check its freed slot asks for", () => {
     expect(closing(merged)).toEqual({ kind: "act", actions: [...reopened(7, MERGED_LINE), { kind: "check-dispatch" }] });
@@ -145,6 +173,14 @@ describe("The reopening note", () => {
     expect(kinds.indexOf("reopen")).toBeLessThan(kinds.indexOf("comment"));
     expect(kinds.indexOf("reopen")).toBeLessThan(kinds.indexOf("add-labels"));
     expect(kinds.indexOf("comment")).toBeLessThan(kinds.indexOf("add-labels"));
+  });
+
+  it("is followed by needs-triage, which starts Triage on the issue now it is open, as it would start nothing on a closed one", () => {
+    const added: LoopEvent = { kind: "label-added", issue: 7, label: "needs-triage" };
+    const issue = (open: boolean) => snapshotOf(anIssue({ number: 7, open, labels: ["enhancement", "needs-triage"] }));
+
+    expect(actionsOf(planFor(added, issue(true), kitConfig()))).toMatchObject([{ kind: "start-agent-run", role: "triage", issue: 7 }]);
+    expect(planFor(added, issue(false), kitConfig())).toEqual({ kind: "nothing", reason: "#7 is closed" });
   });
 });
 
