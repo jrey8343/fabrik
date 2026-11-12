@@ -22,6 +22,7 @@ import { roundLineIn } from "../loop/roundLine.ts";
 import type { Facts } from "./gather.ts";
 import { followUpsOf, mentionsOf, relatedOf, relatedToOf } from "./related.ts";
 import { type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
+import { type DigestRead, digestReadOf } from "./digestRead.ts";
 import { roundWaitsIn } from "./roundRead.ts";
 import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 import { type StoreFacts, storeRowsOf } from "./store.ts";
@@ -87,6 +88,15 @@ export interface Row {
    * read (./roundRead.ts) gives its text.
    */
   readonly prototype: RowPrototype | null;
+  /**
+   * On an open agent pull request's row, at the Merge gate and in draft
+   * alike: the Digest of its head as data, or that none is readable
+   * (./digestRead.ts). Null on any other row. It is worked out from the last
+   * hundred comments of the pull request, which the gather reads. A Digest
+   * is posted as the pull request reaches the Merge gate, so it is among
+   * them unless a hundred comments follow it, when it reads as `none`.
+   */
+  readonly digest: DigestRead | null;
 }
 
 /** An issue's newest prototype round, as its hidden line records it. */
@@ -198,7 +208,7 @@ function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredCheck
  * Ticket's state.
  */
 export function bareRowOf(standing: Standing, title: string, lastWord: Row["lastWord"]): Row {
-  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null, prototype: null };
+  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null, prototype: null, digest: null };
 }
 
 /**
@@ -220,7 +230,14 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
     evidence: pullRequest === null ? null : evidenceOf(facts, pullRequest),
     production: pullRequest !== null && isProductionStanding(standing) ? productionOf(facts, pullRequest) : null,
     prototype: issue === null ? null : prototypeOf(facts, issue),
+    digest: pullRequest === null ? null : digestOf(facts, pullRequest),
   };
+}
+
+/** The Digest of open agent pull request `pullRequest`'s head, from its comments as the gather read them; null when it is no open agent pull request. */
+function digestOf({ github, appLogin }: Facts, pullRequest: number): DigestRead | null {
+  const open = github.openPullRequests.find(({ number }) => number === pullRequest);
+  return open === undefined ? null : digestReadOf(open, appLogin);
 }
 
 /**

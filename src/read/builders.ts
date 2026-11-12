@@ -31,6 +31,7 @@ import type {
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
+import { DIGEST_FOLDS_MARKER, type DigestData, digestDataMarker, digestMarker, digestTop, type NoDigestHow, noDigestLine } from "../loop/digestContract.ts";
 import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, handBackMarker, MAP_CAP_REFUSAL_OPENING, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
 import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
@@ -270,6 +271,37 @@ export function aMapCapRefusal(at: string): CommentFacts {
 /** The Fabrik App's Verdict comment on `headSha` at `at`. */
 export function aVerdictComment(verdict: Verdict, headSha: string, at: string, overrides: Partial<CommentFacts> = {}): CommentFacts {
   return aComment(`${verdictMarker({ verdict, source: "reviewer", requestChanges: false, headSha })}\nVerdict: ${verdict}`, at, overrides);
+}
+
+/**
+ * The Fabrik App's Digest of pull request 50 of `owner/product` as of
+ * `headSha`, posted at `at`, as Kit code writes one: its two hidden lines,
+ * its top rendered from `data`, and `folds` under the folds line. It answers
+ * no ask, has nothing for the Operator's eyes and was written at that head,
+ * unless a test says otherwise.
+ */
+export function aDigestComment(
+  headSha: string,
+  at: string,
+  { data = NOTHING_FOR_YOUR_EYES, carriedFrom = null, folds = "[The run](https://github.com/owner/product/actions/runs/42/attempts/1)" }: { readonly data?: DigestData; readonly carriedFrom?: string | null; readonly folds?: string } = {},
+  overrides: Partial<CommentFacts> = {},
+): CommentFacts {
+  const top = digestTop(data, { repoUrl: "https://github.com/owner/product", pullRequest: 50, headSha });
+  return aComment([digestMarker({ head: headSha, asks: [], carriedFrom }), digestDataMarker(data), top, "", DIGEST_FOLDS_MARKER, folds].join("\n"), at, overrides);
+}
+
+/** A Digest's top with nothing under Needs your eyes and no Follow-up. */
+const NOTHING_FOR_YOUR_EYES: DigestData = {
+  v: 1,
+  items: [],
+  whatItDoes: "A shopper can now save their basket.",
+  howItGotHere: "One Review passed it at the first head.",
+  followUps: [],
+};
+
+/** The Fabrik App's no-Digest line for `headSha` at `at`: no Digest could be written for that head, and how the attempt ended. */
+export function aNoDigestLine(headSha: string, how: NoDigestHow, at: string, overrides: Partial<CommentFacts> = {}): CommentFacts {
+  return aComment(noDigestLine({ head: headSha, how }), at, overrides);
 }
 
 /** Open issue 12, opened on 2026-10-01, with no labels, comments, label events or sub-issues unless a test says so. */

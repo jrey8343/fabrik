@@ -641,7 +641,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   joinRuns: () =>
     joinRuns(
-      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null, prototype: null }],
+      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null, prototype: null, digest: null }],
       { ...A_RUNS_READ, runs: [{ ...A_RUN_IN_FLIGHT, issue: 7, pullRequest: null, kind: "first", retry: null }] },
       NOW,
     ),
@@ -960,6 +960,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     },
     production: { site: "https://shop.example", tracked: true, pages: [{ route: "/book?when=today", url: "https://shop.example/book?when=today" }] },
     prototype: { round: 2, comment: 5003, postedAt: "2026-11-08T21:00:00Z", waiting: true, route: "/book", captures: { run: 4420, artifact: 902 } },
+    digest: null,
   } satisfies Row,
   StoreFacts: {
     kind: "store",
