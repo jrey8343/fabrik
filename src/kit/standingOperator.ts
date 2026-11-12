@@ -3,12 +3,13 @@
 // a Design session's Round waiting on their answer, and Triage's question,
 // with its neighbour, the question that waits on someone else.
 import { researchRunFailedIn } from "../github/threads.ts";
-import { NEEDS_DESIGN, NEEDS_INFO, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
+import { DECISION_TYPES, decisionLabel, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, refusedByMapCap } from "../loop/markers.ts";
 import { whyNotResearchable } from "../loop/research.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
+import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { type LabelEvent, verdictsOn } from "./retroEvidence.ts";
-import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
+import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
 /** Every Standing of the repo's whose move is the Operator's, issues first, then pull requests. */
 export function operatorStandingsOf({ github, operator, appLogin }: StandingFacts, now: string): Standing[] {
@@ -20,6 +21,44 @@ export function operatorStandingsOf({ github, operator, appLogin }: StandingFact
     ...openIssues.flatMap((issue) => failedResearchStandingsOf(issue, openIssues, repo, appLogin)),
     ...openIssues.flatMap((issue) => (issue.labels.includes(READY_FOR_HUMAN) ? [readyForHumanStandingOf(issue, repo, now)] : [])),
     ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, repo, operator)),
+    // Last, so work that stops on the Operator is read so before it is read as reading matter.
+    ...readingMatterOf(github, operator, appLogin),
+  ];
+}
+
+/** The Decision labels whose Decisions the Operator resolves live: all but research, which the Researcher resolves AFK. */
+const OPERATOR_DECISION_LABELS: readonly DecisionLabel[] = DECISION_TYPES.filter((type) => type !== "research").map(decisionLabel);
+
+/**
+ * What waits on the Operator to read, never stopping work, with no place on
+ * the Loop: the Fabrik App's open Audits and Retros, filled or still pending,
+ * since each was opened (a person's `fabrik:audit` or `fabrik:retro` issue is
+ * neither); the Operator's Replays whose results are in, since the Kit wrote
+ * them, by the Replay module's own reading of their markers; each open Map,
+ * read as the Map cap reads them, since it got `wayfinder:map`, carrying its
+ * open grilling, prototype and task Decisions; and each of those Decisions,
+ * carrying its Map, for a reader to fold under it.
+ */
+function readingMatterOf({ repo, openAudits, openRetros, openReplays, openIssues, openMaps }: GitHubFacts, operator: string, appLogin: string): StandingNamed<"yours-to-read">[] {
+  const reading = (issue: number, work: "audit" | "retro" | "replay" | "map" | "operator-decision", since: string, map: number | null, decisions: readonly number[]) =>
+    ({ ...theOperators(repo, issue, null, since), stopsWork: false, work, place: null, name: "yours-to-read", detail: { map, decisions } }) as const;
+  const maps = openIssues.filter((issue) => openMaps.includes(issue.number));
+  return [
+    ...openAudits.filter(({ author }) => author === appLogin).map((audit) => reading(audit.number, "audit", audit.createdAt, null, [])),
+    ...openRetros.filter(({ author }) => author === appLogin).map((retro) => reading(retro.number, "retro", retro.createdAt, null, [])),
+    ...openReplays
+      .filter((replay) => isOperatorsReplay(replay, operator) && replayResultsIn(replay.body))
+      .map((replay) => reading(replay.number, "replay", replay.lastEditedAt ?? replay.createdAt, null, [])),
+    ...maps.flatMap((map) => {
+      const decisions = openIssues.flatMap((issue) => {
+        const label = OPERATOR_DECISION_LABELS.find((operators) => issue.labels.includes(operators));
+        return map.subIssues.includes(issue.number) && label !== undefined ? [{ issue, label }] : [];
+      });
+      return [
+        reading(map.number, "map", lastAdded(map.labelEvents, MAP_LABEL) ?? map.createdAt, null, decisions.map(({ issue }) => issue.number)),
+        ...decisions.map(({ issue, label }) => reading(issue.number, "operator-decision", lastAdded(issue.labelEvents, label) ?? issue.createdAt, map.number, [])),
+      ];
+    }),
   ];
 }
 

@@ -67,6 +67,23 @@
     "subscription": null,
     "detail": { "handBack": null, "role": null, "failure": null, "label": null }
   },
+  "yours-to-read": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 30,
+    "pullRequest": null,
+    "work": "map",
+    "place": null,
+    "name": "yours-to-read",
+    "move": "operator",
+    "yours": true,
+    "stopsWork": false,
+    "since": "2026-11-03T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": null,
+    "detail": { "map": null, "decisions": [31, 32, 33] }
+  },
   "waiting-on-author": {
     "schema": 1,
     "repo": "owner/product",

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aReview, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { type Standing, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
@@ -263,6 +263,79 @@ describe("the Standing rule", () => {
         ],
       });
       expect(standings).toEqual([]);
+    });
+  });
+
+  describe("reading matter", () => {
+    const reading = (issue: number, work: Standing["work"], since: string, detail = { map: null as number | null, decisions: [] as number[] }) => ({
+      schema: 1,
+      repo: "owner/product",
+      issue,
+      pullRequest: null,
+      work,
+      place: null,
+      name: "yours-to-read",
+      move: "operator",
+      yours: true,
+      stopsWork: false,
+      since,
+      stuckAt: null,
+      awaits: null,
+      subscription: null,
+      detail,
+    });
+
+    it("gives the Fabrik App's open Audit and Retro, filled or still pending, one Standing each, yours to read and stopping no work, since each was opened", () => {
+      const standings = standingsIn({
+        openAudits: [anOpenAudit({ number: 90, createdAt: "2026-11-02T20:00:00Z" })],
+        openRetros: [anOpenRetro({ number: 120, createdAt: "2026-10-31T20:00:00Z" })],
+      });
+      expect(standings).toEqual([reading(120, "retro", "2026-10-31T20:00:00Z"), reading(90, "audit", "2026-11-02T20:00:00Z")]);
+    });
+
+    it("gives none to a fabrik:audit or fabrik:retro issue someone other than the Fabrik App opened", () => {
+      const standings = standingsIn({
+        openAudits: [anOpenAudit({ author: "operator" }), anOpenAudit({ number: 91, author: "other-app[bot]" })],
+        openRetros: [anOpenRetro({ author: "operator" })],
+      });
+      expect(standings).toEqual([]);
+    });
+
+    it("gives the Operator's Replay whose results are in one, since the Kit wrote them, and none to one still running or someone else's", () => {
+      const standings = standingsIn({
+        openReplays: [
+          anOpenReplay({ number: 140, lastEditedAt: "2026-11-06T20:00:00Z" }),
+          anOpenReplay({ number: 141, body: aReplayBody({ state: "pending" }) }),
+          anOpenReplay({ number: 142, author: "someone-else" }),
+        ],
+      });
+      expect(standings).toEqual([reading(140, "replay", "2026-11-06T20:00:00Z")]);
+    });
+
+    it("gives an open Map one, since it got wayfinder:map, carrying its open grilling, prototype and task Decisions, and each of them one carrying the Map", () => {
+      const standings = standingsIn({
+        openIssues: [
+          anOpenIssue({ number: 30, labels: ["wayfinder:map"], labelEvents: [aLabelAdded("wayfinder:map", "2026-11-03T20:00:00Z")], subIssues: [31, 32, 33, 34, 35] }),
+          anOpenIssue({ number: 31, labels: ["wayfinder:grilling"], labelEvents: [aLabelAdded("wayfinder:grilling", "2026-11-04T20:00:00Z")] }),
+          anOpenIssue({ number: 32, labels: ["wayfinder:prototype"], createdAt: "2026-11-05T20:00:00Z" }),
+          anOpenIssue({ number: 33, labels: ["wayfinder:task"], createdAt: "2026-11-05T20:00:00Z" }),
+          // The Researcher's, and its run hasn't failed: not the Operator's.
+          anOpenIssue({ number: 34, labels: ["wayfinder:research"] }),
+          // On no open Map.
+          anOpenIssue({ number: 36, labels: ["wayfinder:grilling"] }),
+        ],
+        openMaps: [30],
+      });
+      expect(standings).toEqual([
+        reading(30, "map", "2026-11-03T20:00:00Z", { map: null, decisions: [31, 32, 33] }),
+        reading(31, "operator-decision", "2026-11-04T20:00:00Z", { map: 30, decisions: [] }),
+        reading(32, "operator-decision", "2026-11-05T20:00:00Z", { map: 30, decisions: [] }),
+        reading(33, "operator-decision", "2026-11-05T20:00:00Z", { map: 30, decisions: [] }),
+      ]);
+    });
+
+    it("gives an open issue labelled wayfinder:map that the Map cap's read doesn't count no Standing as a Map", () => {
+      expect(standingsIn({ openIssues: [anOpenIssue({ number: 30, labels: ["wayfinder:map"] })] })).toEqual([]);
     });
   });
 

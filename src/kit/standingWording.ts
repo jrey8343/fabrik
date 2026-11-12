@@ -40,11 +40,35 @@ export function wordStanding(standing: Standing, now: string, _timeZone: string)
       const handedBack = standing.detail.handBack === null ? undefined : HAND_BACK_SENTENCES[standing.detail.handBack];
       return { pill: "Yours to do", sentence: handedBack?.(standing, age) ?? `Handed to you with \`${READY_FOR_HUMAN}\` ${age} ago.`, remedy: null };
     }
+    case "yours-to-read":
+      return { pill: "Yours to read", sentence: readingSentence(standing, age), remedy: null };
     case "waiting-on-author":
       return { pill: "Waiting on its author", sentence: `Triage asked its author, ${standing.detail.author}, a question ${age} ago.`, remedy: null };
     default:
       throw new Error(`No wording for a ${standing.name} Standing yet.`);
   }
+}
+
+/** What reading matter is, and how long it has waited. */
+function readingSentence({ work, detail }: StandingNamed<"yours-to-read">, age: string): string {
+  if (detail.map !== null) return `A Decision on Map #${detail.map} that is yours to resolve.`;
+  switch (work) {
+    case "audit":
+      return `Audit open for ${age}.`;
+    case "retro":
+      return `Retro open for ${age}.`;
+    case "replay":
+      return `Replay results in for ${age}.`;
+    case "map":
+      return `Map open for ${age}, ${decisions(detail.decisions.length)} waiting on you.`;
+    default:
+      return `Open for ${age}.`;
+  }
+}
+
+/** `no Decisions`, `1 Decision` or `2 Decisions`. */
+function decisions(count: number): string {
+  return count === 0 ? "no Decisions" : count === 1 ? "1 Decision" : `${count} Decisions`;
 }
 
 /** How long ago `at` was at `now`, both ISO 8601: whole minutes under an hour, whole hours under two days, else whole days. */

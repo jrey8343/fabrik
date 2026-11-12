@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { ageSince, wordStanding } from "./standingWording.ts";
@@ -93,6 +93,38 @@ describe("the wording of a failed research run", () => {
       sentence: "The Research run failed 5 minutes ago. Add `agent:research` again to run it.",
       remedy: null,
     });
+  });
+});
+
+describe("the wording of reading matter", () => {
+  const all = (github: Partial<GitHubFacts>) => standingsOf(standingFactsOf({ github: factsOf(github) }), SINCE);
+  const words = (github: Partial<GitHubFacts>) => all(github).map((standing) => wordStanding(standing, minutesAfter(3 * 24 * 60), ZONE));
+
+  it("says how long an Audit or a Retro has been open, and how long a Replay's results have waited", () => {
+    expect(
+      words({
+        openAudits: [anOpenAudit({ createdAt: SINCE })],
+        openRetros: [anOpenRetro({ createdAt: minutesAfter(1) })],
+        openReplays: [anOpenReplay({ lastEditedAt: minutesAfter(2) })],
+      }),
+    ).toEqual([
+      { pill: "Yours to read", sentence: "Audit open for 3 days.", remedy: null },
+      { pill: "Yours to read", sentence: "Retro open for 2 days.", remedy: null },
+      { pill: "Yours to read", sentence: "Replay results in for 2 days.", remedy: null },
+    ]);
+  });
+
+  it("says how long a Map has been open and how many Decisions wait on the Operator, and names a Decision's Map", () => {
+    const map = (number: number, subIssues: readonly number[]) => anOpenIssue({ number, labels: ["wayfinder:map"], createdAt: SINCE, subIssues });
+    const decision = (number: number) => anOpenIssue({ number, labels: ["wayfinder:task"], createdAt: minutesAfter(number) });
+    expect(words({ openIssues: [map(30, [31, 32]), decision(31), decision(32), map(40, [41]), decision(41), map(50, [])], openMaps: [30, 40, 50] })).toEqual([
+      { pill: "Yours to read", sentence: "Map open for 3 days, 2 Decisions waiting on you.", remedy: null },
+      { pill: "Yours to read", sentence: "Map open for 3 days, 1 Decision waiting on you.", remedy: null },
+      { pill: "Yours to read", sentence: "Map open for 3 days, no Decisions waiting on you.", remedy: null },
+      { pill: "Yours to read", sentence: "A Decision on Map #30 that is yours to resolve.", remedy: null },
+      { pill: "Yours to read", sentence: "A Decision on Map #30 that is yours to resolve.", remedy: null },
+      { pill: "Yours to read", sentence: "A Decision on Map #40 that is yours to resolve.", remedy: null },
+    ]);
   });
 });
 
