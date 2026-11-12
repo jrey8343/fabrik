@@ -28,9 +28,10 @@ function oldTermIn(path: string, text: string): string[] {
   if (path.endsWith(".ts")) lines.forEach((line, index) => BARE_NAME.test(line) && at.add(index));
   return [...at]
     .sort((a, b) => a - b)
+    .map((index) => ({ index, line: lines[index] ?? "" }))
     // The glossary names the old term as one to avoid.
-    .filter((index) => !(path === "GLOSSARY.md" && lines[index].startsWith("_Avoid_:")))
-    .map((index) => `${path}:${index + 1}: ${lines[index].trim()}`);
+    .filter(({ line }) => !(path === "GLOSSARY.md" && line.startsWith("_Avoid_:")))
+    .map(({ index, line }) => `${path}:${index + 1}: ${line.trim()}`);
 }
 
 describe("The Kit says Required checks, not gating checks", () => {
