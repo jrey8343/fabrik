@@ -33,7 +33,9 @@ function refusedTheFile(error: unknown): boolean {
  * named, nothing is asked of GitHub.
  *
  * A file reads as not there, and its places are dropped, when the head has
- * none at that path, when GitHub refuses to give it, and when the path is no
+ * none at that path, a directory or a submodule there being no file (the
+ * client's `fileText` gives null for one, never GitHub's listing of it),
+ * when GitHub refuses to give it, and when the path is no
  * file's path in a repo (isRepoPath), which is never asked for: a path is an
  * agent's word, and one that climbs out of the repo would be read from
  * wherever it lands.

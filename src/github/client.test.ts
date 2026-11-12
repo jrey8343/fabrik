@@ -194,3 +194,32 @@ describe("Trying a call GitHub failed again", () => {
     expect(calls).toHaveLength(2);
   });
 });
+
+describe("A file's text at a ref", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  /** GitHub's answer to a contents read: a file's own bytes come back under the raw media type the read asks for. */
+  const RAW = "application/vnd.github.raw+json; charset=utf-8";
+  const answering = (body: string, contentType: string) =>
+    vi.stubGlobal("fetch", async () => new Response(body, { status: 200, headers: { "content-type": contentType } }));
+  const repo = { owner: "acme", name: "shop" };
+
+  it("is the file's text as it is, a JSON file's included", async () => {
+    answering('[{"name":"cart"}]\n', RAW);
+
+    await expect(new GitHub("token").fileText(repo, "fixtures/carts.json", "main")).resolves.toBe('[{"name":"cart"}]\n');
+  });
+
+  it("is null for a path that is a directory there, which GitHub answers with a listing, as JSON, in place of a file's text", async () => {
+    answering('[{"name":"domain.md","path":"docs/agents/domain.md","type":"file"}]', "application/json; charset=utf-8");
+
+    await expect(new GitHub("token").fileText(repo, "docs/agents", "main")).resolves.toBeNull();
+  });
+
+  it("is null for a path that is a submodule there, which GitHub describes as JSON too", async () => {
+    answering('{"name":"vendor","path":"vendor","type":"submodule"}', "application/json; charset=utf-8");
+
+    await expect(new GitHub("token").fileText(repo, "vendor", "main")).resolves.toBeNull();
+  });
+});
