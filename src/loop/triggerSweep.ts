@@ -16,7 +16,7 @@ import {
 import type { Action, AgentRole, LabelledTrigger, Plan, RolesUnderWay, TriggerSweepSnapshot } from "./types.ts";
 
 /** The role whose run each trigger label starts; a Replay's starts no one role's. */
-const TRIGGER_ROLES: Readonly<Record<TriggerLabel, AgentRole | null>> = {
+export const TRIGGER_ROLES: Readonly<Record<TriggerLabel, AgentRole | null>> = {
   "agent:implement": "implement",
   "agent:design": "design",
   "agent:review": "review",
