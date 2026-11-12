@@ -8,6 +8,7 @@ import {
   type ActionsJob,
   isAgentJobNamed,
   isJobNamed,
+  jobOf,
   jobsOfUnfinishedRuns,
   KIT_JOB_NAME,
   PUSH_JOB_NAME,
@@ -232,11 +233,4 @@ function byJobNamesOf(jobs: readonly ActionsJob[]): RunInFlight[] {
     startedAt: fact.startedAt,
     url: fact.job === "waiting-on-checks" ? job.runUrl : job.url,
   }));
-}
-
-/** Where an agent job is, from its status: done is landing. */
-function jobOf({ status }: ActionsJob): RunJob {
-  if (status === "completed") return "landing";
-  if (status === "in_progress") return "running";
-  return status === "queued" ? "waiting-for-runner" : "blocked";
 }

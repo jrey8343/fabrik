@@ -2266,8 +2266,8 @@ const UNNUMBERED_JOBS: readonly (readonly [string, AgentRole])[] = [
   [RETRO_JOB_NAME, "retro"],
 ];
 
-/** Where a job is, from its status. */
-function jobOf({ status }: Job): RunJob {
+/** Where a job is, from its status: done is landing. The runs read (src/read/runs.ts) tells an agent job's by it too. */
+export function jobOf({ status }: Job): RunJob {
   if (status === "completed") return "landing";
   if (status === "in_progress") return "running";
   return status === "queued" ? "waiting-for-runner" : "blocked";
