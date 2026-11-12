@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { roundLineIn, withoutRoundLines } from "./roundLine.ts";
+import { roundLineIn, roundLineOf, withoutRoundLines } from "./roundLine.ts";
 
 const MARKER = "<!-- fabrik:design-round 2 -->";
 const VISIBLE = "@jrey **Design session, round 2.** Reply with the numbers you'd answer differently, or `yes` to take every recommendation.\n\nOne question.\n\n**1. Ship it?**\n➡️ Recommended: Yes.";
@@ -27,6 +27,14 @@ describe("Reading a Round's hidden line", () => {
 
     expect(roundLineIn(crlf)).toEqual(FIELDS);
     expect(withoutRoundLines(crlf)).toBe(`${MARKER}\n${VISIBLE}`.replaceAll("\n", "\r\n"));
+  });
+
+  it("reads back, and takes out, a line whose text holds a line or paragraph separator", () => {
+    const fields = { ...FIELDS, intro: "One\u2028question.", questions: [{ question: "Ship\u2029it?", recommendation: "Yes\u2028\u2029now." }] };
+    const body = `${MARKER}\n${roundLineOf(fields)}\n${VISIBLE}`;
+
+    expect(roundLineIn(body)).toEqual(fields);
+    expect(withoutRoundLines(body)).toBe(`${MARKER}\n${VISIBLE}`);
   });
 
   it("ignores a key it doesn't know, so a later release may add one", () => {

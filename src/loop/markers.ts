@@ -445,16 +445,21 @@ export interface PrototypeRequestMarker {
   readonly reply: number | null;
 }
 
-/** How a marker's JSON spells the characters that could end its HTML comment early or mention someone. */
-const ESCAPED: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040" };
+/**
+ * How a marker's JSON spells the characters that could end its HTML comment
+ * early or mention someone, and the line and paragraph separators, which
+ * JSON.stringify leaves raw but a reader's `.` does not match.
+ */
+const ESCAPED: Readonly<Record<string, string>> = { "<": "\\u003c", ">": "\\u003e", "@": "\\u0040", "\u2028": "\\u2028", "\u2029": "\\u2029" };
 
 /**
  * A marker's value as one line of JSON that can neither end its HTML
- * comment early nor mention anyone: `<`, `>` and `@` spelled as escapes,
+ * comment early nor mention anyone, and that a reader matching it line by
+ * line reads whole: `<`, `>`, `@`, U+2028 and U+2029 spelled as escapes,
  * which JSON.parse reads back as they were.
  */
 export function markerJson(value: unknown): string {
-  return JSON.stringify(value).replace(/[<>@]/g, (c) => ESCAPED[c] ?? c);
+  return JSON.stringify(value).replace(/[<>@\u2028\u2029]/g, (c) => ESCAPED[c] ?? c);
 }
 
 /**
