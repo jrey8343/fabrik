@@ -683,6 +683,24 @@ describe("Branch protection", () => {
     });
   });
 
+  describe("as the README's Merge gate section tells it", () => {
+    const section = () => readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n## Merge gate\n")[1]?.split("\n## ")[0] ?? "";
+
+    it("says GitHub refuses a merge whose Required checks haven't all passed, and any push to the branch, the Operator's included", () => {
+      expect(section()).toMatch(/refuses a merge at a head whose Required checks haven't all passed/);
+      expect(section()).toMatch(/any push straight to the branch, the Operator's included/);
+    });
+
+    it("gives the way past by hand in one paragraph, which Setup undoes, and which can't clear a check that never reports", () => {
+      const paragraphs = section().split("\n\n").filter((p) => p.includes('"Do not allow bypassing the above settings"'));
+
+      expect(paragraphs).toHaveLength(1);
+      expect(paragraphs[0]).toMatch(/run Setup, which puts enforcement back/);
+      expect(paragraphs[0]).toMatch(/can never report again/);
+      expect(paragraphs[0]).toMatch(/Setup adds Required checks and never takes one off/);
+    });
+  });
+
   describe("a Kit config with Extra skills", () => {
     const config = JSON.stringify({ sandbox: { checks: ["build"] }, roles: { design: { skills: ["jrey8343/skills/event-storming"] } } });
     const pin = (repository: string) => JSON.stringify([{ repository, sha: "a".repeat(40) }]);
