@@ -4,7 +4,7 @@
 // (`waiting-for-slot`), and a Ticket or research Decision its blockers hold
 // (`blocked`). Each is read by the Loop's own rule for it, so the Standing and
 // the Loop can't disagree, and none can turn Stuck.
-import type { RunInFlightFact } from "../github/snapshot.ts";
+import { dispatchedRunsOf, type RunInFlightFact } from "../github/snapshot.ts";
 import { conflictRunInFlightIn } from "../github/threads.ts";
 import { waitingIssues } from "../loop/designQueue.ts";
 import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
@@ -20,7 +20,7 @@ import {
   REVIEW_LABEL,
 } from "../loop/labels.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import type { AgentRole, KitConfig } from "../loop/types.ts";
+import type { AgentRole } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import { type AwaitedRole, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
@@ -36,9 +36,117 @@ export function inFlightStandingsOf(facts: StandingFacts, _now: string): Standin
   const held = heldStandingsOf(facts);
   const heldWork = new Set(held.map(({ issue, pullRequest, detail }) => (detail.role === "review" ? `pr#${pullRequest}` : `#${issue}`)));
   const specs = new Set(facts.github.openIssues.filter(isSpec).map(({ number }) => number));
-  return [...(runs === null ? [] : [...runningStandingsOf(facts, runs, heldWork), ...waitingOnChecksStandingsOf(facts, runs)]), ...held].filter(
-    ({ issue }) => issue === null || !specs.has(issue),
+  return [
+    ...(runs === null ? [] : [...runningStandingsOf(facts, runs, heldWork), ...waitingOnChecksStandingsOf(facts, runs)]),
+    ...held,
+    ...slotStandingsOf(facts),
+    ...blockedStandingsOf(facts),
+  ].filter(({ issue }) => issue === null || !specs.has(issue));
+}
+
+/**
+ * The Tickets and research Decisions Dispatch would release while
+ * max_in_flight holds them, by Dispatch's own rules (waitingForDispatch,
+ * inFlightOf), so the Standing, Held and Dispatch can't disagree: paused at
+ * 0, or every slot taken, counting what's in flight. Null when none waits or a
+ * slot is free, as the next Tick's Dispatch check releases it (#418), and
+ * when Dispatch's candidates weren't read. With the runs in flight unread,
+ * what was read can't show a slot free, so it counts as full, marked.
+ */
+export type MaxInFlightHold =
+  | { readonly kind: "paused"; readonly maxInFlight: 0; readonly waiting: readonly number[] }
+  | {
+      readonly kind: "full";
+      readonly maxInFlight: number;
+      /** The slots taken, as Dispatch counts them, or as much of it as could be read. */
+      readonly inFlight: number;
+      /** The Tickets and Decisions in flight the facts name, lowest first: a draft PR's Ticket, a running one, a dispatched one, a held one. */
+      readonly inFlightIssues: readonly number[];
+      readonly runsUnread: boolean;
+      readonly waiting: readonly number[];
+    };
+
+export function maxInFlightHoldOf({ github, kit }: Pick<StandingFacts, "github" | "kit">): MaxInFlightHold | null {
+  if (kit === null || kit.dispatch === null) return null;
+  const { candidates } = kit.dispatch;
+  const { maxInFlight } = kit.config.ok ? kit.config.config : DEFAULT_KIT_CONFIG;
+  const heldRuns = { implement: heldOf("implement", github.kitIssues), research: heldOf("research", github.kitIssues) };
+  const waiting = waitingForDispatch(candidates, heldRuns);
+  if (waiting.length === 0) return null;
+  if (maxInFlight === 0) return { kind: "paused", maxInFlight, waiting };
+  const runs = kit.runsInFlight === "unread" ? null : dispatchedRunsOf(kit.runsInFlight);
+  // The Weekly summary's facts hold only agent PRs, so their open drafts are Dispatch's open agent draft PRs.
+  const drafts = github.openPullRequests.filter(({ draft }) => draft);
+  const inFlight = inFlightOf(
+    { ...candidates, openAgentDraftPullRequests: drafts.length, implementRunsInProgress: runs?.implement ?? 0, researchRunsInProgress: runs?.research ?? 0 },
+    heldRuns,
   );
+  if (runs !== null && inFlight.total < maxInFlight) return null;
+  const named = [...drafts.flatMap(({ ticket }) => (ticket === null ? [] : [ticket])), ...(runs?.implementTickets ?? []), ...inFlight.waiting, ...inFlight.held];
+  return { kind: "full", maxInFlight, inFlight: inFlight.total, inFlightIssues: [...new Set(named)].sort((a, b) => a - b), runsUnread: runs === null, waiting };
+}
+
+/**
+ * Work a slot holds: each Ticket or research Decision max_in_flight holds
+ * (maxInFlightHoldOf), since it got its trigger state label, and each
+ * `needs-design` issue waiting for a Design session slot, by the Design queue
+ * check's own rule (waitingIssues), since it got `needs-design`.
+ */
+function slotStandingsOf({ github, kit }: StandingFacts): StandingNamed<"waiting-for-slot">[] {
+  const hold = maxInFlightHoldOf({ github, kit });
+  const decisions = new Set(kit?.dispatch?.candidates.researchDecisions.map(({ number }) => number) ?? []);
+  const dispatch = (hold?.waiting ?? []).flatMap((number): StandingNamed<"waiting-for-slot">[] => {
+    const decision = decisions.has(number);
+    const since = readySince(github.openIssues, number, decision);
+    if (since === null || hold === null) return [];
+    return [
+      {
+        ...inFlight(github.repo, number, null, since, decision ? "research-decision" : "ticket", decision ? null : "implement", { role: decision ? "research" : "implement", on: "issue" }),
+        name: "waiting-for-slot",
+        detail: { slot: "max-in-flight", maxInFlight: hold.maxInFlight },
+      },
+    ];
+  });
+  const design = waitingIssues(github.designQueue).map(
+    (issue): StandingNamed<"waiting-for-slot"> => ({
+      ...inFlight(github.repo, issue.number, null, issue.neededDesignAt, "design-session", "design", { role: "design", on: "issue" }),
+      name: "waiting-for-slot",
+      detail: { slot: "design-session", maxInFlight: null },
+    }),
+  );
+  return [...dispatch, ...design];
+}
+
+/**
+ * Each `ready-for-agent` Ticket with open blockers, or one closed as not
+ * planned, and each research Decision on a live Map with open blockers, as
+ * Dispatch reads them: nothing moves it, so the move is nobody's.
+ */
+function blockedStandingsOf({ github, kit }: StandingFacts): StandingNamed<"blocked">[] {
+  const candidates = kit?.dispatch?.candidates ?? { tickets: [], researchDecisions: [] };
+  const blocked = (number: number, blockers: readonly number[], decision: boolean): StandingNamed<"blocked">[] => {
+    const since = readySince(github.openIssues, number, decision);
+    if (since === null) return [];
+    return [
+      {
+        ...inFlight(github.repo, number, null, since, decision ? "research-decision" : "ticket", decision ? null : "implement", { role: decision ? "research" : "implement", on: "issue" }, "nobody"),
+        name: "blocked",
+        detail: { blockers: [...new Set(blockers)].sort((a, b) => a - b) },
+      },
+    ];
+  };
+  return [
+    ...candidates.tickets
+      .filter((ticket) => ticket.open && ticket.labels.includes(READY_FOR_AGENT) && ticket.subIssues === 0)
+      .flatMap((ticket) => blocked(ticket.number, [...ticket.openBlockers, ...ticket.notPlannedBlockers], false)),
+    ...candidates.researchDecisions.filter((decision) => decision.open && whyNotResearchable(decision) === null).flatMap((decision) => blocked(decision.number, decision.openBlockers, true)),
+  ].filter(({ detail }) => detail.blockers.length > 0);
+}
+
+/** When an open issue got `ready-for-agent`, or `wayfinder:research` for a research Decision, or was opened with it; null when it isn't among the open issues. */
+function readySince(openIssues: readonly OpenIssueFacts[], number: number, decision: boolean): string | null {
+  const issue = openIssues.find((open) => open.number === number);
+  return issue === undefined ? null : (lastAdded(issue.labelEvents, decision ? RESEARCH_DECISION_LABEL : READY_FOR_AGENT) ?? issue.createdAt);
 }
 
 /**
@@ -265,11 +373,3 @@ function inFlight(
   return { schema: STANDING_SCHEMA, repo, issue, pullRequest, work, place, move, yours: false, stopsWork: false, since, stuckAt: null, awaits, subscription: null } as const;
 }
 
-void DEFAULT_KIT_CONFIG;
-void inFlightOf;
-void waitingForDispatch;
-void heldOf;
-void waitingHeldRuns;
-void waitingIssues;
-void whyNotResearchable;
-export type { KitConfig };

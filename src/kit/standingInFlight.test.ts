@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { aTicket } from "../__fixtures__/snapshots.ts";
+import { aDesignQueueIssue, aResearchDecision, aTicket } from "../__fixtures__/snapshots.ts";
 import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import type { HeldRun } from "../loop/heldRun.ts";
 import { conflictAttemptMarker } from "../loop/markers.ts";
@@ -253,6 +253,153 @@ describe("work that goes on without the Operator", () => {
     it("gives nothing running with the runs unread, or no Kit read", () => {
       expect(standingsIn({ openIssues: [ticket(7, ["ready-for-agent", "agent:implement"])] }, aKit("unread"))).toEqual([]);
       expect(standingsIn({ openIssues: [ticket(7, ["ready-for-agent", "agent:implement"])] }, null)).toEqual([]);
+    });
+  });
+
+  const readyAt = "2026-11-05T12:00:00Z";
+  const ready = (number: number) => anOpenIssue({ number, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", readyAt)] });
+  const dispatching = (tickets: Parameters<typeof aTicket>[0][], overrides: Partial<RepoKitFacts> = {}, runs: readonly RunInFlightFact[] = []) =>
+    aKit(runs, { dispatch: { candidates: { tickets: tickets.map((t) => aTicket(t)), researchDecisions: [] } }, ...overrides });
+  const withMaxInFlight = (maxInFlight: number) => ({ config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight } } }) as const;
+
+  describe("waiting for a slot", () => {
+    it("gives a Ticket Dispatch would release, while max_in_flight is full, one Standing waiting for a slot at Implement, since it got ready-for-agent", () => {
+      const standings = standingsIn(
+        { openIssues: [ready(14)], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })] },
+        dispatching([{ number: 14 }], {}, [aRunInFlight({ issue: 12 })]),
+      );
+      expect(standings.filter(({ issue }) => issue === 14)).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 14,
+          pullRequest: null,
+          work: "ticket",
+          place: "implement",
+          name: "waiting-for-slot",
+          move: "kit",
+          yours: false,
+          stopsWork: false,
+          since: readyAt,
+          stuckAt: null,
+          awaits: { role: "implement", on: "issue" },
+          subscription: null,
+          detail: { slot: "max-in-flight", maxInFlight: 2 },
+        },
+      ]);
+    });
+
+    it("gives the same with Dispatch paused at 0, and a research Decision too, since it got wayfinder:research, with no place", () => {
+      const decision = anOpenIssue({ number: 16, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", "2026-11-06T12:00:00Z")] });
+      const standings = standingsIn(
+        { openIssues: [ready(14), decision] },
+        aKit([], { ...withMaxInFlight(0), dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [aResearchDecision({ number: 16 })] } } }),
+      );
+      expect(standings.map(({ issue, work, place, name, since, awaits, detail }) => ({ issue, work, place, name, since, awaits, detail }))).toEqual([
+        { issue: 14, work: "ticket", place: "implement", name: "waiting-for-slot", since: readyAt, awaits: { role: "implement", on: "issue" }, detail: { slot: "max-in-flight", maxInFlight: 0 } },
+        {
+          issue: 16,
+          work: "research-decision",
+          place: null,
+          name: "waiting-for-slot",
+          since: "2026-11-06T12:00:00Z",
+          awaits: { role: "research", on: "issue" },
+          detail: { slot: "max-in-flight", maxInFlight: 0 },
+        },
+      ]);
+    });
+
+    it("gives a releasable Ticket none while a slot is free, and one Dispatch wouldn't release none", () => {
+      expect(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(3), [aRunInFlight({ issue: 12 })]))).toEqual([]);
+      expect(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14, lastRunFailed: true }], withMaxInFlight(0)))).toEqual([]);
+    });
+
+    it("counts max_in_flight full with the runs unread, as Held does", () => {
+      const standings = standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], { runsInFlight: "unread" }));
+      expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([{ issue: 14, name: "waiting-for-slot" }]);
+    });
+
+    it("gives a needs-design issue with no Design session slot free one waiting for a slot at Design, since it got needs-design, and none to one holding a slot", () => {
+      const standings = standingsIn(
+        {
+          designQueue: {
+            issues: [aDesignQueueIssue({ number: 21, neededDesignAt: "2026-11-06T09:00:00Z" }), aDesignQueueIssue({ number: 22, designRounds: 1 })],
+            designTurnsInProgress: [],
+          },
+        },
+        null,
+      );
+      expect(standings).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 21,
+          pullRequest: null,
+          work: "design-session",
+          place: "design",
+          name: "waiting-for-slot",
+          move: "kit",
+          yours: false,
+          stopsWork: false,
+          since: "2026-11-06T09:00:00Z",
+          stuckAt: null,
+          awaits: { role: "design", on: "issue" },
+          subscription: null,
+          detail: { slot: "design-session", maxInFlight: null },
+        },
+      ]);
+    });
+  });
+
+  describe("blocked", () => {
+    it("gives a ready-for-agent Ticket with open blockers one Standing, blocked, the move nobody's, naming its blockers", () => {
+      const standings = standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14, openBlockers: [9, 3] }]));
+      expect(standings).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 14,
+          pullRequest: null,
+          work: "ticket",
+          place: "implement",
+          name: "blocked",
+          move: "nobody",
+          yours: false,
+          stopsWork: false,
+          since: readyAt,
+          stuckAt: null,
+          awaits: { role: "implement", on: "issue" },
+          subscription: null,
+          detail: { blockers: [3, 9] },
+        },
+      ]);
+    });
+
+    it("blocks a Ticket on a blocker closed as not planned, and a research Decision on an open blocker", () => {
+      const decision = anOpenIssue({ number: 16, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", readyAt)] });
+      const standings = standingsIn(
+        { openIssues: [ready(14), decision] },
+        aKit([], { dispatch: { candidates: { tickets: [aTicket({ number: 14, notPlannedBlockers: [5] })], researchDecisions: [aResearchDecision({ number: 16, openBlockers: [4] })] } } }),
+      );
+      expect(standings.map(({ issue, work, name, move, detail }) => ({ issue, work, name, move, detail }))).toEqual([
+        { issue: 14, work: "ticket", name: "blocked", move: "nobody", detail: { blockers: [5] } },
+        { issue: 16, work: "research-decision", name: "blocked", move: "nobody", detail: { blockers: [4] } },
+      ]);
+    });
+
+    it("gives a Ticket with no open blocker none", () => {
+      expect(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(3)))).toEqual([]);
+    });
+  });
+
+  describe("a Spec", () => {
+    it("gives an open issue labelled ready-for-agent with sub-issues no Standing; its Tickets have their own", () => {
+      const spec = anOpenIssue({ number: 3, labels: ["ready-for-agent", "agent:implement"], subIssues: [14], labelEvents: [aLabelAdded("ready-for-agent", readyAt)] });
+      const standings = standingsIn(
+        { openIssues: [spec, ready(14)], kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 3, label: "agent:implement" }])] },
+        dispatching([{ number: 3, subIssues: 1, openBlockers: [2] }, { number: 14, openBlockers: [2] }], {}, [aRunInFlight()]),
+      );
+      expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([{ issue: 14, name: "blocked" }]);
     });
   });
 });
