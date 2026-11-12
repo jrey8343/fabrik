@@ -7,7 +7,7 @@ import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
-import { type Standing, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
+import { type Standing, standingAt, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -654,6 +654,36 @@ describe("work that goes on without the Operator (#606)", () => {
   });
 });
 
+describe("a run that was asked for and never began (#607)", () => {
+  const LABELLED = "2026-11-08T19:20:00Z";
+  const STUCK_AT = "2026-11-08T22:50:00.000Z";
+  const asked = { openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], labelEvents: [aLabelAdded("agent:implement", LABELLED)] })] };
+
+  it("is not-started before the bar and stuck after it, the Kit's move still, but the Operator's to act on and stopping work", () => {
+    expect(standingsIn(asked, {}, "2026-11-08T22:49:00Z")).toMatchObject([{ name: "not-started", move: "kit", yours: false, stopsWork: false, stuckAt: STUCK_AT }]);
+    expect(standingsIn(asked, {}, "2026-11-08T22:51:00Z")).toMatchObject([
+      { name: "stuck", move: "kit", yours: true, stopsWork: true, since: LABELLED, stuckAt: STUCK_AT, detail: { was: "not-started", silence: "trigger-label", label: "agent:implement" } },
+    ]);
+  });
+
+  it.each([
+    ["before the bar", "2026-11-08T22:49:00Z"],
+    ["at the bar", STUCK_AT],
+    ["after the bar", "2026-11-09T09:00:00Z"],
+  ])("reads a kept Standing at a later time as the rule reads the same facts then, %s", (_, later) => {
+    const kept = standingsIn(asked, {}, "2026-11-08T20:00:00Z");
+    expect(kept.map((standing) => standingAt(standing, later))).toStrictEqual(standingsIn(asked, {}, later));
+  });
+
+  it("leaves a kept Standing with no stuckAt, or one already stuck, as it is", () => {
+    const pass = aVerdictComment("pass", HEAD, "2026-11-05T20:00:00Z");
+    const [atTheGate] = standingsIn({ openPullRequests: [anOpenPullRequest({ draft: false, comments: [pass] })] });
+    const [stuck] = standingsIn(asked, {}, "2026-11-09T09:00:00Z");
+    expect(standingAt(atTheGate!, "2027-01-01T00:00:00Z")).toBe(atTheGate);
+    expect(standingAt(stuck!, "2027-01-01T00:00:00Z")).toBe(stuck);
+  });
+});
+
 // After every test above: these read what they produced.
 describe("a Standing, as plain data", () => {
   const MINUTE = 60 * 1000;
@@ -673,10 +703,15 @@ describe("a Standing, as plain data", () => {
     expect(all().some(({ name }) => name === "yours-to-read")).toBe(true);
   });
 
-  it("is the same for the same facts read a minute later", () => {
+  it("is the same for the same facts read a minute later, but for a Standing that crossed its bar then", () => {
+    let crossed = 0;
     for (const { facts, now, standings } of produced) {
-      expect(standingsOf(facts, new Date(Date.parse(now) + MINUTE).toISOString())).toStrictEqual(standings);
+      const later = new Date(Date.parse(now) + MINUTE).toISOString();
+      const read = standingsOf(facts, later);
+      crossed += read.filter((standing, at) => standing.name !== standings[at]?.name).length;
+      expect(read).toStrictEqual(standings.map((standing) => standingAt(standing, later)));
     }
+    expect(crossed).toBeGreaterThan(0);
   });
 
   it("has one of each name so far in the schema fixture, in the order of the names", () => {

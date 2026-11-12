@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import {
   BROKEN_RUN_MARKER,
   EMPTY_DIFF_MARKER,
@@ -296,5 +296,10 @@ describe("a run that was asked for and never began", () => {
       });
       expect(standingsIn({ ...retryFacts(), openIssues: [ticket] }).filter(({ name }) => name === "not-started")).toEqual([]);
     });
+  });
+  it("leaves a Ticket a held marker names held, never not-started or stuck, however old its label", () => {
+    const held = aWeeklyLimitIssue(null, [{ role: "implement", issue: 7, label: "agent:implement" }], { commentedAt: ["2026-11-06T09:00:00Z"] });
+    const standings = standingsIn({ openIssues: [askedFor("2026-11-06T08:00:00Z")], kitIssues: [held] });
+    expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([{ issue: 7, name: "held" }]);
   });
 });
