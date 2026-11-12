@@ -144,6 +144,19 @@ describe("The Kit's workflows", () => {
     expect(kit).toContain("prototype_request: ${{ steps.route.outputs.prototype_request }}");
   });
 
+  // The closing step (#616): a reader of Actions knows what the Kit routed from its name. A Kit job that failed, on an
+  // invalid Kit config or a caller it refuses, says so by failing, with no line.
+  it("loop.yml's Kit job ends with a step that does nothing, named for the routing step's line, only once routing succeeded", () => {
+    const steps = stepsOf(jobIn(loop, "kit"));
+    const closing = steps.at(-1) ?? "";
+    const route = steps.findIndex((step) => step.includes("id: route"));
+
+    expect(route).toBe(steps.length - 2);
+    expect(closing.trimEnd()).toBe('      - name: ${{ steps.route.outputs.kit-said }}\n        run: "true"');
+    expect(closing).not.toMatch(/\bif:|continue-on-error|env:|uses:/);
+    expect(steps[route]).not.toMatch(/continue-on-error/);
+  });
+
   // The request's brief is the Design agent's text: in a run: script it could inject a command.
   it("loop.yml reads the prototype request only through env:, never in a run: script", () => {
     const uses = loop.split("\n").filter((line) => line.includes("outputs.prototype_request"));

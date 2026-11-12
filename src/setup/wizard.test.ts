@@ -208,8 +208,18 @@ describe("The setup wizard's Fabrik App stage", () => {
     expect(w.report).toEqual([]);
   });
 
-  /** A comment or issue made through the App `slug`, which the GitHub user `owner` owns. */
-  const actedOnBy = (slug: string, owner: string) => ({ body: "…", performed_via_github_app: { slug, owner: { login: owner } } });
+  /** A comment or issue the App `slug`, which the GitHub user `owner` owns, wrote as its bot. */
+  const actedOnBy = (slug: string, owner: string) => ({
+    body: "…",
+    user: { login: `${slug}[bot]`, type: "Bot" },
+    performed_via_github_app: { slug, owner: { login: owner } },
+  });
+  /** A comment or issue the Operator wrote themself, made through the App `slug`, which they own. */
+  const writtenThroughBy = (slug: string, owner: string) => ({
+    body: "…",
+    user: { login: owner, type: "User" },
+    performed_via_github_app: { slug, owner: { login: owner } },
+  });
   const OPERATOR = { user: { login: "jrey8343" } };
   /** The answers to the App stage that take the default slug, then the rest of TO_THE_SENTRY_STAGE. */
   const TAKING_THE_DEFAULT = ["", "", "", "", "n", ""];
@@ -263,7 +273,7 @@ describe("The setup wizard's Fabrik App stage", () => {
     expect(w.opened).toContain("https://github.com/apps/fabrik-factory/installations/new");
   });
 
-  it("lists each of the Operator's Apps when it finds more than one, and asks which", async () => {
+  it("lists each of the Operator's Apps when more than one has commented or filed as a bot, and asks which", async () => {
     const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
       ghApi: {
         ...OPERATOR,
@@ -286,6 +296,47 @@ describe("The setup wizard's Fabrik App stage", () => {
     expect(w.status).toBe(0);
     expect(w.opened[0]).toBe("https://github.com/settings/apps");
     expect(w.stdout).toContain("Setup complete");
+  });
+
+  it("finds no App when the only comment made through one of the Operator's Apps was written by the Operator", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
+      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": [writtenThroughBy("another-app", "jrey8343")] },
+    });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).not.toContain("Your App");
+    expect(w.stdout).not.toContain("another-app");
+    expect(w.opened[0]).toBe("https://github.com/settings/apps");
+    expect(w.stdout).toContain("its slug is the last part of the page's URL, github.com/settings/apps/<slug>");
+  });
+
+  it("offers the Fabrik App alone when the Operator has also commented through another App of theirs", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TAKING_THE_DEFAULT, undefined, {
+      ghApi: {
+        ...OPERATOR,
+        "repos/acme/clinic/issues/comments": [writtenThroughBy("another-app", "jrey8343"), actedOnBy("fabrik-factory", "jrey8343")],
+      },
+    });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("Your App fabrik-factory already acts on acme/clinic");
+    expect(w.stdout).not.toContain("More than one of your Apps");
+    expect(w.stdout).not.toContain("another-app");
+    expect(w.opened).toContain("https://github.com/apps/fabrik-factory/installations/new");
+  });
+
+  it("counts an issue a bot filed as it does a comment, and not one a person filed through an App", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TAKING_THE_DEFAULT, undefined, {
+      ghApi: {
+        ...OPERATOR,
+        "repos/acme/clinic/issues": [writtenThroughBy("another-app", "jrey8343"), actedOnBy("fabrik-factory", "jrey8343")],
+      },
+    });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).toContain("Your App fabrik-factory already acts on acme/clinic");
+    expect(w.stdout).not.toContain("another-app");
+    expect(w.opened).toContain("https://github.com/apps/fabrik-factory/installations/new");
   });
 
   it("takes a slug the Operator types over the one it found", async () => {

@@ -230,9 +230,11 @@ wizard_done() {
 }
 
 # operator_app_slugs prints, one per line, the slug of each App owned by the
-# signed-in gh user that made one of the 100 latest comments or issues in $REPO
-# (or the fabrik-runs store). It prints nothing when gh can't tell: no access, a
-# rate limit, or nothing the App has commented on or filed yet.
+# signed-in gh user that wrote, as its bot, one of the 100 latest comments or
+# issues in $REPO (or the fabrik-runs store). A comment a person wrote through an
+# App is that person's, so it counts for nothing. It prints nothing when gh
+# can't tell: no access, a rate limit, or nothing the App has commented on or
+# filed yet.
 operator_app_slugs() {
   local login path repo
   login=$(gh api user 2>/dev/null | node -e '
@@ -246,8 +248,8 @@ operator_app_slugs() {
         let text = ""; process.stdin.on("data", (chunk) => { text += chunk; });
         process.stdin.on("end", () => {
           const login = process.argv[1].toLowerCase();
-          for (const { performed_via_github_app: app } of JSON.parse(text)) {
-            if (app?.slug && app.owner?.login?.toLowerCase() === login) console.log(app.slug);
+          for (const { user, performed_via_github_app: app } of JSON.parse(text)) {
+            if (user?.type === "Bot" && app?.slug && app.owner?.login?.toLowerCase() === login) console.log(app.slug);
           }
         });' "$login" 2>/dev/null || true
     done
