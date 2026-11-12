@@ -44,6 +44,7 @@ import {
 import { spelled } from "./readable.ts";
 import type { MapCap } from "./mapCap.ts";
 import { withoutMentions } from "./mentions.ts";
+import { ROUND_LINE_VERSION, roundLineOf } from "./roundLine.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
 import type {
@@ -760,8 +761,21 @@ function roundComment(
   operator: string,
   sentBack: SentBack | null,
 ): string {
+  const intro = withoutMentions(output.intro);
+  const questions = output.questions.map(({ question, recommendation }) => ({
+    question: withoutMentions(question),
+    recommendation: withoutMentions(recommendation),
+  }));
   return [
     designRoundMarker(round),
+    roundLineOf({
+      v: ROUND_LINE_VERSION,
+      kind: "round",
+      round,
+      intro,
+      questions,
+      ...(sentBack === null ? {} : { sentBack: { pullRequest: sentBack.pullRequest, verdict: sentBack.verdictUrl } }),
+    }),
     `@${operator} **Design session, round ${round}.** Reply with the numbers you'd answer differently, or \`yes\` to take every recommendation.`,
     ...(sentBack === null
       ? []
@@ -772,12 +786,8 @@ function roundComment(
             : `This Ticket came back from #${sentBack.pullRequest}, which the Kit closed unmerged after [its Verdict](${sentBack.verdictUrl}).`,
         ]),
     "",
-    withoutMentions(output.intro),
-    ...output.questions.flatMap(({ question, recommendation }, i) => [
-      "",
-      `**${i + 1}. ${withoutMentions(question)}**`,
-      `➡️ Recommended: ${withoutMentions(recommendation)}`,
-    ]),
+    intro,
+    ...questions.flatMap(({ question, recommendation }, i) => ["", `**${i + 1}. ${question}**`, `➡️ Recommended: ${recommendation}`]),
   ].join("\n");
 }
 

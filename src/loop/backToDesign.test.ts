@@ -8,6 +8,7 @@ import {
   snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
+import { roundLineIn, withoutRoundLines } from "./roundLine.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, VerdictRecord } from "./types.ts";
 
@@ -188,6 +189,31 @@ describe("The Design session after a Ticket comes back", () => {
     expect(round?.kind === "comment" ? round.body : "").not.toContain("came back from");
   });
 
+  it("round 1's hidden line carries the PR it came back from and its Verdict's address", () => {
+    const [round] = actionsOf(planFor(turnFinished, snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig()));
+
+    expect(roundLineIn(round?.kind === "comment" ? round.body : "")).toMatchObject({ round: 1, sentBack: { pullRequest: 50, verdict: VERDICT_URL } });
+  });
+
+  it("round 1's hidden line carries a null Verdict when the Operator sent the Ticket back", () => {
+    const sentByOperator = { ...returnedTicket, sentBack: { pullRequest: 50, verdictUrl: null } };
+
+    const [round] = actionsOf(planFor(turnFinished, snapshotOf(sentByOperator, { operator: "jrey" }), kitConfig()));
+
+    expect(roundLineIn(round?.kind === "comment" ? round.body : "")).toMatchObject({ round: 1, sentBack: { pullRequest: 50, verdict: null } });
+  });
+
+  it("later rounds' hidden lines carry no sentBack, nor does a session that didn't follow a return", () => {
+    const later = actionsOf(planFor(turnFinished, snapshotOf({ ...returnedTicket, designRounds: 1 }), kitConfig()))[0];
+    const plain = actionsOf(planFor(turnFinished, snapshotOf({ ...returnedTicket, sentBack: null }), kitConfig()))[0];
+
+    for (const round of [later, plain]) {
+      const line = roundLineIn(round?.kind === "comment" ? round.body : "");
+      expect(line).not.toBeNull();
+      expect(line).not.toHaveProperty("sentBack");
+    }
+  });
+
   it("a session that didn't follow a return says nothing about one, as before", () => {
     const plan = planFor(turnFinished, snapshotOf({ ...returnedTicket, sentBack: null }), kitConfig());
 
@@ -235,6 +261,31 @@ describe("The Design session after a Ticket comes back names the Operator commen
       /\n\n### Operator comments considered\n\n- \[`inline-8`\]\(https:\/\/github\.com\/acme\/shop\/pull\/50#discussion_r8\)$/,
     );
     expect(body).not.toContain("conversation-3");
+  });
+
+  it("keeps the round's hidden line second, under its marker, and the comment without it as it always was", () => {
+    const plan = planFor(turnNaming(round, ["inline-8"]), snapshotOf(returnedTicket, { operator: "jrey" }), kitConfig());
+
+    const [body = ""] = commentsOf(plan);
+    expect(body.split("\n")[1]).toMatch(/^<!-- fabrik:round-line .* -->$/);
+    expect(roundLineIn(body)).toMatchObject({ round: 1, intro: "The cart total needs a home before the Ticket can be rebuilt." });
+    expect(withoutRoundLines(body)).toBe(
+      [
+        "<!-- fabrik:design-round 1 -->",
+        "@jrey **Design session, round 1.** Reply with the numbers you'd answer differently, or `yes` to take every recommendation.",
+        "",
+        `This Ticket came back from #50, which the Kit closed unmerged after [its Verdict](${VERDICT_URL}).`,
+        "",
+        "The cart total needs a home before the Ticket can be rebuilt.",
+        "",
+        "**1. Should checkout read the cart total?**",
+        "➡️ Recommended: Yes, from the cart service.",
+        "",
+        "### Operator comments considered",
+        "",
+        "- [`inline-8`](https://github.com/acme/shop/pull/50#discussion_r8)",
+      ].join("\n"),
+    );
   });
 
   it("never links an id it wasn't given, and adds nothing when none is left", () => {
