@@ -187,14 +187,14 @@ describe("A Digest no reader can draw", () => {
   });
 
   it.each([
-    ["does not parse", (line: string) => line.replace('{"v":1,', '{"v":1,,')],
-    ["lacks a field its version names", (line: string) => line.replace('"whatItDoes"', '"whatItDid"')],
-    ["is not there", () => "A line a person might write."],
-  ])("is unreadable as malformed, with where it is, when its data line %s", (_how, rewrite) => {
+    ["does not parse", (line: string) => line.replace('{"v":1,', '{"v":1,,'), RENDERED],
+    ["lacks a field its version names", (line: string) => line.replace('"whatItDoes"', '"whatItDid"'), RENDERED],
+    ["is not there, as on a Digest written before the line was", () => "A line in its place.", `A line in its place.\n${RENDERED}`],
+  ])("is unreadable as malformed, with its Markdown, when its data line %s", (_how, rewrite, markdown) => {
     const broken = withDataLine(rewrite);
 
     expect(broken.body).not.toBe(written.body);
-    expect(digestOn(atTheMergeGate(broken))).toMatchObject({ is: "unreadable", why: "malformed", url: URL });
+    expect(digestOn(atTheMergeGate(broken))).toEqual({ is: "unreadable", why: "malformed", url: URL, markdown });
   });
 
   it("is unreadable as edited when GitHub records an edit of its body, though its data line still reads: the Kit never edits a Digest, so the edit is a person's", () => {
