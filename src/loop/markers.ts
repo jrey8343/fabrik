@@ -419,6 +419,39 @@ export function handBackMarkIn(body: string): HandBackMark | null {
 export const SESSION_FINISHED = "**Design session finished.**";
 
 /**
+ * The Roll-in's mark: the first line of the closing comment of a Design
+ * session that finished by settling a Roll-in, naming the pull request the
+ * issue's work is to be built on. The mark alone says a Roll-in was settled
+ * onto that pull request; its text rides on the line under it
+ * (rollInDataLine), so a text this reader can't take is still a Roll-in.
+ */
+export function rollInMarker(pullRequest: number): string {
+  return `<!-- fabrik:roll-in ${pullRequest} -->`;
+}
+
+/** The version of a Roll-in's data line this release writes, and the only one its reader knows. */
+export const ROLL_IN_DATA_VERSION = 1 as const;
+
+/** What to build on the pull request a Roll-in was settled onto, as its closing comment's data line holds it. */
+export interface RollInText {
+  /** Markdown: what to build, standing alone. */
+  readonly summary: string;
+  /** Each one check a test could make. */
+  readonly acceptanceCriteria: readonly string[];
+}
+
+/**
+ * The second line of a Roll-in's closing comment: its text as one hidden,
+ * versioned line of JSON, written from the same fields the comment below it
+ * is rendered from, so no reader parses the Markdown. Its JSON is
+ * markerJson's, so the text can neither end the HTML comment early nor
+ * mention anyone.
+ */
+export function rollInDataLine({ summary, acceptanceCriteria }: RollInText): string {
+  return `<!-- fabrik:roll-in-data ${markerJson({ v: ROLL_IN_DATA_VERSION, summary, acceptanceCriteria: [...acceptanceCriteria] })} -->`;
+}
+
+/**
  * Opens the comment a live Design session ends with. Only the start of a
  * comment counts, so quoting it doesn't.
  */

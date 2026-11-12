@@ -392,6 +392,6 @@ describe("What a Design-session turn's prompt says of Prototypes", () => {
   it("describes the prototype output with an example the Kit accepts", () => {
     const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(said)?.[1] ?? "null");
 
-    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "prototype", route: "/book", variants: 3 } });
+    expect(readDesignTurnOutput(example, 7)).toMatchObject({ ok: true, output: { kind: "prototype", route: "/book", variants: 3 } });
   });
 });

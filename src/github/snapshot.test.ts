@@ -2571,7 +2571,13 @@ describe("Gathering the PRs an Auditor named", () => {
     } as unknown as GitHub;
   }
 
-  const pull = (number: number, merged: boolean, ref: string, type: string) => ({ number, merged, head: { ref }, user: { type } });
+  const pull = (number: number, merged: boolean, ref: string, type: string, state = merged ? "closed" : "open") => ({
+    number,
+    state,
+    merged,
+    head: { ref },
+    user: { type },
+  });
 
   function finished(output: unknown): LoopEvent {
     return {
@@ -2602,21 +2608,23 @@ describe("Gathering the PRs an Auditor named", () => {
       40: pull(40, false, "fabrik/ticket-8", "Bot"),
       41: pull(41, true, "feature/cart", "User"),
       42: pull(42, true, "fabrik/ticket-9", "User"),
+      43: pull(43, false, "fabrik/ticket-10", "Bot", "closed"),
     });
 
     const snapshot = await gatherSnapshot(
       github,
       repo,
-      finished({ candidates: [candidate([31, 40, 404]), candidate([41, 42, 31])], topRecommendation: "Make the cart module deeper" }),
+      finished({ candidates: [candidate([31, 40, 404]), candidate([41, 42, 31, 43])], topRecommendation: "Make the cart module deeper" }),
       null,
       "fabrik-app[bot]",
     );
 
     expect(snapshot.namedPullRequests).toEqual([
-      { number: 31, merged: true, headRef: "fabrik/ticket-7", isAgent: true },
-      { number: 40, merged: false, headRef: "fabrik/ticket-8", isAgent: true },
-      { number: 41, merged: true, headRef: "feature/cart", isAgent: false },
-      { number: 42, merged: true, headRef: "fabrik/ticket-9", isAgent: false },
+      { number: 31, open: false, merged: true, headRef: "fabrik/ticket-7", isAgent: true },
+      { number: 40, open: true, merged: false, headRef: "fabrik/ticket-8", isAgent: true },
+      { number: 41, open: false, merged: true, headRef: "feature/cart", isAgent: false },
+      { number: 42, open: false, merged: true, headRef: "fabrik/ticket-9", isAgent: false },
+      { number: 43, open: false, merged: false, headRef: "fabrik/ticket-10", isAgent: true },
     ]);
     expect(snapshot.issue).toMatchObject({ number: 97, byApp: true, labels: ["fabrik:audit"] });
   });
@@ -2633,6 +2641,99 @@ describe("Gathering the PRs an Auditor named", () => {
     const snapshot = await gatherSnapshot(githubWith({}), repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]");
 
     expect(snapshot.namedPullRequests).toBeNull();
+  });
+});
+
+describe("Gathering the pull request a Design-session turn's Roll-in names", () => {
+  /** The read-only API, holding #7 in its Design session and these pull requests by number; any other number is none, which GitHub answers with a 404. */
+  function githubWith(pulls: Record<number, unknown>) {
+    const reads: string[] = [];
+    const github = {
+      async graphql(query: string): Promise<unknown> {
+        if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+        return {
+          repository: {
+            owner: { login: "acme" },
+            issue: {
+              number: 7,
+              state: "OPEN",
+              author: { login: "someone" },
+              labels: { nodes: [{ name: "needs-design" }] },
+              parent: null,
+              comments: { nodes: [] },
+              timelineItems: { nodes: [] },
+              closedByPullRequestsReferences: { nodes: [] },
+              blockedBy: { nodes: [] },
+              blocking: { nodes: [] },
+            },
+          },
+        };
+      },
+      async rest(method: string, path: string, _body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
+        reads.push(`${method} ${path}`);
+        const pull = /^\/repos\/acme\/shop\/pulls\/(\d+)$/.exec(path);
+        if (method !== "GET" || pull === null) throw new Error(`Unexpected call: ${method} ${path}`);
+        const found = pulls[Number(pull[1])];
+        if (found !== undefined) return found;
+        // As the real client does: a 404 is null only when the call allows it.
+        if (options.allowNotFound === true) return null;
+        throw new Error(`GitHub GET ${path} failed: 404`);
+      },
+    } as unknown as GitHub;
+    return { github, reads };
+  }
+
+  const turn = (output: unknown): LoopEvent => ({
+    kind: "agent-run-finished",
+    role: "design",
+    issue: 7,
+    output: typeof output === "string" ? output : JSON.stringify(output),
+  });
+
+  const rollIn = { kind: "roll-in", pullRequest: 42, summary: "Show the cart's total beside its heading.", acceptanceCriteria: ["The total shows."] };
+
+  it("holds the pull request as GitHub has it: open or not, merged or not, its branch, and whether it is an agent pull request", async () => {
+    const { github, reads } = githubWith({ 42: { number: 42, state: "open", merged: false, head: { ref: "fabrik/ticket-30" }, user: { type: "Bot" } } });
+
+    const snapshot = await gatherSnapshot(github, repo, turn(rollIn), null, "fabrik-app[bot]");
+
+    expect(snapshot.namedPullRequests).toEqual([{ number: 42, open: true, merged: false, headRef: "fabrik/ticket-30", isAgent: true }]);
+    expect(reads).toEqual(["GET /repos/acme/shop/pulls/42"]);
+    expect(snapshot.issue).toMatchObject({ number: 7, labels: ["needs-design"] });
+  });
+
+  it.each([
+    ["a merged one", { number: 42, state: "closed", merged: true, head: { ref: "fabrik/ticket-30" }, user: { type: "Bot" } }, { open: false, merged: true, isAgent: true }],
+    ["a closed one", { number: 42, state: "closed", merged: false, head: { ref: "fabrik/ticket-30" }, user: { type: "Bot" } }, { open: false, merged: false, isAgent: true }],
+    ["a Plain one", { number: 42, state: "open", merged: false, head: { ref: "feature/cart" }, user: { type: "User" } }, { open: true, merged: false, isAgent: false }],
+  ])("tells %s from an open agent pull request", async (_, pull, read) => {
+    const { github } = githubWith({ 42: pull });
+
+    const snapshot = await gatherSnapshot(github, repo, turn(rollIn), null, "fabrik-app[bot]");
+
+    expect(snapshot.namedPullRequests).toMatchObject([{ number: 42, ...read }]);
+  });
+
+  it("holds none when the number is no pull request, which the landing reads as one that does not exist", async () => {
+    const { github } = githubWith({});
+
+    const snapshot = await gatherSnapshot(github, repo, turn(rollIn), null, "fabrik-app[bot]");
+
+    expect(snapshot.namedPullRequests).toEqual([]);
+  });
+
+  it.each([
+    ["a round", { kind: "round", intro: "First:", questions: [{ question: "Roll this in onto #42?", recommendation: "Yes." }] }],
+    ["a not-planned finish", { kind: "not-planned", comment: "Nobody asked for it; see #42." }],
+    ["a Roll-in the contract refuses, which the landing fails before any pull request is asked for", { ...rollIn, summary: "Finish what #7 asked for." }],
+    ["a reply that is no JSON", "Roll it in onto #42"],
+  ])("reads no pull request for %s", async (_, output) => {
+    const { github, reads } = githubWith({ 42: { number: 42, state: "open", merged: false, head: { ref: "fabrik/ticket-30" }, user: { type: "Bot" } } });
+
+    const snapshot = await gatherSnapshot(github, repo, turn(output), null, "fabrik-app[bot]");
+
+    expect(snapshot.namedPullRequests).toBeNull();
+    expect(reads).toEqual([]);
   });
 });
 

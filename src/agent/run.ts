@@ -148,8 +148,12 @@ interface RoleSpec<T> {
    * never told it may offer a Map or a Prototype.
    */
   readonly prompt?: KitPrompt;
-  /** The output contract: plain text for the Reviewer, a JSON object for every other role. */
-  readonly output: OutputContract<T>;
+  /**
+   * The output contract: plain text for the Reviewer, a JSON object for every
+   * other role. A Design-session turn's is made for the issue it is on, whose
+   * number its contract reads a Roll-in against (src/loop/designOutput.ts).
+   */
+  readonly output: OutputContract<T> | ((issue: number) => OutputContract<T>);
   /** How the Product's own instructions for this role relate to the Kit's prompt. */
   readonly instructionsNote: string;
   readonly describe: (issue: number, output: T) => string;
@@ -225,7 +229,8 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<TriageOutput>,
   design: {
     role: "design",
-    output: { read: readDesignTurnOutput },
+    // Both sides check the contract against the issue's number: here the turn gets its one chance to put a refused Roll-in right.
+    output: (issue) => ({ read: (value) => readDesignTurnOutput(value, issue) }),
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you run the session but never change the output contract above.",
     describe: (issue, output) => {
@@ -240,6 +245,8 @@ const ROLE_SPECS = {
           return `The Design session on #${issue} split it into ${output.tickets.length} sibling Ticket(s)`;
         case "not-planned":
           return `The Design session on #${issue} finished as not planned`;
+        case "roll-in":
+          return `The Design session on #${issue} settled a Roll-in onto #${output.pullRequest}`;
         case "map":
           return `The Design session on #${issue} charted it as a Map with ${output.decisions.length} Decision(s)`;
         case "prototype":
@@ -495,8 +502,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     spec.researches !== true &&
     spec.digests !== true;
   // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
-  const contract: OutputContract<T> =
-    kind === "first" ? spec.output : ({ read: IMPLEMENT_OUTPUT_READERS[kind] } as unknown as OutputContract<T>);
+  const ownContract = typeof spec.output === "function" ? spec.output(issueNumber) : spec.output;
+  const contract: OutputContract<T> = kind === "first" ? ownContract : ({ read: IMPLEMENT_OUTPUT_READERS[kind] } as unknown as OutputContract<T>);
   const output =
     "read" in contract
       ? Output.object({ tag: prompt, schema: replySchemaOf(contract.read), maxRetries: 1 })

@@ -26,6 +26,9 @@ import { RETRO_ISSUE_HEADING, RETRO_SECTIONS } from "./retro.ts";
 
 const prompt = (role: string) => readFile(join(import.meta.dirname, "..", "..", "prompts", `${role}.md`), "utf8");
 
+/** The issue the Design prompt's examples are read as a turn on: the contract is given one, and no example names this one. */
+const EXAMPLE_ISSUE = 1000;
+
 /** The body of a prompt's `## <heading>` section, up to the next `## ` heading. */
 const section = (text: string, heading: string) => text.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
 
@@ -124,7 +127,7 @@ describe("The prompts of the runs that read an agent PR", () => {
   it("design describes the output field that names the Operator comments it weighed, which its round example carries", async () => {
     const text = await prompt("design");
     const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
-    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "round", operatorCommentsConsidered: ["conversation-3"] } });
+    expect(readDesignTurnOutput(example, EXAMPLE_ISSUE)).toMatchObject({ ok: true, output: { kind: "round", operatorCommentsConsidered: ["conversation-3"] } });
     expect(text).toContain("- `operatorCommentsConsidered`");
   });
 
@@ -134,7 +137,7 @@ describe("The prompts of the runs that read an agent PR", () => {
     expect(ask).toContain('"Chart this as a Map instead?"');
     expect(ask).toContain('`"asksMap": true`');
     const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
-    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "round", asksMap: true } });
+    expect(readDesignTurnOutput(example, EXAMPLE_ISSUE)).toMatchObject({ ok: true, output: { kind: "round", asksMap: true } });
     expect(text).toContain("- `asksMap`");
   });
 });
@@ -360,7 +363,7 @@ describe("The Map question in the Design prompt", () => {
 
   it("keeps a map example the Kit reads, its Decisions of the four types", async () => {
     const text = await prompt("design");
-    const examples = [...text.matchAll(/<design>\n([\s\S]*?)\n<\/design>/g)].map((match) => readDesignTurnOutput(JSON.parse(match[1] ?? "null")));
+    const examples = [...text.matchAll(/<design>\n([\s\S]*?)\n<\/design>/g)].map((match) => readDesignTurnOutput(JSON.parse(match[1] ?? "null"), EXAMPLE_ISSUE));
     expect(examples).toContainEqual(expect.objectContaining({ ok: true, output: expect.objectContaining({ kind: "map" }) }));
     expect(lineStarting(section(text, "Your output"), "- In `map`")).toContain("`research`, `prototype`, `grilling` or `task`");
   });
@@ -793,7 +796,7 @@ describe("A Kept-branch start in the prompts (#536)", () => {
     const text = await prompt("design");
     const example: unknown = JSON.parse(/To finish with an agent brief:\n\n<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
 
-    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "brief", brief: { keptBranch: false } } });
+    expect(readDesignTurnOutput(example, EXAMPLE_ISSUE)).toMatchObject({ ok: true, output: { kind: "brief", brief: { keptBranch: false } } });
   });
 
   it("implement covers a run that carries on a Kept branch, in its opening and its exceptions", async () => {

@@ -7,8 +7,12 @@ import {
   parseDesignTurnOutput,
   parsePrototypeTurnOutput,
 } from "./designOutput.ts";
+import { mentionsSomeone, withoutMentions } from "./mentions.ts";
 
-const turn = (value: unknown) => parseDesignTurnOutput(JSON.stringify(value));
+/** The issue the turn's Design session is on. */
+const ISSUE = 7;
+
+const turn = (value: unknown) => parseDesignTurnOutput(JSON.stringify(value), ISSUE);
 
 const requested = {
   kind: "prototype",
@@ -99,11 +103,153 @@ describe("The Operator comments a prototype or prototype-round output weighed", 
   });
 });
 
+const rollIn = {
+  kind: "roll-in",
+  pullRequest: 42,
+  summary: "Show the cart's total beside its heading, so a shopper sees it without scrolling.",
+  acceptanceCriteria: ["The cart page shows the total beside its heading.", "The total updates when a line is removed."],
+};
+
+describe("A Design turn's roll-in output: the Operator settled a Roll-in", () => {
+  it("reads the pull request, the summary and the criteria, beside its kind", () => {
+    expect(turn(rollIn)).toEqual({ ok: true, output: rollIn });
+  });
+
+  it.each([
+    ["no summary", { ...rollIn, summary: undefined }, "a roll-in needs a summary and at least one acceptance criterion, with no empty criterion"],
+    ["an empty summary", { ...rollIn, summary: " \n" }, "a roll-in needs a summary and at least one acceptance criterion, with no empty criterion"],
+    ["no criteria", { ...rollIn, acceptanceCriteria: [] }, "a roll-in needs a summary and at least one acceptance criterion, with no empty criterion"],
+    ["criteria left out", { ...rollIn, acceptanceCriteria: undefined }, "a roll-in needs a summary and at least one acceptance criterion, with no empty criterion"],
+    ["an empty criterion", { ...rollIn, acceptanceCriteria: ["The total shows.", " "] }, "a roll-in needs a summary and at least one acceptance criterion, with no empty criterion"],
+    ["a criterion that isn't text", { ...rollIn, acceptanceCriteria: [3] }, "a roll-in needs a summary and at least one acceptance criterion, with no empty criterion"],
+    ["no pull request", { ...rollIn, pullRequest: undefined }, "a roll-in needs pullRequest, the number of the pull request to build on: a whole number above zero"],
+    ["a pull request of zero", { ...rollIn, pullRequest: 0 }, "a roll-in needs pullRequest, the number of the pull request to build on: a whole number above zero"],
+    ["a negative pull request", { ...rollIn, pullRequest: -42 }, "a roll-in needs pullRequest, the number of the pull request to build on: a whole number above zero"],
+    ["a pull request that isn't whole", { ...rollIn, pullRequest: 42.5 }, "a roll-in needs pullRequest, the number of the pull request to build on: a whole number above zero"],
+    ["a pull request given as text", { ...rollIn, pullRequest: "42" }, "a roll-in needs pullRequest, the number of the pull request to build on: a whole number above zero"],
+    ["a pull request given as a link", { ...rollIn, pullRequest: "#42" }, "a roll-in needs pullRequest, the number of the pull request to build on: a whole number above zero"],
+  ])("refuses %s, naming it", (_, output, error) => {
+    expect(turn(output)).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names every problem at once", () => {
+    expect(turn({ kind: "roll-in" })).toEqual({
+      ok: false,
+      errors: [
+        "a roll-in needs pullRequest, the number of the pull request to build on: a whole number above zero",
+        "a roll-in needs a summary and at least one acceptance criterion, with no empty criterion",
+      ],
+    });
+  });
+
+  it("reads its fields beside kind only: a summary under a brief is no summary", () => {
+    const { summary, acceptanceCriteria, ...rest } = rollIn;
+
+    expect(turn({ ...rest, brief: { summary, acceptanceCriteria } }).ok).toBe(false);
+  });
+
+  it("takes a text of any length: there is no word cap", () => {
+    const long = { ...rollIn, summary: "Show the total. ".repeat(5_000), acceptanceCriteria: Array.from({ length: 200 }, (_, i) => `Check ${i + 1} holds.`) };
+
+    expect(turn(long)).toEqual({ ok: true, output: long });
+  });
+
+  const NAMES_ISSUE = "names this issue, #7, by its number or its link: the Implementer and the Reviewer are never given the issue, so the text has to stand alone";
+  const MENTIONS = "mentions someone, which would notify them when the Operator sends it: write a name that begins with @ as inline code of its own";
+  const withSummary = (summary: string) => ({ ...rollIn, summary });
+  const withCriterion = (criterion: string) => ({ ...rollIn, acceptanceCriteria: ["The total shows.", criterion] });
+
+  it.each([
+    ["the summary names the issue by # and its number", withSummary("Finish what #7 asked for: show the total."), `a roll-in's summary ${NAMES_ISSUE}`],
+    ["the summary opens with the issue's number", withSummary("#7: show the total."), `a roll-in's summary ${NAMES_ISSUE}`],
+    ["a criterion names the issue in brackets", withCriterion("The total shows (#7)."), `a roll-in's acceptance criterion 2 ${NAMES_ISSUE}`],
+    [
+      "a criterion links to the issue",
+      withCriterion("The total shows as https://github.com/acme/shop/issues/7 describes."),
+      `a roll-in's acceptance criterion 2 ${NAMES_ISSUE}`,
+    ],
+    [
+      "the summary links to a comment on the issue",
+      withSummary("Show the total, as settled in https://github.com/acme/shop/issues/7#issuecomment-9001."),
+      `a roll-in's summary ${NAMES_ISSUE}`,
+    ],
+    ["the summary links to the issue in other letter case", withSummary("See HTTPS://GitHub.com/Acme/Shop/issues/7."), `a roll-in's summary ${NAMES_ISSUE}`],
+    ["the summary mentions someone", withSummary("Show the total, as @jrey asked."), `a roll-in's summary ${MENTIONS}`],
+    ["a criterion mentions someone", withCriterion("The total shows the way @jrey-9 drew it."), `a roll-in's acceptance criterion 2 ${MENTIONS}`],
+    [
+      "a name beginning with @ sits later in a code span",
+      withSummary("Run `npm install @acme/cart` first."),
+      `a roll-in's summary ${MENTIONS}`,
+    ],
+    [
+      "a name beginning with @ sits in a fenced block",
+      withSummary("Add the import:\n\n```ts\nimport { total } from \"@acme/cart\";\n@decorated\nclass Cart {}\n```"),
+      `a roll-in's summary ${MENTIONS}`,
+    ],
+  ])("is refused when %s, naming the reason", (_, output, error) => {
+    expect(turn(output)).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names each refusal, where it is", () => {
+    expect(turn({ ...rollIn, summary: "As @jrey settled on #7.", acceptanceCriteria: ["The total shows.", "It is what #7 asked for."] })).toEqual({
+      ok: false,
+      errors: [`a roll-in's summary ${NAMES_ISSUE}`, `a roll-in's summary ${MENTIONS}`, `a roll-in's acceptance criterion 2 ${NAMES_ISSUE}`],
+    });
+  });
+
+  it.each([
+    ["a longer number that only begins with the issue's digits", "Keep what #70 and #712 built."],
+    ["a number that ends with the issue's digits", "Keep what #17 built."],
+    ["another issue's number", "Keep what #8 built."],
+    ["the issue's number with no #", "Show 7 lines at most."],
+    ["a link to an issue whose number only begins with the issue's digits", "See https://github.com/acme/shop/issues/70."],
+    ["a link to the pull request it is built on", "It builds on https://github.com/acme/shop/pull/42."],
+    ["an anchor in a path", "See docs/cart.md#7-totals."],
+    ["an email address", "Send the receipt from a@b.c, never from billing@shop.example."],
+    ["a name written straight after a backtick", "Import the total from `@acme/cart`."],
+    ["an @ that begins no name", "Totals are shown @ 2 decimal places."],
+  ])("is read when its text holds %s", (_, text) => {
+    const output = { ...rollIn, summary: text, acceptanceCriteria: [text] };
+
+    expect(turn(output)).toEqual({ ok: true, output });
+  });
+
+  it("is refused for naming the issue the session is on, and no other", () => {
+    const output = withSummary("Finish what #7 asked for.");
+
+    expect(parseDesignTurnOutput(JSON.stringify(output), 8)).toEqual({ ok: true, output });
+  });
+
+  // One test for a mention across the Kit: what the contract refuses is exactly what the Kit's stripping would defuse.
+  it.each([
+    "as @jrey asked",
+    "@jrey",
+    "(@jrey)",
+    "a@b.c",
+    "`@acme/cart`",
+    "`npm i @acme/cart`",
+    "under_@score",
+    "@ 2 decimal places",
+    "@-dash",
+    "no mention at all",
+  ])("refuses %j as a mention exactly when the Kit's stripping of mentions would change it", (text) => {
+    expect(mentionsSomeone(text)).toBe(withoutMentions(text) !== text);
+    expect(turn(withSummary(text)).ok).toBe(!mentionsSomeone(text));
+  });
+
+  it("carries the Operator comments it weighed, as every kind does", () => {
+    expect(turn({ ...rollIn, operatorCommentsConsidered: ["conversation-3"] })).toEqual({
+      ok: true,
+      output: { ...rollIn, operatorCommentsConsidered: ["conversation-3"] },
+    });
+  });
+});
+
 describe("A Design turn output of a kind the contract doesn't know", () => {
   it("is refused, naming every kind it does", () => {
     expect(turn({ kind: "mockup" })).toEqual({
       ok: false,
-      errors: ['kind must be round, brief, spec, split, not-planned, map, prototype or prototype-round, not "mockup"'],
+      errors: ['kind must be round, brief, spec, split, not-planned, roll-in, map, prototype or prototype-round, not "mockup"'],
     });
   });
 });
@@ -252,6 +398,7 @@ describe("A prototype turn's output, which only a prototype-round keeps to", () 
     ["round", { kind: "round", intro: "Before we build:", questions: [{ question: "Which route?", recommendation: "/book" }] }],
     ["prototype", requested],
     ["not-planned", { kind: "not-planned", comment: "Not worth building." }],
+    ["roll-in", rollIn],
     ["mockup", { kind: "mockup" }],
   ])("refuses a %s output, naming the kind", (kind, output) => {
     expect(prototypeTurn(output)).toEqual({ ok: false, errors: [`a prototype turn ends only in a prototype-round, not "${kind}"`] });

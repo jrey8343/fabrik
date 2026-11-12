@@ -110,6 +110,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
               turnStartFrom(event.startedBy, snapshot.startingComment),
               snapshot.openMaps === null ? null : mapCapOf(snapshot.openMaps, config),
               whyNoPrototype(config),
+              snapshot.namedPullRequests,
               event.operatorComments,
             ),
           );
