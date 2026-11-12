@@ -2,8 +2,10 @@
 // pull request at the Merge gate, work handed to them with `ready-for-human`,
 // a Design session's Round waiting on their answer, and Triage's question,
 // with its neighbour, the question that waits on someone else.
-import { NEEDS_DESIGN, NEEDS_INFO, READY_FOR_HUMAN } from "../loop/labels.ts";
+import { researchRunFailedIn } from "../github/threads.ts";
+import { NEEDS_DESIGN, NEEDS_INFO, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, refusedByMapCap } from "../loop/markers.ts";
+import { whyNotResearchable } from "../loop/research.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import { type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
@@ -15,6 +17,7 @@ export function operatorStandingsOf({ github, operator, appLogin }: StandingFact
     ...openIssues.flatMap((issue) => designRoundStandingsOf(issue, repo, appLogin)),
     ...openIssues.flatMap((issue) => stoppedDesignSessionStandingsOf(issue, repo, appLogin)),
     ...openIssues.flatMap((issue) => questionStandingsOf(issue, repo, operator, appLogin)),
+    ...openIssues.flatMap((issue) => failedResearchStandingsOf(issue, openIssues, repo, appLogin)),
     ...openIssues.flatMap((issue) => (issue.labels.includes(READY_FOR_HUMAN) ? [readyForHumanStandingOf(issue, repo, now)] : [])),
     ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, repo, operator)),
   ];
@@ -47,6 +50,34 @@ function stoppedDesignSessionStandingsOf(issue: OpenIssueFacts, repo: string, ap
   if (!issue.labels.includes(NEEDS_DESIGN) || last === undefined || !last.byBot || last.author !== appLogin || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return [];
   const handBack = refusedByMapCap(last.body) ? "map-cap-refused" : "design-turn-failed";
   return [{ ...theOperators(repo, issue.number, null, last.at), work: "design-session", place: "design", name: "yours-to-do", detail: { handBack, role: "design", failure: null, label: null } }];
+}
+
+/**
+ * A research Decision on an open Map whose last run failed, by the Kit's own
+ * rules for which Decisions the Researcher may run on (whyNotResearchable)
+ * and whose last run failed (researchRunFailedIn), as Dispatch reads them:
+ * the Operator's, stopping work, since the Kit's notice, until they add
+ * `agent:research` again. A run whose branch the Kit refused leaves the same
+ * notice. Only the Fabrik App's comments are read, as Dispatch reads them.
+ */
+function failedResearchStandingsOf(decision: OpenIssueFacts, openIssues: readonly OpenIssueFacts[], repo: string, appLogin: string): StandingNamed<"yours-to-do">[] {
+  // A closed parent isn't among the open issues, so it reads as none: no open Map either way.
+  const parent = openIssues.find((issue) => issue.subIssues.includes(decision.number));
+  const parentIssue = parent === undefined ? null : { number: parent.number, open: true, labels: parent.labels };
+  const comments = decision.comments.map((comment) => ({ ...comment, byApp: comment.author === appLogin }));
+  if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(comments)) return [];
+  const notice = comments.findLast((comment) => comment.byApp);
+  const readded = lastAdded(decision.labelEvents, RESEARCH_LABEL);
+  if (notice === undefined || (readded !== null && Date.parse(readded) > Date.parse(notice.at))) return [];
+  return [
+    {
+      ...theOperators(repo, decision.number, null, notice.at),
+      work: "research-decision",
+      place: null,
+      name: "yours-to-do",
+      detail: { handBack: "research-failed", role: "research", failure: null, label: RESEARCH_LABEL },
+    },
+  ];
 }
 
 /**

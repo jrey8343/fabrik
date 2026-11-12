@@ -18,6 +18,7 @@ export interface StandingWords {
 
 /** The sentence for each hand-back a `yours-to-do` Standing names, in the order of HAND_BACKS; one it lacks reads as `ready-for-human` work. */
 const HAND_BACK_SENTENCES: Partial<Record<HandBack, (standing: StandingNamed<"yours-to-do">, age: string) => string>> = {
+  "research-failed": ({ detail }, age) => `The Research run failed ${age} ago. Add \`${detail.label}\` again to run it.`,
   "design-turn-failed": (_, age) => `A Design-session turn failed ${age} ago. Reply on the issue to run it again.`,
   "map-cap-refused": (_, age) => `The Map cap refused this session's Map ${age} ago. Reply on the issue to carry on.`,
 };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
-import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { ageSince, wordStanding } from "./standingWording.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
@@ -75,6 +75,22 @@ describe("the wording of a Standing the Kit handed back", () => {
     expect(wordStanding(stopped(aMapCapRefusal(SINCE)), minutesAfter(2 * 60), ZONE)).toEqual({
       pill: "Yours to do",
       sentence: "The Map cap refused this session's Map 2 hours ago. Reply on the issue to carry on.",
+      remedy: null,
+    });
+  });
+});
+
+describe("the wording of a failed research run", () => {
+  it("says the Research run failed and that adding agent:research again runs it", () => {
+    const failed = theStandingIn({
+      openIssues: [
+        anOpenIssue({ number: 30, labels: ["wayfinder:map"], subIssues: [31] }),
+        anOpenIssue({ number: 31, labels: ["wayfinder:research"], comments: [aComment(`${RESEARCH_RUN_FAILED_MARKER}\nThe Research run failed.`, SINCE)] }),
+      ],
+    });
+    expect(wordStanding(failed, minutesAfter(5), ZONE)).toEqual({
+      pill: "Yours to do",
+      sentence: "The Research run failed 5 minutes ago. Add `agent:research` again to run it.",
       remedy: null,
     });
   });

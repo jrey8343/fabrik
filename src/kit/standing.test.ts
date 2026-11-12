@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aReview, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
-import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { type Standing, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
 
@@ -263,6 +263,59 @@ describe("the Standing rule", () => {
         ],
       });
       expect(standings).toEqual([]);
+    });
+  });
+
+  describe("a research Decision", () => {
+    const failureNotice = (decision: number, at: string) => aComment(`${RESEARCH_RUN_FAILED_MARKER}\n@operator The Research run on #${decision} failed: it timed out.`, at);
+    const mapOf = (number: number, decisions: readonly number[]) => anOpenIssue({ number, labels: ["wayfinder:map"], subIssues: decisions, createdAt: "2026-11-07T20:00:00Z" });
+    const failed = (number: number, overrides: Parameters<typeof anOpenIssue>[0] = {}) =>
+      anOpenIssue({ number, labels: ["wayfinder:research"], comments: [failureNotice(number, "2026-11-06T20:00:00Z")], ...overrides });
+    const decisionsIn = (standings: readonly Standing[]) => standings.filter(({ work }) => work === "research-decision");
+
+    it("on an open Map whose last run failed is the Operator's to do, stopping work, since the Kit's notice, until agent:research is added again", () => {
+      const standings = standingsIn({ openIssues: [mapOf(30, [31]), failed(31)], openMaps: [30] });
+      expect(decisionsIn(standings)).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 31,
+          pullRequest: null,
+          work: "research-decision",
+          place: null,
+          name: "yours-to-do",
+          move: "operator",
+          yours: true,
+          stopsWork: true,
+          since: "2026-11-06T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: { handBack: "research-failed", role: "research", failure: null, label: "agent:research" },
+        },
+      ]);
+    });
+
+    it("is no longer the Operator's once agent:research was added again after the notice", () => {
+      const readded = aLabelAdded("agent:research", "2026-11-07T20:00:00Z", { actor: "operator" });
+      const before = aLabelAdded("agent:research", "2026-11-05T20:00:00Z", { actor: "operator" });
+      const standings = standingsIn({ openIssues: [mapOf(30, [31, 32]), failed(31, { labelEvents: [readded] }), failed(32, { labelEvents: [before] })], openMaps: [30] });
+      expect(decisionsIn(standings).map(({ issue }) => issue)).toEqual([32]);
+    });
+
+    it("reads the failure from the Fabrik App's comments alone, and none on no open Map or whose later word answered it", () => {
+      const otherBot = { author: "dependabot[bot]", byBot: true };
+      const standings = standingsIn({
+        openIssues: [
+          mapOf(30, [31, 32, 33]),
+          failed(31, { comments: [failureNotice(31, "2026-11-06T20:00:00Z"), aComment("Bumped a dependency.", "2026-11-07T08:00:00Z", otherBot)] }),
+          failed(32, { comments: [aComment(`${RESEARCH_RUN_FAILED_MARKER}\nA look-alike.`, "2026-11-06T20:00:00Z", otherBot)] }),
+          failed(33, { comments: [failureNotice(33, "2026-11-04T20:00:00Z"), aComment("Resolved: Stripe and Square both do.", "2026-11-05T20:00:00Z")] }),
+          failed(34),
+        ],
+        openMaps: [30],
+      });
+      expect(decisionsIn(standings).map(({ issue, since }) => ({ issue, since }))).toEqual([{ issue: 31, since: "2026-11-06T20:00:00Z" }]);
     });
   });
 
