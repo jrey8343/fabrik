@@ -17,7 +17,7 @@ The notes for the release that ships the Digest ([#594](https://github.com/jrey8
     - **The criteria and how each was checked**: Kit code's table of every Request changes of the Operator's, each of its line comments and each of the Ticket's criteria, with whether it is in the head, how that was checked and where the writer looked.
 - **The Merge gate opens a little later.** A pass no longer takes the pull request out of draft and requests the Operator's review at once. It adds `agent:digest`, the Digest writer runs, and when that attempt ends the Digest is posted, the pull request leaves draft and the review is requested. The Operator is told once, when the account is there.
   - **On the Actions tab** the run shows as "PR #<number> labeled agent:digest", since the caller workflow is unchanged, and its job is named "Digest PR #<number>".
-  - **The wait**: in the trial a Digest took 20 to 75 seconds to write. Through the Kit there are two more jobs around it, the Kit job before and the push job after. The draft holds its `max_in_flight` slot meanwhile.
+  - **The wait**: in the trial, run on a laptop and not through the Kit, a Digest took 20 to 75 seconds to write. Through the Kit there are two more jobs around it, the Kit job before and the push job after. The draft holds its `max_in_flight` slot meanwhile.
 - **The Loop never waits on a Digest's success.** It waits for the attempt, which has 10 minutes by default. A run that fails, one that runs past its time limit and a reply Kit code refuses each open the gate all the same, under one comment that mentions nobody: "No Digest could be written for this head", the short head and how, which is `failed`, `timed-out`, or `refused` with Kit code's reason.
   - **Kit code refuses** a reply that leaves an ask of the Operator's unanswered, one whose items do not cover every ask missing from the head, and one whose top runs over 180 words. It also refuses one that breaks the reply's shape, one that names a Follow-up Kit code did not list, and a Digest too long for one comment.
   - **A wrong file or line refuses nothing.** That one link is dropped and the Digest lands.
@@ -43,7 +43,7 @@ The notes for the release that ships the Digest ([#594](https://github.com/jrey8
 
 - **A Product repo merges the Kit bump** and does nothing else: no Kit config edit, no Setup run and no new secret. From the first pass after the merge, an agent pull request gets its Digest before the Merge gate opens. A pull request already at the Merge gate has none until its next pass, or until the Operator adds `agent:digest` to it.
 - **The `fabrik-runs` store's caller**, its `.github/workflows/weekly-summary.yml`, is moved up to the release too, after the Pilot's Kit bump, as for any release that changes the Weekly summary. Until it is, the Weekly summary's cost per merged pull request leaves Digest runs out.
-- **Pull requests from before the release are still read.** A Verdict posted before it has no fingerprint, so a Digest of that pull request says the product code's comparison "could not be established", and its rounds table gives that Verdict's effect on the code as not known.
+- **Pull requests from before the release are still read.** A Verdict posted before it has no fingerprint, so a Digest of that pull request says the product code's comparison "could not be established", and its rounds table gives a Verdict's effect on the code as "Not known" wherever it or the Verdict before it has none.
 
 ## To check it on the Pilot
 

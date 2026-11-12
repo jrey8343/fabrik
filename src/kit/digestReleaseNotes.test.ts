@@ -89,10 +89,12 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Digest's release notes, while dr
 
     expect(figured.join("\n")).toContain("20 to 75 seconds");
     expect(figured.join("\n")).toContain("$0.11 to $0.47");
-    for (const line of figured) expect(line).toMatch(/\btrial\b/);
+    for (const line of figured) {
+      expect(line).toMatch(/\btrial\b/);
+      expect(line).toContain("on a laptop");
+      expect(line).toContain("not through the Kit");
+    }
     const spend = notes.split("\n").find((line) => line.includes("$0.11 to $0.47")) ?? "";
-    expect(spend).toContain("on a laptop");
-    expect(spend).toContain("not through the Kit");
     expect(spend).toContain("No Scorer judges");
   });
 
