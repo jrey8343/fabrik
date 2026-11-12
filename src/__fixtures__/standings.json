@@ -1,4 +1,21 @@
 {
+  "waiting-for-reset": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 20,
+    "pullRequest": null,
+    "work": "weekly-limit",
+    "place": null,
+    "name": "waiting-for-reset",
+    "move": "kit",
+    "yours": false,
+    "stopsWork": false,
+    "since": "2026-11-06T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": "B",
+    "detail": { "resetsAt": "2026-11-10T22:00:00Z" }
+  },
   "yours-to-merge": {
     "schema": 1,
     "repo": "owner/product",
@@ -66,6 +83,40 @@
     "awaits": null,
     "subscription": null,
     "detail": { "handBack": null, "role": null, "failure": null, "label": null }
+  },
+  "weekly-limit-reached": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 20,
+    "pullRequest": null,
+    "work": "weekly-limit",
+    "place": null,
+    "name": "weekly-limit-reached",
+    "move": "operator",
+    "yours": true,
+    "stopsWork": true,
+    "since": "2026-11-06T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": "A",
+    "detail": { "resetsAt": "2026-11-09T22:00:00Z" }
+  },
+  "token-refused": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 22,
+    "pullRequest": null,
+    "work": "token-rotation",
+    "place": null,
+    "name": "token-refused",
+    "move": "operator",
+    "yours": true,
+    "stopsWork": true,
+    "since": "2026-11-05T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": "B",
+    "detail": { "anotherFree": true }
   },
   "yours-to-read": {
     "schema": 1,

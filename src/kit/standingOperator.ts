@@ -1,29 +1,82 @@
-// The Standings whose move is the Operator's (src/kit/standing.ts): an agent
-// pull request at the Merge gate, work handed to them with `ready-for-human`,
-// a Design session's Round waiting on their answer, and Triage's question,
-// with its neighbour, the question that waits on someone else.
+// The Standings of what waits on the Operator (src/kit/standing.ts): an agent
+// pull request at the Merge gate, work handed to them with `ready-for-human`
+// or by the Kit's notice, a Design session's Round waiting on their answer,
+// Triage's question, the Subscriptions' issues and what is theirs to read;
+// with their neighbours, the question that waits on someone else and a
+// weekly limit the Kit rides out on another Subscription.
 import { researchRunFailedIn } from "../github/threads.ts";
-import { DECISION_TYPES, decisionLabel, type DecisionLabel, MAP_LABEL, NEEDS_DESIGN, NEEDS_INFO, READY_FOR_HUMAN, RESEARCH_LABEL } from "../loop/labels.ts";
+import { earliestOf, resetsAtOf } from "../loop/kitIssueMarks.ts";
+import {
+  DECISION_TYPES,
+  decisionLabel,
+  type DecisionLabel,
+  MAP_LABEL,
+  NEEDS_DESIGN,
+  NEEDS_INFO,
+  READY_FOR_HUMAN,
+  RESEARCH_LABEL,
+  TOKEN_ROTATION_LABEL,
+  USAGE_CREDITS_LABEL,
+  WEEKLY_LIMIT_LABEL,
+} from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, refusedByMapCap } from "../loop/markers.ts";
 import { whyNotResearchable } from "../loop/research.ts";
+import { freeSubscriptions, kitIssueSubscriptionOf, makesUnusable } from "../loop/subscriptions.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { type LabelEvent, verdictsOn } from "./retroEvidence.ts";
-import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
+import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 /** Every Standing of the repo's whose move is the Operator's, issues first, then pull requests. */
-export function operatorStandingsOf({ github, operator, appLogin }: StandingFacts, now: string): Standing[] {
+export function operatorStandingsOf({ github, kit, operator, appLogin }: StandingFacts, now: string): Standing[] {
   const { repo, openIssues, openPullRequests } = github;
   return [
     ...openIssues.flatMap((issue) => designRoundStandingsOf(issue, repo, appLogin)),
     ...openIssues.flatMap((issue) => stoppedDesignSessionStandingsOf(issue, repo, appLogin)),
     ...openIssues.flatMap((issue) => questionStandingsOf(issue, repo, operator, appLogin)),
     ...openIssues.flatMap((issue) => failedResearchStandingsOf(issue, openIssues, repo, appLogin)),
-    ...openIssues.flatMap((issue) => (issue.labels.includes(READY_FOR_HUMAN) ? [readyForHumanStandingOf(issue, repo, now)] : [])),
+    ...subscriptionStandingsOf(github, kit),
+    // A Subscription's issue carries ready-for-human too, but stands as above.
+    ...openIssues.flatMap((issue) => (issue.labels.includes(READY_FOR_HUMAN) && !makesUnusable(issue.labels) ? [readyForHumanStandingOf(issue, repo, now)] : [])),
     ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, repo, operator)),
     // Last, so work that stops on the Operator is read so before it is read as reading matter.
     ...readingMatterOf(github, operator, appLogin),
   ];
+}
+
+/**
+ * Each open weekly-limit, token-rotation and usage-credits issue, naming its
+ * Subscription by the Kit's rule (kitIssueSubscriptionOf: its marker, or the
+ * first listed), judged by the repo's own Kit config, or the Kit's defaults
+ * when it wasn't read or is invalid. A weekly-limit issue is the Operator's,
+ * stopping work, only while every listed Subscription is used up, by the rule
+ * that chooses a run's (freeSubscriptions), and says when the first of them
+ * resets; while another is free it waits for its reset, the Kit's. A refused
+ * token and spent usage credits are the Operator's, stopping work, since the
+ * Kit handed them over with `ready-for-human`, as today's line dates them.
+ * Its text is read from the Kit's issues, its dates from the open issues.
+ */
+function subscriptionStandingsOf({ repo, openIssues, kitIssues }: GitHubFacts, kit: RepoKitFacts | null): Standing[] {
+  const config = kit?.config.ok === true ? kit.config.config : DEFAULT_KIT_CONFIG;
+  const anyFree = freeSubscriptions(kitIssues, config).length > 0;
+  const firstReset = earliestOf(kitIssues.filter(({ labels }) => labels.includes(WEEKLY_LIMIT_LABEL)).map(resetsAtOf));
+  return openIssues.flatMap((issue): Standing[] => {
+    const owned = kitIssues.find(({ number }) => number === issue.number) ?? { number: issue.number, labels: issue.labels, body: "", comments: [] };
+    const subscription = kitIssueSubscriptionOf(owned, config);
+    const handedOver = { ...theOperators(repo, issue.number, null, lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt), subscription, place: null };
+    if (issue.labels.includes(WEEKLY_LIMIT_LABEL)) {
+      const since = lastAdded(issue.labelEvents, WEEKLY_LIMIT_LABEL) ?? issue.createdAt;
+      const base = { ...theOperators(repo, issue.number, null, since), subscription, work: "weekly-limit", place: null } as const;
+      if (!anyFree) return [{ ...base, name: "weekly-limit-reached", detail: { resetsAt: firstReset } }];
+      return [{ ...base, move: "kit", yours: false, stopsWork: false, name: "waiting-for-reset", detail: { resetsAt: resetsAtOf(owned) } }];
+    }
+    if (issue.labels.includes(TOKEN_ROTATION_LABEL)) return [{ ...handedOver, work: "token-rotation", name: "token-refused", detail: { anotherFree: anyFree } }];
+    if (issue.labels.includes(USAGE_CREDITS_LABEL)) {
+      return [{ ...handedOver, work: "usage-credits", name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null } }];
+    }
+    return [];
+  });
 }
 
 /** The Decision labels whose Decisions the Operator resolves live: all but research, which the Researcher resolves AFK. */

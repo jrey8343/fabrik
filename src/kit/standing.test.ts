@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { subscriptionMarker } from "../loop/subscriptions.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
 
@@ -263,6 +266,121 @@ describe("the Standing rule", () => {
         ],
       });
       expect(standings).toEqual([]);
+    });
+  });
+
+  describe("a Subscription's issue", () => {
+    const listing = (...subscriptions: readonly string[]) =>
+      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null } }) as const;
+    /** Open Kit-owned issue `number`, labelled `labels`, naming `subscription` in its body (none when null), opened at `createdAt`: as the open issues and as the Kit's issues. */
+    const kitIssue = (number: number, labels: readonly string[], subscription: string | null, createdAt: string, body = "") => ({
+      open: anOpenIssue({ number, labels, createdAt, labelEvents: labels.map((label) => aLabelAdded(label, createdAt)) }),
+      kit: { number, labels, body: [body, ...(subscription === null ? [] : [subscriptionMarker(subscription)])].join("\n"), comments: [] },
+    });
+    const weeklyLimit = (number: number, subscription: string | null, resetsAt: string, createdAt = "2026-11-06T20:00:00Z") =>
+      kitIssue(number, ["fabrik:weekly-limit"], subscription, createdAt, resetsAtMarker(resetsAt));
+    const tokenRotation = (number: number, subscription: string | null) => kitIssue(number, ["ready-for-human", "fabrik:token-rotation"], subscription, "2026-11-05T20:00:00Z");
+    const usageCredits = (number: number, subscription: string) => kitIssue(number, ["ready-for-human", "fabrik:usage-credits"], subscription, "2026-11-04T20:00:00Z");
+    const facts = (...issues: readonly ReturnType<typeof kitIssue>[]) => ({ openIssues: issues.map(({ open }) => open), kitIssues: issues.map(({ kit }) => kit) });
+
+    it("is waiting for its reset, the Kit's and never Stuck, for a weekly-limit issue while another Subscription is free, naming its Subscription", () => {
+      expect(standingsIn(facts(weeklyLimit(20, "B", "2026-11-10T22:00:00Z")), listing("A", "B"))).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 20,
+          pullRequest: null,
+          work: "weekly-limit",
+          place: null,
+          name: "waiting-for-reset",
+          move: "kit",
+          yours: false,
+          stopsWork: false,
+          since: "2026-11-06T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: "B",
+          detail: { resetsAt: "2026-11-10T22:00:00Z" },
+        },
+      ]);
+    });
+
+    it("is the Operator's weekly limit reached, stopping work, once every Subscription listed is used up, each saying when the first resets", () => {
+      const standings = standingsIn(facts(weeklyLimit(20, "A", "2026-11-10T22:00:00Z"), weeklyLimit(21, "B", "2026-11-09T22:00:00Z", "2026-11-07T20:00:00Z")), listing("A", "B"));
+      expect(standings).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 20,
+          pullRequest: null,
+          work: "weekly-limit",
+          place: null,
+          name: "weekly-limit-reached",
+          move: "operator",
+          yours: true,
+          stopsWork: true,
+          since: "2026-11-06T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: "A",
+          detail: { resetsAt: "2026-11-09T22:00:00Z" },
+        },
+        expect.objectContaining({ issue: 21, name: "weekly-limit-reached", subscription: "B", detail: { resetsAt: "2026-11-09T22:00:00Z" } }),
+      ]);
+    });
+
+    it("names the first Subscription listed for an issue whose body names none, and judges used up by the Kit's default config when none was read", () => {
+      expect(standingsIn(facts(weeklyLimit(20, null, "2026-11-10T22:00:00Z")), listing("A", "B"))).toEqual([
+        expect.objectContaining({ name: "waiting-for-reset", subscription: "A" }),
+      ]);
+      expect(standingsIn(facts(weeklyLimit(20, null, "2026-11-10T22:00:00Z")))).toEqual([
+        expect.objectContaining({ name: "weekly-limit-reached", subscription: "Claude token" }),
+      ]);
+    });
+
+    it("is the Operator's token refused, stopping work, for a token-rotation issue, saying whether another Subscription is free, not ready-for-human work", () => {
+      expect(standingsIn(facts(tokenRotation(22, "B")), listing("A", "B"))).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 22,
+          pullRequest: null,
+          work: "token-rotation",
+          place: null,
+          name: "token-refused",
+          move: "operator",
+          yours: true,
+          stopsWork: true,
+          since: "2026-11-05T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: "B",
+          detail: { anotherFree: true },
+        },
+      ]);
+      expect(standingsIn(facts(tokenRotation(22, null)))).toEqual([expect.objectContaining({ name: "token-refused", subscription: "Claude token", detail: { anotherFree: false } })]);
+    });
+
+    it("is the Operator's to do, stopping work, for a usage-credits issue, naming its Subscription", () => {
+      expect(standingsIn(facts(usageCredits(23, "B")), listing("A", "B"))).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 23,
+          pullRequest: null,
+          work: "usage-credits",
+          place: null,
+          name: "yours-to-do",
+          move: "operator",
+          yours: true,
+          stopsWork: true,
+          since: "2026-11-04T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: "B",
+          detail: { handBack: null, role: null, failure: null, label: null },
+        },
+      ]);
     });
   });
 

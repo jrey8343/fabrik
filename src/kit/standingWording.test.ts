@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { subscriptionMarker } from "../loop/subscriptions.ts";
+import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { ageSince, wordStanding } from "./standingWording.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
@@ -93,6 +96,48 @@ describe("the wording of a failed research run", () => {
       sentence: "The Research run failed 5 minutes ago. Add `agent:research` again to run it.",
       remedy: null,
     });
+  });
+});
+
+describe("the wording of a Subscription's issue", () => {
+  const listing = (...subscriptions: readonly string[]) =>
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null }) as const;
+  const kitIssue = (number: number, labels: readonly string[], subscription: string, resetsAt: string | null = null) => ({
+    open: anOpenIssue({ number, labels, createdAt: SINCE }),
+    kit: { number, labels, body: [subscriptionMarker(subscription), ...(resetsAt === null ? [] : [resetsAtMarker(resetsAt)])].join("\n"), comments: [] },
+  });
+  const words = (subscriptions: readonly string[], ...issues: readonly ReturnType<typeof kitIssue>[]) =>
+    standingsOf(standingFactsOf({ github: factsOf({ openIssues: issues.map(({ open }) => open), kitIssues: issues.map(({ kit }) => kit) }), kit: listing(...subscriptions) }), SINCE).map(
+      (standing) => wordStanding(standing, minutesAfter(60), ZONE),
+    );
+  const weeklyLimit = (number: number, subscription: string, resetsAt: string | null) => kitIssue(number, ["fabrik:weekly-limit"], subscription, resetsAt);
+
+  it("says a used-up Subscription resets, told in the Operator's time zone, while runs go to the next", () => {
+    expect(words(["A", "B"], weeklyLimit(20, "A", "2026-11-10T22:00:00Z"))).toEqual([
+      { pill: "Used up", sentence: "A reached its weekly limit and resets 2026-11-11 09:00 Australia/Sydney. Runs go to the next Subscription.", remedy: null },
+    ]);
+    expect(words(["A", "B"], weeklyLimit(20, "A", null))[0]?.sentence).toBe("A reached its weekly limit; when it resets is not known. Runs go to the next Subscription.");
+  });
+
+  it("says every Subscription is used up and when the first resets", () => {
+    expect(words(["A"], weeklyLimit(20, "A", "2026-11-10T22:00:00Z"))).toEqual([
+      { pill: "Weekly limit reached", sentence: "Every Subscription is used up. The first resets 2026-11-11 09:00 Australia/Sydney.", remedy: null },
+    ]);
+    expect(words(["A"], weeklyLimit(20, "A", null))[0]?.sentence).toBe("Every Subscription is used up; when the first resets is not known.");
+  });
+
+  it("says no run starts until a refused token is rotated, or that runs go to the next Subscription while another is free", () => {
+    const rotation = kitIssue(22, ["ready-for-human", "fabrik:token-rotation"], "A");
+    expect(words(["A"], rotation)).toEqual([{ pill: "Claude token refused", sentence: "No run can start until it's rotated.", remedy: null }]);
+    expect(words(["A", "B"], rotation)).toEqual([
+      { pill: "Claude token refused", sentence: "A's Claude token was refused. Runs go to the next Subscription until it's rotated.", remedy: null },
+    ]);
+  });
+
+  it("says a Subscription was caught spending usage credits and nothing runs on it until the Operator acts", () => {
+    expect(words(["A", "B"], kitIssue(23, ["ready-for-human", "fabrik:usage-credits"], "B"))).toEqual([
+      { pill: "Yours to do", sentence: "B was caught spending usage credits. Nothing runs on it until you turn them off and close this issue.", remedy: null },
+    ]);
   });
 });
 
