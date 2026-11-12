@@ -939,7 +939,6 @@ async function readPullRequests(github: ReadClient, repo: Repo, named: readonly 
 const ROLL_IN_CROSS_REFERENCES_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!, $after: String) {
     repository(owner: $owner, name: $name) {
-      nameWithOwner
       pullRequest(number: $number) {
         crossReferences: timelineItems(first: 100, after: $after, itemTypes: [CROSS_REFERENCED_EVENT]) {
           pageInfo { hasNextPage endCursor }
@@ -1004,11 +1003,14 @@ interface RawRollInIssue {
  * such issue names costs the one query and nothing more.
  */
 async function gatherRollIns(github: ReadClient, repo: Repo, pullRequest: number, operator: string, appLogin: string | null): Promise<RollInsSnapshot> {
-  let here = `${repo.owner}/${repo.name}`;
-  const references = await pagesOf<RawRollInCrossReference>(github, ROLL_IN_CROSS_REFERENCES_QUERY, repo, { number: pullRequest }, (data) => {
-    here = data.repository.nameWithOwner;
-    return data.repository.pullRequest?.crossReferences ?? null;
-  });
+  const here = `${repo.owner}/${repo.name}`;
+  const references = await pagesOf<RawRollInCrossReference>(
+    github,
+    ROLL_IN_CROSS_REFERENCES_QUERY,
+    repo,
+    { number: pullRequest },
+    (data) => data.repository.pullRequest?.crossReferences ?? null,
+  );
   const numbers = [
     ...new Set(
       references.flatMap(({ source }) =>
@@ -1016,7 +1018,8 @@ async function gatherRollIns(github: ReadClient, repo: Repo, pullRequest: number
         source.number !== undefined &&
         source.state === "CLOSED" &&
         source.stateReason === "NOT_PLANNED" &&
-        source.repository?.nameWithOwner === here
+        // GitHub tells repos apart whatever the case of their names.
+        source.repository?.nameWithOwner.toLowerCase() === here.toLowerCase()
           ? [source.number]
           : [],
       ),

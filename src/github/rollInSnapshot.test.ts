@@ -103,7 +103,6 @@ function gitHubHolding(held: Held = {}) {
         const page = references.slice(from, from + pageSize);
         return {
           repository: {
-            nameWithOwner: "acme/shop",
             pullRequest: {
               crossReferences: {
                 pageInfo: { hasNextPage: from + pageSize < references.length, endCursor: String(from + pageSize) },
@@ -124,7 +123,7 @@ function gitHubHolding(held: Held = {}) {
         return {
           repository: Object.fromEntries(
             asked.map((number) => {
-              const issue = issues.find((held) => held.number === number && (held.repo ?? "acme/shop") === "acme/shop");
+              const issue = issues.find((held) => held.number === number && (held.repo ?? "acme/shop").toLowerCase() === "acme/shop");
               if (issue === undefined) return [`issue${number}`, null];
               const comments = (issue.comments ?? []).map(({ body, author, createdAt }, index) => ({
                 body,
@@ -229,6 +228,14 @@ describe("Reading what an agent pull request closed with (#663)", () => {
     const plan = await planOn({ crossReferences: [settled({ number: 12 }), settled({ number: 7 }), settled({ number: 12 })] });
 
     expect(reopenedBy(plan)).toEqual([7, 12]);
+  });
+
+  it("reads an issue of this repo however GitHub spells the repo's name", async () => {
+    const { github } = gitHubHolding({ crossReferences: [settled({ repo: "Acme/Shop" })] });
+
+    const plan = planFor(merged, await gatherSnapshot(github, { owner: "acme", name: "shop" }, merged, "operator", APP_LOGIN), kitConfig());
+
+    expect(reopenedBy(plan)).toEqual([7]);
   });
 
   it("reads every page of the pull request's cross-references", async () => {
