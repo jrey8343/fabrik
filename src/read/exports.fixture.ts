@@ -44,10 +44,12 @@ import {
   checkCallerWorkflow,
   costOf,
   DEFAULT_KIT_CONFIG,
+  gatherRepo,
   GitHub,
   GitHubError,
   gitHubMessageOf,
   hasUnknownCostBasis,
+  homeFactsOf,
   isLive,
   newerSchemaOf,
   readCaller,
@@ -55,6 +57,7 @@ import {
   readRunRecord,
   refusalOf,
   resolveKitConfig,
+  rowsOf,
   RUN_RECORD_SCHEMA,
   STANDING_NAMES,
   STANDING_SCHEMA,
@@ -69,11 +72,14 @@ import type {
   CallerCheck,
   CallerRead,
   CostFigure,
+  Facts,
   KitConfig,
   KitConfigResult,
   KitConfigSources,
   ReadClient,
+  RepoRead,
   Repo,
+  Row,
   RunRecord,
   Standing,
   StandingFacts,
@@ -139,6 +145,21 @@ function aSchema7Record(): unknown {
   const { brokenRun: _left, ...fields } = aRunRecord();
   return { ...fields, schema: 7 };
 }
+
+/**
+ * `owner/product`, a Product repo whose caller pins v3.1.0 and whose Kit
+ * config names no Operator, at head `d…d` of `main`; every query of its facts
+ * GitHub refuses, for want of a permission.
+ */
+const A_PRODUCT_REPO_REFUSING_ITS_FACTS: ReadClient = {
+  rest: () => Promise.reject(REFUSAL),
+  graphql: <T,>(query: string) =>
+    query.includes("defaultBranchRef { name target { oid } }") && !query.includes("issues(")
+      ? Promise.resolve({ repository: { owner: { login: "owner" }, defaultBranchRef: { name: "main", target: { oid: "d".repeat(40) } } } } as T)
+      : Promise.reject(REFUSAL),
+  fileText: (_repo, path) =>
+    Promise.resolve(path === ".github/workflows/fabrik.yml" ? "jobs:\n  loop:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v3.1.0\n" : null),
+};
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -340,6 +361,25 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // The gather and the rows
 
+  gatherRepo: () =>
+    gatherRepo(
+      A_PRODUCT_REPO_REFUSING_ITS_FACTS,
+      "owner/product",
+      NOW,
+      "fabrik-app[bot]",
+    ),
+  homeFactsOf: () =>
+    homeFactsOf(
+      { github: factsOf({ openIssues: [A_TICKET_WAITING] }) },
+    ),
+  rowsOf: () =>
+    rowsOf(
+      homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
+      "unread",
+      {},
+      NOW,
+    ),
+
   // The join with runs
 
   // The Required checks
@@ -414,6 +454,26 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The closing line and the runs read
 
   // The gather and the rows
+
+  Facts: homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }), issueBodies: [{ issue: 7, body: "From PR #50" }] }) satisfies Facts,
+  RepoRead: {
+    repo: "owner/product",
+    product: true,
+    release: "v3.1.0",
+    operator: "owner",
+    kitConfig: { ok: true, config: DEFAULT_KIT_CONFIG },
+    facts: homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
+    unread: null,
+  } satisfies RepoRead,
+  Row: {
+    standing: A_KEPT_STANDING,
+    title: "Build the thing",
+    lastWord: { text: "The Kit added `agent:implement` again.", at: "2026-11-08T21:20:00Z", url: "https://github.com/owner/product/issues/7#issuecomment-1" },
+    related: [],
+    mentions: [],
+    relatedTo: null,
+    followUps: [],
+  } satisfies Row,
 
   // The join with runs
 

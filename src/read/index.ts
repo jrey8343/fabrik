@@ -79,6 +79,12 @@ export type { CostFigure, Week } from "../kit/weeklySummary.ts";
 
 // The gather and the rows
 
+export { homeFactsOf } from "./builders.ts";
+export { gatherRepo } from "./gather.ts";
+export { rowsOf } from "./rows.ts";
+export type { Facts, RepoRead } from "./gather.ts";
+export type { Row } from "./rows.ts";
+
 // The join with runs
 
 // The Required checks
