@@ -543,10 +543,12 @@ function file(state: ProductState, path: string): string | null {
  * Branch protection requires a PR and the Required checks, with no bypass
  * allowance for anyone, but no approving review: the Operator works alone and
  * can't approve their own PRs. What keeps the Fabrik App from merging is the
- * Merge gate ruleset (mergeGate below), not a review. Setup owns only those
- * settings, the required checks, the PR, its approving reviews and its bypass
- * allowances, and keeps every other one as it finds it, admin enforcement
- * included.
+ * Merge gate ruleset (mergeGate below), not a review. Admins are held to
+ * those rules, so GitHub refuses the Operator too a merge at a head whose
+ * Required checks haven't all passed, and any push straight to the branch.
+ * Setup owns only those settings, the required checks, the PR, its approving
+ * reviews, its bypass allowances and admin enforcement, and keeps every other
+ * one as it finds it.
  */
 function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
   const configText = state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig;

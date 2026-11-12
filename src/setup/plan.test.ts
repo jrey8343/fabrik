@@ -519,7 +519,7 @@ describe("Branch protection", () => {
     expect(protects(state)[0]?.protection.required_status_checks?.checks).toEqual([{ context: "lint" }, { context: "build" }]);
   });
 
-  it("changes only the settings Setup owns, keeping every other one as it finds it, admin enforcement included", () => {
+  it("changes only the settings Setup owns, keeping every other one as it finds it, and says nothing of admins already held to the rules", () => {
     const state = aCleanProduct({
       files: withChecks(["ci", "lint"]),
       protection: aProtectedBranch(["ci"], {
@@ -618,6 +618,41 @@ describe("Branch protection", () => {
     expect(describeAction(action!)).toBe("protect main: admins held to the rules: no → yes; every other setting stays as it is");
   });
 
+  describe("a branch that asks for an approving review", () => {
+    const asksForAReview = (enforce_admins: boolean) =>
+      aProtectedBranch(["build"], {
+        enforce_admins,
+        required_pull_request_reviews: {
+          required_approving_review_count: 1,
+          dismiss_stale_reviews: true,
+          require_code_owner_reviews: false,
+          require_last_push_approval: false,
+        },
+      });
+
+    it("holds admins to the rules and asks for none, since the Operator can't approve their own pull request", () => {
+      const [action] = protects(aCleanProduct({ files: withChecks(["build"]), protection: asksForAReview(false) }));
+
+      expect(action?.protection.enforce_admins).toBe(true);
+      expect(action?.protection.required_pull_request_reviews?.required_approving_review_count).toBe(0);
+      expect(describeAction(action!)).toBe("protect main: approving reviews: 1 → 0; admins held to the rules: no → yes; every other setting stays as it is");
+    });
+
+    it("is left alone when it already holds admins to its rules", () => {
+      expect(protects(aCleanProduct({ files: withChecks(["build"]), protection: asksForAReview(true) }))).toEqual([]);
+    });
+  });
+
+  it("holds admins to the rules when the Kit config lists no checks, and still says to list them", () => {
+    const plan = planSetup(aCleanProduct({ protection: aProtectedBranch([]) }), kit);
+    const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+    expect(action?.protection.enforce_admins).toBe(true);
+    expect(action?.protection.required_status_checks).toBeNull();
+    expect(describeAction(action!)).toBe("protect main: admins held to the rules: no → yes; every other setting stays as it is");
+    expect(plan.notes).toContain("main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again.");
+  });
+
   it("leaves protection alone when it already requires all of that and holds admins to its rules", () => {
     const state = aCleanProduct({ files: withChecks(["build"]), protection: aProtectedBranch(["build", "lint"], { enforce_admins: true }) });
 
@@ -627,7 +662,7 @@ describe("Branch protection", () => {
   it("leaves protection alone once its own step is applied, whatever else the branch had", () => {
     const state = aCleanProduct({
       files: withChecks(["build"]),
-      protection: aProtectedBranch([], { required_pull_request_reviews: null, enforce_admins: true, required_linear_history: true }),
+      protection: aProtectedBranch([], { required_pull_request_reviews: null, required_linear_history: true }),
     });
     const plan = planSetup(state, kit);
 
