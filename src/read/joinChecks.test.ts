@@ -29,8 +29,8 @@ const byWork = (rows: readonly Row[]) => rows.toSorted((a, b) => `${workKeyOf(a.
 
 /** The kept rows of `facts` with the earlier read, joined with the later one; and the rows the rule gives with the later read. */
 function joinedAndRule(facts: Facts, earlier: RequiredChecksRead | null, later: RequiredChecksRead) {
-  const kept = rowsOf(facts, null, earlier, NOW);
-  return { kept, joined: joinChecks(kept, later, NOW), rule: rowsOf(facts, null, later, NOW) };
+  const kept = rowsOf(facts, null, earlier, null, NOW);
+  return { kept, joined: joinChecks(kept, later, NOW), rule: rowsOf(facts, null, later, null, NOW) };
 }
 
 /** The one row of Plain pull request 70, with head 1. */
@@ -107,14 +107,14 @@ describe("the join of kept rows with a Required checks read", () => {
   });
 
   it("leaves a row whose head the read does not hold, or holds as unread, as it was", () => {
-    const kept = rowsOf(plainFacts(), null, EARLIER, NOW);
+    const kept = rowsOf(plainFacts(), null, EARLIER, null, NOW);
 
     expect(joinChecks(kept, aChecksRead({ [head("2")]: [] }), NOW)).toEqual(kept);
     expect(joinChecks(kept, aChecksRead({ [head("1")]: "unread" }), NOW)).toEqual(kept);
   });
 
   it("takes a head with an empty list, from a branch requiring nothing, as all passed", () => {
-    const kept = rowsOf(plainFacts(), null, EARLIER, NOW);
+    const kept = rowsOf(plainFacts(), null, EARLIER, null, NOW);
 
     expect(joinChecks(kept, { ...aChecksRead({ [head("1")]: [] }), required: [] }, NOW).map(({ standing }) => standing.name)).toEqual(["yours-to-merge"]);
   });
@@ -192,7 +192,7 @@ describe("the join of kept rows with a Required checks read", () => {
   });
 
   it("returns rows that come back equal after being written as JSON and read again", () => {
-    const joined = joinChecks(rowsOf(plainFacts(), null, EARLIER, NOW), ALL_PASSED, NOW);
+    const joined = joinChecks(rowsOf(plainFacts(), null, EARLIER, null, NOW), ALL_PASSED, NOW);
 
     expect(JSON.parse(JSON.stringify(joined))).toStrictEqual(joined);
   });

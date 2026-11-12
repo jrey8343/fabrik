@@ -35,13 +35,13 @@ describe("the store's rows", () => {
       readyForHuman: [anOpenIssue({ number: 12, title: "Tick dead in jrey8343/shop", labels: ["ready-for-human"] })],
     });
 
-    expect(rowsOf(facts, null, null, NOW).map(({ standing }) => standing)).toEqual(storeStandingsOf(facts, NOW));
+    expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing)).toEqual(storeStandingsOf(facts, NOW));
   });
 
   it("give an open Weekly summary one row, the Operator's to read, not marked as stopping work, with its title and the Fabrik App's last word", () => {
     const said = { body: "Re-ran: two repos read.", at: "2026-11-09T08:00:00Z", url: `${SUMMARY_URL}#issuecomment-4` };
 
-    const rows = rowsOf(storeOf({ summaries: [aSummary({ appComments: [said] })] }), null, null, NOW);
+    const rows = rowsOf(storeOf({ summaries: [aSummary({ appComments: [said] })] }), null, null, null, NOW);
 
     expect(rows).toEqual([
       {
@@ -59,7 +59,7 @@ describe("the store's rows", () => {
   });
 
   it("give a failure notice that is the Fabrik App's last comment on the newest Weekly summary one row, the Operator's with the mark off", () => {
-    const rows = rowsOf(storeOf({ summaries: [aSummary({ open: false, appComments: [aNotice("2026-11-09T07:30:00Z")] })] }), null, null, NOW);
+    const rows = rowsOf(storeOf({ summaries: [aSummary({ open: false, appComments: [aNotice("2026-11-09T07:30:00Z")] })] }), null, null, null, NOW);
 
     expect(rows).toEqual([
       expect.objectContaining({
@@ -71,14 +71,14 @@ describe("the store's rows", () => {
   });
 
   it("give none for that notice when the Weekly summary's body was written since", () => {
-    const rows = rowsOf(storeOf({ summaries: [aSummary({ open: false, bodyWrittenAt: "2026-11-09T08:00:00Z", appComments: [aNotice("2026-11-09T07:30:00Z")] })] }), null, null, NOW);
+    const rows = rowsOf(storeOf({ summaries: [aSummary({ open: false, bodyWrittenAt: "2026-11-09T08:00:00Z", appComments: [aNotice("2026-11-09T07:30:00Z")] })] }), null, null, null, NOW);
 
     expect(rows).toEqual([]);
   });
 
   it("give an open \"Weekly summary failed\" issue a row, the Operator's with the mark off", () => {
     const notice = { body: "@jrey8343 The issue's own word.", at: "2026-11-02T07:05:00Z", url: `https://github.com/${RUN_STORE_REPO}/issues/11#issuecomment-1` };
-    const rows = rowsOf(storeOf({ failedSummaryIssues: [{ number: 11, title: "Weekly summary failed", createdAt: "2026-11-02T07:00:00Z", appComments: [notice] }] }), null, null, NOW);
+    const rows = rowsOf(storeOf({ failedSummaryIssues: [{ number: 11, title: "Weekly summary failed", createdAt: "2026-11-02T07:00:00Z", appComments: [notice] }] }), null, null, null, NOW);
 
     expect(rows).toEqual([
       expect.objectContaining({
@@ -102,7 +102,7 @@ describe("the store's rows", () => {
       ],
     });
 
-    const rows = rowsOf(storeOf({ readyForHuman: [issue] }), null, null, NOW);
+    const rows = rowsOf(storeOf({ readyForHuman: [issue] }), null, null, null, NOW);
 
     expect(rows).toEqual([
       expect.objectContaining({
@@ -116,14 +116,14 @@ describe("the store's rows", () => {
   it("take any bot's comment for the Fabrik App's when the reader gave no login", () => {
     const issue = anOpenIssue({ number: 12, labels: ["ready-for-human"], comments: [aComment("Another App's word.", "2026-11-08T10:00:00Z", { author: "other-app[bot]" })] });
 
-    const [row] = rowsOf(storeOf({ appLogin: null, readyForHuman: [issue] }), null, null, NOW);
+    const [row] = rowsOf(storeOf({ appLogin: null, readyForHuman: [issue] }), null, null, null, NOW);
 
     expect(row?.lastWord?.text).toBe("Another App's word.");
   });
 
   it("are none for a store with none of these", () => {
-    expect(rowsOf(storeOf({ summaries: [aSummary({ open: false })] }), null, null, NOW)).toEqual([]);
-    expect(rowsOf(storeOf(), null, null, NOW)).toEqual([]);
+    expect(rowsOf(storeOf({ summaries: [aSummary({ open: false })] }), null, null, null, NOW)).toEqual([]);
+    expect(rowsOf(storeOf(), null, null, null, NOW)).toEqual([]);
   });
 
   it("survive a JSON round trip, as their facts do", () => {
@@ -132,7 +132,7 @@ describe("the store's rows", () => {
       failedSummaryIssues: [{ number: 11, title: "Weekly summary failed", createdAt: "2026-11-02T07:00:00Z", appComments: [] }],
       readyForHuman: [anOpenIssue({ number: 12, labels: ["ready-for-human"] })],
     });
-    const rows = rowsOf(facts, null, null, NOW);
+    const rows = rowsOf(facts, null, null, null, NOW);
 
     expect(rows.length).toBe(3);
     expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
@@ -329,8 +329,8 @@ describe("the gather of the store", () => {
   it("gives a row for an open \"Weekly summary failed\" issue until it is closed", async () => {
     const failed = (state: string) => aRawIssue({ number: 11, title: "Weekly summary failed", state });
 
-    expect(rowsOf(await storeFactsFrom({ issues: [failed("OPEN")] }), null, null, NOW).map(({ standing }) => standing.issue)).toEqual([11]);
-    expect(rowsOf(await storeFactsFrom({ issues: [failed("CLOSED")] }), null, null, NOW)).toEqual([]);
+    expect(rowsOf(await storeFactsFrom({ issues: [failed("OPEN")] }), null, null, null, NOW).map(({ standing }) => standing.issue)).toEqual([11]);
+    expect(rowsOf(await storeFactsFrom({ issues: [failed("CLOSED")] }), null, null, null, NOW)).toEqual([]);
   });
 
   it("asks for no connection inside a connection inside a connection", async () => {

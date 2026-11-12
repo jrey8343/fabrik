@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";
 import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
 import { handBackMarker } from "../loop/markers.ts";
 import {
   aComment,
+  aDeploymentsRead,
+  aDeployOf,
   aLabelAdded,
+  aMergedLastDay,
   anOpenIssue,
   anOpenPullRequest,
   aPlainPullRequest,
@@ -21,7 +25,7 @@ import {
 } from "./builders.ts";
 import type { Facts } from "./gather.ts";
 import type { RequiredChecksRead } from "./requiredChecks.ts";
-import { type Row, rowsOf } from "./rows.ts";
+import { bareRowOf, type Row, rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
 const HEAD = "h".repeat(40);
@@ -62,7 +66,7 @@ describe("a Product repo's rows", () => {
     const runs = aRunsRead([aRunRead({ issue: 7 })]);
     const checks = aChecksRead({ ["p".repeat(40)]: [{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-08T19:30:00Z" }] });
 
-    const rows = rowsOf(facts, runs, checks, NOW);
+    const rows = rowsOf(facts, runs, checks, null, NOW);
 
     expect(rows.map(({ standing }) => standing)).toEqual(ruleOf(facts, [aRunInFlight({ issue: 7 })], { ["p".repeat(40)]: [{ name: "test", is: "passed", at: "2026-11-08T19:30:00Z" }] }));
     expect(rows.length).toBeGreaterThan(4);
@@ -72,12 +76,12 @@ describe("a Product repo's rows", () => {
     const facts = homeFactsOf({ github: factsOf({ openIssues: [anOpenIssue({ number: 12, title: "Add the cart", labels: ["ready-for-agent", "agent:implement"] })] }) });
     const runs = aRunsRead([aRunRead({ issue: 12, exact: true, kind: "first", run: 4410, createdAt: "2026-11-08T19:20:00Z", startedAt: "2026-11-08T19:25:00Z" })]);
 
-    const rows = rowsOf(facts, runs, null, NOW);
+    const rows = rowsOf(facts, runs, null, null, NOW);
 
     expect(rows.map(({ standing }) => ({ name: standing.name, since: standing.since, detail: standing.detail }))).toEqual([
       { name: "running", since: "2026-11-08T19:25:00Z", detail: { run: "implement", retry: null, actionsRun: 4410 } },
     ]);
-    expect(rowsOf(facts, aRunsRead("unread"), null, NOW)).toEqual(rowsOf(facts, null, null, NOW));
+    expect(rowsOf(facts, aRunsRead("unread"), null, null, NOW)).toEqual(rowsOf(facts, null, null, null, NOW));
   });
 
   it("take a Plain pull request's name from the checks read, since the report that decided it", () => {
@@ -89,7 +93,7 @@ describe("a Product repo's rows", () => {
       ],
     });
 
-    expect(rowsOf(facts, null, checks, NOW).map(({ standing }) => standing)).toMatchObject([
+    expect(rowsOf(facts, null, checks, null, NOW).map(({ standing }) => standing)).toMatchObject([
       { pullRequest: 70, name: "check-failing", since: "2026-11-08T19:10:00Z", detail: { plain: "kit-bump", check: "lint", checkIs: "failing" } },
     ]);
   });
@@ -97,14 +101,14 @@ describe("a Product repo's rows", () => {
   it("take every Plain pull request as passed on a branch requiring nothing, and as waiting on checks it could not read with no checks read", () => {
     const facts = homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ number: 70 })] }) });
 
-    expect(rowsOf(facts, null, aChecksRead({ ["p".repeat(40)]: [] }, []), NOW).map(({ standing }) => standing.name)).toEqual(["yours-to-merge"]);
-    expect(rowsOf(facts, null, null, NOW).map(({ standing }) => standing.detail)).toEqual([{ plain: "kit-bump", check: null, checksUnread: true, head: "p".repeat(40) }]);
+    expect(rowsOf(facts, null, aChecksRead({ ["p".repeat(40)]: [] }, []), null, NOW).map(({ standing }) => standing.name)).toEqual(["yours-to-merge"]);
+    expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing.detail)).toEqual([{ plain: "kit-bump", check: null, checksUnread: true, head: "p".repeat(40) }]);
   });
 
   it("are the rule's Standings with the runs and the checks unread", () => {
     const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], plainPullRequests: [aPlainPullRequest()] }) });
 
-    expect(rowsOf(facts, null, null, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
+    expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
   });
 
   it("give each Standing its title, the issue's, or the pull request's for a Plain one with no issue, and nothing related yet", () => {
@@ -116,7 +120,7 @@ describe("a Product repo's rows", () => {
       }),
     });
 
-    const rows = rowsOf(facts, null, null, NOW);
+    const rows = rowsOf(facts, null, null, null, NOW);
 
     expect(rows.map(({ standing, title, related, mentions, relatedTo, followUps }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, title, related, mentions, relatedTo, followUps }))).toEqual(
       expect.arrayContaining([
@@ -128,8 +132,36 @@ describe("a Product repo's rows", () => {
     expect(rows).toHaveLength(3);
   });
 
+  describe("a merged agent pull request at Production (#634)", () => {
+    const MERGE = "m".repeat(40);
+    const production = homeFactsOf().kit;
+    const tracked = { ...production, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } } } as const;
+
+    it("take the Deployments read, giving the merged pull request a row with the rule's Standing for it, titled with its own title when its Ticket is closed", () => {
+      const facts = homeFactsOf({ kit: tracked, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z", { title: "Build the thing, merged" })] });
+      const read = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) });
+
+      const rows = rowsOf(facts, null, null, read, NOW);
+
+      expect(rows.map(({ standing }) => standing)).toEqual(
+        standingsOf(standingFactsOf({ github: facts.github, kit: { ...tracked, runsInFlight: "unread", headChecks: {} }, mergedLastDay: facts.mergedLastDay, deployments: read }), NOW),
+      );
+      expect(rows).toEqual([
+        { ...bareRowOf(rows[0]!.standing, "Build the thing, merged", null), related: [], mentions: [], followUps: [], relatedTo: null, ticketClosed: null, plainPullRequest: null },
+      ]);
+      expect(rows[0]!.standing).toMatchObject({ issue: 7, pullRequest: 50, name: "live" });
+      expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing)).toMatchObject([{ name: "merged", detail: { deploysUnread: true } }]);
+    });
+
+    it("title the row with its Ticket's title where the facts hold the Ticket", () => {
+      const facts = homeFactsOf({ kit: tracked, github: factsOf({ openIssues: [TICKET] }), mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z", { title: "Merged as" })] });
+
+      expect(rowsOf(facts, null, null, null, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ title }) => title)).toEqual(["Build the thing"]);
+    });
+  });
+
   describe("the last word", () => {
-    const lastWordOf = (facts: Facts) => rowsOf(facts, null, null, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
+    const lastWordOf = (facts: Facts) => rowsOf(facts, null, null, null, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
 
     it("is the Fabrik App's latest comment on the issue or its pull request, with when and where it was said", () => {
       const onIssue = aComment("The Kit opened #50 for this Ticket.", "2026-11-08T18:00:00Z", { url: "https://github.com/owner/product/issues/7#issuecomment-1" });
@@ -166,7 +198,7 @@ describe("a Product repo's rows", () => {
   describe("whether an open agent pull request's Ticket is closed", () => {
     const atTheMergeGate = anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [aVerdictComment("pass", HEAD, "2026-11-07T20:00:00Z")] });
     const inDraft = anOpenPullRequest({ number: 50, ticket: 7, draft: true });
-    const ticketClosedOf = (facts: Facts) => rowsOf(facts, null, null, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ ticketClosed }) => ticketClosed);
+    const ticketClosedOf = (facts: Facts) => rowsOf(facts, null, null, null, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ ticketClosed }) => ticketClosed);
 
     it.each([
       ["at the Merge gate", atTheMergeGate],
@@ -201,7 +233,7 @@ describe("a Product repo's rows", () => {
     it("is null on a row with no open agent pull request: an issue's, and a Plain pull request's", () => {
       const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], plainPullRequests: [aPlainPullRequest({ number: 70 })] }), ticketStates: [{ ticket: 7, closed: false }] });
 
-      const rows = rowsOf(facts, null, null, NOW);
+      const rows = rowsOf(facts, null, null, null, NOW);
 
       expect(rows.map(({ standing, ticketClosed }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, ticketClosed }))).toEqual(
         expect.arrayContaining([
@@ -217,7 +249,7 @@ describe("a Product repo's rows", () => {
     const notice = handedBack("2026-11-08T19:30:00Z", { author: "some-app[bot]" });
     const issues = [{ ...TICKET, comments: [notice] }];
 
-    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), null, null, NOW).map(({ standing }) => standing.name);
+    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), null, null, null, NOW).map(({ standing }) => standing.name);
 
     expect(named(null)).toEqual(["yours-to-do"]);
     expect(named("fabrik-app[bot]")).not.toEqual(["yours-to-do"]);
@@ -232,7 +264,7 @@ describe("a Product repo's rows", () => {
       }),
     });
 
-    const rows: Row[] = rowsOf(facts, aRunsRead([aRunRead({ issue: 7 })]), null, NOW);
+    const rows: Row[] = rowsOf(facts, aRunsRead([aRunRead({ issue: 7 })]), null, null, NOW);
 
     expect(rows.length).toBeGreaterThan(0);
     expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);

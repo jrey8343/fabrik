@@ -508,6 +508,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
       A_RUNS_READ,
       A_CHECKS_READ,
+      null,
       NOW,
     ),
 
@@ -524,11 +525,11 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   headsToCheck: () =>
     headsToCheck(
-      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, NOW),
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, null, NOW),
     ),
   joinChecks: () =>
     joinChecks(
-      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, NOW),
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, null, NOW),
       A_CHECKS_READ,
       NOW,
     ),

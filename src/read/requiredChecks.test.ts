@@ -361,7 +361,7 @@ describe("the heads a checks read is asked about", () => {
       }),
     });
 
-    expect(headsToCheck(rowsOf(facts, null, null, NOW)).toSorted()).toEqual([head("1"), head("3"), head("5")]);
+    expect(headsToCheck(rowsOf(facts, null, null, null, NOW)).toSorted()).toEqual([head("1"), head("3"), head("5")]);
   });
 
   it("are a Pairing session's pull request's head, joined to its issue's row, unless it is a draft", () => {
@@ -369,7 +369,7 @@ describe("the heads a checks read is asked about", () => {
       aPlainPullRequest({ number, author: "operator", headRef: `fabrik/pair-${issue}`, closes: [issue], headSha: sha, draft });
     const triage = (number: number) => anOpenIssue({ number, labels: ["needs-triage"], labelEvents: [aLabelAdded("needs-triage", "2026-11-11T09:00:00Z")] });
     const facts = homeFactsOf({ github: factsOf({ openIssues: [triage(12), triage(13)], plainPullRequests: [pairing(80, 12, head("6"), false), pairing(81, 13, head("7"), true)] }) });
-    const rows = rowsOf(facts, null, null, NOW);
+    const rows = rowsOf(facts, null, null, null, NOW);
 
     expect(rows.map(({ standing }) => [standing.issue, standing.pullRequest, standing.work])).toEqual(
       expect.arrayContaining([
@@ -383,6 +383,6 @@ describe("the heads a checks read is asked about", () => {
   it("name each head once", () => {
     const facts = homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ number: 70 }), aPlainPullRequest({ number: 71 })] }) });
 
-    expect(headsToCheck(rowsOf(facts, null, null, NOW))).toEqual(["p".repeat(40)]);
+    expect(headsToCheck(rowsOf(facts, null, null, null, NOW))).toEqual(["p".repeat(40)]);
   });
 });

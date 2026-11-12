@@ -3,6 +3,7 @@ import { GitHubError, type ReadClient, type Repo } from "../github/client.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
 import { type Facts, gatherRepo } from "./gather.ts";
 import { threeDeepConnectionsIn } from "./queryShape.ts";
+import { rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-09T12:00:00Z";
 const APP = { __typename: "Bot", login: "fabrik-app" };
@@ -260,6 +261,19 @@ describe("a gather shaped for Home", () => {
         { number: 50, title: "Build the thing", ticket: 7, mergeCommit: "c".repeat(40), mergedAt: "2026-11-09T10:00:00Z" },
         { number: 53, title: "Build the thing", ticket: null, mergeCommit: null, mergedAt: "2026-11-09T11:30:00Z" },
       ]);
+    });
+
+    it("give a row at Production to an agent pull request merged in the last 24 hours, in a repo declaring production, and none to a merged Plain pull request (#634)", async () => {
+      const facts = await factsOf({
+        files: { [CALLER_PATH]: CALLER, [CONFIG_PATH]: JSON.stringify({ production: { url: "https://shop.example", environment: "production" } }) },
+        mergedPullRequests: [
+          aRawMergedPullRequest({ number: 50, mergedAt: "2026-11-09T10:00:00Z" }),
+          aRawMergedPullRequest({ number: 52, mergedAt: "2026-11-09T11:00:00Z", headRefName: "fix-typo", author: OPERATOR }),
+          aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-09T11:10:00Z", headRefName: "dependabot/github_actions/fabrik-1.2.0", author: { __typename: "Bot", login: "dependabot" } }),
+        ],
+      });
+
+      expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => [standing.pullRequest, standing.name, standing.place])).toEqual([[50, "merged", "production"]]);
     });
 
     it("hold the issues GitHub cross-references to each open agent pull request, with where each is and whether it is open", async () => {
