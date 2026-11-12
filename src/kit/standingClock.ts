@@ -5,26 +5,47 @@
 // the Kit. Only the Kit's own signs restart the clock (ADR-0007): a person's
 // comment, label or review never does.
 import { stuckBarMinutes } from "../loop/recoveryWaits.ts";
-import { DISPATCH_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
+import type { RunInFlightFact } from "../github/snapshot.ts";
+import { DESIGN_LABEL, DISPATCH_LABEL, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
 import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import type { CommentFacts, LabelEvent } from "./retroEvidence.ts";
 import { type AwaitedRole, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
-import { lastAdded } from "./standingOperator.ts";
+import { addedAndStillOn, lastAdded } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
 /** Which silence a `not-started` Standing is: a trigger label with no run behind it, the same after the sweep's re-add, or a Retry a Verdict announced. */
 export type NotStartedSilence = "trigger-label" | "trigger-readded";
 
-/** What each trigger label asks for, on an issue: the work it is, its place on the Loop and the run it awaits. */
+/** What each trigger label asks for, on an issue: the work it is, its place on the Loop and the run it awaits. agent:review asks on a pull request. */
 const ASKED_ON_ISSUES: Partial<Record<TriggerLabel, { readonly work: StandingWork; readonly place: StandingPlace | null; readonly role: AwaitedRole }>> = {
   [DISPATCH_LABEL]: { work: "ticket", place: "implement", role: "implement" },
+  [DESIGN_LABEL]: { work: "design-session", place: "design", role: "design" },
+  [RESEARCH_LABEL]: { work: "research-decision", place: null, role: "research" },
+  [REPLAY_TRIGGER_LABEL]: { work: "replay", place: null, role: "replay" },
 };
 
-/** Every `not-started` Standing in the repo: each run asked for that none has begun. */
+/** The roles whose runs a trigger label waits on: a Replay's steps are Implement and Review runs, as the stuck-trigger sweep counts them. */
+const ROLES_BEHIND: Readonly<Record<TriggerLabel, readonly AwaitedRole[]>> = {
+  [DISPATCH_LABEL]: ["implement"],
+  [DESIGN_LABEL]: ["design"],
+  [REVIEW_LABEL]: ["review"],
+  [RESEARCH_LABEL]: ["research"],
+  [REPLAY_TRIGGER_LABEL]: ["replay", "implement", "review"],
+};
+
+/**
+ * Every `not-started` Standing in the repo: each run asked for that none has
+ * begun, read on the repo's own bar, or the Kit's default timeouts' when its
+ * Kit config wasn't read or is invalid. With the runs unread, no run is known.
+ */
 export function notStartedStandingsOf(facts: StandingFacts, _now: string): Standing[] {
   const bar = stuckBarMinutes(facts.kit?.config.ok === true ? facts.kit.config.config : DEFAULT_KIT_CONFIG);
-  return facts.github.openIssues.flatMap((issue) => triggerSilencesOn(issue, facts, bar));
+  const runs = facts.kit === null || facts.kit.runsInFlight === "unread" ? [] : facts.kit.runsInFlight;
+  return [
+    ...facts.github.openIssues.flatMap((issue) => triggerSilencesOn(issue, facts, runs, bar)),
+    ...facts.github.openPullRequests.flatMap((pullRequest) => reviewSilencesOn(pullRequest, facts, runs, bar)),
+  ];
 }
 
 /**
@@ -63,33 +84,55 @@ function pullRequestsOf(issue: number, { github }: StandingFacts): OpenPullReque
   return github.openPullRequests.filter(({ ticket }) => ticket === issue);
 }
 
-/** Each trigger label on an open issue, from when it was last added. */
-function triggerSilencesOn(issue: OpenIssueFacts, facts: StandingFacts, bar: number): StandingNamed<"not-started">[] {
-  const { github } = facts;
+/** Each trigger label on an open issue with no run of its role behind it, since it was last added. */
+function triggerSilencesOn(issue: OpenIssueFacts, facts: StandingFacts, runs: readonly RunInFlightFact[], bar: number): StandingNamed<"not-started">[] {
   return TRIGGER_LABELS.flatMap((label): StandingNamed<"not-started">[] => {
     const asked = ASKED_ON_ISSUES[label];
     const since = lastAdded(issue.labelEvents, label);
-    if (asked === undefined || !issue.labels.includes(label) || since === null) return [];
-    return [
-      {
-        schema: STANDING_SCHEMA,
-        repo: github.repo,
-        issue: issue.number,
-        pullRequest: null,
-        work: asked.work,
-        place: asked.place,
-        name: "not-started",
-        move: "kit",
-        yours: false,
-        stopsWork: false,
-        since,
-        stuckAt: stuckAtOf(clockOf(since, issue.number, pullRequestsOf(issue.number, facts), facts), bar),
-        awaits: { role: asked.role, on: "issue" },
-        subscription: null,
-        detail: { silence: readdedSinceOff(label, issue.labelEvents, issue.comments, facts.appLogin) ? "trigger-readded" : "trigger-label", label },
-      },
-    ];
+    if (asked === undefined || !issue.labels.includes(label) || since === null || hasRunBehind(label, runs, issue.number, null)) return [];
+    const silence = readdedSinceOff(label, issue.labelEvents, issue.comments, facts.appLogin) ? "trigger-readded" : "trigger-label";
+    const clock = clockOf(since, issue.number, pullRequestsOf(issue.number, facts), facts);
+    return [notStarted(facts.github.repo, issue.number, null, asked.work, asked.place, since, stuckAtOf(clock, bar), { role: asked.role, on: "issue" }, { silence, label })];
   });
+}
+
+/** `agent:review` on an open agent pull request with no Review behind it, since it was last added. */
+function reviewSilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts, runs: readonly RunInFlightFact[], bar: number): StandingNamed<"not-started">[] {
+  const since = addedAndStillOn(pullRequest.labelEvents, REVIEW_LABEL);
+  if (since === null || hasRunBehind(REVIEW_LABEL, runs, pullRequest.ticket, pullRequest.number)) return [];
+  const silence = readdedSinceOff(REVIEW_LABEL, pullRequest.labelEvents, pullRequest.comments, facts.appLogin) ? "trigger-readded" : "trigger-label";
+  const clock = clockOf(since, pullRequest.ticket, [pullRequest], facts);
+  return [
+    notStarted(facts.github.repo, pullRequest.ticket, pullRequest.number, "ticket", "review", since, stuckAtOf(clock, bar), { role: "review", on: "pullRequest" }, { silence, label: REVIEW_LABEL }),
+  ];
+}
+
+/**
+ * Whether a run of the label's role is in flight for this work: one its job
+ * names, or one whose name carries no number, which counts for every piece of
+ * work waiting on its role, as the stuck-trigger sweep counts it.
+ */
+function hasRunBehind(label: TriggerLabel, runs: readonly RunInFlightFact[], issue: number | null, pullRequest: number | null): boolean {
+  return runs.some(
+    (run) =>
+      ROLES_BEHIND[label].includes(run.role) &&
+      ((run.issue === null && run.pullRequest === null) || (run.issue !== null && run.issue === issue) || (run.pullRequest !== null && run.pullRequest === pullRequest)),
+  );
+}
+
+/** A `not-started` Standing: the Kit's, never yet the Operator's. */
+function notStarted(
+  repo: string,
+  issue: number | null,
+  pullRequest: number | null,
+  work: StandingWork,
+  place: StandingPlace | null,
+  since: string,
+  stuckAt: string,
+  awaits: NonNullable<Standing["awaits"]>,
+  detail: StandingNamed<"not-started">["detail"],
+): StandingNamed<"not-started"> {
+  return { schema: STANDING_SCHEMA, repo, issue, pullRequest, work, place, name: "not-started", move: "kit", yours: false, stopsWork: false, since, stuckAt, awaits, subscription: null, detail };
 }
 
 /**

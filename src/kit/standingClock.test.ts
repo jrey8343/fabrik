@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aCommit, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
@@ -142,6 +142,72 @@ describe("a run that was asked for and never began", () => {
     it("never reads a person's comment that quotes the marker as a re-add", () => {
       const quoted = aComment(readdNote.body, READDED, { author: "operator", byBot: false });
       expect(standingsIn({ openIssues: [askedFor("unused", { labelEvents: readdedLabels, comments: [quoted] })] })).toMatchObject([{ detail: { silence: "trigger-label" } }]);
+    });
+  });
+
+  describe("each trigger label", () => {
+    const AT = "2026-11-08T19:20:00Z";
+    const labelled = (number: number, labels: readonly string[], label: string) =>
+      anOpenIssue({ number, labels: [...labels, label], labelEvents: [aLabelAdded(label, AT)] });
+    const whatIn = (standings: readonly Standing[]) =>
+      standings.map(({ issue, pullRequest, work, place, name, awaits, detail }) => ({ issue, pullRequest, work, place, name, awaits, detail }));
+
+    it("asks for its own role's run, on the issue or, for agent:review, on the pull request", () => {
+      const standings = standingsIn({
+        openIssues: [labelled(20, ["needs-design"], "agent:design"), labelled(21, ["wayfinder:research"], "agent:research"), labelled(22, [], "agent:replay")],
+        openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, labelEvents: [aLabelAdded("agent:review", AT)] })],
+      });
+      expect(whatIn(standings)).toEqual([
+        { issue: 7, pullRequest: 50, work: "ticket", place: "review", name: "not-started", awaits: { role: "review", on: "pullRequest" }, detail: { silence: "trigger-label", label: "agent:review" } },
+        { issue: 20, pullRequest: null, work: "design-session", place: "design", name: "not-started", awaits: { role: "design", on: "issue" }, detail: { silence: "trigger-label", label: "agent:design" } },
+        { issue: 21, pullRequest: null, work: "research-decision", place: null, name: "not-started", awaits: { role: "research", on: "issue" }, detail: { silence: "trigger-label", label: "agent:research" } },
+        { issue: 22, pullRequest: null, work: "replay", place: null, name: "not-started", awaits: { role: "replay", on: "issue" }, detail: { silence: "trigger-label", label: "agent:replay" } },
+      ]);
+    });
+
+    it("leaves a pull request alone once agent:review came off it", () => {
+      const pullRequest = anOpenPullRequest({ number: 50, ticket: 7, labelEvents: [aLabelAdded("agent:review", AT), aLabelAdded("agent:review", "2026-11-08T19:25:00Z", { action: "unlabeled" })] });
+      expect(standingsIn({ openPullRequests: [pullRequest] })).toEqual([]);
+    });
+  });
+
+  describe("with a run of its role in flight", () => {
+    const LONG_AGO = "2026-11-06T08:00:00Z";
+    const namesIn = (standings: readonly Standing[]) => standings.map(({ issue, pullRequest, name }) => ({ issue, pullRequest, name }));
+
+    it("is running, never not-started or stuck, however old the label", () => {
+      const standings = standingsIn(
+        {
+          openIssues: [
+            askedFor(LONG_AGO),
+            anOpenIssue({ number: 20, labels: ["needs-design", "agent:design"], labelEvents: [aLabelAdded("agent:design", LONG_AGO)] }),
+            anOpenIssue({ number: 21, labels: ["wayfinder:research", "agent:research"], labelEvents: [aLabelAdded("agent:research", LONG_AGO)] }),
+          ],
+          openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8, labelEvents: [aLabelAdded("agent:review", LONG_AGO)] })],
+        },
+        { kit: aKit([aRunInFlight({ issue: 7 }), aRunInFlight({ role: "design", issue: 20 }), aRunInFlight({ role: "research" }), aRunInFlight({ role: "review", pullRequest: 51 })]) },
+      );
+      expect(namesIn(standings)).toEqual([
+        { issue: 7, pullRequest: null, name: "running" },
+        { issue: 8, pullRequest: 51, name: "running" },
+        { issue: 20, pullRequest: null, name: "running" },
+        { issue: 21, pullRequest: null, name: "running" },
+      ]);
+    });
+
+    it("is not-started still while the only run of its role is named for other work", () => {
+      const standings = standingsIn({ openIssues: [askedFor("2026-11-08T19:20:00Z")] }, { kit: aKit([aRunInFlight({ issue: 9 })]) });
+      expect(namesIn(standings)).toEqual([{ issue: 7, pullRequest: null, name: "not-started" }]);
+    });
+
+    it("has no not-started Standing for a Replay while a run with no number of the roles it starts is in flight, as the sweep counts it", () => {
+      const replay = anOpenIssue({ number: 22, labels: ["agent:replay"], labelEvents: [aLabelAdded("agent:replay", LONG_AGO)] });
+      expect(standingsIn({ openIssues: [replay] }, { kit: aKit([aRunInFlight({ role: "review" })]) })).toEqual([]);
+    });
+
+    it("takes no run as known with the runs unread, so the silence still turns Stuck at the bar", () => {
+      expect(namesIn(standingsIn({ openIssues: [askedFor(LONG_AGO)] }, { kit: aKit("unread") }))).toEqual([{ issue: 7, pullRequest: null, name: "stuck" }]);
+      expect(namesIn(standingsIn({ openIssues: [askedFor(LONG_AGO)] }, { kit: null }))).toEqual([{ issue: 7, pullRequest: null, name: "stuck" }]);
     });
   });
 });
