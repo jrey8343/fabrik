@@ -103,6 +103,9 @@ export type { RunnerTime, SpendRead } from "./spend.ts";
 
 // The runway
 
+export { runwayOf } from "./runway.ts";
+export type { Runway } from "./runway.ts";
+
 // The issues to roll in by hand
 
 // Outcomes

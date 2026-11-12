@@ -23,8 +23,35 @@ export interface UsedUpSubscription {
 
 /**
  * How long runs keep going at this pace, and how long they are then held,
- * from the Run records of the store's last two months and the Subscriptions
- * used up at `now`.
+ * from Run records, the Subscriptions used up at `now` with when each frees,
+ * and `now`.
+ *
+ * The Subscriptions it knows are those the records of the store's last two
+ * months name (the month of `now` and the one before, by UTC), with those
+ * passed in as used up. A reading's week is told by its reset: two readings
+ * on one Subscription with the same reset are of the same week; a reading
+ * with no share or no reset is skipped.
+ *
+ * - When every Subscription it knows is used up, runs are held until the
+ *   first of them frees, or null when none is timed.
+ * - The Subscription in use is the one, not used up, with the newest
+ *   reading. Its pace is the rise in its share from its earliest reading of
+ *   the same week no more than 24 hours older than that newest one, per
+ *   hour; unknown when those two are less than an hour apart, or there is no
+ *   reading; zero when the share did not rise.
+ * - The room left is, over the Subscriptions not used up, one less the
+ *   newest share of each one's present week. One with no reading in its
+ *   present week, or whose week has reset since its newest reading, counts
+ *   as untouched.
+ * - Runs run out at the newest reading's time plus the room over the pace.
+ *   When the pace is zero, or a Subscription not used up resets before
+ *   then, they run all week. Otherwise they are then held until the first
+ *   reset or freeing of every Subscription it knows, or null when none is
+ *   known.
+ *
+ * It is an estimate. A share is of each Subscription's own limit, so a pace
+ * measured on one carries to another only roughly; and a share counts
+ * everything run on that Subscription, not the factory's runs alone.
  */
 export function runwayOf(records: readonly RunRecord[], usedUp: readonly UsedUpSubscription[], now: string): Runway {
   const from = lastMonthStart(now);

@@ -62,6 +62,7 @@ import {
   RUN_RECORD_SCHEMA,
   runnerTimeOf,
   runsInFlightFactOf,
+  runwayOf,
   STANDING_NAMES,
   STANDING_SCHEMA,
   standingAt,
@@ -89,6 +90,7 @@ import type {
   RunnerTime,
   RunRecord,
   RunsRead,
+  Runway,
   SpendRead,
   Standing,
   StandingFacts,
@@ -473,6 +475,16 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // The runway
 
+  runwayOf: () =>
+    runwayOf(
+      [
+        aRunRecord({ endedAt: "2026-11-08T09:00:00Z", rateLimit: { ...A_WEEKLY_READING, utilization: 0.32 } }),
+        aRunRecord({ endedAt: "2026-11-08T19:00:00Z", rateLimit: A_WEEKLY_READING }),
+      ],
+      [],
+      NOW,
+    ),
+
   // The issues to roll in by hand
 
   // Outcomes
@@ -562,6 +574,8 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   RunnerTime: { minutes: 3, uncounted: 1 } satisfies RunnerTime,
 
   // The runway
+
+  Runway: { kind: "runs-out", at: "2026-11-11T05:00:00.000Z", heldUntil: "2026-11-13T04:00:00.000Z" } satisfies Runway,
 
   // The issues to roll in by hand
 
