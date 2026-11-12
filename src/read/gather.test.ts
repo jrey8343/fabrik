@@ -47,13 +47,13 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       expect(repo).toEqual({ owner: "jrey8343", name: "shop" });
       expect(ref).toBe(branch?.head);
       calls.files.push(path);
-      if (path === raw.failingFile) throw new GitHubError(`GitHub GET ${path} failed: 403`, 403);
+      if (path === raw.failingFile) throw new GitHubError(`GitHub GET ${path} failed: 403`, 403, { request: `GET ${path}`, body: JSON.stringify({ message: "Resource not accessible by integration" }) });
       return raw.files?.[path] ?? null;
     },
     async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
       calls.queries.push(query);
       expect(variables).toMatchObject({ owner: "jrey8343", name: "shop" });
-      if (raw.failing !== undefined && query.includes(raw.failing)) throw new GitHubError("GitHub GraphQL failed: 502", 502);
+      if (raw.failing !== undefined && query.includes(raw.failing)) throw new GitHubError("GitHub GraphQL failed: 502", 502, { request: "POST /graphql", body: "Bad Gateway" });
       const answer = (data: unknown) => data as T;
       const asked = (nodes: Record<string, unknown>[]) => (/states: OPEN/.test(query) ? nodes.filter(({ state }) => state === undefined || state === "OPEN") : nodes);
       const labelled = (label: unknown) => asked(issues).filter((issue) => ((issue["labels"] as { nodes: { name: string }[] } | undefined)?.nodes ?? []).some(({ name }) => name === label));
@@ -129,7 +129,7 @@ describe("a gather shaped for Home", () => {
 
       const read = await gatherRepo(client, "jrey8343/shop", NOW);
 
-      expect(read).toMatchObject({ product: true, release: "v3.1.0", operator: "kate", kitConfig: { ok: true }, facts: null, unread: "GitHub GraphQL failed: 502" });
+      expect(read).toMatchObject({ product: true, release: "v3.1.0", operator: "kate", kitConfig: { ok: true }, facts: null, unread: "POST /graphql failed with 502: Bad Gateway" });
     });
   });
 
@@ -153,7 +153,7 @@ describe("a gather shaped for Home", () => {
 
       const read = await gatherRepo(client, "jrey8343/shop", NOW);
 
-      expect(read).toMatchObject({ product: true, release: "v3.1.0", operator: "jrey8343", uiBlock: "unknown", kitConfig: { ok: false }, facts: null, unread: "GitHub GET .fabrik/config.json failed: 403" });
+      expect(read).toMatchObject({ product: true, release: "v3.1.0", operator: "jrey8343", uiBlock: "unknown", kitConfig: { ok: false }, facts: null, unread: "GET .fabrik/config.json failed with 403: Resource not accessible by integration" });
     });
 
     it("is still said when a query of the facts fails", async () => {

@@ -6,7 +6,7 @@
 // works the rows out of them by that rule, each with its title and the Fabrik
 // App's last word, as a Product repo's row carries them (./rows.ts). No
 // history, no Run record and no transcript is read here.
-import { pagesOf, type ReadClient } from "../github/client.ts";
+import { pagesOf, type ReadClient, whyUnread } from "../github/client.ts";
 import { ACTOR, COMMENTS, LABEL_EVENTS, openIssueOf, PAGE_INFO, type RawIssue } from "../github/facts.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { loginOf } from "../github/snapshot.ts";
@@ -122,7 +122,7 @@ export async function gatherStore(client: ReadClient, _now: string, appLogin: st
   try {
     return { ...store, facts: await gatherStoreFacts(client, appLogin), unread: null };
   } catch (error) {
-    return { ...store, facts: null, unread: error instanceof Error ? error.message : String(error) };
+    return { ...store, facts: null, unread: whyUnread(error, "A read of the store") };
   }
 }
 

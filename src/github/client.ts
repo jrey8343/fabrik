@@ -73,6 +73,20 @@ export function gitHubMessageOf(error: GitHubError): string {
 }
 
 /**
+ * Why a read came back unread, one wording for every read a reader makes: the
+ * request GitHub refused, with its status and what it said, or the one it
+ * never answered, and why; `read` names the request when the thrower didn't.
+ * Any other failure says its own message.
+ */
+export function whyUnread(error: unknown, read: string): string {
+  if (error instanceof GitHubError) {
+    const request = error.request === "" ? read : error.request;
+    return error.status === 0 ? `${request} got no answer from GitHub: ${error.message}` : `${request} failed with ${error.status}: ${gitHubMessageOf(error)}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * The REST status matching a GraphQL error's `type`, for those GitHub names.
  * An error with no type, or one not listed, is read as GitHub's own failure.
  */

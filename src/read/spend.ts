@@ -3,7 +3,7 @@
 // time summed from the records. Each Subscription's last weekly-limit reading
 // is the Replay gate's own rule (subscriptionReadingsOf, src/kit/replayFacts.ts).
 // Read only, over the API: no checkout and no filesystem.
-import { GitHubError, gitHubMessageOf, type ReadClient } from "../github/client.ts";
+import { type ReadClient, whyUnread } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { newerSchemaOf, readRunRecord, type RunRecord, type UnreadableRunRecords } from "../kit/runRecord.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
@@ -58,7 +58,7 @@ export async function readSpend(
     return { kind: "read", ...readRecords(stored), timeZone: (caller === null ? null : timeZoneIn(caller)) ?? "UTC" };
   } catch (error) {
     // A refusal, or a read GitHub failed, of the store's trees, its caller or a record.
-    return { kind: "unread", why: whyUnread(error) };
+    return { kind: "unread", why: whyUnread(error, "A read of the store") };
   }
 }
 
@@ -141,15 +141,6 @@ function parsed(text: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-/** Why the store couldn't be read, in GitHub's words where GitHub gave them. */
-function whyUnread(error: unknown): string {
-  if (error instanceof GitHubError) {
-    const request = error.request === "" ? "A read of the store" : error.request;
-    return error.status === 0 ? `${request} got no answer from GitHub: ${error.message}` : `${request} failed with ${error.status}: ${gitHubMessageOf(error)}`;
-  }
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** A week's runner time, in whole minutes, with the records that gave no duration. */

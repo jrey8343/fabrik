@@ -172,7 +172,7 @@ function storeWith(raw: RawStore): { client: ReadClient; queries: string[] } {
     async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
       queries.push(query);
       expect(variables).toMatchObject({ owner: RUN_STORE.owner, name: RUN_STORE.name });
-      if (raw.failing !== undefined && query.includes(raw.failing)) throw new GitHubError("GitHub GraphQL failed: 502", 502);
+      if (raw.failing !== undefined && query.includes(raw.failing)) throw new GitHubError("GitHub GraphQL failed: 502", 502, { request: "POST /graphql", body: "Bad Gateway" });
       const answer = (data: unknown) => data as T;
       if (query.includes("labels: [$label]")) {
         expect(variables["label"]).toBe("fabrik:weekly-summary");
@@ -239,7 +239,7 @@ describe("the gather of the store", () => {
   it("still gives the release when a query of the facts fails, with no facts and why", async () => {
     const read = await gatherRepo(storeWith({ failing: "issues(states: OPEN" }).client, RUN_STORE_REPO, NOW);
 
-    expect(read).toEqual({ repo: RUN_STORE_REPO, product: false, store: true, release: "v3.1.0", facts: null, unread: "GitHub GraphQL failed: 502" });
+    expect(read).toEqual({ repo: RUN_STORE_REPO, product: false, store: true, release: "v3.1.0", facts: null, unread: "POST /graphql failed with 502: Bad Gateway" });
   });
 
   it("reads its Weekly summary issues newest first, each with whether it is open, when its body was last written and the Fabrik App's comments on it", async () => {

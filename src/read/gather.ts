@@ -10,7 +10,7 @@
 // merged in the last 24 hours and each open agent pull request's
 // cross-references. The rows are worked out from its facts by ./rows.ts.
 import { gatherWeeklyRunIssues, isAgent, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
-import { pagesOf, type ReadClient, type Repo } from "../github/client.ts";
+import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
@@ -171,7 +171,7 @@ export async function gatherRepo(client: ReadClient, repo: string, now: string, 
     kitConfig = resolveKitConfig(await readKitConfigSources(client, at, branch.target.oid));
   } catch (error) {
     // With no Kit config to read the repo by, none of its facts are read either.
-    const why = messageOf(error);
+    const why = whyUnread(error, "A read of the Kit config");
     const unreadConfig = { ok: false, errors: [`${KIT_CONFIG_PATH} could not be read: ${why}`] } as const;
     return { repo, product: true, release, operator: repository.owner.login, kitConfig: unreadConfig, uiBlock: "unknown", facts: null, unread: why };
   }
@@ -182,13 +182,8 @@ export async function gatherRepo(client: ReadClient, repo: string, now: string, 
     const kit = { repo, branch: branch.name, config: kitConfig };
     return { ...product, facts: await gatherFacts(client, at, kit, operator, appLogin, now), unread: null };
   } catch (error) {
-    return { ...product, facts: null, unread: messageOf(error) };
+    return { ...product, facts: null, unread: whyUnread(error, "A read of the repo") };
   }
-}
-
-/** What a failed read says of why it failed. */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** The facts of one Product repo, as of `now`. */

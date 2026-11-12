@@ -7,7 +7,7 @@
 // are Tickets is said here, so a reader holds no rule of its own. What a
 // merged pull request cost is worked out from its `merged` by
 // costPerMergedPullRequestOf (src/kit/mergedCost.ts). Read only.
-import { GitHubError, gitHubMessageOf, type ReadClient } from "../github/client.ts";
+import { GitHubError, type ReadClient, whyUnread } from "../github/client.ts";
 import { isAgent, LABEL_EVENTS, PAGE_INFO, type RawActor } from "../github/facts.ts";
 import { loginOf } from "../github/snapshot.ts";
 import { type Window, within } from "../kit/retroEvidence.ts";
@@ -165,7 +165,7 @@ export async function readOutcomes(
     });
     return { repo, readAt: now, work, merged, unread: null };
   } catch (error) {
-    return { repo, readAt: now, work: "unread", merged: "unread", unread: whyUnread(error) };
+    return { repo, readAt: now, work: "unread", merged: "unread", unread: whyUnread(error, "A read of the outcomes") };
   }
 }
 
@@ -273,13 +273,4 @@ function isTicket(issue: RawIssue, named: boolean, appLogin: string | null): boo
   if (!everReady || issue.subIssues.nodes.length > 0) return false;
   const kind = neverRelatedKindOf({ author: loginOf(issue.author), labels, subIssues: [] }, appLogin);
   return kind === null || kind === "monitor";
-}
-
-/** Why the outcomes couldn't be read, in GitHub's words where GitHub gave them. */
-function whyUnread(error: unknown): string {
-  if (error instanceof GitHubError) {
-    const request = error.request === "" ? "A read of the outcomes" : error.request;
-    return error.status === 0 ? `${request} got no answer from GitHub: ${error.message}` : `${request} failed with ${error.status}: ${gitHubMessageOf(error)}`;
-  }
-  return error instanceof Error ? error.message : String(error);
 }
