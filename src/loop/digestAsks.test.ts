@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aDigestFacts, aDigestGiven, aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
@@ -10,6 +11,9 @@ import {
   digestCommentOf,
   digestItemsOf,
   digestMarkIn,
+  MAX_ITEMS,
+  MAX_SUGGESTED_REQUEST_WORDS,
+  MAX_TOP_WORDS,
   noDigestLine,
   readDigestReply,
 } from "./digestContract.ts";
@@ -504,5 +508,59 @@ describe("The 180 words of a Digest's top", () => {
 
     expect(digestCommentOf(spaced, GIVEN)).toMatchObject({ ok: true });
     expect(refusalOf({ ...spaced, howItGotHere: `${words(45)} more` })).toMatch(/come to 181 words between them/);
+  });
+});
+
+describe("The README's Digest section, on Needs your eyes", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("\n## Digest\n")[1]?.split("\n## ")[0] ?? "";
+  const bullets = section.split("\n").filter((line) => line.startsWith("- **"));
+  const eyes = bullets.find((line) => line.startsWith("- **Needs your eyes**")) ?? "";
+
+  it("comes straight after Kit code's facts", () => {
+    expect(bullets[bullets.findIndex((line) => line.startsWith("- **Kit code's facts**")) + 1]).toBe(eyes);
+    expect(eyes).not.toBe("");
+  });
+
+  it("says what the asks are, who is left out of them and how each is named and answered", () => {
+    for (const said of ["every Request changes of yours", "every line comment in each", "dismissed", "deferred during a Retry", "`review-<id>`", "`inline-<id>`", "the same at every head"]) {
+      expect(eyes).toContain(said);
+    }
+    expect(eyes).toContain("is listed by its line comments alone");
+    expect(eyes).toContain("(`c1`, `c2`, …)");
+    expect(eyes).toContain("in the head, not in the head, or could not tell");
+    expect(eyes).toContain("a test, an end-to-end test, reading, a search, or Required checks");
+  });
+
+  it("names the three kinds in the order the contract puts them, the section and the fold as the contract renders them", () => {
+    const body = bodyOf(aDigestReply({ asks: FOUR_ANSWERS }));
+    const kinds = ["asked for and not here", "yours to judge", "not proven"].map((kind) => eyes.indexOf(kind));
+
+    expect(kinds.every((at) => at >= 0)).toBe(true);
+    expect(kinds).toEqual(kinds.toSorted((a, b) => a - b));
+    expect(body).toContain("\n### Needs your eyes\n\nNothing.\n");
+    expect(eyes).toContain('"Nothing."');
+    expect(body).toContain("<summary>The criteria and how each was checked</summary>");
+    expect(eyes).toContain("a fourth fold, **The criteria and how each was checked**");
+    expect(eyes).toContain("`asks`");
+    expect(eyes).toContain("`items`");
+  });
+
+  it("gives the limits the contract holds, and what is refused and what is only dropped or put in order", () => {
+    expect(MAX_ITEMS).toBe(4);
+    expect(eyes).toContain("at most four items");
+    expect(eyes).toContain(`more than ${MAX_TOP_WORDS} words between them`);
+    expect(eyes).toContain(`at most ${MAX_SUGGESTED_REQUEST_WORDS} words`);
+    expect(eyes).toContain("90 words for Needs your eyes and 40 each for the other two");
+    expect(eyes).toContain("an ask of Kit code's left unanswered");
+    expect(eyes).toContain("which Kit code drops, keeping the item");
+    expect(eyes).toContain("which Kit code puts in order");
+  });
+
+  it("gives the comment's first line as the contract writes it", () => {
+    const firstLine = (bodyOf(aDigestReply({ asks: FOUR_ANSWERS })).split("\n")[0] ?? "").replace(/"[0-9a-f]{40}"/, "…").replace(/\[[^\]]*\]/, "[…]");
+
+    expect(firstLine).toBe('<!-- fabrik:digest {"head":…,"asks":[…]} -->');
+    expect(section).toContain(`\`${firstLine}\``);
   });
 });
