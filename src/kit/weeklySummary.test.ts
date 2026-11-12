@@ -1285,6 +1285,49 @@ describe("the Weekly summary", () => {
       expect(stuckIn(facts, kit)).toEqual([]);
     });
 
+    describe("a passed draft waiting on its Digest (#654)", () => {
+      /** Agent draft #51, passed on its head a minute before `agent:digest` went on at `askedAt`. */
+      const waiting = (askedAt: string) =>
+        draft(ago(Date.parse(NOW) - Date.parse(askedAt) + 10 * MINUTE), {
+          comments: [aVerdictComment("pass", "h".repeat(40), ago(Date.parse(NOW) - Date.parse(askedAt) + MINUTE))],
+          labelEvents: [aLabelAdded("agent:digest", askedAt)],
+        });
+      const aDigestRun = aRunInFlight({ role: "digest", issue: 7, pullRequest: 51, exact: true });
+
+      it("lists nothing for one before the bar, its Digest run in flight or not yet begun: the body is the same as with no pull request open", () => {
+        const quiet = summaryWith({});
+        const notStarted = summaryWith({ openPullRequests: [waiting(hoursAgo(1))] });
+        const running = summaryWith({ openPullRequests: [waiting(hoursAgo(1))] }, aRepoKit({ runsInFlight: [aDigestRun] }));
+        expect(notStarted.summary.repos[0]).toMatchObject({ waitingOnYou: [], stuck: [], held: null });
+        expect(running.summary.repos[0]).toMatchObject({ waitingOnYou: [], stuck: [], held: null });
+        expect(notStarted.body).toBe(quiet.body);
+        expect(running.body).toBe(quiet.body);
+      });
+
+      it("lists one at the bar under Stuck, on its pull request, with its sentence and remedy", () => {
+        const result = summaryWith({ openPullRequests: [waiting(hoursAgo(4))] });
+        expect(result.summary.repos[0]?.stuck).toEqual([
+          {
+            kind: "silence",
+            number: 51,
+            title: "Build the thing",
+            url: "https://github.com/owner/product/pull/51",
+            since: hoursAgo(4),
+            age: 4 * HOUR,
+            sentence: "No Digest was started for #51 after its pass, 4 hours ago, and the Merge gate never opened.",
+            remedy: `${RUNS}, then mark #51 ready for review.`,
+          },
+        ]);
+        expect(result.body).toContain(
+          ["### Stuck", "", `- [#51](https://github.com/owner/product/pull/51) Build the thing: No Digest was started for #51 after its pass, 4 hours ago, and the Merge gate never opened. ${RUNS}, then mark #51 ready for review.`, ""].join("\n"),
+        );
+      });
+
+      it("never lists one whose Digest run is in flight, however long ago the label went on", () => {
+        expect(stuckIn({ openPullRequests: [waiting(hoursAgo(30))] }, aRepoKit({ runsInFlight: [aDigestRun] }))).toEqual([]);
+      });
+    });
+
     it("reads no Run record: a failed run on record lists nothing anywhere", () => {
       const records = [aRunRecord({ endedAt: hoursAgo(40), jobResult: "cancelled", infrastructureFailure: "timeout" })];
       const result = summaryWith({ openIssues: [anOpenIssue({ number: 7 })] }, aRepoKit(), records);
