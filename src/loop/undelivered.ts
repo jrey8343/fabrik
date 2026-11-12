@@ -10,10 +10,8 @@
 import { type HeldOn, heldUntilReset } from "./hold.ts";
 import { DISPATCH_LABEL } from "./labels.ts";
 import { undeliveredMarker } from "./markers.ts";
+import { UNDELIVERED_GRACE_MINUTES } from "./recoveryWaits.ts";
 import type { Action, ConflictCandidate, PullRequestSnapshot, UnbuiltChangesRequest } from "./types.ts";
-
-/** How long a Request changes waits for GitHub to deliver it before the Kit counts it as undelivered. */
-export const UNDELIVERED_GRACE_MINUTES = 10;
 
 /**
  * The Operator's Request changes on this PR that nothing has settled, oldest
@@ -59,14 +57,15 @@ function actsOn(pullRequest: PullRequestSnapshot): boolean {
  * if the rest fails, the next check, or re-adding agent:implement, still
  * starts the run. `held` is the carrier a run due now is held on,
  * or null when it would start, and `heldTickets` the Tickets whose Implement
- * run is held (#424).
+ * run is held (#424). `waitMinutes` is the record's undeliveredRequestChanges
+ * (src/loop/recoveryWaits.ts), which a PR that merges cleanly waits out.
  */
 export function actOnUndelivered(
   { pullRequest, mergeable }: ConflictCandidate,
   operator: string,
   now: string,
   held: HeldOn | null = null,
-  runMinutes: number = UNDELIVERED_GRACE_MINUTES,
+  waitMinutes: number,
   implementJobUnderWay: boolean | null = null,
   heldTickets: readonly number[],
 ): Action[] | null {
@@ -77,9 +76,9 @@ export function actOnUndelivered(
   if (!actsOn(pullRequest)) return null;
   const unnoted = unnotedChangesRequests(pullRequest, operator);
   // GitHub delivers a review on a PR that merges cleanly, so a run may be working for it whose claim never noted it:
-  // the Kit waits until that run can't still be working (`runMinutes`, the Implement job's timeout) before starting
-  // another. A PR that conflicts, or may, had none started.
-  const grace = mergeable === true ? Math.max(runMinutes, UNDELIVERED_GRACE_MINUTES) : UNDELIVERED_GRACE_MINUTES;
+  // the Kit waits until that run can't still be working (`waitMinutes`, at least the Implement job's timeout) before
+  // starting another. A PR that conflicts, or may, had none started.
+  const grace = mergeable === true ? waitMinutes : UNDELIVERED_GRACE_MINUTES;
   const cutoff = Date.parse(now) - grace * 60_000;
   if (!unnoted.some(({ submittedAt }) => Date.parse(submittedAt) <= cutoff)) return null;
   const reviews = unnoted.map(({ review }) => review);
