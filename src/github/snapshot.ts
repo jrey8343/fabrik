@@ -10,6 +10,7 @@ import {
   type KitConfigSources,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
+import type { ActionsStep } from "../kit/kitSaid.ts";
 import { isOperatorsReplay } from "../kit/replay.ts";
 import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
@@ -498,6 +499,21 @@ export const AUDIT_JOB_NAME = "Audit";
 export const RETRO_JOB_NAME = "Retro";
 export const RERUN_CHECKS_JOB_NAME = "Re-run red checks";
 export const RERUN_WAIT_JOB_NAME = "Re-run checks' wait";
+
+/**
+ * The name of the Kit job in .github/workflows/loop.yml (a test holds the two
+ * together), whose closing step's name says what it routed (#616). Called
+ * from a Product repo's caller workflow, it shows up as `<caller job> / Kit`.
+ */
+export const KIT_JOB_NAME = "Kit";
+
+/**
+ * The names of a Replay's jobs in .github/workflows/loop.yml (a test holds
+ * them together): each of its Arms' jobs, followed by ` (<arm>)`, and the job
+ * that records it, which a Replay's run is in flight until (#617).
+ */
+export const REPLAY_ARM_JOB_NAMES = ["Replay implement", "Replay gates", "Replay review", "Replay score"] as const;
+export const REPLAY_RECORD_JOB_NAME = "Replay record";
 
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
@@ -2099,15 +2115,27 @@ function firstTurnClaimed(timeline: readonly LabelTimelineItem[]): boolean {
 /** Workflow-run statuses, short of completed, whose Implement job may still hold a slot. */
 const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "requested"] as const;
 
-interface Job {
+/** A job of a workflow run not yet completed, as Actions lists it, with what it says of its run. */
+export interface ActionsJob {
   /** The workflow run the job is in. */
-  run: number;
+  readonly run: number;
+  /** That workflow run's attempt. */
+  readonly attempt: number;
   /** When Actions created that workflow run, ISO 8601. */
-  createdAt: string;
-  name: string;
-  status: string;
-  conclusion: string | null;
+  readonly createdAt: string;
+  /** That workflow run's page. */
+  readonly runUrl: string;
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  /** When the job got a runner, ISO 8601; null while it has none. */
+  readonly startedAt: string | null;
+  /** The job's page, where its live log is. */
+  readonly url: string;
+  readonly steps: readonly ActionsStep[];
 }
+
+type Job = ActionsJob;
 
 /**
  * The Implement jobs under way and the Research jobs not yet finished, across
@@ -2241,8 +2269,27 @@ function implementJobsUnderWay(jobs: readonly Job[]): Job[] {
 }
 
 /** Whether a job's name is `jobName`, or `<caller job> / <jobName>` when a Product repo's caller workflow ran it. */
-function isJobNamed(name: string, jobName: string): boolean {
+export function isJobNamed(name: string, jobName: string): boolean {
   return name === jobName || name.endsWith(` / ${jobName}`);
+}
+
+/**
+ * Whether a job's name is that of the agent job a route to `role` starts: an
+ * Implement or Review job, named for its work or not, a Design-session or
+ * prototype turn, or a Triage, Audit, Retro or Research job. Never asked of a
+ * skipped job, whose name is never worked out.
+ */
+export function isAgentJobNamed(role: AgentRole, name: string): boolean {
+  switch (role) {
+    case "implement":
+      return IMPLEMENT_JOB.test(name);
+    case "review":
+      return REVIEW_JOB.test(name);
+    case "design":
+      return DESIGN_JOB.test(name);
+    default:
+      return UNNUMBERED_JOBS.some(([jobName, jobRole]) => jobRole === role && isJobNamed(name, jobName));
+  }
 }
 
 /**
@@ -2402,22 +2449,53 @@ function triggerHistoryOf(items: readonly TriggerTimelineItem[], appLogin: strin
   });
 }
 
-/** Every job, finished or not, of every workflow run not yet completed. */
-async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, repo: Repo): Promise<Job[]> {
+interface ListedWorkflowRun {
+  readonly id: number;
+  readonly created_at: string;
+  readonly run_attempt?: number;
+  readonly html_url?: string;
+}
+
+interface ListedJob {
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion?: string | null;
+  readonly started_at?: string | null;
+  readonly html_url?: string | null;
+  readonly steps?: readonly { readonly name: string; readonly status: string; readonly conclusion?: string | null }[];
+}
+
+/**
+ * Every job, finished or not, of every workflow run not yet completed, each
+ * with its steps: one listing per unfinished status, then one of each run's
+ * jobs. A job has a start only once it is in progress or done, since Actions
+ * gives a queued job one too. Throws when the Actions API can't be read.
+ */
+export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, repo: Repo): Promise<ActionsJob[]> {
   const base = `/repos/${repo.owner}/${repo.name}/actions`;
-  const runs = new Map<number, string>();
+  const runs = new Map<number, ListedWorkflowRun>();
   for (const status of UNFINISHED_RUNS) {
-    const page = (await github.rest("GET", `${base}/runs?status=${status}&per_page=100`)) as {
-      workflow_runs: { id: number; created_at: string }[];
-    };
-    for (const run of page.workflow_runs) runs.set(run.id, run.created_at);
+    const page = (await github.rest("GET", `${base}/runs?status=${status}&per_page=100`)) as { workflow_runs: ListedWorkflowRun[] };
+    for (const run of page.workflow_runs) runs.set(run.id, run);
   }
-  const jobs: Job[] = [];
-  for (const [id, createdAt] of runs) {
-    const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
-      jobs: { name: string; status: string; conclusion?: string | null }[];
-    };
-    jobs.push(...page.jobs.map((job) => ({ run: id, createdAt, name: job.name, status: job.status, conclusion: job.conclusion ?? null })));
+  const jobs: ActionsJob[] = [];
+  for (const [id, run] of runs) {
+    const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] };
+    const runUrl = run.html_url ?? `https://github.com/${repo.owner}/${repo.name}/actions/runs/${id}`;
+    jobs.push(
+      ...page.jobs.map((job) => ({
+        run: id,
+        attempt: run.run_attempt ?? 1,
+        createdAt: run.created_at,
+        runUrl,
+        name: job.name,
+        status: job.status,
+        conclusion: job.conclusion ?? null,
+        startedAt: job.status === "in_progress" || job.status === "completed" ? (job.started_at ?? null) : null,
+        url: job.html_url ?? runUrl,
+        steps: (job.steps ?? []).map((step) => ({ name: step.name, status: step.status, conclusion: step.conclusion ?? null })),
+      })),
+    );
   }
   return jobs;
 }
