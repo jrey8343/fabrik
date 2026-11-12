@@ -474,4 +474,42 @@ describe("a Product repo's rows", () => {
     expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
     expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
   });
+
+  it("carry their evidence, production and Prototype on every row, null where there is nothing, and survive a JSON round trip with each filled (#639)", () => {
+    const line = roundLineOf({
+      v: 1,
+      kind: "prototype",
+      round: 1,
+      intro: "Two takes.",
+      questions: [{ question: "Which variant?", recommendation: "A." }],
+      route: "/book",
+      variants: [{ letter: "A", summary: "Variant A", component: "https://github.com/owner/product/blob/h/src/A.tsx", preview: null }],
+      captures: { run: 4420, artifact: 902 },
+    });
+    const prototypeRound = aComment([designRoundMarker(1), PROTOTYPE_ROUND_MARKER, line, "Two takes."].join("\n"), "2026-11-08T19:00:00Z", { id: 5003 });
+    const marker = { run: 4410, artifact: 901, failure: null, routes: ["/book"], preview: { is: "linked", url: "https://fabrik-ticket-8.shop.example.dev/" } } as const;
+    const facts = homeFactsOf({
+      kit: { ...homeFactsOf().kit, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } } },
+      github: factsOf({
+        openIssues: [anOpenIssue({ number: 21, title: "Rework the booking page", labels: ["needs-design"], comments: [prototypeRound] }), TICKET],
+        openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8 })],
+        plainPullRequests: [aPlainPullRequest()],
+      }),
+      mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")],
+      evidenceMarkers: [
+        { pullRequest: 50, marker },
+        { pullRequest: 51, marker },
+      ],
+    });
+
+    const rows = rowsOf(facts, null, null, null, NOW);
+
+    for (const row of rows) expect(Object.keys(row)).toEqual(expect.arrayContaining(["evidence", "production", "prototype"]));
+    expect(rows.filter(({ evidence }) => evidence !== null).map(({ standing }) => standing.pullRequest)).toEqual(expect.arrayContaining([50, 51]));
+    expect(rows.filter(({ production }) => production !== null).map(({ standing }) => standing.pullRequest)).toEqual([50]);
+    expect(rows.filter(({ prototype }) => prototype !== null).map(({ standing }) => standing.issue)).toEqual([21]);
+    expect(rows.filter(({ evidence, production, prototype }) => evidence === null && production === null && prototype === null).length).toBeGreaterThan(0);
+    expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
+    expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
+  });
 });
