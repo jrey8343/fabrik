@@ -7,12 +7,13 @@
 // read for the facts it hands the writer (src/agent/inputs.ts), and the
 // Digest's rounds table is rendered from the push job's own, never from what
 // the agent job passed out.
+import { capturedRoutesOf } from "../evidence/uiEvidence.ts";
 import { ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { type DigestGiven, parseDigestReply } from "../loop/digestContract.ts";
 import { type DigestThread, digestFactsOf } from "../loop/digestFacts.ts";
 import { allPages, type ReadClient, type Repo } from "./client.ts";
 import { readDigestHead } from "./digestHead.ts";
-import { deferredChangesRequestsOn } from "./snapshot.ts";
+import { digestSnapshotOn } from "./snapshot.ts";
 import { countLandedNothing } from "./threads.ts";
 
 /** What the push job already knows of a Digest when its run ends: where it goes, the head it is written as of, its run, and who the Operator is. */
@@ -33,12 +34,15 @@ export interface DigestWritten {
 /**
  * What Kit code hands the contract for the Digest of `written.pullRequest`
  * at `written.headSha`: what the push job knows already, Kit code's facts,
- * worked out from the pull request's thread as `github` reads it now, and
- * what that head holds of the files the reply's places name
- * (readDigestHead). Among the facts are the asks the writer's reply is
- * checked against, so the Operator's Request changes deferred during a Retry
- * are read here as the agent job's inputs step read them, from the Loop's
- * snapshot of the pull request.
+ * worked out from the pull request's thread as `github` reads it now, what
+ * that head holds of the files the reply's places name (readDigestHead),
+ * and the routes its UI evidence captured (capturedRoutesOf). Among the
+ * facts are the asks the writer's reply is checked against, so the
+ * Operator's Request changes deferred during a Retry are read here as the
+ * agent job's inputs step read them, from the Loop's snapshot of the pull
+ * request. The captured routes come from that same read of it: its evidence
+ * marker, as the snapshot reads it, only from a body a bot wrote. Each
+ * item's picture is checked against them, never against the reply.
  *
  * The reply says only which files to read: each place is checked against
  * what the read found, never against the reply. One that breaks its shape
@@ -49,13 +53,14 @@ export async function readDigestGiven(github: ReadClient, repo: Repo, written: D
   const operator = written.operator ?? repo.owner;
   const reply = parseDigestReply(written.output);
   const named = reply.ok ? reply.output.items.flatMap(({ places }) => places.map(({ path }) => path)) : [];
-  const [facts, head] = await Promise.all([
-    deferredChangesRequestsOn(github, repo, pullRequest, operator)
-      .then((deferred) => readDigestThread(github, repo, pullRequest, operator, deferred))
-      .then(digestFactsOf),
+  const [{ facts, capturedRoutes }, head] = await Promise.all([
+    digestSnapshotOn(github, repo, pullRequest, operator).then(async ({ deferredChangesRequests, uiEvidenceMarker }) => ({
+      facts: digestFactsOf(await readDigestThread(github, repo, pullRequest, operator, deferredChangesRequests)),
+      capturedRoutes: capturedRoutesOf(uiEvidenceMarker),
+    })),
     readDigestHead(github, repo, pullRequest, headSha, named),
   ]);
-  return { repoUrl, pullRequest, headSha, runUrl, facts, head };
+  return { repoUrl, pullRequest, headSha, runUrl, facts, head, capturedRoutes };
 }
 
 /** When the pull request opened, its branch, and the comments on each issue it closes, as the Loop's snapshot reads a Ticket's (src/github/snapshot.ts). */

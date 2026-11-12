@@ -793,6 +793,18 @@ export function evidenceMarkerIn(body: string): EvidenceMarker | null {
 }
 
 /**
+ * The routes a pull request's UI evidence captured, as its evidence marker
+ * names them, in its order: the routes its section lists under "Captured
+ * routes", one whose every shot was missed among them, as `routes` holds
+ * them. None with no marker and with one whose capture kept no screenshots,
+ * a pull request with no UI evidence; and none with a marker that names no
+ * routes, as one written before markers recorded them.
+ */
+export function capturedRoutesOf(marker: EvidenceMarker | null): readonly string[] {
+  return marker === null || marker.artifact === null ? [] : (marker.routes ?? []);
+}
+
+/**
  * The body with what came of its preview deployment, once the push job has
  * polled it (src/kit/previewLink.ts): the evidence section run `run` wrote
  * links the preview, or says it never answered, where it said the preview is
