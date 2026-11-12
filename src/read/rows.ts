@@ -13,9 +13,12 @@ import { plainSinceOf } from "../kit/standingPlain.ts";
 import { isProductionStanding } from "../kit/standingProduction.ts";
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
+import { DESIGN_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { roundLineIn } from "../loop/roundLine.ts";
 import type { Facts } from "./gather.ts";
 import { followUpsOf, mentionsOf, relatedOf, relatedToOf } from "./related.ts";
 import { type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
+import { roundWaitsIn } from "./roundRead.ts";
 import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 import { type StoreFacts, storeRowsOf } from "./store.ts";
 import type { DeploymentsRead } from "./deployments.ts";
@@ -72,6 +75,30 @@ export interface Row {
    * Null on any other row.
    */
   readonly production: RowProduction | null;
+  /**
+   * On an open issue's row: its newest prototype round among the comments
+   * the gather read, when that round's hidden line reads. Null when it has
+   * none, a prototype failure round being none, or the newest was posted by
+   * an earlier release. A pointer to the Round, not the Round: the Round
+   * read (./roundRead.ts) gives its text.
+   */
+  readonly prototype: RowPrototype | null;
+}
+
+/** An issue's newest prototype round, as its hidden line records it. */
+export interface RowPrototype {
+  /** Its number in the Design session. */
+  readonly round: number;
+  /** Its comment's id: a Round's identity. */
+  readonly comment: number;
+  /** When it was posted, ISO 8601. */
+  readonly postedAt: string;
+  /** Whether it waits on the Operator: the session's last Round, with no reply of theirs since, by the Round read's own rule. */
+  readonly waiting: boolean;
+  /** The route its variants render on. */
+  readonly route: string;
+  /** The run and the artifact its captures are kept zipped in, or null when the prototype job kept none. */
+  readonly captures: { readonly run: number; readonly artifact: number } | null;
 }
 
 /** Where a merged agent pull request's change goes live, as Kit config's `production` block declares it. */
@@ -153,7 +180,7 @@ function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredCheck
  * Ticket's state.
  */
 export function bareRowOf(standing: Standing, title: string, lastWord: Row["lastWord"]): Row {
-  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null };
+  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null, prototype: null };
 }
 
 /**
@@ -174,7 +201,38 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
     plainPullRequest: pullRequest === null ? null : plainPullRequestOf(facts, pullRequest, standing.detail.pullRequest === undefined ? null : (owns.get(pullRequest) ?? null)),
     evidence: pullRequest === null ? null : evidenceOf(facts, pullRequest),
     production: pullRequest !== null && isProductionStanding(standing) ? productionOf(facts, pullRequest) : null,
+    prototype: issue === null ? null : prototypeOf(facts, issue),
   };
+}
+
+/**
+ * Open issue `issue`'s newest prototype round among the Fabrik App's
+ * comments, any bot's when its login is not known, when its line reads; null
+ * when the facts hold no such issue or it has no such round.
+ */
+function prototypeOf({ github, operator, appLogin }: Facts, issue: number): RowPrototype | null {
+  const comments = github.openIssues.find(({ number }) => number === issue)?.comments ?? [];
+  const byApp = ({ author, byBot }: CommentFacts) => (appLogin === null ? byBot : author === appLogin);
+  const at = comments.findLastIndex((comment) => byApp(comment) && isPrototypeRound(comment.body));
+  const round = comments[at];
+  const line = round === undefined ? null : roundLineIn(round.body);
+  if (round?.id === undefined || line?.kind !== "prototype") return null;
+  // Only the session's last Round can wait: one posted after it, a failure round among them, has moved the session on.
+  const followed = comments.slice(at + 1).some((comment) => byApp(comment) && DESIGN_ROUND_MARKER.test(comment.body));
+  return {
+    round: line.round,
+    comment: round.id,
+    postedAt: round.at,
+    waiting: !followed && roundWaitsIn(comments, operator, appLogin),
+    route: line.route,
+    captures: line.captures,
+  };
+}
+
+/** Whether a comment is a prototype round, whichever release posted it: a Round's marker, then the prototype round's. A failure round is not one. */
+function isPrototypeRound(body: string): boolean {
+  const [first = "", second = ""] = body.split("\n", 2);
+  return DESIGN_ROUND_MARKER.test(first) && second.replace(/\r$/, "") === PROTOTYPE_ROUND_MARKER;
 }
 
 /** Where merged agent pull request `pullRequest`'s change goes live, with the live page of each route it captured; null when Kit config declares no `production`. */

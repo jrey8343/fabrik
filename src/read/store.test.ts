@@ -56,6 +56,7 @@ describe("the store's rows", () => {
         plainPullRequest: null,
         evidence: null,
         production: null,
+        prototype: null,
       },
     ]);
   });

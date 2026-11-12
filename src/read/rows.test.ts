@@ -3,9 +3,10 @@ import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";
-import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
+import type { CommentFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
-import { handBackMarker } from "../loop/markers.ts";
+import { designRoundMarker, handBackMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { roundLineOf } from "../loop/roundLine.ts";
 import {
   aComment,
   aDeploymentsRead,
@@ -279,6 +280,87 @@ describe("a Product repo's rows", () => {
 
       expect(evidenceOf(null)).toEqual([null]);
       expect(rowsOf(facts, null, null, null, NOW).map(({ evidence }) => evidence)).toEqual([null, null]);
+    });
+  });
+
+  describe("an issue's Prototype (#639)", () => {
+    const at = (minute: number) => `2026-11-08T19:${String(minute).padStart(2, "0")}:00Z`;
+    const posted = (id: number, body: string, minute: number, overrides: Parameters<typeof aComment>[2] = {}) =>
+      aComment(body, at(minute), { id, url: `https://github.com/owner/product/issues/21#issuecomment-${id}`, ...overrides });
+    const question = { question: "Which variant?", recommendation: "B, as it shows the price first." };
+    const variant = (letter: string) => ({ letter, summary: `Variant ${letter}`, component: `https://github.com/owner/product/blob/${HEAD}/src/Book${letter}.tsx`, preview: null });
+    /** A prototype round as this release posts it, its line third. */
+    const prototypeRound = (round: number, captures: { run: number; artifact: number } | null = { run: 4410, artifact: 902 }) =>
+      [
+        designRoundMarker(round),
+        PROTOTYPE_ROUND_MARKER,
+        roundLineOf({ v: 1, kind: "prototype", round, intro: "Two takes on the booking page.", questions: [question], route: "/book", variants: [variant("A"), variant("B")], captures }),
+        "Two takes on the booking page.",
+        "",
+        "**Which variant?**",
+      ].join("\n");
+    const earlierPrototypeRound = (round: number) => [designRoundMarker(round), PROTOTYPE_ROUND_MARKER, "Two takes on the booking page.", "", "**Which variant?**"].join("\n");
+    const failureRound = (round: number) =>
+      [
+        designRoundMarker(round),
+        PROTOTYPE_FAILURE_ROUND_MARKER,
+        roundLineOf({ v: 1, kind: "prototype-failed", round, intro: "The build failed.", questions: [{ question: "Carry on without a prototype, or try again?", recommendation: "Carry on." }], otherAnswers: ["Try again"] }),
+        "The build failed.",
+      ].join("\n");
+    const ordinaryRound = (round: number) => `${designRoundMarker(round)}\nWhich of these should it do?`;
+    const reply = (id: number, minute: number) => posted(id, "B, but with a bigger button.", minute, { author: "operator", byBot: false });
+    const prototypeOf = (comments: readonly CommentFacts[], appLogin: string | null = "fabrik-app[bot]") => {
+      const facts = homeFactsOf({ appLogin, github: factsOf({ openIssues: [anOpenIssue({ number: 21, title: "Rework the booking page", labels: ["needs-design"], comments })] }) });
+      return rowsOf(facts, null, null, null, NOW)
+        .filter(({ standing }) => standing.issue === 21)
+        .map(({ prototype }) => prototype);
+    };
+
+    it("is the session's newest prototype round: its number, comment, time, route and captures, waiting while the Operator has not replied after it", () => {
+      const comments = [posted(5001, ordinaryRound(1), 0), reply(5002, 5), posted(5003, prototypeRound(2), 10)];
+
+      expect(prototypeOf(comments)).toEqual([{ round: 2, comment: 5003, postedAt: at(10), waiting: true, route: "/book", captures: { run: 4410, artifact: 902 } }]);
+    });
+
+    it("gives no captures when the prototype job kept none", () => {
+      expect(prototypeOf([posted(5003, prototypeRound(1, null), 10)])).toMatchObject([{ round: 1, captures: null, waiting: true }]);
+    });
+
+    it("no longer waits once the Operator replies after it, and a bot's reply or another person's is not theirs", () => {
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), reply(5004, 20)])).toMatchObject([{ comment: 5003, waiting: false }]);
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), posted(5004, "Deployed a preview.", 20, { author: "vercel[bot]" })])).toMatchObject([{ comment: 5003, waiting: true }]);
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), posted(5004, "Looks good.", 20, { author: "kate", byBot: false })])).toMatchObject([{ comment: 5003, waiting: true }]);
+    });
+
+    it("no longer waits once a later Round is posted, an ordinary one or a prototype failure round", () => {
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), posted(5004, ordinaryRound(3), 20)])).toMatchObject([{ round: 2, comment: 5003, waiting: false }]);
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), reply(5004, 15), posted(5005, failureRound(3), 20)])).toMatchObject([{ round: 2, comment: 5003, waiting: false }]);
+    });
+
+    it("is null when the newest prototype round was posted by an earlier release, with no line, even after one that has one", () => {
+      expect(prototypeOf([posted(5003, earlierPrototypeRound(2), 10)])).toEqual([null]);
+      expect(prototypeOf([posted(5003, prototypeRound(2), 10), reply(5004, 15), posted(5005, earlierPrototypeRound(3), 20)])).toEqual([null]);
+    });
+
+    it("is never a prototype failure round, nor an issue with no prototype round", () => {
+      expect(prototypeOf([posted(5003, failureRound(2), 10)])).toEqual([null]);
+      expect(prototypeOf([posted(5001, ordinaryRound(1), 0)])).toEqual([null]);
+      expect(prototypeOf([])).toEqual([null]);
+    });
+
+    it("reads a round's line only from the Fabrik App's comment, any bot's when the gather was given no App login", () => {
+      const quoted = posted(5003, prototypeRound(2), 10, { author: "kate", byBot: false });
+      const anotherBot = posted(5003, prototypeRound(2), 10, { author: "helper[bot]" });
+
+      expect(prototypeOf([quoted])).toEqual([null]);
+      expect(prototypeOf([anotherBot])).toEqual([null]);
+      expect(prototypeOf([anotherBot], null)).toMatchObject([{ comment: 5003, waiting: true }]);
+    });
+
+    it("is null on a row with no open issue: a pull request's with no Ticket", () => {
+      const facts = homeFactsOf({ github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 51, ticket: null, comments: [posted(5003, prototypeRound(2), 10)] })] }) });
+
+      expect(rowsOf(facts, null, null, null, NOW).map(({ prototype }) => prototype)).toEqual([null]);
     });
   });
 
