@@ -2,7 +2,7 @@
 // a GitHub facts snapshot per Product repo, the Operator and now, the one issue
 // filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
 // model call.
-import type { DispatchedRuns } from "../github/snapshot.ts";
+import { type DispatchedRuns, dispatchedRunsOf, type RunInFlightFact } from "../github/snapshot.ts";
 import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import {
@@ -207,14 +207,18 @@ export interface RepoKitFacts {
   readonly config: KitConfigResult;
   /** What a Dispatch check weighs, read as it reads it; null when the Kit config is invalid, as then nothing is read. */
   readonly dispatch: DispatchFacts | null;
+  /**
+   * The runs in flight in the repo (readRunsInFlight), read once, whatever its
+   * Kit config: Dispatch's count is made from them (dispatchedRunsOf).
+   * `unread` when the Actions token wasn't minted or GitHub wouldn't list them.
+   */
+  readonly runsInFlight: readonly RunInFlightFact[] | "unread";
 }
 
 /** What a Dispatch check weighs in one Product repo, as the Weekly summary reads it. */
 export interface DispatchFacts {
   /** The Tickets and research Decisions a Dispatch check weighs releasing (gatherDispatchCandidates). */
   readonly candidates: Pick<DispatchSnapshot, "tickets" | "researchDecisions">;
-  /** The Implement and Research runs in progress (countDispatchedRuns), or null when the Actions API couldn't be read. */
-  readonly runs: DispatchedRuns | null;
 }
 
 /** A Product repo whose GitHub facts couldn't be read this run, and why. */
@@ -1284,7 +1288,7 @@ function heldIn(facts: GitHubFacts, kit: RepoKitFacts | null, appLogin: string, 
   const monitor = heldMonitorOf(monitorIssues, appLogin);
   const mapCap = heldMapsOf(openMaps, config);
   const runs = heldRunsOf(kitIssues);
-  const dispatch = kit?.dispatch == null ? null : heldDispatchOf(facts, kit.dispatch, config, now);
+  const dispatch = kit?.dispatch == null ? null : heldDispatchOf(facts, kit.dispatch, kit.runsInFlight === "unread" ? null : dispatchedRunsOf(kit.runsInFlight), config, now);
   const held = { designSessions, monitor, maps: mapCap, runs, dispatch };
   return Object.values(held).every((source) => source === null) ? null : held;
 }
@@ -1297,7 +1301,7 @@ function heldIn(facts: GitHubFacts, kit: RepoKitFacts | null, appLogin: string, 
  * With the runs in progress unread, what was read can't show a slot free,
  * so the line is shown with what was read, marked.
  */
-function heldDispatchOf(facts: GitHubFacts, { candidates, runs }: DispatchFacts, config: KitConfig, now: number): HeldDispatch | null {
+function heldDispatchOf(facts: GitHubFacts, { candidates }: DispatchFacts, runs: DispatchedRuns | null, config: KitConfig, now: number): HeldDispatch | null {
   const heldRuns = { implement: heldOf("implement", facts.kitIssues), research: heldOf("research", facts.kitIssues) };
   const decisions = new Set(candidates.researchDecisions.map(({ number }) => number));
   const waiting = waitingForDispatch(candidates, heldRuns).map((number): WaitingForSlot => {
