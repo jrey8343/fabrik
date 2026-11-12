@@ -228,8 +228,8 @@ describe("What the push job applies", () => {
         12,
       );
 
-    it("is the prototype job's, with the request the Kit job built it on, and the capture result and Evidence page the prototype job passed out", () => {
-      expect(withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-evidence-page-artifact": "9201" })).toEqual({
+    it("is the prototype job's, with the request the Kit job built it on, and the capture result, captures and Evidence page the prototype job passed out", () => {
+      expect(withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-evidence-artifact": "9202", "ui-evidence-page-artifact": "9201" })).toEqual({
         kind: "agent-result",
         role: "design",
         issue: 12,
@@ -238,15 +238,29 @@ describe("What the push job applies", () => {
         startedBy: null,
         prototype: {
           request: { request: { route: "/book", variants: 3, brief: "- **A**: one long form.\n- **B**: a stepper." }, reply: 9001 },
-          capture: { result: captured, artifact: null, evidencePageArtifact: 9201, timedOut: false },
+          capture: { result: captured, artifact: 9202, evidencePageArtifact: 9201, timedOut: false },
         },
       });
     });
 
-    it("has no capture result or Evidence page when capture recorded nothing, and that's never a failure", () => {
-      expect(withOutputs({ "ui-capture-result": "", "ui-evidence-page-artifact": "" })).toMatchObject({
+    it("has no capture result, captures or Evidence page when capture recorded nothing, and that's never a failure", () => {
+      expect(withOutputs({ "ui-capture-result": "", "ui-evidence-artifact": "", "ui-evidence-page-artifact": "" })).toMatchObject({
         kind: "agent-result",
         prototype: { capture: { result: null, artifact: null, evidencePageArtifact: null } },
+      });
+    });
+
+    it.each(["", "abc", "0", "-3", "9.5"])("has no captures' artifact id when the one the prototype job passed out is %j", (id) => {
+      expect(withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-evidence-artifact": id, "ui-evidence-page-artifact": "9201" })).toMatchObject({
+        kind: "agent-result",
+        prototype: { capture: { result: captured, artifact: null, evidencePageArtifact: 9201 } },
+      });
+    });
+
+    it("has no captures' artifact id when the prototype job passed out none", () => {
+      expect(withOutputs({ "ui-capture-result": JSON.stringify(captured), "ui-evidence-page-artifact": "9201" })).toMatchObject({
+        kind: "agent-result",
+        prototype: { capture: { result: captured, artifact: null } },
       });
     });
 
