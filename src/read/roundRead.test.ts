@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "../kit/config.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { prototypeTurnRefused } from "../loop/failures.ts";
 import { type RoundLine, roundLineOf } from "../loop/roundLine.ts";
+import { aDesignTurnFailedNotice, aMapCapRefusal } from "./builders.ts";
 import { readRound } from "./roundRead.ts";
 
 const APP = { __typename: "Bot", login: "fabrik-app" };
@@ -180,6 +182,91 @@ describe("The Round read", () => {
         expect(read.waits).toBe("round");
         expect(read.round).toMatchObject({ round: 3, waiting: true, line });
       }
+    });
+  });
+
+  describe("a failed turn", () => {
+    /** The App's notice that the turn on #21 failed at `at`, naming run `run` in its hidden line, as the Kit posts it. */
+    const aFailedTurn = (at: string, run?: number) => aRawComment(aDesignTurnFailedNotice(at, run).body, at);
+    const reply = (at: string) => aRawComment("Try again.", at, OPERATOR);
+
+    it("with no reply since, waits, in the Standing's own sentence, with its run, the run's address and one in a row", async () => {
+      const { client } = repoWith({ comments: [aRound(1, "2026-11-12T06:00:00Z", anOrdinaryLine(1), 5001), reply("2026-11-12T07:00:00Z"), aFailedTurn("2026-11-12T09:00:00Z", 9100)] });
+
+      const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read.waits).toBe("failed-turn");
+      expect(read.failedTurn).toEqual({
+        sentence: "A Design-session turn failed 3 hours ago. Reply on the issue to run it again.",
+        run: 9100,
+        url: "https://github.com/jrey8343/shop/actions/runs/9100",
+        failedRunning: 1,
+      });
+      // A failed turn is not a Round: the session's last Round, answered, is still given.
+      expect(read.round).toMatchObject({ comment: 5001, waiting: false });
+    });
+
+    it("words a prototype turn's failure the same way, from the notice the Kit posts for it", async () => {
+      const notice = prototypeTurnRefused(21, "jrey8343", "its output broke the contract", "https://github.com/jrey8343/shop/actions/runs/9200/attempts/1");
+      const body = notice.kind === "act" && notice.actions[0]?.kind === "comment" ? notice.actions[0].body : "";
+      const { client } = repoWith({ comments: [aRound(1, "2026-11-12T06:00:00Z"), reply("2026-11-12T07:00:00Z"), aRawComment(body, "2026-11-12T11:00:00Z")] });
+
+      const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read.waits).toBe("failed-turn");
+      expect(read.failedTurn).toEqual({
+        sentence: "A Design-session turn failed 1 hour ago. Reply on the issue to run it again.",
+        run: 9200,
+        url: "https://github.com/jrey8343/shop/actions/runs/9200",
+        failedRunning: 1,
+      });
+    });
+
+    it("counts two after a reply ran the turn again and it failed again, and one again after a Round in between", async () => {
+      const twice = [aRound(1, "2026-11-12T06:00:00Z"), reply("2026-11-12T07:00:00Z"), aFailedTurn("2026-11-12T08:00:00Z", 9100), reply("2026-11-12T09:00:00Z"), aFailedTurn("2026-11-12T10:00:00Z", 9101)];
+      const roundBetween = [...twice, reply("2026-11-12T10:30:00Z"), aRound(2, "2026-11-12T11:00:00Z"), reply("2026-11-12T11:10:00Z"), aFailedTurn("2026-11-12T11:30:00Z", 9102)];
+
+      const second = await readRound(repoWith({ comments: twice }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+      const afterRound = await readRound(repoWith({ comments: roundBetween }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(second.failedTurn).toMatchObject({ run: 9101, failedRunning: 2 });
+      expect(afterRound.failedTurn).toMatchObject({ run: 9102, failedRunning: 1 });
+    });
+
+    it("counts from the session's start when it has no Round yet", async () => {
+      const { client } = repoWith({ comments: [aFailedTurn("2026-11-12T08:00:00Z", 9100), reply("2026-11-12T09:00:00Z"), aFailedTurn("2026-11-12T10:00:00Z", 9101)] });
+
+      const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "failed-turn", round: null, failedTurn: { failedRunning: 2 } });
+    });
+
+    it("from an earlier release, with no run in its hidden line, gives no run or address and is still counted", async () => {
+      const { client } = repoWith({ comments: [aFailedTurn("2026-11-12T08:00:00Z", 9100), reply("2026-11-12T09:00:00Z"), aFailedTurn("2026-11-12T10:00:00Z")] });
+
+      const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read.failedTurn).toEqual({ sentence: "A Design-session turn failed 2 hours ago. Reply on the issue to run it again.", run: null, url: null, failedRunning: 2 });
+    });
+
+    it("waits no more once the Operator has replied, as the turn runs again", async () => {
+      const { client } = repoWith({ comments: [aRound(1, "2026-11-12T06:00:00Z"), reply("2026-11-12T07:00:00Z"), aFailedTurn("2026-11-12T08:00:00Z", 9100), reply("2026-11-12T09:00:00Z")] });
+
+      const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", failedTurn: null });
+    });
+
+    it("is not the Map cap's refusal, which opens like one: nothing waits, and the refusal is not counted", async () => {
+      const refusal = (at: string) => aRawComment(aMapCapRefusal(at).body, at);
+      const refused = [aRound(1, "2026-11-12T06:00:00Z"), reply("2026-11-12T07:00:00Z"), refusal("2026-11-12T08:00:00Z")];
+      const failedAround = [aFailedTurn("2026-11-12T05:00:00Z", 9100), reply("2026-11-12T06:00:00Z"), refusal("2026-11-12T07:00:00Z"), reply("2026-11-12T08:00:00Z"), aFailedTurn("2026-11-12T09:00:00Z", 9101)];
+
+      const read = await readRound(repoWith({ comments: refused }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+      const counted = await readRound(repoWith({ comments: failedAround }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", failedTurn: null });
+      expect(counted.failedTurn).toMatchObject({ failedRunning: 2 });
     });
   });
 });

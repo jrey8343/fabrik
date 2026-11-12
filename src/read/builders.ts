@@ -31,7 +31,7 @@ import type {
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
-import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, MAP_CAP_REFUSAL_OPENING, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, handBackMarker, MAP_CAP_REFUSAL_OPENING, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
 import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
@@ -249,9 +249,14 @@ export function aDesignRound(round: number, at: string): CommentFacts {
   return aComment(`${designRoundMarker(round)}\nWhich of these should it do?`, at);
 }
 
-/** The Fabrik App's failure notice for a Design-session turn, at `at`. */
-export function aDesignTurnFailedNotice(at: string): CommentFacts {
-  return aComment(`${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn on #12 failed: it timed out.\n\nReply on this issue to run the turn again.`, at);
+/**
+ * The Fabrik App's failure notice for a Design-session turn, at `at`; when
+ * `run` is given, its hidden line names that Actions run, as this release
+ * writes it, and else it has none, as an earlier release's.
+ */
+export function aDesignTurnFailedNotice(at: string, run?: number): CommentFacts {
+  const said = `${DESIGN_TURN_FAILED_MARKER}\n@operator The Design-session turn on #12 failed: it timed out.\n\nReply on this issue to run the turn again.`;
+  return aComment(run === undefined ? said : `${said}\n${handBackMarker({ kind: "design-turn-failed", role: "design", failure: "timeout", run })}`, at);
 }
 
 /** The Fabrik App's refusal of a Map the Map cap holds, at `at`. */
