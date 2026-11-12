@@ -52,6 +52,16 @@ describe("a candidate", () => {
     expect(issueRow(facts)?.relatedTo).toBe(50);
   });
 
+  it("is said both ways wherever the pull request is on the Loop, a draft with no Verdict yet as at the Merge gate", () => {
+    const facts = homeFactsOf({
+      github: factsOf({ openIssues: [TICKET, FILED], openPullRequests: [{ ...PULL_REQUEST, draft: true, comments: [] }] }),
+      issueBodies: [{ issue: 30, body: FROM_PR_50 }],
+    });
+
+    expect(pullRequestRow(facts)?.related).toEqual([{ issue: 30, title: "Cache the prices", kind: "candidate" }]);
+    expect(issueRow(facts)?.relatedTo).toBe(50);
+  });
+
   describe("relates nothing", () => {
     const unrelated = (facts: Facts) => {
       expect(pullRequestRow(facts)?.related).toEqual([]);
@@ -288,6 +298,24 @@ describe("the Follow-ups", () => {
     it("leaves no mark for an issue with its title that is not related, such as one someone else opened", () => {
       expect(pullRequestRow(filedAs("Cache the prices", { author: "someone" }))?.followUps.map(({ filedAs: filed }) => filed)).toEqual([null, null]);
     });
+  });
+
+  it("survive a JSON round trip on rows holding one of each: a candidate, a mention, a pull request it is related to and a filed Follow-up", () => {
+    const facts = homeFactsOf({
+      github: factsOf({ openIssues: [TICKET, FILED], openPullRequests: [{ ...PULL_REQUEST, comments: [verdictListing("pass", HEAD, "2026-11-08T12:00:00Z")] }] }),
+      issueBodies: [{ issue: 30, body: FROM_PR_50 }],
+      crossReferences: [{ pullRequest: 50, issue: 40, title: "The cart is slow", open: true, repo: "owner/product" }],
+    });
+
+    const rows = rowsIn(facts);
+
+    expect(pullRequestRow(facts)).toMatchObject({
+      related: [{ issue: 30, title: "Cache the prices", kind: "candidate" }],
+      mentions: [{ issue: 40, title: "The cart is slow" }],
+      followUps: [{ title: "Cache the prices", filedAs: 30 }, { title: "Tidy the cart", filedAs: null }],
+    });
+    expect(issueRow(facts)?.relatedTo).toBe(50);
+    expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
   });
 
   it("are on the pull request's row alone", () => {
