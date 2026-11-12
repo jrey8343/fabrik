@@ -3,6 +3,7 @@ import type { CommentFacts, OpenIssueFacts, OpenPullRequestFacts, ReviewFacts } 
 import { followUpsSection } from "../loop/followUps.ts";
 import { aComment, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aReview, aRollInComment, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { ClosedIssueCommentsFacts, CrossReferenceFacts, Facts } from "./gather.ts";
+import { owedRollInsOf } from "./owedRollIn.ts";
 import { type Row, rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-12T20:00:00Z";
@@ -242,6 +243,49 @@ describe("an issue the Operator reopened", () => {
 
     expect(pullRequestRow(facts)?.related).toEqual([{ issue: 30, title: "Cache the prices", kind: "candidate" }]);
     expect(rowsIn(facts).find(({ standing }) => standing.issue === 30 && standing.pullRequest === null)?.relatedTo).toBe(50);
+  });
+});
+
+describe("every owed Roll-in of a repo, from its rows", () => {
+  /** A repo with a candidate and a mention on pull request 50, one Roll-in owed on it and two on pull request 51, one with no readable text. */
+  const facts = repoWith({
+    issues: [anOpenIssue({ number: 31, title: "Round the totals", author: "operator", labels: ["needs-triage"] })],
+    issueBodies: [{ issue: 31, body: "From PR #50" }],
+    pullRequests: [anOpenPullRequest({ number: 51, ticket: 8 })],
+    crossReferences: [
+      crossReference(),
+      crossReference({ issue: 40, title: "The cart is slow", open: true, closedAs: null }),
+      crossReference({ pullRequest: 51, issue: 34, title: "Sort the basket" }),
+      crossReference({ pullRequest: 51, issue: 33, title: "Show the saving" }),
+    ],
+    closedIssueComments: [
+      { issue: 30, comments: [SETTLED] },
+      { issue: 33, comments: [aRollInComment(51, "2026-11-12T10:00:00Z", { issue: 33, text: TEXT })] },
+      { issue: 34, comments: [aComment("<!-- fabrik:roll-in 51 -->\n**Design session finished.**", "2026-11-12T11:00:00Z", { url: "https://github.com/owner/product/issues/34#issuecomment-1" })] },
+    ],
+  });
+
+  it("is each with its issue and its pull request, so a reader holding either number finds the other, and nothing else", () => {
+    expect(pullRequestRow(facts)).toMatchObject({ related: [{ issue: 31, kind: "candidate" }, OWED], mentions: [{ issue: 40 }] });
+    expect(owedRollInsOf(rowsIn(facts))).toEqual([
+      { issue: 30, pullRequest: 50, title: "Cache the prices", at: SETTLED_AT, url: CLOSING_COMMENT, text: TEXT },
+      { issue: 33, pullRequest: 51, title: "Show the saving", at: "2026-11-12T10:00:00Z", url: "https://github.com/owner/product/issues/33#issuecomment-1", text: TEXT },
+      { issue: 34, pullRequest: 51, title: "Sort the basket", at: "2026-11-12T11:00:00Z", url: "https://github.com/owner/product/issues/34#issuecomment-1", text: null },
+    ]);
+  });
+
+  it("is none in a repo where no Roll-in is owed, and none from no rows", () => {
+    expect(owedRollInsOf(rowsIn(repoWith({ reviews: [aReview("2026-11-12T10:00:00Z", { body: "Roll in #30." })] })))).toEqual([]);
+    expect(owedRollInsOf([])).toEqual([]);
+  });
+
+  it("survives a JSON round trip, as the rows it is read from do", () => {
+    const rows = rowsIn(facts);
+    const owed = owedRollInsOf(rows);
+
+    expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
+    expect(JSON.parse(JSON.stringify(owed))).toStrictEqual(owed);
+    expect(owedRollInsOf(JSON.parse(JSON.stringify(rows)) as Row[])).toEqual(owed);
   });
 });
 

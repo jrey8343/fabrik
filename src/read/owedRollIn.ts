@@ -6,8 +6,45 @@
 // hidden line Kit code wrote beside the closing comment, never its Markdown.
 // Decided in #530 and #576. Pure, no I/O.
 import type { CommentFacts } from "../kit/weeklySummary.ts";
+import type { RollInText } from "../loop/markers.ts";
 import { owedRollIns, type RollInIssue, type SettledRollIn } from "../loop/owedRollIn.ts";
 import type { Facts } from "./gather.ts";
+import type { Row } from "./rows.ts";
+
+/** A Roll-in the Operator settled and has not sent, with the closed issue it is for and the open agent pull request it is owed on. */
+export interface OwedRollIn {
+  /** The issue, closed as not planned: it has no Standing and no row. */
+  readonly issue: number;
+  /** The open agent pull request the Roll-in was settled onto. */
+  readonly pullRequest: number;
+  /** The issue's title. */
+  readonly title: string;
+  /** When the Roll-in was settled: the closing comment's time. */
+  readonly at: string;
+  /** The closing comment. */
+  readonly url: string;
+  /** What to build, as the session gave it, or null when the comment's hidden line holds none this release can read. */
+  readonly text: RollInText | null;
+}
+
+/**
+ * Every owed Roll-in in a repo's rows (./rows.ts), lowest issue number
+ * first, each with its issue and its pull request: the issue is closed, so
+ * no row is its own and no row's `relatedTo` names it, and a reader holding
+ * either number finds the other here. Nothing else under a row's `related`
+ * is listed.
+ */
+export function owedRollInsOf(rows: readonly Row[]): OwedRollIn[] {
+  return rows
+    .flatMap(({ standing, related }) =>
+      related.flatMap((entry): OwedRollIn[] => {
+        if (entry.kind !== "owed" || standing.pullRequest === null) return [];
+        const { issue, title, at, url, text } = entry;
+        return [{ issue, pullRequest: standing.pullRequest, title, at, url, text }];
+      }),
+    )
+    .sort((a, b) => a.issue - b.issue || a.pullRequest - b.pullRequest);
+}
 
 /**
  * Each Roll-in owed on pull request `pullRequest`, lowest issue number
