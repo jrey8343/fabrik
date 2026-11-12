@@ -115,4 +115,7 @@ export type { Runway } from "./runway.ts";
 
 // The issues to roll in by hand
 
+export { readIssuesToRollIn } from "./rollIn.ts";
+export type { IssuesToRollIn, IssueToRollIn } from "./rollIn.ts";
+
 // Outcomes

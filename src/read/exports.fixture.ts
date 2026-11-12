@@ -55,6 +55,7 @@ import {
   kitSaidIn,
   newerSchemaOf,
   readCaller,
+  readIssuesToRollIn,
   readKitConfigSources,
   readRunRecord,
   readRuns,
@@ -83,6 +84,8 @@ import type {
   CallerRead,
   CostFigure,
   Facts,
+  IssuesToRollIn,
+  IssueToRollIn,
   KitConfig,
   KitConfigResult,
   KitConfigSources,
@@ -528,6 +531,15 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // The issues to roll in by hand
 
+  readIssuesToRollIn: () =>
+    readIssuesToRollIn(
+      REFUSING_CLIENT,
+      "owner/product",
+      { standing: { ...A_KEPT_STANDING, pullRequest: 50 }, related: [], mentions: [{ issue: 40, title: "The cart is slow" }] },
+      1,
+      "fabrik-app[bot]",
+    ),
+
   // Outcomes
 };
 
@@ -656,6 +668,16 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   Runway: { kind: "runs-out", at: "2026-11-11T05:00:00.000Z", heldUntil: "2026-11-13T04:00:00.000Z" } satisfies Runway,
 
   // The issues to roll in by hand
+
+  IssuesToRollIn: {
+    page: 1,
+    issues: [
+      { issue: 40, title: "The cart is slow", mentions: true },
+      { issue: 41, title: "Round the totals", mentions: false },
+    ],
+    more: false,
+  } satisfies IssuesToRollIn,
+  IssueToRollIn: { issue: 40, title: "The cart is slow", mentions: true } satisfies IssueToRollIn,
 
   // Outcomes
 };
