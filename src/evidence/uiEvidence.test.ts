@@ -377,7 +377,7 @@ describe("The evidence section a UI PR's body carries", () => {
         "",
         "- `/book`, named by the Ticket",
         "- `/book/waitlist`, named by the Implementer",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/book","/book/waitlist"],"preview":{"is":"none"}} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/book","/book/waitlist"],"preview":{"is":"none"},"missed":[]} -->`,
       ].join("\n"),
     );
   });
@@ -397,6 +397,7 @@ describe("The evidence section a UI PR's body carries", () => {
       failure: null,
       routes: ["/book", "/book/waitlist", "/"],
       preview: { is: "pending" },
+      missed: [],
     });
   });
 
@@ -425,7 +426,7 @@ describe("An evidence section an earlier release wrote, naming the Evidence page
   ])("still has its marker found, %s", (_, evidencePage) => {
     const body = asAnEarlierReleaseWroteIt(`Adds a waitlist to full days.\n\n${evidenceSection(evidence(allCaptured, { evidencePage }))}\n\nCloses #12`);
 
-    expect(evidenceMarkerIn(body)).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/book", "/book/waitlist"], preview: { is: "none" } });
+    expect(evidenceMarkerIn(body)).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/book", "/book/waitlist"], preview: { is: "none" }, missed: [] });
   });
 });
 
@@ -526,7 +527,7 @@ describe("The evidence section of a failed capture", () => {
         why,
         "",
         "No preview link: Kit config declares no `preview.url`.",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"${reason}","routes":[],"preview":{"is":"none"}} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"${reason}","routes":[],"preview":{"is":"none"}${reason === "no-result" ? "" : `,"missed":[]`}} -->`,
       ].join("\n"),
     );
   });
@@ -563,7 +564,7 @@ describe("The evidence section of a failed capture", () => {
         "Captured routes:",
         "",
         "- `/book`, named by the Ticket",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"timeout","routes":["/book"],"preview":{"is":"none"}} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"timeout","routes":["/book"],"preview":{"is":"none"},"missed":[]} -->`,
       ].join("\n"),
     );
   });
@@ -619,6 +620,35 @@ describe("Reading an evidence marker", () => {
   it("reads one an earlier release wrote as it did then, with no routes and no preview given", () => {
     expect(read(`{"run":9100,"artifact":9202,"failure":null}`)).toEqual({ run: 9100, artifact: 9202, failure: null });
     expect(read(`{"run":9100,"artifact":9202}`)).toEqual({ run: 9100, artifact: 9202 });
+  });
+
+  it("reads one the release before missed shots wrote with what was missed unknown, not none", () => {
+    expect(read(`{"run":9100,"artifact":9202,"failure":null,"routes":["/book"],"preview":{"is":"none"}}`)).not.toHaveProperty("missed");
+  });
+
+  // A later release may add to a missed shot, as this one added missed to the marker: its route, size and side still read.
+  it("reads the missed shots of one a later release wrote, keeping only their route, size and side", () => {
+    expect(read(`{"run":9100,"artifact":9202,"failure":null,"missed":[{"route":"/book","viewport":"mobile","side":"before","later":1}],"later":2}`)).toEqual({
+      run: 9100,
+      artifact: 9202,
+      failure: null,
+      missed: [{ route: "/book", viewport: "mobile", side: "before" }],
+    });
+  });
+
+  it.each([
+    ["missed shots that aren't a list", `{"route":"/book","viewport":"mobile","side":"before"}`],
+    ["a missed shot with no route", `[{"viewport":"mobile","side":"before"}]`],
+    ["a missed shot at a size the Kit doesn't capture at", `[{"route":"/book","viewport":"tablet","side":"before"}]`],
+    ["a missed shot of a side that isn't Before or After", `[{"route":"/book","viewport":"mobile","side":"Before"}]`],
+  ])("gives what was missed as unknown from one with %s, the rest as it was", (_, missed) => {
+    expect(read(`{"run":9100,"artifact":9202,"failure":"timeout","routes":["/book"],"preview":{"is":"none"},"missed":${missed}}`)).toEqual({
+      run: 9100,
+      artifact: 9202,
+      failure: "timeout",
+      routes: ["/book"],
+      preview: { is: "none" },
+    });
   });
 
   it.each([
@@ -795,7 +825,7 @@ describe("Linking the preview in a PR body's evidence section, once the push job
     const marker = withPreviewLink(waiting, 9100, { kind: "linked", url: PREVIEW })!.split("\n").findLast((line) => line.startsWith("<!-- fabrik:ui-evidence {"));
 
     expect(marker).toBe(
-      `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/book","/book/waitlist"],"preview":{"is":"linked","url":"https://pr-12.shop.example.dev/"},"later":1} -->`,
+      `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/book","/book/waitlist"],"preview":{"is":"linked","url":"https://pr-12.shop.example.dev/"},"later":1,"missed":[]} -->`,
     );
   });
 
@@ -962,7 +992,7 @@ describe("UI evidence of a page that wouldn't load", () => {
         "Captured routes:",
         "",
         "- `/book`, named by the Ticket. Captured: nothing. **Not captured:** After: unreachable, `ERR_CONNECTION_REFUSED`, at mobile and desktop.",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"unreachable","routes":["/book"],"preview":{"is":"none"}} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"unreachable","routes":["/book"],"preview":{"is":"none"},"missed":[{"route":"/book","viewport":"mobile","side":"after"},{"route":"/book","viewport":"desktop","side":"after"}]} -->`,
       ].join("\n"),
     );
   });
@@ -1000,5 +1030,92 @@ describe("UI evidence of a page that wouldn't load", () => {
     expect(block[1]).toContain(
       "After is missing for `/book/waitlist`, where this branch's page wouldn't load (`ERR_CONNECTION_REFUSED` and `ERR_TOO_MANY_REDIRECTS`), so there's no screenshot of it.",
     );
+  });
+});
+
+// A reader names each shot a capture missed without opening the artifact, which GitHub deletes after 30 days (#667).
+describe("The shots an evidence marker records as missed", () => {
+  /** A shot capture meant to take and missed, the page refusing the browser, as the capture step writes it. */
+  const missedShot = (route: string, viewport: Capture["viewport"], side: Capture["side"]): MissedShot => ({
+    route,
+    reason: route === "/book" ? "ticket" : "implementer",
+    viewport,
+    side,
+    url: `${side === "before" ? "https://www.penrithphysio.com.au" : "http://127.0.0.1:4321"}${route}`,
+    why: `${side}-unreachable`,
+    error: "ERR_CONNECTION_REFUSED",
+  });
+
+  it("names a missed shot by its route, size and side alone, and leaves the rest of the marker as it was", () => {
+    const oneMissed: CaptureResult<Capture> = {
+      ...allCaptured,
+      captures: allCaptured.captures.filter(({ route, viewport, side }) => !(route === "/book" && viewport === "mobile" && side === "before")),
+      missed: [missedShot("/book", "mobile", "before")],
+    };
+
+    expect(evidenceMarkerIn(evidenceSection(evidence(oneMissed)))).toEqual({
+      run: 9100,
+      artifact: 9202,
+      failure: null,
+      routes: ["/book", "/book/waitlist"],
+      preview: { is: "none" },
+      missed: [{ route: "/book", viewport: "mobile", side: "before" }],
+    });
+  });
+
+  it("gives an empty list for a capture that missed nothing", () => {
+    expect(evidenceSection(evidence(allCaptured)).split("\n").at(-1)).toBe(
+      `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/book","/book/waitlist"],"preview":{"is":"none"},"missed":[]} -->`,
+    );
+    expect(evidenceMarkerIn(evidenceSection(evidence(allCaptured)))?.missed).toEqual([]);
+  });
+
+  it("still lists what a capture that failed outright missed, beside why it failed", () => {
+    const failed: CaptureResult<Capture> = {
+      outcome: "failed",
+      reason: "timeout",
+      headSha: HEAD,
+      captures: allCaptured.captures.slice(0, 1),
+      missed: [missedShot("/book/waitlist", "desktop", "after")],
+    };
+
+    expect(evidenceMarkerIn(evidenceSection(evidence(failed)))).toMatchObject({
+      failure: "timeout",
+      missed: [{ route: "/book/waitlist", viewport: "desktop", side: "after" }],
+    });
+  });
+
+  // The push job writes no-result itself, with no capture result to read, so what was missed is not known.
+  it("leaves what was missed unknown when the push job had no capture result to read", () => {
+    const unread: CaptureResult = { outcome: "failed", reason: "no-result", headSha: HEAD, captures: [] };
+
+    expect(evidenceMarkerIn(evidenceSection(evidence(unread, { artifact: null, evidencePage: null })))).toEqual({
+      run: 9100,
+      artifact: null,
+      failure: "no-result",
+      routes: [],
+      preview: { is: "none" },
+    });
+  });
+
+  it("keeps a route that is agent text in the marker on one line, read back as it was", () => {
+    const route = "/book --> @octocat\n<!-- x -->";
+    const result: CaptureResult<Capture> = { outcome: "captured", headSha: HEAD, captures: [], missed: [missedShot(route, "mobile", "after")] };
+    const section = evidenceSection(evidence(result));
+
+    expect(section.split("\n").at(-1)).toMatch(/^<!-- fabrik:ui-evidence \{[^<>@\n\r]*\} -->$/);
+    expect(evidenceMarkerIn(section)?.missed).toEqual([{ route, viewport: "mobile", side: "after" }]);
+  });
+
+  it("keeps the missed shots when the preview step records what came of the preview", () => {
+    const result: CaptureResult<Capture> = { ...allCaptured, missed: [missedShot("/book", "desktop", "before")] };
+    const body = `Adds a waitlist.\n\n${evidenceSection(evidence(result, { preview: { kind: "pending" } }))}\n\nCloses #12`;
+
+    const linked = withPreviewLink(body, 9100, { kind: "linked", url: "https://pr-12.shop.example.dev/" });
+
+    expect(evidenceMarkerIn(linked!)).toMatchObject({
+      preview: { is: "linked", url: "https://pr-12.shop.example.dev/" },
+      missed: [{ route: "/book", viewport: "desktop", side: "before" }],
+    });
   });
 });

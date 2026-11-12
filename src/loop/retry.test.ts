@@ -619,7 +619,7 @@ const NEW_SECTION = [
   "Captured routes:",
   "",
   "- `/waitlist`, named by the Implementer",
-  `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/waitlist"],"preview":{"is":"none"}} -->`,
+  `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/waitlist"],"preview":{"is":"none"},"missed":[]} -->`,
 ].join("\n");
 
 describe("The evidence section on a retry's PR", () => {

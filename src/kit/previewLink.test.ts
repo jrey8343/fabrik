@@ -104,7 +104,7 @@ describe("Linking a UI PR's preview deployment", () => {
     await linkPreview(github, repo, { pullRequest: 51, url: URL_, run: 9100 }, pollerAnswering(...answers).poller);
 
     const { body } = github.calls.at(-1)?.body as { body: string };
-    expect(evidenceMarkerIn(body)).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/waitlist"], preview: { is, url: URL_ } });
+    expect(evidenceMarkerIn(body)).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/waitlist"], preview: { is, url: URL_ }, missed: [] });
   });
 
   it(`stops polling after ${PREVIEW_POLL_MINUTES} minutes, a Kit constant within the push job's step's timeout, polling one last time at the end`, async () => {

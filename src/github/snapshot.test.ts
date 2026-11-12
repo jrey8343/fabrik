@@ -1402,11 +1402,11 @@ describe("Gathering a pull request's UI evidence marker", () => {
     const failed: CaptureResult = { outcome: "failed", reason: "build-failed", headSha: HEAD_SHA, captures: [] };
     const failedBody = evidenceSection({ result: failed, run: 9100, artifact: null, evidencePage: null, preview: { kind: "none" } });
 
-    expect((await gathered(uiBody(9100, 9202)))?.uiEvidenceMarker).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/book"], preview: { is: "none" } });
+    expect((await gathered(uiBody(9100, 9202)))?.uiEvidenceMarker).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/book"], preview: { is: "none" }, missed: [] });
     expect((await gathered(`Adds a waitlist.\n\n${failedBody}\n\nCloses #7`))?.uiEvidenceMarker).toEqual({
       run: 9100,
       artifact: null,
-      failure: "build-failed", routes: [], preview: { is: "none" },
+      failure: "build-failed", routes: [], preview: { is: "none" }, missed: [],
     });
   });
 

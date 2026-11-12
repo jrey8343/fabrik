@@ -559,12 +559,28 @@ export interface EvidenceMarker {
    * it, or whose preview doesn't read.
    */
   readonly preview?: MarkerPreview;
+  /**
+   * Every shot capture meant to take and missed, going on to the rest (#667),
+   * in the capture result's order, by route, viewport and side alone: why it
+   * missed, the address tried and the browser's error stay in the artifact.
+   * Empty when it missed none. Absent from a marker written before markers
+   * recorded them, or whose missed shots don't read, and from one the push
+   * job wrote with no capture result to read: what was missed is then unknown.
+   */
+  readonly missed?: readonly MarkerMissedShot[];
 }
 
 /** What came of a pull request's preview deployment, as its evidence marker records it. */
 export type MarkerPreview =
   | { readonly is: "none" | "pending" }
   | { readonly is: "linked" | "never-answered"; readonly url: string };
+
+/** A shot capture missed, as its evidence marker records it: which route, at which viewport, of which side. */
+export interface MarkerMissedShot {
+  readonly route: string;
+  readonly viewport: Viewport["name"];
+  readonly side: CaptureSide;
+}
 
 /** A UI pull request's evidence, as the push job puts it together for the PR body. */
 export interface UiEvidence extends Pick<EvidenceMarker, "run" | "artifact"> {
@@ -730,13 +746,15 @@ function previewLine(preview: PreviewLink): string {
 
 /**
  * The marker line closing the evidence section, which records how its
- * capture ended, the routes the section lists and what came of the preview.
- * A route may be agent text, so the JSON can neither end the comment early
- * nor mention anyone.
+ * capture ended, the routes the section lists, what came of the preview and
+ * the shots capture missed. A route may be agent text, so the JSON can
+ * neither end the comment early nor mention anyone.
  */
 function evidenceMarker({ run, artifact, result, preview }: UiEvidence, routes: readonly string[]): string {
   const failure = result.outcome === "failed" ? result.reason : null;
-  return markerLine({ run, artifact, failure, routes, preview: markerPreview(preview) });
+  // With no capture result to read, the push job doesn't know what capture missed, so it records nothing rather than none.
+  const missed = failure === "no-result" ? {} : { missed: (result.missed ?? []).map(({ route, viewport, side }) => ({ route, viewport, side })) };
+  return markerLine({ run, artifact, failure, routes, preview: markerPreview(preview), ...missed });
 }
 
 /** An evidence marker line holding this value, on one line. */
@@ -804,7 +822,7 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
     return null;
   }
   if (!isObject(value)) return null;
-  const { run, artifact, failure, routes, preview } = value;
+  const { run, artifact, failure, routes, preview, missed } = value;
   if (!isId(run) || !(artifact === null || isId(artifact))) return null;
   // A field it doesn't record, or that doesn't read, leaves where the evidence is kept, and the other fields, as they were.
   return {
@@ -813,7 +831,13 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
     ...(failure === null || isOneOf(CAPTURE_FAILURES, failure) ? { failure } : {}),
     ...(Array.isArray(routes) && routes.every((route) => typeof route === "string") ? { routes } : {}),
     ...(markerPreviewOf(preview) ?? {}),
+    ...(Array.isArray(missed) && missed.every(isMarkerMissedShot) ? { missed: missed.map(({ route, viewport, side }) => ({ route, viewport, side })) } : {}),
   };
+}
+
+/** Whether a marker's missed shot reads: a route as text, a viewport the Kit captures at and a side. */
+function isMarkerMissedShot(value: unknown): value is MarkerMissedShot {
+  return isObject(value) && typeof value.route === "string" && isOneOf(VIEWPORT_NAMES, value.viewport) && isOneOf(CAPTURE_SIDES, value.side);
 }
 
 /** A marker's preview, when it reads: one of its four outcomes, with the address it polled exactly when it was polled. */
