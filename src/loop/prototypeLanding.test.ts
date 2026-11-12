@@ -736,6 +736,44 @@ describe("A prototype round's hidden line", () => {
     expect(line?.kind === "prototype" && line.variants.map(({ preview }) => preview)).toEqual([null, null, null]);
   });
 
+  it("carries the advised variant's letter when the turn's recommended is one of its variants', the round shown as it would have been", () => {
+    const plan = planFor(finished({ output: JSON.stringify({ ...ROUND, recommended: "B" }) }), inSession(), kitConfig());
+
+    expect(roundLineIn(roundOf(plan))).toMatchObject({ kind: "prototype", recommended: "B" });
+    expect(withoutRoundLines(roundOf(plan))).toBe(withoutRoundLines(roundOf(planFor(finished(), inSession(), kitConfig()))));
+    expect(plan.kind === "act" && plan.notes).toBeUndefined();
+  });
+
+  it("lands an output with no recommended as before: no letter in the line and nothing noted", () => {
+    const plan = planFor(finished(), inSession(), kitConfig());
+
+    expect(roundLineIn(roundOf(plan))).not.toHaveProperty("recommended");
+    expect(plan.kind === "act" && plan.notes).toBeUndefined();
+  });
+
+  it.each([
+    ["a letter past the last variant", "D", '"D"'],
+    ["a lower-case letter", "b", '"b"'],
+    ["a word", "Stepper", '"Stepper"'],
+    ["not text", 2, "2"],
+  ])("refuses %s: the round lands as it would have, its line carries no recommended, and the plan's notes name the refusal", (_, recommended, given) => {
+    const plan = planFor(finished({ output: JSON.stringify({ ...ROUND, recommended }) }), inSession(), kitConfig());
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment"]);
+    expect(roundOf(plan)).toBe(roundOf(planFor(finished(), inSession(), kitConfig())));
+    expect(roundLineIn(roundOf(plan))).not.toHaveProperty("recommended");
+    expect(plan.kind === "act" && plan.notes).toEqual([
+      `The prototype round on #7 advises no variant by letter: the prototype turn's recommended, ${given}, isn't one of its variants' letters (A, B or C)`,
+    ]);
+  });
+
+  it("notes the refusal beside the preview it asks the push job to link", () => {
+    const plan = planFor(finished({ output: JSON.stringify({ ...ROUND, recommended: "D" }) }), inSession(), kitConfig({ ui: UI, preview: { url: "https://{branch_slug}--shop.netlify.app" } }));
+
+    expect(plan.kind === "act" && plan.actions.map(({ kind }) => kind)).toEqual(["push-prototype-branch", "comment", "link-prototype-preview"]);
+    expect(plan.kind === "act" && plan.notes).toHaveLength(1);
+  });
+
   it("takes the route the Operator said yes to from the request, never from what the turn said", () => {
     const output = JSON.stringify({ ...ROUND, intro: "Built on `/checkout` instead.", route: "/checkout" });
 

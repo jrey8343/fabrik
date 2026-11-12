@@ -206,6 +206,39 @@ describe("A prototype turn's prototype-round output: the variants it built", () 
   });
 });
 
+// The letter of the variant the recommendation builds on (#636): optional, and never a reason to fail the turn.
+describe("A prototype-round's advised variant", () => {
+  it("keeps recommended when it is one of the variants' letters", () => {
+    const result = turn({ ...built, recommended: "B" });
+
+    expect(result.ok && result.output).toMatchObject({ kind: "prototype-round", recommended: "B" });
+    expect(result.ok && result.output).not.toHaveProperty("refusedRecommended");
+  });
+
+  it("reads an output with no recommended as it always did", () => {
+    const result = turn(built);
+
+    expect(result.ok && result.output).not.toHaveProperty("recommended");
+    expect(result.ok && result.output).not.toHaveProperty("refusedRecommended");
+  });
+
+  it.each([
+    ["a letter past the last variant", "D", '"D"'],
+    ["a lower-case letter", "b", '"b"'],
+    ["a word", "Stepper", '"Stepper"'],
+    ["a letter with space around it", " B", '" B"'],
+    ["a number", 2, "2"],
+    ["null", null, "null"],
+    ["a list", ["B"], '["B"]'],
+  ])("refuses %s, reading the round all the same, and keeps what was refused, as given, for the landing to note", (_, recommended, given) => {
+    const result = turn({ ...built, recommended });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.output).not.toHaveProperty("recommended");
+    expect(result.ok && result.output).toMatchObject({ refusedRecommended: given });
+  });
+});
+
 describe("A prototype turn's output, which only a prototype-round keeps to", () => {
   const prototypeTurn = (value: unknown) => parsePrototypeTurnOutput(JSON.stringify(value));
 

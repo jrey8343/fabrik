@@ -107,7 +107,9 @@ export function applyPrototypeTurn(
   }
   const roundPreview = previewOfRound(preview);
   const body = prototypeRound(round, parsed.output, event, operator, roundPreview);
-  if (roundPreview.kind !== "pending") return { kind: "act", actions: [push, comment(body)] };
+  // A refused letter changes nothing on GitHub: the round lands as it would have, and the step summary says why its line advises none.
+  const notes = refusedLetter(event.issue, parsed.output);
+  if (roundPreview.kind !== "pending") return { kind: "act", actions: [push, comment(body)], ...notes };
   // The push job polls the preview once the round is posted, and links it there only once it answers.
   const { route } = event.request.request;
   return {
@@ -116,6 +118,19 @@ export function applyPrototypeTurn(
       push,
       { kind: "comment", issue: event.issue, body, key: ROUND_COMMENT.posted },
       { kind: "link-prototype-preview", issue: event.issue, round: ROUND_COMMENT, template: roundPreview.template, route },
+    ],
+    ...notes,
+  };
+}
+
+/** The plan's note of an advised letter the output reader refused, as it isn't one of the round's variants'; nothing when it refused none. */
+function refusedLetter(issue: number, { variants, refusedRecommended }: PrototypeRoundOutput): { notes?: string[] } {
+  if (refusedRecommended === undefined) return {};
+  const letters = variants.map(({ letter }) => letter);
+  const named = letters.length === 1 ? letters.join("") : `${letters.slice(0, -1).join(", ")} or ${letters.at(-1)}`;
+  return {
+    notes: [
+      `The prototype round on #${issue} advises no variant by letter: the prototype turn's recommended, ${refusedRecommended}, isn't one of its variants' letters (${named})`,
     ],
   };
 }
@@ -206,6 +221,7 @@ function prototypeRound(
         intro,
         questions: [{ question: WHICH_VARIANT_QUESTION, recommendation }],
         route: event.request.request.route,
+        ...(output.recommended === undefined ? {} : { recommended: output.recommended }),
         variants: variants.map(({ letter, summary, component }) => ({ letter, summary, component, preview: null })),
         captures: null,
       }),
