@@ -28,13 +28,26 @@ const HAND_BACK_SENTENCES: Partial<Record<HandBack, (standing: StandingNamed<"yo
 export function wordStanding(standing: Standing, now: string, timeZone: string): StandingWords {
   const age = ageSince(standing.since, now);
   switch (standing.name) {
+    case "waiting-on-checks": {
+      const { check, checksUnread } = standing.detail;
+      const sentence = checksUnread ? "Waiting on its Required checks, which could not be read." : check === null ? "Waiting on its Required checks." : `Waiting on \`${check}\`.`;
+      return { pill: "Waiting on checks", sentence, remedy: null };
+    }
     case "waiting-for-reset": {
       const { resetsAt } = standing.detail;
       const resets = resetsAt === null ? "; when it resets is not known" : ` and resets ${readable(resetsAt, timeZone)}`;
       return { pill: "Used up", sentence: `${standing.subscription} reached its weekly limit${resets}. Runs go to the next Subscription.`, remedy: null };
     }
-    case "yours-to-merge":
-      return { pill: "Yours to merge", sentence: `Passed Review ${age} ago and is waiting for your merge.`, remedy: null };
+    case "yours-to-merge": {
+      const passed = `with its Required checks passed, since ${age} ago.`;
+      const sentence =
+        standing.detail.plain === null
+          ? `Passed Review ${age} ago and is waiting for your merge.`
+          : standing.work === "plain"
+            ? `Ready, ${passed}`
+            : `Its Pairing session's pull request, #${standing.pullRequest}, is ready, ${passed}`;
+      return { pill: "Yours to merge", sentence, remedy: null };
+    }
     case "design-round": {
       const { round, prototype } = standing.detail;
       const prototypeIs = prototype === "ready" ? ": the prototype is ready to look at" : prototype === "failed" ? ": the prototype failed" : "";
@@ -63,6 +76,16 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     }
     case "yours-to-read":
       return { pill: "Yours to read", sentence: readingSentence(standing, age), remedy: null };
+    case "check-failing": {
+      const { check, checkIs } = standing.detail;
+      return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing.` : `\`${check}\` has not reported on its head.`, remedy: null };
+    }
+    case "conflicts": {
+      const then = standing.detail.plain === "kit-bump" ? "Dependabot rebases it by itself." : "Resolve it on GitHub.";
+      return { pill: "Conflicts with `main`", sentence: `It conflicts with \`main\`. ${then}`, remedy: null };
+    }
+    case "draft":
+      return { pill: "Draft", sentence: "A draft; nothing is owed on it.", remedy: null };
     case "waiting-on-author":
       return { pill: "Waiting on its author", sentence: `Triage asked its author, ${standing.detail.author}, a question ${age} ago.`, remedy: null };
     default:
