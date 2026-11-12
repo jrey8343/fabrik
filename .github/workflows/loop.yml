@@ -81,8 +81,9 @@ jobs:
       # Both of a Retro run's jobs, its evidence job and its Retro job, run within it.
       retro-timeout-minutes: ${{ steps.route.outputs.retro-timeout-minutes }}
       research-timeout-minutes: ${{ steps.route.outputs.research-timeout-minutes }}
+      digest-timeout-minutes: ${{ steps.route.outputs.digest-timeout-minutes }}
       dispatch-timeout-minutes: ${{ steps.route.outputs.dispatch-timeout-minutes }}
-      # For a Review or a retry: the agent PR, and the Ticket its branch was cut for.
+      # For a Review, a Digest run or a retry: the agent PR, and the Ticket its branch was cut for.
       # For a first Implement run: its Ticket, with no PR. For a replay: the Ticket it replays, and its merged PR.
       pull-request: ${{ steps.route.outputs.pull-request }}
       ticket: ${{ steps.route.outputs.ticket }}
@@ -112,6 +113,9 @@ jobs:
       main-at-start: ${{ steps.route.outputs.main-at-start }}
       # For an Auditor run: the pending Audit's marked commit, which the Audit job checks out.
       audit-commit: ${{ steps.route.outputs.audit-commit }}
+      # For a Digest run (ADR-0022): the head its pass was given on, a full sha, which the Digest job checks out and
+      # the push job lands the Digest for.
+      head-sha: ${{ steps.route.outputs.head-sha }}
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
@@ -1312,6 +1316,133 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The Digest writer (ADR-0022). Read-only, shaped as the Reviewer's job is
+  # (ADR-0002): a checkout of the PR at the head its pass was given on, with
+  # its history, no GitHub credential for the agent, and only the agent service
+  # account. It gets the Base skills alone, runs none of the PR's code, and
+  # passes its reply out as an artifact for the push job, which renders and
+  # posts the Digest, or the no-Digest line when this job fails or runs past
+  # its time limit. agent:digest stays on the PR until then: no claim job
+  # takes it off.
+  # Named "Digest PR #<agent PR>", as the Review job is named for its own
+  # (DIGEST_JOB_NAME in src/github/snapshot.ts).
+  digest:
+    name: "Digest PR #${{ needs.kit.outputs.pull-request }}"
+    needs: kit
+    if: needs.kit.outputs.route == 'digest'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.kit.outputs.digest-timeout-minutes) }}
+    # One Digest run per PR at a time.
+    concurrency:
+      group: fabrik-digest-${{ needs.kit.outputs.pull-request }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      # Read by the push job: a failed 1Password step means the agent never started.
+      secrets-step: ${{ steps.op.outcome }}
+      # For its Run record: the model and effort the runner passed, and the commit the run started from.
+      model: ${{ steps.agent.outputs.model }}
+      effort: ${{ steps.agent.outputs.effort }}
+      base-sha: ${{ steps.base.outputs.sha }}
+    steps:
+      - name: Check out the PR at the head its pass was given on
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          ref: ${{ needs.kit.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Before the secrets load, so a run whose agent never started still names it.
+      - name: Note the commit the run starts from
+        id: base
+        run: echo "sha=$(git -C product rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the Kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      # The Ticket and its Spec, and the PR as the Digest writer is given it: its title and body, the
+      # Operator's Request changes and comments, every Verdict, the Kit's own notes and whether UI
+      # evidence exists. No transcript and no Run record.
+      - name: Prepare the agent job
+        uses: ./kit/.github/actions/prepare-agent
+        with:
+          role: digest
+          github-token: ${{ github.token }}
+          issue: ${{ needs.kit.outputs.ticket }}
+          pull-request: ${{ needs.kit.outputs.pull-request }}
+
+      - name: Load the Claude token
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_AGENT_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
+
+      - name: Run the Digest writer
+        id: agent
+        working-directory: product
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+          FABRIK_ISSUE_FILE: ${{ runner.temp }}/issue.json
+          FABRIK_SPEC_FILE: ${{ runner.temp }}/spec.json
+          FABRIK_PULL_REQUEST_FILE: ${{ runner.temp }}/pull-request.json
+          # The head the Kit job's plan started the run at, which the Digest is written as of.
+          FABRIK_HEAD_SHA: ${{ needs.kit.outputs.head-sha }}
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
+        run: node ../kit/src/agent/run.ts digest
+
+      - name: Pass the reply to the push job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-result
+          path: ${{ runner.temp }}/fabrik-out/agent-result.json
+          if-no-files-found: error
+          retention-days: 7
+
+      # src/agent/run.ts writes this when it catches a failure, a reply that
+      # breaks its shape included. A run cancelled by its time limit leaves none.
+      - name: Pass the failure report to the push job
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure
+          path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # The agent's stream-json transcript (src/agent/transcript.ts), written line by
+      # line as it ran, so it's kept when the run passed, failed or timed out. Not
+      # fabrik-agent-*: the push job downloads those and reads none as a timeout.
+      # continue-on-error: keeping it must never fail a run that passed.
+      - name: Gzip the agent's transcript
+        if: always()
+        continue-on-error: true
+        run: if [ -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl" ]; then gzip -f "$RUNNER_TEMP/fabrik-out/transcript.jsonl"; fi
+
+      - name: Keep the agent's transcript
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-transcript-digest
+          path: ${{ runner.temp }}/fabrik-out/transcript.jsonl.gz
+          if-no-files-found: ignore
+          retention-days: 7
+
   # The Auditor (#150). Read-only, like the Reviewer: a checkout of the default
   # branch at the pending Audit's marked commit, with its full history for git
   # log and blame, no GitHub write credential, and only the agent service
@@ -1850,14 +1981,15 @@ jobs:
   # an Implement run, after the trust-root guard on its branch; for a prototype
   # turn, after the trust-root guard, as a fast-forward of prototype/<issue>;
   # for a Research run, once its branch changes only its findings file), a
-  # Review's red checks or Verdict, or, when the agent job failed or was
-  # cancelled (its timeout-minutes included), the failure notice. always(), so
+  # Review's red checks or Verdict, a Digest run's Digest, or, when the agent
+  # job failed or was cancelled (its timeout-minutes included), the failure
+  # notice, which for a Digest run is its no-Digest line. always(), so
   # it still runs after a cancelled agent job. Never on a replay, whose
   # replay-record job is its push job, so the judge, score-record, Dispatch
   # and Design queue jobs, which follow this one, skip a replay too.
   push:
     name: Push
-    needs: [kit, triage, design, prototype, implement, review-checks, rerun-checks, rerun-wait, review, audit, retro-evidence, retro, research]
+    needs: [kit, triage, design, prototype, implement, review-checks, rerun-checks, rerun-wait, review, digest, audit, retro-evidence, retro, research]
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'
     runs-on: ubuntu-latest
     timeout-minutes: 10
