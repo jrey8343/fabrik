@@ -21,7 +21,7 @@ import { retrosIn, retroWindowStart } from "../loop/retro.ts";
 import { type RetroEvidence, type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
 import { isLive, recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
 import { inSample, type ScoreFile } from "./scorer.ts";
-import { cutMarker, cutTo, digestOf, largestCap, type TranscriptDigest } from "./transcriptDigest.ts";
+import { cutMarker, cutTo, largestCap, type TrimmedTranscript, trimmedTranscriptOf } from "./trimmedTranscript.ts";
 
 // The GitHub facts the metrics read of one Product repo.
 
@@ -983,15 +983,15 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
   /** The store's transcripts as digests, each transcript read once however often it's digested. */
   function digestsOf(readTranscript: RetroEvidenceInput["readTranscript"]): Digests {
     // Each path read, by its digest, or null when the store holds no transcript there.
-    const read = new Map<string, ((budget: number) => TranscriptDigest) | null>();
+    const read = new Map<string, ((budget: number) => TrimmedTranscript) | null>();
     return (record, budget) => {
       const path = record.transcript;
       if (path === null) return null;
       if (!read.has(path)) {
         const lines = readTranscript(path);
-        read.set(path, lines === null ? null : digestOf(lines));
+        read.set(path, lines === null ? null : trimmedTranscriptOf(lines));
       }
-      return read.get(path)?.(budget).digest ?? null;
+      return read.get(path)?.(budget).text ?? null;
     };
   }
   

@@ -106,7 +106,7 @@ export async function readStoreReplayPatches(storeDir: string): Promise<string[]
 /**
  * A reader of the transcripts under `transcripts/`, each by its path in the
  * store, as its stream-json lines; null for a path the checkout doesn't hold.
- * The store keeps them forever and a reader digests only a few, so it lists
+ * The store keeps them forever and a reader trims only a few, so it lists
  * them now and reads and gunzips one from disk each time it's called for it.
  * One cut off by its run's timeout keeps the lines that decoded; bytes that
  * aren't gzip read as no lines.
