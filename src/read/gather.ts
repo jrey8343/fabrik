@@ -16,6 +16,7 @@ import { gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, logi
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
 import { KIT_CONFIG_PATH, type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
+import { MERGED_STANDS_HOURS, type MergedLastDayFacts } from "../kit/standingProduction.ts";
 import type { GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
 import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
@@ -31,8 +32,8 @@ import {
 } from "./homeQueries.ts";
 import { gatherStore, type StoreFacts } from "./store.ts";
 
-/** How far back the merged agent pull requests reach. */
-const MERGED_REACH_MS = 24 * 60 * 60 * 1000;
+/** How far back the merged agent pull requests reach: as long as a merged one stands. */
+const MERGED_REACH_MS = MERGED_STANDS_HOURS * 60 * 60 * 1000;
 
 /** A repo with no caller workflow that pins the Kit at its default branch's head: nothing more is read of it. */
 export interface RepoReadNotProduct {
@@ -89,18 +90,6 @@ export type KitFacts = Omit<RepoKitFacts, "runsInFlight" | "headChecks">;
 export interface IssueBodyFacts {
   readonly issue: number;
   readonly body: string;
-}
-
-/** An agent pull request merged in the last 24 hours. */
-export interface MergedLastDayFacts {
-  readonly number: number;
-  readonly title: string;
-  /** The Ticket it closes, or null. */
-  readonly ticket: number | null;
-  /** Its merge commit's sha, or null when GitHub gives none. */
-  readonly mergeCommit: string | null;
-  /** ISO 8601. */
-  readonly mergedAt: string;
 }
 
 /** An issue GitHub cross-references to an open agent pull request. */

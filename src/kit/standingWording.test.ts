@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { aDesignQueueIssue, aTicket } from "../__fixtures__/snapshots.ts";
 import {
   aComment,
+  aDeploymentsRead,
+  aDeployOf,
   aDesignRound,
   aDesignTurnFailedNotice,
   aLabelAdded,
   aMapCapRefusal,
+  aMergedLastDay,
   anOpenAudit,
   anOpenIssue,
   anOpenPullRequest,
@@ -376,6 +379,68 @@ describe("the wording of a silence that waits on the Kit (#608)", () => {
     expect(wordStanding(theStandingIn({ openPullRequests: [parked] }), minutesAfter(40), ZONE)).toEqual({
       pill: "Parked by you",
       sentence: "You put #50 back in draft 40 minutes ago, after its pass.",
+      remedy: null,
+    });
+  });
+});
+
+describe("the wording of a merged agent pull request at Production (#634)", () => {
+  const MERGE = "m".repeat(40);
+  const kit = (environment: string | null) =>
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment } } }, dispatch: null, runsInFlight: [], headChecks: {} }) as const;
+  /** The one Standing of pull request 50, merged at SINCE, read at `now`. */
+  const atProduction = (deploy: Parameters<typeof aDeployOf>[0] | "unread" | null, now: string, environment: string | null = "production"): Standing => {
+    const deployments = deploy === null ? null : aDeploymentsRead({ [MERGE]: deploy === "unread" ? "unread" : aDeployOf(deploy) });
+    const [standing, ...rest] = standingsOf(standingFactsOf({ kit: kit(environment), mergedLastDay: [aMergedLastDay(SINCE)], deployments }), now);
+    if (standing === undefined || rest.length > 0) throw new Error("expected one Standing");
+    return standing;
+  };
+
+  it("says a merge no deploy has started for yet, one whose Deployments could not be read, and one in a repo that tracks none, is merged", () => {
+    expect(wordStanding(atProduction({ is: "none" }, minutesAfter(40)), minutesAfter(40), ZONE)).toEqual({
+      pill: "Merged",
+      sentence: "Merged 40 minutes ago. No deploy has started yet.",
+      remedy: null,
+    });
+    for (const unread of ["unread", null] as const) {
+      expect(wordStanding(atProduction(unread, minutesAfter(40)), minutesAfter(3 * 60), ZONE)).toEqual({
+        pill: "Merged",
+        sentence: "Merged 3 hours ago. Deployments could not be read.",
+        remedy: null,
+      });
+    }
+    expect(wordStanding(atProduction({ is: "none" }, minutesAfter(40), null), minutesAfter(40), ZONE)).toEqual({
+      pill: "Merged",
+      sentence: "Merged 40 minutes ago. Deploys are not tracked in this repo.",
+      remedy: null,
+    });
+  });
+
+  it("says a deploy is running, from the Deployment's creation", () => {
+    expect(wordStanding(atProduction({ is: "running", deployment: 901, commit: MERGE, at: minutesAfter(5) }, minutesAfter(10)), minutesAfter(25), ZONE)).toEqual({
+      pill: "Deploying",
+      sentence: "A deploy to `production` has been running for 20 minutes.",
+      remedy: null,
+    });
+  });
+
+  it("says it is live, since the deciding report", () => {
+    expect(wordStanding(atProduction({ is: "succeeded", deployment: 900, commit: MERGE, at: minutesAfter(10) }, minutesAfter(10)), minutesAfter(70), ZONE)).toEqual({
+      pill: "Live",
+      sentence: "Live in `production` since 1 hour ago.",
+      remedy: null,
+    });
+  });
+
+  it("says the deploy failed, since the failed report", () => {
+    const failed = atProduction({ is: "failed", deployment: 902, commit: MERGE, at: minutesAfter(10), log: "https://github.com/owner/product/actions/runs/40/job/41" }, minutesAfter(10));
+    expect(wordStanding(failed, minutesAfter(50), ZONE)).toEqual({ pill: "Deploy failed", sentence: "The deploy to `production` failed 40 minutes ago.", remedy: null });
+  });
+
+  it("says no deploy has started since the merge, aged from the merge", () => {
+    expect(wordStanding(atProduction({ is: "none" }, minutesAfter(2 * 60)), minutesAfter(2 * 60), ZONE)).toEqual({
+      pill: "No deploy seen",
+      sentence: "No deploy to `production` has started since the merge 2 hours ago.",
       remedy: null,
     });
   });

@@ -14,6 +14,8 @@ import { type NotStartedSilence, notStartedStandingsOf } from "./standingClock.t
 import { handBackStandingsOf } from "./standingHandBacks.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
+import type { DeploymentsRead } from "../read/deployments.ts";
+import { type MergedLastDayFacts, type ProductionDetail, productionAt, productionStandingsOf } from "./standingProduction.ts";
 import { joinPairing, pairingsOf, plainStandingsOf } from "./standingPlain.ts";
 import { silenceStandingsOf, type WaitingOnKitSilence } from "./standingSilence.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
@@ -41,7 +43,7 @@ export type StandingWork =
   | "plain";
 
 /** Its place on the Loop; a Standing with none has `place: null`. */
-export type StandingPlace = "triage" | "design" | "implement" | "review" | "merge-gate";
+export type StandingPlace = "triage" | "design" | "implement" | "review" | "merge-gate" | "production";
 
 /** Whose move is next: the Operator's, the Kit's, or nobody's, when nothing is owed and nothing moves. */
 export type StandingMove = "operator" | "kit" | "nobody";
@@ -75,6 +77,11 @@ export const STANDING_NAMES = [
   "draft",
   "blocked",
   "waiting-on-author",
+  "deploying",
+  "live",
+  "deploy-failed",
+  "no-deploy-seen",
+  "merged",
 ] as const;
 
 export type StandingName = (typeof STANDING_NAMES)[number];
@@ -133,6 +140,12 @@ export interface StandingDetails {
   readonly blocked: { readonly blockers: readonly number[] };
   /** `author` is a login, with no `@`. */
   readonly "waiting-on-author": { readonly author: string };
+  /** A merged agent pull request at Production (src/kit/standingProduction.ts): each of its five names carries the same keys. */
+  readonly deploying: ProductionDetail;
+  readonly live: ProductionDetail;
+  readonly "deploy-failed": ProductionDetail;
+  readonly "no-deploy-seen": ProductionDetail;
+  readonly merged: ProductionDetail;
 }
 
 /** The fields every Standing has, whatever its name. */
@@ -142,7 +155,7 @@ interface StandingFields {
   readonly repo: string;
   /** The issue this work is, or null for a Plain pull request with no issue. */
   readonly issue: number | null;
-  /** Its open pull request, or null. */
+  /** Its open pull request, or null; at Production, the merged one. */
   readonly pullRequest: number | null;
   readonly work: StandingWork;
   /** Null: no place on the Loop. */
@@ -196,6 +209,13 @@ export interface StandingFacts {
   readonly appLogin: string;
   /** When a run on a piece of work ended, where the reader knows: the Weekly summary's gather reads only unfinished runs, so it gives none. */
   readonly runsEnded: readonly RunEndedFact[];
+  /**
+   * The agent pull requests merged in the last 24 hours, which only the read
+   * library's gather keeps: left out, there is no Standing past the merge.
+   */
+  readonly mergedLastDay?: readonly MergedLastDayFacts[];
+  /** The Deployments read of those merges; left out or null, their deploys are unread. */
+  readonly deployments?: DeploymentsRead | null;
 }
 
 /** A run that ended, on an issue or a pull request, and when: a sign from the Kit on that work. */
@@ -238,6 +258,11 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
   draft: "silence",
   blocked: "silence",
   "waiting-on-author": "silence",
+  deploying: "running",
+  live: "silence",
+  "deploy-failed": "silence",
+  "no-deploy-seen": "silence",
+  merged: "silence",
 };
 
 /**
@@ -277,6 +302,7 @@ function unjoinedStandingsOf(facts: StandingFacts, now: string): Standing[] {
     ...silenceStandingsOf(facts, now),
     ...handBackStandingsOf(facts, now),
     ...plainStandingsOf(facts, now),
+    ...productionStandingsOf(facts, now),
   ];
   return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github)));
 }
@@ -290,11 +316,13 @@ export function standingOrder(a: Standing, b: Standing): number {
  * A kept Standing as it reads at `now`, ISO 8601, with no facts: a silence
  * whose `stuckAt` has passed is `stuck`, the Kit's move still but the
  * Operator's to act on and stopping work, carrying the name it had in
- * `detail.was`, its `since` kept. Everything else is returned as it is. The
+ * `detail.was`, its `since` kept; a `merged` Standing whose `noDeployAt` has
+ * passed is `no-deploy-seen`, since then. Everything else is returned as it is. The
  * rule reads each Standing through this, so a reader that kept one gets the
  * answer the rule would give.
  */
 export function standingAt(standing: Standing, now: string): Standing {
+  if (standing.name === "merged") return productionAt(standing, now);
   if ((standing.name !== "not-started" && standing.name !== "waiting-on-kit") || standing.stuckAt === null) return standing;
   if (Date.parse(now) < Date.parse(standing.stuckAt)) return standing;
   const detail = standing.name === "not-started" ? { was: standing.name, ...standing.detail } : { was: standing.name, ...standing.detail };
