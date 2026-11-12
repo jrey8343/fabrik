@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
-import { type DigestData, type DigestGiven, type DigestItem, type DigestReply, digestCommentOf, readDigestComment, readDigestReply } from "./digestContract.ts";
+import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { type DigestData, type DigestGiven, type DigestItem, type DigestReply, digestCommentOf, noDigestLine, readDigestComment, readDigestReply } from "./digestContract.ts";
+import { planFor } from "./rules.ts";
+import type { Action } from "./types.ts";
 
 const HEAD = "a".repeat(40);
 const BLOB = `https://github.com/acme/shop/blob/${HEAD}`;
@@ -144,6 +147,52 @@ describe("An item's picture, in the Digest", () => {
       "- **The saved basket's page is new.** Nothing but its picture shows how it reads on a phone.",
       "- **The saved basket's page is new.** Nothing but its picture shows how it reads on a phone.",
     ]);
+  });
+});
+
+describe("A Digest with a picture, as the push job lands it", () => {
+  const pullRequest = aPullRequest({ labels: ["agent:digest"], verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] });
+  const GATE_OPENS = ["remove-label", "mark-ready-for-review", "request-review"];
+
+  function landed(reply: unknown, capturedRoutes: readonly string[]): Action[] {
+    const from = aDigestGiven({ headSha: HEAD_SHA, capturedRoutes });
+    const plan = planFor({ kind: "digest-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: JSON.stringify(reply), given: from, runUrl: from.runUrl }, snapshotOfPullRequest(pullRequest), kitConfig());
+    return plan.kind === "act" ? [...plan.actions] : [];
+  }
+  const reply = aDigestReply({ items: [anItem("yours-to-judge", { picture: "/basket/saved" }), anItem("not-proven", { picture: "/checkout" })] });
+
+  it("lands with the route in its data and its rendering on a pull request whose evidence marker names two routes, the item naming another kept without one", () => {
+    const [comment, ...rest] = landed(reply, ["/basket", "/basket/saved"]);
+    const body = comment?.kind === "comment" ? comment.body : "";
+
+    expect(dataOf(body).items.map(({ picture }) => picture)).toEqual(["/basket/saved", null]);
+    expect(needsYourEyesIn(body)).toEqual([
+      "- **The saved basket's page is new.** Nothing but its picture shows how it reads on a phone.",
+      "  Picture: the captured route `/basket/saved`",
+      "- **The saved basket's page is new.** Nothing but its picture shows how it reads on a phone.",
+    ]);
+    expect(rest.map(({ kind }) => kind)).toEqual(GATE_OPENS);
+  });
+
+  it("lands with every picture dropped on a pull request with no captured route: no picture ever refuses a Digest", () => {
+    const [comment, ...rest] = landed(reply, []);
+    const body = comment?.kind === "comment" ? comment.body : "";
+
+    expect(dataOf(body).items.map(({ picture }) => picture)).toEqual([null, null]);
+    expect(body).not.toContain("Picture:");
+    expect(rest.map(({ kind }) => kind)).toEqual(GATE_OPENS);
+  });
+
+  it("is refused when an item's picture is a list of routes: the no-Digest line says so, and the gate opens all the same", () => {
+    const two = { ...reply, items: [{ ...anItem("yours-to-judge"), picture: ["/basket", "/basket/saved"] }] };
+    const [comment, ...rest] = landed(two, ["/basket", "/basket/saved"]);
+
+    expect(comment).toEqual({
+      kind: "comment",
+      issue: 50,
+      body: noDigestLine({ head: HEAD_SHA, how: "refused", reason: "items[0].picture must be a route as text, or null", runUrl: aDigestGiven().runUrl }),
+    });
+    expect(rest.map(({ kind }) => kind)).toEqual(GATE_OPENS);
   });
 });
 
