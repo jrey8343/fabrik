@@ -37,7 +37,8 @@ export function runwayOf(records: readonly RunRecord[], usedUp: readonly UsedUpS
   if (newest === undefined) return { kind: "unknown" };
   const first = readings.find(({ subscription, resetsAt, at }) => subscription === newest.subscription && resetsAt === newest.resetsAt && at >= newest.at - DAY);
   if (first === undefined || newest.at - first.at < HOUR) return { kind: "unknown" };
-  const rise = Math.max(0, newest.share - first.share);
+  const rise = newest.share - first.share;
+  if (rise <= 0) return { kind: "all-week" };
 
   const presentWeeks = [...known].filter((subscription) => !spent.has(subscription)).map((subscription) => presentWeekOf(readings, subscription, now));
   const room = presentWeeks.reduce((sum, week) => sum + (week === null ? 1 : Math.max(0, 1 - week.share)), 0);

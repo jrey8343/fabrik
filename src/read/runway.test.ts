@@ -50,6 +50,19 @@ describe("the runway", () => {
 
       expect(runway).toEqual({ kind: "held", until: null });
     });
+
+    it("knows only the Subscriptions the records of the last two months name", () => {
+      const runway = runwayOf(
+        [...records, aRunRecord({ subscription: "Claude spare", endedAt: "2026-09-30T23:00:00Z" })],
+        [
+          { subscription: "Claude max", until: null },
+          { subscription: "Claude token", until: null },
+        ],
+        NOW,
+      );
+
+      expect(runway).toEqual({ kind: "held", until: null });
+    });
   });
 
   describe("when one Subscription rose from 30% to 40% in ten hours of one week", () => {
@@ -65,6 +78,108 @@ describe("the runway", () => {
       const resets = hoursOn(2 * 24);
 
       const runway = runwayOf([aReading("Claude token", 12, 0.3, resets), aReading("Claude token", 2, 0.4, resets)], [], NOW);
+
+      expect(runway).toEqual({ kind: "all-week" });
+    });
+  });
+
+  describe("the room left", () => {
+    const resets = hoursOn(5 * 24);
+    /** Claude token, rising from 20% to 40% in ten hours: two points an hour, so its own room lasts thirty hours. */
+    const inUse = [aReading("Claude token", 12, 0.2, resets), aReading("Claude token", 2, 0.4, resets)];
+
+    it("takes the whole limit of a second Subscription untouched this week", () => {
+      const runway = runwayOf([...inUse, aRunRecord({ subscription: "Claude max", endedAt: hoursOn(-30), rateLimit: null })], [], NOW);
+
+      expect(runway).toEqual({ kind: "runs-out", at: hoursOn(-2 + 80), heldUntil: resets });
+    });
+
+    it("takes the whole limit of a Subscription whose week has reset since its newest reading", () => {
+      const runway = runwayOf([...inUse, aReading("Claude max", 30, 0.9, hoursOn(-6))], [], NOW);
+
+      expect(runway).toEqual({ kind: "runs-out", at: hoursOn(-2 + 80), heldUntil: resets });
+    });
+
+    it("leaves out a Subscription that is used up", () => {
+      const runway = runwayOf([...inUse, aReading("Claude max", 30, 1, hoursOn(30))], [{ subscription: "Claude max", until: hoursOn(30) }], NOW);
+
+      expect(runway).toEqual({ kind: "runs-out", at: hoursOn(-2 + 30), heldUntil: hoursOn(30) });
+    });
+  });
+
+  it("judges a Subscription that took over yesterday on its readings since, not on its whole week", () => {
+    // Its week began two days ago. A straight line from that reset, 20% in
+    // 48 hours, would say it lasts the week; it read 0% twenty hours ago,
+    // and forty, and 20% now.
+    const resets = hoursOn(5 * 24);
+    const records = [
+      aReading("Claude token", 60, 0.95, hoursOn(30)),
+      aReading("Claude max", 40, 0, resets),
+      aReading("Claude max", 20, 0, resets),
+      aReading("Claude max", 0, 0.2, resets),
+    ];
+
+    const runway = runwayOf(records, [{ subscription: "Claude token", until: null }], NOW);
+
+    expect(runway).toEqual({ kind: "runs-out", at: hoursOn(80), heldUntil: resets });
+  });
+
+  describe("too few readings to tell", () => {
+    const resets = hoursOn(5 * 24);
+
+    it("is unknown with one reading in the last 24 hours", () => {
+      const runway = runwayOf([aReading("Claude token", 30, 0.3, resets), aReading("Claude token", 2, 0.4, resets)], [], NOW);
+
+      expect(runway).toEqual({ kind: "unknown" });
+    });
+
+    it("is unknown with two readings less than an hour apart", () => {
+      const runway = runwayOf([aReading("Claude token", 2.5, 0.3, resets), aReading("Claude token", 2, 0.4, resets)], [], NOW);
+
+      expect(runway).toEqual({ kind: "unknown" });
+    });
+
+    it("is unknown when the earlier reading is of the week before", () => {
+      const runway = runwayOf([aReading("Claude token", 12, 0.9, hoursOn(-6)), aReading("Claude token", 2, 0.1, resets)], [], NOW);
+
+      expect(runway).toEqual({ kind: "unknown" });
+    });
+
+    it("skips a reading with no share or no reset", () => {
+      const runway = runwayOf(
+        [aReading("Claude token", 12, null, resets), aReading("Claude token", 8, 0.3, null), aReading("Claude token", 2, 0.4, resets)],
+        [],
+        NOW,
+      );
+
+      expect(runway).toEqual({ kind: "unknown" });
+    });
+
+    it("is unknown when no record has a reading at all", () => {
+      expect(runwayOf([aRunRecord({ endedAt: hoursOn(-2), rateLimit: null })], [], NOW)).toEqual({ kind: "unknown" });
+      expect(runwayOf([], [], NOW)).toEqual({ kind: "unknown" });
+    });
+  });
+
+  describe("a share that did not rise", () => {
+    const resets = hoursOn(5 * 24);
+
+    it("runs all week when it fell", () => {
+      const runway = runwayOf([aReading("Claude token", 12, 0.4, resets), aReading("Claude token", 2, 0.3, resets)], [], NOW);
+
+      expect(runway).toEqual({ kind: "all-week" });
+    });
+
+    it("runs all week when it stood still", () => {
+      const runway = runwayOf([aReading("Claude token", 12, 0.4, resets), aReading("Claude token", 2, 0.4, resets)], [], NOW);
+
+      expect(runway).toEqual({ kind: "all-week" });
+    });
+
+    it("runs all week when it stood still in a week that has since reset, with no reset ahead known", () => {
+      const reset = hoursOn(-1);
+
+      const runway = runwayOf([aReading("Claude token", 12, 0.4, reset), aReading("Claude token", 2, 0.4, reset)], [], NOW);
 
       expect(runway).toEqual({ kind: "all-week" });
     });
