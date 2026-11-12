@@ -2194,7 +2194,8 @@ export type RunJob = "blocked" | "waiting-for-runner" | "waiting-on-checks" | "r
 
 /**
  * A run in flight, as its job's name tells it (#606): its role, the issue or
- * pull request the name carries, or null where it carries none (a Triage,
+ * pull request the name carries, a Digest job's always its pull request
+ * (#655), or null where it carries none (a Triage,
  * Research, Audit or Retro job, a Review's wait for checks, and an Implement or
  * Review job an earlier release named for nothing), a Retry's number, and when
  * Actions created its workflow run.
@@ -2270,6 +2271,9 @@ export function runsByJobNamesOf(jobs: readonly ActionsJob[]): RunByJobName[] {
     if ([REVIEW_CHECKS_JOB_NAME, RERUN_CHECKS_JOB_NAME, RERUN_WAIT_JOB_NAME].some((name) => isJobNamed(job.name, name))) {
       return job.status === "completed" ? [] : fact({ ...ran, role: "review", job: "waiting-on-checks", startedAt: null });
     }
+    // A Digest job's name always carries its pull request's number, and never its Ticket's (#655).
+    const digestName = DIGEST_JOB.exec(job.name);
+    if (digestName !== null) return fact({ ...ran, role: "digest", pullRequest: numberOrNull(digestName[1]) });
     const designName = DESIGN_JOB.exec(job.name);
     if (designName !== null) {
       const prototype = isJobNamed(job.name.replace(/ #[0-9]+$/, ""), PROTOTYPE_JOB_NAME);

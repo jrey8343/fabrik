@@ -39,7 +39,7 @@ function atTheMergeGate(...comments: ReturnType<typeof aDigestComment>[]): Facts
 }
 
 /** The Digest on pull request 50's row. */
-function digestOf(facts: Facts): DigestRead | null | undefined {
+function digestOn(facts: Facts): DigestRead | null | undefined {
   return rowsOf(facts, null, null, null, NOW).find(({ standing }) => standing.pullRequest === 50)?.digest;
 }
 
@@ -47,7 +47,7 @@ describe("The Digest on an open agent pull request's row", () => {
   it("is readable for a pull request at the Merge gate with a Digest for its head: the data, the folds, the head, when it was posted and where", () => {
     const digest = aDigestComment(HEAD, "2026-11-08T18:05:00Z", { data: DATA, folds: FOLDS }, { url: "https://github.com/owner/product/pull/50#issuecomment-9" });
 
-    expect(digestOf(atTheMergeGate(digest))).toEqual({
+    expect(digestOn(atTheMergeGate(digest))).toEqual({
       is: "readable",
       head: HEAD,
       carriedFrom: null,
@@ -61,39 +61,39 @@ describe("The Digest on an open agent pull request's row", () => {
   it("gives the head a Digest carried forward was first written at", () => {
     const carried = aDigestComment(HEAD, "2026-11-08T18:05:00Z", { carriedFrom: EARLIER_HEAD });
 
-    expect(digestOf(atTheMergeGate(carried))).toMatchObject({ is: "readable", head: HEAD, carriedFrom: EARLIER_HEAD });
+    expect(digestOn(atTheMergeGate(carried))).toMatchObject({ is: "readable", head: HEAD, carriedFrom: EARLIER_HEAD });
   });
 
   it("is none when the only Digest is for an earlier head: one for another head is never given", () => {
-    expect(digestOf(atTheMergeGate(aDigestComment(EARLIER_HEAD, "2026-11-08T17:00:00Z", { data: DATA })))).toEqual({ is: "none" });
+    expect(digestOn(atTheMergeGate(aDigestComment(EARLIER_HEAD, "2026-11-08T17:00:00Z", { data: DATA })))).toEqual({ is: "none" });
   });
 
   it("is none for a head nothing names: a draft still in the Loop", () => {
     const draft = homeFactsOf({ github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: true })] }) });
 
-    expect(digestOf(draft)).toEqual({ is: "none" });
+    expect(digestOn(draft)).toEqual({ is: "none" });
   });
 
   it.each(["failed", "timed-out", "refused", "no-subscription", "never-started"] as const)("is not written, with how, when the Kit's no-Digest line for the head says %s", (how) => {
     const line = aNoDigestLine(HEAD, how, "2026-11-08T18:05:00Z", { url: "https://github.com/owner/product/pull/50#issuecomment-8" });
 
-    expect(digestOf(atTheMergeGate(line))).toEqual({ is: "not-written", how, url: "https://github.com/owner/product/pull/50#issuecomment-8" });
+    expect(digestOn(atTheMergeGate(line))).toEqual({ is: "not-written", how, url: "https://github.com/owner/product/pull/50#issuecomment-8" });
   });
 
   it("is the newer of the two when the head has a no-Digest line and a Digest: a Digest posted after the line is readable, a line after the Digest is not written", () => {
     const line = (at: string) => aNoDigestLine(HEAD, "timed-out", at);
     const digest = (at: string) => aDigestComment(HEAD, at, { data: DATA });
 
-    expect(digestOf(atTheMergeGate(line("2026-11-08T18:05:00Z"), digest("2026-11-08T19:00:00Z")))).toMatchObject({ is: "readable", at: "2026-11-08T19:00:00Z" });
-    expect(digestOf(atTheMergeGate(digest("2026-11-08T18:05:00Z"), line("2026-11-08T19:00:00Z")))).toMatchObject({ is: "not-written", how: "timed-out" });
+    expect(digestOn(atTheMergeGate(line("2026-11-08T18:05:00Z"), digest("2026-11-08T19:00:00Z")))).toMatchObject({ is: "readable", at: "2026-11-08T19:00:00Z" });
+    expect(digestOn(atTheMergeGate(digest("2026-11-08T18:05:00Z"), line("2026-11-08T19:00:00Z")))).toMatchObject({ is: "not-written", how: "timed-out" });
   });
 
   it("is the newest Digest for the head when it has two, and never a no-Digest line for an earlier head", () => {
     const first = aDigestComment(HEAD, "2026-11-08T18:05:00Z", {}, { url: "https://github.com/owner/product/pull/50#issuecomment-8" });
     const second = aDigestComment(HEAD, "2026-11-08T19:00:00Z", { data: DATA }, { url: "https://github.com/owner/product/pull/50#issuecomment-9" });
 
-    expect(digestOf(atTheMergeGate(aNoDigestLine(EARLIER_HEAD, "failed", "2026-11-08T17:00:00Z"), first, second))).toMatchObject({ is: "readable", url: "https://github.com/owner/product/pull/50#issuecomment-9", data: DATA });
-    expect(digestOf(atTheMergeGate(aNoDigestLine(EARLIER_HEAD, "failed", "2026-11-08T17:00:00Z")))).toEqual({ is: "none" });
+    expect(digestOn(atTheMergeGate(aNoDigestLine(EARLIER_HEAD, "failed", "2026-11-08T17:00:00Z"), first, second))).toMatchObject({ is: "readable", url: "https://github.com/owner/product/pull/50#issuecomment-9", data: DATA });
+    expect(digestOn(atTheMergeGate(aNoDigestLine(EARLIER_HEAD, "failed", "2026-11-08T17:00:00Z")))).toEqual({ is: "none" });
   });
 
   it("is read only from a comment the Fabrik App wrote, any bot's when the gather was given no App login: a person quoting one fakes nothing", () => {
@@ -101,10 +101,10 @@ describe("The Digest on an open agent pull request's row", () => {
     const anotherBots = aDigestComment(HEAD, "2026-11-08T18:05:00Z", { data: DATA }, { author: "some-app[bot]" });
     const withNoAppLogin = (...comments: ReturnType<typeof aDigestComment>[]): Facts => ({ ...atTheMergeGate(...comments), appLogin: null });
 
-    expect(digestOf(atTheMergeGate(quoted))).toEqual({ is: "none" });
-    expect(digestOf(atTheMergeGate(anotherBots))).toEqual({ is: "none" });
-    expect(digestOf(withNoAppLogin(anotherBots))).toMatchObject({ is: "readable", data: DATA });
-    expect(digestOf(withNoAppLogin(quoted))).toEqual({ is: "none" });
+    expect(digestOn(atTheMergeGate(quoted))).toEqual({ is: "none" });
+    expect(digestOn(atTheMergeGate(anotherBots))).toEqual({ is: "none" });
+    expect(digestOn(withNoAppLogin(anotherBots))).toMatchObject({ is: "readable", data: DATA });
+    expect(digestOn(withNoAppLogin(quoted))).toEqual({ is: "none" });
   });
 
   it("is null on every other row: an issue's, and a Plain pull request's", () => {
@@ -155,7 +155,7 @@ describe("A Digest no reader can draw", () => {
     const later = withDataLine((line) => line.replace('{"v":1,', '{"v":2,'));
 
     expect(later.body).not.toBe(written.body);
-    expect(digestOf(atTheMergeGate(later))).toEqual({ is: "unreadable", why: "unknown-version", url: URL, markdown: RENDERED });
+    expect(digestOn(atTheMergeGate(later))).toEqual({ is: "unreadable", why: "unknown-version", url: URL, markdown: RENDERED });
   });
 
   it.each([
@@ -166,18 +166,18 @@ describe("A Digest no reader can draw", () => {
     const broken = withDataLine(rewrite);
 
     expect(broken.body).not.toBe(written.body);
-    expect(digestOf(atTheMergeGate(broken))).toMatchObject({ is: "unreadable", why: "malformed", url: URL });
+    expect(digestOn(atTheMergeGate(broken))).toMatchObject({ is: "unreadable", why: "malformed", url: URL });
   });
 
   it("is unreadable as edited when GitHub records an edit of its body, though its data line still reads: the Kit never edits a Digest, so the edit is a person's", () => {
     const edited = { ...written, bodyEditedAt: "2026-11-08T18:30:00Z" };
 
-    expect(digestOf(atTheMergeGate(edited))).toEqual({ is: "unreadable", why: "edited", url: URL, markdown: RENDERED });
+    expect(digestOn(atTheMergeGate(edited))).toEqual({ is: "unreadable", why: "edited", url: URL, markdown: RENDERED });
   });
 
   it("gives an edited Digest's Markdown as the person left it, with every hidden line left out", () => {
     const edited = { ...written, body: `${written.body.replace("Nothing.", "Nothing, they say.")}\n<!-- fabrik:verdict {"verdict":"pass"} -->`, bodyEditedAt: "2026-11-08T18:30:00Z" };
 
-    expect(digestOf(atTheMergeGate(edited))).toEqual({ is: "unreadable", why: "edited", url: URL, markdown: RENDERED.replace("Nothing.", "Nothing, they say.") });
+    expect(digestOn(atTheMergeGate(edited))).toEqual({ is: "unreadable", why: "edited", url: URL, markdown: RENDERED.replace("Nothing.", "Nothing, they say.") });
   });
 });

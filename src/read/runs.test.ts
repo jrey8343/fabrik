@@ -299,6 +299,104 @@ describe("The runs read", () => {
     });
   });
 
+  describe("a Digest run (#655)", () => {
+    const DIGEST_OF_50 = routed({ role: "digest", issue: 12, pullRequest: 50, kind: null, retry: 0, model: "claude-sonnet-4-5" });
+
+    it("is read exactly from the closing line, with role digest, its Ticket and its pull request, running at its Digest job's page", async () => {
+      const actions = actionsOf([
+        {
+          id: 9,
+          status: "in_progress",
+          createdAt: "2026-11-12T09:40:00Z",
+          jobs: [
+            kitJob(DIGEST_OF_50),
+            { name: "fabrik / Review PR #${{ needs.kit.outputs.pull-request }}", status: "completed", conclusion: "skipped" },
+            { id: 6, name: "fabrik / Digest PR #50", status: "in_progress", startedAt: "2026-11-12T09:41:00Z" },
+          ],
+        },
+      ]);
+
+      expect((await readRuns(actions, "owner/product", NOW)).runs).toEqual([
+        {
+          run: 9,
+          attempt: 1,
+          exact: true,
+          role: "digest",
+          issue: 12,
+          pullRequest: 50,
+          kind: null,
+          retry: null,
+          model: "claude-sonnet-4-5",
+          job: "running",
+          createdAt: "2026-11-12T09:40:00Z",
+          startedAt: "2026-11-12T09:41:00Z",
+          url: JOB_PAGE(9, 6),
+        },
+      ]);
+    });
+
+    it("is waiting for a runner, at the run's page, until its Digest job is listed, and landing once that job is done and its push job is not", async () => {
+      const waiting = actionsOf([{ id: 9, status: "in_progress", jobs: [kitJob(DIGEST_OF_50)] }]);
+      const landing = actionsOf([
+        {
+          id: 9,
+          status: "in_progress",
+          jobs: [kitJob(DIGEST_OF_50), { id: 6, name: "fabrik / Digest PR #50", status: "completed", conclusion: "success", startedAt: "2026-11-12T09:41:00Z" }, { name: "fabrik / Push", status: "in_progress" }],
+        },
+      ]);
+
+      expect((await readRuns(waiting, "owner/product", NOW)).runs).toMatchObject([{ role: "digest", pullRequest: 50, job: "waiting-for-runner", startedAt: null, url: RUN_PAGE(9) }]);
+      expect((await readRuns(landing, "owner/product", NOW)).runs).toMatchObject([{ role: "digest", pullRequest: 50, job: "landing", url: JOB_PAGE(9, 6) }]);
+    });
+
+    it("is told by its job's name, Digest PR and the number, for a run with no closing line: not exact, with its pull request, no Ticket and no model", async () => {
+      const actions = actionsOf([
+        {
+          id: 9,
+          status: "in_progress",
+          createdAt: "2026-11-12T09:40:00Z",
+          jobs: [
+            { name: "fabrik / Kit", status: "completed", conclusion: "success", steps: [{ name: "Route", status: "completed", conclusion: "success" }] },
+            { id: 6, name: "fabrik / Digest PR #50", status: "in_progress", startedAt: "2026-11-12T09:41:00Z" },
+          ],
+        },
+      ]);
+
+      expect((await readRuns(actions, "owner/product", NOW)).runs).toEqual([
+        {
+          run: 9,
+          attempt: 1,
+          exact: false,
+          role: "digest",
+          issue: null,
+          pullRequest: 50,
+          kind: null,
+          retry: null,
+          model: null,
+          job: "running",
+          createdAt: "2026-11-12T09:40:00Z",
+          startedAt: "2026-11-12T09:41:00Z",
+          url: JOB_PAGE(9, 6),
+        },
+      ]);
+    });
+
+    it("takes no skipped Digest job for a run, its name never worked out", async () => {
+      const actions = actionsOf([
+        {
+          id: 9,
+          status: "in_progress",
+          jobs: [
+            { name: "fabrik / Kit", status: "completed", conclusion: "success", steps: [{ name: "Route", status: "completed", conclusion: "success" }] },
+            { name: "fabrik / Digest PR #${{ needs.kit.outputs.pull-request }}", status: "completed", conclusion: "skipped" },
+          ],
+        },
+      ]);
+
+      expect((await readRuns(actions, "owner/product", NOW)).runs).toEqual([]);
+    });
+  });
+
   describe("a Replay's run", () => {
     const REPLAY_OF_12 = { fabrik: 1, route: "replay", run: null, held: [], replay: { issue: 30, ticket: 12 } };
     const replayRun = (jobs: readonly CannedJob[]): CannedRun => ({

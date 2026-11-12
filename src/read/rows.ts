@@ -230,12 +230,12 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
     evidence: pullRequest === null ? null : evidenceOf(facts, pullRequest),
     production: pullRequest !== null && isProductionStanding(standing) ? productionOf(facts, pullRequest) : null,
     prototype: issue === null ? null : prototypeOf(facts, issue),
-    digest: pullRequest === null ? null : digestOf(facts, pullRequest),
+    digest: pullRequest === null ? null : digestOn(facts, pullRequest),
   };
 }
 
 /** The Digest of open agent pull request `pullRequest`'s head, from its comments as the gather read them; null when it is no open agent pull request. */
-function digestOf({ github, appLogin }: Facts, pullRequest: number): DigestRead | null {
+function digestOn({ github, appLogin }: Facts, pullRequest: number): DigestRead | null {
   const open = github.openPullRequests.find(({ number }) => number === pullRequest);
   return open === undefined ? null : digestReadOf(open, appLogin);
 }
