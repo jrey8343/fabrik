@@ -75,10 +75,10 @@ export async function readDeployments(
     readAt: now,
     merges: Object.fromEntries(asked.map((merge) => [merge.mergeCommit, of(merge)])),
   });
-  const since = Math.min(...asked.map(({ mergedAt }) => Date.parse(mergedAt)));
+  const earliestMerge = Math.min(...asked.map(({ mergedAt }) => Date.parse(mergedAt)));
   let deployments: RawDeployment[];
   try {
-    deployments = (await listSince(client, repo, environment, since)).filter((deployment) => deployment.environment === environment);
+    deployments = (await listSince(client, repo, environment, earliestMerge)).filter((deployment) => deployment.environment === environment);
   } catch {
     return answer(() => "unread");
   }
@@ -87,8 +87,8 @@ export async function readDeployments(
   const contains = containing(client, repo);
   const decided = await Promise.all(
     asked.map(async (merge) => {
-      const since = kept.filter(({ deployment }) => Date.parse(deployment.created_at) >= Date.parse(merge.mergedAt));
-      return [merge.mergeCommit, await deployOf(since, (deployed) => contains(merge.mergeCommit, deployed))] as const;
+      const candidates = kept.filter(({ deployment }) => Date.parse(deployment.created_at) >= Date.parse(merge.mergedAt));
+      return [merge.mergeCommit, await deployOf(candidates, (deployed) => contains(merge.mergeCommit, deployed))] as const;
     }),
   );
   const byMerge = new Map(decided);
