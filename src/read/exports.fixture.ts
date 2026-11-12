@@ -8,12 +8,15 @@ import {
   A_REPLAY,
   aComment,
   aCommit,
+  aDeploymentsRead,
+  aDeployOf,
   aDesignRound,
   aDesignTurnFailedNotice,
   aFollowUpIssue,
   AGROUP_STATS,
   aLabelAdded,
   aMapCapRefusal,
+  aMergedLastDay,
   aMergedPullRequest,
   aMonitorIssueBody,
   AN_UNKNOWN_COST,
@@ -54,10 +57,14 @@ import {
   homeFactsOf,
   isLive,
   joinChecks,
+  joinDeployments,
   joinRuns,
   KIT_SAID_VERSION,
   kitSaidIn,
+  MERGED_STANDS_HOURS,
+  mergesToRead,
   newerSchemaOf,
+  NO_DEPLOY_SEEN_MINUTES,
   readCaller,
   readDeployments,
   readOutcomes,
@@ -102,6 +109,7 @@ import type {
   KitConfigSources,
   KitSaid,
   MergedInWeek,
+  MergedLastDayFacts,
   MergeToRead,
   OutcomesRead,
   ReadClient,
@@ -250,6 +258,15 @@ const A_CHECKS_READ = {
   holdsAdmins: "yes",
   heads: { ["p".repeat(40)]: [{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-09T11:30:00Z" }] },
 } as const satisfies RequiredChecksRead;
+
+/** Agent pull request 50 for Ticket 7, merged at 11:30 with merge commit `m…`, in a repo declaring production in environment `production`. */
+const A_MERGE_AT_PRODUCTION = homeFactsOf({
+  kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } }, dispatch: null },
+  mergedLastDay: [aMergedLastDay("2026-11-09T11:30:00Z")],
+});
+
+/** `owner/product`'s Deployments in `production` read at NOW: merge `m…` deploying since 11:40. */
+const A_DEPLOYMENTS_READ = aDeploymentsRead({ ["m".repeat(40)]: aDeployOf({ is: "running", deployment: 901, commit: "m".repeat(40), at: "2026-11-09T11:40:00Z" }) }, NOW) satisfies DeploymentsRead;
 
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
@@ -508,7 +525,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
       A_RUNS_READ,
       A_CHECKS_READ,
-      null,
+      A_DEPLOYMENTS_READ,
       NOW,
     ),
 
@@ -650,6 +667,35 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       [{ mergeCommit: "m".repeat(40), mergedAt: "2026-11-12T08:00:00Z" }],
       NOW,
     ),
+
+  // The Standing at Production
+
+  aDeploymentsRead: () =>
+    aDeploymentsRead(
+      A_DEPLOYMENTS_READ.merges,
+      NOW,
+    ),
+  aDeployOf: () =>
+    aDeployOf(
+      { is: "succeeded", deployment: 900, commit: "m".repeat(40), at: "2026-11-09T11:40:00Z" },
+    ),
+  aMergedLastDay: () =>
+    aMergedLastDay(
+      "2026-11-09T11:30:00Z",
+      { title: "Build the thing" },
+    ),
+  joinDeployments: () =>
+    joinDeployments(
+      rowsOf(A_MERGE_AT_PRODUCTION, null, null, null, NOW),
+      A_DEPLOYMENTS_READ,
+      NOW,
+    ),
+  mergesToRead: () =>
+    mergesToRead(
+      rowsOf(A_MERGE_AT_PRODUCTION, null, null, null, NOW),
+    ),
+  MERGED_STANDS_HOURS: () => MERGED_STANDS_HOURS,
+  NO_DEPLOY_SEEN_MINUTES: () => NO_DEPLOY_SEEN_MINUTES,
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -830,6 +876,10 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     log: "https://github.com/owner/product/actions/runs/40/job/41",
   } satisfies DeployOf,
   MergeToRead: { mergeCommit: "m".repeat(40), mergedAt: "2026-11-12T08:00:00Z" } satisfies MergeToRead,
+
+  // The Standing at Production
+
+  MergedLastDayFacts: { number: 50, title: "Build the thing", ticket: 7, mergeCommit: "m".repeat(40), mergedAt: "2026-11-09T11:30:00Z" } satisfies MergedLastDayFacts,
 };
 
 /**

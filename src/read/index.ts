@@ -134,3 +134,10 @@ export type { MergedInWeek, OutcomesRead, WorkOutcome } from "./outcomes.ts";
 
 export { readDeployments } from "./deployments.ts";
 export type { DeployOf, DeploymentsRead, MergeToRead } from "./deployments.ts";
+
+// The Standing at Production
+
+export { aDeploymentsRead, aDeployOf, aMergedLastDay } from "./builders.ts";
+export { MERGED_STANDS_HOURS, NO_DEPLOY_SEEN_MINUTES } from "../kit/standingProduction.ts";
+export { joinDeployments, mergesToRead } from "./joinDeployments.ts";
+export type { MergedLastDayFacts } from "../kit/standingProduction.ts";
