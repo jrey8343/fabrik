@@ -76,4 +76,59 @@ describe("the caller read", () => {
       "jrey8343/fabrik:.github/workflows/schedule.yml@v1.1.0",
     ]);
   });
+
+  it("gives the Kit job's own line, word for word, for a caller job that lacks what the new release's workflow asks", async () => {
+    const client = clientWith({
+      [`acme/shop:${PATH}@main`]: callerAt("v1.0.0"),
+      [`acme/shop:${PATH}@abc123`]: callerAt("v1.1.0"),
+      "jrey8343/fabrik:.github/workflows/schedule.yml@v1.1.0": scheduleAsking({ tick: ["id-token: write", "actions: read"] }),
+    });
+
+    expect(await readCaller(client, "acme/shop", 42)).toEqual({
+      changes: true,
+      from: "v1.0.0",
+      to: "v1.1.0",
+      errors: [
+        ".github/workflows/fabrik.yml: the tick job's permissions: lacks `actions: read`, which the tick job of jrey8343/fabrik/.github/workflows/schedule.yml@v1.1.0 asks for. " +
+          "GitHub checks every uses: job of a workflow before any job's if:, so until the line is added every run of this workflow fails at startup, whatever the event. " +
+          "Add `actions: read` under the tick job's permissions: before merging.",
+      ],
+    });
+  });
+
+  it("gives a pull request that leaves the caller alone as no change, at the one release, reading no Kit workflow", async () => {
+    const client = clientWith({ [`acme/shop:${PATH}@main`]: callerAt("v1.0.0"), [`acme/shop:${PATH}@abc123`]: callerAt("v1.0.0") });
+
+    expect(await readCaller(client, "acme/shop", 42)).toEqual({ changes: false, from: "v1.0.0", to: "v1.0.0", errors: [] });
+    expect(client.reads.filter((read) => read.startsWith("jrey8343/fabrik:"))).toEqual([]);
+  });
+
+  it("gives the Kit job's line for a head whose caller pins two releases", async () => {
+    const twoPins = `${callerAt("v1.1.0")}  loop:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.0.0\n`;
+    const client = clientWith({ [`acme/shop:${PATH}@main`]: callerAt("v1.0.0"), [`acme/shop:${PATH}@abc123`]: twoPins });
+
+    expect(await readCaller(client, "acme/shop", 42)).toEqual({
+      changes: true,
+      from: "v1.0.0",
+      to: null,
+      errors: [".github/workflows/fabrik.yml: The caller workflow pins more than one Fabrik release (v1.1.0, v1.0.0); every uses: line must pin the same one"],
+    });
+  });
+
+  it("gives the Kit job's line for a head whose caller pins a branch", async () => {
+    const client = clientWith({ [`acme/shop:${PATH}@main`]: callerAt("v1.0.0"), [`acme/shop:${PATH}@abc123`]: callerAt("main") });
+
+    expect(await readCaller(client, "acme/shop", 42)).toEqual({
+      changes: true,
+      from: "v1.0.0",
+      to: null,
+      errors: [".github/workflows/fabrik.yml: The caller workflow pins Fabrik at main, which isn't an exact release tag such as v1.2.3"],
+    });
+  });
+
+  it("gives a fork's head the repo can't serve as no change, as the Kit job checks none", async () => {
+    const client = clientWith({ [`acme/shop:${PATH}@main`]: callerAt("v1.0.0") });
+
+    expect(await readCaller(client, "acme/shop", 42)).toEqual({ changes: false, from: "v1.0.0", to: null, errors: [] });
+  });
 });
