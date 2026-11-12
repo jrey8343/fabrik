@@ -18,7 +18,7 @@ import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
-import { LANDED_NOTHING_HEADING, MAP_CAP_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
+import { FILED_FROM_HEADING, filedFromContext, LANDED_NOTHING_HEADING, MAP_CAP_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
@@ -366,6 +366,132 @@ describe("The Map question in the Design prompt", () => {
     const examples = [...text.matchAll(/<design>\n([\s\S]*?)\n<\/design>/g)].map((match) => readDesignTurnOutput(JSON.parse(match[1] ?? "null"), EXAMPLE_ISSUE));
     expect(examples).toContainEqual(expect.objectContaining({ ok: true, output: expect.objectContaining({ kind: "map" }) }));
     expect(lineStarting(section(text, "Your output"), "- In `map`")).toContain("`research`, `prototype`, `grilling` or `task`");
+  });
+});
+
+// The Roll-in (#595): the section the prompt points at is built in ./design.ts, and the finish it shows is the contract's.
+describe("The Roll-in in the Design prompt", () => {
+  const rollIns = async () => section(await prompt("design"), "Roll-ins");
+
+  it("names the part the pull request an issue was filed from arrives under, after the issue, and what it holds", async () => {
+    const intro = lineStarting(await rollIns(), "Some issues are filed from a pull request");
+    expect(intro).toContain(`When "${FILED_FROM_HEADING}" follows the issue at the end of this prompt`);
+    expect(intro).toContain("it says where that pull request stands and whether a Roll-in may be settled, gives its description as data");
+    expect(intro).toContain("says where its branch can be read");
+  });
+
+  it("says where a Roll-in fits, and the three cases where it never does", async () => {
+    const fits = lineStarting(await rollIns(), "- **Where a Roll-in fits.**");
+    expect(fits).toContain("The code the issue changes exists only on the pull request's branch, or the work is a small change to what the pull request builds.");
+    expect(fits).toContain("Never once the pull request has merged or closed");
+    expect(fits).toContain("never where the section says a Roll-in is not on offer");
+    expect(fits).toContain("never when the work needs something only the Operator can do");
+  });
+
+  it("points at the section in the section's own words, whichever way it rules", async () => {
+    const text = await rollIns();
+    const pullRequest = { kind: "pull-request", number: 84, title: "Add a waitlist", body: "", draft: false, headSha: "c".repeat(40), headRef: "fabrik/ticket-7", baseRef: "main" };
+    const said = (standing: object) => filedFromContext({ ...pullRequest, ...standing }).join("\n");
+
+    for (const standing of [{ state: "open", isAgent: true }, { state: "open", isAgent: true, draft: true }]) {
+      expect(said(standing)).toContain("a Roll-in may be settled");
+    }
+    for (const standing of [{ state: "merged", isAgent: true }, { state: "closed", isAgent: true }, { state: "open", isAgent: false }]) {
+      expect(said(standing)).toContain("a Roll-in is not on offer");
+    }
+    expect(text).toContain("a Roll-in may be settled");
+    expect(text).toContain("a Roll-in is not on offer");
+  });
+
+  it("asks for a Roll-in as one question of the first Round, with a recommendation, and settles in that Round whatever else an Implementer would need", async () => {
+    const ask = lineStarting(await rollIns(), "- **Ask in round 1, with a recommendation.**");
+    expect(ask).toContain("one question of round 1 asks whether to roll the issue's work in to that pull request, with your recommendation");
+    expect(ask).toContain("Settle in the same round whatever else an Implementer would need, so the session can finish on one reply.");
+    expect(ask).toContain("Read the branch first, and name the code as the branch has it.");
+  });
+
+  it("settles a Roll-in only on the Operator's answer, onto any open agent pull request the Operator agreed to, and says the Kit sends nothing", async () => {
+    const settles = lineStarting(await rollIns(), "- **Only the Operator's answer settles it.**");
+    expect(settles).toContain("Never settle a Roll-in on your own judgement.");
+    expect(settles).toContain("You may name any open agent pull request the Operator agreed to in the thread, not only the one the section tells you of.");
+    expect(settles).toContain("The Kit sends nothing: the work is built only when the Operator sends the text with a Request changes on that pull request.");
+  });
+
+  it("says who reads the text, the Implementer and the Reviewer, and what they are never given", async () => {
+    const readers = lineStarting(await rollIns(), "- **Write the text for the Implementer and the Reviewer.**");
+    expect(readers).toContain("They are given the pull request, its Ticket and the text, and never the issue, its thread, Triage's comment or the closing comment, so the text has to stand alone.");
+  });
+
+  it("says how to write the text, rule by rule, changes to files only among them", async () => {
+    const writing = lineStarting(await rollIns(), "- **Write the text for the Implementer and the Reviewer.**");
+    for (const rule of [
+      "Open with one line of what and why.",
+      "State every settled decision as a plain requirement, pointing at no round, question or issue.",
+      "Use names only as you read them on the branch.",
+      "Say what stays as it is.",
+      "Give acceptance criteria that each state one check a test could make.",
+      "Ask for changes to files only, never to a pull request's description, title or labels.",
+      "Keep it short enough to read on a phone.",
+    ]) {
+      expect(writing).toContain(rule);
+    }
+  });
+
+  it("keeps not planned meaning won't be built: an issue whose work is to be built on a pull request never finishes that way", async () => {
+    const notPlanned = lineStarting(section(await prompt("design"), "Your turn"), "- **Finish as not planned**");
+    expect(notPlanned).toContain("when the Operator has decided the issue shouldn't be built");
+    expect(notPlanned).toContain("An issue whose work is to be built on a pull request finishes by settling a Roll-in, never as not planned.");
+  });
+
+  it("lists settling a Roll-in among the ways a turn finishes, only on the Operator's yes, and says what the Kit does with it", async () => {
+    const finish = lineStarting(section(await prompt("design"), "Your turn"), "- **Finish by settling a Roll-in**");
+    expect(finish).toContain("once the Operator has said yes to building the issue's work on an open agent pull request, as **Roll-ins** describes");
+    expect(finish).toContain("and nothing an Implementer would need is still open");
+    expect(finish).toContain("Name that pull request and write what to build on it, with its acceptance criteria.");
+    expect(finish).toContain("The Kit closes this issue under a closing comment that carries the text, and sends nothing: only the Operator does.");
+  });
+
+  /** The `roll-in` output the prompt shows, as the session would write it. */
+  const shown = async (): Promise<Record<string, unknown>> =>
+    JSON.parse(/To finish by settling a Roll-in, once the Operator has said yes to one:\n\n<design>\n([\s\S]*?)\n<\/design>/.exec(await prompt("design"))?.[1] ?? "null");
+
+  it("shows a roll-in output the contract accepts as it stands: the pull request, the summary and the criteria beside the kind, and nothing else", async () => {
+    const example = await shown();
+
+    expect(Object.keys(example)).toEqual(["kind", "pullRequest", "summary", "acceptanceCriteria"]);
+    expect(readDesignTurnOutput(example, EXAMPLE_ISSUE)).toEqual({
+      ok: true,
+      output: { kind: "roll-in", pullRequest: 42, summary: example.summary, acceptanceCriteria: example.acceptanceCriteria },
+    });
+    expect(example.acceptanceCriteria).toHaveLength(2);
+    // It names no issue at all, so it reads on a turn of any issue, even one that shares the pull request's number.
+    expect(readDesignTurnOutput(example, 42)).toMatchObject({ ok: true });
+  });
+
+  it("says the Kit writes the heading, the session-finished line and the line about sending, what it refuses in the text, and that there is no word cap", async () => {
+    const note = lineStarting(section(await prompt("design"), "Your output"), "- In `roll-in`");
+    expect(note).toContain("`pullRequest` is the number of the open agent pull request to build on");
+    expect(note).toContain("The Kit writes the closing comment's heading, its line saying the session finished and its line about sending, so the text holds none of them");
+    expect(note).toContain("The text must not name this issue, by its number or a link to it, or mention anyone, or the Kit refuses it.");
+    expect(note).toContain("There is no word cap.");
+  });
+
+  it("says how to write a name beginning with @, in a way the contract accepts where it refuses the bare name", async () => {
+    const note = lineStarting(section(await prompt("design"), "Your output"), "- In `roll-in`");
+    expect(note).toContain(
+      "A name beginning with `@`, such as a scoped package's, is written as inline code of its own, as `` `@scope/name` `` is, since the Kit reads it anywhere else as a mention.",
+    );
+
+    const example = await shown();
+    expect(readDesignTurnOutput({ ...example, summary: "Read the limit from `@scope/name`." }, EXAMPLE_ISSUE)).toMatchObject({ ok: true });
+    expect(readDesignTurnOutput({ ...example, summary: "Read the limit from @scope/name." }, EXAMPLE_ISSUE)).toMatchObject({ ok: false });
+    expect(readDesignTurnOutput({ ...example, summary: "Read the limit from `the @scope/name package`." }, EXAMPLE_ISSUE)).toMatchObject({ ok: false });
+  });
+
+  it.each(["prototype", "triage"])("leaves the %s prompt saying nothing of a Roll-in or of the pull request an issue was filed from", async (role) => {
+    const text = await prompt(role);
+    expect(text).not.toMatch(/roll[- ]in/i);
+    expect(text).not.toContain(FILED_FROM_HEADING);
   });
 });
 
