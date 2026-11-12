@@ -256,6 +256,37 @@ describe("A Design session's rewrite keeps the issue's From retro line, so the n
   });
 });
 
+// A Follow-up the Operator opened as an issue ends with the PR whose pass listed it (#658).
+const filedFollowUp = [
+  "The cart total is worked out twice.",
+  "",
+  "Work it out once, in the cart.",
+  "",
+  "From PR #88",
+].join("\n");
+
+describe("A Design session's rewrite keeps the issue's From PR line, so the issue stays tied to the pull request it was filed from", () => {
+  it("ends the agent brief with it, as the filed issue did", () => {
+    const plan = planFor(turnFinished(agentBrief), inSession(filedFollowUp), kitConfig());
+
+    expect(rewrittenBody(plan)).toBe(
+      [
+        "## Agent brief",
+        "",
+        "Move billing into its own module.",
+        "",
+        "## Acceptance criteria",
+        "",
+        "- [ ] Booking imports nothing from billing",
+        "",
+        "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
+        "",
+        "From PR #88",
+      ].join("\n"),
+    );
+  });
+});
+
 /** The body of the issue the plan creates under this key. */
 function createdBody(plan: Plan, key: string): string | undefined {
   if (plan.kind !== "act") return undefined;
