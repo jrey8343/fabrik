@@ -109,6 +109,27 @@ export function relatedOf(facts: Facts, pullRequest: number): { readonly issue: 
     .map(({ issue, title }) => ({ issue, title, kind: "candidate" }));
 }
 
+/**
+ * The open issues that only mention open agent pull request `pullRequest`:
+ * each issue in the same repo that GitHub cross-references to it, once, in
+ * the order GitHub lists them, but for a candidate, which is under related,
+ * and the pull request's own Ticket, which the Kit's own comments
+ * cross-reference to it. A closed issue's, another repo's and a pull
+ * request's cross-reference is none.
+ */
+export function mentionsOf(facts: Facts, pullRequest: number): { readonly issue: number; readonly title: string }[] {
+  const { github, crossReferences } = facts;
+  const ticket = github.openPullRequests.find(({ number }) => number === pullRequest)?.ticket ?? null;
+  const related = new Set(relatedOf(facts, pullRequest).map(({ issue }) => issue));
+  const mentions: { readonly issue: number; readonly title: string }[] = [];
+  for (const { pullRequest: referenced, issue, title, open, repo } of crossReferences) {
+    const inRepo = repo.toLowerCase() === github.repo.toLowerCase();
+    if (referenced !== pullRequest || !open || !inRepo || issue === ticket || related.has(issue) || mentions.some((mention) => mention.issue === issue)) continue;
+    mentions.push({ issue, title });
+  }
+  return mentions;
+}
+
 /** The open agent pull request issue `issue` could be rolled in to, or null. */
 export function relatedToOf(facts: Facts, issue: number): number | null {
   return candidatesOf(facts).find((candidate) => candidate.issue === issue)?.pullRequest ?? null;

@@ -9,7 +9,7 @@ import { type Standing, type StandingFacts, standingsOf } from "../kit/standing.
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
 import type { Facts } from "./gather.ts";
-import { relatedOf, relatedToOf } from "./related.ts";
+import { mentionsOf, relatedOf, relatedToOf } from "./related.ts";
 
 /** One Standing, with what a reader shows beside it. */
 export interface Row {
@@ -77,6 +77,7 @@ function rowOf(standing: Standing, facts: Facts): Row {
   return {
     ...bareRowOf(standing, titleOf(standing, facts.github), lastWordOf(standing, facts)),
     related: pullRequest === null ? [] : relatedOf(facts, pullRequest),
+    mentions: pullRequest === null ? [] : mentionsOf(facts, pullRequest),
     relatedTo: issue === null ? null : relatedToOf(facts, issue),
   };
 }

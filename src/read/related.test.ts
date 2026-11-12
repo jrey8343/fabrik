@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenIssueFacts, OpenPullRequestFacts, ReviewFacts } from "../kit/weeklySummary.ts";
 import { aComment, aLabelAdded, aReview, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
-import type { Facts, IssueBodyFacts } from "./gather.ts";
+import type { CrossReferenceFacts, Facts, IssueBodyFacts } from "./gather.ts";
 import { neverRelatedKindOf } from "./related.ts";
 import { type Row, rowsOf } from "./rows.ts";
 
@@ -173,6 +173,54 @@ describe("a candidate stops being one", () => {
         aReview("2026-11-08T15:20:00Z", { state: "approved", body: "Leave #30 for later." }),
       ),
     );
+  });
+});
+
+describe("a mention", () => {
+  /** A cross-reference to pull request 50 from issue `issue`. */
+  const crossReference = (issue: number, title: string, overrides: Partial<CrossReferenceFacts> = {}): CrossReferenceFacts => ({
+    pullRequest: 50,
+    issue,
+    title,
+    open: true,
+    repo: "owner/product",
+    ...overrides,
+  });
+
+  it("is an open issue in the same repo that GitHub cross-references to the pull request, under mentions and not under related", () => {
+    const facts = repoWith({ crossReferences: [crossReference(40, "The cart is slow")] });
+
+    expect(pullRequestRow(facts)).toMatchObject({ mentions: [{ issue: 40, title: "The cart is slow" }], related: [] });
+  });
+
+  it("is once for an issue that cross-references the pull request twice", () => {
+    const facts = repoWith({ crossReferences: [crossReference(40, "The cart is slow"), crossReference(40, "The cart is slow")] });
+
+    expect(pullRequestRow(facts)?.mentions).toEqual([{ issue: 40, title: "The cart is slow" }]);
+  });
+
+  it("is never a candidate, which is under related alone", () => {
+    const facts = repoWith({ issues: [FILED], bodies: [{ issue: 30, body: FROM_PR_50 }], crossReferences: [crossReference(30, "Cache the prices")] });
+
+    expect(pullRequestRow(facts)).toMatchObject({ related: [{ issue: 30, title: "Cache the prices", kind: "candidate" }], mentions: [] });
+  });
+
+  it("is none from a closed issue, an issue in another repo, or a cross-reference to another pull request", () => {
+    const facts = repoWith({
+      crossReferences: [crossReference(41, "Closed one", { open: false }), crossReference(42, "Elsewhere", { repo: "owner/other" }), crossReference(43, "Another", { pullRequest: 51 })],
+    });
+
+    expect(pullRequestRow(facts)?.mentions).toEqual([]);
+  });
+
+  it("is none from the pull request's own Ticket, which the Kit's own comments cross-reference to it", () => {
+    expect(pullRequestRow(repoWith({ crossReferences: [crossReference(7, "Build the thing")] }))?.mentions).toEqual([]);
+  });
+
+  it("is on the pull request's row alone", () => {
+    const facts = repoWith({ crossReferences: [crossReference(40, "The cart is slow")] });
+
+    expect(rowsIn(facts).filter(({ mentions }) => mentions.length > 0).map(({ standing }) => standing.pullRequest)).toEqual([50]);
   });
 });
 
