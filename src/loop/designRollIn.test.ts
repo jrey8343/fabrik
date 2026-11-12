@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aNamedPullRequest, anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { rollInIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent, NamedPullRequestSnapshot, Plan } from "./types.ts";
 
@@ -134,5 +135,102 @@ describe("What settling a Roll-in touches", () => {
     expect(plan.actions.map((action) => ("issue" in action ? action.issue : action.kind))).toEqual([7, 7, 7, 7, "check-design-queue"]);
     expect(JSON.stringify(plan.actions.filter((action) => action.kind !== "comment"))).not.toContain("42");
     expect(plan.actions.filter((action) => "pullRequest" in action)).toEqual([]);
+  });
+});
+
+/** The closing comment a turn ending in `output` posts on #7. */
+function closingComment(output: unknown = rollIn, snapshot = naming()): string {
+  const plan = land(output, snapshot);
+  const comment = plan.kind === "act" ? plan.actions.find((action) => action.kind === "comment") : undefined;
+  if (comment?.kind !== "comment") throw new Error(`expected a closing comment, got ${JSON.stringify(plan)}`);
+  return comment.body;
+}
+
+describe("Reading a Roll-in back from its closing comment", () => {
+  it("gives the pull request its mark names and the text, as the turn gave them", () => {
+    expect(rollInIn(closingComment())).toEqual({
+      pullRequest: 42,
+      text: { summary: rollIn.summary, acceptanceCriteria: rollIn.acceptanceCriteria },
+    });
+  });
+
+  // What could end the hidden line's HTML comment early, break it over two lines or mention someone, in the summary and in a criterion.
+  const awkward = [
+    "Render `<Total>` when `lines.length > 0`, --> never before.",
+    "",
+    "Keep the import from `@acme/cart`, and the comment <!-- total --> above it. Then a line separator.",
+  ].join("\n");
+
+  it("gives the same text back when it holds <, >, -->, a newline and an @ straight after a backtick", () => {
+    const output = { ...rollIn, summary: awkward, acceptanceCriteria: [awkward, "The total shows."] };
+
+    expect(rollInIn(closingComment(output))).toEqual({ pullRequest: 42, text: { summary: awkward, acceptanceCriteria: [awkward, "The total shows."] } });
+  });
+
+  it("keeps each hidden line one line that only its own end closes, whatever the text holds", () => {
+    const [mark = "", data = "", third = ""] = closingComment({ ...rollIn, summary: awkward, acceptanceCriteria: [awkward] }).split("\n");
+
+    expect(mark).toBe("<!-- fabrik:roll-in 42 -->");
+    expect(data).toMatch(/^<!-- fabrik:roll-in-data \{"v":1,"summary":".*","acceptanceCriteria":\[".*"\]\} -->$/);
+    expect(data.indexOf("-->")).toBe(data.length - "-->".length);
+    expect(data).not.toContain("@");
+    expect(third.startsWith("**Design session finished.** ")).toBe(true);
+  });
+
+  it("reads a comment whose lines GitHub gave back ending in CRLF", () => {
+    expect(rollInIn(closingComment().replaceAll("\n", "\r\n"))).toEqual({
+      pullRequest: 42,
+      text: { summary: rollIn.summary, acceptanceCriteria: rollIn.acceptanceCriteria },
+    });
+  });
+
+  const withSecondLine = (line: string | null) => {
+    const [mark = "", , ...rest] = closingComment().split("\n");
+    return [mark, ...(line === null ? [] : [line]), ...rest].join("\n");
+  };
+
+  it.each([
+    ["removed", null],
+    ["edited so it does not parse", '<!-- fabrik:roll-in-data {"v":1,"summary":"Show the total.","acceptanceCriteria":["The total shows."] -->'],
+    ["of version 2", '<!-- fabrik:roll-in-data {"v":2,"summary":"Show the total.","acceptanceCriteria":["The total shows."]} -->'],
+    ["with no version", '<!-- fabrik:roll-in-data {"summary":"Show the total.","acceptanceCriteria":["The total shows."]} -->'],
+    ["whose summary is no text", '<!-- fabrik:roll-in-data {"v":1,"summary":7,"acceptanceCriteria":["The total shows."]} -->'],
+    ["whose criteria are no list of text", '<!-- fabrik:roll-in-data {"v":1,"summary":"Show the total.","acceptanceCriteria":"The total shows."} -->'],
+    ["that is no JSON object", '<!-- fabrik:roll-in-data ["Show the total."] -->'],
+    ["cut short", '<!-- fabrik:roll-in-data {"v":1,"summary":"Show the total.","acceptanceCriteria":["The total shows."]}'],
+    ["replaced by another marker", "<!-- fabrik:round-line {} -->"],
+  ])("still gives the pull request, and no text, with the data line %s", (_, line) => {
+    expect(rollInIn(withSecondLine(line))).toEqual({ pullRequest: 42, text: null });
+  });
+
+  it("reads a data line under the mark only: one further down is not the text", () => {
+    const [mark = "", data = "", ...rest] = closingComment().split("\n");
+
+    expect(rollInIn([mark, ...rest, data].join("\n"))).toEqual({ pullRequest: 42, text: null });
+  });
+
+  it("leaves out keys of the data line it doesn't know", () => {
+    const line = '<!-- fabrik:roll-in-data {"v":1,"summary":"Show the total.","acceptanceCriteria":["The total shows."],"sent":true} -->';
+
+    expect(rollInIn(withSecondLine(line))).toEqual({ pullRequest: 42, text: { summary: "Show the total.", acceptanceCriteria: ["The total shows."] } });
+  });
+
+  it.each([
+    ["quotes the mark on its second line", `As the Kit wrote:\n${closingComment()}`],
+    ["quotes the mark as a quotation", closingComment().replace(/^/gm, "> ")],
+    ["quotes the mark after a space", ` ${closingComment()}`],
+    ["quotes the mark in a code span", "`<!-- fabrik:roll-in 42 -->`\n**Design session finished.**"],
+    ["names no pull request in its mark", "<!-- fabrik:roll-in -->\n**Design session finished.**"],
+    ["names pull request zero", "<!-- fabrik:roll-in 0 -->\n**Design session finished.**"],
+    ["opens with the data line and no mark", closingComment().split("\n").slice(1).join("\n")],
+    ["has more than the mark on its first line", "<!-- fabrik:roll-in 42 --> and more\n**Design session finished.**"],
+    ["is an ordinary not-planned finish", "**Design session finished.** This issue won't be built, so the Kit closes it as not planned.\n\nNobody asked for it."],
+    ["is empty", ""],
+  ])("is not a Roll-in's when it %s", (_, body) => {
+    expect(rollInIn(body)).toBeNull();
+  });
+
+  it("reads a mark that is the whole comment", () => {
+    expect(rollInIn("<!-- fabrik:roll-in 42 -->")).toEqual({ pullRequest: 42, text: null });
   });
 });

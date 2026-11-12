@@ -429,6 +429,12 @@ export function rollInMarker(pullRequest: number): string {
   return `<!-- fabrik:roll-in ${pullRequest} -->`;
 }
 
+/** The Roll-in's mark as a comment's whole first line, its pull request captured, whichever way the line ends. */
+const ROLL_IN_MARKER = /^<!-- fabrik:roll-in ([1-9][0-9]*) -->\r?$/;
+
+/** A Roll-in's data line, its JSON captured; JSON holds no bare `\r`, so a line that came back ending in CRLF still reads. */
+const ROLL_IN_DATA_LINE = /^<!-- fabrik:roll-in-data (.*) -->\r?$/;
+
 /** The version of a Roll-in's data line this release writes, and the only one its reader knows. */
 export const ROLL_IN_DATA_VERSION = 1 as const;
 
@@ -449,6 +455,40 @@ export interface RollInText {
  */
 export function rollInDataLine({ summary, acceptanceCriteria }: RollInText): string {
   return `<!-- fabrik:roll-in-data ${markerJson({ v: ROLL_IN_DATA_VERSION, summary, acceptanceCriteria: [...acceptanceCriteria] })} -->`;
+}
+
+/**
+ * The Roll-in a closing comment settles, or null when the comment isn't a
+ * Roll-in's: the pull request its mark names, and its text, or no text when
+ * the line under the mark is missing, doesn't parse, or carries a version or
+ * a shape this reader doesn't know. The mark is read from the comment's
+ * first line and the text from its second, so quoting either further down
+ * counts for nothing. Pass it only the Fabrik App's comments, as a Verdict's
+ * marker is read: anyone can write the mark. The one reader of the comment:
+ * the Loop and the read library both call it.
+ */
+export function rollInIn(body: string): { readonly pullRequest: number; readonly text: RollInText | null } | null {
+  const [first = "", second = ""] = body.split("\n", 2);
+  const pullRequest = ROLL_IN_MARKER.exec(first)?.[1];
+  if (pullRequest === undefined) return null;
+  return { pullRequest: Number(pullRequest), text: rollInTextIn(second) };
+}
+
+/** The text a Roll-in's data line holds, keys this reader doesn't know left out; null when the line isn't one it can take. */
+function rollInTextIn(line: string): RollInText | null {
+  const json = ROLL_IN_DATA_LINE.exec(line)?.[1];
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const { v, summary, acceptanceCriteria } = value as Record<string, unknown>;
+  if (v !== ROLL_IN_DATA_VERSION || typeof summary !== "string") return null;
+  if (!Array.isArray(acceptanceCriteria) || !acceptanceCriteria.every((criterion) => typeof criterion === "string")) return null;
+  return { summary, acceptanceCriteria };
 }
 
 /**
