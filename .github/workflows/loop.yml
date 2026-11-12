@@ -385,6 +385,20 @@ jobs:
           github-token: ${{ github.token }}
           issue: ${{ github.event.issue.number }}
 
+      # When that pull request is an open agent pull request, the turn reads its
+      # branch: its head is fetched to refs/fabrik/filed-from/<n>, with the history
+      # to compare it with the default branch, which stays checked out (#660). The
+      # token goes to this step's git alone, in its environment: none is written to
+      # the checkout or passed on, so the agent still holds no GitHub credential
+      # (ADR-0002). A fetch that fails fails the turn here, before its agent starts,
+      # and leaves the failure report the push job's notice quotes.
+      - name: Fetch the head of the pull request this issue was filed from
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FABRIK_FILED_FROM_FILE: ${{ runner.temp }}/filed-from.json
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+        run: node kit/src/agent/filedFromFetch.ts product
+
       - name: Load the Claude token
         id: op
         uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
