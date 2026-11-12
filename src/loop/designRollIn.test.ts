@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aNamedPullRequest, anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { landedNothingContext } from "../agent/design.ts";
 import { replySchemaOf } from "../agent/launch.ts";
 import { countLandedNothing, currentDesignSessionIn, designSessionOf, designTurnFailedIn, pendingPrototypeIn, unansweredPrototypesIn } from "../github/threads.ts";
+import { rollInHeading, rollInNotSentLine } from "./design.ts";
 import { readDesignTurnOutput } from "./designOutput.ts";
 import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, rollInIn, sessionFinishedIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
@@ -323,6 +325,49 @@ describe("Reading a Roll-in back from its closing comment", () => {
 
   it("reads a mark that is the whole comment", () => {
     expect(rollInIn("<!-- fabrik:roll-in 42 -->")).toEqual({ pullRequest: 42, text: null });
+  });
+});
+
+describe("The README's account of a Design-session turn that ends by settling a Roll-in", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("\n## Design session (async)\n")[1]?.split("\n## ")[0] ?? "";
+  const ways = section.split("\n").filter((line) => line.startsWith("- **"));
+  const bullet = ways.find((line) => line.startsWith("- **A Roll-in**")) ?? "";
+
+  it("is the way listed after Not planned", () => {
+    const names = ways.map((line) => /^- \*\*(.+?)\*\*/.exec(line)?.[1]);
+
+    expect(names.indexOf("A Roll-in")).toBe(names.indexOf("Not planned") + 1);
+    expect(names.indexOf("Not planned")).toBeGreaterThan(-1);
+  });
+
+  it("shows the output with the fields the contract reads, beside its kind", () => {
+    expect(bullet).toContain('`{ "kind": "roll-in", "pullRequest": <n>, "summary": …, "acceptanceCriteria": […] }`');
+    expect(Object.keys(rollIn)).toEqual(["kind", "pullRequest", "summary", "acceptanceCriteria"]);
+    expect(bullet).toContain("with no word cap");
+  });
+
+  it("names the two refusals, and what is no mention", () => {
+    expect(bullet).toContain("refused when the summary or a criterion names the session's own issue, by `#` and its number or by a link to it");
+    expect(bullet).toContain("also refused when either mentions someone, by the same test the Kit strips mentions with");
+    expect(bullet).toContain("an address such as `a@b.c` is no mention, and neither is a name written straight after a backtick");
+    expect(bullet).toContain("the agent job asks the turn once to put the output right, and the push job checks it again");
+  });
+
+  it("says what the Kit does, in the words of the comment it posts", () => {
+    const comment = closingComment();
+
+    expect(comment).toContain(`### ${rollInHeading(42)}`);
+    expect(bullet).toContain(`the heading "${rollInHeading(42).replace("#42", "#n")}"`);
+    expect(bullet).toContain("must be open, an agent pull request, and not the one built from this very issue as its Ticket; if not, the turn fails and nothing changes");
+    expect(bullet).toContain("`needs-design` swapped for `wontfix`, state reason *not planned*");
+    expect(bullet).toContain("a line saying that nothing has been sent and how the Operator sends it");
+    expect(comment).toContain(rollInNotSentLine(7, 42));
+    expect(bullet).toContain("two hidden lines, the Roll-in's mark naming the pull request and the text as one versioned line of JSON");
+  });
+
+  it("says the Kit sends nothing, and puts nothing on the pull request", () => {
+    expect(bullet).toContain("The Kit sends nothing and puts nothing on the pull request, no comment, label or review: only the Operator sends a Roll-in");
   });
 });
 
