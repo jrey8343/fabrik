@@ -582,6 +582,33 @@ export async function readMapOffer(
 /** Where the inputs step writes a Design-session turn's Spec's other Tickets (readIssue's otherTickets), beside issue.json. */
 export const SPEC_TICKETS_FILE = "spec-tickets.json";
 
+// --- The pull request a Design-session turn's issue was filed from (#659) -----
+
+/** Where the inputs step writes the pull request a Design-session turn's issue was filed from, beside issue.json. */
+export const FILED_FROM_FILE = "filed-from.json";
+
+/**
+ * The pull request an issue's `From PR` line names, as a Design-session turn
+ * is told of it: where it stands, and its description. None when the body has
+ * no such line outside code, or the line names no pull request in this repo:
+ * an issue's number, or a number that doesn't exist.
+ */
+export type FiledFrom =
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "pull-request";
+      readonly number: number;
+      readonly title: string;
+      readonly body: string;
+      readonly state: "open" | "merged" | "closed";
+      readonly draft: boolean;
+      readonly headSha: string;
+      readonly headRef: string;
+      readonly baseRef: string;
+      /** Whether it is an agent pull request, by the Kit's own test (isAgentPullRequest). */
+      readonly isAgent: boolean;
+    };
+
 // --- Triage's Recent issues (#363) ------------------------------------------
 
 /** Where the inputs step writes Triage's Recent issues, beside issue.json. */
