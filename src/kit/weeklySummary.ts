@@ -234,9 +234,11 @@ export interface RepoKitFacts {
   /** What a Dispatch check weighs, read as it reads it; null when the Kit config is invalid, as then nothing is read. */
   readonly dispatch: DispatchFacts | null;
   /**
-   * The runs in flight in the repo (readRunsInFlight), read once, whatever its
-   * Kit config: Dispatch's count is made from them (dispatchedRunsOf).
-   * `unread` when the Actions token wasn't minted or GitHub wouldn't list them.
+   * The runs in flight in the repo, from the read library's runs read through
+   * its one converter (runsInFlightFactOf, src/read/runs.ts), read once,
+   * whatever its Kit config: Dispatch's count is made from them
+   * (dispatchedRunsOf). `unread` when the Actions token wasn't minted or
+   * GitHub wouldn't list them.
    */
   readonly runsInFlight: readonly RunInFlightFact[] | "unread";
   /**

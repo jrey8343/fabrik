@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
-import { readRuns, type RunInFlight } from "./runs.ts";
+import { anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
+import { standingsOf } from "../kit/standing.ts";
+import { readRuns, type RunInFlight, type RunsRead, runsInFlightFactOf } from "./runs.ts";
 
 const NOW = "2026-11-12T10:00:00Z";
 const RUN_PAGE = (id: number) => `https://github.com/owner/product/actions/runs/${id}`;
@@ -519,6 +522,71 @@ describe("The runs read", () => {
       const failing = { rest: () => Promise.reject(new TypeError("fetch failed")) };
 
       expect(await readRuns(failing, "owner/product", NOW)).toEqual({ repo: "owner/product", readAt: NOW, runs: "unread", tick: "unread" });
+    });
+  });
+
+  describe("as the Standing's runs-in-flight fact", () => {
+    it("gives each run as the fact, with the run, its attempt, whether it is exact and its start, and keeps unread unread", () => {
+      const read: RunsRead = {
+        repo: "owner/product",
+        readAt: NOW,
+        runs: [
+          {
+            run: 7,
+            attempt: 2,
+            exact: true,
+            role: "implement",
+            issue: 12,
+            pullRequest: 40,
+            kind: "retry",
+            retry: 2,
+            model: "claude-opus-4-1",
+            job: "running",
+            createdAt: "2026-11-12T09:00:00Z",
+            startedAt: "2026-11-12T09:02:00Z",
+            url: JOB_PAGE(7, 3),
+          },
+        ],
+        tick: "unread",
+      };
+
+      expect(runsInFlightFactOf(read)).toEqual([
+        {
+          role: "implement",
+          issue: 12,
+          pullRequest: 40,
+          retry: 2,
+          kind: "retry",
+          job: "running",
+          createdAt: "2026-11-12T09:00:00Z",
+          exact: true,
+          run: 7,
+          attempt: 2,
+          startedAt: "2026-11-12T09:02:00Z",
+        },
+      ]);
+      expect(runsInFlightFactOf({ ...read, runs: "unread" })).toBe("unread");
+    });
+
+    it("makes a Review run waiting on checks the Standing's Review waiting for its Required checks, on the pull request it names alone", async () => {
+      const actions = actionsOf([
+        {
+          id: 8,
+          status: "in_progress",
+          createdAt: "2026-11-12T09:10:00Z",
+          jobs: [
+            kitJob(routed({ role: "review", issue: 7, pullRequest: 50, kind: null, retry: 0, model: "claude-sonnet-4-5" })),
+            { name: "fabrik / Review checks", status: "in_progress", startedAt: "2026-11-12T09:11:00Z" },
+          ],
+        },
+      ]);
+      const runsInFlight = runsInFlightFactOf(await readRuns(actions, "owner/product", NOW));
+      const kit = { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight, headChecks: {} } as const;
+      const github = factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 }), anOpenPullRequest({ number: 51, ticket: 8 })] });
+
+      const standings = standingsOf(standingFactsOf({ github, kit }), NOW);
+
+      expect(standings.filter(({ name }) => name === "waiting-on-checks").map(({ pullRequest, since }) => ({ pullRequest, since }))).toEqual([{ pullRequest: 50, since: "2026-11-12T09:10:00Z" }]);
     });
   });
 

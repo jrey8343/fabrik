@@ -21,7 +21,8 @@ import { appendFile } from "node:fs/promises";
 import { gatherEveryRepoFacts, gatherHeadChecks, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError, type Repo } from "../github/client.ts";
 import { readCallerRuns } from "../github/loopHealthFacts.ts";
-import { defaultBranchOf, gatherDispatchCandidates, readKitConfigSources, readRunsInFlight, type RunInFlightFact } from "../github/snapshot.ts";
+import { defaultBranchOf, gatherDispatchCandidates, readKitConfigSources, type RunInFlightFact } from "../github/snapshot.ts";
+import { readRuns, runsInFlightFactOf } from "../read/runs.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "./config.ts";
@@ -199,25 +200,24 @@ async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo,
   if (branch === null) return null;
   const config = resolveKitConfig(await readKitConfigSources(products, repo, branch.head));
   const name = `${repo.owner}/${repo.name}`;
-  if (!config.ok) return { repo: name, branch: branch.name, config, dispatch: null, runsInFlight: await readRuns(actions, repo), headChecks: {} };
+  if (!config.ok) return { repo: name, branch: branch.name, config, dispatch: null, runsInFlight: await readRunsOf(actions, repo), headChecks: {} };
   const [candidates, runsInFlight, headChecks] = await Promise.all([
     gatherDispatchCandidates(products, repo, appLogin),
-    readRuns(actions, repo),
+    readRunsOf(actions, repo),
     checks === null ? {} : gatherHeadChecks(checks, repo, plainHeads, config.config.sandbox.checks),
   ]);
   return { repo: name, branch: branch.name, config, dispatch: { candidates }, runsInFlight, headChecks };
 }
 
-/** The runs in flight, or unread when they can't be read. */
-async function readRuns(actions: GitHub | null, repo: Repo): Promise<readonly RunInFlightFact[] | "unread"> {
+/**
+ * The runs in flight, from the read library's one read of the repo's Actions
+ * (#617), or unread when they can't be read: the Operator may not have
+ * accepted the App's Actions: read yet, and then Held and the Standings say
+ * the runs are unread.
+ */
+async function readRunsOf(actions: GitHub | null, repo: Repo): Promise<readonly RunInFlightFact[] | "unread"> {
   if (actions === null) return "unread";
-  try {
-    return await readRunsInFlight(actions, repo);
-  } catch (error) {
-    // The Operator may not have accepted the App's Actions: read yet: Held and the Standings say the runs are unread.
-    if (error instanceof GitHubError) return "unread";
-    throw error;
-  }
+  return runsInFlightFactOf(await readRuns(actions, `${repo.owner}/${repo.name}`, new Date().toISOString()));
 }
 
 /**

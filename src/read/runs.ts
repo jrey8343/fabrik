@@ -13,6 +13,7 @@ import {
   PUSH_JOB_NAME,
   REPLAY_ARM_JOB_NAMES,
   REPLAY_RECORD_JOB_NAME,
+  type RunInFlightFact,
   type RunJob,
   type RunKind,
   runsByJobNamesOf,
@@ -93,6 +94,28 @@ async function readTick(client: Pick<ReadClient, "rest">, repo: Repo): Promise<R
   const started = page.workflow_runs.filter((run) => STARTED_RUNS.includes(run.status) && run.conclusion !== "startup_failure" && run.run_started_at != null);
   const newest = started.map((run) => run.run_started_at ?? "").sort().at(-1);
   return { lastStartedAt: newest ?? null };
+}
+
+/**
+ * The Standing rule's runs-in-flight fact from a runs read: the one reader of
+ * it, wherever it is read, the Weekly summary's gather included. Unread stays
+ * unread. A Replay's run is in it too, though no Standing awaits one.
+ */
+export function runsInFlightFactOf(read: RunsRead): readonly RunInFlightFact[] | "unread" {
+  if (read.runs === "unread") return "unread";
+  return read.runs.map((run) => ({
+    role: run.role,
+    issue: run.issue,
+    pullRequest: run.pullRequest,
+    retry: run.retry,
+    kind: run.kind,
+    job: run.job,
+    createdAt: run.createdAt,
+    exact: run.exact,
+    run: run.run,
+    attempt: run.attempt,
+    startedAt: run.startedAt,
+  }));
 }
 
 function repoOf(repo: string): Repo {
