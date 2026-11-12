@@ -55,26 +55,58 @@ function forbiddenKindOf(specifier: string): ForbiddenImport["kind"] | null {
 }
 
 /**
- * Every import the read library may not make, in the modules reached from
- * `entry` by imports that survive to run time, in the order reached. `read`
- * gives a module's text by its path; relative imports resolve against the
- * importing module's folder.
+ * Every module reached from `entry` by imports that survive to run time, the
+ * entry first, in the order reached, with its text. `read` gives a module's
+ * text by its path; relative imports resolve against the importing module's
+ * folder.
  */
-export function forbiddenImportsFrom(entry: string, read: (path: string) => string): ForbiddenImport[] {
-  const forbidden: ForbiddenImport[] = [];
+function modulesReachedFrom(entry: string, read: (path: string) => string): { readonly path: string; readonly text: string }[] {
+  const reached: { path: string; text: string }[] = [];
   const seen = new Set<string>();
   const waiting = [posix.normalize(entry)];
-  for (let module = waiting.shift(); module !== undefined; module = waiting.shift()) {
-    if (seen.has(module)) continue;
-    seen.add(module);
-    for (const specifier of runtimeImportsIn(read(module))) {
-      if (specifier.startsWith("./") || specifier.startsWith("../")) {
-        waiting.push(posix.join(posix.dirname(module), specifier));
-        continue;
-      }
-      const kind = forbiddenKindOf(specifier);
-      if (kind !== null) forbidden.push({ module, imports: specifier, kind });
+  for (let path = waiting.shift(); path !== undefined; path = waiting.shift()) {
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const text = read(path);
+    reached.push({ path, text });
+    for (const specifier of runtimeImportsIn(text)) {
+      if (isRelative(specifier)) waiting.push(posix.join(posix.dirname(path), specifier));
     }
   }
-  return forbidden;
+  return reached;
+}
+
+function isRelative(specifier: string): boolean {
+  return specifier.startsWith("./") || specifier.startsWith("../");
+}
+
+/** Every import the read library may not make, in the modules reached from `entry` (see modulesReachedFrom), in the order reached. */
+export function forbiddenImportsFrom(entry: string, read: (path: string) => string): ForbiddenImport[] {
+  return modulesReachedFrom(entry, read).flatMap(({ path, text }) =>
+    runtimeImportsIn(text).flatMap((specifier) => {
+      const kind = isRelative(specifier) ? null : forbiddenKindOf(specifier);
+      return kind === null ? [] : [{ module: path, imports: specifier, kind }];
+    }),
+  );
+}
+
+/** The names a module's text imports by name from anywhere, types included, as each is exported. */
+function namesImportedIn(text: string): string[] {
+  return [...text.matchAll(STATIC_IMPORT)]
+    .filter((match) => /^\s*import/.test(match[0]))
+    .flatMap((match) => [...(match[1] ?? "").matchAll(/\{([^}]*)\}/g)])
+    .flatMap((braces) => (braces[1] ?? "").split(","))
+    .map((name) => name.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0] ?? "")
+    .filter((name) => name !== "");
+}
+
+/**
+ * The modules reached from `entry` (see modulesReachedFrom) that import
+ * `name` by name, as a type or as a value, in the order reached: so a test can
+ * hold that nothing the read library runs is typed on the Kit's client class.
+ */
+export function modulesImporting(name: string, entry: string, read: (path: string) => string): string[] {
+  return modulesReachedFrom(entry, read)
+    .filter(({ text }) => namesImportedIn(text).includes(name))
+    .map(({ path }) => path);
 }

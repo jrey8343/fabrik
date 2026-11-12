@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { forbiddenImportsFrom } from "./importWalk.ts";
+import { forbiddenImportsFrom, modulesImporting } from "./importWalk.ts";
 
 /** A made-up graph of modules, by path, read as the walk reads a file. */
 function graphOf(files: Readonly<Record<string, string>>): (path: string) => string {
@@ -98,5 +100,34 @@ describe("the walk of the read library's imports", () => {
     });
 
     expect(reads.toSorted()).toEqual(["lib/a.ts", "lib/b.ts", "lib/c.ts", "lib/entry.ts"]);
+  });
+
+  it("holds for the read library's own entry: nothing to install, and nothing a Worker can't load", () => {
+    const entry = fileURLToPath(new URL("./index.ts", import.meta.url));
+
+    expect(forbiddenImportsFrom(entry, (path) => readFileSync(path, "utf8"))).toEqual([]);
+  });
+
+  // A reader hands in its own client, so nothing the library runs may want the Kit's class.
+  it("holds for the read library's own entry: nothing it reaches is typed on the Kit's client class", () => {
+    const entry = fileURLToPath(new URL("./index.ts", import.meta.url));
+    const root = fileURLToPath(new URL("../..", import.meta.url));
+
+    const typedOnTheClass = modulesImporting("GitHub", entry, (path) => readFileSync(path, "utf8")).map((path) => path.replace(root, ""));
+
+    expect(typedOnTheClass).toEqual([]);
+  });
+
+  it("names the modules reached that import a name, as a type or as a value, and not those that import only its likes", () => {
+    const read = graphOf({
+      "lib/entry.ts": 'export { gather } from "./gather.ts";\nexport { wrap } from "./wrap.ts";\nexport { error } from "./error.ts";\n',
+      "lib/gather.ts": 'import { type GitHub, type Repo } from "./client.ts";\nimport { shape } from "./shape.ts";\nexport const gather = 1;\n',
+      "lib/wrap.ts": 'import type {\n  Repo,\n  GitHub as Client,\n} from "./client.ts";\nexport const wrap = 2;\n',
+      "lib/error.ts": 'import { GitHubError } from "./client.ts";\n// A GitHub call that failed.\nexport const error = 3;\n',
+      "lib/shape.ts": 'import type { GitHub } from "./client.ts";\nexport const shape = 4;\n',
+      "lib/client.ts": "export class GitHub {}\n",
+    });
+
+    expect(modulesImporting("GitHub", "lib/entry.ts", read)).toEqual(["lib/gather.ts", "lib/wrap.ts", "lib/shape.ts"]);
   });
 });
