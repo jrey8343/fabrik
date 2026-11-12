@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";
@@ -157,6 +158,61 @@ describe("a Product repo's rows", () => {
       const facts = homeFactsOf({ kit: tracked, github: factsOf({ openIssues: [TICKET] }), mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z", { title: "Merged as" })] });
 
       expect(rowsOf(facts, null, null, null, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ title }) => title)).toEqual(["Build the thing"]);
+    });
+  });
+
+  describe("an agent pull request's UI evidence (#639)", () => {
+    const PREVIEW = "https://fabrik-ticket-7.shop.example.dev/";
+    const evidenceOf = (marker: EvidenceMarker | null, pullRequest = anOpenPullRequest({ number: 50, ticket: 7 })) => {
+      const facts = homeFactsOf({ github: factsOf({ openPullRequests: [pullRequest] }), evidenceMarkers: marker === null ? [] : [{ pullRequest: 50, marker }] });
+      return rowsOf(facts, null, null, null, NOW)
+        .filter(({ standing }) => standing.pullRequest === 50)
+        .map(({ evidence }) => evidence);
+    };
+
+    it("is on an open UI pull request's row: its run, artifact and failure, what came of the preview, and a page for each captured route, in the marker's order", () => {
+      const marker = { run: 4410, artifact: 901, failure: null, routes: ["/cart?step=2", "/book"], preview: { is: "linked", url: PREVIEW } } as const;
+
+      expect(evidenceOf(marker)).toEqual([
+        {
+          run: 4410,
+          artifact: 901,
+          failure: null,
+          preview: "linked",
+          pages: [
+            { route: "/cart?step=2", preview: "https://fabrik-ticket-7.shop.example.dev/cart?step=2" },
+            { route: "/book", preview: "https://fabrik-ticket-7.shop.example.dev/book" },
+          ],
+        },
+      ]);
+    });
+
+    it.each([
+      ["pending", { is: "pending" }],
+      ["never-answered", { is: "never-answered", url: PREVIEW }],
+      ["none", { is: "none" }],
+    ] as const)("gives no page a preview address when the preview is %s", (is, preview) => {
+      const marker = { run: 4410, artifact: 901, failure: null, routes: ["/book"], preview };
+
+      expect(evidenceOf(marker)).toEqual([{ run: 4410, artifact: 901, failure: null, preview: is, pages: [{ route: "/book", preview: null }] }]);
+    });
+
+    it("gives a failed capture's reason, and no pages when it captured no route", () => {
+      const marker = { run: 4410, artifact: null, failure: "server-did-not-start", routes: [], preview: { is: "pending" } } as const;
+
+      expect(evidenceOf(marker)).toEqual([{ run: 4410, artifact: null, failure: "server-did-not-start", preview: "pending", pages: [] }]);
+    });
+
+    it("reads a marker from an earlier release with its run, artifact and failure, its pages null and its preview unknown", () => {
+      expect(evidenceOf({ run: 4410, artifact: 901, failure: "timeout" })).toEqual([{ run: 4410, artifact: 901, failure: "timeout", preview: "unknown", pages: null }]);
+      expect(evidenceOf({ run: 4410, artifact: 901 })).toEqual([{ run: 4410, artifact: 901, failure: null, preview: "unknown", pages: null }]);
+    });
+
+    it("is null on a pull request with no marker, and on a row with no pull request", () => {
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 8 })] }) });
+
+      expect(evidenceOf(null)).toEqual([null]);
+      expect(rowsOf(facts, null, null, null, NOW).map(({ evidence }) => evidence)).toEqual([null, null]);
     });
   });
 

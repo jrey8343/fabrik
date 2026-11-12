@@ -54,6 +54,7 @@ describe("the store's rows", () => {
         followUps: [],
         ticketClosed: null,
         plainPullRequest: null,
+        evidence: null,
       },
     ]);
   });

@@ -5,7 +5,9 @@
 // Every row's Standing is the Standing rule's own (src/kit/standing.ts) for
 // those facts, so a reader holds no rule of its own. Pure, no I/O, and plain
 // data: written as JSON and read back a row is equal.
+import type { CaptureFailure } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
+import { withRouteOn } from "../kit/config.ts";
 import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
 import { plainSinceOf } from "../kit/standingPlain.ts";
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
@@ -54,6 +56,33 @@ export interface Row {
    * Null on any other row.
    */
   readonly plainPullRequest: { readonly since: string; readonly own: Standing | null } | null;
+  /**
+   * On a row whose agent pull request, open or merged in the last 24 hours,
+   * carries the evidence marker the Kit writes on a UI pull request: where
+   * its UI evidence is kept, how its capture ended, what came of its preview
+   * and a page for each captured route. Null on any other row, so a pull
+   * request that is not UI has none. An artifact's expiry is not here: it is
+   * read from GitHub by whoever fetches it.
+   */
+  readonly evidence: RowEvidence | null;
+}
+
+/** An agent pull request's UI evidence, as its evidence marker records it. */
+export interface RowEvidence {
+  /** The Actions run whose Implement job captured it. */
+  readonly run: number;
+  /** The id of that run's artifact holding the screenshots and the capture result, or null when it kept none. */
+  readonly artifact: number | null;
+  /** Why its capture failed, or null when it captured or the marker does not say. */
+  readonly failure: CaptureFailure | null;
+  /** What came of the preview deployment: `unknown` from a marker an earlier release wrote, or whose preview doesn't read. */
+  readonly preview: "none" | "pending" | "linked" | "never-answered" | "unknown";
+  /**
+   * One for each captured route, in the marker's order, with the address of
+   * its page on the preview when the preview was linked, else null. Null from
+   * a marker an earlier release wrote, which records no routes.
+   */
+  readonly pages: readonly { readonly route: string; readonly preview: string | null }[] | null;
 }
 
 /** The last runs read (./runs.ts), or null when none is held. */
@@ -103,7 +132,7 @@ function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredCheck
  * Ticket's state.
  */
 export function bareRowOf(standing: Standing, title: string, lastWord: Row["lastWord"]): Row {
-  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null };
+  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null };
 }
 
 /**
@@ -122,7 +151,32 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
     relatedTo: issue === null ? null : relatedToOf(facts, issue),
     ticketClosed: pullRequest === null ? null : ticketClosedOf(facts, pullRequest),
     plainPullRequest: pullRequest === null ? null : plainPullRequestOf(facts, pullRequest, standing.detail.pullRequest === undefined ? null : (owns.get(pullRequest) ?? null)),
+    evidence: pullRequest === null ? null : evidenceOf(facts, pullRequest),
   };
+}
+
+/** Agent pull request `pullRequest`'s UI evidence, from its evidence marker; null when the facts hold none for it. */
+function evidenceOf({ evidenceMarkers }: Facts, pullRequest: number): RowEvidence | null {
+  const marker = evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker;
+  if (marker === undefined) return null;
+  const { run, artifact, failure, routes, preview } = marker;
+  const linked = preview?.is === "linked" ? preview.url : null;
+  return {
+    run,
+    artifact,
+    failure: failure ?? null,
+    preview: preview?.is ?? "unknown",
+    pages: routes === undefined ? null : routes.map((route) => ({ route, preview: linked === null ? null : pageOn(linked, route) })),
+  };
+}
+
+/** The page at `route` on the site at `base`, as the Kit builds every page's address; null when `base` is no address. */
+function pageOn(base: string, route: string): string | null {
+  try {
+    return withRouteOn(base, route);
+  } catch {
+    return null;
+  }
 }
 
 /**

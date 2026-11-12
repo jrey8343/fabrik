@@ -573,7 +573,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   joinRuns: () =>
     joinRuns(
-      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null }],
+      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null }],
       { ...A_RUNS_READ, runs: [{ ...A_RUN_IN_FLIGHT, issue: 7, pullRequest: null, kind: "first", retry: null }] },
       NOW,
     ),
@@ -850,6 +850,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     followUps: [{ title: "Cache the prices", body: "The prices are read on every request.", filedAs: 30 }],
     ticketClosed: null,
     plainPullRequest: null,
+    evidence: null,
   } satisfies Row,
   StoreFacts: {
     kind: "store",
