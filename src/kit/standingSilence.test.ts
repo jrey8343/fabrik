@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, aReview, aRunInFlight, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aLabelAdded, aReview, aRunInFlight, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { undeliveredMarker } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
-import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
+import type { CommentFacts, GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
 
@@ -209,4 +209,81 @@ describe("the Operator's Request changes with no run started", () => {
   });
 });
 
-void aLabelAdded;
+describe("an issue waiting on Triage", () => {
+  const ASKED = "2026-11-08T12:00:00Z";
+  const ANSWERED = PUSHED;
+  const question = (comments: readonly CommentFacts[] = [], author = "someone") =>
+    anOpenIssue({ number: 12, author, labels: ["needs-info"], labelEvents: [aLabelAdded("needs-info", ASKED)], comments });
+  const answer = aComment("It happens on Safari.", ANSWERED, { author: "someone", byBot: false });
+
+  it("with its needs-info question answered is waiting on the Kit at Triage from the first answer, for a Triage run, turning Stuck at the bar", () => {
+    expect(standingsIn({ openIssues: [question([answer])] })).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 12,
+        pullRequest: null,
+        work: "issue",
+        place: "triage",
+        name: "waiting-on-kit",
+        move: "kit",
+        yours: false,
+        stopsWork: false,
+        since: ANSWERED,
+        stuckAt: BAR,
+        awaits: { role: "triage", on: "issue" },
+        subscription: null,
+        detail: { silence: "needs-info-answered", round: null },
+      },
+    ]);
+    expect(standingsIn({ openIssues: [question([answer])] }, {}, plus(BAR, -1))).toMatchObject([{ name: "waiting-on-kit" }]);
+    expect(standingsIn({ openIssues: [question([answer])] }, {}, plus(BAR, 1))).toMatchObject([{ name: "stuck", detail: { was: "waiting-on-kit", silence: "needs-info-answered" } }]);
+  });
+
+  it("leaves stuckAt where it was after a person's later comment on the answered question", () => {
+    const later = aComment("Any news?", plus(ANSWERED, 60), { author: "operator", byBot: false });
+    expect(standingsIn({ openIssues: [question([answer, later])] })).toMatchObject([{ since: ANSWERED, stuckAt: BAR }]);
+  });
+
+  it("is running while a Triage run is in flight", () => {
+    expect(standingsIn({ openIssues: [question([answer])] }, { kit: aKit([aRunInFlight({ role: "triage" })]) })).toMatchObject([{ name: "running", detail: { run: "triage" } }]);
+  });
+
+  it("with needs-triage is waiting on the Kit at Triage from when the label was last added, whoever added it", () => {
+    const triage = anOpenIssue({
+      number: 13,
+      labels: ["needs-triage"],
+      labelEvents: [aLabelAdded("needs-triage", "2026-11-08T10:00:00Z"), aLabelAdded("needs-triage", "2026-11-08T11:00:00Z", { action: "unlabeled" }), aLabelAdded("needs-triage", PUSHED, { actor: "operator" })],
+    });
+    expect(standingsIn({ openIssues: [triage] })).toMatchObject([
+      { issue: 13, work: "issue", place: "triage", name: "waiting-on-kit", since: PUSHED, stuckAt: BAR, awaits: { role: "triage", on: "issue" }, detail: { silence: "needs-triage", round: null } },
+    ]);
+    expect(standingsIn({ openIssues: [triage] }, {}, plus(BAR, 1))).toMatchObject([{ name: "stuck", detail: { was: "waiting-on-kit", silence: "needs-triage" } }]);
+    expect(standingsIn({ openIssues: [anOpenIssue({ number: 13, labels: ["needs-triage"], createdAt: PUSHED })] })).toMatchObject([{ since: PUSHED, stuckAt: BAR }]);
+  });
+});
+
+describe("a Design session whose Round the Operator answered", () => {
+  const answered = (comments = [aDesignRound(2, "2026-11-08T12:00:00Z"), aComment("The second.", PUSHED, { author: "operator", byBot: false })]) =>
+    anOpenIssue({ number: 20, labels: ["needs-design"], comments });
+
+  it("is waiting on the Kit at Design from the Operator's reply, for the next turn, carrying the round, turning Stuck at the bar", () => {
+    expect(standingsIn({ openIssues: [answered()] })).toMatchObject([
+      { issue: 20, work: "design-session", place: "design", name: "waiting-on-kit", since: PUSHED, stuckAt: BAR, awaits: { role: "design", on: "issue" }, detail: { silence: "round-answered", round: 2 } },
+    ]);
+    expect(standingsIn({ openIssues: [answered()] }, {}, plus(BAR, -1))).toMatchObject([{ name: "waiting-on-kit" }]);
+    expect(standingsIn({ openIssues: [answered()] }, {}, plus(BAR, 1))).toMatchObject([{ name: "stuck", detail: { was: "waiting-on-kit", silence: "round-answered", round: 2 } }]);
+  });
+
+  it("counts from the Operator's first reply, and a turn in flight is running", () => {
+    const twice = [aDesignRound(2, "2026-11-08T12:00:00Z"), aComment("The second.", PUSHED, { author: "operator", byBot: false }), aComment("Or the first.", plus(PUSHED, 20), { author: "operator", byBot: false })];
+    expect(standingsIn({ openIssues: [answered(twice)] })).toMatchObject([{ since: PUSHED, stuckAt: BAR }]);
+    expect(standingsIn({ openIssues: [answered()] }, { kit: aKit([aRunInFlight({ role: "design", issue: 20 })]) })).toMatchObject([{ name: "running" }]);
+  });
+
+  it("is no answered Round while the Round is the last word, or when only someone else replied", () => {
+    expect(standingsIn({ openIssues: [answered([aDesignRound(2, "2026-11-08T12:00:00Z")])] })).toMatchObject([{ name: "design-round" }]);
+    const someoneElse = [aDesignRound(2, "2026-11-08T12:00:00Z"), aComment("+1", PUSHED, { author: "someone", byBot: false })];
+    expect(standingsIn({ openIssues: [answered(someoneElse)] })).not.toContainEqual(expect.objectContaining({ detail: expect.objectContaining({ silence: "round-answered" }) }));
+  });
+});

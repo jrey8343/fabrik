@@ -160,7 +160,8 @@ describe("the Standing rule", () => {
           anOpenIssue({ number: 15, labels: ["needs-triage"] }),
         ],
       });
-      expect(standings).toEqual([
+      // #15 waits on Triage, the Kit's (#608).
+      expect(standings.filter(({ move }) => move === "operator")).toEqual([
         {
           schema: 1,
           repo: "owner/product",
@@ -272,7 +273,8 @@ describe("the Standing rule", () => {
           designing(14, [{ ...aDesignRound(1, "2026-11-02T20:00:00Z"), author: "operator", byBot: false }]),
         ],
       });
-      expect(standings).toEqual([]);
+      // Each waits on the Kit's next turn instead (#608).
+      expect(standings.filter(({ move }) => move === "operator")).toEqual([]);
     });
   });
 
@@ -581,7 +583,8 @@ describe("the Standing rule", () => {
           anOpenIssue({ number: 22, author: "operator", labels: ["needs-triage"] }),
         ],
       });
-      expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([
+      // The answered ones and #22 wait on Triage, the Kit's (#608).
+      expect(standings.filter(({ move }) => move === "operator").map(({ issue, name }) => ({ issue, name }))).toEqual([
         { issue: 20, name: "needs-your-answer" },
         { issue: 21, name: "needs-your-answer" },
       ]);

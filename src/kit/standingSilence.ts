@@ -4,20 +4,57 @@
 // where the facts can't date it. With them, the one look-alike that is the
 // Operator's: a passed draft they put back in draft, `parked`.
 import { notDismissedIn, type PullRequestHistoryItem, requestChangesSinceRunIn } from "../github/threads.ts";
+import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE } from "../loop/labels.ts";
+import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { verdictsOn } from "./retroEvidence.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { barOf, clockOf, stuckAtOf } from "./standingClock.ts";
-import { passAtHeadOf } from "./standingOperator.ts";
-import type { OpenPullRequestFacts } from "./weeklySummary.ts";
+import { answerOf, lastAdded, passAtHeadOf } from "./standingOperator.ts";
+import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
 /** Which silence a `waiting-on-kit` Standing is. */
-export type WaitingOnKitSilence = "request-changes" | "conflicting-draft" | "passed-draft" | "quiet-draft";
+export type WaitingOnKitSilence =
+  | "request-changes"
+  | "conflicting-draft"
+  | "needs-info-answered"
+  | "needs-triage"
+  | "round-answered"
+  | "passed-draft"
+  | "quiet-draft";
 
 /** Every `waiting-on-kit` and `parked` Standing in the repo: each pull request's first, so a Ticket's own leftover gives way to its draft's. */
 export function silenceStandingsOf(facts: StandingFacts, _now: string): Standing[] {
   const bar = barOf(facts);
-  return facts.github.openPullRequests.flatMap((pullRequest) => [...requestChangesSilencesOn(pullRequest, facts, bar), ...draftSilencesOn(pullRequest, facts, bar)]);
+  return [
+    ...facts.github.openPullRequests.flatMap((pullRequest) => [...requestChangesSilencesOn(pullRequest, facts, bar), ...draftSilencesOn(pullRequest, facts, bar)]),
+    ...facts.github.openIssues.flatMap((issue) => issueSilencesOn(issue, facts, bar)),
+  ];
+}
+
+/**
+ * An open issue's silence, by the first that holds: its `needs-info` question
+ * answered, from the first answer; `needs-triage`, from when it was last
+ * added, whoever added it; a Design session's Round the Operator answered,
+ * from their reply. Each waits on the role's next run on the issue.
+ */
+function issueSilencesOn(issue: OpenIssueFacts, facts: StandingFacts, bar: number): StandingNamed<"waiting-on-kit">[] {
+  const silence = (work: StandingWork, place: StandingPlace, role: AgentRole, since: string, silence: WaitingOnKitSilence, round: number | null = null) =>
+    waitingOnKit(facts, issue.number, null, work, place, since, bar, { role, on: "issue" }, { silence, round });
+  const answered = issue.labels.includes(NEEDS_INFO) ? answerOf(issue) : null;
+  if (answered !== null) return [silence("issue", "triage", "triage", answered, "needs-info-answered")];
+  if (issue.labels.includes(NEEDS_TRIAGE)) return [silence("issue", "triage", "triage", lastAdded(issue.labelEvents, NEEDS_TRIAGE) ?? issue.createdAt, "needs-triage")];
+  const reply = issue.labels.includes(NEEDS_DESIGN) ? answeredRoundOf(issue, facts) : null;
+  if (reply !== null) return [silence("design-session", "design", "design", reply.at, "round-answered", reply.round)];
+  return [];
+}
+
+/** The Fabrik App's latest Round on an issue and the Operator's first reply after it, or null while none has replied. */
+function answeredRoundOf({ comments }: OpenIssueFacts, { appLogin, operator }: StandingFacts): { readonly round: number; readonly at: string } | null {
+  const at = comments.findLastIndex(({ author, body }) => author === appLogin && DESIGN_ROUND_MARKER.test(body));
+  const round = comments[at]?.body.match(DESIGN_ROUND_MARKER)?.[1];
+  const reply = comments.slice(at + 1).find(({ author, byBot }) => !byBot && author === operator);
+  return at === -1 || round === undefined || reply === undefined ? null : { round: Number(round), at: reply.at };
 }
 
 /**
