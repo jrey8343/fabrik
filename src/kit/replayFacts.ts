@@ -85,8 +85,8 @@ export function replayStorePaths(repo: string, now: string): string[] {
   return [`/runs/*/*/${month(Date.parse(now))}/`, `/runs/*/*/${month(lastMonthStart(now))}/`, `/runs/${repo}/`];
 }
 
-/** 00:00 UTC on the first of the month before `now`'s, in ms. */
-function lastMonthStart(now: string): number {
+/** 00:00 UTC on the first of the month before `now`'s, in ms: where the store's last two months begin. */
+export function lastMonthStart(now: string): number {
   const at = new Date(now);
   return Date.UTC(at.getUTCFullYear(), at.getUTCMonth() - 1, 1);
 }
