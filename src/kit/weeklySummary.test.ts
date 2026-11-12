@@ -949,6 +949,32 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("Waiting on you, with a Subscription's issues", () => {
+    const HOUR = 60 * 60 * 1000;
+    const kitIssue = (number: number, title: string, labels: readonly string[], at: string) => ({
+      open: anOpenIssue({ number, title, labels, createdAt: at, labelEvents: labels.map((label) => aLabelAdded(label, at)) }),
+      kit: { number, labels, body: "", comments: [] },
+    });
+    const waitingWith = (...issues: readonly ReturnType<typeof kitIssue>[]) => {
+      const facts = factsOf({ openIssues: issues.map(({ open }) => open), kitIssues: issues.map(({ kit }) => kit) });
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [facts] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.repos[0]?.waitingOnYou;
+    };
+
+    it("lists a token-rotation and a usage-credits issue as today's ready-for-human lines, and leaves a weekly-limit issue to Held though every Subscription is used up", () => {
+      const waiting = waitingWith(
+        kitIssue(20, "Weekly limit reached", ["fabrik:weekly-limit"], "2026-11-04T20:00:00Z"),
+        kitIssue(22, "Rotate the Claude token", ["ready-for-human", "fabrik:token-rotation"], "2026-11-05T20:00:00Z"),
+        kitIssue(23, "Turn off usage credits", ["ready-for-human", "fabrik:usage-credits"], "2026-11-06T20:00:00Z"),
+      );
+      expect(waiting).toEqual([
+        { kind: "ready-for-human", number: 22, title: "Rotate the Claude token", url: "https://github.com/owner/product/issues/22", since: "2026-11-05T20:00:00Z", age: 3 * 24 * HOUR },
+        { kind: "ready-for-human", number: 23, title: "Turn off usage credits", url: "https://github.com/owner/product/issues/23", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR },
+      ]);
+    });
+  });
+
   describe("Stuck", () => {
     const HOUR = 60 * 60 * 1000;
     const hoursAgo = (hours: number) => new Date(Date.parse(NOW) - hours * HOUR).toISOString();

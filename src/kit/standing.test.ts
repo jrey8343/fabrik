@@ -629,6 +629,14 @@ describe("a Standing, as plain data", () => {
     for (const standing of all()) expect(JSON.parse(JSON.stringify(standing))).toStrictEqual(standing);
   });
 
+  it("stops work only when the Operator's, never for reading matter, and always for any other move of theirs but a Plain pull request's or a failed Weekly summary run's", () => {
+    for (const standing of all()) {
+      if (!standing.yours || standing.name === "yours-to-read") expect(standing).toMatchObject({ stopsWork: false });
+      else if (standing.work !== "plain" && standing.work !== "weekly-summary") expect(standing).toMatchObject({ stopsWork: true });
+    }
+    expect(all().some(({ name }) => name === "yours-to-read")).toBe(true);
+  });
+
   it("is the same for the same facts read a minute later", () => {
     for (const { facts, now, standings } of produced) {
       expect(standingsOf(facts, new Date(Date.parse(now) + MINUTE).toISOString())).toStrictEqual(standings);
