@@ -10,6 +10,7 @@
 // refuses or fails is "unread", and the others are still given.
 import { allPages, type ReadClient, type Repo } from "../github/client.ts";
 import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
+import type { Row } from "./rows.ts";
 
 /** What a read of a repo's Required checks says. */
 export interface RequiredChecksRead {
@@ -55,6 +56,22 @@ export async function readRequiredChecks(client: Pick<ReadClient, "rest">, repo:
   }
   const read = await Promise.all(asked.map(async (sha) => [sha, branch.required.length === 0 ? [] : await readHead(client, target, sha, branch.required)] as const));
   return { repo, branch: branch.name, readAt: now, required: branch.required, holdsAdmins: branch.holdsAdmins, heads: Object.fromEntries(read) };
+}
+
+/**
+ * The heads a checks read is asked about, from rows, each once, from its
+ * `detail.head`: each agent pull request's at the Merge gate, and each open
+ * Plain pull request's that is not a draft, a Pairing session's joined to its
+ * issue's row included. A draft agent pull request's is never one.
+ */
+export function headsToCheck(rows: readonly Row[]): string[] {
+  const heads = rows.flatMap(({ standing }) => {
+    const { head } = standing.detail;
+    if (head === undefined) return [];
+    const plain = standing.detail.pullRequest !== undefined ? standing.detail.pullRequest !== "draft" : standing.work === "plain" ? standing.name !== "draft" : null;
+    return (plain ?? standing.place === "merge-gate") ? [head] : [];
+  });
+  return [...new Set(heads)];
 }
 
 /**

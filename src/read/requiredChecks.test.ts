@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
-import { type HeadCheck, readRequiredChecks, type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
+import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import { type HeadCheck, headsToCheck, readRequiredChecks, type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
+import { rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-12T10:00:00Z";
 const head = (digit: string) => digit.repeat(40);
@@ -337,5 +339,50 @@ describe("the Required checks fact of a head, for the Standing rule", () => {
   it("is unread for a head the read holds as unread, or does not hold", () => {
     expect(requiredChecksFactOf(read, head("2"))).toBe("unread");
     expect(requiredChecksFactOf(read, head("4"))).toBe("unread");
+  });
+});
+
+describe("the heads a checks read is asked about", () => {
+  const passed = (sha: string) => [aVerdictComment("pass", sha, "2026-11-11T20:00:00Z")];
+
+  it("are the heads of agent pull requests at the Merge gate and of open Plain pull requests not in draft, and never a draft agent pull request's", () => {
+    const facts = homeFactsOf({
+      github: factsOf({
+        openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] }), anOpenIssue({ number: 8, labels: ["ready-for-agent"] })],
+        openPullRequests: [
+          anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: head("1"), comments: passed(head("1")) }),
+          anOpenPullRequest({ number: 51, ticket: 8, draft: true, headSha: head("2") }),
+        ],
+        plainPullRequests: [
+          aPlainPullRequest({ number: 70, headSha: head("3") }),
+          aPlainPullRequest({ number: 71, headSha: head("4"), draft: true }),
+          aPlainPullRequest({ number: 72, headSha: head("5"), mergeable: false }),
+        ],
+      }),
+    });
+
+    expect(headsToCheck(rowsOf(facts, "unread", null, NOW)).toSorted()).toEqual([head("1"), head("3"), head("5")]);
+  });
+
+  it("are a Pairing session's pull request's head, joined to its issue's row, unless it is a draft", () => {
+    const pairing = (number: number, issue: number, sha: string, draft: boolean) =>
+      aPlainPullRequest({ number, author: "operator", headRef: `fabrik/pair-${issue}`, closes: [issue], headSha: sha, draft });
+    const triage = (number: number) => anOpenIssue({ number, labels: ["needs-triage"], labelEvents: [aLabelAdded("needs-triage", "2026-11-11T09:00:00Z")] });
+    const facts = homeFactsOf({ github: factsOf({ openIssues: [triage(12), triage(13)], plainPullRequests: [pairing(80, 12, head("6"), false), pairing(81, 13, head("7"), true)] }) });
+    const rows = rowsOf(facts, "unread", null, NOW);
+
+    expect(rows.map(({ standing }) => [standing.issue, standing.pullRequest, standing.work])).toEqual(
+      expect.arrayContaining([
+        [12, 80, "issue"],
+        [13, 81, "issue"],
+      ]),
+    );
+    expect(headsToCheck(rows)).toEqual([head("6")]);
+  });
+
+  it("name each head once", () => {
+    const facts = homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ number: 70 }), aPlainPullRequest({ number: 71 })] }) });
+
+    expect(headsToCheck(rowsOf(facts, "unread", null, NOW))).toEqual(["p".repeat(40)]);
   });
 });
