@@ -211,7 +211,7 @@ describe("the wording of a Plain pull request's Standing", () => {
   });
 
   it("says a Pairing session's pull request joined to its issue is ready", () => {
-    const joined = plain({ number: 80, author: "operator", headRef: "fabrik/pair-12", closes: 12 }, undefined, {
+    const joined = plain({ number: 80, author: "operator", headRef: "fabrik/pair-12", closes: [12] }, undefined, {
       openIssues: [anOpenIssue({ number: 12, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-05T20:00:00Z")] })],
     });
     expect(wordStanding(joined, minutesAfter(40), ZONE)).toEqual({

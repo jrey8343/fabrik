@@ -141,7 +141,7 @@ describe("a Plain pull request's Standing", () => {
 
   describe("a Pairing session's, joined to its issue", () => {
     const pairing = (overrides: Parameters<typeof aPlainPullRequest>[0] = {}) =>
-      aPlainPullRequest({ number: 80, author: "operator", headRef: "fabrik/pair-12", closes: 12, createdAt: "2026-11-07T10:00:00Z", headCommittedAt: "2026-11-07T10:00:00Z", ...overrides });
+      aPlainPullRequest({ number: 80, author: "operator", headRef: "fabrik/pair-12", closes: [12], createdAt: "2026-11-07T10:00:00Z", headCommittedAt: "2026-11-07T10:00:00Z", ...overrides });
     const handedOver = anOpenIssue({ number: 12, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-05T20:00:00Z")] });
 
     it("is the issue's own Standing while issue 12 is open and has one, carrying both numbers and the name the pull request would have had", () => {
@@ -194,6 +194,12 @@ describe("a Plain pull request's Standing", () => {
       ]);
     });
 
+    it("joins issue 12 when its body closes another issue first", () => {
+      expect(standingsIn({ openIssues: [anOpenIssue({ number: 12, labels: [] })], plainPullRequests: [pairing({ closes: [5, 12], mergeable: false })] })).toEqual([
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", detail: { plain: "pairing" } }),
+      ]);
+    });
+
     it("stands by itself when issue 12 is closed or missing", () => {
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"] })], plainPullRequests: [pairing()] })).toEqual([
         expect.objectContaining({ issue: 13, pullRequest: null, name: "yours-to-do" }),
@@ -225,11 +231,12 @@ describe("a Plain pull request's Standing", () => {
       expect(kindOf({ author: "operator", headRef: "fabrik/skills-bump/mattpocock-skills" })).toBe("other");
     });
 
-    it("is a Pairing session's for the Operator's on a pair branch whose body closes the issue it names", () => {
-      expect(kindOf({ author: "operator", headRef: "fabrik/pair-12", closes: 12 })).toBe("pairing");
-      expect(kindOf({ author: "operator", headRef: "fabrik/pair-12", closes: 13 })).toBe("other");
-      expect(kindOf({ author: "operator", headRef: "fabrik/pair-12", closes: null })).toBe("other");
-      expect(kindOf({ author: "someone", headRef: "fabrik/pair-12", closes: 12 })).toBe("other");
+    it("is a Pairing session's for the Operator's on a pair branch whose body closes the issue it names, whatever else it closes", () => {
+      expect(kindOf({ author: "operator", headRef: "fabrik/pair-12", closes: [12] })).toBe("pairing");
+      expect(kindOf({ author: "operator", headRef: "fabrik/pair-12", closes: [5, 12] })).toBe("pairing");
+      expect(kindOf({ author: "operator", headRef: "fabrik/pair-12", closes: [13] })).toBe("other");
+      expect(kindOf({ author: "operator", headRef: "fabrik/pair-12", closes: [] })).toBe("other");
+      expect(kindOf({ author: "someone", headRef: "fabrik/pair-12", closes: [12] })).toBe("other");
     });
 
     it("is other for anyone else's", () => {

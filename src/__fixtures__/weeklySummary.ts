@@ -341,7 +341,7 @@ export function aPlainPullRequest(overrides: Partial<PlainPullRequestFacts> = {}
     headCommittedAt: "2026-11-06T20:00:00Z",
     draft: false,
     mergeable: true,
-    closes: null,
+    closes: [],
     createdAt: "2026-11-06T20:00:00Z",
     ...overrides,
   };

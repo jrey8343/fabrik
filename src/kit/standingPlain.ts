@@ -56,7 +56,8 @@ export function joinPairing(standings: readonly Standing[], { plainPullRequests,
   const replaced = new Map<Standing, Standing | null>();
   for (const pairing of standings) {
     if (pairing.work !== "plain" || pairing.detail.pullRequest !== undefined || !("plain" in pairing.detail) || pairing.detail.plain !== "pairing") continue;
-    const issue = plainPullRequests.find(({ number }) => number === pairing.pullRequest)?.closes ?? null;
+    const headRef = plainPullRequests.find(({ number }) => number === pairing.pullRequest)?.headRef;
+    const issue = headRef === undefined ? null : pairedIssueOf(headRef);
     if (issue === null || !openIssues.some(({ number }) => number === issue)) continue;
     const own = standings.filter((standing) => standing.issue === issue && standing !== pairing);
     const joinable = own.find((standing) => standing.pullRequest === null && !replaced.has(standing));
@@ -115,13 +116,14 @@ function plainNameOf({ draft, mergeable }: PlainPullRequestFacts, plain: PlainKi
  * What kind of Plain pull request it is, from who opened it and its branch:
  * Dependabot's Kit bump, the Operator's from Setup, the Fabrik App's Skills
  * bump, the Operator's from a Pairing session, whose body closes the issue
- * its branch names; or any other.
+ * its branch names, whatever else it closes; or any other.
  */
 export function plainKindOf({ author, headRef, closes }: PlainPullRequestFacts, operator: string, appLogin: string): PlainKind {
   if (author === DEPENDABOT && headRef.startsWith(KIT_BUMP_BRANCH_PREFIX)) return "kit-bump";
   if (author === operator && SETUP_BRANCH_PREFIXES.some((prefix) => headRef.startsWith(prefix))) return "setup";
   if (author === appLogin && headRef.startsWith(`${SKILLS_BUMP_BRANCH}/`)) return "skills-bump";
-  if (author === operator && closes !== null && pairedIssueOf(headRef) === closes) return "pairing";
+  const paired = pairedIssueOf(headRef);
+  if (author === operator && paired !== null && closes.includes(paired)) return "pairing";
   return "other";
 }
 

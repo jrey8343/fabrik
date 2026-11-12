@@ -203,8 +203,8 @@ export interface PlainPullRequestFacts {
   readonly draft: boolean;
   /** Whether it merges cleanly; null while GitHub hasn't worked it out, which is read as merging cleanly. */
   readonly mergeable: boolean | null;
-  /** The issue its body closes, or null. */
-  readonly closes: number | null;
+  /** Every issue it closes, as GitHub links them: its body's closing keywords and the sidebar's, the first ten. */
+  readonly closes: readonly number[];
   readonly createdAt: string;
 }
 

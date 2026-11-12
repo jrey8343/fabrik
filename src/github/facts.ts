@@ -788,7 +788,7 @@ function plainPullRequestOf(pr: RawOpenPullRequest): PlainPullRequestFacts {
     headCommittedAt: pr.commits.nodes.find(({ commit }) => commit.oid === pr.headRefOid)?.commit.committedDate ?? null,
     draft: pr.isDraft,
     mergeable: mergeableOf(pr.mergeable),
-    closes: pr.closingIssuesReferences.nodes[0]?.number ?? null,
+    closes: pr.closingIssuesReferences.nodes.map(({ number }) => number),
     createdAt: pr.createdAt,
   };
 }

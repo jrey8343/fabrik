@@ -1110,7 +1110,7 @@ describe("the Weekly summary", () => {
         plainPullRequests: [
           aPlainPullRequest({ number: 71, title: "Set up Fabrik v3.1.0", author: "operator", headRef: "fabrik/setup-v3.1.0", headSha: HEAD }),
           aPlainPullRequest({ number: 72, title: "Bump skills", author: "fabrik-app[bot]", headRef: "fabrik/skills-bump/mattpocock-skills", headSha: HEAD }),
-          aPlainPullRequest({ number: 73, title: "Pair on #12", author: "operator", headRef: "fabrik/pair-12", closes: 12, headSha: HEAD }),
+          aPlainPullRequest({ number: 73, title: "Pair on #12", author: "operator", headRef: "fabrik/pair-12", closes: [12], headSha: HEAD }),
           aPlainPullRequest({ number: 74, title: "Fix a typo", author: "someone", headRef: "fix-typo", headSha: HEAD }),
         ],
       });
@@ -1123,7 +1123,7 @@ describe("the Weekly summary", () => {
     it("lists a Pairing session's pull request joined to its open issue once it is ready, in place of the issue's own line", () => {
       const { waiting } = summaryWith({
         openIssues: [anOpenIssue({ number: 12, title: "Pair on the cart", labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-05T20:00:00Z")] })],
-        plainPullRequests: [aPlainPullRequest({ number: 73, title: "Pair on #12", author: "operator", headRef: "fabrik/pair-12", closes: 12, headSha: HEAD })],
+        plainPullRequests: [aPlainPullRequest({ number: 73, title: "Pair on #12", author: "operator", headRef: "fabrik/pair-12", closes: [12], headSha: HEAD })],
       });
       expect(waiting).toEqual([expect.objectContaining({ kind: "plain-ready", plain: "pairing", number: 73, title: "Pair on #12", url: "https://github.com/owner/product/pull/73" })]);
     });

@@ -403,7 +403,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     });
     const DEPENDABOT = { __typename: "Bot", login: "dependabot" };
 
-    it("is kept for every open PR that is no agent PR, whoever opened it, with who opened it, its branch and head, whether it is a draft, whether it merges cleanly and the issue it closes", async () => {
+    it("is kept for every open PR that is no agent PR, whoever opened it, with who opened it, its branch and head, whether it is a draft, whether it merges cleanly and every issue it closes", async () => {
       const github = repoWith({
         openPullRequests: [
           anOpenRawPullRequest(50, "fabrik/ticket-7", APP, { closingIssuesReferences: { nodes: [{ number: 7 }] } }),
@@ -411,7 +411,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
             mergeable: "CONFLICTING",
             commits: { nodes: [aRawCommit("8", "2026-11-02T00:00:00Z", "fabrik: bump", { email: "support@github.com", user: null }), aRawCommit("1", "2026-11-03T00:00:00Z", "fabrik: bump", { email: "support@github.com", user: null })] },
           }),
-          anOpenRawPullRequest(72, "fabrik/pair-12", OPERATOR, { isDraft: true, mergeable: "UNKNOWN", closingIssuesReferences: { nodes: [{ number: 12 }] } }),
+          anOpenRawPullRequest(72, "fabrik/pair-12", OPERATOR, { isDraft: true, mergeable: "UNKNOWN", closingIssuesReferences: { nodes: [{ number: 5 }, { number: 12 }] } }),
           // The Operator's own PR from an agent branch is no agent PR: only the Fabrik App opens one.
           anOpenRawPullRequest(73, "fabrik/ticket-9", OPERATOR),
         ],
@@ -429,7 +429,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headCommittedAt: "2026-11-03T00:00:00Z",
           draft: false,
           mergeable: false,
-          closes: null,
+          closes: [],
           createdAt: "2026-11-01T00:00:00Z",
         },
         {
@@ -441,7 +441,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headCommittedAt: null,
           draft: true,
           mergeable: null,
-          closes: 12,
+          closes: [5, 12],
           createdAt: "2026-11-01T00:00:00Z",
         },
         expect.objectContaining({ number: 73, author: "jrey8343", headRef: "fabrik/ticket-9", mergeable: true }),

@@ -817,7 +817,7 @@ describe("a Standing, as plain data", () => {
           issues += 1;
           // Two open agent PRs that close one Ticket are kept apart.
           expect(its, `#${issue.number}`).toHaveLength(Math.max(1, closing));
-        } else if (issue.labels.length === 0 && closing === 0 && !plainPullRequests.some(({ closes }) => closes === issue.number)) {
+        } else if (issue.labels.length === 0 && closing === 0 && !plainPullRequests.some(({ closes }) => closes.includes(issue.number))) {
           expect(its, `#${issue.number}`).toEqual([]);
         }
       }
