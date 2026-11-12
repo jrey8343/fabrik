@@ -127,6 +127,16 @@ describe("The prompts of the runs that read an agent PR", () => {
     expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "round", operatorCommentsConsidered: ["conversation-3"] } });
     expect(text).toContain("- `operatorCommentsConsidered`");
   });
+
+  it("design names asksMap beside its instruction to ask the Map question, and its round example carries it", async () => {
+    const text = await prompt("design");
+    const ask = lineStarting(section(text, "Maps"), "- **Ask in round 1 when the cap has room.**");
+    expect(ask).toContain('"Chart this as a Map instead?"');
+    expect(ask).toContain('`"asksMap": true`');
+    const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
+    expect(readDesignTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "round", asksMap: true } });
+    expect(text).toContain("- `asksMap`");
+  });
 });
 
 describe("The Coding standards", () => {

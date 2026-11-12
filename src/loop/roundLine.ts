@@ -31,6 +31,8 @@ export type RoundLine = {
    * its Verdict's address when a Verdict sent it back, null when the Operator did.
    */
   readonly sentBack?: { readonly pullRequest: number; readonly verdict: string | null };
+  /** Set when the Round asks "Chart this as a Map instead?"; the line carries the key only then. */
+  readonly asksMap?: true;
 };
 
 const ROUND_LINE = /^<!-- fabrik:round-line (.*) -->$/;
@@ -41,7 +43,7 @@ const ROUND_LINE = /^<!-- fabrik:round-line (.*) -->$/;
  * escapes, so no field can end the HTML comment early or mention anyone.
  */
 export function roundLineOf(line: RoundLine): string {
-  const { v, kind, round, intro, questions, sentBack } = line;
+  const { v, kind, round, intro, questions, sentBack, asksMap } = line;
   return `<!-- fabrik:round-line ${markerJson({
     v,
     kind,
@@ -49,6 +51,7 @@ export function roundLineOf(line: RoundLine): string {
     intro,
     questions: questions.map(({ question, recommendation }) => ({ question, recommendation })),
     ...(sentBack === undefined ? {} : { sentBack: { pullRequest: sentBack.pullRequest, verdict: sentBack.verdict } }),
+    ...(asksMap === true ? { asksMap } : {}),
   })} -->`;
 }
 

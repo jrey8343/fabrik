@@ -18,6 +18,25 @@ const requested = {
   comment: "Prototyping the booking page as you approved.",
 };
 
+describe("A Design turn's round output that asks the Map question", () => {
+  const round = { kind: "round", intro: "One question first.", questions: [{ question: "Chart this as a Map instead?", recommendation: "Yes." }] };
+
+  it("keeps asksMap when it is true", () => {
+    expect(turn({ ...round, asksMap: true })).toEqual({ ok: true, output: { ...round, asksMap: true } });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["false", false],
+    ["the text true", "true"],
+    ["1", 1],
+    ["null", null],
+  ])("leaves the mark out, and still reads the round, when asksMap is %s", (_, asksMap) => {
+    const result = turn({ ...round, asksMap });
+    expect(result).toEqual({ ok: true, output: round });
+  });
+});
+
 describe("A Design turn's prototype output: the Operator approved a Prototype", () => {
   it("reads the route, the variant count, the brief and the request comment's lead-in", () => {
     expect(turn(requested)).toEqual({ ok: true, output: requested });

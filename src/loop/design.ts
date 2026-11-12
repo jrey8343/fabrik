@@ -775,6 +775,7 @@ function roundComment(
       intro,
       questions,
       ...(sentBack === null ? {} : { sentBack: { pullRequest: sentBack.pullRequest, verdict: sentBack.verdictUrl } }),
+      ...(output.asksMap === true ? { asksMap: true } : {}),
     }),
     `@${operator} **Design session, round ${round}.** Reply with the numbers you'd answer differently, or \`yes\` to take every recommendation.`,
     ...(sentBack === null

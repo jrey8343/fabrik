@@ -269,6 +269,28 @@ describe("A Design-session round carries its fields in a hidden line", () => {
       ],
     });
   });
+
+  it("marks a round whose output asks the Map question", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-design"] });
+
+    const body = bodyOf(planFor(turnFinished({ ...round, asksMap: true }), snapshotOf(issue), kitConfig()));
+
+    expect(roundLineIn(body)).toMatchObject({ round: 1, asksMap: true });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["false", false],
+    ["malformed", "yes"],
+  ])("leaves the mark out when asksMap is %s, and lands the round all the same", (_, asksMap) => {
+    const issue = anIssue({ number: 7, labels: ["needs-design"] });
+
+    const plan = planFor(turnFinished({ ...round, asksMap }), snapshotOf(issue), kitConfig());
+
+    expect(plan.kind).toBe("act");
+    expect(roundLineIn(bodyOf(plan))).not.toHaveProperty("asksMap");
+    expect(bodyOf(plan)).toBe(bodyOf(planFor(turnFinished(round), snapshotOf(issue), kitConfig())));
+  });
 });
 
 describe("Finishing a Design session with an agent brief", () => {
