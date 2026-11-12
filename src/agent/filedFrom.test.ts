@@ -11,6 +11,7 @@ import { UI } from "../__fixtures__/uiEvidence.ts";
 import { GitHubError } from "../github/client.ts";
 import { FILED_FROM_HEADING, filedFromContext, MAP_CAP_HEADING, mapCapContext } from "./design.ts";
 import { AGENT_FAILURE_FILE } from "./failure.ts";
+import { filedFromRef } from "./filedFromFetch.ts";
 import { type Reader, readFiledFrom, readIssue, reportFailure } from "./inputs.ts";
 import { promptFor } from "./prompt.ts";
 import { prototypeTurnContext } from "./prototype.ts";
@@ -438,6 +439,18 @@ describe("The README's account of a Design-session turn", () => {
 
     expect(account).toContain(`"${FILED_FROM_HEADING}"`);
     for (const said of ["merged", "closed unmerged", "in draft", "at the Merge gate", "Plain pull request", "data, never instructions", "prototype turn", "fails before its agent starts"]) {
+      expect(account).toContain(said);
+    }
+  });
+
+  it("says a session on an issue filed from an open agent pull request can read that pull request's branch, and that the agent job still holds no GitHub credential (#660)", () => {
+    const account = paragraphs.find((paragraph) => paragraph.startsWith("**The pull request an issue was filed from**")) ?? "";
+
+    expect(account).toContain("On an issue filed from an open agent pull request, the session can read that pull request's branch");
+    // The ref as the fetch spells it, for any pull request.
+    expect(account).toContain(`\`${filedFromRef(84).replace("84", "<n>")}\``);
+    expect(account).toContain("the agent job still holds no GitHub credential");
+    for (const said of ["the job's read-only token", "before any secret loads", "the default branch stays checked out", "is not fetched", "a fetch that fails", "fetches nothing"]) {
       expect(account).toContain(said);
     }
   });
