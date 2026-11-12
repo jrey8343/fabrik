@@ -1,0 +1,31 @@
+# Release notes: The Standing rule and the changed Monday issue
+
+The notes for the minor release that ships the Standing ([#591](https://github.com/jrey8343/fabrik/issues/591)): one rule in the Kit that says, for every piece of work the Loop knows and every open Plain pull request, where it stands and whose move is next, and the Weekly summary's Waiting on you, Stuck and Held rebuilt on it. Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
+
+## What changed
+
+- **Stuck now means silence, never work the Kit handed back.** Work is listed under Stuck when the next move is the Kit's, nothing is running or held, and the Kit has made no sign on it for longer than its own recoveries take. Until now it was any work quiet for 24 hours, mixed with runs that had ended and were already yours.
+  - **One bar per Product repo**, worked out from that repo's own Kit config: the slowest recovery's wait plus two hourly Ticks. On default timeouts that is **3 hours 30 minutes**: the Implement job's 90-minute timeout (the Implement role's 60, plus 20 for UI evidence capture and 10 for the job's other steps), which the unstarted-Retry and undelivered-Request-changes checks wait out, plus 120. A repo that raised its Implement or Review timeout has a longer bar: the Implement job's timeout plus 120, or twice the Review timeout plus 120, whichever is longer. A repo whose Kit config is invalid is read with the default timeouts.
+  - **Only something the Kit does restarts the clock**: a comment, a label, a push or a draft change of the Fabrik App's. Your own comment, label or review never does, so asking "what's happening?" on a lost draft no longer makes it look alive for another day.
+  - **What can be Stuck**: a trigger label, an Execution flaw's Retry or a re-added label with no run behind it; your Request changes with no run started; an agent draft that conflicts with `main` and was never reviewed; a `needs-info` question answered with no Triage since; `needs-triage` with no Triage run; a Round you answered with no turn since; a passed draft whose Merge gate never opened; and an agent draft with nothing above to explain its silence.
+  - **Each Stuck line now carries what to do.** It says what the Kit last asked for and how long ago, then the remedy, such as "No Retry has started since the Execution flaw 4 hours ago. Check the Loop's runs, then add `agent:implement` to #12." Lines are longest first. The old "reviewed by you; the Kit hasn't acted", "a draft with no activity" and "needs-info answered … not picked up" lines are gone.
+  - **With the runs in progress unread**, as until the Operator accepts the Fabrik App's Actions: read, silence still turns Stuck at the bar, and a Stuck section that lists anything opens by saying a run may be working on some of them.
+- **What moved:**
+  - **A run that ended in an Infrastructure failure, and a Broken run that used no retry, are under Waiting on you at once**, from the moment the Kit's notice says so, with no clock. They used to wait a day and then be listed under Stuck. Other work the Kit hands back is listed there the same way, in the Kit's own sentence: a trigger label the hourly check took off after nothing started, for one, which no list named before.
+  - **An Audit or Retro that failed twice in a week is under Held**, not Stuck: "the next Audit is held until next week: two runs failed", linking both, or "was held until this week" once that week has begun. The Kit moves it by itself next week.
+  - **A draft you put back in draft after its pass is under Waiting on you**: "parked by you in draft … ago". It is yours and never Stuck.
+  - **A pull request you commented on or approved after its pass stays at the Merge gate**, listed under Waiting on you as before. It used to leave the Merge gate and be listed a day later under Stuck as "reviewed by you". Only a Request changes hands the move back to the Kit.
+- **What is new:** **a Plain pull request that is ready, with its Required checks passed, is one line under Waiting on you**: "a Kit bump, ready to merge for …", or Setup's pull request, a Skills bump, a Pairing session's pull request or "a pull request". A Plain pull request that is a draft, conflicts with `main`, has a Required check failing or not yet reported, or is still waiting on one, isn't listed. None is ever Stuck, and the Kit still acts on no review or comment on one. Until now no list named a Plain pull request at all.
+- **Why a minor:** it adds behaviour, so not a patch. It adds no Kit config field, changes no caller or shim, and asks for no new secret and no new permission: the runs in progress and a Plain pull request's Required checks are read with the Fabrik App tokens the Weekly summary already mints for its Loop line. If the release that ships this is a higher kind for another Spec's sake, this part needs nothing beyond the bump.
+
+## Upgrading
+
+- **A Product repo merges the bump**, as for any minor, and does nothing else. From then on, every notice by which the Kit hands work back ends with a hidden line naming which hand-back it is, and a failed Weekly summary run's notice ends with a hidden marker. Notices from earlier releases have neither and are still read by their wording, so work handed back before the bump is listed as it should be.
+- **The Monday issue changes once the `fabrik-runs` store's caller is on the release**, by its own Dependabot bump or by running Setup again at the release. The first Monday issue after that is the changed one.
+- **Its Stuck section may be longer than last week's, for a week:** silences between the bar and 24 hours old were not listed before. A Ticket, issue or pull request that turns up there for the first time has most likely been silent that long; its line says what to do.
+
+## What does not change
+
+- Every mention, assignment and review request the Kit makes: no push is added or taken away.
+- Every other line of the Monday issue: the Loop line, the Metrics table, the Scores, the escapes and Review misses, and the other lines of Waiting on you and Held.
+- What the Loop does. The Loop never reads a Standing, and no workflow job or caller template changes.
