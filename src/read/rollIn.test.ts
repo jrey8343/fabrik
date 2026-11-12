@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { ReadClient } from "../github/client.ts";
+import { GitHubError, type ReadClient } from "../github/client.ts";
 import { anOpenIssue, anOpenPullRequest, factsOf, homeFactsOf } from "./builders.ts";
+import { modulesImporting } from "./importWalk.ts";
+import { threeDeepConnectionsIn } from "./queryShape.ts";
 import { type Row, rowsOf } from "./rows.ts";
 import { readIssuesToRollIn } from "./rollIn.ts";
 
@@ -73,7 +77,6 @@ describe("the issues that can be rolled in by hand", () => {
     const read = await readIssuesToRollIn(client, "jrey8343/shop", aRow());
 
     expect(read).toEqual({
-      pullRequest: 50,
       page: 1,
       issues: [
         { issue: 33, title: "Issue 33", mentions: false },
@@ -190,6 +193,50 @@ describe("the issues that can be rolled in by hand", () => {
       expect(read).toMatchObject({ page: 3, more: false });
       expect(numbersOf(read)).toEqual(newestFirst(108, 104));
     });
+  });
+
+  describe("are unread, and the read does not throw", () => {
+    it.each([
+      ["refused for want of a permission", new GitHubError("GitHub GraphQL failed: 403", 403)],
+      ["failed by GitHub", new GitHubError("GitHub GraphQL failed: 502", 502)],
+      ["never answered", new GitHubError("GitHub GraphQL failed: fetch failed", 0)],
+    ])("when a query is %s", async (_what, error) => {
+      const { client } = repoWith({ issues: [aRawIssue(31)], pullRequests: [aRawPullRequest()] });
+      const refusing: ReadClient = { ...client, graphql: (query, variables) => (query.includes("pullRequests(") ? Promise.reject(error) : client.graphql(query, variables)) };
+
+      expect(await readIssuesToRollIn(refusing, "jrey8343/shop", aRow())).toBe("unread");
+    });
+
+    it("when a later page of the issues fails", async () => {
+      const { client } = repoWith({ issues: Array.from({ length: 25 }, (_, i) => aRawIssue(101 + i)), pullRequests: [aRawPullRequest()], pageSize: 10 });
+      const failing: ReadClient = { ...client, graphql: (query, variables) => (variables["after"] === "20" ? Promise.reject(new GitHubError("GitHub GraphQL failed: 502", 502)) : client.graphql(query, variables)) };
+
+      expect(await readIssuesToRollIn(failing, "jrey8343/shop", aRow())).toBe("unread");
+    });
+  });
+
+  it("ask only the pull request's own repo, for no connection inside a connection inside a connection, and no body or comments", async () => {
+    const { client, queries } = repoWith({ issues: [aRawIssue(31)], pullRequests: [aRawPullRequest()] });
+
+    await readIssuesToRollIn(client, "jrey8343/shop", aRow());
+
+    expect(queries.length).toBeGreaterThan(0);
+    expect(queries.flatMap(threeDeepConnectionsIn)).toEqual([]);
+    expect(queries.filter((query) => /\bbody\b|\bcomments\b/.test(query))).toEqual([]);
+  });
+
+  it("are none, and nothing is asked, for a row with no pull request", async () => {
+    const { client, queries } = repoWith({ issues: [aRawIssue(31)] });
+    const issueRow = { ...aRow(), standing: { ...aRow().standing, pullRequest: null } };
+
+    expect(await readIssuesToRollIn(client, "jrey8343/shop", issueRow)).toEqual({ page: 1, issues: [], more: false });
+    expect(queries).toEqual([]);
+  });
+
+  it("are read by no gather", () => {
+    const gather = fileURLToPath(new URL("./gather.ts", import.meta.url));
+
+    expect(modulesImporting("readIssuesToRollIn", gather, (path) => readFileSync(path, "utf8"))).toEqual([]);
   });
 
   it("list a Ticket still waiting for Dispatch, and an issue someone else opened", async () => {

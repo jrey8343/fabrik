@@ -18,8 +18,6 @@ export interface IssueToRollIn {
 
 /** One page of the issues that can be rolled in to a pull request. */
 export interface IssuesToRollIn {
-  /** The open agent pull request they could be rolled in to. */
-  readonly pullRequest: number;
   /** Which page this is, from 1. */
   readonly page: number;
   readonly issues: readonly IssueToRollIn[];
@@ -92,8 +90,8 @@ const PAGE_SIZE = 20;
  * waiting for Dispatch is listed. Those the row says mention the pull request
  * come first, marked, then the rest; each newest first, 20 to a page. Each
  * entry is the issue's number and title, with no body and no comments: a
- * reader fetches those for the one picked. "unread" when GitHub refuses or
- * fails any query.
+ * reader fetches those for the one picked. None, with nothing asked, for a
+ * row with no pull request. "unread" when GitHub refuses or fails any query.
  */
 export async function readIssuesToRollIn(
   client: Pick<ReadClient, "graphql">,
@@ -102,7 +100,23 @@ export async function readIssuesToRollIn(
   page = 1,
   appLogin: string | null = null,
 ): Promise<IssuesToRollIn | "unread"> {
-  const pullRequest = row.standing.pullRequest ?? 0;
+  try {
+    return await issuesToRollInOf(client, repo, row, page, appLogin);
+  } catch {
+    // A refusal, or a query GitHub failed or never answered.
+    return "unread";
+  }
+}
+
+async function issuesToRollInOf(
+  client: Pick<ReadClient, "graphql">,
+  repo: string,
+  row: Pick<Row, "standing" | "related" | "mentions">,
+  page: number,
+  appLogin: string | null,
+): Promise<IssuesToRollIn> {
+  // A row with no pull request has nothing to roll an issue in to.
+  if (row.standing.pullRequest === null) return { page, issues: [], more: false };
   const [owner = "", name = ""] = repo.split("/");
   const [issues, pullRequests] = await Promise.all([
     pagesOf<RawIssue>(client, OPEN_ISSUES_QUERY, { owner, name }, {}, (data) => data.repository.issues),
@@ -116,7 +130,7 @@ export async function readIssuesToRollIn(
     .toSorted((a, b) => Number(b.mentions) - Number(a.mentions) || Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.issue - a.issue)
     .map(({ issue, title, mentions }) => ({ issue, title, mentions }));
   const start = (page - 1) * PAGE_SIZE;
-  return { pullRequest, page, issues: listed.slice(start, start + PAGE_SIZE), more: listed.length > start + PAGE_SIZE };
+  return { page, issues: listed.slice(start, start + PAGE_SIZE), more: listed.length > start + PAGE_SIZE };
 }
 
 /**
