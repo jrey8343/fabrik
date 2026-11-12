@@ -425,7 +425,7 @@ describe("The evidence section on a first run's draft PR", () => {
         "Captured routes:",
         "",
         "- `/waitlist`, named by the Implementer",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/waitlist"],"preview":{"is":"none"}} -->`,
         "",
         "Closes #7",
       ].join("\n"),
@@ -450,7 +450,7 @@ describe("The evidence section on a first run's draft PR", () => {
   });
 
   it.each([
-    ["a UI run's", uiRun(), [`<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`]],
+    ["a UI run's", uiRun(), [`<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/waitlist"],"preview":{"is":"none"}} -->`]],
     ["a non-UI run's", finished({ evidence: anEvidence(CAPTURED) }), []],
   ])("is the Kit's alone: the body never carries %s summary's own section or marker, so no agent can forge where evidence is kept", (_, event, markers) => {
     const summary = [
@@ -498,7 +498,7 @@ describe("The evidence section on a first run's draft PR", () => {
         "**Capture failed:** the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran. There are no screenshots.",
         "",
         "No preview link: Kit config declares no `preview.url`.",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"server-did-not-start"} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"server-did-not-start","routes":[],"preview":{"is":"none"}} -->`,
         "",
         "Closes #7",
       ].join("\n"),
@@ -518,7 +518,7 @@ describe("The evidence section on a first run's draft PR", () => {
       "**Capture failed:** it left no result the push job could read: the Implement job's log shows why. There are no screenshots.",
       "",
       "No preview link: Kit config declares no `preview.url`.",
-      `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"no-result"} -->`,
+      `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"no-result","routes":[],"preview":{"is":"none"}} -->`,
       "",
       "Closes #7",
     ]);
