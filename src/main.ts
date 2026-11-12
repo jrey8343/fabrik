@@ -10,6 +10,7 @@ import { type AgentBranchGit, rebaseBranchOntoMain, rebuildAgentBranch } from ".
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
 import { applyPlan, emptyDiffIn, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
+import { planWithChange, readChangeFingerprint } from "./github/changeRead.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import { describePlan } from "./github/describePlan.ts";
 import {
@@ -445,10 +446,16 @@ async function main(landing: Landing | null): Promise<void> {
   // job checks the store out only while a replay issue is open (.github/actions/replay-store).
   const replayStore = storeCheckoutAt(process.env["FABRIK_STORE_DIR"], config);
   const snapshot = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
-  const plan = planFor(event, snapshot, config);
+  const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
+  // A plan that posts a Verdict records the fingerprint of the PR's own change with it (#643), read with git as the
+  // Fabrik App. Any other plan fetches nothing, and one whose fingerprint can't be read posts its Verdict without it.
+  const { plan, unread } = await planWithChange(
+    snapshot,
+    (given) => planFor(event, given, config),
+    (headSha) => readChangeFingerprint(headSha, remote),
+  );
   // A replay Ticket's claim marks it in progress in this run, and fails when another run claimed it first.
   // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304), as may a Review's pass (#480).
-  const remote = { serverUrl: required("GITHUB_SERVER_URL"), repo, token: required("FABRIK_APP_TOKEN") };
   const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
   const { preview, readded } = await applyPlan(
     github,
@@ -481,7 +488,7 @@ async function main(landing: Landing | null): Promise<void> {
   const readdedLines = readded.map(
     ({ issue, label }) => `- ${label} was already on #${issue}, so it was taken off and added again, which starts its run`,
   );
-  await report([describePlan(plan), ...(readdedLines.length === 0 ? [] : ["", ...readdedLines])].join("\n"));
+  await report([describePlan(plan), ...(readdedLines.length === 0 ? [] : ["", ...readdedLines]), ...(unread === null ? [] : ["", unread])].join("\n"));
   if (plan.kind === "fail") {
     console.log(`::error title=Infrastructure failure::${plan.reason}`);
     if (landing !== null) await reportLandingFailure(landing, plan);
