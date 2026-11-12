@@ -415,8 +415,114 @@ export function handBackMarkIn(body: string): HandBackMark | null {
   return null;
 }
 
-/** How the comment that ends a Design session starts, either way it ends. */
+/**
+ * How the comment that ends a Design session starts, whichever way it ends,
+ * but for a Roll-in's, whose two hidden lines come first. To tell whether a
+ * comment is a session's finish, ask sessionFinishedIn.
+ */
 export const SESSION_FINISHED = "**Design session finished.**";
+
+/**
+ * Whether the Kit's comment is an async Design session's finish: it opens
+ * with the Kit's finished line, or with the Roll-in's mark, whose closing
+ * comment keeps that line under its hidden ones. The one test for it,
+ * wherever the Kit looks for a session's finish: in the snapshot
+ * (src/github/threads.ts) and in a turn's prompt (src/agent/design.ts). Pass
+ * it only the Fabrik App's comments.
+ */
+export function sessionFinishedIn(body: string): boolean {
+  return body.startsWith(SESSION_FINISHED) || ROLL_IN_MARKER.test(body.split("\n", 1)[0] ?? "");
+}
+
+/**
+ * The Roll-in's mark: the first line of the closing comment of a Design
+ * session that finished by settling a Roll-in, naming the pull request the
+ * issue's work is to be built on. The mark alone says a Roll-in was settled
+ * onto that pull request; its text rides on the line under it
+ * (rollInDataLine), so a text this reader can't take is still a Roll-in.
+ */
+export function rollInMarker(pullRequest: number): string {
+  return `<!-- fabrik:roll-in ${pullRequest} -->`;
+}
+
+/** The Roll-in's mark as a comment's whole first line, its pull request captured, whichever way the line ends. */
+const ROLL_IN_MARKER = /^<!-- fabrik:roll-in ([1-9][0-9]*) -->\r?$/;
+
+/** A Roll-in's data line, its JSON captured; JSON holds no bare `\r`, so a line that came back ending in CRLF still reads. */
+const ROLL_IN_DATA_LINE = /^<!-- fabrik:roll-in-data (.*) -->\r?$/;
+
+/** The version of a Roll-in's data line this release writes, and the only one its reader knows. */
+export const ROLL_IN_DATA_VERSION = 1 as const;
+
+/** What to build on the pull request a Roll-in was settled onto, as its closing comment's data line holds it. */
+export interface RollInText {
+  /** Markdown: what to build, standing alone. */
+  readonly summary: string;
+  /** Each one check a test could make. */
+  readonly acceptanceCriteria: readonly string[];
+}
+
+/**
+ * The second line of a Roll-in's closing comment: its text as one hidden,
+ * versioned line of JSON, written from the same fields the comment below it
+ * is rendered from, so no reader parses the Markdown. Its JSON is
+ * markerJson's, so the text can neither end the HTML comment early nor
+ * mention anyone.
+ */
+export function rollInDataLine({ summary, acceptanceCriteria }: RollInText): string {
+  return `<!-- fabrik:roll-in-data ${markerJson({ v: ROLL_IN_DATA_VERSION, summary, acceptanceCriteria: [...acceptanceCriteria] })} -->`;
+}
+
+/**
+ * The Roll-in a closing comment settles, or null when the comment isn't a
+ * Roll-in's: the pull request its mark names, and its text, or no text when
+ * the line under the mark is missing, doesn't parse, or carries a version or
+ * a shape this reader doesn't know. The mark is read from the comment's
+ * first line and the text from its second, so quoting either further down
+ * counts for nothing. Pass it only the Fabrik App's comments, as a Verdict's
+ * marker is read: anyone can write the mark. The one reader of the comment:
+ * the Loop and the read library both call it.
+ */
+export function rollInIn(body: string): { readonly pullRequest: number; readonly text: RollInText | null } | null {
+  const [first = "", second = ""] = body.split("\n", 2);
+  const pullRequest = ROLL_IN_MARKER.exec(first)?.[1];
+  if (pullRequest === undefined) return null;
+  return { pullRequest: Number(pullRequest), text: rollInTextIn(second) };
+}
+
+/** The text a Roll-in's data line holds, keys this reader doesn't know left out; null when the line isn't one it can take. */
+function rollInTextIn(line: string): RollInText | null {
+  const json = ROLL_IN_DATA_LINE.exec(line)?.[1];
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const { v, summary, acceptanceCriteria } = value as Record<string, unknown>;
+  if (v !== ROLL_IN_DATA_VERSION || typeof summary !== "string") return null;
+  if (!Array.isArray(acceptanceCriteria) || !acceptanceCriteria.every((criterion) => typeof criterion === "string")) return null;
+  return { summary, acceptanceCriteria };
+}
+
+/**
+ * The first line of the Kit's note that it reopened an issue for Triage
+ * because its pull request merged or closed with the Roll-in unsent (#663).
+ * It names no pull request: any such note after a Roll-in's closing comment
+ * says that Roll-in was acted on, so the reopening happens once.
+ */
+export const ROLL_IN_REOPENED_MARKER = "<!-- fabrik:roll-in-reopened -->";
+
+/**
+ * Whether the Kit's comment is its note that it reopened the issue for
+ * Triage: it opens with that note's mark, so quoting the mark further down
+ * counts for nothing. Pass it only the Fabrik App's comments.
+ */
+export function rollInReopenedIn(body: string): boolean {
+  return body.startsWith(ROLL_IN_REOPENED_MARKER);
+}
 
 /**
  * Opens the comment a live Design session ends with. Only the start of a

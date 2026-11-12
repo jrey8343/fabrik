@@ -5,8 +5,10 @@
 // Run beside the Product checkout at product/, whose Kit config names the Operator.
 // Env: GH_TOKEN, GITHUB_REPOSITORY, GITHUB_API_URL, and
 //   FABRIK_ROLE                  the agent's role: a Design-session turn's also writes map.json, whether
-//                                it may offer a Map (readMapOffer), and spec-tickets.json, its Spec's other
-//                                Tickets (readIssue's otherTickets, #475)
+//                                it may offer a Map (readMapOffer), spec-tickets.json, its Spec's other
+//                                Tickets (readIssue's otherTickets, #475), and filed-from.json, the pull
+//                                request its issue's `From PR` line names, or that there is none
+//                                (readFiledFrom, #659)
 //   FABRIK_ISSUE                 the issue or Ticket: writes issue.json and spec.json (its parent: a Ticket's Spec, a Decision's Map, or null);
 //                                a Ticket back in design from an agent PR carries that PR in issue.json's sentBack
 //   FABRIK_PULL_REQUEST          optional, a PR: writes pull-request.json, with the Operator's comments on it
@@ -50,7 +52,7 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { fromAuditIn } from "../loop/markers.ts";
+import { fromAuditIn, fromPullRequestIn } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -160,14 +162,15 @@ function specTicketOf(ticket: SubIssue): SpecTicket {
  * from anyone else's (#426). When the issue's current Design session follows
  * the Kit's note that the Ticket came back from an agent PR, the issue also
  * carries `sentBack`: what that closed PR was judged on and what it built
- * (see readSentBack).
+ * (see readSentBack). `body` is the issue's body once more, as GitHub has it,
+ * for the step's own reads of its lines (readFiledFrom).
  */
 export async function readIssue(
   github: Reader,
   repo: Repo,
   number: number,
   operator: string,
-): Promise<{ issue: unknown; spec: { number: number; title: string; body: string } | null; otherTickets: SpecTicket[] }> {
+): Promise<{ issue: unknown; body: string; spec: { number: number; title: string; body: string } | null; otherTickets: SpecTicket[] }> {
   const comments: IssueComment[] = [];
   let after: string | null = null;
   let issue: NonNullable<IssueQueryResult["repository"]["issue"]>;
@@ -204,6 +207,7 @@ export async function readIssue(
       comments: authoredComments,
       ...(sentBack === null ? {} : { sentBack: await readSentBack(github, repo, sentBack, operator) }),
     },
+    body: issue.body,
     spec: issue.parent === null ? null : { number: issue.parent.number, title: issue.parent.title, body: issue.parent.body },
     otherTickets: (issue.parent?.subIssues.nodes ?? []).filter((ticket) => ticket.number !== issue.number).map(specTicketOf),
   };
@@ -582,6 +586,100 @@ export async function readMapOffer(
 /** Where the inputs step writes a Design-session turn's Spec's other Tickets (readIssue's otherTickets), beside issue.json. */
 export const SPEC_TICKETS_FILE = "spec-tickets.json";
 
+// --- The pull request a Design-session turn's issue was filed from (#659) -----
+
+/** Where the inputs step writes the pull request a Design-session turn's issue was filed from, beside issue.json. */
+export const FILED_FROM_FILE = "filed-from.json";
+
+/**
+ * The pull request an issue's `From PR` line names, as a Design-session turn
+ * is told of it: where it stands, and its description. None when the body has
+ * no such line outside code, or the line names no pull request in this repo:
+ * an issue's number, or a number that doesn't exist.
+ */
+export type FiledFrom =
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "pull-request";
+      readonly number: number;
+      readonly title: string;
+      readonly body: string;
+      readonly state: "open" | "merged" | "closed";
+      readonly draft: boolean;
+      readonly headSha: string;
+      readonly headRef: string;
+      readonly baseRef: string;
+      /** Whether it is an agent pull request, by the Kit's own test (isAgentPullRequest). */
+      readonly isAgent: boolean;
+    };
+
+/**
+ * FILED_FROM_FILE's FiledFrom as its readers take it, the turn's prompt and
+ * the Design job's fetch (#660), or an error: neither guesses where the pull
+ * request stands from a file it can't read.
+ */
+export function filedFromOf(value: unknown): FiledFrom {
+  const read = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  if (read["kind"] === "none") return { kind: "none" };
+  const { number, title, body, state, draft, headSha, headRef, baseRef, isAgent } = read;
+  if (
+    read["kind"] === "pull-request" &&
+    typeof number === "number" &&
+    typeof title === "string" &&
+    typeof body === "string" &&
+    (state === "open" || state === "merged" || state === "closed") &&
+    typeof draft === "boolean" &&
+    typeof headSha === "string" &&
+    typeof headRef === "string" &&
+    typeof baseRef === "string" &&
+    typeof isAgent === "boolean"
+  ) {
+    return { kind: "pull-request", number, title, body, state, draft, headSha, headRef, baseRef, isAgent };
+  }
+  throw new Error(`${FILED_FROM_FILE} doesn't say which pull request this issue was filed from`);
+}
+
+/** A pull request as the REST API returns it: the fields a FiledFrom is read from. */
+interface RestFiledFrom {
+  number: number;
+  title: string;
+  body: string | null;
+  state: "open" | "closed";
+  merged: boolean;
+  draft?: boolean;
+  head: { ref: string; sha: string };
+  base: { ref: string };
+  user: { type: string } | null;
+}
+
+/**
+ * The pull request the first `From PR` line outside code in `issueBody`
+ * names (fromPullRequestIn), read afresh on every turn. A body with no such
+ * line reads nothing. GitHub answers 404 for a number that is an issue's or
+ * that doesn't exist, which is no failure: the turn runs as it would with no
+ * line. Any other failed read throws, and fails the turn before its agent
+ * starts.
+ */
+export async function readFiledFrom(github: Pick<Reader, "rest">, repo: Repo, issueBody: string): Promise<FiledFrom> {
+  const number = fromPullRequestIn(issueBody);
+  if (number === null) return { kind: "none" };
+  const pull = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true })) as RestFiledFrom | null;
+  if (pull === null) return { kind: "none" };
+  return {
+    kind: "pull-request",
+    number: pull.number,
+    title: pull.title,
+    body: pull.body ?? "",
+    state: pull.merged ? "merged" : pull.state === "open" ? "open" : "closed",
+    draft: pull.draft === true,
+    headSha: pull.head.sha,
+    headRef: pull.head.ref,
+    baseRef: pull.base.ref,
+    // This job doesn't know the App's login, so any bot's pull request from an agent branch is an agent pull request.
+    isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
+  };
+}
+
 // --- Triage's Recent issues (#363) ------------------------------------------
 
 /** Where the inputs step writes Triage's Recent issues, beside issue.json. */
@@ -933,10 +1031,13 @@ async function main(outDir: string): Promise<void> {
   // its `operator`, as the Loop's snapshot names them, or else the repo's owner.
   const resolved = await readKitConfigFromCheckout(PRODUCT_DIR);
   const operator = (resolved.ok ? resolved.config.operator : null) ?? owner;
-  const { issue, spec, otherTickets } = await readIssue(github, repo, issueNumber, operator);
+  const { issue, body, spec, otherTickets } = await readIssue(github, repo, issueNumber, operator);
   await writeFile(join(outDir, "issue.json"), JSON.stringify(issue));
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
   if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, SPEC_TICKETS_FILE), JSON.stringify(otherTickets));
+  // Read afresh on every turn, and always written: a body with no `From PR` line writes that there is none (#659).
+  // A prototype turn's job runs this step as the Design role too, and hands its agent nothing of the file.
+  if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, FILED_FROM_FILE), JSON.stringify(await readFiledFrom(github, repo, body)));
   // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
   if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
     await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec)));

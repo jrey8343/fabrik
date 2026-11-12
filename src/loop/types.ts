@@ -11,6 +11,7 @@ import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
+import type { RequestChangesText, RollInIssue } from "./owedRollIn.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
 export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research" | "digest";
@@ -1214,11 +1215,20 @@ export interface Snapshot {
    */
   readonly replay: ReplaySnapshot | null;
   /**
-   * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR
-   * its reply names under "Introduced by" that GitHub has, in any order. A
-   * number naming no PR isn't here.
+   * Gathered for an Audit run finishing, whose Audit is `issue`: each PR its
+   * reply names under "Introduced by" that GitHub has, in any order. And for a
+   * Design-session turn finishing in a Roll-in: the pull request it names,
+   * if GitHub has it. A number naming no PR isn't here. Null for any other
+   * event, and for a Design-session turn that ends any other way.
    */
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
+  /**
+   * Gathered for an agent pull request closing, merged or not, only: what
+   * tells which Roll-ins were left unsent on it, so their issues are
+   * reopened for Triage (src/loop/rollInReopening.ts, #663). Null for any other
+   * event, and for a Plain pull request closing.
+   */
+  readonly rollIns: RollInsSnapshot | null;
   /**
    * Gathered for a scheduled tick, and for whatever may free a Subscription
    * (#439): each issue or PR a held marker on an open carrier (a
@@ -1263,6 +1273,28 @@ export interface Snapshot {
    * after a PR that closes it merged (src/loop/mergedTickets.ts, #543).
    */
   readonly readyTickets: readonly TicketSnapshot[] | null;
+}
+
+/**
+ * What the owed rule (src/loop/owedRollIn.ts) reads beside a pull request
+ * that has just merged or closed, `pullRequest` in the same snapshot.
+ */
+export interface RollInsSnapshot {
+  /** The repo the pull request is in, `owner/name`. */
+  readonly repo: string;
+  /**
+   * The Operator's Request changes on the pull request, oldest first, one
+   * dismissed since marked so: each review's own text. Nobody else's review
+   * is here, and no comment pinned to a line.
+   */
+  readonly requestChanges: readonly RequestChangesText[];
+  /**
+   * Each issue of this repo, closed as not planned, that GitHub
+   * cross-references to the pull request, with its comments and whether the
+   * Fabrik App wrote each. The cross-reference only finds the issue: the
+   * Roll-in's mark in its closing comment is what counts.
+   */
+  readonly issues: readonly RollInIssue[];
 }
 
 /** What the stuck-trigger sweep weighs (src/loop/triggerSweep.ts, #419). */
@@ -1358,9 +1390,11 @@ export interface HeldTargetSnapshot {
   readonly labeledAt?: Readonly<Record<string, string>>;
 }
 
-/** A PR an Auditor named, as GitHub has it (src/loop/auditLanding.ts). */
+/** A PR an Auditor named (src/loop/auditLanding.ts), or the one a Design session's Roll-in names (src/loop/design.ts), as GitHub has it. */
 export interface NamedPullRequestSnapshot {
   readonly number: number;
+  /** Whether it is open: neither merged nor closed. */
+  readonly open: boolean;
   readonly merged: boolean;
   /** Its head branch. */
   readonly headRef: string;
@@ -1887,6 +1921,16 @@ export type Action =
       readonly digest: string;
       readonly carried: readonly Action[];
       readonly otherwise: readonly Action[];
+    }
+  | {
+      /**
+       * Reopens a closed issue (#663): one whose Roll-in was left unsent when
+       * its pull request merged or closed. GitHub's reopening event starts
+       * nothing in the Loop, so whatever the issue is reopened for is the
+       * plan's own to start.
+       */
+      readonly kind: "reopen";
+      readonly issue: number;
     };
 
 /**

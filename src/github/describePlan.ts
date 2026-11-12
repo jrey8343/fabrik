@@ -108,6 +108,8 @@ export function actionPhrase(action: Action): string {
       return `collapse an older Digest on #${action.pullRequest} (comment ${action.node}) as outdated`;
     case "carry-digest":
       return `carry the last Digest of #${action.pullRequest} forward to ${action.headSha.slice(0, 7)}, with no Digest run, then collapse the older Digests and open the Merge gate; or, if the files its places name can't be read there, go on as with no Digest to carry`;
+    case "reopen":
+      return `reopen #${action.issue}`;
   }
 }
 

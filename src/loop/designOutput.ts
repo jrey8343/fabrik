@@ -5,6 +5,10 @@
 // (large), or, for a Ticket already under a Spec, sibling Tickets under that
 // Spec. Any Ticket in an outcome may instead be an Operator step. Or the
 // session ends as not planned: the Operator decided the issue won't be built.
+// Or it ends by settling a Roll-in: the Operator decided the issue's work is
+// to be built on an open agent pull request, and the output carries what to
+// build there, which may neither name the session's own issue nor mention
+// anyone, so both sides read the contract against the issue's number.
 // Or, when the destination is too foggy to design in one session, the issue
 // becomes a Map with its first Decisions. Two kinds carry a Prototype (#155)
 // and end nothing: an ordinary turn's `prototype`, the request the Operator
@@ -12,6 +16,7 @@
 import { isRoute } from "../kit/config.ts";
 import { isCommentIdList } from "./considered.ts";
 import { DECISION_TYPES, type DecisionType } from "./labels.ts";
+import { mentionsSomeone } from "./mentions.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 
 /**
@@ -87,6 +92,21 @@ type DesignTurnOutcome =
       readonly kind: "not-planned";
       /** What the Operator decided and why, for the closing comment. */
       readonly comment: string;
+    }
+  | {
+      /**
+       * The Operator settled a Roll-in: the issue's work is to be built on an
+       * open agent pull request, so the issue closes as not planned with what to
+       * build there in its closing comment, which Kit code renders from these
+       * fields. Only the Operator sends it (ADR-0010).
+       */
+      readonly kind: "roll-in";
+      /** The open agent pull request the work is to be built on. */
+      readonly pullRequest: number;
+      /** Markdown: what to build, standing alone. It neither names this issue nor mentions anyone. */
+      readonly summary: string;
+      /** Each one check a test could make; at least one, and under the summary's two refusals. */
+      readonly acceptanceCriteria: readonly string[];
     }
   | {
       /** The foggy outcome: the issue is rewritten in place as a Map, with its first Decisions as its sub-issues. */
@@ -278,6 +298,11 @@ function readQuestions(value: unknown, errors: string[]): RoundQuestion[] {
 /** At least one step, and no empty one. */
 function isSteps(value: unknown): value is string[] {
   return Array.isArray(value) && value.length > 0 && value.every(isText);
+}
+
+/** A number GitHub could give an issue or a pull request: whole, and above zero. */
+function isIssueNumber(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
 function readBrief(value: unknown, errors: string[]): DesignAgentBrief | OperatorBrief | null {
@@ -499,13 +524,17 @@ export function dependencyOrder<T extends Blocked>(items: readonly T[]): T[] | n
 }
 
 /** Checks an already-parsed value against the contract, naming every problem. */
-export function readDesignTurnOutput(value: unknown): DesignTurnOutputResult {
-  const result = readTurn(value);
+export function readDesignTurnOutput(value: unknown, issue: number): DesignTurnOutputResult {
+  return withConsidered(readTurn(value, issue), value);
+}
+
+/** A read output with the Operator comments it weighed, when it gave a list of ids. */
+function withConsidered(result: DesignTurnOutputResult, value: unknown): DesignTurnOutputResult {
   if (!result.ok || !isObject(value) || !isCommentIdList(value.operatorCommentsConsidered)) return result;
   return { ok: true, output: { ...result.output, operatorCommentsConsidered: value.operatorCommentsConsidered } };
 }
 
-function readTurn(value: unknown): DesignTurnOutputResult {
+function readTurn(value: unknown, issue: number | null): DesignTurnOutputResult {
   if (!isObject(value)) return { ok: false, errors: ["Design-session output must be a JSON object"] };
   const errors: string[] = [];
   switch (value.kind) {
@@ -539,6 +568,19 @@ function readTurn(value: unknown): DesignTurnOutputResult {
     case "not-planned": {
       if (!isText(value.comment)) return { ok: false, errors: ["not-planned needs non-empty comment text"] };
       return { ok: true, output: { kind: "not-planned", comment: value.comment } };
+    }
+    case "roll-in": {
+      const { pullRequest, summary, acceptanceCriteria } = value;
+      if (!isIssueNumber(pullRequest)) errors.push("a roll-in needs pullRequest, the number of the pull request to build on: a whole number above zero");
+      // As an agent brief's, with the fields beside `kind`.
+      if (!isText(summary) || !isSteps(acceptanceCriteria)) {
+        errors.push("a roll-in needs a summary and at least one acceptance criterion, with no empty criterion");
+      }
+      if (errors.length > 0) return { ok: false, errors };
+      const text = { summary: summary as string, acceptanceCriteria: acceptanceCriteria as string[] };
+      refuseRollInText(text, issue, errors);
+      if (errors.length > 0) return { ok: false, errors };
+      return { ok: true, output: { kind: "roll-in", pullRequest: pullRequest as number, ...text } };
     }
     case "map": {
       if (!isText(value.comment)) errors.push("a map needs non-empty comment text");
@@ -588,16 +630,56 @@ function readTurn(value: unknown): DesignTurnOutputResult {
       return {
         ok: false,
         errors: [
-          `kind must be round, brief, spec, split, not-planned, map, prototype or prototype-round, not ${JSON.stringify(value.kind)}`,
+          `kind must be round, brief, spec, split, not-planned, roll-in, map, prototype or prototype-round, not ${JSON.stringify(value.kind)}`,
         ],
       };
   }
 }
 
+/**
+ * The two refusals of a Roll-in's text, each pushed onto `errors` with where
+ * it is: the summary or a criterion that names the session's own issue, which
+ * the Implementer and the Reviewer it is written for are never given, or that
+ * mentions someone, by the Kit's one test for a mention (mentionsSomeone),
+ * since the Operator sends the text as their own. Nothing is stripped, and
+ * nothing checks the text's length.
+ */
+function refuseRollInText(
+  { summary, acceptanceCriteria }: { readonly summary: string; readonly acceptanceCriteria: readonly string[] },
+  issue: number | null,
+  errors: string[],
+): void {
+  const parts = [["summary", summary] as const, ...acceptanceCriteria.map((criterion, i) => [`acceptance criterion ${i + 1}`, criterion] as const)];
+  for (const [where, text] of parts) {
+    if (issue !== null && namesOwnIssue(text, issue)) {
+      errors.push(
+        `a roll-in's ${where} names this issue, #${issue}, by its number or its link: the Implementer and the Reviewer are never given the issue, so the text has to stand alone`,
+      );
+    }
+    if (mentionsSomeone(text)) {
+      errors.push(
+        `a roll-in's ${where} mentions someone, which would notify them when the Operator sends it: write a name that begins with @ as inline code of its own`,
+      );
+    }
+  }
+}
+
+/**
+ * Whether the text names the issue: its number after a `#`, and not as part
+ * of a longer number, or a link to it. The contract isn't told which repo the
+ * turn is in, so a link to an issue of that number in any repo on GitHub
+ * names it.
+ */
+function namesOwnIssue(text: string, issue: number): boolean {
+  const byNumber = new RegExp(`(?<![\\w/])#${issue}(?!\\d)`);
+  const byLink = new RegExp(`https://github\\.com/[^/\\s]+/[^/\\s]+/issues/${issue}(?!\\d)`, "i");
+  return byNumber.test(text) || byLink.test(text);
+}
+
 /** Parses the text an agent emitted, then checks it. */
-export function parseDesignTurnOutput(text: string): DesignTurnOutputResult {
+export function parseDesignTurnOutput(text: string, issue: number): DesignTurnOutputResult {
   const json = jsonOf(text);
-  return json.ok ? readDesignTurnOutput(json.value) : json;
+  return json.ok ? readDesignTurnOutput(json.value, issue) : json;
 }
 
 /** What a prototype turn ends in: its prototype round's variants. */
@@ -615,7 +697,8 @@ export type PrototypeTurnOutputResult =
  */
 export function readPrototypeTurnOutput(value: unknown): PrototypeTurnOutputResult {
   if (isObject(value) && value.kind !== "prototype-round") return notPrototypeRound(value.kind);
-  const result = readDesignTurnOutput(value);
+  // Only a prototype-round is read from here on, and no rule of its asks which issue the turn is on.
+  const result = withConsidered(readTurn(value, null), value);
   if (!result.ok) return result;
   return result.output.kind === "prototype-round" ? { ok: true, output: result.output } : notPrototypeRound(result.output.kind);
 }

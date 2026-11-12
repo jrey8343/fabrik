@@ -9,9 +9,11 @@
 // adds the bodies of the Operator's open issues, the agent pull requests
 // merged in the last 24 hours, each open agent pull request's
 // cross-references, the evidence marker of each agent pull request, open or
-// merged in the last 24 hours, each comment's id (#639), and GitHub's record
-// of an edit to each of an open pull request's comments (#655). The rows are
-// worked out from its facts by ./rows.ts.
+// merged in the last 24 hours, each comment's id (#639), GitHub's record of
+// an edit to each of an open pull request's comments (#655), and, with each
+// cross-reference, how its issue was closed, with the comments of those
+// closed as not planned, where an owed Roll-in's closing comment is (#664).
+// The rows are worked out from its facts by ./rows.ts.
 import { gatherWeeklyRunIssues, isAgent, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
@@ -25,11 +27,14 @@ import type { CommentFacts, GitHubFacts, RepoKitFacts } from "../kit/weeklySumma
 import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import {
+  type ClosedIssueCommentsQueryResult,
+  closedIssueCommentsQuery,
   MERGED_PULL_REQUESTS_QUERY,
   type MergedPullRequestsQueryResult,
   OPEN_ISSUES_QUERY,
   type RawHomeComment,
   OPEN_PULL_REQUESTS_QUERY,
+  type RawCrossReference,
   type RawHomeIssue,
   type RawHomePullRequest,
   REPO_QUERY,
@@ -104,8 +109,20 @@ export interface CrossReferenceFacts {
   readonly issue: number;
   readonly title: string;
   readonly open: boolean;
+  /** How the issue was closed, as GitHub names the reason; null while it is open, or closed with no reason given. */
+  readonly closedAs: "completed" | "not_planned" | "duplicate" | null;
   /** The repo the issue is in, `owner/name`. */
   readonly repo: string;
+}
+
+/**
+ * The comments of an issue of this repo, closed as not planned, that GitHub
+ * cross-references to an open agent pull request: where a Roll-in's closing
+ * comment is (#664). Its latest hundred, oldest first.
+ */
+export interface ClosedIssueCommentsFacts {
+  readonly issue: number;
+  readonly comments: readonly CommentFacts[];
 }
 
 /** Whether an open agent pull request's Ticket is closed, as GitHub gives it with the pull request. */
@@ -140,6 +157,13 @@ export interface Facts {
   readonly mergedLastDay: readonly MergedLastDayFacts[];
   /** The issues GitHub cross-references to each open agent pull request. */
   readonly crossReferences: readonly CrossReferenceFacts[];
+  /**
+   * The comments of each of those issues that is in this repo and closed as
+   * not planned: the owed rule reads a Roll-in's closing comment among them
+   * (./owedRollIn.ts). Empty in a repo with no such issue, which no query
+   * is made for.
+   */
+  readonly closedIssueComments: readonly ClosedIssueCommentsFacts[];
   /** Whether each open agent pull request's Ticket is closed; a Ticket GitHub gave no state of is not here. */
   readonly ticketStates: readonly TicketStateFacts[];
   /**
@@ -221,6 +245,7 @@ async function gatherFacts(
   const mergedLastDay = merged.repository.pullRequests.nodes.flatMap(({ mergedAt, ...pullRequest }) =>
     mergedAt === null || Date.parse(mergedAt) < since || !isAgent(pullRequest) ? [] : [{ ...pullRequest, mergedAt }],
   );
+  const crossReferences = agent.flatMap(({ number, crossReferences: references }) => references.nodes.flatMap((reference) => crossReferenceOf(number, reference)));
   return {
     kind: "product",
     github: {
@@ -265,13 +290,8 @@ async function gatherFacts(
       mergeCommit: mergeCommit?.oid ?? null,
       mergedAt,
     })),
-    crossReferences: agent.flatMap(({ number, crossReferences }) =>
-      crossReferences.nodes.flatMap(({ source }) =>
-        source?.__typename !== "Issue" || source.number === undefined
-          ? []
-          : [{ pullRequest: number, issue: source.number, title: source.title ?? "", open: source.state === "OPEN", repo: source.repository?.nameWithOwner ?? "" }],
-      ),
-    ),
+    crossReferences,
+    closedIssueComments: await gatherClosedIssueComments(github, repo, crossReferences),
     ticketStates: agent.flatMap(({ closingIssuesReferences }) => {
       // The Ticket is the first issue an agent pull request closes, as the Weekly summary's mapping takes it.
       const ticket = closingIssuesReferences.nodes[0];
@@ -283,6 +303,38 @@ async function gatherFacts(
       return marker === null ? [] : [{ pullRequest: number, marker }];
     }),
   };
+}
+
+/** How the Kit names each reason GitHub closes an issue with. */
+const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
+
+/** GitHub's cross-reference to open agent pull request `pullRequest` as a fact, when it is an issue's; none for a pull request's. */
+function crossReferenceOf(pullRequest: number, { source }: RawCrossReference): CrossReferenceFacts[] {
+  if (source?.__typename !== "Issue" || source.number === undefined) return [];
+  const { state, stateReason } = source;
+  const closedAs = state !== "CLOSED" || stateReason === undefined || stateReason === null || stateReason === "REOPENED" ? null : CLOSED_AS[stateReason];
+  return [{ pullRequest, issue: source.number, title: source.title ?? "", open: state === "OPEN", closedAs, repo: source.repository?.nameWithOwner ?? "" }];
+}
+
+/**
+ * The comments of each issue among `crossReferences` that is in `repo` and
+ * closed as not planned, lowest number first: one query for them all, by
+ * number, and none at all when there is no such issue, so a repo where no
+ * Roll-in could be owed pays nothing. An issue GitHub no longer has is left
+ * out.
+ */
+async function gatherClosedIssueComments(github: ReadClient, repo: Repo, crossReferences: readonly CrossReferenceFacts[]): Promise<ClosedIssueCommentsFacts[]> {
+  // GitHub tells repos apart whatever the case of their names.
+  const here = `${repo.owner}/${repo.name}`.toLowerCase();
+  const numbers = [...new Set(crossReferences.filter((reference) => reference.closedAs === "not_planned" && reference.repo.toLowerCase() === here).map(({ issue }) => issue))].sort((a, b) => a - b);
+  if (numbers.length === 0) return [];
+  const { repository } = await github.graphql<ClosedIssueCommentsQueryResult>(closedIssueCommentsQuery(numbers), { owner: repo.owner, name: repo.name });
+  return numbers.flatMap((number) => {
+    const issue = repository[`issue${number}`];
+    if (issue === null || issue === undefined) return [];
+    const comments = issue.comments.nodes.map(({ url, author, body, createdAt }) => ({ url, author: loginOf(author), byBot: author?.__typename === "Bot", body, at: createdAt }));
+    return [{ issue: number, comments }];
+  });
 }
 
 /**

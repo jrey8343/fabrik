@@ -8,9 +8,10 @@
 // each one's page on the preview and, once merged, in production, and where
 // an issue's Prototype is kept. The Kit builds every address, so a reader
 // holds no rule about addresses either. An open agent pull request's row
-// carries the Digest of its head as data (#655), so a reader parses no hidden
-// line and no Markdown. Pure, no I/O, and plain data: written as JSON and
-// read back a row is equal.
+// carries the Digest of its head as data (#655), and each Roll-in owed on it
+// with the Kit's text as data (#664), so a reader parses no hidden line and
+// no Markdown. Pure, no I/O, and plain data: written as JSON and read back a
+// row is equal.
 import { type CaptureFailure, captureFailureSentence } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { productionPageUrl, withRouteOn } from "../kit/config.ts";
@@ -22,7 +23,7 @@ import { isHeldLine } from "../loop/heldLine.ts";
 import { DESIGN_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
 import { roundLineIn } from "../loop/roundLine.ts";
 import type { Facts } from "./gather.ts";
-import { followUpsOf, mentionsOf, relatedOf, relatedToOf } from "./related.ts";
+import { followUpsOf, mentionsOf, type Related, relatedOf, relatedToOf } from "./related.ts";
 import { type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
 import { type DigestRead, digestReadOf } from "./digestRead.ts";
 import { roundWaitsIn } from "./roundRead.ts";
@@ -37,8 +38,13 @@ export interface Row {
   readonly title: string;
   /** The Fabrik App's latest comment on the issue or its pull request, never a held line: how a finished run's summary reaches a reader. Null when it has said nothing there. */
   readonly lastWord: { readonly text: string; readonly at: string; readonly url: string } | null;
-  /** On a pull request's row: the issues that could still be rolled in to it. */
-  readonly related: readonly { readonly issue: number; readonly title: string; readonly kind: "candidate" }[];
+  /**
+   * On a pull request's row: the issues that could still be rolled in to it,
+   * its candidates, and each Roll-in owed on it (#664): a closed issue's,
+   * settled by its Design session with the Operator, who has not sent it,
+   * with the Kit's text as data.
+   */
+  readonly related: readonly Related[];
   /** On a pull request's row: the open issues that only mention it. */
   readonly mentions: readonly { readonly issue: number; readonly title: string }[];
   /** On an issue's row: the pull request it could be rolled in to, or null. */

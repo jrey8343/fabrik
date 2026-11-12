@@ -1,9 +1,11 @@
 // What a row carries beside an agent pull request (#619): the issues that
-// could still be rolled in to it, its candidates; the open issues that only
-// mention it; and the Follow-ups its pass named. Each is said by the Kit's own
-// readers, never guessed: a candidate's `From PR` line by the reader of that
-// line, a Follow-up by the reader of a Verdict's Follow-ups. Decided in #530
-// and #574. Pure, no I/O: worked out from a gather's facts (./gather.ts).
+// could still be rolled in to it, its candidates, and each Roll-in owed on it
+// (#664, ./owedRollIn.ts); the open issues that only mention it; and the
+// Follow-ups its pass named. Each is said by the Kit's own readers, never
+// guessed: a candidate's `From PR` line by the reader of that line, an owed
+// Roll-in by the Loop's owed rule, a Follow-up by the reader of a Verdict's
+// Follow-ups. Decided in #530 and #574. Pure, no I/O: worked out from a
+// gather's facts (./gather.ts).
 import { verdictsOn } from "../kit/retroEvidence.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
 import { followUpsIn } from "../loop/followUps.ts";
@@ -20,8 +22,25 @@ import {
   REPLAY_LABEL,
   RETRO_LABEL,
 } from "../loop/labels.ts";
-import { fromPullRequestIn } from "../loop/markers.ts";
+import { fromPullRequestIn, type RollInText } from "../loop/markers.ts";
+import { namesIssue } from "../loop/owedRollIn.ts";
 import type { Facts } from "./gather.ts";
+import { owedOn } from "./owedRollIn.ts";
+
+/** An issue related to an open agent pull request: one that could still be rolled in to it, or one whose Roll-in the Operator settled and has not sent. */
+export type Related =
+  | { readonly issue: number; readonly title: string; readonly kind: "candidate" }
+  | {
+      readonly issue: number;
+      readonly title: string;
+      readonly kind: "owed";
+      /** When the Roll-in was settled: the closing comment's time. */
+      readonly at: string;
+      /** The closing comment. */
+      readonly url: string;
+      /** What to build, as the session gave it, or null when the comment's hidden line holds none this release can read. */
+      readonly text: RollInText | null;
+    };
 
 /** The kinds of issue never related to a pull request, whatever their `From PR` line says. */
 export type NeverRelatedKind = "audit" | "retro" | "monitor" | "replay" | "kit-owned" | "map" | "decision" | "spec";
@@ -92,23 +111,21 @@ function candidatesOf({ github, operator, appLogin, issueBodies }: Facts): Candi
  * read.
  */
 function namedInRequestChanges(pullRequest: OpenPullRequestFacts, operator: string, repo: string, issue: number): boolean {
-  const byNumber = new RegExp(`(?<![\\w/])#${issue}(?!\\d)`);
-  const byLink = new RegExp(`https://github\\.com/${escaped(repo)}/issues/${issue}(?!\\d)`, "i");
-  return pullRequest.reviews.some(
-    ({ author, state, body }) => author === operator && state === "changes-requested" && (byNumber.test(body) || byLink.test(body)),
-  );
+  return pullRequest.reviews.some(({ author, state, body }) => author === operator && state === "changes-requested" && namesIssue(body, repo, issue));
 }
 
-/** `text` with every character a regular expression gives a meaning to escaped. */
-function escaped(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** The issues that could still be rolled in to open agent pull request `pullRequest`, in the order of the open issues. */
-export function relatedOf(facts: Facts, pullRequest: number): { readonly issue: number; readonly title: string; readonly kind: "candidate" }[] {
-  return candidatesOf(facts)
+/**
+ * The issues related to open agent pull request `pullRequest`: those that
+ * could still be rolled in to it, its candidates, in the order of the open
+ * issues, then each Roll-in owed on it (./owedRollIn.ts), lowest issue
+ * number first.
+ */
+export function relatedOf(facts: Facts, pullRequest: number): Related[] {
+  const candidates = candidatesOf(facts)
     .filter((candidate) => candidate.pullRequest === pullRequest)
-    .map(({ issue, title }) => ({ issue, title, kind: "candidate" }));
+    .map(({ issue, title }): Related => ({ issue, title, kind: "candidate" }));
+  const owed = owedOn(facts, pullRequest).map(({ issue, title, at, url, text }): Related => ({ issue, title, kind: "owed", at, url, text }));
+  return [...candidates, ...owed];
 }
 
 /**
@@ -135,10 +152,11 @@ export function mentionsOf(facts: Facts, pullRequest: number): { readonly issue:
 /**
  * The Follow-ups the pass on open agent pull request `pullRequest`'s head
  * named, in the Verdict's order, each with its title, its body and the
- * number of the related issue that has exactly its title, compared as the
- * Retro's evidence compares a filed Follow-up's, else null. None when the
- * latest Verdict on its head is not a pass, or it has none there. A Verdict
- * is read from a bot's comment alone, so quoting one fakes nothing.
+ * number of the related issue, a candidate or an owed Roll-in's, that has
+ * exactly its title, compared as the Retro's evidence compares a filed
+ * Follow-up's, else null. None when the latest Verdict on its head is not a
+ * pass, or it has none there. A Verdict is read from a bot's comment alone,
+ * so quoting one fakes nothing.
  */
 export function followUpsOf(facts: Facts, pullRequest: number): { readonly title: string; readonly body: string; readonly filedAs: number | null }[] {
   const open = facts.github.openPullRequests.find(({ number }) => number === pullRequest);

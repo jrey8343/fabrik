@@ -1,6 +1,7 @@
 // Design-session rules: when a turn starts, and how its output lands on the issue.
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
+import { ticketOfAgentBranch } from "./agentPullRequest.ts";
 import type { SentBack } from "./backToDesign.ts";
 import { withCarriedLines } from "./carriedLines.ts";
 import { consideredSection } from "./considered.ts";
@@ -39,6 +40,9 @@ import {
   monitorMarkerLine,
   type PrototypeRequestMarker,
   prototypeRequestMarker,
+  rollInDataLine,
+  rollInMarker,
+  type RollInText,
   SESSION_FINISHED,
 } from "./markers.ts";
 import { spelled } from "./readable.ts";
@@ -55,6 +59,7 @@ import type {
   IssueSnapshot,
   KitConfig,
   LoopEvent,
+  NamedPullRequestSnapshot,
   Plan,
   StartingComment,
 } from "./types.ts";
@@ -269,8 +274,9 @@ export function whyNoPrototype({ ui }: Pick<KitConfig, "ui">): string | null {
  * A turn whose starting reply the Operator deleted posts nothing: it answered
  * a reply that is no longer there. A Map is weighed against `mapCap`, the
  * Map cap over the open Maps the snapshot holds, and a Prototype is refused
- * for `noPrototype`, why this Kit can't take one, when that isn't null.
- * Whichever comment it posts ends with the Operator comments it weighed,
+ * for `noPrototype`, why this Kit can't take one, when that isn't null. A
+ * Roll-in is checked against `named`, the pull request it names as the
+ * snapshot read it. Whichever comment it posts ends with the Operator comments it weighed,
  * among those on the PR it came back from that it was `given` (ADR-0007).
  */
 export function applyTurn(
@@ -280,6 +286,7 @@ export function applyTurn(
   start: TurnStart,
   mapCap: MapCap | null,
   noPrototype: string | null,
+  named: readonly NamedPullRequestSnapshot[] | null,
   given: readonly GivenOperatorComment[] = [],
 ): Plan {
   const gone = replyNotThere(start, {
@@ -287,7 +294,7 @@ export function applyTurn(
     deleted: (comment) => `The Operator's reply that started this Design-session turn on #${issueNumber} (comment ${comment}) was deleted, so the turn posts nothing`,
   });
   if (gone !== null) return gone;
-  const parsed = parseDesignTurnOutput(text);
+  const parsed = parseDesignTurnOutput(text, issueNumber);
   if (!parsed.ok) {
     return {
       kind: "fail",
@@ -296,7 +303,7 @@ export function applyTurn(
     };
   }
   const reply = start.kind === "reply" ? start.comment.id : null;
-  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap, noPrototype, reply);
+  const plan = landTurn(issueNumber, parsed.output, snapshot, mapCap, noPrototype, named, reply);
   if (plan.kind !== "act") return plan;
   const considered = consideredSection(parsed.output.operatorCommentsConsidered ?? [], given);
   const ended = considered.length === 0 ? plan.actions : plan.actions.map((action) => endedWith(action, considered));
@@ -324,6 +331,7 @@ function landTurn(
   snapshot: IssueContext,
   mapCap: MapCap | null,
   noPrototype: string | null,
+  named: readonly NamedPullRequestSnapshot[] | null,
   reply: number | null,
 ): Plan {
   const notNow = whileInSession(issueNumber, snapshot.issue);
@@ -348,7 +356,15 @@ function landTurn(
   // Every outcome but a round ends the session and frees its slot, so the next waiting issue can start.
   if (output.kind === "not-planned") {
     // Nothing new is ready, so there is nothing for Dispatch to check.
-    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, output.comment, snapshot.issue.openBlocking), CHECK_DESIGN_QUEUE] };
+    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, notPlannedComment(output.comment, snapshot.issue.openBlocking)), CHECK_DESIGN_QUEUE] };
+  }
+  if (output.kind === "roll-in") {
+    if (named === null) return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the pull request the Roll-in names" };
+    const cannot = whyNoRollIn(issueNumber, output.pullRequest, named);
+    if (cannot !== null) return wrongOutcome(issueNumber, cannot);
+    // The same finish with another comment: the issue's work is to be built on a pull request, which the Kit leaves alone.
+    const comment = rollInComment(issueNumber, output.pullRequest, output, snapshot.issue.openBlocking);
+    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, comment), CHECK_DESIGN_QUEUE] };
   }
   // The Spec stays the single parent of its work: a Ticket under one splits into
   // siblings, and only an issue with no Spec above it gets a Spec, or a Map, of its own.
@@ -386,32 +402,99 @@ function landTurn(
 }
 
 /**
- * Nothing to build: the issue closes as not planned, with the session's
- * reasoning as its closing comment. Its work never lands, so the issues it
- * blocks stay blocked by it (src/loop/dispatch.ts); the comment says which.
+ * The issue closes as not planned under this closing comment: because it
+ * won't be built, or because the Operator settled a Roll-in, so its work is
+ * to be built on a pull request. Either way nothing lands from the issue
+ * itself, so the issues it blocks stay blocked by it (src/loop/dispatch.ts),
+ * which the comment says (stillBlockedNote).
  */
-function closeAsNotPlanned(issueNumber: number, comment: string, blocking: readonly number[]): Action[] {
-  const stillBlocked = blocking.map((issue) => `#${issue}`).join(", ");
+function closeAsNotPlanned(issueNumber: number, comment: string): Action[] {
   return [
-    {
-      kind: "comment",
-      issue: issueNumber,
-      body: [
-        `${SESSION_FINISHED} This issue won't be built, so the Kit closes it as not planned.`,
-        "",
-        closingNote(comment),
-        ...(blocking.length === 0
-          ? []
-          : [
-              "",
-              `${stillBlocked} stay${blocking.length === 1 ? "s" : ""} blocked by it: an issue closed as not planned never lands its work, so Dispatch won't start ${blocking.length === 1 ? "it" : "them"} until the Operator removes the blocked-by edge.`,
-            ]),
-      ].join("\n"),
-    },
+    { kind: "comment", issue: issueNumber, body: comment },
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
     { kind: "add-labels", issue: issueNumber, labels: [WONTFIX] },
     { kind: "close", issue: issueNumber, reason: "not_planned" },
   ];
+}
+
+/** Nothing to build: the closing comment of a session that finished as not planned, with its reasoning. */
+function notPlannedComment(comment: string, blocking: readonly number[]): string {
+  return [
+    `${SESSION_FINISHED} This issue won't be built, so the Kit closes it as not planned.`,
+    "",
+    closingNote(comment),
+    ...stillBlockedNote(blocking),
+  ].join("\n");
+}
+
+/** The lines that end a not-planned closing comment when the issue blocks others: which stay blocked, and until when. None when it blocks nothing. */
+function stillBlockedNote(blocking: readonly number[]): string[] {
+  if (blocking.length === 0) return [];
+  const stillBlocked = blocking.map((issue) => `#${issue}`).join(", ");
+  return [
+    "",
+    `${stillBlocked} stay${blocking.length === 1 ? "s" : ""} blocked by it: an issue closed as not planned never lands its work, so Dispatch won't start ${blocking.length === 1 ? "it" : "them"} until the Operator removes the blocked-by edge.`,
+  ];
+}
+
+/**
+ * Why a Roll-in can't be settled onto `pullRequest`, as GitHub has it among
+ * `named`, or null when it can: only an open agent pull request takes one,
+ * and never the issue's own, the one built from this very issue as its
+ * Ticket, since closing a Ticket closes its drafts. It need not be the pull
+ * request the issue's `From PR` line names: the session may name any the
+ * Operator agreed to. A number GitHub has no pull request for isn't among
+ * `named`.
+ */
+function whyNoRollIn(issueNumber: number, pullRequest: number, named: readonly NamedPullRequestSnapshot[]): string | null {
+  const onto = `a Roll-in can't be settled onto #${pullRequest}`;
+  const openAgentOnly = "only an open agent pull request can take one";
+  const found = named.find(({ number }) => number === pullRequest);
+  if (found === undefined) return `${onto}, which is no pull request in this repo`;
+  if (found.merged) return `${onto}, which has merged: ${openAgentOnly}`;
+  if (!found.open) return `${onto}, which is closed: ${openAgentOnly}`;
+  if (!found.isAgent) return `${onto}, which is a Plain pull request: ${openAgentOnly}`;
+  if (ticketOfAgentBranch(found.headRef) === issueNumber) return `${onto}, which is #${issueNumber}'s own pull request, built from it as its Ticket`;
+  return null;
+}
+
+/** The heading a Roll-in's closing comment puts over what to build, naming the pull request to build it on. */
+export function rollInHeading(pullRequest: number): string {
+  return `What to build on #${pullRequest}`;
+}
+
+/** The line of a Roll-in's closing comment that says nothing has been sent, and how the Operator sends it: "sent" is told by the issue's name (ADR-0010). */
+export function rollInNotSentLine(issueNumber: number, pullRequest: number): string {
+  return `Nothing has been sent to #${pullRequest}. The Operator sends this Roll-in with a Request changes on #${pullRequest} that carries this text and names this issue, #${issueNumber}.`;
+}
+
+/**
+ * The closing comment of a session that finished by settling a Roll-in onto
+ * `pullRequest`, rendered by Kit code from the output's fields: the Roll-in's
+ * mark and its data line, hidden, which rollInIn reads back, then what a
+ * person reads. The Markdown and the data are both written from the fields,
+ * neither from the other. The contract refused a text that mentions anyone,
+ * so the comment mentions nobody. It goes on the issue only: the Kit puts
+ * nothing on the pull request, where a Retry would read it, and sends
+ * nothing (ADR-0010).
+ */
+export function rollInComment(issueNumber: number, pullRequest: number, text: RollInText, blocking: readonly number[] = []): string {
+  return [
+    rollInMarker(pullRequest),
+    rollInDataLine(text),
+    `${SESSION_FINISHED} The Operator settled a Roll-in onto #${pullRequest}, so the Kit closes this issue as not planned.`,
+    "",
+    `### ${rollInHeading(pullRequest)}`,
+    "",
+    text.summary.trim(),
+    "",
+    "**Acceptance criteria**",
+    "",
+    ...text.acceptanceCriteria.map((criterion) => `- ${criterion.trim()}`),
+    "",
+    rollInNotSentLine(issueNumber, pullRequest),
+    ...stillBlockedNote(blocking),
+  ].join("\n");
 }
 
 /** An outcome the contract allows but this issue can't take: nothing changes, and the run fails. */

@@ -6,7 +6,8 @@
 # reads what the agent is given (the issue, its parent Spec, for Implement
 # and Review runs the PR and the Operator's review, for a Digest run the PR
 # with its Verdicts and the Kit's notes, for a Design-session turn
-# whether it may offer a Map, for Triage the recent issues it compares the
+# whether it may offer a Map and the pull request its issue was filed from,
+# if it was filed from one, for Triage the recent issues it compares the
 # issue against for a duplicate, and for an Auditor run its inputs) into
 # $RUNNER_TEMP, through the job's read-only token. The agent itself never
 # gets a GitHub token.

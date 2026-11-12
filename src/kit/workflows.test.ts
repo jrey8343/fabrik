@@ -13,7 +13,7 @@ import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { DIGEST_JOB_NAME, IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EVIDENCE_PAGE_FILE } from "../evidence/capture.ts";
-import { MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
+import { FILED_FROM_FILE, MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { RUN_BRIEF_FILE } from "../agent/transcript.ts";
@@ -307,6 +307,20 @@ describe("The Kit's workflows", () => {
 
     expect(agent).toContain(`FABRIK_SPEC_TICKETS_FILE: \${{ runner.temp }}/${SPEC_TICKETS_FILE}`);
     expect(loop.split("FABRIK_SPEC_TICKETS_FILE:").length - 1).toBe(1);
+  });
+
+  it("the Design job gives its agent the pull request its issue was filed from, which the agent-inputs step read for its role, and no other agent job does (#659)", () => {
+    const design = jobIn(loop, "design");
+    const agent = stepsOf(design).find((step) => step.includes("src/agent/run.ts design"));
+    const elsewhere = [loop.replace(design, ""), ...workflows.filter(({ text }) => text !== loop).map(({ text }) => text), ...actions.map(({ text }) => text)];
+
+    expect(agent).toContain(`FABRIK_FILED_FROM_FILE: \${{ runner.temp }}/${FILED_FROM_FILE}`);
+    // The prototype job reads the same inputs under the Design role, and hands its agent nothing of this one.
+    expect(stepsOf(jobIn(loop, PROTOTYPE_JOB)).find((step) => step.includes("src/agent/run.ts prototype"))).toBeDefined();
+    for (const text of elsewhere) {
+      expect(text).not.toContain("FABRIK_FILED_FROM_FILE");
+      expect(text).not.toContain(FILED_FROM_FILE);
+    }
   });
 
   it("the Triage job gives its agent the recent issues the agent-inputs step read for its role, and no other agent job does", () => {
@@ -852,6 +866,75 @@ describe("The agent jobs whose input step may read a sent-back Ticket's PR", () 
         /path: (\|\n\s+)?\$\{\{ runner\.temp \}\}\/fabrik-out\/agent-failure\.json\n/,
       );
     }
+  });
+});
+
+// #660: a Design-session turn on an issue filed from an open agent pull request
+// reads that pull request's branch, so the Design job fetches its head before
+// the agent starts (src/agent/filedFromFetch.ts). The job's read-only token goes
+// to that one step, and the agent still holds no GitHub credential (ADR-0002).
+describe("The Design job's fetch of the pull request its issue was filed from", () => {
+  const steps = (): readonly string[] => stepsOf(job("design"));
+  const stepAt = (text: string): number => steps().findIndex((step) => step.includes(text));
+  const fetchAt = (): number => stepAt("- name: Fetch the head of the pull request this issue was filed from\n");
+  const fetch = (): string => steps()[fetchAt()] ?? "";
+  /** A step's `env:` block, one `NAME: value` line each. */
+  const envOf = (step: string): string[] =>
+    (/\n {8}env:\n((?: {10}.*\n?)+)/.exec(step)?.[1] ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
+
+  it("runs after the agent's inputs are read and before any secret loads", () => {
+    expect(fetchAt()).toBe(stepAt("uses: ./kit/.github/actions/prepare-agent") + 1);
+    expect(stepAt("1password/load-secrets-action")).toBe(fetchAt() + 1);
+    expect(steps().slice(0, fetchAt() + 1).join("\n")).not.toMatch(/secrets\.|steps\.op\./);
+  });
+
+  it("is given the job's own token, the file the inputs step wrote and where its failure report goes, and nothing else", () => {
+    expect(envOf(fetch())).toEqual([
+      "GH_TOKEN: ${{ github.token }}",
+      `FABRIK_FILED_FROM_FILE: \${{ runner.temp }}/${FILED_FROM_FILE}`,
+      "FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out",
+    ]);
+    expect(fetch()).toContain("        run: node kit/src/agent/filedFromFetch.ts product\n");
+    expect(fetch()).not.toMatch(/\n {8}(with|uses|working-directory):/);
+  });
+
+  it("leaves the token to no later step: nothing of it is written to the job's environment, and the agent step is handed none", () => {
+    const later = steps().slice(fetchAt() + 1);
+
+    expect(fetch()).not.toMatch(/GITHUB_ENV|GITHUB_OUTPUT|GITHUB_PATH|GITHUB_STATE/);
+    expect(later.length).toBeGreaterThan(0);
+    for (const step of later) expect(step).not.toMatch(/github\.token|GH_TOKEN|GITHUB_TOKEN/);
+    expect(job("design")).not.toMatch(/\n {4}env:\n/);
+    for (const checkout of steps().filter((step) => step.includes("uses: actions/checkout@"))) expect(checkout).toContain("persist-credentials: false");
+  });
+
+  it("fetches after the commit the run starts from is noted, so the run's record of it is the default branch's", () => {
+    expect(stepAt("id: base\n")).toBeGreaterThanOrEqual(0);
+    expect(stepAt("id: base\n")).toBeLessThan(fetchAt());
+  });
+
+  it("fails the turn before its agent starts when the fetch fails: the agent step runs only after it passed, and its failure report is passed on", () => {
+    const agent = steps()[stepAt("run: node ../kit/src/agent/run.ts design")] ?? "";
+    const failure = steps()[stepAt("name: fabrik-agent-failure\n")] ?? "";
+
+    expect(fetch()).not.toMatch(/continue-on-error|\n {8}if:/);
+    expect(stepAt("run: node ../kit/src/agent/run.ts design")).toBeGreaterThan(fetchAt());
+    expect(agent).not.toMatch(/\n {8}if:/);
+    expect(steps()[stepAt("1password/load-secrets-action")]).not.toMatch(/\n {8}if:/);
+    expect(failure).toContain("if: failure()\n");
+    expect(failure).toContain(`path: \${{ runner.temp }}/fabrik-out/${AGENT_FAILURE_FILE}\n`);
+  });
+
+  it("is a step of the Design job alone: the prototype job, whose inputs step reads the pull request too, fetches nothing", () => {
+    const everywhere = [...workflows, ...actions].map(({ text }) => text).join("\n");
+
+    expect(everywhere.split("filedFromFetch.ts").length - 1).toBe(1);
+    expect(everywhere.split("Fetch the head of the pull request this issue was filed from").length - 1).toBe(1);
+    expect(job(PROTOTYPE_JOB)).not.toContain("filedFromFetch");
+    expect(stepsOf(job(PROTOTYPE_JOB)).find((step) => step.includes("uses: ./kit/.github/actions/prepare-agent"))).toMatch(/\n\s+role: design\n/);
   });
 });
 
