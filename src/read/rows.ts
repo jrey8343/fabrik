@@ -3,8 +3,12 @@
 // flight from the last runs read, the Required checks and the Deployments of
 // the last day's merges (#634), any of which may be unread, at a time.
 // Every row's Standing is the Standing rule's own (src/kit/standing.ts) for
-// those facts, so a reader holds no rule of its own. Pure, no I/O, and plain
-// data: written as JSON and read back a row is equal.
+// those facts, so a reader holds no rule of its own. A row also carries what a
+// reader needs to show a change (#639): the routes UI evidence captured, with
+// each one's page on the preview and, once merged, in production, and where
+// an issue's Prototype is kept. The Kit builds every address, so a reader
+// holds no rule about addresses either. Pure, no I/O, and plain data: written
+// as JSON and read back a row is equal.
 import type { CaptureFailure } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { productionPageUrl, withRouteOn } from "../kit/config.ts";
