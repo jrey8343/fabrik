@@ -215,7 +215,8 @@ describe("The Digest: a run that fails", () => {
   it("no outcome of a failed run counts against the Ticket's Retries, hands anything back or touches the Ticket", () => {
     const actions = actionsOf(failedOn(failed({ report: { failure: "weekly-limit", detail: "limit reached" } })));
 
-    expect(actions.map(({ kind }) => kind)).toEqual(["comment", "remove-label"]);
+    // The weekly-limit issue it opens is the Kit's own, as any run's refusal opens it (src/loop/digestEdges.test.ts).
+    expect(actions.map(({ kind }) => kind)).toEqual(["comment", "remove-label", "open-issue"]);
     expect(actions.every((action) => !("issue" in action) || action.issue === 50)).toBe(true);
     expect(actions[0]?.kind === "comment" ? actions[0].body : "").not.toContain("fabrik:hand-back");
   });
