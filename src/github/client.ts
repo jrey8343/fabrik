@@ -163,16 +163,19 @@ export async function allPages<T>(
 /**
  * Whether a second try of a call that failed with `error` could succeed
  * without doubling a change (#421). A read (`write` false) retries after any
- * 5xx, a call GitHub never answered, or a secondary rate limit; a write only
- * after a 502, 503 or 504, which GitHub answers when the call never reached
- * it, or a secondary rate limit, which refuses it unmade. A primary rate
- * limit, with no requests left until it resets, retries neither.
+ * 5xx, a call GitHub never answered, a secondary rate limit, or a missing
+ * permission, which a freshly minted App token is sometimes refused in its
+ * first second though the App has it (#676); a write only after a 502, 503
+ * or 504, which GitHub answers when the call never reached it, or a
+ * secondary rate limit, which refuses it unmade. A primary rate limit, with
+ * no requests left until it resets, retries neither.
  */
 function worthRetrying(error: GitHubError, write: boolean): boolean {
-  const secondaryLimit = refusalOf(error) === "rate-limited" && error.rateLimitRemaining !== "0";
+  const refusal = refusalOf(error);
+  const secondaryLimit = refusal === "rate-limited" && error.rateLimitRemaining !== "0";
   if (secondaryLimit) return true;
   if (write) return error.status === 502 || error.status === 503 || error.status === 504;
-  return error.status === 0 || error.status >= 500;
+  return error.status === 0 || error.status >= 500 || refusal === "missing-permission";
 }
 
 /** The longest a retry waits on GitHub's `retry-after`, so a job's timeout never runs out waiting. */
@@ -187,7 +190,9 @@ export class GitHub implements ReadClient {
   /**
    * `retryDelaysMs` is how long to wait before each retry of a call worth
    * retrying, one retry to each: by default twice, after 1 and 4 seconds,
-   * unless GitHub's `retry-after` asks for longer.
+   * unless GitHub's `retry-after` asks for longer. A read refused for a
+   * missing permission waits these out too before it gives up (#676), so a
+   * caller that degrades on that refusal waits about 5 seconds first.
    */
   constructor(token: string, apiUrl = "https://api.github.com", options: { readonly retryDelaysMs?: readonly number[] } = {}) {
     this.#token = token;

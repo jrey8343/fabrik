@@ -56,7 +56,7 @@ describe("What a failed call throws", () => {
   it("a REST call: a GitHubError naming the request, with GitHub's status and body", async () => {
     answering(403, { message: "Resource not accessible by integration" });
 
-    const error = await caught(new GitHub("token").rest("GET", "/repos/acme/shop/pulls/84"));
+    const error = await caught(new GitHub("token", undefined, { retryDelaysMs: [] }).rest("GET", "/repos/acme/shop/pulls/84"));
 
     expect(error).toBeInstanceOf(GitHubError);
     expect(error).toMatchObject({ status: 403, request: "GET /repos/acme/shop/pulls/84", body: expect.stringContaining("Resource not accessible") });
@@ -79,7 +79,7 @@ describe("What a failed call throws", () => {
   it("a file read: a GitHubError naming the path and ref", async () => {
     answering(403, { message: "Resource not accessible by integration" });
 
-    const error = await caught(new GitHub("token").fileText(repo, ".fabrik/config.json", "main"));
+    const error = await caught(new GitHub("token", undefined, { retryDelaysMs: [] }).fileText(repo, ".fabrik/config.json", "main"));
 
     expect(error).toBeInstanceOf(GitHubError);
     expect(error).toMatchObject({ status: 403, request: "GET .fabrik/config.json@main" });
@@ -142,7 +142,6 @@ describe("Trying a call GitHub failed again", () => {
   });
 
   it.each([
-    ["a 403 for a missing permission", { status: 403, body: JSON.stringify({ message: "Resource not accessible by integration" }) }],
     ["a 404", 404],
     ["a 422", 422],
     ["a primary rate limit", { status: 403, body: JSON.stringify({ message: "API rate limit exceeded" }), headers: { "x-ratelimit-remaining": "0" } }],
@@ -152,6 +151,56 @@ describe("Trying a call GitHub failed again", () => {
     await caught(github().rest("GET", "/repos/acme/shop/pulls/84"));
 
     expect(calls).toHaveLength(1);
+  });
+
+  // #676: a freshly minted App token is sometimes refused a read it has the permission for, then granted it a moment later.
+  describe("a 403 for a missing permission", () => {
+    const missingPermission = { status: 403, body: JSON.stringify({ message: "Resource not accessible by integration" }) };
+
+    it("tries a REST read again, and returns what the next try got", async () => {
+      const calls = answeringInTurn(missingPermission, 200);
+
+      await expect(github().rest("GET", "/repos/acme/shop/pulls/84")).resolves.toEqual({ ok: 200 });
+      expect(calls).toHaveLength(2);
+    });
+
+    it("tries a file read again, and returns the file's text", async () => {
+      const calls = answeringInTurn(missingPermission, { status: 200, body: "# Builder" });
+
+      await expect(github().fileText({ owner: "acme", name: "shop" }, ".fabrik/builder.md", "main")).resolves.toBe("# Builder");
+      expect(calls).toHaveLength(2);
+    });
+
+    it("tries a GraphQL query again, but not a mutation", async () => {
+      const data = { status: 200, body: JSON.stringify({ data: { viewer: { login: "fabrik" } } }) };
+      const queryCalls = answeringInTurn(missingPermission, data);
+      await expect(github().graphql("query { viewer { login } }", {})).resolves.toEqual({ viewer: { login: "fabrik" } });
+      expect(queryCalls).toHaveLength(2);
+
+      const mutationCalls = answeringInTurn(missingPermission, data);
+      await caught(github().graphql("mutation Ready($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { clientMutationId } }", { id: "PR_1" }));
+      expect(mutationCalls).toHaveLength(1);
+    });
+
+    it("gives up on a read after two more tries, throwing the missing permission", async () => {
+      const calls = answeringInTurn(missingPermission, missingPermission, missingPermission, 200);
+
+      const error = await caught(github().rest("GET", "/repos/acme/shop/pulls/84"));
+
+      expect(error).toBeInstanceOf(GitHubError);
+      expect(error).toMatchObject({ status: 403 });
+      expect(refusalOf(error as GitHubError)).toBe("missing-permission");
+      expect(calls).toHaveLength(3);
+    });
+
+    it("never tries a write again", async () => {
+      const calls = answeringInTurn(missingPermission, 201);
+
+      const error = await caught(github().rest("POST", "/repos/acme/shop/issues/12/comments", { body: "Hi" }));
+
+      expect(error).toMatchObject({ status: 403 });
+      expect(calls).toHaveLength(1);
+    });
   });
 
   it.each([
