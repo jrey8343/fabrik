@@ -266,6 +266,30 @@ describe("the Follow-ups", () => {
     expect(pullRequestRow(withComments(quoted))?.followUps).toEqual([]);
   });
 
+  describe("filed", () => {
+    /** Pull request 50 with its pass listing FOLLOW_UPS, and issue 30 titled `title`, the Operator's, filed From PR #50. */
+    const filedAs = (title: string, overrides: Partial<OpenIssueFacts> = {}) =>
+      homeFactsOf({
+        github: factsOf({ openIssues: [TICKET, { ...FILED, title, ...overrides }], openPullRequests: [{ ...PULL_REQUEST, comments: [verdictListing("pass", HEAD, "2026-11-08T12:00:00Z")] }] }),
+        issueBodies: [{ issue: 30, body: FROM_PR_50 }],
+      });
+
+    it("is the number of the related issue with exactly its title, outer spaces aside", () => {
+      expect(pullRequestRow(filedAs("  Cache the prices "))?.followUps.map(({ title, filedAs: filed }) => ({ title, filed }))).toEqual([
+        { title: "Cache the prices", filed: 30 },
+        { title: "Tidy the cart", filed: null },
+      ]);
+    });
+
+    it("leaves no mark once the issue's title is edited", () => {
+      expect(pullRequestRow(filedAs("Cache the prices per page"))?.followUps.map(({ filedAs: filed }) => filed)).toEqual([null, null]);
+    });
+
+    it("leaves no mark for an issue with its title that is not related, such as one someone else opened", () => {
+      expect(pullRequestRow(filedAs("Cache the prices", { author: "someone" }))?.followUps.map(({ filedAs: filed }) => filed)).toEqual([null, null]);
+    });
+  });
+
   it("are on the pull request's row alone", () => {
     const facts = withComments(verdictListing("pass", HEAD, "2026-11-08T12:00:00Z"));
 
