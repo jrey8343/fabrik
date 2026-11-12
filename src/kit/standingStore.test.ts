@@ -3,6 +3,7 @@ import { type Standing, standingsOf } from "./standing.ts";
 import { aSummaryIssue, storeFactsOf } from "../__fixtures__/standingStore.ts";
 import { aLabelAdded, anOpenIssue } from "../__fixtures__/weeklySummary.ts";
 import type { StoreStandingFacts } from "./standingStore.ts";
+import { wordStanding } from "./standingWording.ts";
 import { weeklyFailureOf } from "./weeklyFiling.ts";
 
 const NOW = "2026-11-09T20:00:00Z";
@@ -134,6 +135,22 @@ describe("the store's Standings", () => {
         detail: { handBack: null, role: null, failure: null, label: null },
       },
     ]);
+  });
+});
+
+describe("the wording of the store's Standings", () => {
+  it("says the open Weekly summary is this week's, aged from when it was filed", () => {
+    const [summary] = standingsOf(storeFactsOf({ summaries: [aSummaryIssue({ bodyWrittenAt: "2026-11-09T07:00:00Z" })] }), NOW);
+    expect(wordStanding(summary!, "2026-11-09T09:00:00Z", "UTC")).toEqual({ pill: "Yours to read", sentence: "This week's summary, filed 2 hours ago.", remedy: null });
+  });
+
+  it("says a failed Weekly summary run is to re-run, aged from its notice", () => {
+    const [failed] = standingsOf(storeFactsOf({ failedSummaryIssues: [{ number: 3, createdAt: "2026-11-09T07:05:00Z" }] }), NOW);
+    expect(wordStanding(failed!, "2026-11-09T07:45:00Z", "UTC")).toEqual({
+      pill: "Yours to do",
+      sentence: "The Weekly summary run failed 40 minutes ago, so this week's isn't filed. Open the run and re-run its failed jobs.",
+      remedy: null,
+    });
   });
 });
 

@@ -22,6 +22,7 @@ const HAND_BACK_SENTENCES: Partial<Record<HandBack, (standing: StandingNamed<"yo
   "research-failed": ({ detail }, age) => `The Research run failed ${age} ago. Add \`${detail.label}\` again to run it.`,
   "design-turn-failed": (_, age) => `A Design-session turn failed ${age} ago. Reply on the issue to run it again.`,
   "map-cap-refused": (_, age) => `The Map cap refused this session's Map ${age} ago. Reply on the issue to carry on.`,
+  "weekly-summary-failed": (_, age) => `The Weekly summary run failed ${age} ago, so this week's isn't filed. Open the run and re-run its failed jobs.`,
 };
 
 /** A Standing's pill, sentence and remedy at `now`, ISO 8601; times it names are told in `timeZone`. */
@@ -82,6 +83,8 @@ function readingSentence({ work, detail }: StandingNamed<"yours-to-read">, age: 
       return `Replay results in for ${age}.`;
     case "map":
       return `Map open for ${age}, ${decisions(detail.decisions.length)} waiting on you.`;
+    case "weekly-summary":
+      return `This week's summary, filed ${age} ago.`;
     default:
       return `Open for ${age}.`;
   }
