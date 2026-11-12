@@ -3646,3 +3646,71 @@ describe("the Weekly summary's Loop health line", () => {
     expect(weeklySummary(input({ health: [health({ tick: ticked("2026-11-07T10:00:00Z") })] })).kind).toBe("summary");
   });
 });
+
+// A week whose Audit or Retro waited on a free Subscription, and never opened (#442).
+describe("the skipped-week line", () => {
+  const APP = "fabrik-app[bot]";
+  const waiting = (kind: "audit" | "retro", monday = "2026-11-02") => `This week's ${kind === "audit" ? "Audit" : "Retro"} waits for a free Subscription.\n\n<!-- fabrik:weekly-run-waiting ${kind} ${monday} -->`;
+  const carrier = (number: number, comments: string[]) => ({ number, labels: ["fabrik:weekly-limit"], body: "The weekly usage limit is reached.", comments });
+  const audit = (number: number, createdAt: string, author = APP) => ({ number, title: "Audit: week of 2026-11-02", author, createdAt, body: auditBody(AUDITED_SHA) });
+  const retro = (number: number, createdAt: string) => ({ number, title: "Retro: week of 2026-11-02", author: APP, createdAt, body: retroBody(RETRO_WINDOW_END) });
+  const link = (number: number) => `[#${number}](https://github.com/owner/product/issues/${number})`;
+  const bodyOf = (facts: GitHubFacts, overrides: Partial<WeeklySummaryInput> = {}) => {
+    const result = weeklySummary(input({ records: [aRunRecord()], facts: [facts], ...overrides }));
+    if (result.kind !== "summary") throw new Error("skipped");
+    return result.body;
+  };
+
+  it("names the Carriers holding the week's waiting marker when no Audit opened, even after they closed", () => {
+    const body = bodyOf(factsOf({ weekCarriers: [carrier(41, [waiting("audit")]), carrier(43, [waiting("audit")])] }));
+
+    expect(body).toContain(`No Audit last week: no Subscription was free (${link(41)}, ${link(43)})`);
+  });
+
+  it("names the Retro's skipped week on its own line", () => {
+    const body = bodyOf(factsOf({ weekCarriers: [carrier(41, [waiting("retro")])] }));
+
+    expect(body).toContain(`No Retro last week: no Subscription was free (${link(41)})`);
+    expect(body).not.toContain("No Audit last week");
+  });
+
+  it("reads a marker on a Carrier still open", () => {
+    expect(bodyOf(factsOf({ kitIssues: [carrier(41, [waiting("audit")])] }))).toContain(`No Audit last week: no Subscription was free (${link(41)})`);
+  });
+
+  it("sits beside the Loop line", () => {
+    const health: RepoHealthFacts = {
+      repo: "owner/product",
+      tick: { kind: "read", callerSince: null, lastTick: { at: "2026-11-08T19:00:00Z", url: "https://github.com/owner/product/actions/runs/9", release: null }, deadTickIssue: null },
+      runs: { kind: "read", runs: [] },
+    };
+    const body = bodyOf(factsOf({ weekCarriers: [carrier(41, [waiting("audit")])] }), { health: [health] });
+
+    expect(body).toMatch(/\*\*Loop:\*\* [^\n]*\n\nNo Audit last week: no Subscription was free/);
+  });
+
+  it("keeps an otherwise quiet week from being skipped", () => {
+    expect(weeklySummary(input({ facts: [factsOf({ weekCarriers: [carrier(41, [waiting("audit")])] })] })).kind).toBe("summary");
+  });
+
+  it.each([
+    ["an Audit opened later that week", factsOf({ weekCarriers: [carrier(41, [waiting("audit")])], audits: [audit(95, "2026-11-08T05:05:00Z")] })],
+    ["a marker for an earlier week", factsOf({ weekCarriers: [carrier(41, [waiting("audit", "2026-10-26")])] })],
+    ["an Audit still open", factsOf({ weekCarriers: [carrier(41, [waiting("audit")])], openAudits: [anOpenAudit()] })],
+  ])("shows no line for %s", (_, facts) => {
+    expect(bodyOf(facts)).not.toContain("last week: no Subscription was free");
+  });
+
+  it("shows no line for a Retro opened later that week", () => {
+    const facts = factsOf({ weekCarriers: [carrier(41, [waiting("retro")])], retros: [retro(85, "2026-11-07T05:05:00Z")] });
+
+    expect(bodyOf(facts)).not.toContain("No Retro last week");
+  });
+
+  it("shows no line for an Audit turned off with audit.day null", () => {
+    const facts = factsOf({ weekCarriers: [carrier(41, [waiting("audit")])] });
+    const kits = [aRepoKit({ config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, audit: { ...DEFAULT_KIT_CONFIG.audit, day: null } } } })];
+
+    expect(bodyOf(facts, { kits })).not.toContain("No Audit last week");
+  });
+});

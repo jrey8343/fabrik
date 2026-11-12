@@ -16,7 +16,7 @@ import {
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { flakyCheckMarksIn } from "../loop/markers.ts";
+import { flakyCheckMarksIn, weeklyRunWaitingMarksIn, type WeeklyRunKind } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
@@ -191,6 +191,13 @@ export interface GitHubFacts extends MetricFacts {
    * and Stuck leaves those runs out, as the Kit resumes them itself.
    */
   readonly kitIssues: readonly KitIssueSnapshot[];
+  /**
+   * The repo's weekly-limit, usage-credits and token-rotation issues updated
+   * since the week before the summary's began, open or closed, read as
+   * kitIssues reads them: the skipped-week line reads the waiting markers on
+   * them, a Carrier closed since included (#442).
+   */
+  readonly weekCarriers: readonly KitIssueSnapshot[];
 }
 
 /** An open Plain pull request (GLOSSARY.md): one that is no agent PR, whoever opened it. */
@@ -500,6 +507,17 @@ export interface RepoSection {
   readonly unread: string | null;
   /** Its Loop's health, or null when it wasn't read. */
   readonly health: LoopHealth | null;
+  /** The week's Audit and Retro that never opened for want of a free Subscription, each beside the Loop line (#442). */
+  readonly skippedWeeks: readonly SkippedWeek[];
+}
+
+/**
+ * A week's Audit or Retro that never opened while no Subscription was free:
+ * the tick noted the wait on these Carriers, by number, and opened none that week.
+ */
+export interface SkippedWeek {
+  readonly kind: WeeklyRunKind;
+  readonly carriers: readonly number[];
 }
 
 /** A Product repo's Kit config that fails to resolve, so the Loop does nothing there. */
@@ -776,14 +794,16 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   };
   const repos: RepoSection[] = [
     ...input.facts.map((facts) => ({ ...repoSectionOf(facts, input), health: healthOf(facts.repo) })),
-    ...input.unread.map(({ repo, why }) => ({ repo, invalidKitConfig: null, waitingOnYou: [], stuck: [], runsUnread: false, held: null, unread: why, health: healthOf(repo) })),
+    ...input.unread.map(({ repo, why }) => ({ repo, invalidKitConfig: null, waitingOnYou: [], stuck: [], runsUnread: false, held: null, unread: why, health: healthOf(repo), skippedWeeks: [] })),
   ];
   // Held work counts too, so a queue never sits unseen through a week nothing ran,
   // and so does a repo that couldn't be read, so its failure is never taken for a quiet week,
-  // and a Loop that's down or failing, so a dead Loop never reads as a quiet week (#460).
+  // and a Loop that's down or failing, so a dead Loop never reads as a quiet week (#460),
+  // and an Audit or Retro skipped for want of a free Subscription, so the Operator learns of it (#442).
   const quiet = repos.every(
     (repo) =>
       repo.invalidKitConfig === null &&
+      repo.skippedWeeks.length === 0 &&
       repo.waitingOnYou.length === 0 &&
       repo.stuck.length === 0 &&
       repo.held === null &&
@@ -1210,7 +1230,43 @@ function repoSectionOf(facts: GitHubFacts, { operator, appLogin, now: filedAt, t
     runsUnread: kit === null || kit.runsInFlight === "unread",
     held: heldIn(facts, kit, invalid === null, standings, appLogin, now, thisWeek, items),
     unread: null,
+    skippedWeeks: skippedWeeksOf(facts, kit, thisWeek.monday, appLogin),
   };
+}
+
+/**
+ * The summary's week's Audit and Retro that never opened for want of a free
+ * Subscription (#442): a Carrier, open or since closed, holds the week's
+ * waiting marker, and the Fabrik App opened none that week, by the gate's
+ * own week from Monday 00:00 UTC, nor is one still open. A week skipped
+ * because the branch didn't move or nothing was new, or given up after two
+ * failed runs, holds no marker; nor does a run turned off, which gets no line
+ * either, though a marker was noted before it was.
+ */
+function skippedWeeksOf(facts: GitHubFacts, kit: RepoKitFacts | null, monday: string, appLogin: string): SkippedWeek[] {
+  const start = Date.parse(`${monday}T00:00:00Z`);
+  const carriers = [...new Map([...facts.weekCarriers, ...facts.kitIssues].map((issue) => [issue.number, issue])).values()];
+  const kinds = [
+    { kind: "audit", issues: facts.audits, open: facts.openAudits },
+    { kind: "retro", issues: facts.retros, open: facts.openRetros },
+  ] as const;
+  return kinds.flatMap(({ kind, issues, open }): SkippedWeek[] => {
+    if (kit !== null && kit.config.ok && kit.config.config[kind].day === null) return [];
+    const byApp = (issue: { readonly author: string }) => issue.author === appLogin;
+    const opened = issues.some((issue) => byApp(issue) && Date.parse(issue.createdAt) >= start && Date.parse(issue.createdAt) < start + 7 * DAY_MS);
+    if (opened || open.some(byApp)) return [];
+    const holding = carriers
+      .filter((issue) => [issue.body, ...issue.comments].some((text) => weeklyRunWaitingMarksIn(text).some((mark) => mark.kind === kind && mark.monday === monday)))
+      .map(({ number }) => number)
+      .toSorted((a, b) => a - b);
+    return holding.length === 0 ? [] : [{ kind, carriers: holding }];
+  });
+}
+
+/** A skipped week's line, such as "No Audit last week: no Subscription was free (#41, #43)". */
+function skippedWeekLine(repo: string, { kind, carriers }: SkippedWeek): string {
+  const links = carriers.map((number) => `[#${number}](https://github.com/${repo}/issues/${number})`).join(", ");
+  return `No ${kind === "audit" ? "Audit" : "Retro"} last week: no Subscription was free (${links})`;
 }
 
 /**
@@ -1758,15 +1814,17 @@ function heldRunsLines(repo: string, { runs, weeklyLimitIssues }: HeldRuns, time
 const SHOWN_ITEMS = 10;
 
 function repoLines(
-  { repo, invalidKitConfig, waitingOnYou, stuck, runsUnread, unread, health }: RepoSection,
+  { repo, invalidKitConfig, waitingOnYou, stuck, runsUnread, unread, health, skippedWeeks }: RepoSection,
   timeZone: string,
   escapes: readonly EscapeThisWeek[],
   reviewMisses: readonly ReviewMissThisWeek[],
 ): string[] {
   // A dead Tick leads the section, so the waits below are read knowing the Loop was down.
   const healthLines = health === null ? null : loopHealthLines(health, timeZone);
-  const leading = healthLines?.lead == null ? [] : [healthLines.lead, "", healthLines.line, ""];
-  const trailing = healthLines === null || healthLines.lead !== null ? [] : [healthLines.line, ""];
+  // A week skipped for want of a free Subscription gets its line beside the Loop line, under neither Held nor Stuck (#442).
+  const skipped = skippedWeeks.flatMap((week) => [skippedWeekLine(repo, week), ""]);
+  const leading = healthLines?.lead == null ? [] : [healthLines.lead, "", healthLines.line, "", ...skipped];
+  const trailing = healthLines?.lead != null ? [] : [...(healthLines === null ? [] : [healthLines.line, ""]), ...skipped];
   if (unread !== null) {
     const line = `The Kit couldn't read this repo on GitHub this run, so what waits on you, what's stuck and what's held there, and its PRs, Tickets and Specs in the metrics, are left out of this summary: ${escapedTitle(unread)}. Re-run the Weekly summary to try it again.`;
     return [`## ${repo}`, "", ...leading, line, "", ...trailing, liveLinks(repo), ""];

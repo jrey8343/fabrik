@@ -615,8 +615,11 @@ describe("The scheduled tick before any reset", () => {
 
     const plan = planFor(tick("2026-11-08T09:00:00.000Z"), tickSnapshot({ kitIssues, held: [anIssueHeld(7, []), audit] }), TWO_SUBSCRIPTIONS);
 
-    const resumed = actionsOf(plan).filter((action) =>
-      ["add-labels", "start-agent-run", "drop-held-run", "close", "comment"].includes(action.kind),
+    // The week's Audit, due and waiting on a free Subscription, is noted on the Carrier: that's no resume (#442).
+    const resumed = actionsOf(plan).filter(
+      (action) =>
+        ["add-labels", "start-agent-run", "drop-held-run", "close", "comment"].includes(action.kind) &&
+        !(action.kind === "comment" && action.body.includes("fabrik:weekly-run-waiting")),
     );
     expect(resumed).toEqual([]);
   });

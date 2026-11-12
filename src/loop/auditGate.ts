@@ -5,7 +5,7 @@ import { auditsIn, lastAudit } from "./audit.ts";
 import { AUDIT_LABEL } from "./labels.ts";
 import { AUDIT_PENDING_MARKER, auditMarker } from "./markers.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
-import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
+import { dateOf, heldBack, waitingForSubscription, weekStart } from "./weeklyGate.ts";
 
 /**
  * The audit gate: a pending Audit to open, or why there's none this tick. The
@@ -20,9 +20,7 @@ export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the audit slice the audit gate weighs" };
   }
-  // Any open weekly-limit issue holds it back, rotation on or off, as it does the
-  // Retro: the tick can't start an Auditor run at a reset, so none is ever held.
-  const held = heldBack("Audit", day, auditsIn(slice.issues), now, snapshot.kitIssues);
+  const held = heldBack("Audit", day, auditsIn(slice.issues), now);
   if (held !== null) return { kind: "nothing", reason: held };
 
   const { head } = slice;
@@ -31,6 +29,10 @@ export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (last !== null && last.commit === head) {
     return { kind: "nothing", reason: `The default branch hasn't moved since #${last.number} audited it at ${shortSha(head)}` };
   }
+  // Last of all, so it's named only when it alone holds the week's Audit back (#442):
+  // the tick can't start an Auditor run at a reset, so none is ever held.
+  const waiting = waitingForSubscription("audit", now, snapshot.kitIssues, config);
+  if (waiting !== null) return waiting;
   return { kind: "act", actions: [pendingAudit(weekStart(now), head)] };
 }
 

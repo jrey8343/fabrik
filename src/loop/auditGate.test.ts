@@ -143,8 +143,8 @@ describe("The audit gate opens nothing", () => {
     expect(tick(SUNDAY, { issues: [anAuditIssue({ number: 90, open: true, stateReason: null, body })] })).toEqual(OPENS_NOTHING);
   });
 
-  it("while the weekly-limit issue is open, since the Auditor's run would stall on the limit", () => {
-    expect(tick(SUNDAY, { kitIssues: [weeklyLimitIssue("2026-11-09T04:00:00.000Z")] })).toEqual(OPENS_NOTHING);
+  it("while the one Subscription's weekly-limit issue is open, since the Auditor's run would stall on the limit, noting the wait on it", () => {
+    expect(opened(tick(SUNDAY, { kitIssues: [weeklyLimitIssue("2026-11-09T04:00:00.000Z")] }))).toEqual([]);
   });
 
   it("when two Audits have already failed this week, until next week", () => {

@@ -184,8 +184,8 @@ describe("The retro gate opens nothing", () => {
     expect(tick(SATURDAY, { issues: [aRetroIssue({ open: true, stateReason: null, body })] })).toEqual(OPENS_NOTHING);
   });
 
-  it("while the weekly-limit issue is open, since the Retro's run would stall on the limit", () => {
-    expect(tick(SATURDAY, { kitIssues: [weeklyLimitIssue("2026-11-09T04:00:00.000Z")] })).toEqual(OPENS_NOTHING);
+  it("while the one Subscription's weekly-limit issue is open, since the Retro's run would stall on the limit", () => {
+    expect(opened(tick(SATURDAY, { kitIssues: [weeklyLimitIssue("2026-11-09T04:00:00.000Z")] }))).toEqual([]);
   });
 
   it("when two Retros have already failed this week, until next week", () => {
@@ -312,9 +312,8 @@ describe("The tick's other rules", () => {
   });
 });
 
-// Like the Audit's (src/loop/hold.test.ts): with rotation on too, any open
-// weekly-limit issue holds the Retro back, so that it never competes with
-// Tickets for what's left of the weekly usage limits (US 7).
+// Like the Audit's (src/loop/hold.test.ts): the Retro is held back only while
+// no Subscription is free, rotation on or off (#442).
 describe("The Retro due while a Subscription's weekly-limit issue is open, with rotation on", () => {
   const TWO_SUBSCRIPTIONS = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
 
@@ -326,20 +325,24 @@ describe("The Retro due while a Subscription's weekly-limit issue is open, with 
     comments: [],
   });
 
-  it("opens nothing while another Subscription is free, waiting for the reset", () => {
-    expect(tick(SATURDAY, { kitIssues: [limitOf(41, "Claude token")] }, TWO_SUBSCRIPTIONS)).toEqual(OPENS_NOTHING);
+  it("opens the pending Retro while another Subscription is free", () => {
+    expect(opened(tick(SATURDAY, { kitIssues: [limitOf(41, "Claude token")] }, TWO_SUBSCRIPTIONS))).toEqual([
+      expect.objectContaining({ labels: ["fabrik:retro"] }),
+    ]);
   });
 
   it("opens nothing while every Subscription is used up", () => {
     const kitIssues = [limitOf(40, "Claude token 2"), limitOf(41, "Claude token")];
 
-    expect(tick(SATURDAY, { kitIssues }, TWO_SUBSCRIPTIONS)).toEqual(OPENS_NOTHING);
+    expect(opened(tick(SATURDAY, { kitIssues }, TWO_SUBSCRIPTIONS))).toEqual([]);
   });
 
-  it("opens nothing on the tick that closes one weekly-limit issue at its reset while another stays open", () => {
+  it("opens on the tick that closes one weekly-limit issue at its reset, freeing its Subscription", () => {
     const kitIssues = [limitOf(40, "Claude token 2", "2026-11-07T03:00:00.000Z"), limitOf(41, "Claude token")];
 
-    expect(opened(tick(SATURDAY, { kitIssues }, TWO_SUBSCRIPTIONS))).toEqual([]);
+    expect(opened(tick(SATURDAY, { kitIssues }, TWO_SUBSCRIPTIONS))).toEqual([
+      expect.objectContaining({ labels: ["fabrik:retro"] }),
+    ]);
   });
 
   it("opens on the tick that closes the last weekly-limit issue at its reset", () => {
@@ -351,7 +354,7 @@ describe("The Retro due while a Subscription's weekly-limit issue is open, with 
   });
 
   it("with one Subscription listed, waits for the reset, as V1 does", () => {
-    expect(tick(SATURDAY, { kitIssues: [limitOf(41, "Claude token")] })).toEqual(OPENS_NOTHING);
+    expect(opened(tick(SATURDAY, { kitIssues: [limitOf(41, "Claude token")] }))).toEqual([]);
   });
 });
 

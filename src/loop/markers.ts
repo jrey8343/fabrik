@@ -889,6 +889,25 @@ function closesFence(fence: string, line: string): boolean {
   return closing !== undefined && closing[0] === fence[0] && closing.length >= fence.length;
 }
 
+/** Which weekly run a waiting marker is about: the Audit or the Retro. */
+export type WeeklyRunKind = "audit" | "retro";
+
+/** Where a Carrier notes the week's Audit or Retro waiting on a free Subscription (#442). */
+export const WEEKLY_RUN_WAITING_MARKER = "<!-- fabrik:weekly-run-waiting";
+
+/** The waiting marker for `kind` in the week from `monday`, such as `<!-- fabrik:weekly-run-waiting audit 2026-11-02 -->`. */
+export function weeklyRunWaitingMarker(kind: WeeklyRunKind, monday: string): string {
+  return `${WEEKLY_RUN_WAITING_MARKER} ${kind} ${monday} -->`;
+}
+
+/** Each waiting marker a body or comment holds: its kind and the Monday of its week, as `yyyy-mm-dd`. */
+export function weeklyRunWaitingMarksIn(text: string): { readonly kind: WeeklyRunKind; readonly monday: string }[] {
+  return [...text.matchAll(/<!-- fabrik:weekly-run-waiting (audit|retro) (\d{4}-\d{2}-\d{2}) -->/g)].map(([, kind, monday]) => ({
+    kind: kind as WeeklyRunKind,
+    monday: monday ?? "",
+  }));
+}
+
 /**
  * An Audit's marker line (#150): `<!-- fabrik:audit <sha> -->`, the commit the
  * Audit reads, which was the default branch's head when the tick opened it.

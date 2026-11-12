@@ -40,6 +40,7 @@ import { leavingOutHeldLines } from "./heldLines.ts";
 import {
   gatherDesignQueueSlice,
   gatherKitIssues,
+  gatherWeekCarriers,
   gatherOpenMaps,
   loginOf,
   type MergeableState,
@@ -57,6 +58,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * week's 30-day revert window is as whole as this week's.
  */
 const WINDOW_MS = 37 * DAY_MS;
+/** How far back the Carriers are read: the summary's week, ending at the last Monday in any time zone, and the days before it. */
+const CARRIERS_REACH_MS = 14 * DAY_MS;
 
 /**
  * How far back the PRs, the default branch's commits and the issues the
@@ -176,7 +179,7 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
   const github = leavingOutHeldLines(client);
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(reach).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, audits, retros, openMaps, openReplays, { kitIssues }] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, audits, retros, openMaps, openReplays, { kitIssues }, weekCarriers] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -199,6 +202,8 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
     // The Loop's own read, so Held and the scheduled tick's resume can't disagree. It doesn't know
     // the App's login, so it takes any bot's text for the App's, as the Design queue slice does.
     gatherKitIssues(github, repo, null),
+    // The Carriers, closed ones included, whose waiting markers name an Audit or Retro week skipped for want of a free Subscription (#442).
+    gatherWeekCarriers(github, repo, null, new Date(now - CARRIERS_REACH_MS).toISOString()),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -224,6 +229,7 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
     openReplays: openReplays.map(({ number, title, createdAt, lastEditedAt, body, author }) => ({ number, title, author: loginOf(author), createdAt, lastEditedAt, body })),
     openMaps: openMaps.map((map) => map.number),
     kitIssues,
+    weekCarriers,
   };
 }
 
