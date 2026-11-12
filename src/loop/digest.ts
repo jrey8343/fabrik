@@ -39,11 +39,49 @@ function whyNoDigest(pullRequest: PullRequestSnapshot, config: KitConfig): strin
   if (!config.digest.enabled) return "the Digest is off in this repo's Kit config (`digest.enabled`)";
   if (!pullRequest.isAgent) return `#${number} isn't an agent PR`;
   if (pullRequest.ticket === null) return `#${number}'s branch names no Ticket`;
+  return whyNothingToDigest(pullRequest);
+}
+
+/**
+ * Why a pull request has nothing a Digest could be written of now, or null
+ * while it has: it is closed, a run is in flight on it, or its latest
+ * Verdict is not a pass on its current head.
+ */
+function whyNothingToDigest(pullRequest: PullRequestSnapshot): string | null {
+  const { number } = pullRequest;
   if (!pullRequest.open) return `#${number} is closed`;
   const run = runInFlight(pullRequest);
   if (run !== null) return `${runName(run)} on #${number} is still in flight`;
   if (!passedAt(pullRequest, pullRequest.headSha)) return `#${number} has no pass on its current head, ${pullRequest.headSha.slice(0, 7)}`;
   return null;
+}
+
+/**
+ * A lost start: `agent:digest` has sat for the stuck-trigger sweep's wait
+ * with no Digest job under way on its pull request, as when GitHub started
+ * no workflow for a pull request that conflicts with its base (ADR-0015).
+ * The sweep neither adds the label again nor hands anything to the Operator
+ * (src/loop/triggerSweep.ts). The attempt ends as one that never started:
+ * the no-Digest line says `never-started` for the pull request's head, the
+ * label comes off and the gate opens, so a passed pull request is never left
+ * in draft for want of a Digest run.
+ *
+ * One overtaken since is dropped as any attempt is: a run in flight on it
+ * lands first, and a head with no pass gets a Review of its own, whose pass
+ * brings the next Digest. On anything but an open agent PR, which the label
+ * starts nothing on, it comes off with one line saying why. `pullRequests`
+ * is every open agent PR as the tick read them, or null when it read none:
+ * the label is then left alone.
+ */
+export function lostStart(number: number, pullRequests: readonly PullRequestSnapshot[] | null, operator: string): Pick<Extract<Plan, { kind: "act" }>, "actions" | "notes"> {
+  if (pullRequests === null) {
+    return { actions: [], notes: [`The stuck-trigger sweep left ${DIGEST_LABEL} on #${number} alone: the open agent PRs weren't read, so whether its pass still stands isn't known`] };
+  }
+  const pullRequest = pullRequests.find((one) => one.number === number);
+  if (pullRequest === undefined) return { actions: declineTrigger(number, DIGEST_LABEL, `#${number} isn't an open agent PR`) };
+  const dropped = whyNothingToDigest(pullRequest);
+  if (dropped !== null) return { actions: [labelOff(pullRequest)], notes: [`The Digest run of #${number} never started, and it was dropped: ${dropped}`] };
+  return { actions: [{ kind: "comment", issue: number, body: noDigestLine({ head: pullRequest.headSha, how: "never-started" }) }, ...openGate(pullRequest, operator)] };
 }
 
 type Passed = Extract<LoopEvent, { kind: "review-run-finished" }>;

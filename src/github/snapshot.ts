@@ -2424,12 +2424,15 @@ async function readRolesUnderWay(github: Pick<ReadClient, "rest">, repo: Repo): 
   const anyJobNamed = (...names: string[]) => jobs.some(({ name }) => names.some((jobName) => isJobNamed(name, jobName)));
   const anyReviewJob = jobs.some(({ name }) => REVIEW_JOB.test(name));
   const designTurns = new Set(jobs.flatMap((job) => DESIGN_JOB.exec(job.name)?.[1] ?? []).map(Number));
+  // A Digest job's name always carries its pull request's number, so the sweep reads exactly whether one is under way there.
+  const digests = new Set(jobs.flatMap((job) => DIGEST_JOB.exec(job.name)?.[1] ?? []).map(Number));
   return {
     implement: implementJobsUnderWay(jobs).length > 0,
     research: anyJobNamed(RESEARCH_JOB_NAME),
     review: anyReviewJob || anyJobNamed(REVIEW_CHECKS_JOB_NAME),
     claim: anyJobNamed(CLAIM_JOB_NAME),
     designTurns: [...designTurns].sort((a, b) => a - b),
+    digests: [...digests].sort((a, b) => a - b),
   };
 }
 

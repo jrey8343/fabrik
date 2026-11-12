@@ -1,20 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  aLabelledTrigger,
-  anIssue,
-  aPullRequest,
-  HEAD_SHA,
-  kitConfig,
-  NOTHING_UNDER_WAY,
-  notificationsOf,
-  snapshotOf,
-  snapshotOfPullRequest,
-  tickSnapshot,
-  withoutNotes,
-} from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { digestCommentOf, noDigestLine } from "./digestContract.ts";
 import { planFor } from "./rules.ts";
-import type { Action, KitIssueSnapshot, LabelledTrigger, LoopEvent, Plan, PullRequestSnapshot, VerdictRecord } from "./types.ts";
+import type { Action, LoopEvent, Plan, PullRequestSnapshot, VerdictRecord } from "./types.ts";
 
 /** A Verdict as the snapshot reads one off the pull request, by default the Reviewer's pass on the head. */
 function aVerdict(overrides: Partial<VerdictRecord> = {}): VerdictRecord {
@@ -233,26 +221,7 @@ describe("The Digest: a run that fails", () => {
   });
 });
 
-describe("The Digest: the stuck-trigger sweep", () => {
-  /** Monday 04:00 UTC: no Audit or Retro is due, so the tick's own plan is just its queue checks. */
-  const tick = { kind: "scheduled-tick", now: "2026-11-09T04:00:00.000Z" } as const;
-  const QUEUE_CHECKS: Action[] = [{ kind: "check-dispatch" }, { kind: "check-design-queue" }];
-  const swept = (labelled: readonly LabelledTrigger[]): Plan => withoutNotes(planFor(tick, tickSnapshot({ triggers: { underWay: NOTHING_UNDER_WAY, labelled } }), kitConfig()));
-
-  it.each([
-    ["an hour, with no job under way anywhere", aLabelledTrigger({ number: 50, label: "agent:digest", lastAddedAt: "2026-11-09T03:00:00Z" })],
-    ["a day, though the Kit's note says it was added again", aLabelledTrigger({ number: 50, label: "agent:digest", lastAddedAt: "2026-11-08T04:00:00Z", readded: true })],
-  ])("leaves agent:digest alone when it has sat %s: it neither adds it again nor takes it off", (_how, trigger) => {
-    expect(swept([trigger])).toEqual({ kind: "act", actions: QUEUE_CHECKS });
-  });
-
-  it("still sweeps another trigger label that sits beside it", () => {
-    const plan = swept([aLabelledTrigger({ number: 50, label: "agent:digest" }), aLabelledTrigger({ number: 7, label: "agent:implement" })]);
-
-    expect(actionsOf(plan).slice(0, 1)).toEqual([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]);
-    expect(actionsOf(plan).every((action) => !("issue" in action) || action.issue !== 50)).toBe(true);
-  });
-});
+// What the stuck-trigger sweep does about agent:digest, a lost start, is src/loop/digestEdges.test.ts's.
 
 describe("The Digest: agent:digest starting a run", () => {
   it("agent:digest on an agent pull request with a pass on its current head starts a Digest run at that head, on the Digest writer's model and time limit", () => {

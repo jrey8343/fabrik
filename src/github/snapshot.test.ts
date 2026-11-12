@@ -3560,7 +3560,23 @@ describe("Gathering a scheduled tick's trigger-sweep slice (#419)", () => {
 
     const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
 
-    expect(snapshot.triggers?.underWay).toEqual({ implement: false, research: false, review: true, claim: true, designTurns: [3, 12] });
+    expect(snapshot.triggers?.underWay).toEqual({ implement: false, research: false, review: true, claim: true, designTurns: [3, 12], digests: [] });
+  });
+
+  it("reads the pull request of each Digest job under way from its name, lowest first, leaving out one its run skipped and one whose run has finished", async () => {
+    const { github } = githubWith([]);
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Digest PR #60", status: "queued" }, { name: "fabrik / Review PR #61", status: "completed", conclusion: "skipped" }] },
+      { id: 2, status: "queued", jobs: [{ name: "Digest PR #52", status: "in_progress" }] },
+      // Done, with its push job still to land the Digest: under way until its run finishes.
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Digest PR #70", status: "completed", conclusion: "success" }] },
+      { id: 4, status: "in_progress", jobs: [{ name: "fabrik / Digest PR #80", status: "completed", conclusion: "skipped" }] },
+      { id: 5, status: "completed", jobs: [{ name: "fabrik / Digest PR #90", status: "completed", conclusion: "success" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.triggers?.underWay).toMatchObject({ review: false, digests: [52, 60, 70] });
   });
 
   // #477: the Review job names its agent PR; a run of an earlier Kit release names none.

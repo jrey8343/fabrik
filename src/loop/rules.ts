@@ -250,11 +250,16 @@ function thenCheckQueues(plan: Plan): Plan {
   }
 }
 
-/** The stuck-trigger sweep (src/loop/triggerSweep.ts) on the snapshot's trigger-sweep slice, which only the tick gathers. */
+/**
+ * The stuck-trigger sweep (src/loop/triggerSweep.ts) on the snapshot's
+ * trigger-sweep slice, which only the tick gathers. A lost Digest start is
+ * weighed on the open agent PRs the tick's conflict slice already read.
+ */
 function stuckTriggers(now: string, snapshot: Snapshot, config: KitConfig): Plan {
+  const openAgentPullRequests = snapshot.conflicts === null ? null : snapshot.conflicts.pullRequests.map(({ pullRequest }) => pullRequest);
   return snapshot.triggers === null
     ? missingFromSnapshot("the trigger labels the stuck-trigger sweep weighs")
-    : sweepStuckTriggers(now, snapshot.triggers, snapshot.operator, recoveryWaits(config).stuckTrigger);
+    : sweepStuckTriggers(now, snapshot.triggers, snapshot.operator, recoveryWaits(config).stuckTrigger, openAgentPullRequests);
 }
 
 /** The conflict check (src/loop/conflicts.ts) on the snapshot's conflict slice, which a push to main and the tick gather. */

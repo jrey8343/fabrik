@@ -1241,6 +1241,8 @@ export interface RolesUnderWay {
   readonly claim: boolean;
   /** The issue of each `Design-session turn #N` or `Prototype turn #N` job, lowest first. */
   readonly designTurns: readonly number[];
+  /** The pull request of each `Digest PR #N` job, lowest first: the sweep reads exactly whether one is under way on a pull request. */
+  readonly digests: readonly number[];
 }
 
 /** A trigger label on an open issue or PR, as the stuck-trigger sweep reads it. */

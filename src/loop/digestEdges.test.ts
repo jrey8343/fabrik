@@ -3,12 +3,24 @@
 // still opens its Kit-owned issue, and a start that is lost opens the gate at
 // the stuck-trigger sweep. Each through the Loop rules core.
 import { describe, expect, it } from "vitest";
-import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import {
+  aLabelledTrigger,
+  anIssue,
+  aPullRequest,
+  HEAD_SHA,
+  kitConfig,
+  NOTHING_UNDER_WAY,
+  notificationsOf,
+  snapshotOf,
+  snapshotOfPullRequest,
+  tickSnapshot,
+  withoutNotes,
+} from "../__fixtures__/snapshots.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { noDigestLine } from "./digestContract.ts";
 import { retryNumber } from "./retry.ts";
 import { planFor } from "./rules.ts";
-import type { Action, KitConfig, KitIssueSnapshot, LoopEvent, Plan, PullRequestSnapshot, VerdictRecord } from "./types.ts";
+import type { Action, KitConfig, KitIssueSnapshot, LabelledTrigger, LoopEvent, Plan, PullRequestSnapshot, RolesUnderWay, VerdictRecord } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const REPO = "https://github.com/acme/shop";
@@ -290,5 +302,97 @@ describe("The Digest: never against the Ticket's Retries", () => {
     // Nothing lands on the Ticket, and nothing is handed to the Operator.
     expect(actionsOf(plan).every((action) => !("issue" in action) || action.issue !== 7)).toBe(true);
     expect(JSON.stringify(actionsOf(plan))).not.toContain("fabrik:hand-back");
+  });
+});
+
+describe("The Digest: a lost start, at the stuck-trigger sweep", () => {
+  /** Monday 04:00 UTC: no Audit or Retro is due, so the tick's own plan is just its queue checks. */
+  const tick = { kind: "scheduled-tick", now: "2026-11-09T04:00:00.000Z" } as const;
+  const QUEUE_CHECKS: Action[] = [{ kind: "check-dispatch" }, { kind: "check-design-queue" }];
+  /** `agent:digest` on #50, added an hour before the tick unless a test says otherwise. */
+  const onFifty = (overrides: Partial<LabelledTrigger> = {}): LabelledTrigger => aLabelledTrigger({ number: 50, label: "agent:digest", lastAddedAt: "2026-11-09T03:00:00Z", ...overrides });
+
+  /** The tick's plan with these trigger labels on, and these open agent PRs as it read them. */
+  function swept(labelled: readonly LabelledTrigger[], pullRequests: readonly PullRequestSnapshot[] = [aPassedDraft()], underWay: RolesUnderWay | null = NOTHING_UNDER_WAY): Plan {
+    const conflicts = { main: HEAD_SHA, now: tick.now, implementJobUnderWay: null, pullRequests: pullRequests.map((pullRequest) => ({ pullRequest, mergeable: true })) };
+    return planFor(tick, tickSnapshot({ operator: "jrey", triggers: { underWay, labelled }, conflicts }), kitConfig());
+  }
+
+  const NEVER_STARTED: Action = { kind: "comment", issue: 50, body: noDigestLine({ head: HEAD_SHA, how: "never-started" }) };
+
+  it("agent:digest on for 30 minutes with no Digest job under way: the no-Digest line says never-started, the label comes off and the gate opens", () => {
+    const plan = swept([onFifty({ lastAddedAt: "2026-11-09T03:30:00Z" })]);
+
+    expect(actionsOf(withoutNotes(plan))).toEqual([NEVER_STARTED, ...THE_GATE_OPENS, ...QUEUE_CHECKS]);
+    // The review request is the one notification: no comment mentions the Operator, and nothing is handed back.
+    expect(notificationsOf(plan, "jrey")).toEqual(["review request on #50"]);
+    expect(JSON.stringify(actionsOf(plan))).not.toContain("fabrik:hand-back");
+  });
+
+  it("is never added again nor given up on, whatever the thread says of an earlier re-add", () => {
+    const plan = swept([onFifty({ readded: true })]);
+
+    expect(actionsOf(withoutNotes(plan))).toEqual([NEVER_STARTED, ...THE_GATE_OPENS, ...QUEUE_CHECKS]);
+    expect(JSON.stringify(actionsOf(plan))).not.toContain("fabrik:stuck-trigger");
+  });
+
+  it("leaves the label alone under 30 minutes: its run may still be starting", () => {
+    expect(actionsOf(withoutNotes(swept([onFifty({ lastAddedAt: "2026-11-09T03:31:00Z" })])))).toEqual(QUEUE_CHECKS);
+  });
+
+  it("leaves the label alone while a Digest job is under way on that pull request", () => {
+    const plan = swept([onFifty()], [aPassedDraft()], { ...NOTHING_UNDER_WAY, digests: [50] });
+
+    expect(actionsOf(withoutNotes(plan))).toEqual(QUEUE_CHECKS);
+  });
+
+  it("a Digest job on another pull request does not count, nor does any other role's job", () => {
+    const plan = swept([onFifty()], [aPassedDraft()], { implement: true, research: true, review: true, claim: true, designTurns: [50], digests: [51] });
+
+    expect(actionsOf(withoutNotes(plan))).toEqual([NEVER_STARTED, ...THE_GATE_OPENS, ...QUEUE_CHECKS]);
+  });
+
+  it("leaves the label alone with the Actions API unread, as it leaves every label", () => {
+    expect(actionsOf(withoutNotes(swept([onFifty()], [aPassedDraft()], null)))).toEqual(QUEUE_CHECKS);
+  });
+
+  it("on a pull request whose gate has opened, as when the label was added by hand, the line is posted and the label comes off, and nothing else moves", () => {
+    const plan = swept([onFifty()], [aPassedDraft({ draft: false, leftDraftSinceVerdict: true })]);
+
+    expect(actionsOf(withoutNotes(plan))).toEqual([NEVER_STARTED, { kind: "remove-label", issue: 50, label: "agent:digest" }, ...QUEUE_CHECKS]);
+    expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it.each([
+    ["a run is now in flight on it", aPassedDraft({ conflictRunInFlight: "c".repeat(40) }), "The conflict-only run on #50 is still in flight"],
+    ["its head has no pass on it", aPassedDraft({ headSha: "b".repeat(40) }), "#50 has no pass on its current head, bbbbbbb"],
+  ])("a lost start on a pull request overtaken since, where %s, is dropped as any attempt is: the label comes off, nothing is posted and the gate stays closed", (_what, pullRequest, why) => {
+    const plan = swept([onFifty()], [pullRequest]);
+
+    expect(actionsOf(plan)).toEqual([{ kind: "remove-label", issue: 50, label: "agent:digest" }, ...QUEUE_CHECKS]);
+    expect(plan.kind === "act" ? plan.notes : []).toContain(`The Digest run of #50 never started, and it was dropped: ${why}`);
+  });
+
+  it("on anything but an open agent PR, where no Digest is written, the label comes off with one line saying why", () => {
+    const plan = swept([onFifty({ number: 7 })], [aPassedDraft()]);
+
+    expect(actionsOf(withoutNotes(plan))).toEqual([
+      { kind: "remove-label", issue: 7, label: "agent:digest" },
+      { kind: "comment", issue: 7, body: "agent:digest came off and nothing started: #7 isn't an open agent PR." },
+      ...QUEUE_CHECKS,
+    ]);
+    expect(notificationsOf(plan, "jrey")).toEqual([]);
+  });
+
+  it("still sweeps another trigger label that sits beside it, by that label's own rule", () => {
+    const plan = swept([onFifty(), aLabelledTrigger({ number: 7, label: "agent:implement" })]);
+
+    expect(actionsOf(withoutNotes(plan))).toEqual([
+      NEVER_STARTED,
+      ...THE_GATE_OPENS,
+      { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
+      { kind: "comment", issue: 7, body: "<!-- fabrik:stuck-trigger-readded agent:implement -->\n`agent:implement` sat 60 minutes with no run behind it, so the Kit added it again." },
+      ...QUEUE_CHECKS,
+    ]);
   });
 });
