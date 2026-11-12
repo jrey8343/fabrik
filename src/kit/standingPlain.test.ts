@@ -119,12 +119,15 @@ describe("a Plain pull request's Standing", () => {
       });
     });
 
-    it("is waiting on checks it could not read when the head's checks are unread, the repo's Kit wasn't read, or no check is listed", () => {
+    it("is waiting on checks it could not read when the head's checks are unread, or the repo's Kit wasn't read", () => {
       const unread = { name: "waiting-on-checks", move: "kit", yours: false, stopsWork: false, detail: { plain: "kit-bump", check: null, checksUnread: true, head: HEAD } };
       expect(named(standingOf({}, "unread"))).toEqual(unread);
       expect(named(standingsIn({ plainPullRequests: [aPlainPullRequest()] }, kitWith({}))[0])).toEqual(unread);
       expect(named(standingsIn({ plainPullRequests: [aPlainPullRequest()] }, null)[0])).toEqual(unread);
-      expect(named(standingOf({}, []))).toEqual(unread);
+    });
+
+    it("is yours to merge when the head has an empty list, as a branch requiring no checks gives: none required is all passed", () => {
+      expect(named(standingOf({}, []))).toEqual({ name: "yours-to-merge", move: "operator", yours: true, stopsWork: false, detail: { plain: "kit-bump", head: HEAD } });
     });
 
     it("never reads a check the Kit config doesn't list: what the gather leaves out of the fact names nothing", () => {
@@ -137,6 +140,27 @@ describe("a Plain pull request's Standing", () => {
     expect(sinceOf({ createdAt: "2026-11-01T00:00:00Z", headCommittedAt: "2026-11-07T09:00:00Z" })).toBe("2026-11-07T09:00:00Z");
     expect(sinceOf({ createdAt: "2026-11-07T00:00:00Z", headCommittedAt: "2026-11-01T09:00:00Z" })).toBe("2026-11-07T00:00:00Z");
     expect(sinceOf({ createdAt: "2026-11-07T00:00:00Z", headCommittedAt: null })).toBe("2026-11-07T00:00:00Z");
+  });
+
+  describe("read with the time of each check's report", () => {
+    const sinceOf = (checks: RequiredChecksFact, overrides: Parameters<typeof aPlainPullRequest>[0] = {}) =>
+      standingsIn({ plainPullRequests: [aPlainPullRequest(overrides)] }, kitWith({ [HEAD]: checks }))[0]?.since;
+
+    it("stands since the last Required check passed, when every one has", () => {
+      expect(sinceOf([{ name: "test", is: "passed", at: "2026-11-07T09:30:00Z" }, { name: "lint", is: "passed", at: "2026-11-07T09:10:00Z" }])).toBe("2026-11-07T09:30:00Z");
+    });
+
+    it("stands since the report of the check it names: the failing one, or the one still running", () => {
+      expect(sinceOf([{ name: "test", is: "running", at: "2026-11-07T09:00:00Z" }, { name: "lint", is: "failing", at: "2026-11-07T09:20:00Z" }])).toBe("2026-11-07T09:20:00Z");
+      expect(sinceOf([{ name: "test", is: "passed", at: "2026-11-07T09:40:00Z" }, { name: "lint", is: "running", at: "2026-11-07T09:05:00Z" }])).toBe("2026-11-07T09:05:00Z");
+    });
+
+    it("stands since its head, opening or draft change as before when no report decided it: a check never reported, none required, or a draft", () => {
+      expect(sinceOf([{ name: "test", is: "passed", at: "2026-11-07T09:30:00Z" }, { name: "lint", is: "never-reported", at: null }])).toBe("2026-11-06T20:00:00Z");
+      expect(sinceOf([])).toBe("2026-11-06T20:00:00Z");
+      expect(sinceOf([{ name: "test", is: "failing", at: "2026-11-07T09:30:00Z" }], { draft: true })).toBe("2026-11-06T20:00:00Z");
+      expect(sinceOf([{ name: "test", is: "failing", at: "2026-11-07T09:30:00Z" }], { mergeable: false })).toBe("2026-11-06T20:00:00Z");
+    });
   });
 
   it("stands since it last left draft or went into it, when that came after its head and its opening", () => {

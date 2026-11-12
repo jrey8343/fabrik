@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
-import { readRequiredChecks } from "./requiredChecks.ts";
+import { type HeadCheck, readRequiredChecks } from "./requiredChecks.ts";
 
 const NOW = "2026-11-12T10:00:00Z";
 const head = (digit: string) => digit.repeat(40);
@@ -101,6 +101,11 @@ function repoWith(branch: CannedBranch, heads: Readonly<Record<string, CannedHea
 
 /** A branch held to its rules for everyone, requiring these checks. */
 const requiring = (...required: string[]): CannedBranch => ({ protected: true, enforcementLevel: "everyone", required });
+
+/** The names of the checks a head was given, in order. */
+function namesOf(checks: readonly HeadCheck[] | "unread" | undefined): string[] | "unread" | undefined {
+  return checks === undefined || checks === "unread" ? checks : checks.map(({ name }) => name);
+}
 
 /** What each check on one head is, by name. */
 async function isOn(client: Pick<ReadClient, "rest">, sha: string): Promise<Record<string, string>> {
@@ -204,7 +209,7 @@ describe("the Required checks read", () => {
 
     const read = await readRequiredChecks(client, "owner/product", [head("1")], NOW);
 
-    expect(read.heads[head("1")]?.map(({ name }) => name)).toEqual(["test"]);
+    expect(namesOf(read.heads[head("1")])).toEqual(["test"]);
   });
 
   it("gives each head in the branch's own order, whatever order the reports came in", async () => {
@@ -215,7 +220,7 @@ describe("the Required checks read", () => {
     const read = await readRequiredChecks(client, "owner/product", [head("1")], NOW);
 
     expect(read).toMatchObject({ required: ["lint", "test"] });
-    expect(read.heads[head("1")]?.map(({ name }) => name)).toEqual(["lint", "test"]);
+    expect(namesOf(read.heads[head("1")])).toEqual(["lint", "test"]);
   });
 
   it("gives an empty list for each head of a branch that requires nothing", async () => {
