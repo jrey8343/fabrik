@@ -255,6 +255,21 @@ describe("work that goes on without the Operator", () => {
       expect(standingsIn({ openIssues: [ticket(7, ["ready-for-agent", "agent:implement"])] }, aKit("unread"))).toEqual([]);
       expect(standingsIn({ openIssues: [ticket(7, ["ready-for-agent", "agent:implement"])] }, null)).toEqual([]);
     });
+
+    it("still gives the rest with the runs unread", () => {
+      const standings = standingsIn(
+        {
+          openIssues: [ticket(7, ["ready-for-agent", "agent:implement"]), ticket(8), ticket(9), anOpenIssue({ number: 13, labels: ["ready-for-human"] })],
+          kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 8, label: "agent:implement" }])],
+        },
+        aKit("unread", { dispatch: { candidates: { tickets: [aTicket({ number: 9, openBlockers: [3] })], researchDecisions: [] } } }),
+      );
+      expect(standings.map(({ issue, name }) => ({ issue, name })).toSorted((a, b) => (a.issue ?? 0) - (b.issue ?? 0))).toEqual([
+        { issue: 8, name: "held" },
+        { issue: 9, name: "blocked" },
+        { issue: 13, name: "yours-to-do" },
+      ]);
+    });
   });
 
   const readyAt = "2026-11-05T12:00:00Z";
