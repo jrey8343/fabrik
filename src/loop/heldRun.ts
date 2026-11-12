@@ -62,7 +62,9 @@ export function heldLineIssue({ issue, lineOn }: HeldRun): number {
  * is held: its Audit or Retro fails instead (src/loop/failures.ts). Only a held
  * marker an Auditor run left before that (#268) is still read, and its Audit
  * fails at the reset (src/loop/resume.ts). A Digest run's is agent:digest,
- * on its PR, as a Review's is agent:review.
+ * on its PR, as a Review's is agent:review, though a Digest run is never
+ * held either: where one would be, its attempt ends with the no-Digest line
+ * and the Merge gate opens (src/loop/digest.ts).
  */
 export const RESUME_LABELS = {
   triage: NEEDS_TRIAGE,
@@ -98,7 +100,8 @@ export function runNamed(role: AgentRole): string {
  * included, on its Ticket, where agent:implement resumes it, though one on an
  * agent PR has its held line there. An Auditor or
  * Retro run never gets here: its pending issue fails before it's planned
- * (src/loop/weeklyRuns.ts).
+ * (src/loop/weeklyRuns.ts). Nor does a Digest run: while a run due is held,
+ * its rules plan no start (src/loop/digest.ts).
  */
 export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): HoldableRun {
   const label = RESUME_LABELS[start.role];

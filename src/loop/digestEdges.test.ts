@@ -164,6 +164,19 @@ describe("The Digest: never a Held run, when agent:digest is added", () => {
   });
 });
 
+describe("The Digest: never a Held run, at a tick that resumes held runs", () => {
+  it("a held marker naming a Digest run is dropped, never resumed: agent:digest is not given back to its pull request", () => {
+    // A marker no rule writes any more. One Subscription is free, so the tick resumes what is held.
+    const carrier: KitIssueSnapshot = { ...usedUp(40, "Claude token 2"), comments: ['The run is held.\n\n<!-- fabrik:held {"issue":50,"role":"digest","label":"agent:digest"} -->'] };
+    const on = { number: 50, open: true, labels: [], draft: true, byApp: true, body: "" };
+
+    const plan = planFor({ kind: "scheduled-tick", now: "2026-11-09T04:00:00.000Z" }, tickSnapshot({ kitIssues: [carrier], held: [on] }), ROTATING);
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "drop-held-run", role: "digest", issue: 50, reason: "The Kit never holds a Digest run, so it starts none on #50" });
+    expect(actionsOf(plan).some((action) => action.kind === "add-labels" && action.labels.includes("agent:digest"))).toBe(false);
+  });
+});
+
 type Failed = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
 /** The Digest writer's job on #50, for Ticket #7, was refused on its Subscription's weekly limit. */
