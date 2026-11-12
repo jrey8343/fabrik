@@ -9,7 +9,7 @@
 // an issue's Prototype is kept. The Kit builds every address, so a reader
 // holds no rule about addresses either. Pure, no I/O, and plain data: written
 // as JSON and read back a row is equal.
-import type { CaptureFailure } from "../evidence/uiEvidence.ts";
+import { type CaptureFailure, captureFailureSentence } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { productionPageUrl, withRouteOn } from "../kit/config.ts";
 import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
@@ -135,6 +135,12 @@ export interface RowEvidence {
    * a marker an earlier release wrote, which records no routes.
    */
   readonly pages: readonly { readonly route: string; readonly preview: string | null }[] | null;
+  /**
+   * Why its capture failed as one sentence a reader shows as it is (#667),
+   * the words the evidence section says it in, worded by the Kit from the
+   * reason alone, so it holds nothing an agent wrote; null with no failure.
+   */
+  readonly failureSentence: string | null;
 }
 
 /** The last runs read (./runs.ts), or null when none is held. */
@@ -259,6 +265,7 @@ function evidenceOf({ evidenceMarkers }: Facts, pullRequest: number): RowEvidenc
     failure: failure ?? null,
     preview: preview?.is ?? "unknown",
     pages: routes === undefined ? null : routes.map((route) => ({ route, preview: linked === null ? null : pageOn(linked, route) })),
+    failureSentence: failure === undefined || failure === null ? null : captureFailureSentence(failure),
   };
 }
 

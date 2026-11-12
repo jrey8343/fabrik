@@ -632,6 +632,15 @@ export function failureWords(job: string): Readonly<Record<CaptureFailure, strin
 /** Why a PR's capture failed, in the Implement job. */
 const FAILURE_WORDS = failureWords("the Implement job");
 
+/**
+ * Why a pull request's capture failed, as one sentence a reader shows as it
+ * is (#667): the words the evidence section's failure line says it in, all
+ * the Kit's own, so it holds nothing an agent wrote.
+ */
+export function captureFailureSentence(reason: CaptureFailure): string {
+  return `Capture failed: ${FAILURE_WORDS[reason]}.`;
+}
+
 /** A failed capture's reason, and the screenshots it took first: a failed capture keeps them. */
 function failureLine(reason: CaptureFailure, captures: readonly Capture[]): string {
   const took = captures.length === 0 ? "There are no screenshots." : `It took ${screenshots(captures.length)} first.`;

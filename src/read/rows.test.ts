@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
+import { CAPTURE_FAILURES, captureFailureSentence, type EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";
@@ -250,6 +250,7 @@ describe("a Product repo's rows", () => {
             { route: "/cart?step=2", preview: "https://fabrik-ticket-7.shop.example.dev/cart?step=2" },
             { route: "/book", preview: "https://fabrik-ticket-7.shop.example.dev/book" },
           ],
+          failureSentence: null,
         },
       ]);
     });
@@ -261,18 +262,36 @@ describe("a Product repo's rows", () => {
     ] as const)("gives no page a preview address when the preview is %s", (is, preview) => {
       const marker = { run: 4410, artifact: 901, failure: null, routes: ["/book"], preview };
 
-      expect(evidenceOf(marker)).toEqual([{ run: 4410, artifact: 901, failure: null, preview: is, pages: [{ route: "/book", preview: null }] }]);
+      expect(evidenceOf(marker)).toEqual([{ run: 4410, artifact: 901, failure: null, preview: is, pages: [{ route: "/book", preview: null }], failureSentence: null }]);
     });
 
-    it("gives a failed capture's reason, and no pages when it captured no route", () => {
+    it("gives a failed capture's reason in the Kit's own sentence for it, and no pages when it captured no route", () => {
       const marker = { run: 4410, artifact: null, failure: "server-did-not-start", routes: [], preview: { is: "pending" } } as const;
 
-      expect(evidenceOf(marker)).toEqual([{ run: 4410, artifact: null, failure: "server-did-not-start", preview: "pending", pages: [] }]);
+      expect(evidenceOf(marker)).toEqual([
+        {
+          run: 4410,
+          artifact: null,
+          failure: "server-did-not-start",
+          preview: "pending",
+          pages: [],
+          failureSentence: "Capture failed: the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran.",
+        },
+      ]);
+    });
+
+    // The sentence is the Kit's, from the reason alone (#667): no route, which may be agent text, reaches it.
+    it.each(CAPTURE_FAILURES)("words a capture that failed for %s in the evidence section's sentence for it", (failure) => {
+      const [evidence] = evidenceOf({ run: 4410, artifact: 901, failure, routes: ["/book @octocat -->"], preview: { is: "none" } });
+
+      expect(evidence?.failureSentence).toBe(captureFailureSentence(failure));
     });
 
     it("reads a marker from an earlier release with its run, artifact and failure, its pages null and its preview unknown", () => {
-      expect(evidenceOf({ run: 4410, artifact: 901, failure: "timeout" })).toEqual([{ run: 4410, artifact: 901, failure: "timeout", preview: "unknown", pages: null }]);
-      expect(evidenceOf({ run: 4410, artifact: 901 })).toEqual([{ run: 4410, artifact: 901, failure: null, preview: "unknown", pages: null }]);
+      expect(evidenceOf({ run: 4410, artifact: 901, failure: "timeout" })).toEqual([
+        { run: 4410, artifact: 901, failure: "timeout", preview: "unknown", pages: null, failureSentence: "Capture failed: it ran out of time." },
+      ]);
+      expect(evidenceOf({ run: 4410, artifact: 901 })).toEqual([{ run: 4410, artifact: 901, failure: null, preview: "unknown", pages: null, failureSentence: null }]);
     });
 
     it("is null on a pull request with no marker, and on a row with no pull request", () => {

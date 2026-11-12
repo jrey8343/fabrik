@@ -906,9 +906,10 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     evidence: {
       run: 4410,
       artifact: 901,
-      failure: null,
+      failure: "timeout",
       preview: "linked",
       pages: [{ route: "/book?when=today", preview: "https://fabrik-ticket-7.shop.example.dev/book?when=today" }],
+      failureSentence: "Capture failed: it ran out of time.",
     },
     production: { site: "https://shop.example", tracked: true, pages: [{ route: "/book?when=today", url: "https://shop.example/book?when=today" }] },
     prototype: { round: 2, comment: 5003, postedAt: "2026-11-08T21:00:00Z", waiting: true, route: "/book", captures: { run: 4420, artifact: 902 } },

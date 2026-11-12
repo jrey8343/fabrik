@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import type { UiConfig } from "../kit/config.ts";
 import {
+  CAPTURE_FAILURES,
   type Capture,
   type CaptureFailure,
   type CaptureResult,
+  captureFailureSentence,
   evidenceMarkerIn,
   evidenceSection,
   isUi,
@@ -527,6 +529,21 @@ describe("The evidence section of a failed capture", () => {
         `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"${reason}","routes":[],"preview":{"is":"none"}} -->`,
       ].join("\n"),
     );
+  });
+
+  // A reader says why a capture failed in the Kit's own sentence (#667), so every reason must have one: a tenth can't be added without its words.
+  it.each(CAPTURE_FAILURES)("gives %s a sentence of its own, the words the section's failure line says it in", (reason) => {
+    const failed: CaptureResult = { outcome: "failed", reason, headSha: HEAD, captures: [] };
+    const sentence = captureFailureSentence(reason);
+
+    expect(sentence).toMatch(/^Capture failed: .+\.$/);
+    expect(evidenceSection(evidence(failed))).toContain(`${sentence.replace("Capture failed:", "**Capture failed:**")} There are no screenshots.`);
+    expect(CAPTURE_FAILURES.filter((other) => captureFailureSentence(other) === sentence)).toEqual([reason]);
+  });
+
+  it("names the Implement job, the job that captures a pull request, where a reason points at a log", () => {
+    expect(captureFailureSentence("error")).toBe("Capture failed: it hit an error the Kit didn't expect, which the Implement job's log shows.");
+    expect(captureFailureSentence("no-result")).toBe("Capture failed: it left no result the push job could read: the Implement job's log shows why.");
   });
 
   it("links the Evidence page of the screenshots it took before it failed, and lists their routes", () => {
