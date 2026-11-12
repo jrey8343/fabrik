@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { type ChangeFingerprint, changeFingerprintOf, changeLine } from "./changeFingerprint.ts";
+import { DIGEST_FOLDS_MARKER, type DigestGiven, type DigestReply, digestCommentOf, noDigestLine, readDigestReply } from "./digestContract.ts";
 import { type DigestThread, digestFactsOf } from "./digestFacts.ts";
-import { aPullRequest } from "../__fixtures__/snapshots.ts";
+import { aDigestFacts, aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
+import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { followUpsSection, newIssueUrl } from "./followUps.ts";
 import { retryAfterFlaw } from "./retry.ts";
+import { planFor } from "./rules.ts";
 import type { FollowUp } from "./verdict.ts";
 import {
   conflictAttemptMarker,
@@ -368,5 +371,191 @@ describe("The Follow-ups of every pass on the pull request", () => {
     const quoting = aVerdict(5, { verdict: "execution-flaw", headSha: sha("a") }, ["", "The cart throws.", ...followUpsSection([RATE_LIMIT], REPO, 50)].join("\n"));
 
     expect(digestFactsOf(aThread({ kitComments: [quoting] })).followUps).toEqual([]);
+  });
+});
+
+/** The Digest's comment for this reply and what Kit code hands the contract; a refusal fails the test. */
+function bodyOf(reply: DigestReply, given: DigestGiven): string {
+  const comment = digestCommentOf(reply, given);
+  if (!comment.ok) throw new Error(`expected a Digest, got the refusal: ${comment.refused}`);
+  return comment.body;
+}
+
+describe("The Follow-ups a Digest shows", () => {
+  const NEW_ISSUE = "https://github.com/acme/shop/issues/new?title=";
+  const THREE = aDigestGiven({
+    facts: aDigestFacts({
+      followUps: [
+        { id: "f1", title: "Rate limit the cart", url: `${NEW_ISSUE}Rate+limit+the+cart` },
+        { id: "f2", title: "Delete the old basket page", url: `${NEW_ISSUE}Delete+the+old+basket+page` },
+        { id: "f3", title: "Say 'basket' in the emails", url: `${NEW_ISSUE}Say+%27basket%27+in+the+emails` },
+      ],
+    }),
+  });
+  /** The Follow-ups section of a Digest: what sits between its heading and the folds line. */
+  const shown = (body: string) => body.split("\n### Follow-ups\n\n")[1]?.split(`\n\n${DIGEST_FOLDS_MARKER}\n`)[0];
+
+  it("are only the ones the reply names: f2 of three is one line with its title and its Open as issue link", () => {
+    expect(shown(bodyOf(aDigestReply({ followUps: ["f2"] }), THREE))).toBe(`- Delete the old basket page: [Open as issue](${NEW_ISSUE}Delete+the+old+basket+page)`);
+  });
+
+  it("sit after How it got here, above the folds", () => {
+    const body = bodyOf(aDigestReply({ howItGotHere: "One Review passed it.", followUps: ["f2"] }), THREE);
+
+    expect(body).toContain("### How it got here\n\nOne Review passed it.\n\n### Follow-ups\n\n- Delete the old basket page");
+    expect(body.indexOf("### Follow-ups")).toBeLessThan(body.indexOf(DIGEST_FOLDS_MARKER));
+  });
+
+  it('are "None named." when the reply names none, whatever Kit code listed', () => {
+    expect(shown(bodyOf(aDigestReply({ followUps: [] }), THREE))).toBe("None named.");
+    expect(shown(bodyOf(aDigestReply({ followUps: [] }), aDigestGiven()))).toBe("None named.");
+  });
+
+  it("are each shown once, in the order their Verdicts named them", () => {
+    expect(shown(bodyOf(aDigestReply({ followUps: ["f3", "f1", "f3"] }), THREE))).toBe(
+      [`- Rate limit the cart: [Open as issue](${NEW_ISSUE}Rate+limit+the+cart)`, `- Say 'basket' in the emails: [Open as issue](${NEW_ISSUE}Say+%27basket%27+in+the+emails)`].join("\n"),
+    );
+  });
+
+  it("refuse the Digest when the reply names an id Kit code did not list", () => {
+    expect(digestCommentOf(aDigestReply({ followUps: ["f2", "f9", "f7"] }), THREE)).toEqual({
+      ok: false,
+      refused: "the reply names Follow-ups Kit code did not list: `f9`, `f7`",
+    });
+    expect(digestCommentOf(aDigestReply({ followUps: ["f1"] }), aDigestGiven())).toEqual({ ok: false, refused: "the reply names a Follow-up Kit code did not list: `f1`" });
+  });
+
+  it("have the no-Digest line say so when the reply names one that was not listed, as a broken reply's does", () => {
+    const pullRequest = aPullRequest({ draft: false, leftDraftSinceVerdict: true, labels: ["agent:digest"], verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] });
+    const given = aDigestGiven({ ...THREE, headSha: HEAD_SHA });
+
+    const plan = planFor(
+      { kind: "digest-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: JSON.stringify(aDigestReply({ followUps: ["f4"] })), given, runUrl: given.runUrl },
+      snapshotOfPullRequest(pullRequest),
+      kitConfig(),
+    );
+
+    const comments = plan.kind === "act" ? plan.actions.flatMap((action) => (action.kind === "comment" ? [action.body] : [])) : [];
+    expect(comments).toEqual([noDigestLine({ head: HEAD_SHA, how: "refused", reason: "the reply names a Follow-up Kit code did not list: `f4`", runUrl: given.runUrl })]);
+    expect(comments[0]).toContain("`refused`, Kit code refused the Digest writer's reply (the reply names a Follow-up Kit code did not list: `f4`).");
+  });
+});
+
+describe("The rounds fold", () => {
+  /** The folds of a Digest, each as GitHub is given it: everything under the folds line but the link to the run. */
+  const foldsOf = (body: string) => (body.split(`\n${DIGEST_FOLDS_MARKER}\n`)[1] ?? "").split("\n\n[The run](")[0] ?? "";
+  const roundsFoldOf = (body: string) => foldsOf(body).slice(foldsOf(body).indexOf("<details>\n<summary>The rounds</summary>"));
+
+  it("is Kit code's table of the rounds from the thread, with who, what and the effect on the code, then the writer's closing line, and nothing else", () => {
+    const facts = digestFactsOf(
+      aThread({
+        kitComments: [
+          aVerdict(5, { verdict: "execution-flaw", source: "ci", checks: ["test"], headSha: sha("a"), change: FIRST }),
+          aRetryPush(10, sha("b")),
+          aVerdict(15, { verdict: "pass", headSha: sha("b"), change: PRODUCT_MOVED }),
+          aNote(21, requestChangesRunStartedMarker([8]), "The Kit started the Request-changes run for the Operator's review."),
+          aRequestChangesPush(25, sha("c")),
+          aRebase(30),
+          anInfrastructureFailure(35),
+          aVerdict(40, { verdict: "pass", requestChanges: true, headSha: sha("d"), change: PRODUCT_MOVED }),
+        ],
+        requestChanges: [{ review: 8, at: at(20), dismissed: false }],
+      }),
+    );
+
+    const body = bodyOf(aDigestReply({ roundsLine: "Both passes agree; the Request-changes run changed nothing the second Review weighed." }), aDigestGiven({ facts }));
+
+    expect(roundsFoldOf(body)).toBe(
+      [
+        "<details>",
+        "<summary>The rounds</summary>",
+        "",
+        "| Who | What | Effect on the code |",
+        "| --- | --- | --- |",
+        "| The Implementer | The first run | |",
+        "| Red Required checks | Execution flaw | |",
+        "| The Implementer | Retry 1 | |",
+        "| The Reviewer | Pass | Product code |",
+        "| The Operator | Request changes | |",
+        "| The Implementer | A Request-changes run | |",
+        "| The Kit | A rebase onto `main` | |",
+        "| The Kit | An Infrastructure failure | |",
+        "| The Reviewer | Pass | None |",
+        "",
+        "Both passes agree; the Request-changes run changed nothing the second Review weighed.",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+  });
+
+  it("comes third, inside a details block, after Walk me through it and Decided without you, and before the link to the run", () => {
+    const body = bodyOf(aDigestReply(), aDigestGiven());
+
+    expect(foldsOf(body).match(/<summary>(.*)<\/summary>/g)).toEqual([
+      "<summary>Walk me through it</summary>",
+      "<summary>Decided without you, and left alone</summary>",
+      "<summary>The rounds</summary>",
+    ]);
+    expect(foldsOf(body).endsWith(roundsFoldOf(body))).toBe(true);
+    expect(body.endsWith(`</details>\n\n[The run](${aDigestGiven().runUrl})`)).toBe(true);
+  });
+
+  it("words every kind of round: the Kit's own Verdicts with what they were for, a Design flaw, a conflict-only run, a Broken run, and an effect that is tests only or not known", () => {
+    const facts = aDigestFacts({
+      rounds: [
+        { who: "implementer", what: "first-run", effect: null },
+        { who: "reviewer", what: "execution-flaw", effect: null },
+        { who: "kit", what: "execution-flaw", why: "retry-changed-nothing", effect: "none" },
+        { who: "implementer", what: "retry", retry: 2, effect: null },
+        { who: "kit", what: "broken-run", effect: null },
+        { who: "kit", what: "execution-flaw", why: "broken-run", effect: "not-known" },
+        { who: "implementer", what: "conflict-only-run", effect: null },
+        { who: "reviewer", what: "design-flaw", effect: "tests-only" },
+      ],
+    });
+
+    expect(roundsFoldOf(bodyOf(aDigestReply(), aDigestGiven({ facts }))).split("\n").slice(5, 13)).toEqual([
+      "| The Implementer | The first run | |",
+      "| The Reviewer | Execution flaw | |",
+      "| The Kit, for a Retry that changed nothing | Execution flaw | None |",
+      "| The Implementer | Retry 2 | |",
+      "| The Kit | A Broken run | |",
+      "| The Kit, for a Broken run | Execution flaw | Not known |",
+      "| The Implementer | A conflict-only run | |",
+      "| The Reviewer | Design flaw | Tests only |",
+    ]);
+  });
+
+  it("keeps the closing line to one line, with no mention in it", () => {
+    const body = bodyOf(aDigestReply({ roundsLine: "  The two Verdicts disagreed\non the empty basket, says @octocat.\n" }), aDigestGiven());
+
+    expect(roundsFoldOf(body).split("\n").slice(-3)).toEqual(["The two Verdicts disagreed on the empty basket, says @​octocat.", "", "</details>"]);
+  });
+});
+
+describe("The reply's Follow-ups and closing line", () => {
+  it("reads a reply that names the Follow-ups to show and words the rounds' closing line", () => {
+    expect(readDigestReply(aDigestReply({ followUps: ["f2"], roundsLine: "Two Reviews; the second passed it." }))).toEqual({
+      ok: true,
+      output: aDigestReply({ followUps: ["f2"], roundsLine: "Two Reviews; the second passed it." }),
+    });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["text", "f1"],
+    ["a list holding anything but ids", ["f1", 2]],
+    ["a list holding an empty id", ["f1", " "]],
+  ])("refuses followUps that is %s", (_name, followUps) => {
+    expect(readDigestReply({ ...aDigestReply(), followUps })).toEqual({ ok: false, errors: ["followUps must be a list of Follow-up ids"] });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["empty", "  "],
+    ["no text", 7],
+  ])("refuses a roundsLine that is %s", (_name, roundsLine) => {
+    expect(readDigestReply({ ...aDigestReply(), roundsLine })).toEqual({ ok: false, errors: ["roundsLine must be non-empty text"] });
   });
 });

@@ -99,7 +99,7 @@ async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise
     case "review":
       return { ...(await finishedReviewEvent(input, join(agentDir, AGENT_RESULT_FILE))), branch: null };
     case "digest":
-      return { ...(await finishedDigestEvent(input, join(agentDir, AGENT_RESULT_FILE), github, repo)), branch: null };
+      return { ...(await finishedDigestEvent(input, join(agentDir, AGENT_RESULT_FILE), github, repo, config.operator)), branch: null };
     case "agent-result":
       return agentResultEvent(input, join(agentDir, AGENT_RESULT_FILE), repo);
   }
@@ -288,16 +288,18 @@ async function finishedReviewEvent(
  * The Digest writer's reply, from its result, for the pull request and the
  * head the Kit job's plan named, with what Kit code hands the Digest's
  * contract beside it (src/github/digestGiven.ts), none of it the agent's word.
+ * `operator` is the Kit config's, whose Request changes Kit code's facts count.
  */
 async function finishedDigestEvent(
   input: Extract<PushJobInput, { kind: "digest" }>,
   resultPath: string,
   github: GitHub,
   repo: Repo,
+  operator: string | null,
 ): Promise<{ event: LoopEvent; source: string }> {
   const result = readAgentRunResult(await readFile(resultPath, "utf8"));
   const { pullRequest, headSha } = input;
-  const given = await readDigestGiven(github, repo, { repoUrl: thisRepoUrl(), pullRequest, headSha, runUrl: thisRunUrl() });
+  const given = await readDigestGiven(github, repo, { repoUrl: thisRepoUrl(), pullRequest, headSha, runUrl: thisRunUrl(), operator });
   return { event: digestEventFrom(result, { pullRequest, headSha }, given, thisRunUrl()), source: `the Digest of #${pullRequest}` };
 }
 
