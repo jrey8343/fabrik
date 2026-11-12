@@ -224,6 +224,31 @@ describe("The Deployments read", () => {
       await readOne(client);
       expect(client.calls.filter((path) => path.includes("/compare/"))).toEqual([`/repos/owner/product/compare/${sha("a")}...${sha("b")}?per_page=1`]);
     });
+
+    it("asks no comparison once the merge commit's own deploy has decided it, for no later deploy could succeed sooner", async () => {
+      const client = repoWith({
+        deployments: [
+          { id: 7, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "success", at: "2026-11-12T08:05:00Z" }, { state: "inactive", at: "2026-11-12T08:34:00Z" }] },
+          { id: 8, sha: sha("b"), createdAt: "2026-11-12T08:30:00Z", reports: [{ state: "success", at: "2026-11-12T08:34:00Z" }] },
+          { id: 9, sha: sha("c"), createdAt: "2026-11-12T09:30:00Z", reports: [{ state: "in_progress", at: "2026-11-12T09:31:00Z" }] },
+        ],
+        compare: { [`${sha("a")}...${sha("b")}`]: "ahead", [`${sha("a")}...${sha("c")}`]: "ahead" },
+      });
+      expect(deployOf(await readOne(client), sha("a"))).toEqual({ is: "succeeded", deployment: 7, commit: sha("a"), at: "2026-11-12T08:05:00Z", log: null });
+      expect(client.calls.filter((path) => path.includes("/compare/"))).toEqual([]);
+    });
+
+    it("still asks about a Deployment whose reports could not be read when it was created before the deciding success", async () => {
+      const client = repoWith({
+        deployments: [
+          { id: 6, sha: sha("b"), createdAt: "2026-11-12T08:01:00Z", reports: refusal("/repos/owner/product/deployments/6/statuses") },
+          { id: 7, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "success", at: "2026-11-12T08:05:00Z" }] },
+        ],
+        compare: { [`${sha("a")}...${sha("b")}`]: "behind" },
+      });
+      expect(deployOf(await readOne(client), sha("a")).deployment).toBe(7);
+      expect(client.calls.filter((path) => path.includes("/compare/"))).toEqual([`/repos/owner/product/compare/${sha("a")}...${sha("b")}?per_page=1`]);
+    });
   });
 
   describe("what a Deployment is, from its reports", () => {

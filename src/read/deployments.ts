@@ -55,9 +55,10 @@ const PAGE = 100;
  *
  * One request for each page of the environment's Deployments, newest first,
  * read no further back than the earliest merge; one for each Deployment's
- * reports; and one comparison for each pair of merge and deployed commit that
- * could count, asked once, and none where the two are the same commit. Asked
- * about no merges, it makes no request.
+ * reports; and a comparison for each pair of merge and deployed commit the
+ * answer turns on, asked once, and none where the two are the same commit: a
+ * merge its own commit's deploy has settled asks none. Asked about no merges,
+ * it makes no request.
  */
 export async function readDeployments(
   client: Pick<ReadClient, "rest">,
@@ -87,8 +88,7 @@ export async function readDeployments(
   const decided = await Promise.all(
     asked.map(async (merge) => {
       const since = kept.filter(({ deployment }) => Date.parse(deployment.created_at) >= Date.parse(merge.mergedAt));
-      const candidates = await Promise.all(since.map(async (candidate) => ({ ...candidate, contains: await contains(merge.mergeCommit, candidate.deployment.sha) })));
-      return [merge.mergeCommit, deployOf(candidates)] as const;
+      return [merge.mergeCommit, await deployOf(since, (deployed) => contains(merge.mergeCommit, deployed))] as const;
     }),
   );
   const byMerge = new Map(decided);
@@ -200,39 +200,54 @@ function containing(client: Pick<ReadClient, "rest">, repo: string): (merge: str
   };
 }
 
-/** A Deployment created at or after a merge, what it is, and whether its commit contains the merge commit. */
+/** A Deployment created at or after a merge, and what it is. */
 interface Candidate {
   readonly deployment: RawDeployment;
   readonly state: Exclude<DeploymentState, "passed-over">;
-  readonly contains: boolean | "unread";
 }
 
 /**
- * The answer for one merge, from the Deployments created since it, first
- * match wins: succeeded at the earliest success of any that counts; running,
- * at the newest running one's creation; failed by the newest that counts;
- * else none. Unread when one that could count could not be read: its
- * comparison or its reports.
+ * The answer for one merge, from the Deployments created since it, of which
+ * those whose commit contains the merge commit count (`counts`), first match
+ * wins: succeeded at the earliest success of any that counts; running, at
+ * the newest running one's creation; failed by the newest that counts; else
+ * none. It asks whether one counts only as far as the answer turns on it, so
+ * a merge its own commit's deploy has settled asks nothing. Unread when one
+ * the answer turns on could not be read: its comparison, or its reports where
+ * it might have succeeded sooner or be the one that decides.
  */
-function deployOf(candidates: readonly Candidate[]): DeployOf | "unread" {
-  const counting: { readonly deployment: RawDeployment; readonly state: Exclude<Candidate["state"], "unread"> }[] = [];
-  for (const { deployment, state, contains } of candidates) {
-    if (contains === "unread") return "unread";
-    if (!contains) continue;
-    if (state === "unread") return "unread";
-    counting.push({ deployment, state });
-  }
+async function deployOf(candidates: readonly Candidate[], counts: (deployed: string) => Promise<boolean | "unread">): Promise<DeployOf | "unread"> {
   // Newest first, by creation, then by GitHub's numbering where that ties.
-  counting.sort((a, b) => Date.parse(b.deployment.created_at) - Date.parse(a.deployment.created_at) || b.deployment.id - a.deployment.id);
-  const succeeded = counting
-    .flatMap(({ deployment, state }) => (state.is === "succeeded" ? [{ deployment, at: state.at }] : []))
-    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.deployment.id - b.deployment.id)[0];
-  if (succeeded !== undefined) return { is: "succeeded", deployment: succeeded.deployment.id, commit: succeeded.deployment.sha, at: succeeded.at, log: null };
-  const running = counting.find(({ state }) => state.is === "running");
-  if (running !== undefined) return { is: "running", deployment: running.deployment.id, commit: running.deployment.sha, at: running.deployment.created_at, log: null };
-  const [newest] = counting;
-  if (newest !== undefined && newest.state.is === "failed") {
-    return { is: "failed", deployment: newest.deployment.id, commit: newest.deployment.sha, at: newest.state.at, log: newest.state.log };
+  const newestFirst = candidates.toSorted((a, b) => Date.parse(b.deployment.created_at) - Date.parse(a.deployment.created_at) || b.deployment.id - a.deployment.id);
+  const unreadable = newestFirst.filter(({ state }) => state === "unread");
+  /** Whether one whose reports could not be read, created at or before `by` (epoch ms), counts or might: it could have succeeded sooner. */
+  const unreadableCounts = async (by: number) => {
+    for (const { deployment } of unreadable) {
+      if (Date.parse(deployment.created_at) <= by && (await counts(deployment.sha)) !== false) return true;
+    }
+    return false;
+  };
+  const successes = newestFirst
+    .flatMap(({ deployment, state }) => (state !== "unread" && state.is === "succeeded" ? [{ deployment, at: state.at }] : []))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.deployment.id - b.deployment.id);
+  for (const { deployment, at } of successes) {
+    if (await unreadableCounts(Date.parse(at))) return "unread";
+    const counted = await counts(deployment.sha);
+    if (counted === "unread") return "unread";
+    if (counted) return { is: "succeeded", deployment: deployment.id, commit: deployment.sha, at, log: null };
+  }
+  if (await unreadableCounts(Infinity)) return "unread";
+  for (const { deployment, state } of newestFirst) {
+    if (state === "unread" || state.is !== "running") continue;
+    const counted = await counts(deployment.sha);
+    if (counted === "unread") return "unread";
+    if (counted) return { is: "running", deployment: deployment.id, commit: deployment.sha, at: deployment.created_at, log: null };
+  }
+  for (const { deployment, state } of newestFirst) {
+    if (state === "unread" || state.is !== "failed") continue;
+    const counted = await counts(deployment.sha);
+    if (counted === "unread") return "unread";
+    if (counted) return { is: "failed", deployment: deployment.id, commit: deployment.sha, at: state.at, log: state.log };
   }
   return { is: "none", deployment: null, commit: null, at: null, log: null };
 }
