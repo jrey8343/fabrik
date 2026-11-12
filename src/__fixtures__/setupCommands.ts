@@ -110,6 +110,29 @@ export function aReadyOperator(productDir: string, release = "v1.4.2"): Record<s
   };
 }
 
+/** One of a repo's Deployments, as the canned gh gives it: its environment, and the address its status gave, if any. */
+export interface CannedDeployment {
+  readonly environment: string;
+  /** Its status's state; success by default. */
+  readonly state?: string;
+  readonly url?: string;
+}
+
+/** The canned gh answers for a repo's Deployments, given newest first, and each one's statuses. */
+export function deploymentsOf(repo: string, deployments: readonly CannedDeployment[]): Record<string, Answer> {
+  const ids = deployments.map((_, i) => deployments.length - i);
+  const listed = deployments.map(({ environment }, i) => ({
+    id: ids[i],
+    environment,
+    created_at: new Date(Date.UTC(2026, 10, 1, ids[i])).toISOString(),
+  }));
+  const script: Record<string, Answer> = { [`gh api repos/${repo}/deployments?per_page=100`]: { stdout: JSON.stringify(listed) } };
+  deployments.forEach(({ state = "success", url = "" }, i) => {
+    script[`gh api repos/${repo}/deployments/${ids[i]}/statuses?per_page=100`] = { stdout: JSON.stringify([{ state, environment_url: url }]) };
+  });
+  return script;
+}
+
 /** Every command that changes something: none may run before the Operator's yes. */
 export const APPLYING = {
   "gh label create": {},

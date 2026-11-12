@@ -399,7 +399,8 @@ function pausedStarter(starter: string): string {
   return starter.replace(member, (_, key: string) => `${key}0`);
 }
 
-function jsonObject(text: string): Record<string, unknown> | null {
+/** The Kit config's text as a JSON object, or null when it isn't one. */
+export function jsonObject(text: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(text);
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
