@@ -15,13 +15,6 @@ import {
 import type { Action, LabelledTrigger, Plan, RolesUnderWay, TriggerSweepSnapshot } from "./types.ts";
 
 /**
- * How long a trigger label stays on, in minutes, before the sweep counts it
- * as having no run behind it, when no job of its role is under way: well past
- * the 10 minutes the adapter's cycle waits (#417), and the time a claim takes.
- */
-export const STUCK_TRIGGER_MINUTES = 30;
-
-/**
  * The first line of the give-up comment for each role whose failed run parks
  * its work: Dispatch skips a Ticket or research Decision whose latest Kit word
  * is its role's failure notice (#418, #154), and a Design session whose turn
@@ -37,14 +30,15 @@ const PARKING_MARKERS: Partial<Record<TriggerLabel, string>> = {
 
 /**
  * What the sweep does this tick about each trigger label with no run behind
- * it: on an open issue or PR, one last added at least STUCK_TRIGGER_MINUTES
- * ago with no job of its role under way. The first time, it adds it again;
+ * it: on an open issue or PR, one last added at least `waitMinutes` ago (the
+ * record's stuckTrigger, src/loop/recoveryWaits.ts) with no job of its role
+ * under way. The first time, it adds it again;
  * if it's still stuck at a later tick, the Kit's re-add since it last came
  * off, it gives up. The count resets whenever the label comes off, so only
  * the Operator adding it again restarts the work after a give-up. With the
  * Actions API unread, it leaves every label alone and says so.
  */
-export function sweepStuckTriggers(now: string, { underWay, labelled }: TriggerSweepSnapshot, operator: string): Plan {
+export function sweepStuckTriggers(now: string, { underWay, labelled }: TriggerSweepSnapshot, operator: string, waitMinutes: number): Plan {
   if (underWay === null) {
     return {
       kind: "act",
@@ -54,7 +48,7 @@ export function sweepStuckTriggers(now: string, { underWay, labelled }: TriggerS
   }
   const actions = labelled.flatMap((trigger) => {
     const minutes = minutesOn(now, trigger);
-    if (minutes === null || minutes < STUCK_TRIGGER_MINUTES || hasRunBehind(trigger, underWay)) return [];
+    if (minutes === null || minutes < waitMinutes || hasRunBehind(trigger, underWay)) return [];
     return trigger.readded ? giveUp(trigger, operator) : readd(trigger, minutes);
   });
   return actions.length === 0 ? { kind: "nothing", reason: "No trigger label sits with no run behind it" } : { kind: "act", actions };

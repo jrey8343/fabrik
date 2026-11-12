@@ -784,7 +784,7 @@ export interface PullRequestSnapshot {
    * tells (#389): the latest of its force pushes, the Kit's notes of its own
    * pushes, its opening by the Fabrik App, and its head commit's commit time,
    * each of which is no later than the push. Null when none of them is known.
-   * What the conflict check waits a Review's grace period (reviewGraceMinutes) from before it brings
+   * What the conflict check waits the record's unreviewedDraft (src/loop/recoveryWaits.ts) from before it brings
    * a draft whose push GitHub never reviewed up to date with main.
    */
   readonly headPushedAt: string | null;

@@ -3,8 +3,7 @@ import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
 import { issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { failureNotice } from "./failures.ts";
-import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
-import { checkConflicts, reviewGraceMinutes } from "./conflicts.ts";
+import { checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
@@ -42,6 +41,7 @@ import { startAgentRun } from "./runs.ts";
 import { makesUnusable, onChosenSubscription } from "./subscriptions.ts";
 import { parseTriageOutput, type TriageOutput } from "./triageOutput.ts";
 import { checkDesignQueue } from "./designQueue.ts";
+import { recoveryWaits } from "./recoveryWaits.ts";
 import { replayGate } from "./replayGate.ts";
 import { landReplayRun, startReplay } from "./replayRun.ts";
 import { retroGate } from "./retroGate.ts";
@@ -217,7 +217,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // Before all that, a Tick that runs at all closes its repo's Dead-tick issue (#461).
       return thenCheckQueues(
         alongside(
-          withDeadTickClosed(event, snapshot, withReasonNoted(stuckTriggers(event.now, snapshot))),
+          withDeadTickClosed(event, snapshot, withReasonNoted(stuckTriggers(event.now, snapshot, config))),
           scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate], event.now, snapshot, config),
         ),
       );
@@ -246,8 +246,10 @@ function thenCheckQueues(plan: Plan): Plan {
 }
 
 /** The stuck-trigger sweep (src/loop/triggerSweep.ts) on the snapshot's trigger-sweep slice, which only the tick gathers. */
-function stuckTriggers(now: string, snapshot: Snapshot): Plan {
-  return snapshot.triggers === null ? missingFromSnapshot("the trigger labels the stuck-trigger sweep weighs") : sweepStuckTriggers(now, snapshot.triggers, snapshot.operator);
+function stuckTriggers(now: string, snapshot: Snapshot, config: KitConfig): Plan {
+  return snapshot.triggers === null
+    ? missingFromSnapshot("the trigger labels the stuck-trigger sweep weighs")
+    : sweepStuckTriggers(now, snapshot.triggers, snapshot.operator, recoveryWaits(config).stuckTrigger);
 }
 
 /** The conflict check (src/loop/conflicts.ts) on the snapshot's conflict slice, which a push to main and the tick gather. */
@@ -258,8 +260,7 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
         snapshot.conflicts,
         snapshot.operator,
         heldOn(snapshot.kitIssues, config),
-        implementJobTimeoutMinutes(config.roles.implement.timeoutMinutes),
-        reviewGraceMinutes(config.roles.review.timeoutMinutes),
+        recoveryWaits(config),
         heldOf("implement", snapshot.kitIssues),
       );
 }

@@ -4,6 +4,13 @@
 // Stuck bar is built from the record, so work turns Stuck only once every
 // recovery has had its turn, and a recovery added to the record is counted
 // with no other change.
+//
+// The Tick's other parts wait on no clock of the Kit's before moving work on,
+// so none is here: the audit and retro gates wait for a day of the week, the
+// held-run resume and the weekly-limit close for a Subscription's reset (held
+// work is never Stuck), the Flaky-check sweep and closing merged Tickets act
+// on what they read at once, and the replay step's release of a run past its
+// limit moves a Replay, which never turns Stuck between its steps.
 import { implementJobTimeoutMinutes } from "../evidence/capture.ts";
 import type { KitConfig } from "./types.ts";
 
