@@ -25,6 +25,8 @@ interface RawRepo {
   mergedPullRequests?: Record<string, unknown>[];
   /** Fail every query whose text holds this. */
   failing?: string;
+  /** Refuse the read of this file, as GitHub refuses one for want of a permission. */
+  failingFile?: string;
 }
 
 /** Every call a gather made of the client: each query's text, and each file read. */
@@ -45,6 +47,7 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       expect(repo).toEqual({ owner: "jrey8343", name: "shop" });
       expect(ref).toBe(branch?.head);
       calls.files.push(path);
+      if (path === raw.failingFile) throw new GitHubError(`GitHub GET ${path} failed: 403`, 403);
       return raw.files?.[path] ?? null;
     },
     async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
@@ -127,6 +130,36 @@ describe("a gather shaped for Home", () => {
       const read = await gatherRepo(client, "jrey8343/shop", NOW);
 
       expect(read).toMatchObject({ product: true, release: "v3.1.0", operator: "kate", kitConfig: { ok: true }, facts: null, unread: "GitHub GraphQL failed: 502" });
+    });
+  });
+
+  describe("whether a Product repo has a ui block", () => {
+    const UI = '{ "ui": { "paths": ["src/**/*.tsx"], "serve": "npm run preview", "url": "http://localhost:4173" } }';
+
+    it.each([
+      ["yes for a Kit config with a ui block", UI, "yes"],
+      ["no for a Kit config with ui: null", '{ "ui": null }', "no"],
+      ["no for a Kit config with no ui block", '{ "operator": "kate" }', "no"],
+      ["no for a repo with no Kit config", undefined, "no"],
+      ["unknown for an invalid Kit config", '{ "ui": { "paths": [] } }', "unknown"],
+    ] as const)("is %s", async (_what, config, uiBlock) => {
+      const { client } = repoWith({ files: { [CALLER_PATH]: CALLER, ...(config === undefined ? {} : { [CONFIG_PATH]: config }) } });
+
+      expect(await gatherRepo(client, "jrey8343/shop", NOW)).toMatchObject({ product: true, uiBlock });
+    });
+
+    it("is unknown when the Kit config could not be read, with no facts and why, and the read does not throw", async () => {
+      const { client } = repoWith({ files: { [CALLER_PATH]: CALLER }, failingFile: CONFIG_PATH });
+
+      const read = await gatherRepo(client, "jrey8343/shop", NOW);
+
+      expect(read).toMatchObject({ product: true, release: "v3.1.0", operator: "jrey8343", uiBlock: "unknown", kitConfig: { ok: false }, facts: null, unread: "GitHub GET .fabrik/config.json failed: 403" });
+    });
+
+    it("is still said when a query of the facts fails", async () => {
+      const { client } = repoWith({ files: { [CALLER_PATH]: CALLER, [CONFIG_PATH]: UI }, failing: "pullRequests(states: OPEN" });
+
+      expect(await gatherRepo(client, "jrey8343/shop", NOW)).toMatchObject({ uiBlock: "yes", facts: null });
     });
   });
 

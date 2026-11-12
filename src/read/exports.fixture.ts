@@ -587,6 +587,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     release: "v3.1.0",
     operator: "owner",
     kitConfig: { ok: true, config: DEFAULT_KIT_CONFIG },
+    uiBlock: "no",
     facts: homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
     unread: null,
   } satisfies RepoRead,
