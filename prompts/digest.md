@@ -30,7 +30,7 @@ At the end of this prompt, each under its own heading:
 - "Every Verdict on the pull request", oldest first: each with the head it judged, who gave it and its whole comment.
 - "The Kit's notes on the pull request", oldest first: what the Kit itself wrote on the thread between the Verdicts, such as a Retry's push or a rebase onto the default branch.
 - "Kit code's facts": what Kit code worked out from the thread, which no agent wrote. Its `rounds`, oldest first, each with who and what, and on a Verdict its `effect` on the code against the Verdict before it; its `counts` of them; `retriesLeft`, how many of the Ticket's Retries are left; `followUps`, every Follow-up a pass on this pull request named, each with Kit code's id for it; `asks`, every Request changes of the Operator's and every line comment in one, each under the id it is headed by where the Request changes are set out; and `productCode`, whether the product code changed since the first Verdict. These are facts. Word them, and never contradict them or count anything again yourself.
-- "UI evidence": whether the pull request has screenshots of its pages.
+- "UI evidence": whether the pull request has screenshots of its pages, and its captured routes, the routes those screenshots are of, or that it has none.
 
 You are given no transcript and no Run record, and you need none: write from the pull request, its thread and the code.
 
@@ -77,6 +77,14 @@ What an item holds:
 - At most three places on an item, and at most 40 lines in each. Name the fewest lines that show the thing. The Kit cuts a longer place to its first 40 lines, and refuses a Digest with a fourth place on an item.
 - Take each line number from the file as it stands at this head, as `grep -n` or `git blame` gives it, never from a diff, a Verdict or the pull request's body. The Kit drops a place whose file or lines the head does not have, and keeps the item.
 - Point; never quote. The Kit links each place after the item's sentence, and the Operator is shown the real lines from the head. Don't retype them in `claim` or `sentence`, or anywhere in the top.
+
+`picture`, on an item about a screen: one captured route, or `null`.
+
+- An item about a screen may name one captured route as its picture: the route of the screen it is about, exactly as "UI evidence" lists it, with nothing added or left off. At most one on an item.
+- A changed screen with no captured route is a `not-proven` item: nothing shows it as it now is. Its `picture` is `null`.
+- `null` on an item that is about no screen, and on every item when the pull request has no captured routes.
+- Never embed or link an image, here or anywhere in your output. The Kit names the route after the item's places, and the Operator is shown the picture from the pull request's UI evidence.
+- The Kit drops a picture whose route is not a captured route, and keeps the item.
 
 `suggestedRequest`, on an item that is `asked-not-here` or `not-proven`: the request the Operator could send as it stands, in at most 40 words, or `null` when you have none. The Kit does not show it in the Digest.
 
@@ -161,6 +169,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
         { "path": "src/pages/saved-basket.tsx", "start": 14, "end": 16, "as": "words" },
         { "path": "src/pages/saved-basket.test.tsx", "start": 22, "end": 25, "as": "code" }
       ],
+      "picture": "/basket",
       "suggestedRequest": "Rename the saved-basket page's heading from \"Saved cart\" to \"Saved basket\", and update the test that reads it."
     },
     {
@@ -169,6 +178,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
       "sentence": "The Ticket said \"for a while\" and the Implementer chose a day. How long a shopper's price holds is a pricing call.",
       "asks": [],
       "places": [{ "path": "src/basket/saved.ts", "start": 31, "end": 38, "as": "code" }],
+      "picture": null,
       "suggestedRequest": null
     },
     {
@@ -177,6 +187,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
       "sentence": "A unit test moves the clock; nothing drives the page a shopper returns to.",
       "asks": [],
       "places": [{ "path": "src/basket/saved.test.ts", "start": 48, "end": 71, "as": "code" }],
+      "picture": null,
       "suggestedRequest": "Add an end-to-end test that saves a basket, moves the clock a day, returns to /basket and checks the repriced total and the list of what changed."
     }
   ],
@@ -190,10 +201,10 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
 </digest>
 
 - `asks` holds your answer to every ask of Kit code's, under Kit code's id for it, and to every criterion, under an id of your own. Each has `id`, `answer`, `where` and `checkedBy`, and a criterion has `criterion` too. No id twice.
-- `items` is a list of at most four items, and an empty list when nothing needs the Operator's eyes. Each has `kind`, `claim`, `sentence`, `asks`, `places` and `suggestedRequest`: `asks` is a list, empty on any kind but `asked-not-here`; `places` is a list of at most three places, each with `path`, `start`, `end` and `as`, and an empty list when the item is about no lines; and `suggestedRequest` is text or `null`. `claim` and `sentence` are plain text.
+- `items` is a list of at most four items, and an empty list when nothing needs the Operator's eyes. Each has `kind`, `claim`, `sentence`, `asks`, `places`, `picture` and `suggestedRequest`: `asks` is a list, empty on any kind but `asked-not-here`; `places` is a list of at most three places, each with `path`, `start`, `end` and `as`, and an empty list when the item is about no lines; `picture` is one captured route as text, or `null`; and `suggestedRequest` is text or `null`. `claim` and `sentence` are plain text.
 - `whatItDoes` and `howItGotHere` are plain text: no Markdown, no code, and each within its 40 words.
 - `followUps` is a list of Kit code's ids, such as `f1`, and an empty list when there is none to show.
 - `walkthrough` and `decided` are Markdown, with only what GitHub renders in a pull request: lists, tables, code blocks and Mermaid. No headings and no HTML: the Kit gives each fold its title.
 - `roundsLine` is plain text on one line.
 - Every field is required, and no text may be empty. The Kit checks the reply's shape, and a reply that breaks it posts no Digest.
-- Write no layout of your own around the JSON: the Kit adds the opening line, the headings, the link to each place, the Follow-ups' titles and links, the folds, the table of the rounds, the table of the asks and the link to the run.
+- Write no layout of your own around the JSON: the Kit adds the opening line, the headings, the link to each place, each picture's route, the Follow-ups' titles and links, the folds, the table of the rounds, the table of the asks and the link to the run.

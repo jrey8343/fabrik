@@ -66,8 +66,9 @@ export function aDigestReply(overrides: Partial<DigestReply> = {}): DigestReply 
 
 /**
  * What the push job hands the contract for the Digest of #50 of acme/shop at
- * head `a…a`, with aDigestFacts for its facts and nothing read of the head,
- * as for a reply that names no place.
+ * head `a…a`, with aDigestFacts for its facts, nothing read of the head, as
+ * for a reply that names no place, and no captured route, as for a pull
+ * request with no UI evidence.
  */
 export function aDigestGiven(overrides: Partial<DigestGiven> = {}): DigestGiven {
   return {
@@ -77,6 +78,7 @@ export function aDigestGiven(overrides: Partial<DigestGiven> = {}): DigestGiven 
     runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
     facts: aDigestFacts(),
     head: { files: [], changed: [] },
+    capturedRoutes: [],
     ...overrides,
   };
 }

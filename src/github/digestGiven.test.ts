@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
+import { CAPTURED, EVIDENCE_PAGE } from "../__fixtures__/uiEvidence.ts";
+import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import { type DigestReply, digestCommentOf, readDigestComment } from "../loop/digestContract.ts";
 import { handBackMarker, RETRY_PUSH_MARKER, verdictMarker } from "../loop/markers.ts";
 import type { ReadClient } from "./client.ts";
@@ -46,6 +48,10 @@ interface Thread {
   readonly files?: readonly { filename: string; status: string; patch?: string }[];
   /** Each file's text at the head, by its path. Left out, a read of any file is unexpected. */
   readonly texts?: Readonly<Record<string, string>>;
+  /** The pull request's body. Left out, it is empty. */
+  readonly body?: string;
+  /** Who opened the pull request, and so wrote its body. Left out, the Fabrik App. */
+  readonly openedBy?: User;
 }
 
 const REVIEW_URL = (id: number) => `https://github.com/acme/shop/pull/50#pullrequestreview-${id}`;
@@ -57,7 +63,10 @@ const LINE_URL = (id: number) => `https://github.com/acme/shop/pull/50#discussio
  * queries select: the thread's opening, and the pull request as the Loop's
  * snapshot reads it.
  */
-function gitHub({ comments = [], reviews = [], lineComments = [], headRefName = "fabrik/ticket-7", closes = [], files, texts }: Thread = {}): { client: ReadClient; calls: string[] } {
+function gitHub({ comments = [], reviews = [], lineComments = [], headRefName = "fabrik/ticket-7", closes = [], files, texts, body = "", openedBy = BOT }: Thread = {}): {
+  client: ReadClient;
+  calls: string[];
+} {
   const calls: string[] = [];
   const author = (user: User | null) => (user === null ? null : { login: user.login, __typename: user.type });
   const client: ReadClient = {
@@ -74,8 +83,8 @@ function gitHub({ comments = [], reviews = [], lineComments = [], headRefName = 
             isDraft: true,
             headRefName,
             headRefOid: HEAD,
-            author: { login: BOT.login, __typename: "Bot" },
-            body: "",
+            author: author(openedBy),
+            body,
             labels: { nodes: [] },
             comments: { pageInfo: { hasPreviousPage: false }, nodes: comments.map(({ user, body, created_at }) => ({ body, createdAt: created_at, author: author(user) })) },
             changesRequests: {
@@ -250,7 +259,7 @@ describe("What the push job hands the Digest's contract", () => {
     const given = await readDigestGiven(gitHub(thread).client, repo, written);
 
     expect(given).toMatchObject({ repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, runUrl: RUN });
-    expect(Object.keys(given).toSorted()).toEqual(["facts", "head", "headSha", "pullRequest", "repoUrl", "runUrl"]);
+    expect(Object.keys(given).toSorted()).toEqual(["capturedRoutes", "facts", "head", "headSha", "pullRequest", "repoUrl", "runUrl"]);
     expect(given.facts.rounds.map(({ who, what }) => `${who}: ${what}`)).toEqual([
       "implementer: first-run",
       "operator: request-changes",
@@ -323,6 +332,7 @@ describe("What the push job hands the Digest's contract", () => {
       sentence: "The Ticket said for a while.",
       asks: [],
       places,
+      picture: null,
       suggestedRequest: null,
     });
     const reply = aDigestReply({
@@ -369,6 +379,80 @@ describe("What the push job hands the Digest's contract", () => {
 
       expect((await readDigestGiven(client, repo, { ...written, output })).head).toEqual({ files: [], changed: [] });
       expect(calls.filter((call) => call.startsWith("text ") || call.includes("/pulls/50/files"))).toEqual([]);
+    });
+  });
+
+  describe("of the captured routes, for the picture an item names", () => {
+    /** The pull request's body, with an evidence section ending in this marker. */
+    const bodyWith = (marker: string) => `Saves the basket.\n\n<!-- fabrik:ui-evidence-start -->\n## UI evidence\n\n<!-- fabrik:ui-evidence ${marker} -->\n\nCloses #7`;
+    const TWO_ROUTES = bodyWith('{"run":9100,"artifact":9202,"failure":null,"routes":["/basket","/basket/saved"],"preview":{"is":"none"},"missed":[]}');
+    const quiet: Thread = { ...thread, reviews: [] };
+    const item = (picture: string): DigestReply["items"][number] => ({
+      kind: "yours-to-judge",
+      claim: "The saved basket's page is new.",
+      sentence: "How it reads is yours to judge.",
+      asks: [],
+      places: [],
+      picture,
+      suggestedRequest: null,
+    });
+    const pictures = (reply: DigestReply, given: Awaited<ReturnType<typeof readDigestGiven>>) => {
+      const comment = digestCommentOf(reply, given);
+      const read = readDigestComment(comment.ok ? comment.body : "");
+      return read.ok ? read.data.items.map(({ picture }) => picture) : read.why;
+    };
+
+    it("is the routes the evidence marker in the pull request's body names, in the marker's order", async () => {
+      expect((await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES }).client, repo, written)).capturedRoutes).toEqual(["/basket", "/basket/saved"]);
+    });
+
+    it("is the routes of the evidence section the push job writes on a UI pull request, one whose every shot was missed among them", async () => {
+      const result: CaptureResult = {
+        ...CAPTURED,
+        missed: [
+          { route: "/pricing", reason: "ticket", viewport: "mobile", side: "after", url: "http://127.0.0.1:4321/pricing", why: "after-unreachable", error: "ERR_CONNECTION_REFUSED" },
+          { route: "/pricing", reason: "ticket", viewport: "desktop", side: "after", url: "http://127.0.0.1:4321/pricing", why: "after-unreachable", error: "ERR_CONNECTION_REFUSED" },
+        ],
+      };
+      const section = evidenceSection({ run: 9100, artifact: 9202, result, evidencePage: EVIDENCE_PAGE, preview: { kind: "none" } });
+
+      expect((await readDigestGiven(gitHub({ ...quiet, body: `Adds the waitlist.\n\n${section}\n\nCloses #7` }).client, repo, written)).capturedRoutes).toEqual(["/pricing", "/waitlist"]);
+    });
+
+    it.each([
+      ["has no UI evidence: its body holds no evidence marker", "Saves the basket.\n\nCloses #7"],
+      ["has an evidence marker written before markers recorded the captured routes", bodyWith('{"run":9100,"artifact":9202,"failure":null}')],
+      ["has an evidence marker that names no routes", bodyWith('{"run":9100,"artifact":9202,"failure":"no-routes","routes":[],"preview":{"is":"none"},"missed":[]}')],
+      ["has an evidence marker whose routes do not read", bodyWith('{"run":9100,"artifact":9202,"failure":null,"routes":"/basket"}')],
+      ["has no UI evidence: its capture kept no screenshots", bodyWith('{"run":9100,"artifact":null,"failure":"unreachable","routes":["/basket"],"preview":{"is":"none"},"missed":[]}')],
+    ])("is none on a pull request that %s, so every picture is dropped", async (_what, body) => {
+      const given = await readDigestGiven(gitHub({ ...quiet, body }).client, repo, written);
+
+      expect(given.capturedRoutes).toEqual([]);
+      expect(pictures(aDigestReply({ items: [item("/basket"), item("/basket/saved")] }), given)).toEqual([null, null]);
+    });
+
+    it("is none when somebody other than a bot wrote the body, so nobody else can name a captured route", async () => {
+      expect((await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES, openedBy: STRANGER }).client, repo, written)).capturedRoutes).toEqual([]);
+    });
+
+    it("is what the contract checks each picture against: a captured route lands, and a route that was not captured is dropped", async () => {
+      const given = await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES }).client, repo, written);
+
+      expect(pictures(aDigestReply({ items: [item("/basket/saved"), item("/checkout")] }), given)).toEqual(["/basket/saved", null]);
+    });
+
+    it("costs no call of its own: the body comes with the pull request as the read already asks for it, once for the Loop's snapshot and once for the thread", async () => {
+      const { client, calls } = gitHub({ ...quiet, body: TWO_ROUTES });
+
+      await readDigestGiven(client, repo, written);
+
+      expect(calls.filter((call) => call.startsWith("graphql "))).toHaveLength(2);
+      expect(calls.filter((call) => !call.startsWith("graphql ")).map((call) => call.split("?")[0]).toSorted()).toEqual([
+        "GET /repos/acme/shop/issues/50/comments",
+        "GET /repos/acme/shop/pulls/50/comments",
+        "GET /repos/acme/shop/pulls/50/reviews",
+      ]);
     });
   });
 });

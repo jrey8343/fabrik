@@ -2,6 +2,7 @@
 // `agent:digest` starts the Digest writer on a pull request, how its attempt
 // lands, and when the Merge gate opens. Pure, no I/O.
 import { declineTrigger } from "./declineTrigger.ts";
+import { digestToCarry } from "./digestCarry.ts";
 import { digestCommentOf, noDigestLine, parseDigestReply } from "./digestContract.ts";
 import { runsDueAreHeld } from "./hold.ts";
 import { DIGEST_LABEL } from "./labels.ts";
@@ -90,11 +91,17 @@ type Passed = Extract<LoopEvent, { kind: "review-run-finished" }>;
  * What a pass that would open the Merge gate does in its place, after its
  * Verdict: the first of these that holds.
  * 1. The Digest is off in Kit config: the gate opens as it always has.
- * 2. A run started now would be held, every Subscription being used up with
+ * 2. The last Digest can be carried forward, only `main` having moved since
+ *    it was written (`digestToCarry`): it is posted again for this head, the
+ *    older Digests are collapsed and the gate opens, in the same step, with
+ *    no label, no run and no model. Should the push job be unable to read
+ *    the files its places name at this head, nothing is carried and the pass
+ *    goes on from the next step.
+ * 3. A run started now would be held, every Subscription being used up with
  *    rotation on (`runsDueAreHeld`): the no-Digest line says
  *    `no-subscription` and the gate opens, in the same step. A Digest run is
  *    never a Held run, so the pass adds no label for the Loop to hold.
- * 3. Otherwise the pass adds `agent:digest`, which starts the Digest writer,
+ * 4. Otherwise the pass adds `agent:digest`, which starts the Digest writer,
  *    and the pull request stays in draft with no review requested: the gate
  *    opens when that attempt ends (`openGate`).
  * A pass that keeps the pull request in draft, an Execution flaw and a
@@ -107,6 +114,24 @@ type Passed = Extract<LoopEvent, { kind: "review-run-finished" }>;
  */
 export function digestOnPass(event: Passed, pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator" | "kitIssues">, config: KitConfig): Action[] {
   if (!config.digest.enabled) return gateOpening(pullRequest, snapshot.operator);
+  const withNoneCarried = digestWrittenOnPass(event, pullRequest, snapshot, config);
+  if (digestToCarry(pullRequest) === null) return withNoneCarried;
+  return [
+    {
+      kind: "carry-digest",
+      pullRequest: pullRequest.number,
+      headSha: event.headSha,
+      repoUrl: event.repoUrl,
+      digest: pullRequest.digests.at(-1)!.body,
+      // The Digest carried is itself an older one once its copy for this head is posted.
+      carried: [...collapseOlder(pullRequest), ...gateOpening(pullRequest, snapshot.operator)],
+      otherwise: withNoneCarried,
+    },
+  ];
+}
+
+/** What a pass does about a Digest with none to carry forward: steps 3 and 4 of `digestOnPass`. */
+function digestWrittenOnPass(event: Passed, pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator" | "kitIssues">, config: KitConfig): Action[] {
   if (runsDueAreHeld(snapshot.kitIssues, config)) {
     return [{ kind: "comment", issue: pullRequest.number, body: noDigestLine({ head: event.headSha, how: "no-subscription" }) }, ...gateOpening(pullRequest, snapshot.operator)];
   }

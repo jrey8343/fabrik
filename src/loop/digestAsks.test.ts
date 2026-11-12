@@ -101,7 +101,7 @@ function aCriterion(number: number, answer: DigestAnswer["answer"] = "in-head", 
 
 /** An item under Needs your eyes. */
 function anItem(kind: DigestItem["kind"], rest: Partial<DigestItem> = {}): DigestItem {
-  return { kind, claim: "The banner still says cart.", sentence: "It reads cart at this head, which is yours to weigh.", asks: [], places: [], suggestedRequest: null, ...rest };
+  return { kind, claim: "The banner still says cart.", sentence: "It reads cart at this head, which is yours to weigh.", asks: [], places: [], picture: null, suggestedRequest: null, ...rest };
 }
 
 describe("The Digest writer's reply, with its answers and its items", () => {

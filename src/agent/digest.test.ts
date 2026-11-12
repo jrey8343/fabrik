@@ -129,6 +129,7 @@ describe("What the Digest writer is given of the pull request", () => {
       ],
       kitNotes: [RETRY_NOTE],
       uiEvidence: false,
+      capturedRoutes: [],
       facts: FACTS,
     });
   });
@@ -190,6 +191,25 @@ describe("What the Digest writer is given of the pull request", () => {
     expect(await readDigestPullRequest(thread(withShots), repo, 50, { operator: "operator" })).toMatchObject({ uiEvidence: true });
     expect(await readDigestPullRequest(thread(withNone), repo, 50, { operator: "operator" })).toMatchObject({ uiEvidence: false });
   });
+
+  describe("of the captured routes", () => {
+    const bodyWith = (marker: string) => `Saves the cart.\n\n<!-- fabrik:ui-evidence-start -->\n## UI evidence\n\n<!-- fabrik:ui-evidence ${marker} -->\n\nCloses #7`;
+
+    it("is the routes the evidence marker in the pull request's body names, in the marker's order", async () => {
+      const body = bodyWith('{"run":9100,"artifact":9202,"failure":null,"routes":["/basket","/basket/saved"],"preview":{"is":"none"},"missed":[]}');
+
+      expect(await readDigestPullRequest(thread(body), repo, 50, { operator: "operator" })).toMatchObject({ uiEvidence: true, capturedRoutes: ["/basket", "/basket/saved"] });
+    });
+
+    it.each([
+      ["has no UI evidence", "Saves the cart.\n\nCloses #7", false],
+      ["has an evidence marker written before markers recorded the captured routes", bodyWith('{"run":9100,"artifact":9202,"failure":null}'), true],
+      ["has an evidence marker that names no routes", bodyWith('{"run":9100,"artifact":9202,"failure":"no-routes","routes":[],"preview":{"is":"none"},"missed":[]}'), true],
+      ["has an evidence marker whose capture kept no screenshots", bodyWith('{"run":9100,"artifact":null,"failure":"unreachable","routes":["/basket"],"preview":{"is":"none"},"missed":[]}'), false],
+    ])("is none on a pull request that %s", async (_what, body, uiEvidence) => {
+      expect(await readDigestPullRequest(thread(body), repo, 50, { operator: "operator" })).toMatchObject({ uiEvidence, capturedRoutes: [] });
+    });
+  });
 });
 
 describe("A Digest run's context", () => {
@@ -202,6 +222,7 @@ describe("A Digest run's context", () => {
     verdicts: [{ verdict: "pass", source: "reviewer", headSha: HEAD, comment: PASS }],
     kitNotes: [RETRY_NOTE],
     uiEvidence: true,
+    capturedRoutes: ["/basket", "/basket/saved"],
     facts: FACTS,
   };
 
@@ -239,7 +260,31 @@ describe("A Digest run's context", () => {
       "Kit code worked these out from the pull request's thread; no agent wrote them. They are facts: word them, never contradict them, and count nothing again yourself.",
       ...json(FACTS),
       `## ${DIGEST_SECTIONS.uiEvidence}`,
-      "This pull request has UI evidence: screenshots of its pages, which its body links.",
+      "This pull request has UI evidence: screenshots of its pages, which its body links. Its captured routes, the only routes an item may name as its picture:",
+      ...json(["/basket", "/basket/saved"]),
+    ]);
+  });
+
+  it("lists the captured routes as a block of their own, exactly as Kit code read them from the evidence marker", async () => {
+    const { dir, pullRequestFile, specFile } = await filesOf({ ...given, capturedRoutes: ["/waitlist?ref=`mail`", "/Team/@olive"] });
+
+    const { parts } = await digestContext(dir, pullRequestFile, specFile, HEAD);
+
+    expect(parts.slice(parts.indexOf(`## ${DIGEST_SECTIONS.uiEvidence}`) + 2)).toEqual(json(["/waitlist?ref=`mail`", "/Team/@olive"]));
+  });
+
+  it.each([
+    ["its evidence marker names none", []],
+    ["its input holds none, as one gathered before the input listed them", undefined],
+    ["what its input holds is no list of routes", "/basket"],
+  ])("says there are no captured routes on a pull request with UI evidence when %s", async (_what, capturedRoutes) => {
+    const { dir, pullRequestFile, specFile } = await filesOf({ ...given, capturedRoutes });
+
+    const { parts } = await digestContext(dir, pullRequestFile, specFile, HEAD);
+
+    expect(parts.slice(parts.indexOf(`## ${DIGEST_SECTIONS.uiEvidence}`))).toEqual([
+      `## ${DIGEST_SECTIONS.uiEvidence}`,
+      "This pull request has UI evidence: screenshots of its pages, which its body links. It has no captured routes, so no item may name a picture.",
     ]);
   });
 
@@ -272,7 +317,7 @@ describe("A Digest run's context", () => {
   });
 
   it("says so when there is no Verdict, no note of the Kit's or no UI evidence to give", async () => {
-    const { dir, pullRequestFile, specFile } = await filesOf({ ...given, verdicts: [], kitNotes: [], uiEvidence: false }, null);
+    const { dir, pullRequestFile, specFile } = await filesOf({ ...given, verdicts: [], kitNotes: [], uiEvidence: false, capturedRoutes: [] }, null);
 
     const { parts } = await digestContext(dir, pullRequestFile, specFile, HEAD);
 
@@ -282,7 +327,10 @@ describe("A Digest run's context", () => {
       `## ${DIGEST_SECTIONS.kitNotes}`,
       "(None.)",
     ]);
-    expect(parts.slice(parts.indexOf(`## ${DIGEST_SECTIONS.uiEvidence}`))).toEqual([`## ${DIGEST_SECTIONS.uiEvidence}`, "This pull request has no UI evidence."]);
+    expect(parts.slice(parts.indexOf(`## ${DIGEST_SECTIONS.uiEvidence}`))).toEqual([
+      `## ${DIGEST_SECTIONS.uiEvidence}`,
+      "This pull request has no UI evidence, and so no captured routes: no item may name a picture.",
+    ]);
     expect(parts).not.toContain("## The parent Spec");
   });
 
