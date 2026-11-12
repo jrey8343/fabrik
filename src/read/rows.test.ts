@@ -148,7 +148,17 @@ describe("a Product repo's rows", () => {
         standingsOf(standingFactsOf({ github: facts.github, kit: { ...tracked, runsInFlight: "unread", headChecks: {} }, mergedLastDay: facts.mergedLastDay, deployments: read }), NOW),
       );
       expect(rows).toEqual([
-        { ...bareRowOf(rows[0]!.standing, "Build the thing, merged", null), related: [], mentions: [], followUps: [], relatedTo: null, ticketClosed: null, plainPullRequest: null },
+        {
+          ...bareRowOf(rows[0]!.standing, "Build the thing, merged", null),
+          related: [],
+          mentions: [],
+          followUps: [],
+          relatedTo: null,
+          ticketClosed: null,
+          plainPullRequest: null,
+          evidence: null,
+          production: { site: "https://shop.example", tracked: true, pages: [] },
+        },
       ]);
       expect(rows[0]!.standing).toMatchObject({ issue: 7, pullRequest: 50, name: "live" });
       expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing)).toMatchObject([{ name: "merged", detail: { deploysUnread: true } }]);
@@ -158,6 +168,62 @@ describe("a Product repo's rows", () => {
       const facts = homeFactsOf({ kit: tracked, github: factsOf({ openIssues: [TICKET] }), mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z", { title: "Merged as" })] });
 
       expect(rowsOf(facts, null, null, null, NOW).filter(({ standing }) => standing.pullRequest === 50).map(({ title }) => title)).toEqual(["Build the thing"]);
+    });
+
+    describe("its links to production (#639)", () => {
+      const UI_MARKER = { run: 4400, artifact: 900, failure: null, routes: ["/book", "/cart?step=2"], preview: { is: "linked", url: "https://fabrik-ticket-7.shop.example.dev/" } } as const;
+      const productionOf = (facts: Facts, read = aDeploymentsRead({})) => rowsOf(facts, null, null, read, NOW).map(({ standing, production }) => ({ name: standing.name, production }));
+
+      it("give the site, that it is tracked, and the live page of each captured route, whatever the row's name", () => {
+        const merged = homeFactsOf({ kit: tracked, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")], evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] });
+        const production = {
+          site: "https://shop.example",
+          tracked: true,
+          pages: [
+            { route: "/book", url: "https://shop.example/book" },
+            { route: "/cart?step=2", url: "https://shop.example/cart?step=2" },
+          ],
+        };
+
+        expect(productionOf(merged)).toEqual([{ name: "merged", production }]);
+        expect(productionOf(merged, aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) }))).toEqual([{ name: "live", production }]);
+        expect(productionOf(merged, aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) }))).toEqual([{ name: "deploying", production }]);
+      });
+
+      it("say a site whose Kit config names no environment is not tracked, with its pages built on its own path", () => {
+        const untracked = { ...production, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://example.dev/shop/", environment: null } } } } as const;
+        const facts = homeFactsOf({ kit: untracked, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")], evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] });
+
+        expect(productionOf(facts, aDeploymentsRead({}))).toEqual([
+          {
+            name: "merged",
+            production: {
+              site: "https://example.dev/shop/",
+              tracked: false,
+              pages: [
+                { route: "/book", url: "https://example.dev/shop/book" },
+                { route: "/cart?step=2", url: "https://example.dev/shop/cart?step=2" },
+              ],
+            },
+          },
+        ]);
+      });
+
+      it.each([
+        ["that is not UI", []],
+        ["whose marker an earlier release wrote, naming no routes", [{ pullRequest: 50, marker: { run: 4400, artifact: 900 } }]],
+        ["whose capture named no routes", [{ pullRequest: 50, marker: { ...UI_MARKER, routes: [] } }]],
+      ] as const)("give a merged pull request %s no pages, so a reader links the site alone", (_what, evidenceMarkers) => {
+        const facts = homeFactsOf({ kit: tracked, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")], evidenceMarkers });
+
+        expect(productionOf(facts).map(({ production }) => production)).toEqual([{ site: "https://shop.example", tracked: true, pages: [] }]);
+      });
+
+      it("are null on a row that is not a merged pull request's, an open UI pull request's among them", () => {
+        const facts = homeFactsOf({ kit: tracked, github: factsOf({ openIssues: [TICKET], openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8 })] }), evidenceMarkers: [{ pullRequest: 51, marker: UI_MARKER }] });
+
+        expect(rowsOf(facts, null, null, null, NOW).map(({ production }) => production)).toEqual([null, null]);
+      });
     });
   });
 

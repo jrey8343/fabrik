@@ -7,9 +7,10 @@
 // data: written as JSON and read back a row is equal.
 import type { CaptureFailure } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { withRouteOn } from "../kit/config.ts";
+import { productionPageUrl, withRouteOn } from "../kit/config.ts";
 import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
 import { plainSinceOf } from "../kit/standingPlain.ts";
+import { isProductionStanding } from "../kit/standingProduction.ts";
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
 import type { Facts } from "./gather.ts";
@@ -65,6 +66,26 @@ export interface Row {
    * read from GitHub by whoever fetches it.
    */
   readonly evidence: RowEvidence | null;
+  /**
+   * On a merged agent pull request's row, whatever its name: where its
+   * change goes live. Which links a reader shows, and when, is the reader's.
+   * Null on any other row.
+   */
+  readonly production: RowProduction | null;
+}
+
+/** Where a merged agent pull request's change goes live, as Kit config's `production` block declares it. */
+export interface RowProduction {
+  /** The production site's address, `production.url`. */
+  readonly site: string;
+  /** Whether Kit config names the environment its deploys are tracked by. */
+  readonly tracked: boolean;
+  /**
+   * The live page of each route its UI evidence captured, in the marker's
+   * order; empty for a pull request that is not UI or whose marker names no
+   * routes, for which a reader links the site alone.
+   */
+  readonly pages: readonly { readonly route: string; readonly url: string }[];
 }
 
 /** An agent pull request's UI evidence, as its evidence marker records it. */
@@ -132,7 +153,7 @@ function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredCheck
  * Ticket's state.
  */
 export function bareRowOf(standing: Standing, title: string, lastWord: Row["lastWord"]): Row {
-  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null };
+  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null };
 }
 
 /**
@@ -152,7 +173,16 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
     ticketClosed: pullRequest === null ? null : ticketClosedOf(facts, pullRequest),
     plainPullRequest: pullRequest === null ? null : plainPullRequestOf(facts, pullRequest, standing.detail.pullRequest === undefined ? null : (owns.get(pullRequest) ?? null)),
     evidence: pullRequest === null ? null : evidenceOf(facts, pullRequest),
+    production: pullRequest !== null && isProductionStanding(standing) ? productionOf(facts, pullRequest) : null,
   };
+}
+
+/** Where merged agent pull request `pullRequest`'s change goes live, with the live page of each route it captured; null when Kit config declares no `production`. */
+function productionOf({ kit, evidenceMarkers }: Facts, pullRequest: number): RowProduction | null {
+  const production = kit.config.ok ? kit.config.config.production : null;
+  if (production === null) return null;
+  const routes = evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker.routes ?? [];
+  return { site: production.url, tracked: production.environment !== null, pages: routes.map((route) => ({ route, url: productionPageUrl(production, route) })) };
 }
 
 /** Agent pull request `pullRequest`'s UI evidence, from its evidence marker; null when the facts hold none for it. */
