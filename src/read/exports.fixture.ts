@@ -4,16 +4,55 @@
 // every value as JSON and reads it back, and runs every call with the one
 // thing a Worker can't do made to throw. A Ticket that adds an export adds its
 // entries here, under its own heading, one argument to a line.
-import { aRunRecord, anOpenIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import {
+  A_REPLAY,
+  aComment,
+  aCommit,
+  aDesignRound,
+  aDesignTurnFailedNotice,
+  aFollowUpIssue,
+  AGROUP_STATS,
+  aLabelAdded,
+  aMapCapRefusal,
+  aMergedPullRequest,
+  aMonitorIssueBody,
+  AN_UNKNOWN_COST,
+  anAnswersComment,
+  anAuditRunRecord,
+  anEscapeMarkerIssue,
+  anOpenAudit,
+  anOpenIssue,
+  anOpenMonitorIssue,
+  anOpenPullRequest,
+  anOpenReplay,
+  anOpenRetro,
+  aPlainPullRequest,
+  aReplayBody,
+  aReplayRunRecord,
+  aRetroRunRecord,
+  aReview,
+  aRunInFlight,
+  aRunRecord,
+  aSpec,
+  aSummaryIssue,
+  aTicketTimeline,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  standingFactsOf,
+  storeFactsOf,
   checkCallerWorkflow,
+  costOf,
   DEFAULT_KIT_CONFIG,
   GitHub,
   GitHubError,
   gitHubMessageOf,
+  hasUnknownCostBasis,
+  isLive,
   KIT_SAID_VERSION,
   kitSaidIn,
   newerSchemaOf,
+  readCaller,
   readKitConfigSources,
   readRunRecord,
   readRuns,
@@ -28,11 +67,14 @@ import {
   stuckBarMinutes,
   TICK_DEAD_MINUTES,
   TICK_MINUTES,
+  weeksEndingAt,
   wordStanding,
 } from "./index.ts";
 import type {
   ActionsStep,
   CallerCheck,
+  CallerRead,
+  CostFigure,
   KitConfig,
   KitConfigResult,
   KitConfigSources,
@@ -48,6 +90,7 @@ import type {
   StandingName,
   StandingWords,
   StoreStandingFacts,
+  Week,
 } from "./index.ts";
 
 /** A refusal for want of a permission, as GitHub answers an App that lacks one. */
@@ -225,6 +268,121 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // Fact builders and cost functions
 
+  A_REPLAY: () => A_REPLAY,
+  aComment: () =>
+    aComment(
+      "Thanks, merging.",
+      "2026-11-08T19:00:00Z",
+      { author: "operator", byBot: false },
+    ),
+  aCommit: () =>
+    aCommit(
+      "2026-11-08T19:00:00Z",
+    ),
+  aDesignRound: () =>
+    aDesignRound(
+      2,
+      "2026-11-08T19:00:00Z",
+    ),
+  aDesignTurnFailedNotice: () =>
+    aDesignTurnFailedNotice(
+      "2026-11-08T19:00:00Z",
+    ),
+  aFollowUpIssue: () =>
+    aFollowUpIssue(
+      50,
+      "Split the cart module",
+    ),
+  AGROUP_STATS: () => AGROUP_STATS,
+  aLabelAdded: () =>
+    aLabelAdded(
+      "agent:implement",
+      "2026-11-08T19:20:00Z",
+    ),
+  aMapCapRefusal: () =>
+    aMapCapRefusal(
+      "2026-11-08T19:00:00Z",
+    ),
+  aMergedPullRequest: () =>
+    aMergedPullRequest(
+      "2026-11-04T12:00:00Z",
+    ),
+  aMonitorIssueBody: () => aMonitorIssueBody(),
+  AN_UNKNOWN_COST: () => AN_UNKNOWN_COST,
+  anAnswersComment: () =>
+    anAnswersComment(
+      900,
+      { reviewMiss: true, amendsTicket: false },
+      "2026-11-08T19:00:00Z",
+    ),
+  anAuditRunRecord: () => anAuditRunRecord(),
+  anEscapeMarkerIssue: () =>
+    anEscapeMarkerIssue(
+      "Worth a deeper module.",
+    ),
+  anOpenAudit: () => anOpenAudit(),
+  anOpenIssue: () => anOpenIssue(),
+  anOpenMonitorIssue: () => anOpenMonitorIssue(),
+  anOpenPullRequest: () =>
+    anOpenPullRequest(
+      { commits: [{ at: "2026-11-08T19:00:00Z" }] },
+    ),
+  anOpenReplay: () => anOpenReplay(),
+  anOpenRetro: () => anOpenRetro(),
+  aPlainPullRequest: () => aPlainPullRequest(),
+  aReplayBody: () =>
+    aReplayBody(
+      { state: "done", run: 2000 },
+    ),
+  aReplayRunRecord: () => aReplayRunRecord(),
+  aRetroRunRecord: () => aRetroRunRecord(),
+  aReview: () =>
+    aReview(
+      "2026-11-08T19:00:00Z",
+    ),
+  aRunInFlight: () => aRunInFlight(),
+  aRunRecord: () => aRunRecord(),
+  aSpec: () =>
+    aSpec(
+      [{ label: "ready-for-agent", action: "labeled", actor: "operator", at: "2026-11-01T00:00:00Z" }],
+    ),
+  aSummaryIssue: () => aSummaryIssue(),
+  aTicketTimeline: () =>
+    aTicketTimeline(
+      [{ label: "agent:implement", action: "labeled", actor: "operator", at: "2026-11-08T19:20:00Z" }],
+    ),
+  aVerdictComment: () =>
+    aVerdictComment(
+      "pass",
+      "h".repeat(40),
+      "2026-11-08T19:00:00Z",
+    ),
+  aWeeklyLimitIssue: () =>
+    aWeeklyLimitIssue(
+      "2026-11-10T00:00:00Z",
+      [{ role: "implement", issue: 7, label: "agent:implement" }],
+    ),
+  factsOf: () => factsOf(),
+  standingFactsOf: () => standingFactsOf(),
+  storeFactsOf: () => storeFactsOf(),
+  costOf: () =>
+    costOf(
+      [aRunRecord(), aRunRecord({ runId: 1001, ...AN_UNKNOWN_COST })],
+    ),
+  hasUnknownCostBasis: () =>
+    hasUnknownCostBasis(
+      aRunRecord(AN_UNKNOWN_COST),
+    ),
+  isLive: () =>
+    isLive(
+      aRunRecord(),
+    ),
+  weeksEndingAt: () =>
+    weeksEndingAt(
+      Date.parse(NOW),
+      "Europe/London",
+    ),
+
   // The closing line and the runs read
 
   KIT_SAID_VERSION: () => KIT_SAID_VERSION,
@@ -251,6 +409,23 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   // The Required checks
 
   // The caller read
+
+  readCaller: () =>
+    readCaller(
+      {
+        rest: () => Promise.resolve({ head: { sha: "abc123" }, base: { ref: "main" } }),
+        fileText: (repo, path, ref) =>
+          Promise.resolve(
+            repo.owner === "owner"
+              ? `jobs:\n  tick:\n    uses: jrey8343/fabrik/.github/workflows/schedule.yml@${ref === "main" ? "v1.0.0" : "v1.1.0"}\n    permissions:\n      id-token: write\n`
+              : path === ".github/workflows/schedule.yml" && ref === "v1.1.0"
+                ? "on:\n  workflow_call:\njobs:\n  tick:\n    permissions:\n      id-token: write\n      actions: read\n"
+                : null,
+          ),
+      },
+      "owner/product",
+      42,
+    ),
 
   // Spend
 
@@ -297,6 +472,9 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
 
   // Fact builders and cost functions
 
+  CostFigure: { usd: 1, unknownCost: 1 } satisfies CostFigure,
+  Week: { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z"), monday: "2026-11-02" } satisfies Week,
+
   // The closing line and the runs read
 
   ActionsStep: A_CLOSING_STEP satisfies ActionsStep,
@@ -312,6 +490,17 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The Required checks
 
   // The caller read
+
+  CallerRead: {
+    changes: true,
+    from: "v1.0.0",
+    to: "v1.1.0",
+    errors: [
+      ".github/workflows/fabrik.yml: the tick job's permissions: lacks `actions: read`, which the tick job of jrey8343/fabrik/.github/workflows/schedule.yml@v1.1.0 asks for. " +
+        "GitHub checks every uses: job of a workflow before any job's if:, so until the line is added every run of this workflow fails at startup, whatever the event. " +
+        "Add `actions: read` under the tick job's permissions: before merging.",
+    ],
+  } satisfies CallerRead,
 
   // Spend
 

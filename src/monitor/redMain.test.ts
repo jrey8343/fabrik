@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aGroup, aMonitorIssue, aMonitorIssueBody, monitorInput, SENTRY_ON, sentryRead } from "../__fixtures__/monitor.ts";
+import { aMonitorIssueBody } from "../read/builders.ts";
+import { aGroup, aMonitorIssue, monitorInput, SENTRY_ON, sentryRead } from "../__fixtures__/monitor.ts";
 import { aCheckRun, aCommit, aRedMainBody, aRedMainIssue, commitUrl, RED_DETAILS, redMainInput, runUrl } from "../__fixtures__/redMain.ts";
 import { monitorPlanFor } from "./core.ts";
 

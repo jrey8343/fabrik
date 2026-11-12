@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PAST_HAND_BACK_NOTICES } from "../__fixtures__/handBackWordings.ts";
 import { aPullRequest } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aRunInFlight, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aRunInFlight, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../read/builders.ts";
 import { conflictRunEnded, requestChangesRunEnded } from "../loop/conflicts.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import { stopTicketOf } from "../loop/handClosing.ts";

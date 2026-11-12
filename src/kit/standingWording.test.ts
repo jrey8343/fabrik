@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { aDesignQueueIssue, aTicket } from "../__fixtures__/snapshots.ts";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aDesignRound,
+  aDesignTurnFailedNotice,
+  aLabelAdded,
+  aMapCapRefusal,
+  anOpenAudit,
+  anOpenIssue,
+  anOpenPullRequest,
+  anOpenReplay,
+  anOpenRetro,
+  aPlainPullRequest,
+  aReplayBody,
+  aReview,
+  aVerdictComment,
+  factsOf,
+  standingFactsOf,
+} from "../read/builders.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";

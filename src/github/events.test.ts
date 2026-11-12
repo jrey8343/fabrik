@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aRetroEvidenceInput } from "../__fixtures__/retroEvidence.ts";
-import { aMergedPullRequest, anEscapeMarkerIssue, aRunRecord, factsOf } from "../__fixtures__/weeklySummary.ts";
+import { aMergedPullRequest, anEscapeMarkerIssue, aRunRecord, factsOf } from "../read/builders.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import type { CaptureOutputs } from "../kit/pushJob.ts";
 import { evidenceBundle, readEvidenceBundle } from "../kit/retroEvidence.ts";

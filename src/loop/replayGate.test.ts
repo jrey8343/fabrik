@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aReading, acceptedBody, aReplayIssue, baseOf, replaySlice, requestBody } from "../__fixtures__/replay.ts";
 import { aResearchDecision, aTicket, kitConfig, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
-import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord } from "../read/builders.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { type ReplayCandidate, replayMarksIn } from "../kit/replay.ts";
 import { planFor } from "./rules.ts";

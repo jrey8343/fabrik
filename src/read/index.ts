@@ -33,6 +33,48 @@ export type { StandingWords } from "../kit/standingWording.ts";
 
 // Fact builders and cost functions
 
+export {
+  A_REPLAY,
+  aComment,
+  aCommit,
+  aDesignRound,
+  aDesignTurnFailedNotice,
+  aFollowUpIssue,
+  AGROUP_STATS,
+  aLabelAdded,
+  aMapCapRefusal,
+  aMergedPullRequest,
+  aMonitorIssueBody,
+  AN_UNKNOWN_COST,
+  anAnswersComment,
+  anAuditRunRecord,
+  anEscapeMarkerIssue,
+  anOpenAudit,
+  anOpenIssue,
+  anOpenMonitorIssue,
+  anOpenPullRequest,
+  anOpenReplay,
+  anOpenRetro,
+  aPlainPullRequest,
+  aReplayBody,
+  aReplayRunRecord,
+  aRetroRunRecord,
+  aReview,
+  aRunInFlight,
+  aRunRecord,
+  aSpec,
+  aSummaryIssue,
+  aTicketTimeline,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  standingFactsOf,
+  storeFactsOf,
+} from "./builders.ts";
+export { isLive } from "../kit/runRecord.ts";
+export { costOf, hasUnknownCostBasis, weeksEndingAt } from "../kit/weeklySummary.ts";
+export type { CostFigure, Week } from "../kit/weeklySummary.ts";
+
 // The closing line and the runs read
 
 export { KIT_SAID_VERSION, kitSaidIn } from "../kit/kitSaid.ts";
@@ -48,6 +90,9 @@ export type { RunInFlight, RunsRead } from "./runs.ts";
 // The Required checks
 
 // The caller read
+
+export { readCaller } from "./caller.ts";
+export type { CallerRead } from "./caller.ts";
 
 // Spend
 

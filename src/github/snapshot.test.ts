@@ -17,7 +17,7 @@ import {
 } from "../__fixtures__/snapshots.ts";
 import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
-import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord } from "../read/builders.ts";
 import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import type { RunRecord } from "../kit/runRecord.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";

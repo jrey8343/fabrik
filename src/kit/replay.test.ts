@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aRunRecord, aScoreEntry, aScoreFile } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord } from "../read/builders.ts";
+import { aScoreEntry, aScoreFile } from "../__fixtures__/weeklySummary.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "./config.ts";
 import {
   hiddenTests,

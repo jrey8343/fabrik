@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { aRetroEvidenceInput } from "../__fixtures__/retroEvidence.ts";
-import { aMergedPullRequest, anEscapeMarkerIssue, aRunRecord, factsOf } from "../__fixtures__/weeklySummary.ts";
+import { aMergedPullRequest, anEscapeMarkerIssue, aRunRecord, factsOf } from "../read/builders.ts";
 import { evidenceBundle } from "../kit/retroEvidence.ts";
 import { RETRO_SECTIONS, retroContext } from "./retro.ts";
 

@@ -1194,7 +1194,7 @@ function subscriptionsOf(records: readonly RunRecord[]): WeekMetrics["subscripti
  * cost basis is unknown. A run with no cost figure at all, one that ended
  * without a result, such as a timeout, adds nothing and isn't counted.
  */
-function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: number } {
+export function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: number } {
   return {
     usd: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
     unknownCost: records.filter(hasUnknownCostBasis).length,
@@ -1202,7 +1202,7 @@ function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: num
 }
 
 /** Whether any of the run's models has an unknown cost basis, which leaves the run with no total (src/kit/runRecord.ts). */
-function hasUnknownCostBasis(record: RunRecord): boolean {
+export function hasUnknownCostBasis(record: RunRecord): boolean {
   return Object.values(record.modelUsage).some((usage) => usage.costBasis === UNKNOWN_COST_BASIS);
 }
 
@@ -1529,7 +1529,7 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, listedWith: Liste
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.
 
 /** A week as the instants it starts at (inclusive) and ends at (exclusive), and its Monday's date. */
-interface Week extends Window {
+export interface Week extends Window {
   readonly monday: string;
 }
 
@@ -1538,7 +1538,7 @@ const REVERT_WINDOW_MS = 30 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /** The week ending at the last Monday 00:00 at or before `now`, and the week before it. */
-function weeksEndingAt(now: number, timeZone: string): { thisWeek: Week; lastWeek: Week } {
+export function weeksEndingAt(now: number, timeZone: string): { thisWeek: Week; lastWeek: Week } {
   const today = wallClock(now, timeZone);
   // A calendar date as midnight UTC, so date arithmetic never meets a DST change.
   const thisMonday = Date.UTC(today.year, today.month - 1, today.day) - WEEKDAYS.indexOf(today.weekday) * DAY_MS;

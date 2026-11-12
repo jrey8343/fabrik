@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aLabelAdded,
+  anOpenIssue,
+  anOpenPullRequest,
+  aReview,
+  aRunInFlight,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  standingFactsOf,
+} from "../read/builders.ts";
 import type { HeldRun } from "../loop/heldRun.ts";
 import { conflictAttemptMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";

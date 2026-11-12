@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { AGROUP_STATS, aMonitorIssueBody } from "../read/builders.ts";
 import {
   aClosedMonitorIssue,
   aGroup,
-  AGROUP_STATS,
   aMonitorIssue,
-  aMonitorIssueBody,
   monitorInput,
   openErrorIssues,
   SENTRY_ON,

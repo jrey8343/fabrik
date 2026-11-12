@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
-import { anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { anOpenPullRequest, factsOf, standingFactsOf } from "./builders.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";
 import { readRuns, type RunInFlight, type RunsRead, runsInFlightFactOf } from "./runs.ts";
