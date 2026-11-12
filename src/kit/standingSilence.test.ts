@@ -95,5 +95,56 @@ describe("a draft that conflicts with main and has no Verdict on its head", () =
   });
 });
 
+describe("a draft with a pass on its head", () => {
+  const PASSED = PUSHED;
+  const LATER = plus(PASSED, 30);
+  const passedDraft = (overrides: Parameters<typeof anOpenPullRequest>[0] = {}) =>
+    anOpenPullRequest({ number: 50, ticket: 7, commits: [{ at: "2026-11-08T18:00:00Z", byApp: true }], comments: [aVerdictComment("pass", HEAD, PASSED)], ...overrides });
+
+  it("never taken out of draft since its pass is waiting on the Kit to open the Merge gate, from the pass, turning Stuck at the bar", () => {
+    expect(standingsIn({ openPullRequests: [passedDraft()] })).toMatchObject([
+      { issue: 7, pullRequest: 50, place: "review", name: "waiting-on-kit", move: "kit", since: PASSED, stuckAt: BAR, awaits: { role: "review", on: "pullRequest" }, detail: { silence: "passed-draft", round: null } },
+    ]);
+    expect(standingsIn({ openPullRequests: [passedDraft()] }, {}, plus(BAR, -1))).toMatchObject([{ name: "waiting-on-kit" }]);
+    expect(standingsIn({ openPullRequests: [passedDraft()] }, {}, plus(BAR, 1))).toMatchObject([{ name: "stuck", detail: { was: "waiting-on-kit", silence: "passed-draft" } }]);
+  });
+
+  it("put back in draft after the pass by the Operator is parked: theirs, not stopping work, never Stuck, since they did it", () => {
+    const parked = passedDraft({
+      draftEvents: [
+        { kind: "ready", actor: "fabrik-app[bot]", at: plus(PASSED, 1) },
+        { kind: "draft", actor: "operator", at: LATER },
+      ],
+    });
+    expect(standingsIn({ openPullRequests: [parked] })).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "review",
+        name: "parked",
+        move: "operator",
+        yours: true,
+        stopsWork: false,
+        since: LATER,
+        stuckAt: null,
+        awaits: null,
+        subscription: null,
+        detail: {},
+      },
+    ]);
+    expect(standingsIn({ openPullRequests: [parked] }, {}, "2027-01-01T00:00:00Z")).toMatchObject([{ name: "parked" }]);
+  });
+
+  it("is not parked when the Fabrik App put it back in draft, or when the Operator's draft was before the pass", () => {
+    const byApp = passedDraft({ draftEvents: [{ kind: "ready", actor: "fabrik-app[bot]", at: plus(PASSED, 1) }, { kind: "draft", actor: "fabrik-app[bot]", at: LATER }] });
+    const before = passedDraft({ draftEvents: [{ kind: "ready", actor: "operator", at: "2026-11-08T18:10:00Z" }, { kind: "draft", actor: "operator", at: "2026-11-08T18:20:00Z" }] });
+    expect(standingsIn({ openPullRequests: [byApp] })).toMatchObject([{ name: "waiting-on-kit", detail: { silence: "quiet-draft" } }]);
+    expect(standingsIn({ openPullRequests: [before] })).toMatchObject([{ name: "waiting-on-kit", detail: { silence: "passed-draft" } }]);
+  });
+});
+
 void aLabelAdded;
 void anOpenIssue;
