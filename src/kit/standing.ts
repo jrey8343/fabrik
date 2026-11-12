@@ -258,9 +258,12 @@ export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: stri
   return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github)
     .map((standing) => withHead(standing, facts.github))
     .map((standing) => standingAt(standing, now))
-    .toSorted(
-    (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
-  );
+    .toSorted(standingOrder);
+}
+
+/** The order the rule gives a repo's Standings in: oldest first, then by issue, then by pull request. */
+export function standingOrder(a: Standing, b: Standing): number {
+  return Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0);
 }
 
 /**
