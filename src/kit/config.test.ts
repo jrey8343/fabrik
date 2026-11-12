@@ -781,6 +781,18 @@ describe("The Kit config template", () => {
     expect(resolveKitConfig({ config: template })).toEqual({ ok: true, config: DEFAULTS });
   });
 
+  it("is documented in the README's Kit config section: the block, where null is accepted, and what each declaration gets", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
+    const nulls = /`null` is accepted only where the default is `null` \(([^)]*)\)/.exec(section)?.[1] ?? "";
+
+    expect(nulls).toContain("`production`");
+    expect(nulls).toContain("`production.environment`");
+    expect(section).toMatch(/^- `production` \(default `null`\)/m);
+    expect(section).toMatch(/^ {4}\| No `production` \|/m);
+    expect(section).toMatch(/^ {4}\| `production\.url`, no `environment` \|/m);
+    expect(section).toMatch(/^ {4}\| `production\.url` and `environment` \|/m);
+  });
+
   it("is the defaults block the README's Kit config section shows", () => {
     const section = readme.slice(readme.indexOf("## Kit config"));
     const block = /```json\n([\s\S]*?)```/.exec(section)?.[1];
