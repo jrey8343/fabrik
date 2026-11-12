@@ -65,6 +65,7 @@ export type {
   CommentFacts,
   CommitFacts,
   DefaultBranchCommitFacts,
+  DraftEvent,
   EscapeMarkerIssueFacts,
   FollowUpIssueFacts,
   LabelEvent,

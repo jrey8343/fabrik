@@ -69,7 +69,7 @@ export function clockOf(since: string, issue: number | null, pullRequests: reado
       ...(work?.comments ?? []).filter(({ author }) => author === appLogin).map(({ at }) => at),
       ...(work?.labelEvents ?? []).filter(({ actor }) => actor === appLogin).map(({ at }) => at),
     ]),
-    ...pullRequests.flatMap(({ commits, draftEvents = [] }) => [
+    ...pullRequests.flatMap(({ commits, draftEvents }) => [
       ...commits.filter(({ byApp }) => byApp).map(({ at }) => at),
       ...draftEvents.filter(({ actor }) => actor === appLogin).map(({ at }) => at),
     ]),
@@ -130,7 +130,7 @@ function retrySilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts
   if (latest.record.ticketNotReady === true || latest.record.requestChangesFirst !== undefined) return [];
   const notes = pullRequest.comments.filter(({ author }) => author === facts.appLogin).map(({ body }) => body);
   if (pushedSinceVerdictIn(notes) || retryNoteSinceVerdictIn(notes) === "ended") return [];
-  if ((pullRequest.draftEvents ?? []).some(({ kind, at }) => kind === "ready" && Date.parse(at) > Date.parse(latest.at))) return [];
+  if (pullRequest.draftEvents.some(({ kind, at }) => kind === "ready" && Date.parse(at) > Date.parse(latest.at))) return [];
   const open = facts.github.openIssues.find(({ number }) => number === ticket);
   if (open !== undefined && open.labels.length > 0 && !open.labels.includes(READY_FOR_AGENT)) return [];
   const landedNothing = countLandedNothing((open?.comments ?? []).map(({ body, author }) => ({ body, byApp: author === facts.appLogin })));

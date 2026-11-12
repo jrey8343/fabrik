@@ -398,6 +398,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
       reviews: { nodes: [] },
       comments: { nodes: [] },
       timelineItems: { nodes: [] },
+      draftEvents: { nodes: [] },
       ...overrides,
     });
     const DEPENDABOT = { __typename: "Bot", login: "dependabot" };
@@ -477,12 +478,14 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefOid: "h".repeat(40),
           headRefName: "fabrik/ticket-7",
           createdAt: "2026-11-01T00:00:00Z",
+          mergeable: "MERGEABLE",
           author: APP,
           closingIssuesReferences: { nodes: [{ number: 7 }] },
           commits: { nodes: [aRawCommit("1", "2026-11-02T00:00:00Z", "A fix", { email: "jared@example.com", user: { login: "jrey8343" } })] },
           reviews: { nodes: [{ author: OPERATOR, state: "COMMENTED", submittedAt: "2026-11-02T01:00:00Z", body: "Why here?", comments: { nodes: [] } }] },
           comments: { nodes: [] },
           timelineItems: { nodes: [] },
+          draftEvents: { nodes: [] },
         },
         {
           number: 52,
@@ -491,12 +494,14 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefOid: "a".repeat(40),
           headRefName: "fabrik/ticket-9",
           createdAt: "2026-11-01T00:00:00Z",
+          mergeable: "MERGEABLE",
           author: OPERATOR,
           closingIssuesReferences: { nodes: [{ number: 9 }] },
           commits: { nodes: [] },
           reviews: { nodes: [] },
           comments: { nodes: [] },
           timelineItems: { nodes: [] },
+          draftEvents: { nodes: [] },
         },
       ],
     });
@@ -515,8 +520,80 @@ describe("Gathering a Product repo's GitHub facts", () => {
         reviews: [{ author: "jrey8343", state: "commented", body: "Why here?", comments: [], at: "2026-11-02T01:00:00Z" }],
         comments: [],
         labelEvents: [],
+        mergeable: true,
+        draftEvents: [],
       },
     ]);
+  });
+
+  describe("an open agent pull request's two Standing reads (#608)", () => {
+    /** Open agent PR `number`, the Fabrik App's from Ticket `number - 43`'s branch, a draft, with `mergeable` and draft events as given. */
+    const anOpenAgentPullRequest = (number: number, overrides: Record<string, unknown> = {}) => ({
+      number,
+      title: `PR ${number}`,
+      isDraft: true,
+      headRefOid: "h".repeat(40),
+      headRefName: `fabrik/ticket-${number - 43}`,
+      createdAt: "2026-11-01T00:00:00Z",
+      mergeable: "MERGEABLE",
+      author: APP,
+      closingIssuesReferences: { nodes: [{ number: number - 43 }] },
+      commits: { nodes: [] },
+      reviews: { nodes: [] },
+      comments: { nodes: [] },
+      timelineItems: { nodes: [] },
+      draftEvents: { nodes: [] },
+      ...overrides,
+    });
+
+    it("reads whether each merges cleanly with the default branch, and one GitHub has not yet worked out as not known", async () => {
+      const github = repoWith({
+        openPullRequests: [anOpenAgentPullRequest(50), anOpenAgentPullRequest(51, { mergeable: "CONFLICTING" }), anOpenAgentPullRequest(52, { mergeable: "UNKNOWN" })],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+      expect(facts.openPullRequests.map(({ number, mergeable }) => ({ number, mergeable }))).toEqual([
+        { number: 50, mergeable: true },
+        { number: 51, mergeable: false },
+        { number: 52, mergeable: null },
+      ]);
+    });
+
+    it("reads when each went into draft and out of it, and who did it, oldest first", async () => {
+      const github = repoWith({
+        openPullRequests: [
+          anOpenAgentPullRequest(50, {
+            draftEvents: {
+              nodes: [
+                { __typename: "ReadyForReviewEvent", createdAt: "2026-11-02T00:00:00Z", actor: APP },
+                { __typename: "ConvertToDraftEvent", createdAt: "2026-11-03T00:00:00Z", actor: OPERATOR },
+                { __typename: "ConvertToDraftEvent", createdAt: "2026-11-04T00:00:00Z", actor: null },
+              ],
+            },
+          }),
+        ],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+      expect(facts.openPullRequests[0]?.draftEvents).toEqual([
+        { kind: "ready", actor: "fabrik-app[bot]", at: "2026-11-02T00:00:00Z" },
+        { kind: "draft", actor: "jrey8343", at: "2026-11-03T00:00:00Z" },
+        { kind: "draft", actor: "ghost", at: "2026-11-04T00:00:00Z" },
+      ]);
+    });
+
+    it("asks for both in the one read of the open pull requests, the Plain ones' merge state among them", async () => {
+      const queries: string[] = [];
+      const github = repoWith({ openPullRequests: [anOpenAgentPullRequest(50)] });
+      await gatherGitHubFacts({ graphql: (query, variables) => (queries.push(query), github.graphql(query, variables)) }, repo, NOW, OPERATOR.login);
+
+      const open = queries.filter((query) => query.includes("pullRequests(states: OPEN"));
+      expect(open).toHaveLength(1);
+      expect(open[0]).toMatch(/\bmergeable\b/);
+      expect(open[0]).toMatch(/draftEvents: timelineItems\(last: 100, itemTypes: \[CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT\]\)/);
+    });
   });
 
   it("holds the open Kit-owned issues as the Loop reads them, so Held names the held runs: a bot's body and comments alone", async () => {
@@ -858,6 +935,8 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
             reviews: { nodes: [] },
             comments: { nodes: [] },
             timelineItems: { nodes: [] },
+            draftEvents: { nodes: [] },
+            mergeable: "MERGEABLE",
           },
         ],
       },

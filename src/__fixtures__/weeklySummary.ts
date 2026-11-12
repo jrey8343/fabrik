@@ -303,7 +303,7 @@ export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueF
 
 /**
  * Open agent PR 50, a draft for Ticket 7 at head `h…h` opened on 2026-10-01,
- * with nothing on it unless a test says so. A commit given only its time is the
+ * merging cleanly, with nothing on it unless a test says so. A commit given only its time is the
  * Operator's, as aCommit makes it.
  */
 export function anOpenPullRequest(
@@ -320,6 +320,8 @@ export function anOpenPullRequest(
     reviews: [],
     comments: [],
     labelEvents: [],
+    mergeable: true,
+    draftEvents: [],
     ...overrides,
   };
 }

@@ -146,8 +146,10 @@ export interface OpenPullRequestFacts {
   /** Oldest first. */
   readonly comments: readonly CommentFacts[];
   readonly labelEvents: readonly LabelEvent[];
-  /** When it went into draft and out of it, and who did it, oldest first; absent where they weren't read. */
-  readonly draftEvents?: readonly DraftEvent[];
+  /** Whether it merges cleanly with the default branch, or null when GitHub hasn't worked it out yet, which is read as merging cleanly. */
+  readonly mergeable: boolean | null;
+  /** When it went into draft and out of it, and who did it, oldest first: its latest 100. */
+  readonly draftEvents: readonly DraftEvent[];
 }
 
 /** A commit on the default branch. */

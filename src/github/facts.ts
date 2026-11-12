@@ -12,6 +12,7 @@ import type {
   AgentPullRequestFacts,
   CommentFacts,
   CommitFacts,
+  DraftEvent,
   EscapeMarkerIssueFacts,
   GitHubFacts,
   LabelEvent,
@@ -373,6 +374,16 @@ const LABEL_EVENTS = `
     }
   }
 `;
+// Aliased, as the label events read the same connection with other arguments.
+const DRAFT_EVENTS = `
+  draftEvents: timelineItems(last: 100, itemTypes: [CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
+    nodes {
+      __typename
+      ... on ConvertToDraftEvent { createdAt actor ${ACTOR} }
+      ... on ReadyForReviewEvent { createdAt actor ${ACTOR} }
+    }
+  }
+`;
 const COMMENTS = `comments(last: 100) { nodes { url body createdAt author ${ACTOR} } }`;
 const COMMIT = "commit { oid message committedDate author { email user { login } } }";
 const REVIEWS = `reviews(first: 100) { nodes { databaseId url author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
@@ -424,6 +435,7 @@ const OPEN_PULL_REQUESTS_QUERY = `
           ${REVIEWS}
           ${COMMENTS}
           ${LABEL_EVENTS}
+          ${DRAFT_EVENTS}
         }
       }
     }
@@ -594,6 +606,14 @@ interface RawOpenPullRequest {
   reviews: { nodes: RawReview[] };
   comments: { nodes: RawComment[] };
   timelineItems: { nodes: RawLabelEvent[] };
+  draftEvents: { nodes: RawDraftEvent[] };
+}
+
+/** A pull request going into draft or out of it, by whom. */
+interface RawDraftEvent {
+  __typename: string;
+  createdAt: string;
+  actor: RawActor | null;
 }
 
 interface RawIssue {
@@ -745,7 +765,16 @@ function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
     reviews: pr.reviews.nodes.flatMap(reviewOf),
     comments: pr.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(pr.timelineItems.nodes),
+    mergeable: mergeableOf(pr.mergeable),
+    draftEvents: draftEventsOf(pr.draftEvents.nodes),
   };
+}
+
+/** When a pull request went into draft and out of it, and who did it, oldest first. */
+function draftEventsOf(nodes: readonly RawDraftEvent[]): DraftEvent[] {
+  return nodes
+    .map(({ __typename, createdAt, actor }): DraftEvent => ({ kind: __typename === "ConvertToDraftEvent" ? "draft" : "ready", actor: loginOf(actor), at: createdAt }))
+    .toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
 /** An open Plain pull request: who opened it, its branch and head, and whether it is a draft and merges cleanly. Its reviews, labels and comments, which the Kit never acts on, are left out. */
