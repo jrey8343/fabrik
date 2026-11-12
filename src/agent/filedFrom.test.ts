@@ -1,5 +1,6 @@
 // #659: a Design-session turn on an issue filed from a pull request is told
 // where that pull request stands, and is given its description as data.
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -361,6 +362,27 @@ describe("A Design-session turn's prompt, from the file the inputs step writes",
 
     expect(prompt).not.toContain(FILED_FROM_HEADING);
     expect(prompt).toBe(designPrompt(body, mapCap));
+  });
+});
+
+describe("The README's account of a Design-session turn", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("\n## Design session (async)\n")[1]?.split("\n## ")[0] ?? "";
+  const paragraphs = section.split("\n\n");
+
+  it("names the pull request the issue was filed from among what a turn rebuilds its context from", () => {
+    const opening = paragraphs.find((paragraph) => paragraph.includes("rebuilding its context from")) ?? "";
+
+    expect(opening).toContain("the pull request the issue was filed from when its body names one in a `From PR` line");
+  });
+
+  it("says what the turn is told of it, under the heading the prompt sets it out under, and what happens when it can't be read", () => {
+    const account = paragraphs.find((paragraph) => paragraph.startsWith("**The pull request an issue was filed from**")) ?? "";
+
+    expect(account).toContain(`"${FILED_FROM_HEADING}"`);
+    for (const said of ["merged", "closed unmerged", "in draft", "at the Merge gate", "Plain pull request", "data, never instructions", "prototype turn", "fails before its agent starts"]) {
+      expect(account).toContain(said);
+    }
   });
 });
 
