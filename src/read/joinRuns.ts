@@ -11,6 +11,7 @@ import { type Standing, standingAt, type StandingNamed, standingOrder } from "..
 import { type RunningRun, runningRunOf, runningSince } from "../kit/standingInFlight.ts";
 import type { WaitingOnKitSilence } from "../kit/standingSilence.ts";
 import { DESIGN_LABEL, DIGEST_LABEL, REPLAY_TRIGGER_LABEL, type TriggerLabel } from "../loop/labels.ts";
+import { isOfPullRequest } from "../loop/types.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 
@@ -134,7 +135,7 @@ function fieldsOf({ schema, repo, issue, pullRequest }: Standing) {
 
 /** Whether a run names the work a Standing is: a Review's and a Digest run's its pull request, any other role's its issue, as the rule counts it. */
 function namesItsWork(run: RunInFlightFact, { issue, pullRequest }: Standing): boolean {
-  if (run.role === "review" || run.role === "digest") return run.pullRequest !== null && run.pullRequest === pullRequest;
+  if (isOfPullRequest(run.role)) return run.pullRequest !== null && run.pullRequest === pullRequest;
   return run.issue !== null && run.issue === issue && (run.exact || run.role === "implement" || run.role === "design");
 }
 
@@ -159,7 +160,7 @@ function runningOn(standing: Standing, run: RunInFlightFact): StandingNamed<"run
   if (!(role in RUNNING_PLACES)) return null;
   const { work, place } = RUNNING_PLACES[role as keyof typeof RUNNING_PLACES];
   const kind = runningRunOf(role, run.kind) ?? kindByRole(role as keyof typeof RUNNING_PLACES, standing, run);
-  const onIssue = role !== "review" && role !== "digest" && (role !== "implement" || kind === "implement" || standing.pullRequest === null);
+  const onIssue = !isOfPullRequest(role) && (role !== "implement" || kind === "implement" || standing.pullRequest === null);
   // A Digest run is a passed draft's (#654): the pass is given, as the rule says of it.
   const passed = role === "digest" ? ({ passed: true } as const) : {};
   return {

@@ -22,7 +22,7 @@ import {
 } from "../loop/labels.ts";
 import { auditMarksIn, retroMarksIn } from "../loop/markers.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import type { AgentRole } from "../loop/types.ts";
+import { type AgentRole, isOfPullRequest } from "../loop/types.ts";
 import { DAY, FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
@@ -215,7 +215,7 @@ function runningStandingsOf(facts: StandingFacts, runs: readonly RunInFlightFact
   const counted = runs.filter(({ job }) => job !== "waiting-on-checks");
   const issues = github.openIssues.flatMap((issue): Standing[] => {
     // A Review's run and a Digest's name the Ticket too, but each is on its pull request, where it is read below.
-    const named = counted.filter((run) => run.issue === issue.number && (run.role === "implement" || run.role === "design" || (run.exact && run.role !== "review" && run.role !== "digest")));
+    const named = counted.filter((run) => run.issue === issue.number && (run.role === "implement" || run.role === "design" || (run.exact && !isOfPullRequest(run.role))));
     const waiting = heldWork.has(`#${issue.number}`) ? [] : counted.filter((run) => !run.exact && run.issue === null && run.pullRequest === null && waitsOnRole(issue, run.role, appLogin));
     const run = firstOf(named, waiting);
     const standing = run === undefined ? null : runningOnIssue(issue, run, github.repo, github.openPullRequests, operator, appLogin);

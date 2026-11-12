@@ -85,7 +85,7 @@ import { defaultBranchOf, gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { prototypeRequestJson } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
-import type { Action, Plan } from "../loop/types.ts";
+import { type Action, isOfPullRequest, type Plan } from "../loop/types.ts";
 import { kitConfigErrors } from "../skills/pinnedManifests.ts";
 import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { callerChangeErrors } from "./callerPermissions.ts";
@@ -210,7 +210,7 @@ export function kitJobOutputs(
   const run = plan === null ? null : agentRunIn(plan);
   const replay = plan === null ? null : replayRunIn(plan);
   // A Review's subject is the PR itself, as a Digest run's is; a retry is an Implement run on the Ticket that fixes its PR.
-  const onPullRequest = run?.role === "review" || run?.role === "digest";
+  const onPullRequest = isOfPullRequest(run?.role);
   const pullRequest = run !== null && onPullRequest ? run.issue : (run?.pullRequest ?? null);
   const builds = run?.role === "implement" ? run.issue : ticket;
   // The closing step's line: what this job routed, held and declined included, as one line of JSON (#616).

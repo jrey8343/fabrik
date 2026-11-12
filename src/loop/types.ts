@@ -17,6 +17,19 @@ export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" |
 
 export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research", "digest"];
 
+/** The roles whose run is of a pull request itself, which the run names where any other role's names an issue: a Review, and a Digest run. */
+const PULL_REQUEST_ROLES: readonly string[] = ["review", "digest"] satisfies readonly AgentRole[];
+
+/**
+ * Whether a run in `role` is of a pull request itself: its `issue` is then
+ * the pull request's number, its Ticket is the one the pull request was cut
+ * for, and it is read on the pull request, never on the issue. An Implement
+ * run that fixes a pull request is still of its Ticket.
+ */
+export function isOfPullRequest(role: string | undefined): boolean {
+  return role !== undefined && PULL_REQUEST_ROLES.includes(role);
+}
+
 /** How an agent job, or the Review checks job (src/review/wait.ts), says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
   | "crash"
