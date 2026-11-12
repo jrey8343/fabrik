@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { aDesignQueueIssue, aResearchDecision, aTicket, kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aDesignRound, aLabelAdded, aReplayBody, aReview, aRunInFlight, aVerdictComment, anOpenIssue, anOpenPullRequest, anOpenReplay, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aDesignRound,
+  aLabelAdded,
+  anOpenIssue,
+  anOpenPullRequest,
+  anOpenReplay,
+  aReplayBody,
+  aReview,
+  aRunInFlight,
+  aVerdictComment,
+  factsOf,
+  standingFactsOf,
+} from "../read/builders.ts";
 import { undeliveredMarker } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";

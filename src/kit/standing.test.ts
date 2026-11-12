@@ -1,8 +1,26 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
-import { aRunInFlight, aWeeklyLimitIssue } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aDesignRound,
+  aDesignTurnFailedNotice,
+  aLabelAdded,
+  aMapCapRefusal,
+  anOpenAudit,
+  anOpenIssue,
+  anOpenPullRequest,
+  anOpenReplay,
+  anOpenRetro,
+  aPlainPullRequest,
+  aReplayBody,
+  aReview,
+  aRunInFlight,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  standingFactsOf,
+} from "../read/builders.ts";
 import { aTicket } from "../__fixtures__/snapshots.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord } from "../read/builders.ts";
 import { type Rubric, rubricSet } from "./rubrics.ts";
 import type { ReplayArm, RunRecord } from "./runRecord.ts";
 import { judgedRunOf, type JudgeRun, readJudgedRun, scoreFileFor, scoringPlan, scoringRubrics } from "./scorer.ts";

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type Standing, standingsOf } from "./standing.ts";
-import { aSummaryIssue, storeFactsOf } from "../__fixtures__/standingStore.ts";
-import { aLabelAdded, anOpenIssue } from "../__fixtures__/weeklySummary.ts";
+import { aLabelAdded, anOpenIssue, aSummaryIssue, storeFactsOf } from "../read/builders.ts";
 import type { StoreStandingFacts } from "./standingStore.ts";
 import { wordStanding } from "./standingWording.ts";
 import { weeklyFailureOf } from "./weeklyFiling.ts";

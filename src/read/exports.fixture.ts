@@ -4,8 +4,43 @@
 // every value as JSON and reads it back, and runs every call with the one
 // thing a Worker can't do made to throw. A Ticket that adds an export adds its
 // entries here, under its own heading, one argument to a line.
-import { aRunRecord, anOpenIssue, factsOf, standingFactsOf, UNKNOWN_COST_BASIS } from "../__fixtures__/weeklySummary.ts";
 import {
+  A_REPLAY,
+  aComment,
+  aCommit,
+  aDesignRound,
+  aDesignTurnFailedNotice,
+  aFollowUpIssue,
+  AGROUP_STATS,
+  aLabelAdded,
+  aMapCapRefusal,
+  aMergedPullRequest,
+  aMonitorIssueBody,
+  AN_UNKNOWN_COST,
+  anAnswersComment,
+  anAuditRunRecord,
+  anEscapeMarkerIssue,
+  anOpenAudit,
+  anOpenIssue,
+  anOpenMonitorIssue,
+  anOpenPullRequest,
+  anOpenReplay,
+  anOpenRetro,
+  aPlainPullRequest,
+  aReplayBody,
+  aReplayRunRecord,
+  aRetroRunRecord,
+  aReview,
+  aRunInFlight,
+  aRunRecord,
+  aSpec,
+  aSummaryIssue,
+  aTicketTimeline,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  standingFactsOf,
+  storeFactsOf,
   checkCallerWorkflow,
   costOf,
   DEFAULT_KIT_CONFIG,
@@ -184,13 +219,110 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // Fact builders and cost functions
 
+  A_REPLAY: () => A_REPLAY,
+  aComment: () =>
+    aComment(
+      "Thanks, merging.",
+      "2026-11-08T19:00:00Z",
+      { author: "operator", byBot: false },
+    ),
+  aCommit: () =>
+    aCommit(
+      "2026-11-08T19:00:00Z",
+    ),
+  aDesignRound: () =>
+    aDesignRound(
+      2,
+      "2026-11-08T19:00:00Z",
+    ),
+  aDesignTurnFailedNotice: () =>
+    aDesignTurnFailedNotice(
+      "2026-11-08T19:00:00Z",
+    ),
+  aFollowUpIssue: () =>
+    aFollowUpIssue(
+      50,
+      "Split the cart module",
+    ),
+  AGROUP_STATS: () => AGROUP_STATS,
+  aLabelAdded: () =>
+    aLabelAdded(
+      "agent:implement",
+      "2026-11-08T19:20:00Z",
+    ),
+  aMapCapRefusal: () =>
+    aMapCapRefusal(
+      "2026-11-08T19:00:00Z",
+    ),
+  aMergedPullRequest: () =>
+    aMergedPullRequest(
+      "2026-11-04T12:00:00Z",
+    ),
+  aMonitorIssueBody: () => aMonitorIssueBody(),
+  AN_UNKNOWN_COST: () => AN_UNKNOWN_COST,
+  anAnswersComment: () =>
+    anAnswersComment(
+      900,
+      { reviewMiss: true, amendsTicket: false },
+      "2026-11-08T19:00:00Z",
+    ),
+  anAuditRunRecord: () => anAuditRunRecord(),
+  anEscapeMarkerIssue: () =>
+    anEscapeMarkerIssue(
+      "Worth a deeper module.",
+    ),
+  anOpenAudit: () => anOpenAudit(),
+  anOpenIssue: () => anOpenIssue(),
+  anOpenMonitorIssue: () => anOpenMonitorIssue(),
+  anOpenPullRequest: () =>
+    anOpenPullRequest(
+      { commits: [{ at: "2026-11-08T19:00:00Z" }] },
+    ),
+  anOpenReplay: () => anOpenReplay(),
+  anOpenRetro: () => anOpenRetro(),
+  aPlainPullRequest: () => aPlainPullRequest(),
+  aReplayBody: () =>
+    aReplayBody(
+      { state: "done", run: 2000 },
+    ),
+  aReplayRunRecord: () => aReplayRunRecord(),
+  aRetroRunRecord: () => aRetroRunRecord(),
+  aReview: () =>
+    aReview(
+      "2026-11-08T19:00:00Z",
+    ),
+  aRunInFlight: () => aRunInFlight(),
+  aRunRecord: () => aRunRecord(),
+  aSpec: () =>
+    aSpec(
+      [{ label: "ready-for-agent", action: "labeled", actor: "operator", at: "2026-11-01T00:00:00Z" }],
+    ),
+  aSummaryIssue: () => aSummaryIssue(),
+  aTicketTimeline: () =>
+    aTicketTimeline(
+      [{ label: "agent:implement", action: "labeled", actor: "operator", at: "2026-11-08T19:20:00Z" }],
+    ),
+  aVerdictComment: () =>
+    aVerdictComment(
+      "pass",
+      "h".repeat(40),
+      "2026-11-08T19:00:00Z",
+    ),
+  aWeeklyLimitIssue: () =>
+    aWeeklyLimitIssue(
+      "2026-11-10T00:00:00Z",
+      [{ role: "implement", issue: 7, label: "agent:implement" }],
+    ),
+  factsOf: () => factsOf(),
+  standingFactsOf: () => standingFactsOf(),
+  storeFactsOf: () => storeFactsOf(),
   costOf: () =>
     costOf(
-      [aRunRecord(), aRunRecord({ runId: 1001, ...UNKNOWN_COST_BASIS })],
+      [aRunRecord(), aRunRecord({ runId: 1001, ...AN_UNKNOWN_COST })],
     ),
   hasUnknownCostBasis: () =>
     hasUnknownCostBasis(
-      aRunRecord(UNKNOWN_COST_BASIS),
+      aRunRecord(AN_UNKNOWN_COST),
     ),
   isLive: () =>
     isLive(

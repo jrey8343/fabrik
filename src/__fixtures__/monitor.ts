@@ -4,6 +4,7 @@ import { DEFAULT_KIT_CONFIG, type MonitorErrors } from "../kit/config.ts";
 import type { MonitorInput, SentryGroupsRead } from "../monitor/core.ts";
 import type { MonitorIssue } from "../monitor/issues.ts";
 import type { GroupFacts } from "../monitor/sentry.ts";
+import { aMonitorIssueBody } from "../read/builders.ts";
 
 /** Production errors on, read from Sentry's `acme/clinic` project, with the default threshold of 3 events in 24 hours. */
 export const SENTRY_ON: MonitorErrors = {
@@ -45,29 +46,6 @@ export function aGroup(overrides: Partial<GroupFacts> = {}): GroupFacts {
     },
     ...overrides,
   };
-}
-
-/** The stats block's lines for aGroup()'s stats, as the Monitor writes them. */
-export const AGROUP_STATS: readonly string[] = [
-  "- Events in the last 24 hours: 9",
-  "- Users affected: 4",
-  "- Last seen: 2026-11-06 06:15 UTC",
-  "- Release: `clinic@1.4.0`",
-];
-
-/** A Monitor issue's body for group 4504, its stats block holding these lines. */
-export function aMonitorIssueBody(stats: readonly string[] = AGROUP_STATS): string {
-  return [
-    "<!-- fabrik:monitor sentry:4504 -->",
-    "Sentry reports a production error in this repo, `CLINIC-7`.",
-    "",
-    "- Culprit: `POST /api/book`",
-    "<!-- fabrik:monitor-stats -->",
-    ...stats,
-    "<!-- /fabrik:monitor-stats -->",
-    "",
-    "[The group in Sentry](https://acme.sentry.io/issues/4504/)",
-  ].join("\n");
 }
 
 /**

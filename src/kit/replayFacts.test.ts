@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aReading } from "../__fixtures__/replay.ts";
-import { A_REPLAY, aRunRecord } from "../__fixtures__/weeklySummary.ts";
+import { A_REPLAY, aRunRecord } from "../read/builders.ts";
 import { newestWeeklyLimits, replayCandidatesOf, replayStorePaths, replayTicketsIn } from "./replayFacts.ts";
 
 /** Wednesday 2026-11-11, so the store's last two months are October and November 2026. */

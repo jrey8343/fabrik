@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  A_REPLAY,
   aComment,
   aCommit,
-  anAnswersComment,
   aDesignRound,
   aDesignTurnFailedNotice,
+  AGROUP_STATS,
   aLabelAdded,
-  A_REPLAY,
   aMapCapRefusal,
   aMergedPullRequest,
+  aMonitorIssueBody,
+  AN_UNKNOWN_COST,
+  anAnswersComment,
+  anAuditRunRecord,
   anEscapeMarkerIssue,
   anOpenAudit,
   anOpenIssue,
@@ -16,7 +20,6 @@ import {
   anOpenPullRequest,
   anOpenReplay,
   anOpenRetro,
-  anAuditRunRecord,
   aPlainPullRequest,
   aReplayBody,
   aReplayRunRecord,
@@ -24,17 +27,13 @@ import {
   aReview,
   aRunInFlight,
   aRunRecord,
-  aScoreEntry,
-  aScoreFile,
-  aSkippedScoreFile,
   aSpec,
   aTicketTimeline,
   aVerdictComment,
   aWeeklyLimitIssue,
   factsOf,
-  UNKNOWN_COST_BASIS,
-} from "../__fixtures__/weeklySummary.ts";
-import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
+} from "../read/builders.ts";
+import { aScoreEntry, aScoreFile, aSkippedScoreFile } from "../__fixtures__/weeklySummary.ts";
 import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
 import { handBackMarker, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
@@ -285,7 +284,7 @@ describe("the Weekly summary", () => {
       input({
         records: [
           aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", ...UNKNOWN_COST_BASIS }),
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", ...AN_UNKNOWN_COST }),
         ],
       }),
     );
@@ -2010,7 +2009,7 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", ...UNKNOWN_COST_BASIS, retry: 1 }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", ...AN_UNKNOWN_COST, retry: 1 }),
           ],
           facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-04T00:00:00Z")] })],
         }),
@@ -2120,7 +2119,7 @@ describe("the Weekly summary", () => {
       const result = weeklySummary(
         input({
           records: [
-            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", ...UNKNOWN_COST_BASIS }),
+            aRunRecord({ issue: 3, role: "triage", pullRequest: null, endedAt: "2026-11-03T00:00:00Z", ...AN_UNKNOWN_COST }),
             aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 2 }),
           ],
           facts: [factsOf({ specs: [aSpec([aLabelAdded("ready-for-agent", "2026-11-05T00:00:00Z")], { number: 3 })] })],
@@ -2169,7 +2168,7 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1 }),
-            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", ...UNKNOWN_COST_BASIS }),
+            aRunRecord({ endedAt: "2026-11-03T06:00:00Z", ...AN_UNKNOWN_COST }),
           ],
           facts: [factsOf({ tickets: [aTicketTimeline([], { closedAt: "2026-11-04T00:00:00Z" })] })],
         }),
@@ -2197,7 +2196,7 @@ describe("the Weekly summary", () => {
         aRunRecord({ endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 1.5, retry: 1 }),
         aRunRecord({
           endedAt: "2026-11-05T00:00:00Z",
-          ...UNKNOWN_COST_BASIS,
+          ...AN_UNKNOWN_COST,
           stepUp: true,
           stepUpReason: "retry",
           // Friday 13 November 2026, 10:00 in Sydney.
@@ -2260,10 +2259,10 @@ describe("the Weekly summary", () => {
         input({
           records: [
             aRunRecord({ issue: 7, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2 }),
-            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", ...UNKNOWN_COST_BASIS, retry: 1 }),
+            aRunRecord({ issue: 7, endedAt: "2026-11-03T00:00:00Z", ...AN_UNKNOWN_COST, retry: 1 }),
             aRunRecord({ issue: 8, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1.5 }),
             aRunRecord({ issue: 9, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0.25 }),
-            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-26T00:00:00Z", ...UNKNOWN_COST_BASIS }),
+            aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-26T00:00:00Z", ...AN_UNKNOWN_COST }),
             aRunRecord({ issue: 3, role: "design", pullRequest: null, endedAt: "2026-10-27T00:00:00Z", totalCostUsd: 1 }),
           ],
           facts: [
@@ -3112,7 +3111,7 @@ describe("the Weekly summary", () => {
             aRunRecord({ totalCostUsd: 9.5 }),
             aRunRecord({ role: "score", baseSha: null, totalCostUsd: 0.25 }),
             aRunRecord({ role: "score", baseSha: null, totalCostUsd: 0.25 }),
-            aRunRecord({ role: "score", baseSha: null, ...UNKNOWN_COST_BASIS }),
+            aRunRecord({ role: "score", baseSha: null, ...AN_UNKNOWN_COST }),
             aRunRecord({ role: "score", baseSha: null, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 0.4 }), // last week's
           ],
           scoreFiles: [aScoreFile()],
@@ -3140,7 +3139,7 @@ describe("the Weekly summary", () => {
           ...[2, 4, 5, 6].map((runId) => aRunRecord({ runId, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 0 })),
           judgeRun({ runId: 1, endedAt: "2026-11-03T00:05:00Z", totalCostUsd: 0.25 }),
           judgeRun({ runId: 2, endedAt: "2026-11-04T00:05:00Z", totalCostUsd: 0.25 }),
-          judgeRun({ runId: 5, endedAt: "2026-11-04T00:05:00Z", ...UNKNOWN_COST_BASIS }),
+          judgeRun({ runId: 5, endedAt: "2026-11-04T00:05:00Z", ...AN_UNKNOWN_COST }),
           aRunRecord({ runId: 3, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2.25 }),
           judgeRun({ runId: 3, endedAt: "2026-10-28T00:05:00Z", totalCostUsd: 0.25 }),
         ],
@@ -3285,7 +3284,7 @@ describe("the Weekly summary", () => {
     const replayRecords = [
       aReplayRunRecord({ endedAt: "2026-11-06T00:00:00Z", totalCostUsd: 2, subscription: "Claude token 2", rateLimit: weeklyReading(0.9) }),
       judgeRun({ runId: 2000, replay: A_REPLAY, subscription: "Claude token 2", endedAt: "2026-11-06T00:05:00Z", totalCostUsd: 0.5 }),
-      aReplayRunRecord({ replay: variant, subscription: "Claude token 2", endedAt: "2026-11-06T00:30:00Z", ...UNKNOWN_COST_BASIS }),
+      aReplayRunRecord({ replay: variant, subscription: "Claude token 2", endedAt: "2026-11-06T00:30:00Z", ...AN_UNKNOWN_COST }),
       aReplayRunRecord({
         role: "review",
         verdict: "pass",

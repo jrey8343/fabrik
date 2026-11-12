@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aLabelAdded,
+  anOpenIssue,
+  anOpenPullRequest,
+  aReview,
+  aRunInFlight,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  standingFactsOf,
+} from "../read/builders.ts";
 import {
   BROKEN_RUN_MARKER,
   EMPTY_DIFF_MARKER,

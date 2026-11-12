@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, factsOf, standingFactsOf } from "../read/builders.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
 import type { GitHubFacts, RepoKitFacts, RequiredChecksFact } from "./weeklySummary.ts";

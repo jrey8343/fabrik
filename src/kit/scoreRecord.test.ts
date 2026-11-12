@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord } from "../read/builders.ts";
 import { noWait, storeWith } from "../__fixtures__/store.ts";
 import type { RecordWrite } from "./recordWriter.ts";
 import type { Rubric } from "./rubrics.ts";
