@@ -30,6 +30,7 @@ import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { isStateLabel, type StateLabel } from "../loop/labels.ts";
 import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
+import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
 import { fromAuditIn } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
@@ -257,7 +258,7 @@ export async function readSentBack(github: Reader, repo: Repo, sentBack: SentBac
   };
 }
 
-/** Every Verdict the Fabrik App posted on the PR, oldest first, each with its whole comment. */
+/** Every Verdict the Fabrik App posted on the PR, oldest first, each with its comment, whole but for its change line. */
 async function verdictsOn(github: Reader, repo: Repo, pullRequest: number): Promise<unknown[]> {
   const comments = await allPages<{ body: string; user: RestUser | null }>(
     github,
@@ -267,7 +268,8 @@ async function verdictsOn(github: Reader, repo: Repo, pullRequest: number): Prom
   return comments.flatMap(({ body, user }) => {
     if (user?.type !== "Bot") return [];
     const [record] = verdictsIn([body]);
-    return record === undefined ? [] : [{ verdict: record.verdict, source: record.source, headSha: record.headSha, comment: body }];
+    // Without its change line (#643), which is hashes for Kit code and says nothing to an agent.
+    return record === undefined ? [] : [{ verdict: record.verdict, source: record.source, headSha: record.headSha, comment: withoutChangeLines(body) }];
   });
 }
 
@@ -452,8 +454,10 @@ export async function readPullRequest(
   const { title, body, baseRefName, headRefName, headRefOid, comments } = pullRequest;
   // Only a PR the Operator requested changes on carries them, so every other PR's input is as it always was.
   const amended = requestedChanges.length === 0 ? {} : { requestedChanges };
+  // A Verdict among the comments keeps its marker and loses its change line (#643), which says nothing to an agent.
+  const kept = comments.nodes.map((comment) => ({ ...comment, body: withoutChangeLines(comment.body) }));
   return withComments
-    ? { number, title, body, comments: comments.nodes, operatorComments, ...amended }
+    ? { number, title, body, comments: kept, operatorComments, ...amended }
     : { number, title, body, baseRefName, headRefName, headRefOid, operatorComments, ...amended };
 }
 
