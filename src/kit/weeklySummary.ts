@@ -45,7 +45,7 @@ import {
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type Standing, type StandingName, standingsOf } from "./standing.ts";
+import { type PlainKind, type Standing, type StandingName, standingsOf } from "./standing.ts";
 import { answerOf, lastAdded, passedMoveOf } from "./standingOperator.ts";
 import {
   firstRunOf,
@@ -626,7 +626,9 @@ export type WaitingItem =
    * its passing Verdict, as after an empty Request-changes run or a failed
    * conflict-only run, waiting since it got the label.
    */
-  | (ItemBase & { readonly kind: "handed-back" });
+  | (ItemBase & { readonly kind: "handed-back" })
+  /** A Plain pull request ready to merge, every Required check passed, waiting since its head; a Pairing session's among them, joined to its issue or not. */
+  | (ItemBase & { readonly kind: "plain-ready"; readonly plain: PlainKind });
 
 /** Loop work that hasn't moved in more than 24 hours, since `since`. */
 export type StuckItem =
@@ -1356,7 +1358,7 @@ function itemsIn(repo: string, now: number) {
   return {
     issue: (issue: { readonly number: number; readonly title: string }, since: string) =>
       item(issue.number, issue.title, `https://github.com/${repo}/issues/${issue.number}`, since),
-    pullRequest: (pullRequest: OpenPullRequestFacts, since: string) =>
+    pullRequest: (pullRequest: { readonly number: number; readonly title: string }, since: string) =>
       item(pullRequest.number, pullRequest.title, `https://github.com/${repo}/pull/${pullRequest.number}`, since),
   };
 }
@@ -1374,9 +1376,11 @@ const LISTED_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-failed", "de
 /**
  * Whether Waiting on you lists a Standing: every one whose move is the
  * Operator's, but a weekly-limit issue, which stays under Held, and a Map's
- * own Decisions, folded into the Map's line.
+ * own Decisions, folded into the Map's line. Of the Plain pull requests only
+ * one ready to merge is listed, whatever else is the Operator's.
  */
 function listedInWaitingOnYou(standing: Standing): boolean {
+  if (standing.work === "plain") return standing.name === "yours-to-merge";
   if (standing.move !== "operator" || !LISTED_IN_WAITING_ON_YOU.has(standing.name) || standing.work === "weekly-limit") return false;
   if (standing.name === "yours-to-read") return standing.detail.map === null;
   if (standing.name === "yours-to-do") return standing.detail.handBack === null || LISTED_HAND_BACKS.has(standing.detail.handBack);
@@ -1395,6 +1399,10 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, appLogin: string,
   const onIssue = issue === null ? null : items.issue(issue, standing.since);
   switch (standing.name) {
     case "yours-to-merge": {
+      if (standing.detail.plain !== null) {
+        const plain = facts.plainPullRequests.find(({ number }) => number === standing.pullRequest);
+        return plain === undefined ? null : { kind: "plain-ready", ...items.pullRequest(plain, standing.since), plain: standing.detail.plain };
+      }
       if (pullRequest === undefined) return null;
       const item = items.pullRequest(pullRequest, standing.since);
       return { kind: "merge-gate", ...item, operatorWait: item.age };
@@ -1838,8 +1846,19 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `at the Merge gate, Operator wait ${duration(item.operatorWait)}`);
     case "handed-back":
       return itemLine(item, `handed to you with \`${READY_FOR_HUMAN}\` ${duration(item.age)} ago`);
+    case "plain-ready":
+      return itemLine(item, `${PLAIN_PHRASES[item.plain]}, ready to merge for ${duration(item.age)}`);
   }
 }
+
+/** What a Plain pull request of each kind is called in its line. */
+const PLAIN_PHRASES: Readonly<Record<PlainKind, string>> = {
+  "kit-bump": "a Kit bump",
+  setup: "Setup's pull request",
+  "skills-bump": "a Skills bump",
+  pairing: "a Pairing session's pull request",
+  other: "a pull request",
+};
 
 function stuckLine(item: StuckItem): string {
   switch (item.kind) {
