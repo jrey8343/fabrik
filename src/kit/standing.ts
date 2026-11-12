@@ -9,6 +9,7 @@
 // shown (src/kit/standingWording.ts).
 import type { HandBack } from "../loop/handBacks.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { notStartedStandingsOf } from "./standingClock.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
@@ -208,10 +209,27 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
  */
 export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: string): Standing[] {
   if (facts.kind === "store") return storeStandingsOf(facts, now);
-  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...inFlightStandingsOf(facts, now)];
-  return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))).toSorted(
+  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...inFlightStandingsOf(facts, now), ...notStartedStandingsOf(facts, now)];
+  return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github)))
+    .map((standing) => standingAt(standing, now))
+    .toSorted(
     (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
   );
+}
+
+/**
+ * A kept Standing as it reads at `now`, ISO 8601, with no facts: a silence
+ * whose `stuckAt` has passed is `stuck`, the Kit's move still but the
+ * Operator's to act on and stopping work, carrying the name it had in
+ * `detail.was`, its `since` kept. Everything else is returned as it is. The
+ * rule reads each Standing through this, so a reader that kept one gets the
+ * answer the rule would give.
+ */
+export function standingAt(standing: Standing, now: string): Standing {
+  if ((standing.name !== "not-started" && standing.name !== "waiting-on-kit") || standing.stuckAt === null) return standing;
+  if (Date.parse(now) < Date.parse(standing.stuckAt)) return standing;
+  const detail = standing.name === "not-started" ? { was: standing.name, ...standing.detail } : { was: standing.name, ...standing.detail };
+  return { ...standing, name: "stuck", yours: true, stopsWork: true, detail };
 }
 
 /**
