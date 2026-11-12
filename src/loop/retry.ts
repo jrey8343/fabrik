@@ -9,7 +9,7 @@
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_AGENT, STEP_UP_LABEL } from "./labels.ts";
-import { RETRY_ENDED_MARKER, RETRY_RESTARTED_MARKER } from "./markers.ts";
+import { handBackMarker, RETRY_ENDED_MARKER, RETRY_RESTARTED_MARKER } from "./markers.ts";
 import type { Action, KitConfig, PullRequestSnapshot, StepUpReason, VerdictRecord } from "./types.ts";
 
 /** Execution-flaw retries a Ticket gets before the next flaw counts as a Design flaw. */
@@ -250,7 +250,7 @@ export function unstartedRetry(
   if (run?.kind !== "retry") return null;
   if (Date.parse(now) - Date.parse(verdictPostedAt) < runMinutes * 60_000) return null;
   if (ticketNotReady(pullRequest)) {
-    return [{ kind: "comment", issue: number, body: [RETRY_ENDED_MARKER, `@${operator} ${runName(run)} on #${number} never started. ${ticketNotReadyLine(number, ticket)}`].join("\n") }];
+    return [{ kind: "comment", issue: number, body: [RETRY_ENDED_MARKER, `@${operator} ${runName(run)} on #${number} never started. ${ticketNotReadyLine(number, ticket)}`, handBackMarker({ kind: "retry-never-started", role: "implement" })].join("\n") }];
   }
   return [
     {

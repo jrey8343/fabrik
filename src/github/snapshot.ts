@@ -36,6 +36,7 @@ import { escapeMarkerIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
+  AgentRole,
   AuditSnapshot,
   ConflictCandidate,
   ConflictSnapshot,
@@ -484,6 +485,19 @@ export const DESIGN_JOB_NAME = "Design-session turn";
  * of its session, so it holds the session's slot as a Design job does (#155).
  */
 export const PROTOTYPE_JOB_NAME = "Prototype turn";
+
+/**
+ * The names of the jobs in .github/workflows/loop.yml that carry no number (a
+ * test holds them together), which the runs in flight are read by (#606): a
+ * Triage, Audit or Retro job, and a Review's re-run of its red checks and its
+ * wait for them. Called from a Product repo's caller workflow, each shows up
+ * as `<caller job> / <name>`.
+ */
+export const TRIAGE_JOB_NAME = "Triage";
+export const AUDIT_JOB_NAME = "Audit";
+export const RETRO_JOB_NAME = "Retro";
+export const RERUN_CHECKS_JOB_NAME = "Re-run red checks";
+export const RERUN_WAIT_JOB_NAME = "Re-run checks' wait";
 
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
@@ -1605,7 +1619,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
   );
   const botComments = fromBots.map((comment) => comment.body);
   // Every review still requesting changes, however old: GitHub lists a dismissed one no longer.
-  const standing = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
+  const notDismissed = new Set(pullRequest.changesRequests.nodes.map(({ databaseId }) => databaseId));
   const history = historyOf(pullRequest, fromBots);
   const ticket = ticketOfAgentBranch(pullRequest.headRefName);
   const isAgent = isAgentPullRequest({ headRef: pullRequest.headRefName, authorIsBot: pullRequest.author?.__typename === "Bot" });
@@ -1631,7 +1645,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     retryNoteSinceVerdict: retryNoteSinceVerdictIn(botComments),
     verdictPostedAt: verdictPostedAtIn(history),
     headPushedAt: headPushedAtOf(pullRequest, fromBots, isAgent),
-    ...requestChangesSinceRunIn(history, standing, operator),
+    ...requestChangesSinceRunIn(history, notDismissed, operator),
     leftDraftSinceVerdict: leftDraftSinceVerdictIn(history),
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
@@ -1726,10 +1740,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** GitHub's word for whether a PR merges cleanly into the default branch. */
-type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 
 /** Whether a PR merges cleanly, or null while GitHub is still working it out. */
-function mergeableOf(state: MergeableState): boolean | null {
+export function mergeableOf(state: MergeableState): boolean | null {
   return state === "UNKNOWN" ? null : state === "MERGEABLE";
 }
 
@@ -2088,6 +2102,8 @@ const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "request
 interface Job {
   /** The workflow run the job is in. */
   run: number;
+  /** When Actions created that workflow run, ISO 8601. */
+  createdAt: string;
   name: string;
   status: string;
   conclusion: string | null;
@@ -2105,11 +2121,98 @@ interface Job {
  * release names none.
  */
 export async function countDispatchedRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<DispatchedRuns> {
-  const jobs = await jobsOfUnfinishedRuns(github, repo);
-  const research = jobs.filter(({ name, status }) => status !== "completed" && isJobNamed(name, RESEARCH_JOB_NAME)).length;
-  const implement = implementJobsUnderWay(jobs);
-  const named = implement.flatMap(({ name }) => IMPLEMENT_JOB.exec(name)?.[1] ?? []).map(Number);
+  return dispatchedRunsOf(await readRunsInFlight(github, repo));
+}
+
+/** The Implement and Research runs Dispatch counts in flight, from the runs in flight: an Implement job until its push job lands it, a Research job until it's done. */
+export function dispatchedRunsOf(runs: readonly RunInFlightFact[]): DispatchedRuns {
+  const implement = runs.filter(({ role }) => role === "implement");
+  const research = runs.filter(({ role, job }) => role === "research" && job !== "landing").length;
+  const named = implement.flatMap(({ issue }) => (issue === null ? [] : [issue]));
   return { implement: implement.length, research, implementTickets: [...new Set(named)].sort((a, b) => a - b) };
+}
+
+/** The kind of run a job's name says it is, where it says: a Retry, or a Design session's prototype turn. */
+export type RunKind = "first" | "retry" | "request-changes" | "conflict-only" | "prototype";
+
+/**
+ * Where a run in flight is: behind its concurrency group (`blocked`), queued
+ * for a runner, a Review waiting on the Required checks or re-running red
+ * ones, running, or its agent job done while the run is still landing it.
+ */
+export type RunJob = "blocked" | "waiting-for-runner" | "waiting-on-checks" | "running" | "landing";
+
+/**
+ * A run in flight, as its job's name tells it (#606): its role, the issue or
+ * pull request the name carries, or null where it carries none (a Triage,
+ * Research, Audit or Retro job, a Review's wait for checks, and an Implement or
+ * Review job an earlier release named for nothing), a Retry's number, and when
+ * Actions created its workflow run.
+ */
+export interface RunInFlightFact {
+  readonly role: AgentRole | "replay";
+  readonly issue: number | null;
+  readonly pullRequest: number | null;
+  readonly retry: number | null;
+  readonly kind: RunKind | null;
+  readonly job: RunJob;
+  /** When Actions created its workflow run, ISO 8601. */
+  readonly createdAt: string;
+}
+
+/**
+ * The runs in flight across every workflow run in the repo not yet finished,
+ * one per job the Loop names (#606): the one read Dispatch's count, the
+ * Weekly summary's Held and the Standing rule share. A job its run skipped is
+ * no run. An Implement job counts until its run's push job has landed it, as
+ * Dispatch counts it (implementJobsUnderWay); a Review's wait for checks only
+ * while it is under way; any other job while its run is unfinished, as the
+ * stuck-trigger sweep counts it. Throws when the Actions API can't be read.
+ */
+export async function readRunsInFlight(github: Pick<GitHub, "rest">, repo: Repo): Promise<RunInFlightFact[]> {
+  const jobs = await jobsOfUnfinishedRuns(github, repo);
+  const implement = new Set(implementJobsUnderWay(jobs));
+  return jobs.flatMap((job): RunInFlightFact[] => {
+    if (job.conclusion === "skipped") return [];
+    const ran = { issue: null, pullRequest: null, retry: null, kind: null, job: jobOf(job), createdAt: job.createdAt } as const;
+    const implementName = IMPLEMENT_JOB.exec(job.name);
+    if (implementName !== null) {
+      if (!implement.has(job)) return [];
+      const retry = implementName[2] === undefined ? null : Number(implementName[2]);
+      return [{ ...ran, role: "implement", issue: numberOrNull(implementName[1]), retry, kind: retry === null ? null : "retry" }];
+    }
+    const reviewName = REVIEW_JOB.exec(job.name);
+    if (reviewName !== null) return [{ ...ran, role: "review", pullRequest: numberOrNull(reviewName[1]) }];
+    if ([REVIEW_CHECKS_JOB_NAME, RERUN_CHECKS_JOB_NAME, RERUN_WAIT_JOB_NAME].some((name) => isJobNamed(job.name, name))) {
+      return job.status === "completed" ? [] : [{ ...ran, role: "review", job: "waiting-on-checks" }];
+    }
+    const designName = DESIGN_JOB.exec(job.name);
+    if (designName !== null) {
+      const prototype = isJobNamed(job.name.replace(/ #[0-9]+$/, ""), PROTOTYPE_JOB_NAME);
+      return [{ ...ran, role: "design", issue: numberOrNull(designName[1]), kind: prototype ? "prototype" : null }];
+    }
+    const unnumbered = UNNUMBERED_JOBS.find(([name]) => isJobNamed(job.name, name));
+    return unnumbered === undefined ? [] : [{ ...ran, role: unnumbered[1] }];
+  });
+}
+
+/** The jobs whose names carry no number, by role. */
+const UNNUMBERED_JOBS: readonly (readonly [string, AgentRole])[] = [
+  [TRIAGE_JOB_NAME, "triage"],
+  [RESEARCH_JOB_NAME, "research"],
+  [AUDIT_JOB_NAME, "audit"],
+  [RETRO_JOB_NAME, "retro"],
+];
+
+/** Where a job is, from its status. */
+function jobOf({ status }: Job): RunJob {
+  if (status === "completed") return "landing";
+  if (status === "in_progress") return "running";
+  return status === "queued" ? "waiting-for-runner" : "blocked";
+}
+
+function numberOrNull(digits: string | undefined): number | null {
+  return digits === undefined ? null : Number(digits);
 }
 
 /** The Implement and Research runs a Dispatch check counts in flight, and the Tickets the Implement runs name. */
@@ -2147,8 +2250,8 @@ function isJobNamed(name: string, jobName: string): boolean {
  * not: named for what it runs on (#477), or for nothing, as a run of an earlier
  * Kit release still in flight names it.
  */
-const IMPLEMENT_JOB = new RegExp(`^(?:.+ / )?${IMPLEMENT_JOB_NAME}(?: #([1-9][0-9]*)(?: \\(Retry [1-9][0-9]*\\))?)?$`);
-const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #[1-9][0-9]*)?$`);
+const IMPLEMENT_JOB = new RegExp(`^(?:.+ / )?${IMPLEMENT_JOB_NAME}(?: #([1-9][0-9]*)(?: \\(Retry ([1-9][0-9]*)\\))?)?$`);
+const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #([1-9][0-9]*))?$`);
 
 /**
  * Whether an Implement job is under way anywhere in the repo (#387), as
@@ -2302,19 +2405,19 @@ function triggerHistoryOf(items: readonly TriggerTimelineItem[], appLogin: strin
 /** Every job, finished or not, of every workflow run not yet completed. */
 async function jobsOfUnfinishedRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<Job[]> {
   const base = `/repos/${repo.owner}/${repo.name}/actions`;
-  const runIds = new Set<number>();
+  const runs = new Map<number, string>();
   for (const status of UNFINISHED_RUNS) {
-    const runs = (await github.rest("GET", `${base}/runs?status=${status}&per_page=100`)) as {
-      workflow_runs: { id: number }[];
+    const page = (await github.rest("GET", `${base}/runs?status=${status}&per_page=100`)) as {
+      workflow_runs: { id: number; created_at: string }[];
     };
-    for (const run of runs.workflow_runs) runIds.add(run.id);
+    for (const run of page.workflow_runs) runs.set(run.id, run.created_at);
   }
   const jobs: Job[] = [];
-  for (const id of runIds) {
+  for (const [id, createdAt] of runs) {
     const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
       jobs: { name: string; status: string; conclusion?: string | null }[];
     };
-    jobs.push(...page.jobs.map((job) => ({ run: id, name: job.name, status: job.status, conclusion: job.conclusion ?? null })));
+    jobs.push(...page.jobs.map((job) => ({ run: id, createdAt, name: job.name, status: job.status, conclusion: job.conclusion ?? null })));
   }
   return jobs;
 }

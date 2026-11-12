@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "./client.ts";
-import { gatherEveryRepoFacts, gatherGitHubFacts, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
+import { gatherEveryRepoFacts, gatherGitHubFacts, gatherHeadChecks, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -382,6 +382,104 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
+  describe("an open Plain pull request", () => {
+    /** Open PR `number`, on `headRefName`, by `author`, out of draft, merging cleanly, closing nothing. */
+    const anOpenRawPullRequest = (number: number, headRefName: string, author: unknown, overrides: Record<string, unknown> = {}) => ({
+      number,
+      title: `PR ${number}`,
+      isDraft: false,
+      headRefOid: String(number % 10).repeat(40),
+      headRefName,
+      createdAt: "2026-11-01T00:00:00Z",
+      mergeable: "MERGEABLE",
+      author,
+      closingIssuesReferences: { nodes: [] },
+      commits: { nodes: [] },
+      reviews: { nodes: [] },
+      comments: { nodes: [] },
+      timelineItems: { nodes: [] },
+      draftEvents: { nodes: [] },
+      ...overrides,
+    });
+    const DEPENDABOT = { __typename: "Bot", login: "dependabot" };
+
+    it("is kept for every open PR that is no agent PR, whoever opened it, with who opened it, its branch and head, whether it is a draft, whether it merges cleanly, when it last went into draft or out of it, and every issue it closes", async () => {
+      const github = repoWith({
+        openPullRequests: [
+          anOpenRawPullRequest(50, "fabrik/ticket-7", APP, { closingIssuesReferences: { nodes: [{ number: 7 }] } }),
+          anOpenRawPullRequest(71, "dependabot/github_actions/fabrik-d03f57835c", DEPENDABOT, {
+            mergeable: "CONFLICTING",
+            commits: { nodes: [aRawCommit("8", "2026-11-02T00:00:00Z", "fabrik: bump", { email: "support@github.com", user: null }), aRawCommit("1", "2026-11-03T00:00:00Z", "fabrik: bump", { email: "support@github.com", user: null })] },
+          }),
+          anOpenRawPullRequest(72, "fabrik/pair-12", OPERATOR, {
+            isDraft: true,
+            mergeable: "UNKNOWN",
+            closingIssuesReferences: { nodes: [{ number: 5 }, { number: 12 }] },
+            draftEvents: {
+              nodes: [
+                { __typename: "ConvertToDraftEvent", createdAt: "2026-11-04T00:00:00Z", actor: OPERATOR },
+                { __typename: "ReadyForReviewEvent", createdAt: "2026-11-03T00:00:00Z", actor: OPERATOR },
+              ],
+            },
+          }),
+          // The Operator's own PR from an agent branch is no agent PR: only the Fabrik App opens one.
+          anOpenRawPullRequest(73, "fabrik/ticket-9", OPERATOR),
+        ],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+      expect(facts.plainPullRequests).toEqual([
+        {
+          number: 71,
+          title: "PR 71",
+          author: "dependabot[bot]",
+          headRef: "dependabot/github_actions/fabrik-d03f57835c",
+          headSha: "1".repeat(40),
+          headCommittedAt: "2026-11-03T00:00:00Z",
+          draft: false,
+          mergeable: false,
+          closes: [],
+          draftChangedAt: null,
+          createdAt: "2026-11-01T00:00:00Z",
+        },
+        {
+          number: 72,
+          title: "PR 72",
+          author: "jrey8343",
+          headRef: "fabrik/pair-12",
+          headSha: "2".repeat(40),
+          headCommittedAt: null,
+          draft: true,
+          mergeable: null,
+          closes: [5, 12],
+          draftChangedAt: "2026-11-04T00:00:00Z",
+          createdAt: "2026-11-01T00:00:00Z",
+        },
+        expect.objectContaining({ number: 73, author: "jrey8343", headRef: "fabrik/ticket-9", mergeable: true }),
+      ]);
+      // The metrics read agent PRs alone.
+      expect(facts.openPullRequests.map(({ number }) => number)).toEqual([50]);
+    });
+
+    it("keeps none of its reviews, labels or comments, so a Request changes, needs-design or a comment on one changes nothing", async () => {
+      const plain = anOpenRawPullRequest(74, "fix-typo", OPERATOR);
+      const touched = {
+        ...plain,
+        reviews: { nodes: [{ author: OPERATOR, state: "CHANGES_REQUESTED", submittedAt: "2026-11-02T01:00:00Z", body: "Not yet.", comments: { nodes: [] } }] },
+        comments: { nodes: [{ author: OPERATOR, body: "What about this?", createdAt: "2026-11-02T02:00:00Z" }] },
+        timelineItems: { nodes: [aRawLabelEvent("needs-design", "2026-11-02T03:00:00Z", OPERATOR)] },
+      };
+
+      const [before, after] = await Promise.all([
+        gatherGitHubFacts(repoWith({ openPullRequests: [plain] }), repo, NOW, OPERATOR.login),
+        gatherGitHubFacts(repoWith({ openPullRequests: [touched] }), repo, NOW, OPERATOR.login),
+      ]);
+
+      expect(after.plainPullRequests).toEqual(before.plainPullRequests);
+    });
+  });
+
   it("holds the open agent PRs alone, with their Ticket from Closes #n, head, draft state, commits, reviews and activity", async () => {
     const github = repoWith({
       openPullRequests: [
@@ -392,12 +490,14 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefOid: "h".repeat(40),
           headRefName: "fabrik/ticket-7",
           createdAt: "2026-11-01T00:00:00Z",
+          mergeable: "MERGEABLE",
           author: APP,
           closingIssuesReferences: { nodes: [{ number: 7 }] },
           commits: { nodes: [aRawCommit("1", "2026-11-02T00:00:00Z", "A fix", { email: "jared@example.com", user: { login: "jrey8343" } })] },
           reviews: { nodes: [{ author: OPERATOR, state: "COMMENTED", submittedAt: "2026-11-02T01:00:00Z", body: "Why here?", comments: { nodes: [] } }] },
           comments: { nodes: [] },
           timelineItems: { nodes: [] },
+          draftEvents: { nodes: [] },
         },
         {
           number: 52,
@@ -406,12 +506,14 @@ describe("Gathering a Product repo's GitHub facts", () => {
           headRefOid: "a".repeat(40),
           headRefName: "fabrik/ticket-9",
           createdAt: "2026-11-01T00:00:00Z",
+          mergeable: "MERGEABLE",
           author: OPERATOR,
           closingIssuesReferences: { nodes: [{ number: 9 }] },
           commits: { nodes: [] },
           reviews: { nodes: [] },
           comments: { nodes: [] },
           timelineItems: { nodes: [] },
+          draftEvents: { nodes: [] },
         },
       ],
     });
@@ -430,8 +532,80 @@ describe("Gathering a Product repo's GitHub facts", () => {
         reviews: [{ author: "jrey8343", state: "commented", body: "Why here?", comments: [], at: "2026-11-02T01:00:00Z" }],
         comments: [],
         labelEvents: [],
+        mergeable: true,
+        draftEvents: [],
       },
     ]);
+  });
+
+  describe("an open agent pull request's two Standing reads (#608)", () => {
+    /** Open agent PR `number`, the Fabrik App's from Ticket `number - 43`'s branch, a draft, with `mergeable` and draft events as given. */
+    const anOpenAgentPullRequest = (number: number, overrides: Record<string, unknown> = {}) => ({
+      number,
+      title: `PR ${number}`,
+      isDraft: true,
+      headRefOid: "h".repeat(40),
+      headRefName: `fabrik/ticket-${number - 43}`,
+      createdAt: "2026-11-01T00:00:00Z",
+      mergeable: "MERGEABLE",
+      author: APP,
+      closingIssuesReferences: { nodes: [{ number: number - 43 }] },
+      commits: { nodes: [] },
+      reviews: { nodes: [] },
+      comments: { nodes: [] },
+      timelineItems: { nodes: [] },
+      draftEvents: { nodes: [] },
+      ...overrides,
+    });
+
+    it("reads whether each merges cleanly with the default branch, and one GitHub has not yet worked out as not known", async () => {
+      const github = repoWith({
+        openPullRequests: [anOpenAgentPullRequest(50), anOpenAgentPullRequest(51, { mergeable: "CONFLICTING" }), anOpenAgentPullRequest(52, { mergeable: "UNKNOWN" })],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+      expect(facts.openPullRequests.map(({ number, mergeable }) => ({ number, mergeable }))).toEqual([
+        { number: 50, mergeable: true },
+        { number: 51, mergeable: false },
+        { number: 52, mergeable: null },
+      ]);
+    });
+
+    it("reads when each went into draft and out of it, and who did it, oldest first", async () => {
+      const github = repoWith({
+        openPullRequests: [
+          anOpenAgentPullRequest(50, {
+            draftEvents: {
+              nodes: [
+                { __typename: "ReadyForReviewEvent", createdAt: "2026-11-02T00:00:00Z", actor: APP },
+                { __typename: "ConvertToDraftEvent", createdAt: "2026-11-03T00:00:00Z", actor: OPERATOR },
+                { __typename: "ConvertToDraftEvent", createdAt: "2026-11-04T00:00:00Z", actor: null },
+              ],
+            },
+          }),
+        ],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+      expect(facts.openPullRequests[0]?.draftEvents).toEqual([
+        { kind: "ready", actor: "fabrik-app[bot]", at: "2026-11-02T00:00:00Z" },
+        { kind: "draft", actor: "jrey8343", at: "2026-11-03T00:00:00Z" },
+        { kind: "draft", actor: "ghost", at: "2026-11-04T00:00:00Z" },
+      ]);
+    });
+
+    it("asks for both in the one read of the open pull requests, the Plain ones' merge state among them", async () => {
+      const queries: string[] = [];
+      const github = repoWith({ openPullRequests: [anOpenAgentPullRequest(50)] });
+      await gatherGitHubFacts({ graphql: (query, variables) => (queries.push(query), github.graphql(query, variables)) }, repo, NOW, OPERATOR.login);
+
+      const open = queries.filter((query) => query.includes("pullRequests(states: OPEN"));
+      expect(open).toHaveLength(1);
+      expect(open[0]).toMatch(/\bmergeable\b/);
+      expect(open[0]).toMatch(/draftEvents: timelineItems\(last: 100, itemTypes: \[CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT\]\)/);
+    });
   });
 
   it("holds the open Kit-owned issues as the Loop reads them, so Held names the held runs: a bot's body and comments alone", async () => {
@@ -773,6 +947,8 @@ describe("Gathering a Product repo's GitHub facts for a Retro", () => {
             reviews: { nodes: [] },
             comments: { nodes: [] },
             timelineItems: { nodes: [] },
+            draftEvents: { nodes: [] },
+            mergeable: "MERGEABLE",
           },
         ],
       },
@@ -919,5 +1095,85 @@ describe("Reading the open issues on other repos a Retro's proposals may be file
       { repo: "jrey8343/skills", number: 12, title: "Route handlers skill", body: "From retro jrey8343/shop#99" },
     ]);
     expect(unread).toEqual([{ repo: "jrey8343/private-skills", why: "GitHub GraphQL error: Could not resolve to a Repository" }]);
+  });
+});
+
+describe("Reading the Required checks on each open Plain pull request's head", () => {
+  const head = (digit: string) => digit.repeat(40);
+  /** A check run on a head: one finished, with its conclusion, or one still `in_progress` or `queued`. */
+  const aCheckRun = (name: string, status: string, conclusion: string | null = null) => ({ name, status, conclusion });
+
+  /** The Checks API over these heads' check runs, a head given as a GitHubError failing its read; with every path it was asked. */
+  function checksOn(runs: Record<string, readonly unknown[] | GitHubError>) {
+    const asked: string[] = [];
+    return {
+      asked,
+      async rest(method: string, path: string): Promise<unknown> {
+        expect(method).toBe("GET");
+        asked.push(path);
+        const match = /^\/repos\/jrey8343\/shop\/commits\/([0-9a-f]{40})\/check-runs\?per_page=100&page=1$/.exec(path);
+        if (match === null) throw new Error(`Unexpected call: ${path}`);
+        const found = runs[match[1]!];
+        if (found instanceof GitHubError) throw found;
+        return { total_count: found?.length ?? 0, check_runs: found ?? [] };
+      },
+    };
+  }
+
+  it("judges each check the Kit config lists, in its order, as the Review's wait does: passed, running, failing, or never reported on the head", async () => {
+    const github = checksOn({
+      [head("1")]: [aCheckRun("test", "completed", "success"), aCheckRun("lint", "in_progress")],
+      [head("2")]: [aCheckRun("test", "completed", "failure")],
+      [head("3")]: [aCheckRun("lint", "completed", "skipped"), aCheckRun("test", "completed", "cancelled")],
+      [head("4")]: [aCheckRun("test", "queued"), aCheckRun("lint", "completed", "neutral")],
+    });
+
+    expect(await gatherHeadChecks(github, repo, [head("1"), head("2"), head("3"), head("4")], ["test", "lint"])).toEqual({
+      [head("1")]: [
+        { name: "test", is: "passed" },
+        { name: "lint", is: "running" },
+      ],
+      [head("2")]: [
+        { name: "test", is: "failing" },
+        { name: "lint", is: "never-reported" },
+      ],
+      // A skipped or cancelled check never counts as a pass.
+      [head("3")]: [
+        { name: "test", is: "failing" },
+        { name: "lint", is: "failing" },
+      ],
+      [head("4")]: [
+        { name: "test", is: "running" },
+        { name: "lint", is: "failing" },
+      ],
+    });
+  });
+
+  it("reads no check the Kit config doesn't list, loop / Kit among them, and reads loop / Kit only when it is listed", async () => {
+    const github = checksOn({ [head("1")]: [aCheckRun("loop / Kit", "completed", "failure"), aCheckRun("test", "completed", "success")] });
+
+    expect(await gatherHeadChecks(github, repo, [head("1")], ["test"])).toEqual({ [head("1")]: [{ name: "test", is: "passed" }] });
+    expect(await gatherHeadChecks(github, repo, [head("1")], ["test", "loop / Kit"])).toEqual({
+      [head("1")]: [
+        { name: "test", is: "passed" },
+        { name: "loop / Kit", is: "failing" },
+      ],
+    });
+  });
+
+  it("leaves every head unread, asking nothing, when the Kit config lists no checks: it cannot tell which the branch requires", async () => {
+    const github = checksOn({ [head("1")]: [aCheckRun("loop / Kit", "completed", "success")] });
+
+    expect(await gatherHeadChecks(github, repo, [head("1")], [])).toEqual({});
+    expect(github.asked).toEqual([]);
+  });
+
+  it("leaves a head whose read GitHub refused unread, and reads the rest", async () => {
+    const github = checksOn({
+      [head("1")]: new GitHubError("GitHub GET failed: 403", 403, { body: "Resource not accessible by integration" }),
+      [head("2")]: [aCheckRun("test", "completed", "success")],
+    });
+
+    expect(await gatherHeadChecks(github, repo, [head("1"), head("2")], ["test"])).toEqual({ [head("2")]: [{ name: "test", is: "passed" }] });
   });
 });

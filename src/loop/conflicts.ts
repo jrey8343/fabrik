@@ -12,7 +12,8 @@
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
-import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, requestChangesRunEndedMarker } from "./markers.ts";
+import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
+import type { Recovery } from "./recoveryWaits.ts";
 import { runInFlight, runName, unstartedRetry } from "./retry.ts";
 import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, MergeableSnapshot, Plan, PullRequestSnapshot } from "./types.ts";
@@ -23,29 +24,29 @@ import type { Action, ConflictCandidate, ConflictSnapshot, KitConfig, MergeableS
  * (src/loop/retry.ts, #416), or the Request-changes run for an undelivered
  * Request changes on it (src/loop/undelivered.ts, #341), or else a rebase onto main if
  * it conflicts with it, at the Merge gate or as a draft whose push GitHub never
- * reviewed (#389), or why there's neither. Such a draft waits `reviewMinutes`
- * from its push (reviewGraceMinutes). `heldTickets` are the Tickets whose
+ * reviewed (#389), or why there's neither. Each recovery waits as long as
+ * `waits`, the record of recovery waits at the repo's Kit config
+ * (src/loop/recoveryWaits.ts), says. `heldTickets` are the Tickets whose
  * Implement run is held until a reset (#424).
  */
 export function checkConflicts(
   conflicts: ConflictSnapshot,
   operator: string,
   held: HeldOn | null,
-  runMinutes: number | undefined,
-  reviewMinutes: number,
+  waits: Readonly<Record<Recovery, number>>,
   heldTickets: readonly number[],
 ): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];
   const actions: Action[] = [];
   for (const candidate of conflicts.pullRequests) {
-    // Only with the Implement job's timeout to wait out: a Retry may be working until then.
-    const unstarted = runMinutes === undefined ? null : unstartedRetry(candidate.pullRequest, operator, now, runMinutes, conflicts.implementJobUnderWay);
+    // A Retry may be working until the Implement job's timeout has passed.
+    const unstarted = unstartedRetry(candidate.pullRequest, operator, now, waits.unstartedRetry, conflicts.implementJobUnderWay);
     if (unstarted !== null) {
       actions.push(...unstarted);
       continue;
     }
-    const undelivered = actOnUndelivered(candidate, operator, now, held, runMinutes, conflicts.implementJobUnderWay, heldTickets);
+    const undelivered = actOnUndelivered(candidate, operator, now, held, waits.undeliveredRequestChanges, conflicts.implementJobUnderWay, heldTickets);
     if (undelivered !== null) {
       actions.push(...undelivered);
       continue;
@@ -54,7 +55,7 @@ export function checkConflicts(
       reasons.push("The default branch has no head, so no PR can conflict with it");
       continue;
     }
-    const why = whyNotRebased(candidate, main, operator, now, reviewMinutes);
+    const why = whyNotRebased(candidate, main, operator, now, waits.unreviewedDraft);
     if (why !== null) reasons.push(why);
     else actions.push(rebaseOntoMain(candidate.pullRequest, main, held));
   }
@@ -92,23 +93,15 @@ function whyNotRebased(
 }
 
 /**
- * How long a draft's push is left for a Review that did start, before the Kit
- * counts it as never reviewed (#389, ADR-0016): a Review is two jobs, the wait
- * for the PR's required checks and the Reviewer's, each given the Review
- * role's timeout, so a started one has ended by then.
- */
-export function reviewGraceMinutes(reviewTimeoutMinutes: number): number {
-  return 2 * reviewTimeoutMinutes;
-}
-
-/**
  * Why this draft isn't one whose push GitHub never reviewed (#389, ADR-0016),
  * or null when it is. GitHub starts no pull_request-family workflow while a PR
  * conflicts with its base, so a push onto a conflicting draft (a Retry's, a
  * first Implement run's, a Request-changes run's, or the Operator's) starts
  * no Review, and nothing else moves the draft on. The rest of whyNotRebased's
  * rules (a run in flight, one attempt per main head, a mergeable state
- * GitHub has worked out) apply to it as to a PR at the Merge gate.
+ * GitHub has worked out) apply to it as to a PR at the Merge gate. A push is
+ * left `reviewMinutes` (the record's unreviewedDraft) for a Review that did
+ * start before the Kit counts it as never reviewed.
  */
 function whyNotUnreviewedDraft(pullRequest: PullRequestSnapshot, mergeable: boolean | null, now: string, reviewMinutes: number): string | null {
   const { number, headSha, headPushedAt } = pullRequest;
@@ -331,6 +324,7 @@ export function conflictRunEnded(
         "",
         `The PR still conflicts with \`main\`, so it's yours to resolve: the Kit won't try again until \`main\` moves past ${main.slice(0, 7)}. No retry was used.`,
         ...(runUrl === null ? [] : ["", `[The run](${runUrl})`]),
+        handBackMarker({ kind: "conflict-run-unlanded", role: "implement" }),
       ].join("\n"),
     },
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },
@@ -363,6 +357,7 @@ export function requestChangesRunEnded(pullRequest: number, main: string, operat
         `The Kit judged the run against \`main\` at ${head}, and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
         "",
         `[The run](${runUrl})`,
+        handBackMarker({ kind: "request-changes-unlanded", role: "implement" }),
       ].join("\n"),
     },
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },

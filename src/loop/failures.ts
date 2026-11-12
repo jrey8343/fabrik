@@ -29,7 +29,7 @@ import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, runNamed } from 
 import { heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
-import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
+import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, type HandBackMark, handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { readable } from "./readable.ts";
 import { withoutMentions } from "./mentions.ts";
 import { MAX_RETRIES, runInFlight, stepUpReasonFor } from "./retry.ts";
@@ -320,10 +320,11 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
     detail: run.report?.detail ?? "",
     commits: run.report?.commits === undefined ? null : commitsLeft(run.report.commits),
-    standing: broken === null ? `This is an Infrastructure failure, so ${notRetried(run.role)}.` : freeBrokenRun(pullRequest),
+    failureKind: broken === null ? `This is an Infrastructure failure, so ${notRetried(run.role)}.` : freeBrokenRun(pullRequest),
     resume: resumeAfter(failure, run, resume),
     pointer: repoWide?.pointer ?? null,
     runUrl: run.runUrl,
+    handBack: { kind: handBackOfFailed(run.role, broken), role: run.role, failure },
   });
   return {
     kind: "act",
@@ -505,10 +506,11 @@ export function prototypeTurnRefused(issueNumber: number, operator: string, how:
     failed: `The prototype turn on #${issueNumber} failed: ${how}.`,
     detail: "",
     commits: null,
-    standing: `This is an Infrastructure failure, so ${NOT_RETRIED}.`,
+    failureKind: `This is an Infrastructure failure, so ${NOT_RETRIED}.`,
     resume: CARRY_ON_AFTER_PROTOTYPE,
     pointer: null,
     runUrl,
+    handBack: { kind: "design-turn-failed", role: "design" },
   });
   return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body }] };
 }
@@ -527,10 +529,12 @@ function noticeBody(notice: {
   readonly detail: string;
   readonly commits: string | null;
   /** What kind of failure it was and what the Loop does about it, as one sentence. */
-  readonly standing: string;
+  readonly failureKind: string;
   readonly resume: string;
   readonly pointer: string | null;
   readonly runUrl: string;
+  /** Which hand-back it is, on its hidden last line. */
+  readonly handBack: HandBackMark;
 }): string {
   const detail = notice.detail.trim();
   return [
@@ -539,9 +543,21 @@ function noticeBody(notice: {
     ...(detail === "" ? [] : ["", `> ${detail}`]),
     ...(notice.commits === null ? [] : ["", notice.commits]),
     "",
-    `${notice.standing} ${notice.resume}`,
+    `${notice.failureKind} ${notice.resume}`,
     ...(notice.pointer === null ? [] : ["", notice.pointer]),
     "",
     `[The run](${notice.runUrl})`,
+    handBackMarker(notice.handBack),
   ].join("\n");
+}
+
+/**
+ * Which hand-back a failed run's notice is: a failed Design-session turn's or
+ * Research run's own, else an Infrastructure failure, or a Broken run that
+ * used no retry.
+ */
+function handBackOfFailed(role: AgentRole, broken: BrokenRun | null): HandBackMark["kind"] {
+  if (role === "design") return "design-turn-failed";
+  if (role === "research") return "research-failed";
+  return broken === null ? "infrastructure-failure" : "broken-run-no-retry";
 }

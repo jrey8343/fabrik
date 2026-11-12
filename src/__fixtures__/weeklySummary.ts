@@ -1,7 +1,9 @@
 // Small builders for the Weekly summary's tests, matching anIssue, aPullRequest
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
+import type { RunInFlightFact } from "../github/snapshot.ts";
 import { type ReplayProgress, replayBody } from "../kit/replay.ts";
 import type { ReplayRun, RunRecord } from "../kit/runRecord.ts";
+import type { StandingFacts } from "../kit/standing.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "../kit/scorer.ts";
 import type {
   AgentPullRequestFacts,
@@ -17,6 +19,7 @@ import type {
   OpenPullRequestFacts,
   OpenReplayFacts,
   OpenRetroFacts,
+  PlainPullRequestFacts,
   ReviewFacts,
   SpecFacts,
   TicketFacts,
@@ -190,6 +193,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     mergedPullRequestTitles: [],
     openIssues: [],
     openPullRequests: [],
+    plainPullRequests: [],
     designQueue: { issues: [], designTurnsInProgress: [] },
     monitorIssues: [],
     escapeMarkerIssues: [],
@@ -299,7 +303,7 @@ export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueF
 
 /**
  * Open agent PR 50, a draft for Ticket 7 at head `h…h` opened on 2026-10-01,
- * with nothing on it unless a test says so. A commit given only its time is the
+ * merging cleanly, with nothing on it unless a test says so. A commit given only its time is the
  * Operator's, as aCommit makes it.
  */
 export function anOpenPullRequest(
@@ -316,6 +320,30 @@ export function anOpenPullRequest(
     reviews: [],
     comments: [],
     labelEvents: [],
+    mergeable: true,
+    draftEvents: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Open Plain pull request 70, a Kit bump: Dependabot's, on the branch its
+ * `fabrik` group names (as a real one's), out of draft, merging cleanly,
+ * closing nothing, opened with its head on 2026-11-06 at 20:00.
+ */
+export function aPlainPullRequest(overrides: Partial<PlainPullRequestFacts> = {}): PlainPullRequestFacts {
+  return {
+    number: 70,
+    title: "fabrik: bump the fabrik group with 2 updates",
+    author: "dependabot[bot]",
+    headRef: "dependabot/github_actions/fabrik-d03f57835c",
+    headSha: "p".repeat(40),
+    headCommittedAt: "2026-11-06T20:00:00Z",
+    draft: false,
+    mergeable: true,
+    closes: [],
+    draftChangedAt: null,
+    createdAt: "2026-11-06T20:00:00Z",
     ...overrides,
   };
 }
@@ -337,4 +365,14 @@ export function aWeeklyLimitIssue(resetsAt: string | null, held: readonly HeldRu
 /** Open issue 41, the Fabrik App's Monitor error issue for Sentry group 4504, its stats block holding no held line unless a test's body says so. */
 export function anOpenMonitorIssue(overrides: Partial<MonitorIssueFacts> = {}): MonitorIssueFacts {
   return { number: 41, author: "fabrik-app[bot]", body: aMonitorIssueBody(), ...overrides };
+}
+
+/** What the Standing rule reads of `owner/product`: its GitHub facts, nothing in them unless a test says so, no Kit config read, and the Operator and the Fabrik App by login. */
+export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> = {}): StandingFacts {
+  return { kind: "product", github: factsOf(), kit: null, operator: "operator", appLogin: "fabrik-app[bot]", runsEnded: [], ...overrides };
+}
+
+/** An Implement run in flight on no Ticket the job names, running, its workflow run created an hour before the filing, unless a test says otherwise. */
+export function aRunInFlight(overrides: Partial<RunInFlightFact> = {}): RunInFlightFact {
+  return { role: "implement", issue: null, pullRequest: null, retry: null, kind: null, job: "running", createdAt: "2026-11-08T19:00:00Z", ...overrides };
 }
