@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
-import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  BROKEN_RUN_MARKER,
+  EMPTY_DIFF_MARKER,
+  RETRY_ENDED_MARKER,
+  RETRY_PUSH_MARKER,
+  RETRY_RESTARTED_MARKER,
+  stuckTriggerReaddedMarker,
+  UNMARKED_RETRY_PUSH,
+  verdictMarker,
+} from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
+import type { CommentFacts } from "./retroEvidence.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -208,6 +218,83 @@ describe("a run that was asked for and never began", () => {
     it("takes no run as known with the runs unread, so the silence still turns Stuck at the bar", () => {
       expect(namesIn(standingsIn({ openIssues: [askedFor(LONG_AGO)] }, { kit: aKit("unread") }))).toEqual([{ issue: 7, pullRequest: null, name: "stuck" }]);
       expect(namesIn(standingsIn({ openIssues: [askedFor(LONG_AGO)] }, { kit: null }))).toEqual([{ issue: 7, pullRequest: null, name: "stuck" }]);
+    });
+  });
+  describe("a Retry a Verdict announced", () => {
+    const HEAD = "h".repeat(40);
+    const FLAW = "2026-11-08T19:00:00Z";
+    const flaw = aVerdictComment("execution-flaw", HEAD, FLAW);
+    /** Ticket 7, given agent:implement by the Kit with the Verdict, and its agent draft #50 with these comments. */
+    const retryFacts = (
+      comments: readonly CommentFacts[] = [flaw],
+      overrides: Parameters<typeof anOpenPullRequest>[0] = {},
+      ticketLabels: readonly string[] = ["ready-for-agent", "agent:implement"],
+    ): Partial<GitHubFacts> => ({
+      openIssues: [anOpenIssue({ number: 7, labels: ticketLabels, labelEvents: [aLabelAdded("ready-for-agent", "2026-11-08T10:00:00Z"), aLabelAdded("agent:implement", FLAW)] })],
+      openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, createdAt: "2026-11-08T12:00:00Z", comments, ...overrides })],
+    });
+
+    it("gives the Ticket and its draft not-started, at Implement, awaiting an Implement run on the pull request, from the Verdict", () => {
+      expect(standingsIn(retryFacts())).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 7,
+          pullRequest: 50,
+          work: "ticket",
+          place: "implement",
+          name: "not-started",
+          move: "kit",
+          yours: false,
+          stopsWork: false,
+          since: FLAW,
+          stuckAt: "2026-11-08T22:30:00.000Z",
+          awaits: { role: "implement", on: "pullRequest" },
+          subscription: null,
+          detail: { silence: "retry", label: null },
+        },
+      ]);
+    });
+
+    it("restarts the clock at the Kit's note that it added agent:implement again for the Retry, and is Stuck a full bar after it", () => {
+      const restarted = aComment(`${RETRY_RESTARTED_MARKER}\nRetry 1 of 2 on #50 never started, so the Kit has added \`agent:implement\` to #7 again to start it.`, "2026-11-08T20:40:00Z");
+      const [before] = standingsIn(retryFacts([flaw, restarted]), {}, "2026-11-08T23:00:00Z");
+      expect(before).toMatchObject({ name: "not-started", since: FLAW, stuckAt: "2026-11-09T00:10:00.000Z", detail: { silence: "retry" } });
+      expect(standingsIn(retryFacts([flaw, restarted]), {}, "2026-11-09T00:11:00Z")).toMatchObject([{ name: "stuck", detail: { was: "not-started", silence: "retry" } }]);
+    });
+
+    it("is running once the Retry is in flight", () => {
+      expect(standingsIn(retryFacts(), { kit: aKit([aRunInFlight({ issue: 7, retry: 1, kind: "retry" })]) })).toMatchObject([{ name: "running", detail: { run: "retry", retry: 1 } }]);
+    });
+
+    it.each([
+      ["the Retry pushed", [flaw, aComment(`${RETRY_PUSH_MARKER}\nThe Implementer pushed a fix.`, "2026-11-08T19:30:00Z")], {}],
+      ["the Retry pushed, in a note from before its marker", [flaw, aComment(`${UNMARKED_RETRY_PUSH}#50.`, "2026-11-08T19:30:00Z")], {}],
+      ["the Kit ended the Retry", [flaw, aComment(`${RETRY_ENDED_MARKER}\n@operator Retry 1 of 2 on #50 never started.`, "2026-11-08T19:30:00Z")], {}],
+      ["the pull request is out of draft", [flaw], { draft: false }],
+      ["the flaw found its Ticket not ready", [aComment(`${verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, ticketNotReady: true, headSha: HEAD })}\nVerdict`, FLAW)], {}],
+      [
+        "the flaw gave way to the Operator's Request changes",
+        [aComment(`${verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, requestChangesFirst: [900], headSha: HEAD })}\nVerdict`, FLAW)],
+        {},
+      ],
+      [
+        "the Retries are used up",
+        [aVerdictComment("execution-flaw", "a".repeat(40), "2026-11-08T15:00:00Z"), aVerdictComment("execution-flaw", "b".repeat(40), "2026-11-08T17:00:00Z"), flaw],
+        {},
+      ],
+      ["the latest Verdict is a pass", [flaw, aVerdictComment("pass", HEAD, "2026-11-08T19:30:00Z")], { draft: false }],
+    ] as const)("calls for no Retry once %s", (_, comments, overrides) => {
+      expect(standingsIn(retryFacts(comments, overrides, ["ready-for-agent"])).filter(({ name }) => name === "not-started")).toEqual([]);
+    });
+
+    it("counts the Ticket's runs that landed nothing among its Retries", () => {
+      const ticket = anOpenIssue({
+        number: 7,
+        labels: ["ready-for-agent"],
+        comments: [aComment(`${EMPTY_DIFF_MARKER}\nNothing changed.`, "2026-11-08T11:00:00Z"), aComment(`${BROKEN_RUN_MARKER}\nBroken.`, "2026-11-08T11:30:00Z")],
+      });
+      expect(standingsIn({ ...retryFacts(), openIssues: [ticket] }).filter(({ name }) => name === "not-started")).toEqual([]);
     });
   });
 });

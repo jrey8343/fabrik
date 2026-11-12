@@ -6,16 +6,18 @@
 // comment, label or review never does.
 import { stuckBarMinutes } from "../loop/recoveryWaits.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { DESIGN_LABEL, DISPATCH_LABEL, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
+import { countLandedNothing, pushedSinceVerdictIn, retryNoteSinceVerdictIn } from "../github/threads.ts";
+import { DESIGN_LABEL, DISPATCH_LABEL, READY_FOR_AGENT, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
 import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
+import { MAX_RETRIES, retryNumber } from "../loop/retry.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
-import type { CommentFacts, LabelEvent } from "./retroEvidence.ts";
+import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import { type AwaitedRole, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { addedAndStillOn, lastAdded } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
 /** Which silence a `not-started` Standing is: a trigger label with no run behind it, the same after the sweep's re-add, or a Retry a Verdict announced. */
-export type NotStartedSilence = "trigger-label" | "trigger-readded";
+export type NotStartedSilence = "trigger-label" | "trigger-readded" | "retry";
 
 /** What each trigger label asks for, on an issue: the work it is, its place on the Loop and the run it awaits. agent:review asks on a pull request. */
 const ASKED_ON_ISSUES: Partial<Record<TriggerLabel, { readonly work: StandingWork; readonly place: StandingPlace | null; readonly role: AwaitedRole }>> = {
@@ -43,6 +45,8 @@ export function notStartedStandingsOf(facts: StandingFacts, _now: string): Stand
   const bar = stuckBarMinutes(facts.kit?.config.ok === true ? facts.kit.config.config : DEFAULT_KIT_CONFIG);
   const runs = facts.kit === null || facts.kit.runsInFlight === "unread" ? [] : facts.kit.runsInFlight;
   return [
+    // First, so a Retry is read as one, not as the agent:implement on its Ticket the Verdict added for it.
+    ...facts.github.openPullRequests.flatMap((pullRequest) => retrySilencesOn(pullRequest, facts, runs, bar)),
     ...facts.github.openIssues.flatMap((issue) => triggerSilencesOn(issue, facts, runs, bar)),
     ...facts.github.openPullRequests.flatMap((pullRequest) => reviewSilencesOn(pullRequest, facts, runs, bar)),
   ];
@@ -104,6 +108,37 @@ function reviewSilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFact
   const clock = clockOf(since, pullRequest.ticket, [pullRequest], facts);
   return [
     notStarted(facts.github.repo, pullRequest.ticket, pullRequest.number, "ticket", "review", since, stuckAtOf(clock, bar), { role: "review", on: "pullRequest" }, { silence, label: REVIEW_LABEL }),
+  ];
+}
+
+/**
+ * A Retry an agent draft's latest Verdict, an Execution flaw, announced, with
+ * no Implement run started for it since, from the Verdict: read from the
+ * Fabrik App's comments as the Loop reads whether one is in flight
+ * (runInFlight, src/loop/retry.ts). None was announced on a flaw that found
+ * its Ticket no longer `ready-for-agent`, or gave way to the Operator's
+ * Request changes, or once the Ticket's Retries are used up, counting its
+ * runs that landed nothing; none is owed once a Retry pushed or the Kit ended
+ * it, or once the pull request left draft. The Kit's note that it added
+ * `agent:implement` again for it is a sign, so the clock restarts there.
+ */
+function retrySilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts, runs: readonly RunInFlightFact[], bar: number): StandingNamed<"not-started">[] {
+  const { ticket } = pullRequest;
+  const verdicts = verdictsOn(pullRequest.comments);
+  const latest = verdicts.at(-1);
+  if (!pullRequest.draft || ticket === null || latest === undefined || latest.record.verdict !== "execution-flaw") return [];
+  if (latest.record.ticketNotReady === true || latest.record.requestChangesFirst !== undefined) return [];
+  const notes = pullRequest.comments.filter(({ author }) => author === facts.appLogin).map(({ body }) => body);
+  if (pushedSinceVerdictIn(notes) || retryNoteSinceVerdictIn(notes) === "ended") return [];
+  if ((pullRequest.draftEvents ?? []).some(({ kind, at }) => kind === "ready" && Date.parse(at) > Date.parse(latest.at))) return [];
+  const open = facts.github.openIssues.find(({ number }) => number === ticket);
+  if (open !== undefined && open.labels.length > 0 && !open.labels.includes(READY_FOR_AGENT)) return [];
+  const landedNothing = countLandedNothing((open?.comments ?? []).map(({ body, author }) => ({ body, byApp: author === facts.appLogin })));
+  if (retryNumber(verdicts.slice(0, -1).map(({ record }) => record), landedNothing) > MAX_RETRIES) return [];
+  if (hasRunBehind(DISPATCH_LABEL, runs, ticket, pullRequest.number)) return [];
+  const clock = clockOf(latest.at, ticket, pullRequestsOf(ticket, facts), facts);
+  return [
+    notStarted(facts.github.repo, ticket, pullRequest.number, "ticket", "implement", latest.at, stuckAtOf(clock, bar), { role: "implement", on: "pullRequest" }, { silence: "retry", label: null }),
   ];
 }
 
