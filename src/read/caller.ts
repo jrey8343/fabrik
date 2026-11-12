@@ -32,9 +32,22 @@ function releaseOf(text: string | null): string | null {
  * What `pullRequest` in `repo` ("owner/name") does to the caller workflow:
  * two file reads in the repo (the base branch's caller and the head's), and
  * one from the Kit's repo for each of its workflows the head's caller names,
- * at the release it pins.
+ * at the release it pins. "unread" when GitHub refuses or fails any of them.
  */
-export async function readCaller(client: Pick<ReadClient, "rest" | "fileText">, repo: string, pullRequest: number): Promise<CallerRead> {
+export async function readCaller(
+  client: Pick<ReadClient, "rest" | "fileText">,
+  repo: string,
+  pullRequest: number,
+): Promise<CallerRead | "unread"> {
+  try {
+    return await callerOf(client, repo, pullRequest);
+  } catch {
+    // A refusal, or a read GitHub failed, of the pull request, either caller or a Kit workflow.
+    return "unread";
+  }
+}
+
+async function callerOf(client: Pick<ReadClient, "rest" | "fileText">, repo: string, pullRequest: number): Promise<CallerRead> {
   const [owner = "", name = ""] = repo.split("/");
   const product: Repo = { owner, name };
   const pull = (await client.rest("GET", `/repos/${repo}/pulls/${pullRequest}`)) as { head: { sha: string }; base: { ref: string } };

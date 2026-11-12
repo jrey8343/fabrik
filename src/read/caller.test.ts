@@ -149,6 +149,27 @@ describe("the caller read", () => {
 
     const kitJob = await callerChangeErrors(clientWith(files), { owner: "acme", name: "shop" }, { path: PATH, baseText: callerAt("v1.0.0"), headSha: "abc123" });
 
-    expect((await readCaller(clientWith(files), "acme/shop", 42)).errors).toEqual(kitJob);
+    expect(await readCaller(clientWith(files), "acme/shop", 42)).toMatchObject({ errors: kitJob });
+  });
+
+  it("is unread when GitHub refuses the pull request", async () => {
+    const refusing: ReadClient = {
+      rest: () => Promise.reject(new GitHubError("GitHub GET /repos/acme/shop/pulls/42 failed: 403", 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }) })),
+      graphql: () => Promise.reject(new Error("the caller read makes no GraphQL query")),
+      fileText: () => Promise.reject(new Error("the pull request was never read")),
+    };
+
+    expect(await readCaller(refusing, "acme/shop", 42)).toBe("unread");
+  });
+
+  it("is unread when a read of the Kit's workflows fails", async () => {
+    const files = clientWith({ [`acme/shop:${PATH}@main`]: callerAt("v1.0.0"), [`acme/shop:${PATH}@abc123`]: callerAt("v1.1.0") });
+    const failing: ReadClient = {
+      ...files,
+      fileText: (repo, path, ref) =>
+        repo.owner === "jrey8343" ? Promise.reject(new GitHubError(`GitHub GET ${path}@${ref} failed: 502`, 502)) : files.fileText(repo, path, ref),
+    };
+
+    expect(await readCaller(failing, "acme/shop", 42)).toBe("unread");
   });
 });
