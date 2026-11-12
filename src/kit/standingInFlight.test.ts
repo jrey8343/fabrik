@@ -56,8 +56,28 @@ describe("work that goes on without the Operator", () => {
           stuckAt: null,
           awaits: { role: "implement", on: "issue" },
           subscription: null,
-          detail: { run: "implement", retry: null },
+          detail: { run: "implement", retry: null, actionsRun: 1 },
         },
+      ]);
+    });
+
+    it("takes its time from its run, when its agent job got a runner, and carries the Actions run (#621)", () => {
+      const standings = standingsIn(
+        { openIssues: [ticket(7)] },
+        aKit([aRunInFlight({ issue: 7, run: 4410, createdAt: "2026-11-08T19:20:00Z", startedAt: "2026-11-08T19:31:00Z" })]),
+      );
+      expect(standings.map(({ name, since, detail }) => ({ name, since, detail }))).toEqual([
+        { name: "running", since: "2026-11-08T19:31:00Z", detail: { run: "implement", retry: null, actionsRun: 4410 } },
+      ]);
+    });
+
+    it("takes an exact run's kind from the run itself (#621)", () => {
+      const standings = standingsIn(
+        { openIssues: [ticket(7)], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] },
+        aKit([aRunInFlight({ issue: 7, pullRequest: 50, exact: true, kind: "request-changes" })]),
+      );
+      expect(standings.map(({ name, pullRequest, awaits, detail }) => ({ name, pullRequest, awaits, run: "run" in detail ? detail.run : null }))).toEqual([
+        { name: "running", pullRequest: 50, awaits: { role: "implement", on: "pullRequest" }, run: "request-changes" },
       ]);
     });
 
@@ -72,7 +92,7 @@ describe("work that goes on without the Operator", () => {
         aKit([aRunInFlight({ issue: 7, retry: 1, kind: "retry" })]),
       );
       expect(runningIn(standings)).toEqual([
-        { issue: 7, pullRequest: 50, name: "running", place: "implement", awaits: { role: "implement", on: "pullRequest" }, detail: { run: "retry", retry: 1, head: HEAD } },
+        { issue: 7, pullRequest: 50, name: "running", place: "implement", awaits: { role: "implement", on: "pullRequest" }, detail: { run: "retry", retry: 1, actionsRun: 1, head: HEAD } },
       ]);
     });
 
@@ -89,8 +109,8 @@ describe("work that goes on without the Operator", () => {
         aKit([aRunInFlight({ issue: 7 }), aRunInFlight({ issue: 8 })]),
       );
       expect(runningIn(standings).map(({ issue, pullRequest, detail }) => ({ issue, pullRequest, detail }))).toEqual([
-        { issue: 7, pullRequest: 50, detail: { run: "request-changes", retry: null, head: HEAD } },
-        { issue: 8, pullRequest: 51, detail: { run: "conflict-only", retry: null, head: HEAD } },
+        { issue: 7, pullRequest: 50, detail: { run: "request-changes", retry: null, actionsRun: 1, head: HEAD } },
+        { issue: 8, pullRequest: 51, detail: { run: "conflict-only", retry: null, actionsRun: 1, head: HEAD } },
       ]);
     });
 
@@ -117,14 +137,14 @@ describe("work that goes on without the Operator", () => {
         aKit([aRunInFlight({ role: "research" })]),
       );
       expect(runningIn(standings)).toEqual([
-        { issue: 30, pullRequest: null, name: "running", place: null, awaits: { role: "research", on: "issue" }, detail: { run: "research", retry: null } },
-        { issue: 31, pullRequest: null, name: "running", place: null, awaits: { role: "research", on: "issue" }, detail: { run: "research", retry: null } },
+        { issue: 30, pullRequest: null, name: "running", place: null, awaits: { role: "research", on: "issue" }, detail: { run: "research", retry: null, actionsRun: 1 } },
+        { issue: 31, pullRequest: null, name: "running", place: null, awaits: { role: "research", on: "issue" }, detail: { run: "research", retry: null, actionsRun: 1 } },
       ]);
     });
 
     it("counts an Implement job named for nothing, from an earlier release, for every Ticket waiting on Implement", () => {
       const standings = standingsIn({ openIssues: [ticket(7, ["ready-for-agent", "agent:implement"]), ticket(8)] }, aKit([aRunInFlight()]));
-      expect(runningIn(standings).map(({ issue, detail }) => ({ issue, detail }))).toEqual([{ issue: 7, detail: { run: "implement", retry: null } }]);
+      expect(runningIn(standings).map(({ issue, detail }) => ({ issue, detail }))).toEqual([{ issue: 7, detail: { run: "implement", retry: null, actionsRun: 1 } }]);
     });
 
     describe("an exact run, from the Kit job's closing line (#617)", () => {
@@ -133,7 +153,7 @@ describe("work that goes on without the Operator", () => {
           { openIssues: [anOpenIssue({ number: 12, labels: ["needs-triage"] }), anOpenIssue({ number: 13, labels: ["needs-triage"] })] },
           aKit([aRunInFlight({ role: "triage", issue: 13, exact: true })]),
         );
-        expect(runningIn(standings.filter(({ name }) => name === "running")).map(({ issue, detail }) => ({ issue, detail }))).toEqual([{ issue: 13, detail: { run: "triage", retry: null } }]);
+        expect(runningIn(standings.filter(({ name }) => name === "running")).map(({ issue, detail }) => ({ issue, detail }))).toEqual([{ issue: 13, detail: { run: "triage", retry: null, actionsRun: 1 } }]);
       });
 
       it("counts a Research run for the Decision it names, and a Review run for its pull request alone", () => {
@@ -167,8 +187,8 @@ describe("work that goes on without the Operator", () => {
         aKit([aRunInFlight({ role: "triage" })]),
       );
       expect(runningIn(standings.filter(({ name }) => name === "running"))).toEqual([
-        { issue: 12, pullRequest: null, name: "running", place: "triage", awaits: { role: "triage", on: "issue" }, detail: { run: "triage", retry: null } },
-        { issue: 13, pullRequest: null, name: "running", place: "triage", awaits: { role: "triage", on: "issue" }, detail: { run: "triage", retry: null } },
+        { issue: 12, pullRequest: null, name: "running", place: "triage", awaits: { role: "triage", on: "issue" }, detail: { run: "triage", retry: null, actionsRun: 1 } },
+        { issue: 13, pullRequest: null, name: "running", place: "triage", awaits: { role: "triage", on: "issue" }, detail: { run: "triage", retry: null, actionsRun: 1 } },
       ]);
     });
 
@@ -178,9 +198,9 @@ describe("work that goes on without the Operator", () => {
         aKit([aRunInFlight({ role: "review", pullRequest: 50 }), aRunInFlight({ role: "design", issue: 20 }), aRunInFlight({ role: "design", issue: 21, kind: "prototype" })]),
       );
       expect(runningIn(standings)).toEqual([
-        { issue: 7, pullRequest: 50, name: "running", place: "review", awaits: { role: "review", on: "pullRequest" }, detail: { run: "review", retry: null, head: "h".repeat(40) } },
-        { issue: 20, pullRequest: null, name: "running", place: "design", awaits: { role: "design", on: "issue" }, detail: { run: "design", retry: null } },
-        { issue: 21, pullRequest: null, name: "running", place: "design", awaits: { role: "design", on: "issue" }, detail: { run: "prototype", retry: null } },
+        { issue: 7, pullRequest: 50, name: "running", place: "review", awaits: { role: "review", on: "pullRequest" }, detail: { run: "review", retry: null, actionsRun: 1, head: "h".repeat(40) } },
+        { issue: 20, pullRequest: null, name: "running", place: "design", awaits: { role: "design", on: "issue" }, detail: { run: "design", retry: null, actionsRun: 1 } },
+        { issue: 21, pullRequest: null, name: "running", place: "design", awaits: { role: "design", on: "issue" }, detail: { run: "prototype", retry: null, actionsRun: 1 } },
       ]);
     });
 

@@ -96,7 +96,8 @@ type WaitingOnKitDetail = { readonly silence: WaitingOnKitSilence; readonly roun
 
 /** What each name's wording is made of: numbers, labels, check names and logins, never a repo's text. */
 export interface StandingDetails {
-  readonly running: { readonly run: string; readonly retry: number | null };
+  /** `run` is the kind of run and `retry` its Retry number; `actionsRun` is its Actions run's number (#621). */
+  readonly running: { readonly run: string; readonly retry: number | null; readonly actionsRun: number };
   readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean };
   /**
    * A Held run's role and the Carrier its newest held marker is on; or, for an
