@@ -17,6 +17,7 @@ import {
   anOpenReplay,
   anOpenRetro,
   anAuditRunRecord,
+  aPlainPullRequest,
   aReplayBody,
   aReplayRunRecord,
   aRetroRunRecord,
@@ -64,7 +65,7 @@ function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput 
   };
 }
 
-/** `owner/product`'s Kit config on `main`, the default one unless a test says so, with nothing for Dispatch to weigh and no run in progress. */
+/** `owner/product`'s Kit config on `main`, the default one unless a test says so, with nothing for Dispatch to weigh, no run in progress and no Plain head's checks read. */
 function aRepoKit(overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
   return {
     repo: "owner/product",
@@ -72,6 +73,7 @@ function aRepoKit(overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
     config: { ok: true, config: DEFAULT_KIT_CONFIG },
     dispatch: { candidates: { tickets: [], researchDecisions: [] } },
     runsInFlight: [],
+    headChecks: {},
     ...overrides,
   };
 }
@@ -1002,6 +1004,89 @@ describe("the Weekly summary", () => {
         { kind: "ready-for-human", number: 22, title: "Rotate the Claude token", url: "https://github.com/owner/product/issues/22", since: "2026-11-05T20:00:00Z", age: 3 * 24 * HOUR },
         { kind: "ready-for-human", number: 23, title: "Turn off usage credits", url: "https://github.com/owner/product/issues/23", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR },
       ]);
+    });
+  });
+
+  describe("Waiting on you, with Plain pull requests", () => {
+    const HOUR = 60 * 60 * 1000;
+    const HEAD = "p".repeat(40);
+    const PASSED = [{ name: "test", is: "passed" }] as const;
+    const summaryWith = (github: Partial<GitHubFacts>, kits: readonly RepoKitFacts[] = [aRepoKit({ headChecks: { [HEAD]: PASSED } })]) => {
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [factsOf(github)], kits }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return { waiting: result.summary.repos[0]?.waitingOnYou, body: result.body };
+    };
+
+    it("lists a ready Kit bump, with its Required checks passed, as one line ready to merge since its head", () => {
+      const { waiting, body } = summaryWith({ plainPullRequests: [aPlainPullRequest({ headSha: HEAD, createdAt: "2026-11-06T20:00:00Z", headCommittedAt: "2026-11-07T20:00:00Z" })] });
+      expect(waiting).toEqual([
+        {
+          kind: "plain-ready",
+          plain: "kit-bump",
+          number: 70,
+          title: "fabrik: bump the fabrik group with 2 updates",
+          url: "https://github.com/owner/product/pull/70",
+          since: "2026-11-07T20:00:00Z",
+          age: 24 * HOUR,
+        },
+      ]);
+      expect(body).toContain("- [#70](https://github.com/owner/product/pull/70) fabrik: bump the fabrik group with 2 updates: a Kit bump, ready to merge for 24 hours\n");
+    });
+
+    it("names each kind of Plain pull request in its line", () => {
+      const { body } = summaryWith({
+        plainPullRequests: [
+          aPlainPullRequest({ number: 71, title: "Set up Fabrik v3.1.0", author: "operator", headRef: "fabrik/setup-v3.1.0", headSha: HEAD }),
+          aPlainPullRequest({ number: 72, title: "Bump skills", author: "fabrik-app[bot]", headRef: "fabrik/skills-bump/mattpocock-skills", headSha: HEAD }),
+          aPlainPullRequest({ number: 73, title: "Pair on #12", author: "operator", headRef: "fabrik/pair-12", closes: 12, headSha: HEAD }),
+          aPlainPullRequest({ number: 74, title: "Fix a typo", author: "someone", headRef: "fix-typo", headSha: HEAD }),
+        ],
+      });
+      expect(body).toContain("[#71](https://github.com/owner/product/pull/71) Set up Fabrik v3.1.0: Setup's pull request, ready to merge for 2 days\n");
+      expect(body).toContain("[#72](https://github.com/owner/product/pull/72) Bump skills: a Skills bump, ready to merge for 2 days\n");
+      expect(body).toContain("[#73](https://github.com/owner/product/pull/73) Pair on #12: a Pairing session's pull request, ready to merge for 2 days\n");
+      expect(body).toContain("[#74](https://github.com/owner/product/pull/74) Fix a typo: a pull request, ready to merge for 2 days\n");
+    });
+
+    it("lists a Pairing session's pull request joined to its open issue once it is ready, in place of the issue's own line", () => {
+      const { waiting } = summaryWith({
+        openIssues: [anOpenIssue({ number: 12, title: "Pair on the cart", labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-05T20:00:00Z")] })],
+        plainPullRequests: [aPlainPullRequest({ number: 73, title: "Pair on #12", author: "operator", headRef: "fabrik/pair-12", closes: 12, headSha: HEAD })],
+      });
+      expect(waiting).toEqual([expect.objectContaining({ kind: "plain-ready", plain: "pairing", number: 73, title: "Pair on #12", url: "https://github.com/owner/product/pull/73" })]);
+    });
+
+    it("gives no line to a draft, a conflicting one, or one with a Required check failing, running or never reported", () => {
+      const head = (digit: string) => digit.repeat(40);
+      const kit = aRepoKit({
+        headChecks: {
+          [head("1")]: [{ name: "test", is: "failing" }],
+          [head("2")]: [{ name: "test", is: "running" }],
+          [head("3")]: [{ name: "test", is: "never-reported" }],
+          [HEAD]: PASSED,
+        },
+      });
+      const { waiting } = summaryWith(
+        {
+          plainPullRequests: [
+            aPlainPullRequest({ number: 70, draft: true, headSha: HEAD }),
+            aPlainPullRequest({ number: 71, mergeable: false, headSha: HEAD }),
+            aPlainPullRequest({ number: 72, headSha: head("1") }),
+            aPlainPullRequest({ number: 73, headSha: head("2") }),
+            aPlainPullRequest({ number: 74, headSha: head("3") }),
+          ],
+        },
+        [kit],
+      );
+      expect(waiting).toEqual([]);
+    });
+
+    it("files with no line for a Plain pull request whose checks could not be read: the checks token unset, no checks listed, or no Kit read", () => {
+      for (const kits of [[aRepoKit({ headChecks: {} })], []]) {
+        const { waiting, body } = summaryWith({ plainPullRequests: [aPlainPullRequest({ headSha: HEAD })] }, kits);
+        expect(waiting).toEqual([]);
+        expect(body).not.toContain("#70");
+      }
     });
   });
 

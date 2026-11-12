@@ -8,10 +8,13 @@
 // holds no relative time. Its wording ("40 minutes ago") is made when it is
 // shown (src/kit/standingWording.ts).
 import type { HandBack } from "../loop/handBacks.ts";
+import type { TriggerLabel } from "../loop/labels.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { type NotStartedSilence, notStartedStandingsOf } from "./standingClock.ts";
 import { handBackStandingsOf } from "./standingHandBacks.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
+import { joinPairing, plainStandingsOf } from "./standingPlain.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
@@ -76,10 +79,14 @@ export const STANDING_NAMES = [
 export type StandingName = (typeof STANDING_NAMES)[number];
 
 /** What a `not-started` Standing's wording is made of. */
-interface NotStartedDetail {
-  readonly silence: string;
-  readonly label: string | null;
-}
+/**
+ * What a `not-started` Standing's wording is made of: which run was asked for
+ * and how (src/kit/standingClock.ts), and the trigger label that asked, null
+ * for a Retry a Verdict announced.
+ */
+type NotStartedDetail =
+  | { readonly silence: Exclude<NotStartedSilence, "retry">; readonly label: TriggerLabel }
+  | { readonly silence: Extract<NotStartedSilence, "retry">; readonly label: null };
 
 /** What a `waiting-on-kit` Standing's wording is made of: nothing yet, until the rule builds one. */
 type WaitingOnKitDetail = Readonly<Record<never, never>>;
@@ -167,6 +174,17 @@ export interface StandingFacts {
   readonly operator: string;
   /** The Fabrik App's bot login. */
   readonly appLogin: string;
+  /** When a run on a piece of work ended, where the reader knows: the Weekly summary's gather reads only unfinished runs, so it gives none. */
+  readonly runsEnded: readonly RunEndedFact[];
+}
+
+/** A run that ended, on an issue or a pull request, and when: a sign from the Kit on that work. */
+export interface RunEndedFact {
+  readonly issue: number | null;
+  readonly pullRequest: number | null;
+  readonly role: AwaitedRole;
+  /** ISO 8601. */
+  readonly at: string;
 }
 
 /** Which piece of work a Standing is: its issue, or its pull request when it has no issue. */
@@ -209,10 +227,33 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
  */
 export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: string): Standing[] {
   if (facts.kind === "store") return storeStandingsOf(facts, now);
-  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...inFlightStandingsOf(facts, now), ...handBackStandingsOf(facts, now)];
-  return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))).toSorted(
+  const candidates: Standing[] = [
+    ...operatorStandingsOf(facts, now),
+    ...inFlightStandingsOf(facts, now),
+    ...notStartedStandingsOf(facts, now),
+    ...handBackStandingsOf(facts, now),
+    ...plainStandingsOf(facts, now),
+  ];
+  return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github)
+    .map((standing) => standingAt(standing, now))
+    .toSorted(
     (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
   );
+}
+
+/**
+ * A kept Standing as it reads at `now`, ISO 8601, with no facts: a silence
+ * whose `stuckAt` has passed is `stuck`, the Kit's move still but the
+ * Operator's to act on and stopping work, carrying the name it had in
+ * `detail.was`, its `since` kept. Everything else is returned as it is. The
+ * rule reads each Standing through this, so a reader that kept one gets the
+ * answer the rule would give.
+ */
+export function standingAt(standing: Standing, now: string): Standing {
+  if ((standing.name !== "not-started" && standing.name !== "waiting-on-kit") || standing.stuckAt === null) return standing;
+  if (Date.parse(now) < Date.parse(standing.stuckAt)) return standing;
+  const detail = standing.name === "not-started" ? { was: standing.name, ...standing.detail } : { was: standing.name, ...standing.detail };
+  return { ...standing, name: "stuck", yours: true, stopsWork: true, detail };
 }
 
 /**

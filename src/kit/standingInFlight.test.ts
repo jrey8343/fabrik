@@ -13,7 +13,7 @@ const NOW = "2026-11-08T20:00:00Z";
 
 /** `owner/product`'s Kit, on the default Kit config, with nothing for Dispatch to weigh and these runs in flight. */
 function aKit(runsInFlight: readonly RunInFlightFact[] | "unread", overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
-  return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: { candidates: { tickets: [], researchDecisions: [] } }, runsInFlight, ...overrides };
+  return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: { candidates: { tickets: [], researchDecisions: [] } }, runsInFlight, headChecks: {}, ...overrides };
 }
 
 function standingsIn(github: Partial<GitHubFacts>, kit: RepoKitFacts | null): Standing[] {
@@ -174,7 +174,8 @@ describe("work that goes on without the Operator", () => {
           {
             openPullRequests: [
               anOpenPullRequest({ number: 50, ticket: 7 }),
-              anOpenPullRequest({ number: 51, ticket: 8, comments: [aVerdictComment("execution-flaw", HEAD, "2026-11-08T18:00:00Z")] }),
+              // A pass, since an Execution flaw on a draft announces a Retry, a not-started Standing of its own (#607).
+              anOpenPullRequest({ number: 51, ticket: 8, comments: [aVerdictComment("pass", HEAD, "2026-11-08T18:00:00Z")] }),
               anOpenPullRequest({ number: 52, ticket: 9, draft: false }),
               anOpenPullRequest({ number: 53, ticket: 10 }),
             ],

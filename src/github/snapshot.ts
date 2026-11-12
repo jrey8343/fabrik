@@ -1740,10 +1740,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** GitHub's word for whether a PR merges cleanly into the default branch. */
-type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 
 /** Whether a PR merges cleanly, or null while GitHub is still working it out. */
-function mergeableOf(state: MergeableState): boolean | null {
+export function mergeableOf(state: MergeableState): boolean | null {
   return state === "UNKNOWN" ? null : state === "MERGEABLE";
 }
 

@@ -42,7 +42,7 @@ import {
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type Standing, type StandingName, standingsOf, type StandingNamed } from "./standing.ts";
+import { type PlainKind, type Standing, type StandingName, standingsOf, type StandingNamed } from "./standing.ts";
 import { maxInFlightHoldOf } from "./standingInFlight.ts";
 import { answerOf, lastAdded, passedMoveOf, readyForHumanStandingOf } from "./standingOperator.ts";
 import {
@@ -153,6 +153,8 @@ export interface OpenReplayFacts {
 
 /** What the summary reads of one Product repo on GitHub: what the metrics read, and the rest. */
 export interface GitHubFacts extends MetricFacts {
+  /** The repo's open Plain pull requests: every open one that is no agent PR, whoever opened it. Never in the metrics, which read agent PRs alone. */
+  readonly plainPullRequests: readonly PlainPullRequestFacts[];
   readonly specs: readonly SpecFacts[];
   /** The repo's open issues. */
   readonly openIssues: readonly OpenIssueFacts[];
@@ -186,6 +188,34 @@ export interface GitHubFacts extends MetricFacts {
   readonly kitIssues: readonly KitIssueSnapshot[];
 }
 
+/** An open Plain pull request (GLOSSARY.md): one that is no agent PR, whoever opened it. */
+export interface PlainPullRequestFacts {
+  readonly number: number;
+  readonly title: string;
+  /** Who opened it: a login, a bot's ending `[bot]`, with no `@`. */
+  readonly author: string;
+  /** Its branch's name. */
+  readonly headRef: string;
+  readonly headSha: string;
+  /** When its head commit was made, ISO 8601, or null when that commit wasn't read. */
+  readonly headCommittedAt: string | null;
+  readonly draft: boolean;
+  /** Whether it merges cleanly; null while GitHub hasn't worked it out, which is read as merging cleanly. */
+  readonly mergeable: boolean | null;
+  /** The issue its body closes, or null. */
+  readonly closes: number | null;
+  readonly createdAt: string;
+}
+
+/** One Required check the Kit config lists, as it stands on a head. */
+export interface RequiredCheckFact {
+  readonly name: string;
+  readonly is: "passed" | "running" | "failing" | "never-reported";
+}
+
+/** Each Required check the Kit config lists, on one head, in the order it lists them; or the whole fact unread. */
+export type RequiredChecksFact = readonly RequiredCheckFact[] | "unread";
+
 /**
  * One Product repo's Kit config, read at its default branch's head as the
  * Loop reads it, which drives the caps Held reports, and what Dispatch weighs
@@ -205,6 +235,12 @@ export interface RepoKitFacts {
    * `unread` when the Actions token wasn't minted or GitHub wouldn't list them.
    */
   readonly runsInFlight: readonly RunInFlightFact[] | "unread";
+  /**
+   * The Required checks on each open Plain pull request's head, by its sha. A
+   * head missing is unread: the checks token wasn't minted, the read failed,
+   * or the Kit config is invalid or lists no checks.
+   */
+  readonly headChecks: Readonly<Record<string, RequiredChecksFact>>;
 }
 
 /** What a Dispatch check weighs in one Product repo, as the Weekly summary reads it. */
@@ -592,7 +628,9 @@ export type WaitingItem =
    * its passing Verdict, as after an empty Request-changes run or a failed
    * conflict-only run, waiting since it got the label.
    */
-  | (ItemBase & { readonly kind: "handed-back" });
+  | (ItemBase & { readonly kind: "handed-back" })
+  /** A Plain pull request ready to merge, every Required check passed, waiting since its head; a Pairing session's among them, joined to its issue or not. */
+  | (ItemBase & { readonly kind: "plain-ready"; readonly plain: PlainKind });
 
 /** Loop work that hasn't moved in more than 24 hours, since `since`. */
 export type StuckItem =
@@ -1155,7 +1193,7 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
   const { thisWeek } = weeksEndingAt(now, timeZone);
-  const standings = standingsOf({ kind: "product", github: facts, kit, operator, appLogin }, filedAt);
+  const standings = standingsOf({ kind: "product", github: facts, kit, operator, appLogin, runsEnded: [] }, filedAt);
   return {
     repo: facts.repo,
     invalidKitConfig: invalid,
@@ -1301,7 +1339,7 @@ function itemsIn(repo: string, now: number) {
   return {
     issue: (issue: { readonly number: number; readonly title: string }, since: string) =>
       item(issue.number, issue.title, `https://github.com/${repo}/issues/${issue.number}`, since),
-    pullRequest: (pullRequest: OpenPullRequestFacts, since: string) =>
+    pullRequest: (pullRequest: { readonly number: number; readonly title: string }, since: string) =>
       item(pullRequest.number, pullRequest.title, `https://github.com/${repo}/pull/${pullRequest.number}`, since),
   };
 }
@@ -1318,9 +1356,11 @@ const LISTED_IN_WAITING_ON_YOU: ReadonlySet<StandingName> = new Set(["yours-to-m
 /**
  * Whether Waiting on you lists a Standing: every one whose move is the
  * Operator's, but a weekly-limit issue, which stays under Held, and a Map's
- * own Decisions, folded into the Map's line.
+ * own Decisions, folded into the Map's line. Of the Plain pull requests only
+ * one ready to merge is listed, whatever else is the Operator's.
  */
 function listedInWaitingOnYou(standing: Standing): boolean {
+  if (standing.work === "plain") return standing.name === "yours-to-merge";
   if (standing.move !== "operator" || !LISTED_IN_WAITING_ON_YOU.has(standing.name) || standing.work === "weekly-limit") return false;
   if (standing.name === "yours-to-read") return standing.detail.map === null;
   return true;
@@ -1378,6 +1418,10 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, operator: string,
   const onIssue = issue === null ? null : items.issue(issue, standing.since);
   switch (standing.name) {
     case "yours-to-merge": {
+      if (standing.detail.plain !== null) {
+        const plain = facts.plainPullRequests.find(({ number }) => number === standing.pullRequest);
+        return plain === undefined ? null : { kind: "plain-ready", ...items.pullRequest(plain, standing.since), plain: standing.detail.plain };
+      }
       if (pullRequest === undefined) return null;
       const item = items.pullRequest(pullRequest, standing.since);
       return { kind: "merge-gate", ...item, operatorWait: item.age };
@@ -1809,8 +1853,19 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `at the Merge gate, Operator wait ${duration(item.operatorWait)}`);
     case "handed-back":
       return itemLine(item, `handed to you with \`${READY_FOR_HUMAN}\` ${duration(item.age)} ago`);
+    case "plain-ready":
+      return itemLine(item, `${PLAIN_PHRASES[item.plain]}, ready to merge for ${duration(item.age)}`);
   }
 }
+
+/** What a Plain pull request of each kind is called in its line. */
+const PLAIN_PHRASES: Readonly<Record<PlainKind, string>> = {
+  "kit-bump": "a Kit bump",
+  setup: "Setup's pull request",
+  "skills-bump": "a Skills bump",
+  pairing: "a Pairing session's pull request",
+  other: "a pull request",
+};
 
 function stuckLine(item: StuckItem): string {
   switch (item.kind) {

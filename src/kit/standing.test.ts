@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { aRunInFlight, aWeeklyLimitIssue } from "../__fixtures__/weeklySummary.ts";
 import { aTicket } from "../__fixtures__/snapshots.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
-import { type Standing, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
+import { type Standing, standingAt, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -273,7 +273,7 @@ describe("the Standing rule", () => {
 
   describe("a Subscription's issue", () => {
     const listing = (...subscriptions: readonly string[]) =>
-      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, runsInFlight: [] } }) as const;
+      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, runsInFlight: [], headChecks: {} } }) as const;
     /** Open Kit-owned issue `number`, labelled `labels`, naming `subscription` in its body (none when null), opened at `createdAt`: as the open issues and as the Kit's issues. */
     const kitIssue = (number: number, labels: readonly string[], subscription: string | null, createdAt: string, body = "") => ({
       open: anOpenIssue({ number, labels, createdAt, labelEvents: labels.map((label) => aLabelAdded(label, createdAt)) }),
@@ -583,6 +583,37 @@ describe("the Standing rule", () => {
     });
   });
 
+  describe("a Plain pull request", () => {
+    it("is named by its draft, its merge and its Required checks, each with its kind and no place (src/kit/standingPlain.test.ts)", () => {
+      const head = (digit: string) => digit.repeat(40);
+      const kit = {
+        repo: "owner/product",
+        branch: "main",
+        config: { ok: true, config: DEFAULT_KIT_CONFIG },
+        dispatch: null,
+        runsInFlight: [],
+        headChecks: { [head("1")]: [{ name: "test", is: "running" }], [head("2")]: [{ name: "test", is: "failing" }] },
+      } as const;
+      const standings = standingsIn(
+        {
+          plainPullRequests: [
+            aPlainPullRequest({ number: 70, headSha: head("1") }),
+            aPlainPullRequest({ number: 71, headSha: head("2"), author: "operator", headRef: "fabrik/setup-v3.1.0" }),
+            aPlainPullRequest({ number: 72, mergeable: false }),
+            aPlainPullRequest({ number: 73, draft: true, author: "operator", headRef: "fix-typo" }),
+          ],
+        },
+        { kit },
+      );
+      expect(standings.map(({ pullRequest, name, detail }) => ({ pullRequest, name, detail }))).toEqual([
+        { pullRequest: 70, name: "waiting-on-checks", detail: { plain: "kit-bump", check: "test", checksUnread: false } },
+        { pullRequest: 71, name: "check-failing", detail: { plain: "setup", check: "test", checkIs: "failing" } },
+        { pullRequest: 72, name: "conflicts", detail: { plain: "kit-bump" } },
+        { pullRequest: 73, name: "draft", detail: { plain: "other" } },
+      ]);
+    });
+  });
+
   describe("one piece of work", () => {
     it("is one Standing for a Ticket and the agent PR that closes it, carrying both numbers", () => {
       const standings = standingsIn({
@@ -636,6 +667,7 @@ describe("work that goes on without the Operator (#606)", () => {
           branch: "main",
           config: { ok: true, config: DEFAULT_KIT_CONFIG },
           dispatch: { candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 15, openBlockers: [3] })], researchDecisions: [] } },
+          headChecks: {},
           runsInFlight: [
             aRunInFlight({ issue: 7, createdAt: "2026-11-08T19:20:00Z" }),
             aRunInFlight({ issue: 12 }),
@@ -651,6 +683,36 @@ describe("work that goes on without the Operator (#606)", () => {
       { issue: 7, name: "running", move: "kit", yours: false, stopsWork: false, stuckAt: null },
       { issue: 8, name: "waiting-on-checks", move: "kit", yours: false, stopsWork: false, stuckAt: null },
     ]);
+  });
+});
+
+describe("a run that was asked for and never began (#607)", () => {
+  const LABELLED = "2026-11-08T19:20:00Z";
+  const STUCK_AT = "2026-11-08T22:50:00.000Z";
+  const asked = { openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent", "agent:implement"], labelEvents: [aLabelAdded("agent:implement", LABELLED)] })] };
+
+  it("is not-started before the bar and stuck after it, the Kit's move still, but the Operator's to act on and stopping work", () => {
+    expect(standingsIn(asked, {}, "2026-11-08T22:49:00Z")).toMatchObject([{ name: "not-started", move: "kit", yours: false, stopsWork: false, stuckAt: STUCK_AT }]);
+    expect(standingsIn(asked, {}, "2026-11-08T22:51:00Z")).toMatchObject([
+      { name: "stuck", move: "kit", yours: true, stopsWork: true, since: LABELLED, stuckAt: STUCK_AT, detail: { was: "not-started", silence: "trigger-label", label: "agent:implement" } },
+    ]);
+  });
+
+  it.each([
+    ["before the bar", "2026-11-08T22:49:00Z"],
+    ["at the bar", STUCK_AT],
+    ["after the bar", "2026-11-09T09:00:00Z"],
+  ])("reads a kept Standing at a later time as the rule reads the same facts then, %s", (_, later) => {
+    const kept = standingsIn(asked, {}, "2026-11-08T20:00:00Z");
+    expect(kept.map((standing) => standingAt(standing, later))).toStrictEqual(standingsIn(asked, {}, later));
+  });
+
+  it("leaves a kept Standing with no stuckAt, or one already stuck, as it is", () => {
+    const pass = aVerdictComment("pass", HEAD, "2026-11-05T20:00:00Z");
+    const [atTheGate] = standingsIn({ openPullRequests: [anOpenPullRequest({ draft: false, comments: [pass] })] });
+    const [stuck] = standingsIn(asked, {}, "2026-11-09T09:00:00Z");
+    expect(standingAt(atTheGate!, "2027-01-01T00:00:00Z")).toBe(atTheGate);
+    expect(standingAt(stuck!, "2027-01-01T00:00:00Z")).toBe(stuck);
   });
 });
 
@@ -673,10 +735,15 @@ describe("a Standing, as plain data", () => {
     expect(all().some(({ name }) => name === "yours-to-read")).toBe(true);
   });
 
-  it("is the same for the same facts read a minute later", () => {
+  it("is the same for the same facts read a minute later, but for a Standing that crossed its bar then", () => {
+    let crossed = 0;
     for (const { facts, now, standings } of produced) {
-      expect(standingsOf(facts, new Date(Date.parse(now) + MINUTE).toISOString())).toStrictEqual(standings);
+      const later = new Date(Date.parse(now) + MINUTE).toISOString();
+      const read = standingsOf(facts, later);
+      crossed += read.filter((standing, at) => standing.name !== standings[at]?.name).length;
+      expect(read).toStrictEqual(standings.map((standing) => standingAt(standing, later)));
     }
+    expect(crossed).toBeGreaterThan(0);
   });
 
   it("has one of each name so far in the schema fixture, in the order of the names", () => {

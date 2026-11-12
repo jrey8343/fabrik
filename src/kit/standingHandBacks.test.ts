@@ -149,7 +149,7 @@ describe("work the Kit hands back", () => {
     const standings = standingsOf(
       standingFactsOf({
         github: factsOf({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"], comments: [infrastructureFailure("2026-11-08T19:30:00Z")] })] }),
-        kit: { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [aRunInFlight({ issue: 7 })] },
+        kit: { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [aRunInFlight({ issue: 7 })], headChecks: {} },
       }),
       NOW,
     );

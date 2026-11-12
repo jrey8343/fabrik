@@ -19,6 +19,7 @@ import type {
   OpenPullRequestFacts,
   OpenReplayFacts,
   OpenRetroFacts,
+  PlainPullRequestFacts,
   ReviewFacts,
   SpecFacts,
   TicketFacts,
@@ -192,6 +193,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     mergedPullRequestTitles: [],
     openIssues: [],
     openPullRequests: [],
+    plainPullRequests: [],
     designQueue: { issues: [], designTurnsInProgress: [] },
     monitorIssues: [],
     escapeMarkerIssues: [],
@@ -323,6 +325,27 @@ export function anOpenPullRequest(
 }
 
 /**
+ * Open Plain pull request 70, a Kit bump: Dependabot's, on the branch its
+ * `fabrik` group names (as a real one's), out of draft, merging cleanly,
+ * closing nothing, opened with its head on 2026-11-06 at 20:00.
+ */
+export function aPlainPullRequest(overrides: Partial<PlainPullRequestFacts> = {}): PlainPullRequestFacts {
+  return {
+    number: 70,
+    title: "fabrik: bump the fabrik group with 2 updates",
+    author: "dependabot[bot]",
+    headRef: "dependabot/github_actions/fabrik-d03f57835c",
+    headSha: "p".repeat(40),
+    headCommittedAt: "2026-11-06T20:00:00Z",
+    draft: false,
+    mergeable: true,
+    closes: null,
+    createdAt: "2026-11-06T20:00:00Z",
+    ...overrides,
+  };
+}
+
+/**
  * Open weekly-limit issue 20, the Fabrik App's, whose limit resets at
  * `resetsAt` (none said when null), holding these runs with a held marker each.
  */
@@ -343,7 +366,7 @@ export function anOpenMonitorIssue(overrides: Partial<MonitorIssueFacts> = {}): 
 
 /** What the Standing rule reads of `owner/product`: its GitHub facts, nothing in them unless a test says so, no Kit config read, and the Operator and the Fabrik App by login. */
 export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> = {}): StandingFacts {
-  return { kind: "product", github: factsOf(), kit: null, operator: "operator", appLogin: "fabrik-app[bot]", ...overrides };
+  return { kind: "product", github: factsOf(), kit: null, operator: "operator", appLogin: "fabrik-app[bot]", runsEnded: [], ...overrides };
 }
 
 /** An Implement run in flight on no Ticket the job names, running, its workflow run created an hour before the filing, unless a test says otherwise. */
