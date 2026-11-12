@@ -211,6 +211,11 @@ describe("a run that was asked for and never began", () => {
       expect(namesIn(standings)).toEqual([{ issue: 7, pullRequest: null, name: "not-started" }]);
     });
 
+    it("is not-started still while the only run of its role is exact and names no work, since an exact run counts only for the work it names (#617)", () => {
+      const standings = standingsIn({ openIssues: [askedFor("2026-11-08T19:20:00Z")] }, { kit: aKit([aRunInFlight({ exact: true })]) });
+      expect(namesIn(standings)).toEqual([{ issue: 7, pullRequest: null, name: "not-started" }]);
+    });
+
     it("has no not-started Standing for a Replay while a run with no number of the roles it starts is in flight, as the sweep counts it", () => {
       const replay = anOpenIssue({ number: 22, labels: ["agent:replay"], labelEvents: [aLabelAdded("agent:replay", LONG_AGO)] });
       expect(standingsIn({ openIssues: [replay] }, { kit: aKit([aRunInFlight({ role: "review" })]) })).toEqual([]);

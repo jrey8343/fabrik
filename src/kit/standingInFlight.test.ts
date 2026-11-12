@@ -116,6 +116,33 @@ describe("work that goes on without the Operator", () => {
       expect(runningIn(standings).map(({ issue, detail }) => ({ issue, detail }))).toEqual([{ issue: 7, detail: { run: "implement", retry: null } }]);
     });
 
+    describe("an exact run, from the Kit job's closing line (#617)", () => {
+      it("counts only for the work it names: a Triage run for its issue, not every issue waiting on Triage", () => {
+        const standings = standingsIn(
+          { openIssues: [anOpenIssue({ number: 12, labels: ["needs-triage"] }), anOpenIssue({ number: 13, labels: ["needs-triage"] })] },
+          aKit([aRunInFlight({ role: "triage", issue: 13, exact: true })]),
+        );
+        expect(runningIn(standings.filter(({ name }) => name === "running")).map(({ issue, detail }) => ({ issue, detail }))).toEqual([{ issue: 13, detail: { run: "triage", retry: null } }]);
+      });
+
+      it("counts a Research run for the Decision it names, and a Review run for its pull request alone", () => {
+        const decision = (number: number) => anOpenIssue({ number, labels: ["wayfinder:research", "agent:research"] });
+        const standings = standingsIn(
+          { openIssues: [decision(30), decision(31), ticket(7)], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 }), anOpenPullRequest({ number: 51, ticket: 8 })] },
+          aKit([aRunInFlight({ role: "research", issue: 31, exact: true }), aRunInFlight({ role: "review", issue: 7, pullRequest: 50, exact: true })]),
+        );
+        expect(runningIn(standings.filter(({ name }) => name === "running")).map(({ issue, pullRequest }) => ({ issue, pullRequest }))).toEqual([
+          { issue: 7, pullRequest: 50 },
+          { issue: 31, pullRequest: null },
+        ]);
+      });
+
+      it("counts for no work when it names none", () => {
+        const standings = standingsIn({ openIssues: [anOpenIssue({ number: 12, labels: ["needs-triage"] }), ticket(7, ["ready-for-agent", "agent:implement"])] }, aKit([aRunInFlight({ role: "triage", exact: true }), aRunInFlight({ exact: true })]));
+        expect(standings.filter(({ name }) => name === "running")).toEqual([]);
+      });
+    });
+
     it("counts a Triage job for every issue waiting on Triage: needs-triage, or needs-info with an answer", () => {
       const asked = aLabelAdded("needs-info", "2026-11-07T18:00:00Z");
       const standings = standingsIn(
@@ -189,6 +216,15 @@ describe("work that goes on without the Operator", () => {
         expect(standings.filter(({ name }) => name !== "waiting-on-kit").map(({ pullRequest, name }) => ({ pullRequest, name }))).toEqual([
           { pullRequest: 50, name: "running" },
           { pullRequest: 53, name: "waiting-on-checks" },
+        ]);
+      });
+
+      it("counts an exact wait for checks only for the pull request its closing line names (#617)", () => {
+        const exact = aRunInFlight({ role: "review", job: "waiting-on-checks", exact: true, issue: 7, pullRequest: 50, createdAt: "2026-11-08T19:40:00Z" });
+        const standings = standingsIn({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 }), anOpenPullRequest({ number: 51, ticket: 8 })] }, aKit([exact]));
+
+        expect(standings.filter(({ name }) => name !== "waiting-on-kit").map(({ pullRequest, name, since }) => ({ pullRequest, name, since }))).toEqual([
+          { pullRequest: 50, name: "waiting-on-checks", since: "2026-11-08T19:40:00Z" },
         ]);
       });
 
