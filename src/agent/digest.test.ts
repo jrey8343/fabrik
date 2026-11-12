@@ -22,7 +22,7 @@ const FLAW = verdict("execution-flaw", EARLIER, ": Execution flaw\n\nThe empty c
 const PASS = verdict("pass", HEAD, ": Pass\n\n### Checked\n\nEvery criterion.");
 const RETRY_NOTE = "<!-- fabrik:retry-push -->\nRetry 1 of 2 pushed `aaaaaaa`.";
 
-/** Kit code's facts for the thread below: an Execution flaw, its Retry, the Operator's Request changes, then the pass, with no fingerprint recorded. */
+/** Kit code's facts for the thread below: an Execution flaw, its Retry, the Operator's Request changes with its line comment, then the pass, with no fingerprint recorded. */
 const FACTS: DigestFacts = {
   rounds: [
     { who: "implementer", what: "first-run", effect: null },
@@ -32,6 +32,10 @@ const FACTS: DigestFacts = {
     { who: "reviewer", what: "pass", effect: "not-known" },
   ],
   followUps: [],
+  asks: [
+    { id: "review-8", what: "request-changes", url: "https://github.com/acme/shop/pull/50#pullrequestreview-8" },
+    { id: "inline-9", what: "line-comment", url: "https://github.com/acme/shop/pull/50#discussion_r9", path: "src/cart.ts", line: 12 },
+  ],
   retriesLeft: 1,
   productCode: { kind: "not-established" },
   counts: { passes: 1, executionFlaws: 1, designFlaws: 0, retries: 1, conflictOnlyRuns: 0, requestChanges: 1, infrastructureFailures: 0 },
@@ -158,6 +162,14 @@ describe("What the Digest writer is given of the pull request", () => {
 
     expect(given.requestedChanges).toBeUndefined();
     expect(given.operatorComments.map(({ id }) => id)).toEqual(["conversation-3"]);
+    expect(given.facts.asks).toEqual([]);
+  });
+
+  it("lists the asks among Kit code's facts under the ids its Request changes and their line comments are set out under", async () => {
+    const given = await readDigestPullRequest(thread(), repo, 50, { operator: "operator" });
+
+    expect(given.facts.asks.map(({ id }) => id)).toEqual(["review-8", "inline-9"]);
+    expect(given.requestedChanges?.flatMap((review) => [review.id, ...review.comments.map(({ id }) => id)])).toEqual(["review-8", "inline-9"]);
   });
 
   it("says UI evidence exists when the body's evidence marker names the screenshots kept, and not when capture kept none", async () => {

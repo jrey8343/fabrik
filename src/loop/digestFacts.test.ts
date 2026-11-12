@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type ChangeFingerprint, changeFingerprintOf, changeLine } from "./changeFingerprint.ts";
 import { DIGEST_FOLDS_MARKER, type DigestGiven, type DigestReply, digestCommentOf, noDigestLine, readDigestReply } from "./digestContract.ts";
 import { type DigestThread, digestFactsOf } from "./digestFacts.ts";
-import { aDigestFacts, aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
+import { aDigestFacts, aDigestGiven, aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { followUpsSection, newIssueUrl } from "./followUps.ts";
@@ -99,7 +99,7 @@ describe("The rounds Kit code builds from a pull request's thread", () => {
       anInfrastructureFailure(35),
       aVerdict(40, { verdict: "pass", requestChanges: true, headSha: sha("d") }),
     ],
-    requestChanges: [{ review: 8, at: at(20), dismissed: false }],
+    requestChanges: [aRequestChanges(8, at(20))],
   });
 
   it("come out oldest first, each with who and what", () => {
@@ -195,9 +195,9 @@ describe("The rounds Kit code builds from a pull request's thread", () => {
     const started = aNote(21, requestChangesRunStartedMarker([8]), "The Kit started the Request-changes run for the Operator's review.");
     const gaveWay = aVerdict(30, { verdict: "execution-flaw", requestChangesFirst: [9], headSha: sha("a") });
     const requestChanges = [
-      { review: 8, at: at(20), dismissed: true },
-      { review: 9, at: at(25), dismissed: true },
-      { review: 10, at: at(35), dismissed: true },
+      aRequestChanges(8, at(20), { dismissed: true }),
+      aRequestChanges(9, at(25), { dismissed: true }),
+      aRequestChanges(10, at(35), { dismissed: true }),
     ];
 
     expect(rows(aThread({ kitComments: [started, gaveWay], requestChanges }))).toEqual([
@@ -460,7 +460,7 @@ describe("The rounds fold", () => {
           anInfrastructureFailure(35),
           aVerdict(40, { verdict: "pass", requestChanges: true, headSha: sha("d"), change: PRODUCT_MOVED }),
         ],
-        requestChanges: [{ review: 8, at: at(20), dismissed: false }],
+        requestChanges: [aRequestChanges(8, at(20))],
       }),
     );
 

@@ -3,7 +3,7 @@
 // (src/loop/digestContract.ts). A Ticket that widens any of the three adds
 // its field here once, and every test that lands a Digest keeps its shape.
 import type { DigestGiven, DigestReply } from "../loop/digestContract.ts";
-import type { DigestFacts } from "../loop/digestFacts.ts";
+import type { DigestFacts, ThreadRequestChanges } from "../loop/digestFacts.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -21,7 +21,26 @@ export function aDigestFacts(overrides: Partial<DigestFacts> = {}): DigestFacts 
     counts: { passes: 1, executionFlaws: 0, designFlaws: 0, retries: 0, conflictOnlyRuns: 0, requestChanges: 0, infrastructureFailures: 0 },
     retriesLeft: 2,
     followUps: [],
+    asks: [],
     productCode: { kind: "unchanged" },
+    ...overrides,
+  };
+}
+
+/**
+ * A Request changes of the Operator's on #50 of acme/shop, as a thread has
+ * it: review `review`, given at `at`, still requesting changes, not deferred,
+ * with a line of text and no line comment.
+ */
+export function aRequestChanges(review: number, at: string, overrides: Partial<ThreadRequestChanges> = {}): ThreadRequestChanges {
+  return {
+    review,
+    at,
+    dismissed: false,
+    deferred: false,
+    body: "Call it a basket.",
+    url: `https://github.com/acme/shop/pull/50#pullrequestreview-${review}`,
+    lineComments: [],
     ...overrides,
   };
 }
