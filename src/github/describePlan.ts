@@ -3,6 +3,7 @@
 // names the actions that landed and those that didn't (#421). Pure, no I/O.
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import type { Action, Plan } from "../loop/types.ts";
+import type { RefusedCollapse } from "./apply.ts";
 
 /** What a plan does, one line to each action, for the step summary. */
 export function describePlan(plan: Plan): string {
@@ -103,5 +104,19 @@ export function actionPhrase(action: Action): string {
         : action.on.hasBody
           ? `react ${action.content} to review ${action.on.review} and each of its inline comments on #${action.pullRequest}`
           : `react ${action.content} to each inline comment of review ${action.on.review} on #${action.pullRequest}`;
+    case "minimize-comment":
+      return `collapse an older Digest on #${action.pullRequest} (comment ${action.node}) as outdated`;
   }
+}
+
+/**
+ * Each older Digest GitHub refused to collapse while the plan was applied
+ * (ADR-0022), one line to each, for the step summary: the refusal held
+ * nothing up, so this is the only place it is said.
+ */
+export function describeRefusedCollapses(refused: readonly RefusedCollapse[]): string[] {
+  return refused.map(
+    ({ pullRequest, node, why }) =>
+      `- GitHub refused to collapse an older Digest on #${pullRequest} (comment ${node}) as outdated: ${why.replace(/[.\s]+$/, "")}. Nothing else was held up: the current Digest is found by its head either way`,
+  );
 }

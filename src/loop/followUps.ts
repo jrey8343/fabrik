@@ -18,8 +18,13 @@ const MAX_TITLE_LENGTH = 256;
 /** The heading a pass's Verdict comment lists its Follow-ups under. */
 const FOLLOW_UPS_HEADING = "### Follow-ups";
 
-/** The line each Follow-up in a Verdict comment ends with. */
-const OPEN_AS_ISSUE_LINK = /^\[Open as issue\]\(.*\)$/;
+/** The line each Follow-up in a Verdict comment ends with, and the address it links. */
+const OPEN_AS_ISSUE_LINK = /^\[Open as issue\]\((.*)\)$/;
+
+/** A Follow-up as a posted Verdict comment lists it: its title and body, and its Open as issue link as the comment has it. */
+export interface ListedFollowUp extends FollowUp {
+  readonly url: string;
+}
 
 /**
  * The Follow-ups part of a pass's Verdict comment: each Follow-up's title,
@@ -50,8 +55,18 @@ export function followUpsSection(followUps: readonly FollowUp[], repoUrl: string
  * them, in order: each one's title and body. None when it lists none.
  */
 export function followUpsIn(comment: string): FollowUp[] {
+  return listedFollowUpsIn(comment).map(({ title, body }) => ({ title, body }));
+}
+
+/**
+ * The Follow-ups a posted Verdict comment lists, as followUpsIn reads them,
+ * each with the Open as issue link the comment gives it: the Digest lists a
+ * pass's Follow-ups with the links the Operator already has
+ * (src/loop/digestFacts.ts).
+ */
+export function listedFollowUpsIn(comment: string): ListedFollowUp[] {
   const lines = comment.split("\n").map((line) => line.replace(/\r$/, ""));
-  const followUps: FollowUp[] = [];
+  const followUps: ListedFollowUp[] = [];
   let at = lines.lastIndexOf(FOLLOW_UPS_HEADING) + 1;
   if (at === 0) return followUps;
   for (;;) {
@@ -59,7 +74,8 @@ export function followUpsIn(comment: string): FollowUp[] {
     const title = /^#### (.*)$/.exec(lines[at] ?? "")?.[1];
     const link = lines.findIndex((line, i) => i > at && OPEN_AS_ISSUE_LINK.test(line));
     if (title === undefined || link === -1) return followUps;
-    followUps.push({ title, body: lines.slice(at + 1, link).join("\n").replace(/^\n+|\n+$/g, "") });
+    const url = OPEN_AS_ISSUE_LINK.exec(lines[link] ?? "")?.[1] ?? "";
+    followUps.push({ title, body: lines.slice(at + 1, link).join("\n").replace(/^\n+|\n+$/g, ""), url });
     at = link + 1;
   }
 }

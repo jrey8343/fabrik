@@ -15,6 +15,7 @@ import {
   snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
+import { aDigestGiven } from "../__fixtures__/digests.ts";
 import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { aRunRecord } from "../read/builders.ts";
@@ -1309,7 +1310,7 @@ describe("Gathering what a Digest run's push job lands on (ADR-0022)", () => {
       pullRequest: 50,
       headSha: HEAD_SHA,
       output: "{}",
-      given: { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN },
+      given: aDigestGiven({ headSha: HEAD_SHA, runUrl: RUN }),
       runUrl: RUN,
     } as const;
 

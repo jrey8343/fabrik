@@ -16,6 +16,7 @@ import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
+import { digestMarkIn } from "../loop/digestContract.ts";
 import { heldRunsIn, isCarrier } from "../loop/heldRun.ts";
 import { makesUnusable } from "../loop/subscriptions.ts";
 import {
@@ -178,7 +179,12 @@ function openIssueNumbersIn(repo: Repo, edges: DependencyEdges): number[] {
     .map((issue) => issue.number);
 }
 
-const PULL_REQUEST_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { __typename } }";
+/**
+ * What the snapshot reads of each comment on a PR, the latest 100 and each
+ * earlier page alike: with its node id and whether it is minimized, which
+ * collapsing an older Digest as outdated goes by (ADR-0022).
+ */
+const PULL_REQUEST_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { id isMinimized body createdAt author { __typename } }";
 
 /** What the snapshot reads of a PR, by itself or as one of the open agent PRs the conflict check weighs. */
 const PULL_REQUEST_FIELDS = `
@@ -214,7 +220,7 @@ const PULL_REQUEST_QUERY = `
 
 interface PullRequestComments {
   pageInfo: { hasPreviousPage: boolean; startCursor?: string | null };
-  nodes: { body: string; createdAt: string; author: { __typename: string } | null }[];
+  nodes: { id: string; isMinimized: boolean; body: string; createdAt: string; author: { __typename: string } | null }[];
 }
 
 const DEFAULT_BRANCH_QUERY = `
@@ -1671,13 +1677,19 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     retryNoteSinceVerdict: retryNoteSinceVerdictIn(botComments),
     verdictPostedAt: verdictPostedAtIn(history),
     headPushedAt: headPushedAtOf(pullRequest, fromBots, isAgent),
-    ...requestChangesSinceRunIn(history, notDismissed, operator),
+    // Its head tells a passed draft whose gate has yet to open, where the Operator's Request changes counts (ADR-0022).
+    ...requestChangesSinceRunIn(history, notDismissed, operator, pullRequest.headRefOid),
     leftDraftSinceVerdict: leftDraftSinceVerdictIn(history),
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
     // Likewise, so nobody else can plant or hide the existing tests its runs changed (#463).
     changedTests: byAppOf(pullRequest.author, appLogin) ? changedTestsIn(pullRequest.body) : [],
+    // Only a bot's comment whose first line is the Digest's marker, as for a Verdict: never a no-Digest line, and
+    // never a person's quoting one. A collapsed Digest is read whole, as GitHub still returns it.
+    digests: fromBots
+      .filter((comment) => digestMarkIn(comment.body) !== null)
+      .map(({ id, isMinimized, body, createdAt }) => ({ node: id, minimized: isMinimized, body, postedAt: createdAt })),
   };
 }
 

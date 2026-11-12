@@ -303,7 +303,7 @@ describe("Applying a plan that links a UI PR's preview deployment", () => {
 
     const applied = await applyPlan(fakeGitHub(), repo, plan, heldBranch());
 
-    expect(applied).toEqual({ preview: { pullRequest: 51, url: `https://deploy-preview-51--shop.netlify.app/fabrik-ticket-7/${HEAD}` }, readded: [] });
+    expect(applied).toEqual({ preview: { pullRequest: 51, url: `https://deploy-preview-51--shop.netlify.app/fabrik-ticket-7/${HEAD}` }, readded: [], refusedCollapses: [] });
   });
 
   it("hands on a retry's preview for the PR it pushed to, changing nothing on GitHub itself", async () => {
@@ -333,8 +333,8 @@ describe("Applying a plan that links a UI PR's preview deployment", () => {
       ],
     };
 
-    expect(await applyPlan(fakeGitHub(), repo, plan, heldBranch())).toEqual({ preview: null, readded: [] });
-    expect(await applyPlan(fakeGitHub(), repo, { kind: "nothing", reason: "no change" })).toEqual({ preview: null, readded: [] });
+    expect(await applyPlan(fakeGitHub(), repo, plan, heldBranch())).toEqual({ preview: null, readded: [], refusedCollapses: [] });
+    expect(await applyPlan(fakeGitHub(), repo, { kind: "nothing", reason: "no change" })).toEqual({ preview: null, readded: [], refusedCollapses: [] });
   });
 });
 
@@ -541,7 +541,7 @@ describe("Applying a prototype turn's plan (#155)", () => {
 
       const applied = await applyPlan(github, repo, planLinking("https://{branch_slug}--shop.netlify.app/{sha}"), heldBranch());
 
-      expect(applied).toEqual({ preview: { round: 9300, url: `https://prototype-7--shop.netlify.app/${HEAD}/book` }, readded: [] });
+      expect(applied).toEqual({ preview: { round: 9300, url: `https://prototype-7--shop.netlify.app/${HEAD}/book` }, readded: [], refusedCollapses: [] });
       expect(github.calls.map(({ method, path }) => `${method} ${path}`)).toEqual([`POST ${issues}/7/comments`]);
     });
 
