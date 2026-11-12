@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
 import type { ReadClient, Repo } from "../github/client.ts";
+import { callerChangeErrors } from "../kit/callerPermissions.ts";
 import { readCaller } from "./caller.ts";
 
 const PATH = ".github/workflows/fabrik.yml";
@@ -130,5 +131,24 @@ describe("the caller read", () => {
     const client = clientWith({ [`acme/shop:${PATH}@main`]: callerAt("v1.0.0") });
 
     expect(await readCaller(client, "acme/shop", 42)).toEqual({ changes: false, from: "v1.0.0", to: null, errors: [] });
+  });
+
+  /** The Kit's v1.1.0 scheduled workflow, asking a caller's tick job for `id-token: write` and `actions: read`. */
+  const ASKS_ACTIONS = { "jrey8343/fabrik:.github/workflows/schedule.yml@v1.1.0": scheduleAsking({ tick: ["id-token: write", "actions: read"] }) };
+
+  it.each([
+    ["a bump the caller grants", { [`acme/shop:${PATH}@abc123`]: callerAt("v1.1.0", ["id-token: write", "actions: read"]), ...ASKS_ACTIONS }],
+    ["a bump with a gap", { [`acme/shop:${PATH}@abc123`]: callerAt("v1.1.0"), ...ASKS_ACTIONS }],
+    ["a bump to a release without the workflow", { [`acme/shop:${PATH}@abc123`]: callerAt("v1.1.0") }],
+    ["a caller with no grants at all", { [`acme/shop:${PATH}@abc123`]: callerAt("v1.1.0").replace(/ {4}permissions:\n {6}id-token: write\n/, ""), ...ASKS_ACTIONS }],
+    ["a branch pin", { [`acme/shop:${PATH}@abc123`]: callerAt("main") }],
+    ["an unchanged caller", { [`acme/shop:${PATH}@abc123`]: callerAt("v1.0.0") }],
+    ["a fork's head", {}],
+  ])("gives, for %s, the errors the Kit job's check gives on the same pull request", async (_case, head: Readonly<Record<string, string>>) => {
+    const files = { [`acme/shop:${PATH}@main`]: callerAt("v1.0.0"), ...head };
+
+    const kitJob = await callerChangeErrors(clientWith(files), { owner: "acme", name: "shop" }, { path: PATH, baseText: callerAt("v1.0.0"), headSha: "abc123" });
+
+    expect((await readCaller(clientWith(files), "acme/shop", 42)).errors).toEqual(kitJob);
   });
 });
