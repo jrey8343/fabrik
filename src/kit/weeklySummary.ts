@@ -1306,9 +1306,17 @@ function heldMapsOf(openMaps: readonly number[], config: KitConfig): HeldMaps | 
   return open.length > 0 && mapCapFull(open, config) ? { open } : null;
 }
 
-/** The `needs-design` issues waiting for a Design session slot, as their Standings have it: how many, and since when the oldest. */
+/**
+ * The `needs-design` issues waiting for a Design session slot, as their
+ * Standings have it: how many, and since when the oldest. One the Design queue
+ * check would start a session on, a slot being free, waits on the Kit, and is
+ * counted as the Monday issue has always counted it.
+ */
 function heldDesignSessionsOf(standings: readonly Standing[], now: number): HeldDesignSessions | null {
-  const waiting = standings.filter((standing) => standing.name === "waiting-for-slot" && standing.detail.slot === "design-session");
+  const waiting = standings.filter(
+    (standing) =>
+      (standing.name === "waiting-for-slot" && standing.detail.slot === "design-session") || (standing.name === "waiting-on-kit" && standing.detail.silence === "design-slot-free"),
+  );
   const oldestSince = waiting.map(({ since }) => since).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (oldestSince === undefined) return null;
   return { waiting: waiting.length, oldestSince, oldestAge: now - Date.parse(oldestSince) };

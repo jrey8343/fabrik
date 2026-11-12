@@ -328,8 +328,10 @@ describe("work that goes on without the Operator", () => {
     });
 
     it("gives a releasable Ticket none while a slot is free, and one Dispatch wouldn't release none", () => {
-      expect(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(3), [aRunInFlight({ issue: 12 })]))).toEqual([]);
-      expect(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14, lastRunFailed: true }], withMaxInFlight(0)))).toEqual([]);
+      // A releasable one waits on the Kit instead (#608).
+      const slots = (standings: readonly Standing[]) => standings.filter(({ name }) => name === "waiting-for-slot");
+      expect(slots(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(3), [aRunInFlight({ issue: 12 })])))).toEqual([]);
+      expect(slots(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14, lastRunFailed: true }], withMaxInFlight(0))))).toEqual([]);
     });
 
     it("counts max_in_flight full with the runs unread, as Held does", () => {
@@ -341,7 +343,8 @@ describe("work that goes on without the Operator", () => {
       const standings = standingsIn(
         {
           designQueue: {
-            issues: [aDesignQueueIssue({ number: 21, neededDesignAt: "2026-11-06T09:00:00Z" }), aDesignQueueIssue({ number: 22, designRounds: 1 })],
+            // caps.design_sessions is 2 by default: 22 and 23 hold both slots.
+            issues: [aDesignQueueIssue({ number: 21, neededDesignAt: "2026-11-06T09:00:00Z" }), aDesignQueueIssue({ number: 22, designRounds: 1 }), aDesignQueueIssue({ number: 23, designRounds: 1 })],
             designTurnsInProgress: [],
           },
         },
@@ -406,7 +409,7 @@ describe("work that goes on without the Operator", () => {
     });
 
     it("gives a Ticket with no open blocker none", () => {
-      expect(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(3)))).toEqual([]);
+      expect(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(3))).filter(({ name }) => name === "blocked")).toEqual([]);
     });
   });
 
@@ -466,7 +469,8 @@ describe("work that goes on without the Operator", () => {
       expect(words(full, 14)).toEqual({ pill: "Waiting for a slot", sentence: "Waiting for a slot for 3 days: `max_in_flight` is 2.", remedy: null });
       const paused = standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(0)));
       expect(words(paused, 14).sentence).toBe("Dispatch is paused: `max_in_flight` is 0.");
-      const design = standingsIn({ designQueue: { issues: [aDesignQueueIssue({ number: 21, neededDesignAt: "2026-11-06T20:00:00Z" })], designTurnsInProgress: [] } }, null);
+      const holding = [aDesignQueueIssue({ number: 22, designRounds: 1 }), aDesignQueueIssue({ number: 23, designRounds: 1 })];
+      const design = standingsIn({ designQueue: { issues: [aDesignQueueIssue({ number: 21, neededDesignAt: "2026-11-06T20:00:00Z" }), ...holding], designTurnsInProgress: [] } }, null);
       expect(words(design, 21).sentence).toBe("Waiting for a Design session slot for 2 days.");
     });
 

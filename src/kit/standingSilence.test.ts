@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { kitConfig } from "../__fixtures__/snapshots.ts";
+import { aDesignQueueIssue, aResearchDecision, aTicket, kitConfig } from "../__fixtures__/snapshots.ts";
 import { aComment, aDesignRound, aLabelAdded, aReview, aRunInFlight, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { undeliveredMarker } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
@@ -285,5 +285,70 @@ describe("a Design session whose Round the Operator answered", () => {
     expect(standingsIn({ openIssues: [answered([aDesignRound(2, "2026-11-08T12:00:00Z")])] })).toMatchObject([{ name: "design-round" }]);
     const someoneElse = [aDesignRound(2, "2026-11-08T12:00:00Z"), aComment("+1", PUSHED, { author: "someone", byBot: false })];
     expect(standingsIn({ openIssues: [answered(someoneElse)] })).not.toContainEqual(expect.objectContaining({ detail: expect.objectContaining({ silence: "round-answered" }) }));
+  });
+});
+
+describe("silences the rule cannot date", () => {
+  const READY = "2026-11-05T12:00:00Z";
+  const dispatching = (tickets: Parameters<typeof aTicket>[0][], researchDecisions: Parameters<typeof aResearchDecision>[0][] = [], maxInFlight = DEFAULT_KIT_CONFIG.maxInFlight): RepoKitFacts => ({
+    ...aKit([], { ...DEFAULT_KIT_CONFIG, maxInFlight }),
+    dispatch: { candidates: { tickets: tickets.map((ticket) => aTicket(ticket)), researchDecisions: researchDecisions.map((decision) => aResearchDecision(decision)) } },
+  });
+
+  it("gives a ready, unblocked Ticket that a free slot would let Dispatch release waiting on the Kit at Implement, since it got ready-for-agent, never turning Stuck", () => {
+    const facts = { openIssues: [anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", READY)] })] };
+    expect(standingsIn(facts, { kit: dispatching([{ number: 14 }]) })).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 14,
+        pullRequest: null,
+        work: "ticket",
+        place: "implement",
+        name: "waiting-on-kit",
+        move: "kit",
+        yours: false,
+        stopsWork: false,
+        since: READY,
+        stuckAt: null,
+        awaits: { role: "implement", on: "issue" },
+        subscription: null,
+        detail: { silence: "releasable", round: null },
+      },
+    ]);
+    expect(standingsIn(facts, { kit: dispatching([{ number: 14 }]) }, "2027-01-01T00:00:00Z")).toMatchObject([{ name: "waiting-on-kit", stuckAt: null }]);
+  });
+
+  it("gives a research Decision Dispatch would release the same, with no place, and one max_in_flight holds waits for a slot instead", () => {
+    const decision = anOpenIssue({ number: 21, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", READY)] });
+    expect(standingsIn({ openIssues: [decision] }, { kit: dispatching([], [{ number: 21 }]) })).toMatchObject([
+      { issue: 21, work: "research-decision", place: null, name: "waiting-on-kit", stuckAt: null, awaits: { role: "research", on: "issue" }, detail: { silence: "releasable" } },
+    ]);
+    expect(standingsIn({ openIssues: [decision] }, { kit: dispatching([], [{ number: 21 }], 0) })).toMatchObject([{ name: "waiting-for-slot" }]);
+  });
+
+  it("gives a needs-design issue the Design queue check would start a session on, a slot being free, waiting on the Kit at Design, since it got needs-design; with every slot held it waits for one", () => {
+    const waiting = aDesignQueueIssue({ number: 21, neededDesignAt: READY });
+    const holding = (number: number) => aDesignQueueIssue({ number, designRounds: 1 });
+    expect(standingsIn({ designQueue: { issues: [waiting, holding(22)], designTurnsInProgress: [] } })).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 21,
+        pullRequest: null,
+        work: "design-session",
+        place: "design",
+        name: "waiting-on-kit",
+        move: "kit",
+        yours: false,
+        stopsWork: false,
+        since: READY,
+        stuckAt: null,
+        awaits: { role: "design", on: "issue" },
+        subscription: null,
+        detail: { silence: "design-slot-free", round: null },
+      },
+    ]);
+    expect(standingsIn({ designQueue: { issues: [waiting, holding(22), holding(23)], designTurnsInProgress: [] } })).toMatchObject([{ issue: 21, name: "waiting-for-slot" }]);
   });
 });

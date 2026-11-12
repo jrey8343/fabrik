@@ -6,7 +6,7 @@
 // the Loop can't disagree, and none can turn Stuck.
 import { dispatchedRunsOf, type RunInFlightFact } from "../github/snapshot.ts";
 import { conflictRunInFlightIn } from "../github/threads.ts";
-import { waitingIssues } from "../loop/designQueue.ts";
+import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
 import {
@@ -87,10 +87,22 @@ export function maxInFlightHoldOf({ github, kit }: Pick<StandingFacts, "github" 
 }
 
 /**
+ * The `needs-design` issues the Design queue check would start a session on
+ * now, a slot being free, by its own rule (checkDesignQueue), on the repo's
+ * Kit config, or the Kit's defaults when it wasn't read or is invalid. None
+ * of them waits for a slot: each waits on the Kit (src/kit/standingSilence.ts).
+ */
+export function designSessionsStartingOf({ github, kit }: Pick<StandingFacts, "github" | "kit">): number[] {
+  const plan = checkDesignQueue(github.designQueue, kit?.config.ok === true ? kit.config.config : DEFAULT_KIT_CONFIG, heldOf("design", github.kitIssues));
+  return plan.kind === "act" ? plan.actions.flatMap((action) => (action.kind === "add-labels" ? [action.issue] : [])) : [];
+}
+
+/**
  * Work a slot holds: each Ticket or research Decision max_in_flight holds
  * (maxInFlightHoldOf), since it got its trigger state label, and each
  * `needs-design` issue waiting for a Design session slot, by the Design queue
- * check's own rule (waitingIssues), since it got `needs-design`.
+ * check's own rule (waitingIssues), since it got `needs-design`, but those it
+ * would start a session on now.
  */
 function slotStandingsOf({ github, kit }: StandingFacts): StandingNamed<"waiting-for-slot">[] {
   const hold = maxInFlightHoldOf({ github, kit });
@@ -107,7 +119,8 @@ function slotStandingsOf({ github, kit }: StandingFacts): StandingNamed<"waiting
       },
     ];
   });
-  const design = waitingIssues(github.designQueue).map(
+  const starting = new Set(designSessionsStartingOf({ github, kit }));
+  const design = waitingIssues(github.designQueue).filter(({ number }) => !starting.has(number)).map(
     (issue): StandingNamed<"waiting-for-slot"> => ({
       ...inFlight(github.repo, issue.number, null, issue.neededDesignAt, "design-session", "design", { role: "design", on: "issue" }),
       name: "waiting-for-slot",
@@ -144,7 +157,7 @@ function blockedStandingsOf({ github, kit }: StandingFacts): StandingNamed<"bloc
 }
 
 /** When an open issue got `ready-for-agent`, or `wayfinder:research` for a research Decision, or was opened with it; null when it isn't among the open issues. */
-function readySince(openIssues: readonly OpenIssueFacts[], number: number, decision: boolean): string | null {
+export function readySince(openIssues: readonly OpenIssueFacts[], number: number, decision: boolean): string | null {
   const issue = openIssues.find((open) => open.number === number);
   return issue === undefined ? null : (lastAdded(issue.labelEvents, decision ? RESEARCH_DECISION_LABEL : READY_FOR_AGENT) ?? issue.createdAt);
 }
@@ -171,7 +184,7 @@ function waitingOnChecksStandingsOf({ github }: StandingFacts, runs: readonly Ru
 }
 
 /** An open issue labelled `ready-for-agent` with sub-issues, not a Map: a Spec, which has no Standing of its own; its Tickets do. */
-function isSpec(issue: OpenIssueFacts): boolean {
+export function isSpec(issue: OpenIssueFacts): boolean {
   return issue.labels.includes(READY_FOR_AGENT) && !issue.labels.includes(MAP_LABEL) && issue.subIssues.length > 0;
 }
 

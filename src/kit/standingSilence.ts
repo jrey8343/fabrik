@@ -4,12 +4,15 @@
 // where the facts can't date it. With them, the one look-alike that is the
 // Operator's: a passed draft they put back in draft, `parked`.
 import { notDismissedIn, type PullRequestHistoryItem, requestChangesSinceRunIn } from "../github/threads.ts";
+import { waitingForDispatch } from "../loop/dispatch.ts";
+import { heldOf } from "../loop/heldRun.ts";
 import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { verdictsOn } from "./retroEvidence.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { barOf, clockOf, stuckAtOf } from "./standingClock.ts";
+import { designSessionsStartingOf, maxInFlightHoldOf, readySince } from "./standingInFlight.ts";
 import { answerOf, lastAdded, passAtHeadOf } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
@@ -21,7 +24,9 @@ export type WaitingOnKitSilence =
   | "needs-triage"
   | "round-answered"
   | "passed-draft"
-  | "quiet-draft";
+  | "quiet-draft"
+  | "releasable"
+  | "design-slot-free";
 
 /** Every `waiting-on-kit` and `parked` Standing in the repo: each pull request's first, so a Ticket's own leftover gives way to its draft's. */
 export function silenceStandingsOf(facts: StandingFacts, _now: string): Standing[] {
@@ -29,7 +34,46 @@ export function silenceStandingsOf(facts: StandingFacts, _now: string): Standing
   return [
     ...facts.github.openPullRequests.flatMap((pullRequest) => [...requestChangesSilencesOn(pullRequest, facts, bar), ...draftSilencesOn(pullRequest, facts, bar)]),
     ...facts.github.openIssues.flatMap((issue) => issueSilencesOn(issue, facts, bar)),
+    ...releasableSilencesOf(facts),
+    ...designSlotFreeSilencesOf(facts),
   ];
+}
+
+/**
+ * Each `needs-design` issue the Design queue check would start a session on
+ * now, a slot being free (designSessionsStartingOf), since it got
+ * `needs-design`: never Stuck, as the facts don't say when the slot came free;
+ * the `agent:design` the check adds starts a clock.
+ */
+function designSlotFreeSilencesOf(facts: StandingFacts): StandingNamed<"waiting-on-kit">[] {
+  const starting = new Set(designSessionsStartingOf(facts));
+  return facts.github.designQueue.issues
+    .filter(({ number }) => starting.has(number))
+    .map((issue) =>
+      waitingOnKit(facts, issue.number, null, "design-session", "design", issue.neededDesignAt, null, { role: "design", on: "issue" }, { silence: "design-slot-free", round: null }),
+    );
+}
+
+/**
+ * Each Ticket and research Decision Dispatch would release, by its own rule
+ * (waitingForDispatch), while max_in_flight leaves a slot free
+ * (maxInFlightHoldOf): the next Dispatch check releases it. The facts don't
+ * say when it became releasable, so it never turns Stuck; the trigger label
+ * Dispatch adds starts a clock. Since it got its state label.
+ */
+function releasableSilencesOf(facts: StandingFacts): StandingNamed<"waiting-on-kit">[] {
+  const { github, kit } = facts;
+  if (kit === null || kit.dispatch === null || maxInFlightHoldOf(facts) !== null) return [];
+  const { candidates } = kit.dispatch;
+  const decisions = new Set(candidates.researchDecisions.map(({ number }) => number));
+  const held = { implement: heldOf("implement", github.kitIssues), research: heldOf("research", github.kitIssues) };
+  return waitingForDispatch(candidates, held).flatMap((number) => {
+    const decision = decisions.has(number);
+    const since = readySince(github.openIssues, number, decision);
+    if (since === null) return [];
+    const awaits = { role: decision ? "research" : "implement", on: "issue" } as const;
+    return [waitingOnKit(facts, number, null, decision ? "research-decision" : "ticket", decision ? null : "implement", since, null, awaits, { silence: "releasable", round: null })];
+  });
 }
 
 /**
