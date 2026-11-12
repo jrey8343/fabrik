@@ -20,9 +20,25 @@ import {
   REPLAY_LABEL,
   RETRO_LABEL,
 } from "../loop/labels.ts";
-import { fromPullRequestIn } from "../loop/markers.ts";
+import { fromPullRequestIn, type RollInText } from "../loop/markers.ts";
 import { namesIssue } from "../loop/owedRollIn.ts";
 import type { Facts } from "./gather.ts";
+import { owedOn } from "./owedRollIn.ts";
+
+/** An issue related to an open agent pull request: one that could still be rolled in to it, or one whose Roll-in the Operator settled and has not sent. */
+export type Related =
+  | { readonly issue: number; readonly title: string; readonly kind: "candidate" }
+  | {
+      readonly issue: number;
+      readonly title: string;
+      readonly kind: "owed";
+      /** When the Roll-in was settled: the closing comment's time. */
+      readonly at: string;
+      /** The closing comment. */
+      readonly url: string;
+      /** What to build, as the session gave it, or null when the comment's hidden line holds none this release can read. */
+      readonly text: RollInText | null;
+    };
 
 /** The kinds of issue never related to a pull request, whatever their `From PR` line says. */
 export type NeverRelatedKind = "audit" | "retro" | "monitor" | "replay" | "kit-owned" | "map" | "decision" | "spec";
@@ -96,11 +112,18 @@ function namedInRequestChanges(pullRequest: OpenPullRequestFacts, operator: stri
   return pullRequest.reviews.some(({ author, state, body }) => author === operator && state === "changes-requested" && namesIssue(body, repo, issue));
 }
 
-/** The issues that could still be rolled in to open agent pull request `pullRequest`, in the order of the open issues. */
-export function relatedOf(facts: Facts, pullRequest: number): { readonly issue: number; readonly title: string; readonly kind: "candidate" }[] {
-  return candidatesOf(facts)
+/**
+ * The issues related to open agent pull request `pullRequest`: those that
+ * could still be rolled in to it, its candidates, in the order of the open
+ * issues, then each Roll-in owed on it (./owedRollIn.ts), lowest issue
+ * number first.
+ */
+export function relatedOf(facts: Facts, pullRequest: number): Related[] {
+  const candidates = candidatesOf(facts)
     .filter((candidate) => candidate.pullRequest === pullRequest)
-    .map(({ issue, title }) => ({ issue, title, kind: "candidate" }));
+    .map(({ issue, title }): Related => ({ issue, title, kind: "candidate" }));
+  const owed = owedOn(facts, pullRequest).map(({ issue, title, at, url, text }): Related => ({ issue, title, kind: "owed", at, url, text }));
+  return [...candidates, ...owed];
 }
 
 /**

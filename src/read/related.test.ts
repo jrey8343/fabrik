@@ -195,6 +195,7 @@ describe("a mention", () => {
     issue,
     title,
     open: true,
+    closedAs: null,
     repo: "owner/product",
     ...overrides,
   });
@@ -304,7 +305,7 @@ describe("the Follow-ups", () => {
     const facts = homeFactsOf({
       github: factsOf({ openIssues: [TICKET, FILED], openPullRequests: [{ ...PULL_REQUEST, comments: [verdictListing("pass", HEAD, "2026-11-08T12:00:00Z")] }] }),
       issueBodies: [{ issue: 30, body: FROM_PR_50 }],
-      crossReferences: [{ pullRequest: 50, issue: 40, title: "The cart is slow", open: true, repo: "owner/product" }],
+      crossReferences: [{ pullRequest: 50, issue: 40, title: "The cart is slow", open: true, closedAs: null, repo: "owner/product" }],
     });
 
     const rows = rowsIn(facts);

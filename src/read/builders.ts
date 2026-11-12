@@ -31,8 +31,19 @@ import type {
   SpecFacts,
   TicketFacts,
 } from "../kit/weeklySummary.ts";
+import { rollInComment } from "../loop/design.ts";
 import { DIGEST_FOLDS_MARKER, type DigestData, digestDataMarker, digestMarker, digestTop, type NoDigestHow, noDigestLine } from "../loop/digestContract.ts";
-import { DESIGN_TURN_FAILED_MARKER, designRoundMarker, fromPullRequestLine, handBackMarker, MAP_CAP_REFUSAL_OPENING, REQUEST_CHANGES_RUN_MARKER, requestChangesAnswersMarker, verdictMarker } from "../loop/markers.ts";
+import {
+  DESIGN_TURN_FAILED_MARKER,
+  designRoundMarker,
+  fromPullRequestLine,
+  handBackMarker,
+  MAP_CAP_REFUSAL_OPENING,
+  REQUEST_CHANGES_RUN_MARKER,
+  requestChangesAnswersMarker,
+  type RollInText,
+  verdictMarker,
+} from "../loop/markers.ts";
 import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
@@ -304,6 +315,28 @@ export function aNoDigestLine(headSha: string, how: NoDigestHow, at: string, ove
   return aComment(noDigestLine({ head: headSha, how }), at, overrides);
 }
 
+/**
+ * The Fabrik App's closing comment, at `at`, on issue 30 of `owner/product`,
+ * whose Design session finished by settling a Roll-in onto pull request
+ * `pullRequest`: as Kit code writes one, its mark and its line of data
+ * first, then what a person reads. On another issue with `{ issue }`, and
+ * with what the session settled as `{ text }`.
+ */
+export function aRollInComment(
+  pullRequest: number,
+  at: string,
+  { issue = 30, text = WHAT_TO_BUILD }: { readonly issue?: number; readonly text?: RollInText } = {},
+  overrides: Partial<CommentFacts> = {},
+): CommentFacts {
+  return aComment(rollInComment(issue, pullRequest, text), at, { url: `https://github.com/owner/product/issues/${issue}#issuecomment-1`, ...overrides });
+}
+
+/** A Roll-in's text: one line of what to build and why, and one check a test could make. */
+const WHAT_TO_BUILD: RollInText = {
+  summary: "Read the prices once per page, so a page of forty products asks for them once.",
+  acceptanceCriteria: ["A page that shows forty products reads the prices once."],
+};
+
 /** Open issue 12, opened on 2026-10-01, with no labels, comments, label events or sub-issues unless a test says so. */
 export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueFacts {
   return { number: 12, title: "An open issue", author: "someone", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], subIssues: [], ...overrides };
@@ -407,8 +440,8 @@ export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> 
  * What a gather shaped for Home reads of `owner/product` (./gather.ts): its
  * Kit config the default at `main`, nothing for Dispatch to weigh, the
  * Operator `operator`, the Fabrik App `fabrik-app[bot]`, and no GitHub facts,
- * issue bodies, merges, cross-references, Tickets' states or evidence markers unless a test
- * says so.
+ * issue bodies, merges, cross-references, closed issues' comments, Tickets'
+ * states or evidence markers unless a test says so.
  */
 export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts {
   return {
@@ -420,6 +453,7 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
     issueBodies: [],
     mergedLastDay: [],
     crossReferences: [],
+    closedIssueComments: [],
     ticketStates: [],
     evidenceMarkers: [],
     ...overrides,

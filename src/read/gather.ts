@@ -30,6 +30,7 @@ import {
   OPEN_ISSUES_QUERY,
   type RawHomeComment,
   OPEN_PULL_REQUESTS_QUERY,
+  type RawCrossReference,
   type RawHomeIssue,
   type RawHomePullRequest,
   REPO_QUERY,
@@ -104,8 +105,20 @@ export interface CrossReferenceFacts {
   readonly issue: number;
   readonly title: string;
   readonly open: boolean;
+  /** How the issue was closed, as GitHub names the reason; null while it is open, or closed with no reason given. */
+  readonly closedAs: "completed" | "not_planned" | "duplicate" | null;
   /** The repo the issue is in, `owner/name`. */
   readonly repo: string;
+}
+
+/**
+ * The comments of an issue of this repo, closed as not planned, that GitHub
+ * cross-references to an open agent pull request: where a Roll-in's closing
+ * comment is (#664). Its latest hundred, oldest first.
+ */
+export interface ClosedIssueCommentsFacts {
+  readonly issue: number;
+  readonly comments: readonly CommentFacts[];
 }
 
 /** Whether an open agent pull request's Ticket is closed, as GitHub gives it with the pull request. */
@@ -140,6 +153,13 @@ export interface Facts {
   readonly mergedLastDay: readonly MergedLastDayFacts[];
   /** The issues GitHub cross-references to each open agent pull request. */
   readonly crossReferences: readonly CrossReferenceFacts[];
+  /**
+   * The comments of each of those issues that is in this repo and closed as
+   * not planned: the owed rule reads a Roll-in's closing comment among them
+   * (./owedRollIn.ts). Empty in a repo with no such issue, which no query
+   * is made for.
+   */
+  readonly closedIssueComments: readonly ClosedIssueCommentsFacts[];
   /** Whether each open agent pull request's Ticket is closed; a Ticket GitHub gave no state of is not here. */
   readonly ticketStates: readonly TicketStateFacts[];
   /**
@@ -221,6 +241,7 @@ async function gatherFacts(
   const mergedLastDay = merged.repository.pullRequests.nodes.flatMap(({ mergedAt, ...pullRequest }) =>
     mergedAt === null || Date.parse(mergedAt) < since || !isAgent(pullRequest) ? [] : [{ ...pullRequest, mergedAt }],
   );
+  const crossReferences = agent.flatMap(({ number, crossReferences: references }) => references.nodes.flatMap((reference) => crossReferenceOf(number, reference)));
   return {
     kind: "product",
     github: {
@@ -265,13 +286,8 @@ async function gatherFacts(
       mergeCommit: mergeCommit?.oid ?? null,
       mergedAt,
     })),
-    crossReferences: agent.flatMap(({ number, crossReferences }) =>
-      crossReferences.nodes.flatMap(({ source }) =>
-        source?.__typename !== "Issue" || source.number === undefined
-          ? []
-          : [{ pullRequest: number, issue: source.number, title: source.title ?? "", open: source.state === "OPEN", repo: source.repository?.nameWithOwner ?? "" }],
-      ),
-    ),
+    crossReferences,
+    closedIssueComments: [],
     ticketStates: agent.flatMap(({ closingIssuesReferences }) => {
       // The Ticket is the first issue an agent pull request closes, as the Weekly summary's mapping takes it.
       const ticket = closingIssuesReferences.nodes[0];
@@ -283,6 +299,17 @@ async function gatherFacts(
       return marker === null ? [] : [{ pullRequest: number, marker }];
     }),
   };
+}
+
+/** How the Kit names each reason GitHub closes an issue with. */
+const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
+
+/** GitHub's cross-reference to open agent pull request `pullRequest` as a fact, when it is an issue's; none for a pull request's. */
+function crossReferenceOf(pullRequest: number, { source }: RawCrossReference): CrossReferenceFacts[] {
+  if (source?.__typename !== "Issue" || source.number === undefined) return [];
+  const { state, stateReason } = source;
+  const closedAs = state !== "CLOSED" || stateReason === undefined || stateReason === null || stateReason === "REOPENED" ? null : CLOSED_AS[stateReason];
+  return [{ pullRequest, issue: source.number, title: source.title ?? "", open: state === "OPEN", closedAs, repo: source.repository?.nameWithOwner ?? "" }];
 }
 
 /**

@@ -52,12 +52,12 @@ export interface RepoQueryResult {
 /** A pull request's reviews, as the Weekly summary reads them, but for their line comments, which no Standing reads. */
 const REVIEWS = `reviews(first: 100) { nodes { databaseId url author ${ACTOR} state submittedAt body } }`;
 
-/** The issues GitHub cross-references to a pull request: the latest 50 references, an issue's with where it is and whether it is open. */
+/** The issues GitHub cross-references to a pull request: the latest 50 references, an issue's with where it is, whether it is open and why it is in that state. */
 const CROSS_REFERENCES = `
   crossReferences: timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
     nodes {
       __typename
-      ... on CrossReferencedEvent { source { __typename ... on Issue { number title state repository { nameWithOwner } } } }
+      ... on CrossReferencedEvent { source { __typename ... on Issue { number title state stateReason repository { nameWithOwner } } } }
     }
   }
 `;
@@ -90,7 +90,15 @@ export type RawHomeReview = Omit<RawReview, "comments">;
 /** A cross-reference as CROSS_REFERENCES reads it: an issue's source, or another kind's, of which only the kind is read. */
 export interface RawCrossReference {
   __typename: string;
-  source?: { __typename: string; number?: number; title?: string; state?: "OPEN" | "CLOSED"; repository?: { nameWithOwner: string } };
+  source?: {
+    __typename: string;
+    number?: number;
+    title?: string;
+    state?: "OPEN" | "CLOSED";
+    /** Why the issue is in its state, as GitHub's GraphQL names it; null when GitHub records no reason. */
+    stateReason?: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+    repository?: { nameWithOwner: string };
+  };
 }
 
 /** An open pull request as OPEN_PULL_REQUESTS_QUERY reads it. */

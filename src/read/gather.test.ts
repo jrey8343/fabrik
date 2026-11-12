@@ -277,22 +277,32 @@ describe("a gather shaped for Home", () => {
       expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => [standing.pullRequest, standing.name, standing.place])).toEqual([[50, "merged", "production"]]);
     });
 
-    it("hold the issues GitHub cross-references to each open agent pull request, with where each is and whether it is open", async () => {
-      const issue = (number: number, state: string, repo = "jrey8343/shop") => ({
-        __typename: "CrossReferencedEvent",
-        source: { __typename: "Issue", number, title: `Issue ${number}`, state, repository: { nameWithOwner: repo } },
-      });
+    it("hold the issues GitHub cross-references to each open agent pull request, with where each is, whether it is open and how it was closed", async () => {
+      const issue = aRawCrossReference;
       const facts = await factsOf({
         openPullRequests: [
-          aRawOpenPullRequest({ crossReferences: { nodes: [issue(31, "OPEN"), issue(32, "CLOSED"), issue(33, "OPEN", "jrey8343/blog"), { __typename: "CrossReferencedEvent", source: { __typename: "PullRequest" } }] } }),
+          aRawOpenPullRequest({
+            crossReferences: {
+              nodes: [
+                issue(31, "OPEN"),
+                issue(32, "CLOSED", "COMPLETED"),
+                issue(33, "OPEN", "REOPENED", "jrey8343/blog"),
+                { __typename: "CrossReferencedEvent", source: { __typename: "PullRequest" } },
+                issue(35, "CLOSED", "DUPLICATE"),
+                issue(36, "CLOSED", null),
+              ],
+            },
+          }),
           aRawOpenPullRequest({ number: 70, headRefName: "fix-typo", author: OPERATOR, crossReferences: { nodes: [issue(34, "OPEN")] } }),
         ],
       });
 
       expect(facts.crossReferences).toEqual([
-        { pullRequest: 50, issue: 31, title: "Issue 31", open: true, repo: "jrey8343/shop" },
-        { pullRequest: 50, issue: 32, title: "Issue 32", open: false, repo: "jrey8343/shop" },
-        { pullRequest: 50, issue: 33, title: "Issue 33", open: true, repo: "jrey8343/blog" },
+        { pullRequest: 50, issue: 31, title: "Issue 31", open: true, closedAs: null, repo: "jrey8343/shop" },
+        { pullRequest: 50, issue: 32, title: "Issue 32", open: false, closedAs: "completed", repo: "jrey8343/shop" },
+        { pullRequest: 50, issue: 33, title: "Issue 33", open: true, closedAs: null, repo: "jrey8343/blog" },
+        { pullRequest: 50, issue: 35, title: "Issue 35", open: false, closedAs: "duplicate", repo: "jrey8343/shop" },
+        { pullRequest: 50, issue: 36, title: "Issue 36", open: false, closedAs: null, repo: "jrey8343/shop" },
       ]);
       expect(facts.github.openPullRequests.map(({ number }) => number)).toEqual([50]);
       expect(facts.github.plainPullRequests.map(({ number }) => number)).toEqual([70]);
@@ -518,6 +528,14 @@ function aRawOpenPullRequest(overrides: Record<string, unknown> = {}): Record<st
     draftEvents: { nodes: [] },
     crossReferences: { nodes: [] },
     ...overrides,
+  };
+}
+
+/** GitHub's cross-reference to a pull request from issue `number` of `jrey8343/shop`, titled "Issue" and its number, in this state for this reason, as the gather's query reads one. */
+function aRawCrossReference(number: number, state: "OPEN" | "CLOSED", stateReason: string | null = null, repo = "jrey8343/shop"): Record<string, unknown> {
+  return {
+    __typename: "CrossReferencedEvent",
+    source: { __typename: "Issue", number, title: `Issue ${number}`, state, stateReason, repository: { nameWithOwner: repo } },
   };
 }
 
