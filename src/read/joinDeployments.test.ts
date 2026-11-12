@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
-import { workKeyOf } from "../kit/standing.ts";
 import { aDeploymentsRead, aDeployOf, aLabelAdded, aMergedLastDay, anOpenIssue, factsOf, homeFactsOf } from "./builders.ts";
 import type { DeploymentsRead } from "./deployments.ts";
 import type { Facts } from "./gather.ts";
 import { joinDeployments, mergesToRead } from "./joinDeployments.ts";
-import { type Row, rowsOf } from "./rows.ts";
+import { rowsOf } from "./rows.ts";
 
 const KEPT_AT = "2026-11-12T10:00:00Z";
 const NOW = "2026-11-12T10:20:00Z";
@@ -57,9 +56,6 @@ function joinedAndRule(of: Facts, earlier: DeploymentsRead | null, later: Deploy
   return { kept, joined: joinDeployments(kept, later, now), rule: rowsOf(of, null, null, known, now) };
 }
 
-/** The rows in a fixed order, so the join and the rule are compared row for row. */
-const byWork = (rows: readonly Row[]) => rows.toSorted((a, b) => `${workKeyOf(a.standing)} ${a.standing.pullRequest}`.localeCompare(`${workKeyOf(b.standing)} ${b.standing.pullRequest}`));
-
 const named = (rows: readonly { readonly standing: { readonly issue: number | null; readonly pullRequest: number | null; readonly name: string } }[]) => rows.map(({ standing }) => [standing.pullRequest ?? standing.issue, standing.name]);
 
 describe("which merges want a Deployments read", () => {
@@ -93,7 +89,7 @@ describe("the join of kept rows with a Deployments read", () => {
       { pullRequest: 51, name: "deploy-failed", since: "2026-11-12T10:05:00Z", detail: { deployment: 901, log: "https://github.com/owner/product/actions/runs/40/job/41" } },
       { pullRequest: 52, name: "deploying", move: "kit", since: "2026-11-12T10:10:00Z", detail: { deployment: 902 } },
     ]);
-    expect(byWork(joined)).toEqual(byWork(rule));
+    expect(joined).toEqual(rule);
   });
 
   it("agrees with the rule for a read, over the rows the rule gave without one", () => {
@@ -101,7 +97,28 @@ describe("the join of kept rows with a Deployments read", () => {
     const kept = rowsOf(facts(), null, null, null, NOW);
 
     expect(kept.filter(({ standing }) => standing.pullRequest !== null).map(({ standing }) => standing.detail)).toMatchObject([{ deploysUnread: true }, { deploysUnread: true }, { deploysUnread: true }]);
-    expect(byWork(joinDeployments(kept, read, NOW))).toEqual(byWork(rowsOf(facts(), null, null, read, NOW)));
+    expect(joinDeployments(kept, read, NOW)).toEqual(rowsOf(facts(), null, null, read, NOW));
+  });
+
+  it("puts the rows back in the rule's order when deploys settle in the opposite order to their merges", () => {
+    const read = aDeploymentsRead(
+      {
+        [merge("1")]: aDeployOf({ is: "running", deployment: 910, commit: merge("1"), at: "2026-11-12T10:10:00Z" }),
+        [merge("2")]: aDeployOf({ is: "succeeded", deployment: 911, commit: merge("2"), at: "2026-11-12T09:45:00Z" }),
+        [merge("3")]: aDeployOf(),
+      },
+      NOW,
+    );
+    const kept = rowsOf(facts(), null, null, null, NOW);
+    const joined = joinDeployments(kept, read, NOW);
+
+    expect(named(joined)).toEqual([
+      [14, "not-started"],
+      [51, "live"],
+      [52, "merged"],
+      [50, "deploying"],
+    ]);
+    expect(joined).toEqual(rowsOf(facts(), null, null, read, NOW));
   });
 
   it("returns a row unchanged when the read leaves out its merge or gives it as unread, but for reading it later", () => {
@@ -128,7 +145,7 @@ describe("the join of kept rows with a Deployments read", () => {
 
     expect(kept.find(({ standing }) => standing.pullRequest === 52)?.standing).toMatchObject({ name: "no-deploy-seen", since: "2026-11-12T10:50:00.000Z" });
     expect(joined.find(({ standing }) => standing.pullRequest === 52)?.standing).toMatchObject({ name: "deploying", since: "2026-11-12T11:05:00Z" });
-    expect(byWork(joined)).toEqual(byWork(rowsOf(facts(), null, null, started, "2026-11-12T11:10:00Z")));
+    expect(joined).toEqual(rowsOf(facts(), null, null, started, "2026-11-12T11:10:00Z"));
   });
 
   it("takes no read of another environment or repo", () => {
@@ -143,11 +160,11 @@ describe("the join of kept rows with a Deployments read", () => {
     for (const environment of ["production", null]) {
       const { joined, rule } = joinedAndRule(facts(environment), EARLIER, LATER, after);
 
-      expect(named(byWork(joined))).toEqual([
+      expect(named(joined)).toEqual([
         [14, "stuck"],
         [52, environment === null ? "merged" : "deploying"],
       ]);
-      expect(byWork(joined)).toEqual(byWork(rule));
+      expect(joined).toEqual(rule);
     }
   });
 

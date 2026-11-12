@@ -5,7 +5,7 @@
 // rule: for the same facts, the rows the rule gives with a Deployments read
 // (rowsOf) equal the rows it gave with none, or with an earlier read, joined
 // with that read.
-import { standingAt } from "../kit/standing.ts";
+import { standingAt, standingOrder } from "../kit/standing.ts";
 import { deployIn, isProductionStanding, type ProductionStanding, productionStandingOf, stillStands } from "../kit/standingProduction.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
@@ -26,7 +26,7 @@ export function mergesToRead(rows: readonly Row[]): MergeToRead[] {
 
 /**
  * The kept rows as they stand at `now`, ISO 8601, with the Deployments of
- * `read`, in the order they were kept. A row at Production takes the name,
+ * `read`, in the rule's order. A row at Production takes the name,
  * `since` and detail the rule gives for the read; a merge the read leaves out
  * or gives as unread keeps its row, as does a read of another repo or
  * environment. A merged pull request's row whose 24 hours have passed at
@@ -34,13 +34,15 @@ export function mergesToRead(rows: readonly Row[]): MergeToRead[] {
  * rule reads a kept Standing (standingAt).
  */
 export function joinDeployments(rows: readonly Row[], read: DeploymentsRead, now: string): Row[] {
-  return rows.flatMap((row) => {
+  const joined = rows.flatMap((row) => {
     const settled = isProductionStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
     if (settled === null) return [];
     const standing = standingAt(settled, now);
     const plainPullRequest = withOwnSettled(row.plainPullRequest, (own) => standingAt(own, now));
     return standing === row.standing && plainPullRequest === row.plainPullRequest ? [row] : [{ ...row, standing, plainPullRequest }];
   });
+  // A row at Production takes its deploy's time, so the rows are put back in the rule's order.
+  return joined.toSorted((a, b) => standingOrder(a.standing, b.standing));
 }
 
 /** A merged pull request's kept Standing with the fresh read, or as it was where the read says nothing of it; null once its 24 hours have passed. */
