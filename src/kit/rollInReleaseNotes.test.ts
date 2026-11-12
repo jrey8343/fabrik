@@ -7,9 +7,15 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { KIT, RELEASED_NOTES } from "../__fixtures__/repoScan.ts";
+import { aNamedPullRequest, anIssue, aPullRequest, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { FILED_FROM_HEADING, filedFromContext } from "../agent/design.ts";
 import { filedFromRef, headIsFetched } from "../agent/filedFromFetch.ts";
 import type { FiledFrom } from "../agent/inputs.ts";
+import { readDesignTurnOutput } from "../loop/designOutput.ts";
+import type { RollInIssue } from "../loop/owedRollIn.ts";
+import { reopenUnsentRollIns } from "../loop/rollInReopening.ts";
+import { planFor } from "../loop/rules.ts";
+import type { Action, NamedPullRequestSnapshot, Plan } from "../loop/types.ts";
 
 const NOTES = "docs/release-notes/roll-in.md";
 
@@ -110,4 +116,140 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Roll-in's release notes, while d
     expect(prompt).toContain("Never settle a Roll-in on your own judgement.");
     expect(asked).toContain("never settles a Roll-in on its own judgement");
   });
+
+  it("say the new finish as the Kit lands it: the issue closed as not planned under a closing comment with the Kit's own heading and its line that nothing has been sent", async () => {
+    const notes = await read(NOTES);
+    const finish = bullet(notes, "A new finish: settling a Roll-in.**");
+    const notSent = bullet(notes, "The comment says nothing has been sent:**");
+    const actions = actionsOf(settle());
+    const comment = actions[0]?.kind === "comment" ? actions[0].body : "";
+
+    expect(comment).toContain("### What to build on #42");
+    expect(finish).toContain('headed "What to build on #n"');
+    expect(actions.slice(1)).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["wontfix"] },
+      { kind: "close", issue: 7, reason: "not_planned" },
+      { kind: "check-design-queue" },
+    ]);
+    expect(finish).toContain("The issue closes as not planned");
+    expect(finish).toContain("`needs-design` swapped for `wontfix`");
+    expect(finish).toContain("acceptance criteria");
+    expect(finish).toContain("stands alone");
+    expect(finish).toContain("no word cap");
+    expect(finish).toContain('`"kind": "roll-in"`');
+    // The Kit's line, with the pull request as #n and the issue as #m.
+    expect(comment.split("\n").at(-1)).toBe("Nothing has been sent to #42. The Operator sends this Roll-in with a Request changes on #42 that carries this text and names this issue, #7.");
+    expect(notSent).toContain('"Nothing has been sent to #n. The Operator sends this Roll-in with a Request changes on #n that carries this text and names this issue, #m."');
+  });
+
+  it("say what the Kit refuses: a text that names the issue or mentions someone, and a Roll-in onto a pull request that can't take one, changing nothing", async () => {
+    const notes = await read(NOTES);
+    const text = bullet(notes, "The Kit refuses a text that names the issue or mentions someone.**");
+    const onto = bullet(notes, "The Kit refuses a Roll-in onto a pull request that can't take one:**");
+    const refusals = (summary: string): readonly string[] => {
+      const read = readDesignTurnOutput({ ...ROLL_IN, summary }, 7);
+      return read.ok ? [] : read.errors;
+    };
+
+    expect(refusals("Show the total beside the heading.")).toEqual([]);
+    expect(refusals("Show the total, as #7 asks.")).toEqual([expect.stringContaining("names this issue, #7, by its number or its link")]);
+    expect(refusals("Show the total, as https://github.com/acme/shop/issues/7 asks.")).toEqual([expect.stringContaining("names this issue, #7, by its number or its link")]);
+    expect(refusals("Show the total, as @octocat asked.")).toEqual([expect.stringContaining("mentions someone")]);
+    expect(text).toContain("by `#` and its number or by a link to it");
+    expect(text).toContain("Nothing is stripped");
+    expect(text).toContain("one chance to put it right");
+
+    // Each pull request the landing refuses, in the Kit's own reason.
+    const why = (named: Parameters<typeof aNamedPullRequest>[0]): string => {
+      const plan = settle([aNamedPullRequest({ number: 42, open: true, merged: false, headRef: "fabrik/ticket-30", ...named })]);
+      return plan.kind === "fail" ? plan.reason : "";
+    };
+    expect(why({ open: false, merged: true })).toContain("which has merged: only an open agent pull request can take one");
+    expect(why({ open: false })).toContain("which is closed: only an open agent pull request can take one");
+    expect(why({ isAgent: false, headRef: "cart-total" })).toContain("which is a Plain pull request: only an open agent pull request can take one");
+    expect(why({ headRef: "fabrik/ticket-7" })).toContain("which is #7's own pull request, built from it as its Ticket");
+    for (const said of ["has merged", "is closed", "a Plain pull request", "the one built from this very issue as its Ticket"]) expect(onto).toContain(said);
+    expect(onto).toContain("The turn fails and nothing changes");
+  });
+
+  it("say only the Operator sends it, with a Request changes that carries the text and names the issue, and that the Kit puts nothing on the pull request", async () => {
+    const notes = await read(NOTES);
+    const sends = bullet(notes, "Only the Operator sends it,**");
+
+    // Every action of the landing is on the issue: none on the pull request it names.
+    const touched = actionsOf(settle()).flatMap((action) => ("issue" in action ? [action.issue] : "pullRequest" in action ? [action.pullRequest] : []));
+    expect(new Set(touched)).toEqual(new Set([7]));
+    expect(sends).toContain("with a Request changes on the pull request that carries the text and names the issue");
+    expect(sends).toContain("(ADR-0010)");
+    expect(sends).toContain("The Kit never sends it");
+    expect(sends).toContain("puts nothing on the pull request: no comment, no label and no review");
+  });
+
+  it("say what happens to a Roll-in never sent, with the reopening note's own two lines, and that one sent by hand without naming the issue reads as unsent", async () => {
+    const notes = await read(NOTES);
+    const lost = bullet(notes, "A Roll-in never sent is not lost.**");
+    const byHand = bullet(notes, "Name the issue when sending by hand.**");
+    const closing = actionsOf(settle())[0];
+    const settled: RollInIssue = {
+      number: 7,
+      title: "Show the cart's total",
+      repo: "acme/shop",
+      closedAs: "not_planned",
+      comments: [{ body: closing?.kind === "comment" ? closing.body : "", byApp: true, at: "2026-11-10T09:00:00Z", url: "https://github.com/acme/shop/issues/7#issuecomment-1" }],
+    };
+    /** What the Kit does when #42 merges or closes, given these Request changes of the Operator's on it. */
+    const closed = (merged: boolean, requestChanges: readonly string[] = []): readonly Action[] =>
+      reopenUnsentRollIns(
+        { kind: "pull-request-closed", pullRequest: 42, merged, closedByBot: false },
+        aPullRequest({ number: 42, ticket: 30, open: false, draft: false }),
+        { repo: "acme/shop", requestChanges: requestChanges.map((body) => ({ body, dismissed: false })), issues: [settled] },
+      );
+    const noteOf = (actions: readonly Action[]): string => {
+      const note = actions.find((action) => action.kind === "comment");
+      return note?.kind === "comment" ? (note.body.split("\n")[1] ?? "") : "";
+    };
+
+    expect(closed(true).map(({ kind }) => kind)).toEqual(["reopen", "remove-label", "comment", "add-labels"]);
+    expect(closed(true)[1]).toEqual({ kind: "remove-label", issue: 7, label: "wontfix" });
+    expect(closed(true)[3]).toEqual({ kind: "add-labels", issue: 7, labels: ["needs-triage"] });
+    for (const said of ["merges or closes", "whoever closed it", "reopens the issue", "takes `wontfix` off", "mentions nobody", "adds `needs-triage`, which starts Triage"]) {
+      expect(lost).toContain(said);
+    }
+    // The note's line, with the pull request as #n.
+    expect(noteOf(closed(true))).toBe("#42 merged before this Roll-in was sent, so the Kit reopened this issue for Triage: its work can be built on `main` as its own Ticket.");
+    expect(noteOf(closed(false))).toBe("#42 closed unmerged before this Roll-in was sent, so the Kit reopened this issue for Triage. The code the text above names may not be on `main`.");
+    expect(lost).toContain(`"${noteOf(closed(true)).replace("#42", "#n")}"`);
+    expect(lost).toContain(`"${noteOf(closed(false)).replace("#42", "#n")}"`);
+
+    // "Sent" is told by the issue's name: the same text without it leaves the Roll-in unsent.
+    expect(closed(true, ["Roll in #7: show the cart's total beside its heading."])).toEqual([]);
+    expect(closed(true, ["Roll in https://github.com/acme/shop/issues/7: show the cart's total."])).toEqual([]);
+    expect(closed(true, ["Show the cart's total beside its heading."])).toHaveLength(4);
+    expect(byHand).toContain("by `#` and its number or by its link");
+    expect(byHand).toContain("that does not name the issue reads as unsent");
+    expect(byHand).toContain("though the work was built");
+  });
 });
+
+/** A session's output that settles a Roll-in onto #42. */
+const ROLL_IN = {
+  kind: "roll-in",
+  pullRequest: 42,
+  summary: "Show the cart's total beside its heading.",
+  acceptanceCriteria: ["The cart page shows the total beside its heading."],
+};
+
+/** The Loop's plan when a Design session on #7 ends by settling a Roll-in onto #42, which GitHub holds as `named`: by default an open agent pull request built from the Ticket #30. */
+function settle(named: readonly NamedPullRequestSnapshot[] = [aNamedPullRequest({ number: 42, open: true, merged: false, headRef: "fabrik/ticket-30" })]): Plan {
+  return planFor(
+    { kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(ROLL_IN) },
+    snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { namedPullRequests: named }),
+    kitConfig(),
+  );
+}
+
+function actionsOf(plan: Plan): readonly Action[] {
+  if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
+  return plan.actions;
+}
