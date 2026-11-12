@@ -19,6 +19,7 @@ import {
 } from "../github/snapshot.ts";
 import { type KitSaid, kitSaidIn } from "../kit/kitSaid.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { CALLER_FILE } from "../setup/shims.ts";
 
 /** What a read of a repo's Actions says: its runs in flight, and when its Tick last started. */
 export interface RunsRead {
@@ -56,8 +57,42 @@ export interface RunInFlight {
 /** What `owner/product` reads in Actions: its runs in flight, and when its Tick last started; never throws. */
 export async function readRuns(client: Pick<ReadClient, "rest">, repo: string, now: string): Promise<RunsRead> {
   const target = repoOf(repo);
-  const runs = await readInFlight(client, target);
-  return { repo, readAt: now, runs, tick: "unread" };
+  const [runs, tick] = await Promise.all([readInFlight(client, target), readTick(client, target)]);
+  return { repo, readAt: now, runs, tick };
+}
+
+/**
+ * The minutes after which a Tick that has not started is dead, as Home calls
+ * it (#527), beside the Tick's interval (TICK_MINUTES). Nothing in the Kit
+ * acts on it: the Dead-tick issue keeps its own 25 hours.
+ */
+export const TICK_DEAD_MINUTES = 120;
+
+interface ListedScheduledRun {
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly run_started_at?: string | null;
+}
+
+/** The statuses of a workflow run that has started its jobs: one GitHub refused at startup completes too, and is told by its conclusion. */
+const STARTED_RUNS = ["in_progress", "completed"];
+
+/**
+ * When the repo's Tick last started: the newest scheduled run of its caller
+ * workflow that started its jobs, in one request. A run GitHub refused at
+ * startup has not started, nor one still waiting to begin. The daily Tick
+ * check reads the same Tick from its check runs on the default branch.
+ */
+async function readTick(client: Pick<ReadClient, "rest">, repo: Repo): Promise<RunsRead["tick"]> {
+  let page: { workflow_runs: ListedScheduledRun[] };
+  try {
+    page = (await client.rest("GET", `/repos/${repo.owner}/${repo.name}/actions/workflows/${CALLER_FILE}/runs?event=schedule&per_page=100`)) as typeof page;
+  } catch {
+    return "unread";
+  }
+  const started = page.workflow_runs.filter((run) => STARTED_RUNS.includes(run.status) && run.conclusion !== "startup_failure" && run.run_started_at != null);
+  const newest = started.map((run) => run.run_started_at ?? "").sort().at(-1);
+  return { lastStartedAt: newest ?? null };
 }
 
 function repoOf(repo: string): Repo {

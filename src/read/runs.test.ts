@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
+import { readProductTicks } from "../github/tickFacts.ts";
 import { readRuns, type RunInFlight } from "./runs.ts";
 
 const NOW = "2026-11-12T10:00:00Z";
@@ -424,6 +425,100 @@ describe("The runs read", () => {
       ]);
 
       expect((await readRuns(actions, "owner/product", NOW)).runs).toEqual([]);
+    });
+  });
+
+  describe("when the Tick last started", () => {
+    it("is the newest scheduled run of the caller workflow that started its jobs, one GitHub refused at startup or still waiting to begin aside", async () => {
+      const actions = actionsOf(
+        [],
+        [
+          { id: 45, status: "queued", conclusion: null, startedAt: "2026-11-12T09:55:00Z" },
+          { id: 44, status: "completed", conclusion: "startup_failure", startedAt: "2026-11-12T09:50:00Z" },
+          { id: 43, status: "in_progress", conclusion: null, startedAt: "2026-11-12T09:45:00Z" },
+          { id: 42, status: "completed", conclusion: "success", startedAt: "2026-11-12T09:40:00Z" },
+        ],
+      );
+
+      expect((await readRuns(actions, "owner/product", NOW)).tick).toEqual({ lastStartedAt: "2026-11-12T09:45:00Z" });
+    });
+
+    it("names the same Tick as the daily Tick check's reader of the same repo", async () => {
+      // A made-up repo's scheduled runs, newest first: each started one ran its `tick / …` jobs on main's head of the time.
+      const ticks = [
+        { id: 44, commit: "c3", status: "completed", conclusion: "startup_failure", startedAt: "2026-11-12T09:50:00Z" },
+        { id: 43, commit: "c3", status: "queued", conclusion: null, startedAt: "2026-11-12T09:45:00Z" },
+        { id: 42, commit: "c2", status: "completed", conclusion: "success", startedAt: "2026-11-12T09:40:00Z" },
+        { id: 41, commit: "c1", status: "completed", conclusion: "success", startedAt: "2026-11-12T09:35:00Z" },
+      ] as const;
+      const main = ["c3", "c2", "c1"];
+      const started = ticks.filter(({ status, conclusion }) => status === "completed" && conclusion !== "startup_failure");
+      const actions = actionsOf([], ticks);
+      const repo = {
+        async rest(method: string, path: string): Promise<unknown> {
+          if (path === "/repos/owner/product") return { default_branch: "main" };
+          if (path.startsWith("/repos/owner/product/commits?sha=main&")) return main.map((sha) => ({ sha, commit: { committer: { date: "2026-11-12T08:00:00Z" } } }));
+          const checks = /^\/repos\/owner\/product\/commits\/(\w+)\/check-runs\?/.exec(path);
+          if (checks !== null) {
+            const runs = started
+              .filter(({ commit }) => commit === checks[1])
+              .flatMap(({ id, startedAt }) => [
+                { name: "tick / Kit", started_at: new Date(Date.parse(startedAt) + 5_000).toISOString(), details_url: JOB_PAGE(id, 1) },
+                { name: "tick / Tick", started_at: new Date(Date.parse(startedAt) + 9_000).toISOString(), details_url: JOB_PAGE(id, 2) },
+              ]);
+            return { total_count: runs.length, check_runs: runs };
+          }
+          if (path.startsWith("/repos/owner/product/issues?")) return [];
+          return actions.rest(method, path);
+        },
+        fileText: () => Promise.resolve(null),
+      };
+
+      const read = await readRuns(repo, "owner/product", NOW);
+      const daily = await readProductTicks(repo, { owner: "owner", name: "product" }, "fabrik-app[bot]");
+
+      expect(read.tick).toEqual({ lastStartedAt: "2026-11-12T09:40:00Z" });
+      expect(daily.kind === "read" ? daily.facts.lastTick?.url : null).toMatch(new RegExp(`^${RUN_PAGE(42)}/`));
+    });
+
+    it("is null for a repo whose Tick never started", async () => {
+      const refusedOnly = actionsOf([], [{ id: 44, status: "completed", conclusion: "startup_failure", startedAt: "2026-11-12T09:50:00Z" }]);
+
+      expect((await readRuns(actionsOf([]), "owner/product", NOW)).tick).toEqual({ lastStartedAt: null });
+      expect((await readRuns(refusedOnly, "owner/product", NOW)).tick).toEqual({ lastStartedAt: null });
+    });
+  });
+
+  it("makes 9 REST requests for a repo with three runs in flight: a listing per unfinished status, one of each run's jobs, and the Tick's", async () => {
+    const running = (id: number): CannedRun => ({ id, status: "in_progress", jobs: [kitJob(IMPLEMENT_ON_12), { name: "fabrik / Implement #12 (Retry 2)", status: "in_progress" }] });
+    const actions = actionsOf([running(7), running(8), { ...running(9), status: "queued" }]);
+
+    const read = await readRuns(actions, "owner/product", NOW);
+
+    expect(read.runs).toHaveLength(3);
+    expect(actions.calls).toHaveLength(9);
+  });
+
+  describe("unread", () => {
+    it("gives the runs unread when GitHub refuses their listing, with the Tick still read", async () => {
+      const actions = actionsOf([], [{ id: 42, status: "completed", conclusion: "success", startedAt: "2026-11-12T09:40:00Z" }], { runs: true });
+
+      expect(await readRuns(actions, "owner/product", NOW)).toEqual({ repo: "owner/product", readAt: NOW, runs: "unread", tick: { lastStartedAt: "2026-11-12T09:40:00Z" } });
+    });
+
+    it("gives the Tick unread when GitHub refuses its listing, with the runs still read", async () => {
+      const actions = actionsOf([{ id: 7, status: "in_progress", jobs: [kitJob(IMPLEMENT_ON_12), { name: "fabrik / Implement #12 (Retry 2)", status: "queued" }] }], [], { tick: true });
+
+      const read = await readRuns(actions, "owner/product", NOW);
+
+      expect(read.tick).toBe("unread");
+      expect(read.runs).toMatchObject([{ run: 7, issue: 12 }]);
+    });
+
+    it("never throws, though GitHub fails some other way than refusing", async () => {
+      const failing = { rest: () => Promise.reject(new TypeError("fetch failed")) };
+
+      expect(await readRuns(failing, "owner/product", NOW)).toEqual({ repo: "owner/product", readAt: NOW, runs: "unread", tick: "unread" });
     });
   });
 
