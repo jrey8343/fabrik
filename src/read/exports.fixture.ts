@@ -51,24 +51,34 @@ import {
   hasUnknownCostBasis,
   homeFactsOf,
   isLive,
+  KIT_SAID_VERSION,
+  kitSaidIn,
   newerSchemaOf,
   readCaller,
   readKitConfigSources,
   readRunRecord,
+  readRuns,
+  readSpend,
   refusalOf,
   resolveKitConfig,
   rowsOf,
   RUN_RECORD_SCHEMA,
+  runnerTimeOf,
+  runsInFlightFactOf,
+  runwayOf,
   STANDING_NAMES,
   STANDING_SCHEMA,
   standingAt,
   standingsOf,
   stuckBarMinutes,
+  subscriptionReadingsOf,
+  TICK_DEAD_MINUTES,
   TICK_MINUTES,
   weeksEndingAt,
   wordStanding,
 } from "./index.ts";
 import type {
+  ActionsStep,
   CallerCheck,
   CallerRead,
   CostFigure,
@@ -76,16 +86,24 @@ import type {
   KitConfig,
   KitConfigResult,
   KitConfigSources,
+  KitSaid,
   ReadClient,
   RepoRead,
   Repo,
   Row,
+  RunInFlight,
+  RunKind,
+  RunnerTime,
   RunRecord,
+  RunsRead,
+  Runway,
+  SpendRead,
   Standing,
   StandingFacts,
   StandingName,
   StandingWords,
   StoreStandingFacts,
+  SubscriptionReading,
   Week,
 } from "./index.ts";
 
@@ -140,6 +158,43 @@ const A_KEPT_STANDING = {
   detail: { silence: "trigger-label", label: "agent:implement" },
 } as const satisfies Standing;
 
+/** What the Kit job routed: a second Retry of the Implement run on Ticket 12, on its agent pull request 40. */
+const A_KIT_SAID = {
+  fabrik: 1,
+  route: "implement",
+  run: { role: "implement", issue: 12, pullRequest: 40, kind: "retry", retry: 2, model: "claude-opus-4-1" },
+  held: [],
+  replay: null,
+} as const satisfies KitSaid;
+
+/** The Kit job's closing step, completed, named for that line. */
+const A_CLOSING_STEP = { name: JSON.stringify(A_KIT_SAID), status: "completed", conclusion: "success" } as const satisfies ActionsStep;
+
+/** That run in flight in Actions run 7, its second attempt, its Implement job running. */
+const A_RUN_IN_FLIGHT = {
+  run: 7,
+  attempt: 2,
+  exact: true,
+  role: "implement",
+  issue: 12,
+  pullRequest: 40,
+  kind: "retry",
+  retry: 2,
+  model: "claude-opus-4-1",
+  job: "running",
+  createdAt: "2026-11-09T11:00:00Z",
+  startedAt: "2026-11-09T11:02:00Z",
+  url: "https://github.com/owner/product/actions/runs/7/job/3",
+} as const satisfies RunInFlight;
+
+/** `owner/product`'s Actions, read at NOW: that run in flight, and its Tick last started five minutes before. */
+const A_RUNS_READ = {
+  repo: "owner/product",
+  readAt: NOW,
+  runs: [A_RUN_IN_FLIGHT],
+  tick: { lastStartedAt: "2026-11-09T11:55:00Z" },
+} as const satisfies RunsRead;
+
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
   const { brokenRun: _left, ...fields } = aRunRecord();
@@ -160,6 +215,9 @@ const A_PRODUCT_REPO_REFUSING_ITS_FACTS: ReadClient = {
   fileText: (_repo, path) =>
     Promise.resolve(path === ".github/workflows/fabrik.yml" ? "jobs:\n  loop:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v3.1.0\n" : null),
 };
+
+/** A weekly-limit reading, 42% used, its week resetting on 2026-11-13 at 04:00 UTC. */
+const A_WEEKLY_READING = { status: "allowed", rateLimitType: "seven_day", utilization: 0.42, resetsAt: Date.parse("2026-11-13T04:00:00Z") / 1000 };
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -359,6 +417,23 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // The closing line and the runs read
 
+  KIT_SAID_VERSION: () => KIT_SAID_VERSION,
+  kitSaidIn: () =>
+    kitSaidIn(
+      [A_CLOSING_STEP],
+    ),
+  readRuns: () =>
+    readRuns(
+      REFUSING_CLIENT,
+      "owner/product",
+      NOW,
+    ),
+  runsInFlightFactOf: () =>
+    runsInFlightFactOf(
+      A_RUNS_READ,
+    ),
+  TICK_DEAD_MINUTES: () => TICK_DEAD_MINUTES,
+
   // The gather and the rows
 
   gatherRepo: () =>
@@ -405,7 +480,50 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // Spend
 
+  readSpend: () =>
+    readSpend(
+      {
+        rest: (_method, path) =>
+          Promise.resolve({
+            truncated: false,
+            tree: path.endsWith("/HEAD")
+              ? [{ path: "runs", type: "tree", sha: "runs" }]
+              : path.endsWith("/runs")
+                ? [{ path: "owner", type: "tree", sha: "owner" }]
+                : path.endsWith("/owner")
+                  ? [{ path: "product", type: "tree", sha: "product" }]
+                  : path.endsWith("/product")
+                    ? [{ path: "2026-11", type: "tree", sha: "2026-11" }]
+                    : [{ path: "1000-1-implement.json", type: "blob", sha: "a-blob" }],
+          }),
+        fileText: (_repo, path) =>
+          Promise.resolve(path.startsWith("runs/") ? JSON.stringify(aSchema7Record()) : '    - cron: "0 8 * * 1"\n      timezone: "Europe/London"\n'),
+      },
+      ["2026-11"],
+      (path) => path.endsWith("/999-1-implement.json"),
+      NOW,
+    ),
+  subscriptionReadingsOf: () =>
+    subscriptionReadingsOf(
+      [aRunRecord({ endedAt: "2026-11-08T19:00:00Z", rateLimit: A_WEEKLY_READING })],
+      NOW,
+    ),
+  runnerTimeOf: () =>
+    runnerTimeOf(
+      [aRunRecord({ durationMs: 61_000 }), aRunRecord({ runId: 1001, durationMs: null })],
+    ),
+
   // The runway
+
+  runwayOf: () =>
+    runwayOf(
+      [
+        aRunRecord({ endedAt: "2026-11-08T09:00:00Z", rateLimit: { ...A_WEEKLY_READING, utilization: 0.32 } }),
+        aRunRecord({ endedAt: "2026-11-08T19:00:00Z", rateLimit: A_WEEKLY_READING }),
+      ],
+      [],
+      NOW,
+    ),
 
   // The issues to roll in by hand
 
@@ -453,6 +571,12 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
 
   // The closing line and the runs read
 
+  ActionsStep: A_CLOSING_STEP satisfies ActionsStep,
+  KitSaid: A_KIT_SAID satisfies KitSaid,
+  RunKind: "retry" satisfies RunKind,
+  RunInFlight: A_RUN_IN_FLIGHT satisfies RunInFlight,
+  RunsRead: A_RUNS_READ satisfies RunsRead,
+
   // The gather and the rows
 
   Facts: homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }), issueBodies: [{ issue: 7, body: "From PR #50" }] }) satisfies Facts,
@@ -494,7 +618,24 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
 
   // Spend
 
+  SpendRead: {
+    kind: "read",
+    records: { "runs/owner/product/2026-11/1000-1-implement.json": aRunRecord() },
+    unreadable: { count: 1, newestSchema: RUN_RECORD_SCHEMA + 1 },
+    timeZone: "Europe/London",
+  } satisfies SpendRead,
+  SubscriptionReading: {
+    subscription: "Claude token",
+    share: 0.42,
+    said: "allowed",
+    readAt: "2026-11-08T19:00:00Z",
+    resetsAt: "2026-11-13T04:00:00.000Z",
+  } satisfies SubscriptionReading,
+  RunnerTime: { minutes: 3, uncounted: 1 } satisfies RunnerTime,
+
   // The runway
+
+  Runway: { kind: "runs-out", at: "2026-11-11T05:00:00.000Z", heldUntil: "2026-11-13T04:00:00.000Z" } satisfies Runway,
 
   // The issues to roll in by hand
 

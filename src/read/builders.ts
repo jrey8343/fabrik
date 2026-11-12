@@ -383,9 +383,9 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
   };
 }
 
-/** An Implement run in flight on no Ticket the job names, running, its workflow run created an hour before the filing, unless a test says otherwise. */
+/** An Implement run in flight on no Ticket the job names, told by its job's name, running, its workflow run (1, first attempt) created an hour before the filing, with no start read, unless a test says otherwise. */
 export function aRunInFlight(overrides: Partial<RunInFlightFact> = {}): RunInFlightFact {
-  return { role: "implement", issue: null, pullRequest: null, retry: null, kind: null, job: "running", createdAt: "2026-11-08T19:00:00Z", ...overrides };
+  return { role: "implement", issue: null, pullRequest: null, retry: null, kind: null, job: "running", createdAt: "2026-11-08T19:00:00Z", exact: false, run: 1, attempt: 1, startedAt: null, ...overrides };
 }
 
 /** What the Standing rule reads of the store: nothing in it unless a test says so. */
