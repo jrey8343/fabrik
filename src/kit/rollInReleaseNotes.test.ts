@@ -11,11 +11,14 @@ import { aNamedPullRequest, anIssue, aPullRequest, kitConfig, snapshotOf } from 
 import { FILED_FROM_HEADING, filedFromContext } from "../agent/design.ts";
 import { filedFromRef, headIsFetched } from "../agent/filedFromFetch.ts";
 import type { FiledFrom } from "../agent/inputs.ts";
+import { withCarriedLines } from "../loop/carriedLines.ts";
 import { readDesignTurnOutput } from "../loop/designOutput.ts";
 import type { RollInIssue } from "../loop/owedRollIn.ts";
 import { reopenUnsentRollIns } from "../loop/rollInReopening.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Action, NamedPullRequestSnapshot, Plan } from "../loop/types.ts";
+import { EXPORT_CALLS } from "../read/exports.fixture.ts";
+import type { OwedRollIn } from "../read/index.ts";
 
 const NOTES = "docs/release-notes/roll-in.md";
 
@@ -229,6 +232,33 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Roll-in's release notes, while d
     expect(byHand).toContain("by `#` and its number or by its link");
     expect(byHand).toContain("that does not name the issue reads as unsent");
     expect(byHand).toContain("though the work was built");
+  });
+
+  it("say a rewrite keeps the `From PR` line as it keeps the `From audit` and `From retro` lines, and never one the old body only quotes as code", async () => {
+    const notes = await read(NOTES);
+    const kept = bullet(notes, "A rewrite keeps the `From PR` line,**");
+
+    expect(withCarriedLines("## What to build", "The old body.\n\nFrom audit #40\nFrom retro #41\nFrom PR #42")).toBe("## What to build\n\nFrom audit #40\nFrom retro #41\nFrom PR #42");
+    expect(withCarriedLines("## What to build", "The old body.\n\n```\nFrom PR #42\n```")).toBe("## What to build");
+    expect(kept).toContain("as it keeps the `From audit` and `From retro` lines");
+    expect(kept).toContain("an agent brief, an Operator brief, a Map and the Spec that supersedes an issue");
+    expect(kept).toContain("only quotes inside a code block");
+    expect(kept).toContain("stays tied to the pull request it was filed from");
+  });
+
+  it("say, for a reader of the Kit, what the read library reports of an owed Roll-in: on its pull request's row, the text as data, and one list from the issue's side", async () => {
+    const notes = await read(NOTES);
+    const reader = bullet(notes, "For a reader of the Kit:**");
+    const owed = (EXPORT_CALLS["owedRollInsOf"]?.() as readonly OwedRollIn[])[0];
+
+    expect(Object.keys(await import("../read/index.ts"))).toContain("owedRollInsOf");
+    expect(Object.keys(owed ?? {}).toSorted()).toEqual(["at", "issue", "pullRequest", "text", "title", "url"]);
+    expect(Object.keys(owed?.text ?? {})).toEqual(["summary", "acceptanceCriteria"]);
+    for (const said of ["`related`", '`kind: "owed"`', "`at`", "`url`", "`text`", "`summary`", "`acceptanceCriteria`", "`owedRollInsOf`"]) expect(reader).toContain(said);
+    expect(reader).toContain("on its pull request's row");
+    expect(reader).toContain("never from its Markdown");
+    expect(reader).toContain("`text` is null");
+    expect(reader).toContain("still owed");
   });
 });
 
