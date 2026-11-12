@@ -286,6 +286,8 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
           operator,
           `${broken === null ? "it failed, as an Infrastructure failure" : "it was a Broken run"}: ${howItFailed(failure, run, config)}${detail === "" ? "" : ` (${detail})`}`,
           run.runUrl,
+          true,
+          failure,
         ),
       ],
     };

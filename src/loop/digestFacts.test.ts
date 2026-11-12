@@ -4,7 +4,7 @@ import { type ChangeFingerprint, changeFingerprintOf, changeLine } from "./chang
 import { DIGEST_FOLDS_MARKER, type DigestGiven, type DigestReply, digestCommentOf, noDigestLine, readDigestReply } from "./digestContract.ts";
 import { type DigestThread, digestFactsOf } from "./digestFacts.ts";
 import { aDigestFacts, aDigestGiven, aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
-import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { followUpsSection, newIssueUrl } from "./followUps.ts";
 import { retryAfterFlaw } from "./retry.ts";
@@ -157,7 +157,45 @@ describe("The rounds Kit code builds from a pull request's thread", () => {
     const retries = (thread: DigestThread) => digestFactsOf(thread).rounds.flatMap(({ what, retry }) => (what === "retry" ? [retry] : []));
 
     expect(retries(aThread({ kitComments: twoRetries }))).toEqual([1, 2]);
-    expect(retries(aThread({ kitComments: twoRetries.slice(0, 2), landedNothing: 1 }))).toEqual([2]);
+    expect(retries(aThread({ kitComments: twoRetries.slice(0, 2), landedNothing: 1 }))).toEqual([1, 2]);
+  });
+
+  it("open with the Retry the opening push was, when the Ticket's earlier runs landed nothing, so the rounds, the count of Retries and the Retries left agree", () => {
+    // The Ticket's first run landed nothing, so the run that opened the pull request was Retry 1, and the flaw's was Retry 2.
+    const facts = digestFactsOf(
+      aThread({
+        kitComments: [aVerdict(5, { verdict: "execution-flaw", headSha: sha("a") }), aRetryPush(10, sha("b")), aVerdict(15, { verdict: "pass", headSha: sha("b") })],
+        landedNothing: 1,
+      }),
+    );
+
+    expect(facts.rounds.map(({ who, what, retry }) => (retry === undefined ? [who, what] : [who, what, retry]))).toEqual([
+      ["implementer", "retry", 1],
+      ["reviewer", "execution-flaw"],
+      ["implementer", "retry", 2],
+      ["reviewer", "pass"],
+    ]);
+    expect(facts.counts.retries).toBe(2);
+    expect(facts.retriesLeft).toBe(0);
+  });
+
+  it("give a conflict-only run that failed its row and its count, as the Infrastructure failure or the Broken run its notice says it was", () => {
+    const noticeOf = (report: { readonly failure: "missing-output"; readonly detail: string } | null): string => {
+      const plan = planFor(
+        { kind: "agent-run-failed", role: "implement", issue: 7, runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1", jobResult: "failure", secretsStep: "success", report, conflict: { pullRequest: 50, main: sha("9") } },
+        snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] })),
+        kitConfig(),
+      );
+      return (plan.kind === "act" ? plan.actions : []).flatMap((action) => (action.kind === "comment" && action.issue === 50 ? [action.body] : []))[0] ?? "";
+    };
+    const crashed = noticeOf(null);
+    const broken = noticeOf({ failure: "missing-output", detail: "" });
+    const thread = aThread({ kitComments: [aVerdict(5, { verdict: "pass", headSha: sha("a") }), { at: at(10), body: crashed }, { at: at(20), body: broken }] });
+
+    expect(crashed).toContain("it failed, as an Infrastructure failure");
+    expect(broken).toContain("it was a Broken run");
+    expect(rows(thread)).toEqual(["implementer: first-run", "reviewer: pass", "kit: infrastructure-failure", "kit: broken-run"]);
+    expect(digestFactsOf(thread).counts.infrastructureFailures).toBe(1);
   });
 
   it("give a conflict-only run's push to the Implementer and a Broken run's notice to the Kit", () => {

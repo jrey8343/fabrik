@@ -13,11 +13,11 @@ import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEf
 import { listedFollowUpsIn } from "./followUps.ts";
 import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { MAX_RETRIES, retryNumber } from "./retry.ts";
-import type { Verdict, VerdictRecord } from "./types.ts";
+import { isBrokenRun, type Verdict, type VerdictRecord } from "./types.ts";
 
 /** A pull request's thread, as much of it as the facts are worked out from. */
 export interface DigestThread {
-  /** When the pull request was opened, which the first run's push did: that run leaves no note of its own. */
+  /** When the pull request was opened, which the push of the run that opened it did: that run leaves no note of its own. */
   readonly openedAt: string;
   /** The Kit's own comments on it, oldest first: only a bot's, so nobody can plant a round by quoting a marker. */
   readonly kitComments: readonly { readonly at: string; readonly body: string }[];
@@ -180,7 +180,9 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
   // Stable, so things at the same time keep the order they were read in, the Kit's comments first.
   const entries = [...thread.kitComments, ...asked].sort((a: Entry, b: Entry) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 
-  const rounds: Round[] = [row("implementer", "first-run")];
+  // The push that opened the pull request: the Ticket's first run, or, when its runs before that landed nothing, the
+  // Retry after the last of them, as the Implement rules number it (src/loop/implement.ts).
+  const rounds: Round[] = [thread.landedNothing === 0 ? row("implementer", "first-run") : { ...row("implementer", "retry"), retry: thread.landedNothing }];
   // The Kit's comments so far, which say what the Kit had counted when each round came.
   const sofar: string[] = [];
   let before: VerdictRecord | undefined;
@@ -259,8 +261,11 @@ function noteRound(body: string, sofar: readonly string[], landedNothing: number
   if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) return [row("implementer", "request-changes-run")];
   if (body.startsWith(CONFLICT_RUN_MARKER)) return [row("implementer", "conflict-only-run")];
   if (conflictAttemptIn(body)?.outcome === "rebased") return [row("kit", "rebase")];
-  const handBack = handBackMarkIn(body)?.kind;
-  if (handBack === "infrastructure-failure") return [row("kit", "infrastructure-failure")];
-  if (handBack === "broken-run-no-retry") return [row("kit", "broken-run")];
+  const handBack = handBackMarkIn(body);
+  if (handBack?.kind === "infrastructure-failure") return [row("kit", "infrastructure-failure")];
+  if (handBack?.kind === "broken-run-no-retry") return [row("kit", "broken-run")];
+  // A conflict-only run that failed is handed back as one that landed nothing is, and its hand-back names the failure:
+  // one that changed nothing, didn't bring `main` in or was refused names none, and is no failure.
+  if (handBack?.kind === "conflict-run-unlanded" && handBack.failure !== undefined) return [row("kit", isBrokenRun(handBack.failure) ? "broken-run" : "infrastructure-failure")];
   return [];
 }
