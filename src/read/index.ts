@@ -129,3 +129,8 @@ export type { IssuesToRollIn, IssueToRollIn } from "./rollIn.ts";
 export { costPerMergedPullRequestOf } from "../kit/mergedCost.ts";
 export { readOutcomes } from "./outcomes.ts";
 export type { MergedInWeek, OutcomesRead, WorkOutcome } from "./outcomes.ts";
+
+// The Deployments read
+
+export { readDeployments } from "./deployments.ts";
+export type { DeployOf, DeploymentsRead, MergeToRead } from "./deployments.ts";

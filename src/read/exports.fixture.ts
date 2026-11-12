@@ -59,6 +59,7 @@ import {
   kitSaidIn,
   newerSchemaOf,
   readCaller,
+  readDeployments,
   readOutcomes,
   readIssuesToRollIn,
   readKitConfigSources,
@@ -90,6 +91,8 @@ import type {
   CallerCheck,
   CallerRead,
   CostFigure,
+  DeploymentsRead,
+  DeployOf,
   Facts,
   HeadCheck,
   IssuesToRollIn,
@@ -99,6 +102,7 @@ import type {
   KitConfigSources,
   KitSaid,
   MergedInWeek,
+  MergeToRead,
   OutcomesRead,
   ReadClient,
   RepoRead,
@@ -634,6 +638,17 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       [aRunRecord({ totalCostUsd: 3 }), aReplayRunRecord({ totalCostUsd: 40 })],
       [{ repo: "owner/product", ticket: 7 }, { repo: "owner/product", ticket: null }],
     ),
+
+  // The Deployments read
+
+  readDeployments: () =>
+    readDeployments(
+      REFUSING_CLIENT,
+      "owner/product",
+      "production",
+      [{ mergeCommit: "m".repeat(40), mergedAt: "2026-11-12T08:00:00Z" }],
+      NOW,
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -794,6 +809,26 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     url: "https://github.com/owner/product/pull/51",
   } satisfies WorkOutcome,
   MergedInWeek: { pullRequest: 52, ticket: null, mergedAt: "2026-11-06T10:00:00Z" } satisfies MergedInWeek,
+
+  // The Deployments read
+
+  DeploymentsRead: {
+    repo: "owner/product",
+    environment: "production",
+    readAt: NOW,
+    merges: {
+      ["m".repeat(40)]: { is: "succeeded", deployment: 900, commit: "n".repeat(40), at: "2026-11-12T08:06:00Z", log: null },
+      ["o".repeat(40)]: "unread",
+    },
+  } satisfies DeploymentsRead,
+  DeployOf: {
+    is: "failed",
+    deployment: 901,
+    commit: "o".repeat(40),
+    at: "2026-11-12T09:09:00Z",
+    log: "https://github.com/owner/product/actions/runs/40/job/41",
+  } satisfies DeployOf,
+  MergeToRead: { mergeCommit: "m".repeat(40), mergedAt: "2026-11-12T08:00:00Z" } satisfies MergeToRead,
 };
 
 /**

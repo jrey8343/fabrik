@@ -81,17 +81,18 @@ export async function readDeployments(
   } catch {
     return answer(() => "unread");
   }
-  const states = new Map(await Promise.all(deployments.map(async (deployment) => [deployment.id, await stateOf(client, repo, deployment)] as const)));
+  const read = await Promise.all(deployments.map(async (deployment) => ({ deployment, state: await stateOf(client, repo, deployment) })));
+  const kept = read.flatMap(({ deployment, state }) => (state === "passed-over" ? [] : [{ deployment, state }]));
   const contains = containing(client, repo);
   const decided = await Promise.all(
     asked.map(async (merge) => {
-      const counting = deployments.filter((deployment) => Date.parse(deployment.created_at) >= Date.parse(merge.mergedAt) && states.get(deployment.id) !== "passed-over");
-      const found = await Promise.all(counting.map(async (deployment) => ({ deployment, state: states.get(deployment.id)!, contains: await contains(merge.mergeCommit, deployment.sha) })));
-      return [merge.mergeCommit, deployOf(found)] as const;
+      const since = kept.filter(({ deployment }) => Date.parse(deployment.created_at) >= Date.parse(merge.mergedAt));
+      const candidates = await Promise.all(since.map(async (candidate) => ({ ...candidate, contains: await contains(merge.mergeCommit, candidate.deployment.sha) })));
+      return [merge.mergeCommit, deployOf(candidates)] as const;
     }),
   );
   const byMerge = new Map(decided);
-  return answer(({ mergeCommit }) => byMerge.get(mergeCommit)!);
+  return answer(({ mergeCommit }) => byMerge.get(mergeCommit) ?? "unread");
 }
 
 /** The merges asked about, each merge commit once, at its earliest merge. */
@@ -214,17 +215,24 @@ interface Candidate {
  * comparison or its reports.
  */
 function deployOf(candidates: readonly Candidate[]): DeployOf | "unread" {
-  if (candidates.some(({ state, contains }) => contains === "unread" || (contains && state === "unread"))) return "unread";
-  const counting = candidates.filter(({ contains }) => contains === true).toSorted((a, b) => Date.parse(b.deployment.created_at) - Date.parse(a.deployment.created_at) || b.deployment.id - a.deployment.id);
+  const counting: { readonly deployment: RawDeployment; readonly state: Exclude<Candidate["state"], "unread"> }[] = [];
+  for (const { deployment, state, contains } of candidates) {
+    if (contains === "unread") return "unread";
+    if (!contains) continue;
+    if (state === "unread") return "unread";
+    counting.push({ deployment, state });
+  }
+  // Newest first, by creation, then by GitHub's numbering where that ties.
+  counting.sort((a, b) => Date.parse(b.deployment.created_at) - Date.parse(a.deployment.created_at) || b.deployment.id - a.deployment.id);
   const succeeded = counting
-    .flatMap(({ deployment, state }) => (state !== "unread" && state.is === "succeeded" ? [{ deployment, at: state.at }] : []))
-    .toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.deployment.id - b.deployment.id)[0];
+    .flatMap(({ deployment, state }) => (state.is === "succeeded" ? [{ deployment, at: state.at }] : []))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.deployment.id - b.deployment.id)[0];
   if (succeeded !== undefined) return { is: "succeeded", deployment: succeeded.deployment.id, commit: succeeded.deployment.sha, at: succeeded.at, log: null };
-  const running = counting.find(({ state }) => state !== "unread" && state.is === "running");
+  const running = counting.find(({ state }) => state.is === "running");
   if (running !== undefined) return { is: "running", deployment: running.deployment.id, commit: running.deployment.sha, at: running.deployment.created_at, log: null };
-  const failed = counting.find(({ state }) => state !== "unread" && state.is === "failed");
-  if (failed !== undefined && failed.state !== "unread" && failed.state.is === "failed") {
-    return { is: "failed", deployment: failed.deployment.id, commit: failed.deployment.sha, at: failed.state.at, log: failed.state.log };
+  const [newest] = counting;
+  if (newest !== undefined && newest.state.is === "failed") {
+    return { is: "failed", deployment: newest.deployment.id, commit: newest.deployment.sha, at: newest.state.at, log: newest.state.log };
   }
   return { is: "none", deployment: null, commit: null, at: null, log: null };
 }
