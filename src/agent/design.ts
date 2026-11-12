@@ -12,7 +12,7 @@ import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_C
 import { BROKEN_RUN_MARKER, EMPTY_DIFF_MARKER, isBrokenRunComment, isEmptyDiffComment, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
-import { FILED_FROM_FILE, type FiledFrom, MAP_INPUTS_FILE, type MapOffer, SPEC_TICKETS_FILE, type SpecTicket } from "./inputs.ts";
+import { type FiledFrom, filedFromOf, MAP_INPUTS_FILE, type MapOffer, SPEC_TICKETS_FILE, type SpecTicket } from "./inputs.ts";
 import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
 
 /** The heading the Map cap is set out under, which prompts/design.md names. */
@@ -334,26 +334,4 @@ function standingSaid({ state, draft, isAgent }: FiledFromPullRequest): string {
   return draft
     ? "It is an open agent pull request still in draft, so it is still with the Implementer or the Reviewer. Even so a Roll-in may be settled: the Operator sends it once the pull request is at the Merge gate."
     : "It is an open agent pull request that has left draft, so it is at the Merge gate, waiting on the Operator, and a Roll-in may be settled.";
-}
-
-/** The inputs step's FiledFrom, or a failed turn: a turn never guesses where the pull request stands. */
-function filedFromOf(value: unknown): FiledFrom {
-  const read = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
-  if (read["kind"] === "none") return { kind: "none" };
-  const { number, title, body, state, draft, headSha, headRef, baseRef, isAgent } = read;
-  if (
-    read["kind"] === "pull-request" &&
-    typeof number === "number" &&
-    typeof title === "string" &&
-    typeof body === "string" &&
-    (state === "open" || state === "merged" || state === "closed") &&
-    typeof draft === "boolean" &&
-    typeof headSha === "string" &&
-    typeof headRef === "string" &&
-    typeof baseRef === "string" &&
-    typeof isAgent === "boolean"
-  ) {
-    return { kind: "pull-request", number, title, body, state, draft, headSha, headRef, baseRef, isAgent };
-  }
-  throw new Error(`${FILED_FROM_FILE} doesn't say which pull request this issue was filed from`);
 }

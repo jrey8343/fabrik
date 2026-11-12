@@ -613,6 +613,32 @@ export type FiledFrom =
       readonly isAgent: boolean;
     };
 
+/**
+ * FILED_FROM_FILE's FiledFrom as its readers take it, the turn's prompt and
+ * the Design job's fetch (#660), or an error: neither guesses where the pull
+ * request stands from a file it can't read.
+ */
+export function filedFromOf(value: unknown): FiledFrom {
+  const read = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  if (read["kind"] === "none") return { kind: "none" };
+  const { number, title, body, state, draft, headSha, headRef, baseRef, isAgent } = read;
+  if (
+    read["kind"] === "pull-request" &&
+    typeof number === "number" &&
+    typeof title === "string" &&
+    typeof body === "string" &&
+    (state === "open" || state === "merged" || state === "closed") &&
+    typeof draft === "boolean" &&
+    typeof headSha === "string" &&
+    typeof headRef === "string" &&
+    typeof baseRef === "string" &&
+    typeof isAgent === "boolean"
+  ) {
+    return { kind: "pull-request", number, title, body, state, draft, headSha, headRef, baseRef, isAgent };
+  }
+  throw new Error(`${FILED_FROM_FILE} doesn't say which pull request this issue was filed from`);
+}
+
 /** A pull request as the REST API returns it: the fields a FiledFrom is read from. */
 interface RestFiledFrom {
   number: number;

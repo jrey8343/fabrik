@@ -8,10 +8,12 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchFiledFrom, filedFromRef } from "./filedFromFetch.ts";
-import type { FiledFrom } from "./inputs.ts";
+import { AGENT_FAILURE_FILE, readFailureReport } from "./failure.ts";
+import { fetchFiledFrom, filedFromRef, UnfetchedHeadError } from "./filedFromFetch.ts";
+import { FILED_FROM_FILE, type FiledFrom } from "./inputs.ts";
 
 const run = promisify(execFile);
 const BRANCH = "fabrik/ticket-7";
@@ -190,6 +192,35 @@ describe("The Design job's fetch of the pull request its issue was filed from", 
 
     expect(await git(checkout, "rev-parse", `${ref}^{commit}`)).toBe(head);
   });
+
+  describe("when the head can't be fetched", () => {
+    /** A head the remote doesn't hold, as after a force-push to the pull request's branch since the inputs were read. */
+    const gone = "f".repeat(40);
+
+    it("fails, naming the pull request, the commit and the ref, and what git answered", async () => {
+      const error = await fetchFiledFrom(checkout, REMOTE(), filedFrom({ headSha: gone })).then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toBeInstanceOf(UnfetchedHeadError);
+      const { message } = error as Error;
+      expect(message.startsWith(`fetching the head of #84 (\`${gone}\`) to \`refs/fabrik/filed-from/84\`: fatal: `)).toBe(true);
+      // Git's own words, which differ by version, on the one line a failure notice quotes.
+      expect(message).toContain(`not our ref ${gone}`);
+      expect(message).not.toContain("\n");
+      await expect(git(checkout, "rev-parse", "--verify", "--quiet", "refs/fabrik/filed-from/84")).rejects.toThrow();
+    });
+
+    it.each(["", "main", "--upload-pack=touch pwned", "abc123"])("fails without running git on a head that is no full commit sha: %j", async (headSha) => {
+      const before = await gitFilesOf(checkout);
+
+      await expect(fetchFiledFrom(checkout, REMOTE(), filedFrom({ headSha }))).rejects.toThrow(
+        `fetching the head of #84 to \`refs/fabrik/filed-from/84\`: the inputs name no commit for it`,
+      );
+      expect(await gitFilesOf(checkout)).toEqual(before);
+    });
+  });
 });
 
 // GitHub serves a repository over HTTP and asks for the token on every
@@ -295,6 +326,108 @@ describe("The fetch's credential, against a remote that asks for it as GitHub do
 
     expect(await git(checkout, "rev-parse", `${ref}^{commit}`)).toBe(head);
     await expect(readFile(ran, "utf8")).rejects.toThrow();
+  });
+
+  it("fails on a token the remote turns away, naming the pull request and never the token", async () => {
+    const error = await fetchFiledFrom(checkout, { ...REMOTE(), serverUrl, token: "ghs_expired" }, filedFrom()).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(UnfetchedHeadError);
+    const said = `${(error as Error).message}\n${String((error as Error).cause)}`;
+    expect(said).toContain(`fetching the head of #84 (\`${head}\`) to \`refs/fabrik/filed-from/84\`: `);
+    expect(said).not.toContain("ghs_expired");
+    expect(said).not.toContain(Buffer.from("x-access-token:ghs_expired").toString("base64"));
+    await expect(git(checkout, "rev-parse", "--verify", "--quiet", "refs/fabrik/filed-from/84")).rejects.toThrow();
+  });
+});
+
+describe("The Design job's step that fetches the head, run as loop.yml runs it", () => {
+  const STEP = fileURLToPath(new URL("./filedFromFetch.ts", import.meta.url));
+  let temp: string;
+
+  /** Runs the step from the job's workspace, beside the checkout at product/, given only what the step's env names. */
+  async function step(written: unknown): Promise<{ code: number; stdout: string; stderr: string; report: unknown }> {
+    temp = join(root, "runner-temp");
+    await mkdir(temp, { recursive: true });
+    await writeFile(join(temp, FILED_FROM_FILE), JSON.stringify(written));
+    const ended = await run(process.execPath, [STEP, "product"], {
+      cwd: root,
+      env: {
+        PATH: process.env["PATH"] ?? "",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GITHUB_SERVER_URL: `file://${root}`,
+        GITHUB_REPOSITORY: "acme/shop",
+        GH_TOKEN: TOKEN,
+        FABRIK_FILED_FROM_FILE: join(temp, FILED_FROM_FILE),
+        FABRIK_OUT_DIR: join(temp, "fabrik-out"),
+      },
+    }).then(
+      ({ stdout, stderr }) => ({ code: 0, stdout, stderr }),
+      (error: { code: number; stdout: string; stderr: string }) => ({ code: error.code, stdout: error.stdout, stderr: error.stderr }),
+    );
+    const report = await readFile(join(temp, "fabrik-out", AGENT_FAILURE_FILE), "utf8").then(
+      (text) => JSON.parse(text) as unknown,
+      () => null,
+    );
+    return { ...ended, report };
+  }
+
+  it("fetches the head of the open agent pull request the inputs step wrote, and says where it left it", async () => {
+    const { code, stdout, report } = await step(filedFrom());
+
+    expect(code).toBe(0);
+    expect(stdout).toBe(`Fetched the head of #84 (${head}) to refs/fabrik/filed-from/84.\n`);
+    expect(await git(checkout, "rev-parse", "refs/fabrik/filed-from/84^{commit}")).toBe(head);
+    expect(await git(checkout, "merge-base", "HEAD", "refs/fabrik/filed-from/84")).toBe(cutFrom);
+    expect(report).toBeNull();
+  });
+
+  it.each([
+    ["an issue filed from no pull request", { kind: "none" }, "The issue was filed from no pull request, so there is no head to fetch.\n"],
+    ["a merged pull request", { state: "merged" }, "#84 is not an open agent pull request, so its head is not fetched.\n"],
+    ["a pull request closed unmerged", { state: "closed" }, "#84 is not an open agent pull request, so its head is not fetched.\n"],
+    ["a Plain pull request", { isAgent: false }, "#84 is not an open agent pull request, so its head is not fetched.\n"],
+  ] as const)("passes, fetching nothing, for %s", async (_what, written, said) => {
+    const before = await gitFilesOf(checkout);
+
+    const { code, stdout, report } = await step("kind" in written ? written : filedFrom(written));
+
+    expect(code).toBe(0);
+    expect(stdout).toBe(said);
+    expect(await gitFilesOf(checkout)).toEqual(before);
+    expect(report).toBeNull();
+  });
+
+  it("fails when the head can't be fetched, leaving the failure report that names the pull request, so the agent step never runs", async () => {
+    const gone = "f".repeat(40);
+
+    const { code, stderr, report } = await step(filedFrom({ headSha: gone }));
+
+    expect(code).toBe(1);
+    expect(report).toEqual({ failure: "unread-inputs", detail: expect.stringContaining(`not our ref ${gone}`) });
+    const { detail } = report as { detail: string };
+    expect(detail.startsWith(`fetching the head of #84 (\`${gone}\`) to \`refs/fabrik/filed-from/84\`: fatal: `)).toBe(true);
+    expect(stderr).toContain(detail);
+    // As the push job reads it for its notice: a failed input, with what could not be fetched.
+    expect(readFailureReport(JSON.stringify(report))).toEqual({ failure: "unread-inputs", detail });
+  });
+
+  it.each([
+    ["names a pull request without saying where it stands", { kind: "pull-request", number: 84 }],
+    ["is no JSON object", null],
+  ])("fails, fetching nothing, when the file the inputs step wrote %s", async (_how, written) => {
+    const before = await gitFilesOf(checkout);
+
+    const { code, stderr, report } = await step(written);
+
+    expect(code).toBe(1);
+    expect(stderr).toContain("filed-from.json doesn't say which pull request this issue was filed from");
+    expect(await gitFilesOf(checkout)).toEqual(before);
+    // No report: nothing names a pull request, so the push job reads it as a crash.
+    expect(report).toBeNull();
   });
 });
 
