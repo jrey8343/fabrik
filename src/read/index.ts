@@ -93,6 +93,8 @@ export type { Row } from "./rows.ts";
 
 // The join with runs
 
+export { joinRuns } from "./joinRuns.ts";
+
 // The Required checks
 
 // The caller read
