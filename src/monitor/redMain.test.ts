@@ -13,11 +13,11 @@ function filedFor(plan: ReturnType<typeof monitorPlanFor>): (string | undefined)
   return plan.open.map((issue) => /^- Red at: \[`(\w+)`\]/m.exec(issue.body)?.[1]);
 }
 
-/** A commit whose gating checks failed, the one aRedMainIssue() names. */
+/** A commit whose checks failed, the one aRedMainIssue() names. */
 const RED = "badc0de4a1b2c3d4e5f60718293a4b5c6d7e8f90";
 /** A later commit that's red too. */
 const STILL_RED = "dead0004a1b2c3d4e5f60718293a4b5c6d7e8f90";
-/** A commit whose gating checks passed. */
+/** A commit whose checks passed. */
 const GREEN = "600dc0de1b2c3d4e5f60718293a4b5c6d7e8f901";
 
 describe("Red main", () => {
@@ -39,7 +39,7 @@ describe("Red main", () => {
         labels: ["fabrik:monitor"],
         body: [
           "<!-- fabrik:monitor red-main -->",
-          "The default branch is red: the newest commit on it whose gating checks have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
+          "The default branch is red: the newest commit on it whose checks the Monitor reads have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
           "",
           "<!-- fabrik:monitor-stats -->",
           `- Red at: [\`badc0de\`](${commitUrl(RED)})`,
@@ -48,7 +48,7 @@ describe("Red main", () => {
           `  - [\`test\`](${runUrl(901)}) failed`,
           "<!-- /fabrik:monitor-stats -->",
           "",
-          "The gating checks are `sandbox.checks` in `.fabrik/config.json`, or every check but Fabrik's own when it lists none.",
+          "The checks the Monitor reads are the Required checks `sandbox.checks` in `.fabrik/config.json` lists or, when it lists none, every check but those of Fabrik's own jobs.",
         ].join("\n"),
       },
     ]);
@@ -117,7 +117,7 @@ describe("Red main", () => {
         issue: 41,
         comment: [
           "<!-- fabrik:monitor-green -->",
-          `Green at [\`600dc0d\`](${commitUrl(GREEN)}): its gating checks passed, so the default branch is no longer red and the Monitor closes this issue as completed.`,
+          `Green at [\`600dc0d\`](${commitUrl(GREEN)}): the checks the Monitor reads passed (the Required checks \`sandbox.checks\` lists, or every check but those of Fabrik's own jobs when it lists none), so the default branch is no longer red and the Monitor closes this issue as completed.`,
         ].join("\n"),
         because: "the default branch is green again.",
       },
@@ -276,7 +276,7 @@ describe("Which checks gate the default branch", () => {
             aCheckRun({ id: 921, name: "lint", conclusion: "failure" }),
           ]),
         ],
-        { gatingChecks: ["build"], issues: [aRedMainIssue({ number: 41 })] },
+        { listedChecks: ["build"], issues: [aRedMainIssue({ number: 41 })] },
       ),
     );
 
@@ -292,31 +292,31 @@ describe("Which checks gate the default branch", () => {
             aCheckRun({ id: 902, name: "deploy", status: "in_progress", conclusion: null, completedAt: null }),
           ]),
         ],
-        { gatingChecks: ["build", "test"] },
+        { listedChecks: ["build", "test"] },
       ),
     );
 
     expect(filedFor(plan)).toEqual(["badc0de"]);
   });
 
-  it("decides a commit by the gating checks on it, a listed check that isn't on it counting for nothing", () => {
+  it("decides a commit by the Required checks sandbox.checks lists that are on it, a listed check that isn't on it counting for nothing", () => {
     const plan = monitorPlanFor(
       redMainInput([aCommit(RED, [aCheckRun({ id: 901, name: "test", conclusion: "failure" })])], {
-        gatingChecks: ["build", "test"],
+        listedChecks: ["build", "test"],
       }),
     );
 
     expect(filedFor(plan)).toEqual(["badc0de"]);
   });
 
-  it("passes over a commit that carries none of the gating checks", () => {
+  it("passes over a commit that carries none of the Required checks sandbox.checks lists", () => {
     const plan = monitorPlanFor(
       redMainInput(
         [
           aCommit(STILL_RED, [aCheckRun({ id: 930, name: "lint", conclusion: "failure" })]),
           aCommit(GREEN, [aCheckRun({ id: 920, name: "build", conclusion: "success" })]),
         ],
-        { gatingChecks: ["build"], issues: [aRedMainIssue({ number: 41 })] },
+        { listedChecks: ["build"], issues: [aRedMainIssue({ number: 41 })] },
       ),
     );
 
@@ -394,16 +394,16 @@ describe("No decided commit", () => {
     expect(plan.rewrite).toEqual([]);
     expect(plan.close).toEqual([]);
     expect(redMainLines(plan)).toEqual([
-      "Red main is undecided: none of the default branch's 2 newest commits has finished its gating checks with a pass or a failure.",
+      "Red main is undecided: none of the default branch's 2 newest commits has finished its checks (every one but those of Fabrik's own jobs, as `sandbox.checks` lists none) with a pass or a failure.",
     ]);
   });
 
-  it("names the gating checks sandbox.checks lists when no commit has finished them", () => {
-    const plan = monitorPlanFor(redMainInput(undecided, { gatingChecks: ["build", "test"] }));
+  it("names the Required checks sandbox.checks lists when no commit has finished them", () => {
+    const plan = monitorPlanFor(redMainInput(undecided, { listedChecks: ["build", "test"] }));
 
     expect(plan.open).toEqual([]);
     expect(redMainLines(plan)).toEqual([
-      "Red main is undecided: none of the default branch's 3 newest commits has finished its gating checks (`build`, `test`) with a pass or a failure.",
+      "Red main is undecided: none of the default branch's 3 newest commits has finished the Required checks `sandbox.checks` lists (`build`, `test`) with a pass or a failure.",
     ]);
   });
 });

@@ -119,7 +119,7 @@ export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<M
     monitor: { ...DEFAULT_KIT_CONFIG.monitor, errors: SENTRY_ON },
     sentry: sentryRead(groups),
     issues: [],
-    gatingChecks: [],
+    listedChecks: [],
     mainChecks: null,
     cap: DEFAULT_KIT_CONFIG.caps.monitorIssues,
     operator: "operator",
