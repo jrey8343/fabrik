@@ -16,6 +16,7 @@ import {
   type PrototypeRequestMarker,
 } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
+import { spelled } from "./readable.ts";
 import { GITHUB_COMMENT_LIMIT, ROUND_LINE_VERSION, roundLineOf, withoutRoundLines } from "./roundLine.ts";
 import type { Action, BranchChanges, IssueContext, LoopEvent, Plan, PostedComment, StartingComment } from "./types.ts";
 
@@ -126,11 +127,10 @@ export function applyPrototypeTurn(
 /** The plan's note of an advised letter the output reader refused, as it isn't one of the round's variants'; nothing when it refused none. */
 function refusedLetter(issue: number, { variants, refusedRecommended }: PrototypeRoundOutput): { notes?: string[] } {
   if (refusedRecommended === undefined) return {};
-  const letters = variants.map(({ letter }) => letter);
-  const named = letters.length === 1 ? letters.join("") : `${letters.slice(0, -1).join(", ")} or ${letters.at(-1)}`;
+  const letters = spelled(variants.map(({ letter }) => letter));
   return {
     notes: [
-      `The prototype round on #${issue} advises no variant by letter: the prototype turn's recommended, ${refusedRecommended}, isn't one of its variants' letters (${named})`,
+      `The prototype round on #${issue} advises no variant by letter: the prototype turn's recommended, ${refusedRecommended}, isn't one of its variants' letters (${letters})`,
     ],
   };
 }
