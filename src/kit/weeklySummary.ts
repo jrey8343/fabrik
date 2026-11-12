@@ -2,7 +2,7 @@
 // a GitHub facts snapshot per Product repo, the Operator and now, the one issue
 // filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
 // model call.
-import { type DispatchedRuns, dispatchedRunsOf, type RunInFlightFact } from "../github/snapshot.ts";
+import type { RunInFlightFact } from "../github/snapshot.ts";
 import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import {
@@ -14,13 +14,10 @@ import {
   NEEDS_INFO,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
-  RESEARCH_DECISION_LABEL,
   RESEARCH_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
-import { waitingIssues } from "../loop/designQueue.ts";
-import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
-import { heldOf, runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
+import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { auditMarksIn, flakyCheckMarksIn, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
@@ -51,7 +48,8 @@ import {
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type Standing, standingsOf } from "./standing.ts";
+import { type Standing, standingsOf, type StandingNamed } from "./standing.ts";
+import { maxInFlightHoldOf } from "./standingInFlight.ts";
 import { lastAdded, passedMoveOf } from "./standingOperator.ts";
 import {
   firstRunOf,
@@ -1184,7 +1182,7 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
       ...weekGivenUp("Retro", facts.retros, (body) => retroMarksIn(body).failed, appLogin, thisWeek, items),
     ]),
     // The Loop does nothing in a repo whose Kit config is invalid, so no cap holds anything there.
-    held: invalid === null ? heldIn(facts, kit, appLogin, now) : null,
+    held: invalid === null ? heldIn(facts, kit, standings, appLogin, now) : null,
     unread: null,
   };
 }
@@ -1279,73 +1277,56 @@ function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: 
 
 /**
  * What a cap holds in the repo, by its own Kit config, or the Kit's default
- * caps without one; null when nothing is held.
+ * caps without one; null when nothing is held. Its lines about work, the
+ * `needs-design` issues waiting for a slot, the Held runs and what
+ * max_in_flight holds, are the repo's Standings (src/kit/standing.ts), so
+ * Held and the Standing can't disagree; the Map cap and the Monitor's held
+ * count have no piece of work behind them and are read as they always were.
  */
-function heldIn(facts: GitHubFacts, kit: RepoKitFacts | null, appLogin: string, now: number): Held | null {
-  const { designQueue, monitorIssues, openMaps, kitIssues } = facts;
+function heldIn(facts: GitHubFacts, kit: RepoKitFacts | null, standings: readonly Standing[], appLogin: string, now: number): Held | null {
+  const { monitorIssues, openMaps } = facts;
   const config = kit?.config.ok === true ? kit.config.config : DEFAULT_KIT_CONFIG;
-  const designSessions = heldDesignSessionsOf(designQueue, now);
+  const designSessions = heldDesignSessionsOf(standings, now);
   const monitor = heldMonitorOf(monitorIssues, appLogin);
   const mapCap = heldMapsOf(openMaps, config);
-  const runs = heldRunsOf(kitIssues);
-  const dispatch = kit?.dispatch == null ? null : heldDispatchOf(facts, kit.dispatch, kit.runsInFlight === "unread" ? null : dispatchedRunsOf(kit.runsInFlight), config, now);
+  const runs = heldRunsOf(facts.kitIssues, standings);
+  const dispatch = heldDispatchOf(facts, kit, standings, now);
   const held = { designSessions, monitor, maps: mapCap, runs, dispatch };
   return Object.values(held).every((source) => source === null) ? null : held;
 }
 
 /**
- * The Tickets and research Decisions Dispatch would release while
- * max_in_flight holds them, by Dispatch's own rules (waitingForDispatch,
- * inFlightOf), so the summary and Dispatch can't disagree. Null when none
- * waits or a slot is free: the next Tick's Dispatch check releases it (#418).
- * With the runs in progress unread, what was read can't show a slot free,
- * so the line is shown with what was read, marked.
+ * The Tickets and research Decisions waiting for a slot while max_in_flight
+ * holds them: paused at 0, or every slot taken, counted by Dispatch's own
+ * rules (maxInFlightHoldOf), each with how long it has waited, as its Standing has it.
  */
-function heldDispatchOf(facts: GitHubFacts, { candidates }: DispatchFacts, runs: DispatchedRuns | null, config: KitConfig, now: number): HeldDispatch | null {
-  const heldRuns = { implement: heldOf("implement", facts.kitIssues), research: heldOf("research", facts.kitIssues) };
-  const decisions = new Set(candidates.researchDecisions.map(({ number }) => number));
-  const waiting = waitingForDispatch(candidates, heldRuns).map((number): WaitingForSlot => {
-    const issue = facts.openIssues.find((open) => open.number === number);
-    const label = decisions.has(number) ? RESEARCH_DECISION_LABEL : READY_FOR_AGENT;
-    const since = issue === undefined ? null : (lastAdded(issue.labelEvents, label) ?? issue.createdAt);
-    return { number, since, age: since === null ? null : now - Date.parse(since) };
+function heldDispatchOf(facts: GitHubFacts, kit: RepoKitFacts | null, standings: readonly Standing[], now: number): HeldDispatch | null {
+  const hold = maxInFlightHoldOf({ github: facts, kit });
+  const slots = new Map(standings.flatMap((standing) => (standing.name === "waiting-for-slot" && standing.detail.slot === "max-in-flight" ? [[standing.issue, standing.since] as const] : [])));
+  const waiting = (hold?.waiting ?? []).flatMap((number): WaitingForSlot[] => {
+    const since = slots.get(number);
+    return since === undefined ? [] : [{ number, since, age: now - Date.parse(since) }];
   });
-  if (waiting.length === 0) return null;
-  if (config.maxInFlight === 0) return { kind: "paused", waiting };
-  // The summary reads only agent PRs, so its open drafts are Dispatch's open agent draft PRs.
-  const drafts = facts.openPullRequests.filter(({ draft }) => draft);
-  const inFlight = inFlightOf(
-    {
-      ...candidates,
-      openAgentDraftPullRequests: drafts.length,
-      implementRunsInProgress: runs?.implement ?? 0,
-      researchRunsInProgress: runs?.research ?? 0,
-    },
-    heldRuns,
-  );
-  if (runs !== null && inFlight.total < config.maxInFlight) return null;
-  const named = [...drafts.flatMap(({ ticket }) => (ticket === null ? [] : [ticket])), ...(runs?.implementTickets ?? []), ...inFlight.waiting, ...inFlight.held];
-  return {
-    kind: "full",
-    maxInFlight: config.maxInFlight,
-    inFlight: inFlight.total,
-    inFlightIssues: [...new Set(named)].sort((a, b) => a - b),
-    runsUnread: runs === null,
-    waiting,
-  };
+  if (hold === null || waiting.length === 0) return null;
+  if (hold.kind === "paused") return { kind: "paused", waiting };
+  const { maxInFlight, inFlight, inFlightIssues, runsUnread } = hold;
+  return { kind: "full", maxInFlight, inFlight, inFlightIssues, runsUnread, waiting };
 }
 
 /**
- * The Held runs, read by the scheduled tick's own rule (waitingHeldRuns), so
- * the summary and the resume can't disagree, with the open weekly-limit issues
- * they wait on. Null while no run is held.
+ * The Held runs whose work stands held, in the order the scheduled tick
+ * resumes them (waitingHeldRuns), with the open weekly-limit issues they wait
+ * on. Null while no run is held.
  */
-function heldRunsOf(kitIssues: readonly KitIssueSnapshot[]): HeldRuns | null {
-  const runs = waitingHeldRuns(kitIssues).map(({ run, markers }) => ({
-    role: run.role,
-    issue: run.issue,
-    heldOn: [...markers].flatMap(([issue, held]) => (held > 0 ? [issue] : [])),
-  }));
+function heldRunsOf(kitIssues: readonly KitIssueSnapshot[], standings: readonly Standing[]): HeldRuns | null {
+  const held = standings.filter((standing): standing is StandingNamed<"held"> => standing.name === "held");
+  const runs = waitingHeldRuns(kitIssues)
+    .filter(({ run }) => held.some(({ issue, pullRequest, detail }) => detail.role === run.role && (run.role === "review" ? pullRequest : issue) === run.issue))
+    .map(({ run, markers }) => ({
+      role: run.role,
+      issue: run.issue,
+      heldOn: [...markers].flatMap(([issue, count]) => (count > 0 ? [issue] : [])),
+    }));
   if (runs.length === 0) return null;
   const weeklyLimitIssues = kitIssues
     .filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL))
@@ -1364,14 +1345,10 @@ function heldMapsOf(openMaps: readonly number[], config: KitConfig): HeldMaps | 
   return open.length > 0 && mapCapFull(open, config) ? { open } : null;
 }
 
-/**
- * The `needs-design` issues waiting for a Design session slot: by the Design
- * queue check's own rule (waitingIssues), so the summary and the check can't
- * disagree.
- */
-function heldDesignSessionsOf(queue: DesignQueueSnapshot, now: number): HeldDesignSessions | null {
-  const waiting = waitingIssues(queue);
-  const oldestSince = waiting.map((issue) => issue.neededDesignAt).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
+/** The `needs-design` issues waiting for a Design session slot, as their Standings have it: how many, and since when the oldest. */
+function heldDesignSessionsOf(standings: readonly Standing[], now: number): HeldDesignSessions | null {
+  const waiting = standings.filter((standing) => standing.name === "waiting-for-slot" && standing.detail.slot === "design-session");
+  const oldestSince = waiting.map(({ since }) => since).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (oldestSince === undefined) return null;
   return { waiting: waiting.length, oldestSince, oldestAge: now - Date.parse(oldestSince) };
 }
