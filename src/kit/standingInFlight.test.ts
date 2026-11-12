@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aTicket } from "../__fixtures__/snapshots.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import type { HeldRun } from "../loop/heldRun.ts";
 import { conflictAttemptMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf } from "./standing.ts";
@@ -186,6 +188,65 @@ describe("work that goes on without the Operator", () => {
 
       it("gives no draft waiting on checks with no wait for checks in flight", () => {
         expect(standingsIn({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }, aKit([aRunInFlight({ role: "triage" })]))).toEqual([]);
+      });
+    });
+
+    describe("held", () => {
+      const implement = { role: "implement", issue: 7, label: "agent:implement" } as const;
+      const carrier = (held: readonly HeldRun[]) => aWeeklyLimitIssue(null, held, { createdAt: "2026-11-08T09:00:00Z", commentedAt: held.map(() => "2026-11-08T10:00:00Z") });
+
+      it("gives a Ticket a held marker names one Standing, held at Implement with its Carrier, since the marker", () => {
+        const standings = standingsIn({ openIssues: [ticket(7)], kitIssues: [carrier([implement])] }, null);
+        expect(standings).toEqual([
+          {
+            schema: 1,
+            repo: "owner/product",
+            issue: 7,
+            pullRequest: null,
+            work: "ticket",
+            place: "implement",
+            name: "held",
+            move: "kit",
+            yours: false,
+            stopsWork: false,
+            since: "2026-11-08T10:00:00Z",
+            stuckAt: null,
+            awaits: { role: "implement", on: "issue" },
+            subscription: null,
+            detail: { carrier: 20, role: "implement" },
+          },
+        ]);
+      });
+
+      it("gives a held Review its agent PR and Ticket, at Review, awaiting a run on the PR", () => {
+        const standings = standingsIn(
+          { openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8, draft: false })], kitIssues: [carrier([{ role: "review", issue: 51, label: "agent:review" }])] },
+          null,
+        );
+        expect(standings.map(({ issue, pullRequest, name, place, awaits, detail }) => ({ issue, pullRequest, name, place, awaits, detail }))).toEqual([
+          { issue: 8, pullRequest: 51, name: "held", place: "review", awaits: { role: "review", on: "pullRequest" }, detail: { carrier: 20, role: "review" } },
+        ]);
+      });
+
+      it("keeps a held Ticket held whatever else is true of it, a run named for nothing included, short of a move of the Operator's", () => {
+        const heldTicket = ticket(7, ["ready-for-agent", "agent:implement"]);
+        const standings = standingsIn(
+          { openIssues: [heldTicket, anOpenIssue({ number: 8, labels: ["ready-for-agent", "ready-for-human"] })], kitIssues: [carrier([implement, { ...implement, issue: 8 }])] },
+          aKit([aRunInFlight()], { dispatch: { candidates: { tickets: [aTicket({ number: 7, labels: ["ready-for-agent"], openBlockers: [3] })], researchDecisions: [] } } }),
+        );
+        expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([
+          { issue: 8, name: "yours-to-do" },
+          { issue: 7, name: "held" },
+        ]);
+      });
+
+      it("leaves out a run the scheduled tick has resumed", () => {
+        const resumed = carrier([implement]);
+        const standings = standingsIn(
+          { openIssues: [ticket(7)], kitIssues: [{ ...resumed, comments: [...resumed.comments, '<!-- fabrik:resumed {"issue":7,"role":"implement","held":1} -->'] }] },
+          null,
+        );
+        expect(standings).toEqual([]);
       });
     });
 

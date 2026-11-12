@@ -219,9 +219,36 @@ function placeOf(role: AgentRole): StandingPlace | null {
   return places[role];
 }
 
-/** The `held` Standings: placeholder until held runs are read. */
-function heldStandingsOf(_facts: StandingFacts): StandingNamed<"held">[] {
-  return [];
+/**
+ * Each piece of work whose run is a Held run, read by the scheduled tick's own
+ * rule (waitingHeldRuns), so the Standing and the resume can't disagree,
+ * carrying the Carrier its newest held marker is on. A Review's run is on its
+ * PR, with the Ticket the PR closes; an Implement run whose held line is on
+ * the Ticket's PR, as a Retry's is, awaits a run there.
+ */
+function heldStandingsOf({ github }: StandingFacts): StandingNamed<"held">[] {
+  return waitingHeldRuns(github.kitIssues).map(({ run, heldAt, newest }) => {
+    const pullRequest = run.role === "review" ? github.openPullRequests.find(({ number }) => number === run.issue) : undefined;
+    const issue = run.role === "review" ? (pullRequest?.ticket ?? null) : run.issue;
+    const onPullRequest = run.role === "review" || (run.lineOn !== undefined && run.lineOn !== run.issue);
+    const carrier = github.kitIssues.find(({ number }) => number === newest.on);
+    const since = heldAt ?? carrier?.createdAt ?? openSince(github, issue, run.role === "review" ? run.issue : null);
+    return {
+      ...inFlight(github.repo, issue, run.role === "review" ? run.issue : null, since, workOf(run.role), placeOf(run.role), { role: run.role, on: onPullRequest ? "pullRequest" : "issue" }),
+      name: "held",
+      detail: { carrier: newest.on, role: run.role },
+    };
+  });
+}
+
+/**
+ * When the work was opened, for a held run whose held markers' times weren't
+ * read: its issue's, else its PR's, else the start of time, which says only
+ * that it is not known.
+ */
+function openSince({ openIssues, openPullRequests }: StandingFacts["github"], issue: number | null, pullRequest: number | null): string {
+  const opened = openIssues.find(({ number }) => number === issue)?.createdAt ?? openPullRequests.find(({ number }) => number === pullRequest)?.createdAt;
+  return opened ?? new Date(0).toISOString();
 }
 
 /** The fields of a Standing of work the Kit moves, or nobody does: none of these can turn Stuck. */
