@@ -2,6 +2,7 @@
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
 import { type ReplayProgress, replayBody } from "../kit/replay.ts";
 import type { ReplayRun, RunRecord } from "../kit/runRecord.ts";
+import type { StandingFacts } from "../kit/standing.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "../kit/scorer.ts";
 import type {
   AgentPullRequestFacts,
@@ -337,4 +338,9 @@ export function aWeeklyLimitIssue(resetsAt: string | null, held: readonly HeldRu
 /** Open issue 41, the Fabrik App's Monitor error issue for Sentry group 4504, its stats block holding no held line unless a test's body says so. */
 export function anOpenMonitorIssue(overrides: Partial<MonitorIssueFacts> = {}): MonitorIssueFacts {
   return { number: 41, author: "fabrik-app[bot]", body: aMonitorIssueBody(), ...overrides };
+}
+
+/** What the Standing rule reads of `owner/product`: its GitHub facts, nothing in them unless a test says so, no Kit config read, and the Operator and the Fabrik App by login. */
+export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> = {}): StandingFacts {
+  return { kind: "product", github: factsOf(), kit: null, operator: "operator", appLogin: "fabrik-app[bot]", ...overrides };
 }

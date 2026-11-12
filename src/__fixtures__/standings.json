@@ -1,0 +1,53 @@
+{
+  "yours-to-merge": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 7,
+    "pullRequest": 50,
+    "work": "ticket",
+    "place": "merge-gate",
+    "name": "yours-to-merge",
+    "move": "operator",
+    "yours": true,
+    "stopsWork": true,
+    "since": "2026-11-07T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": null,
+    "detail": { "plain": null }
+  },
+  "design-round": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 12,
+    "pullRequest": null,
+    "work": "design-session",
+    "place": "design",
+    "name": "design-round",
+    "move": "operator",
+    "yours": true,
+    "stopsWork": true,
+    "since": "2026-11-05T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": null,
+    "detail": { "round": 2, "prototype": null }
+  },
+  "yours-to-do": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 13,
+    "pullRequest": null,
+    "work": "ready-for-human",
+    "place": null,
+    "name": "yours-to-do",
+    "move": "operator",
+    "yours": true,
+    "stopsWork": true,
+    "since": "2026-11-01T20:00:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": null,
+    "detail": { "handBack": null, "role": null, "failure": null, "label": null }
+  }
+}
