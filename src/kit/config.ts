@@ -77,6 +77,8 @@ export interface KitConfig {
   readonly ui: UiConfig | null;
   /** Where a pull request's preview deployment appears (#153); null links none. */
   readonly preview: PreviewConfig | null;
+  /** Where the Product repo's production is (ADR-0021); null declares nothing, and nothing in the Loop reads it. */
+  readonly production: ProductionConfig | null;
 }
 
 /** The `ui` block: which changed files make a pull request UI, and how the Sandbox serves the branch to capture it. */
@@ -192,6 +194,18 @@ export const REVIEWER_IMAGE_CAP = 8;
 export interface PreviewConfig {
   /** An http(s) URL that may use only the PREVIEW_PLACEHOLDERS, such as `https://pr-{pr}.example.dev`. */
   readonly url: string;
+}
+
+/**
+ * The `production` block: the production site's address and the name its
+ * deploys carry in GitHub's Deployments. Only a reader of the Kit acts on it;
+ * the Loop still ends at the merge.
+ */
+export interface ProductionConfig {
+  /** The production site's http(s) base address, which live links are built from. */
+  readonly url: string;
+  /** The environment the repo's production deploys carry in GitHub's Deployments; null when its host reports none. */
+  readonly environment: string | null;
 }
 
 /** The placeholders a `preview.url` template may use, filled in from the pull request after the push. */
@@ -391,6 +405,8 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   // Visual evidence is off until a Product repo turns it on with /fabrik-visual-evidence.
   ui: null,
   preview: null,
+  // Production is declared by a Product repo, never guessed.
+  production: null,
 };
 
 /** Where the Kit config lives in a Product repo (ADR-0005). */
@@ -596,6 +612,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     subscriptions: file.subscriptions("subscriptions") ?? defaults.subscriptions,
     ui: readUi(file.nullableObject("ui")),
     preview: readPreview(file.nullableObject("preview")),
+    production: readProduction(file.nullableObject("production")),
   };
 }
 
@@ -789,6 +806,20 @@ function readPreview(preview: Reader | null | undefined): PreviewConfig | null {
   if (preview === undefined || preview === null) return null;
   const url = preview.nullableString("url", checkPreviewTemplate);
   return url === undefined || url === null ? null : { url };
+}
+
+/** The `production` block; left out or null, it declares nothing. */
+function readProduction(production: Reader | null | undefined): ProductionConfig | null {
+  if (production === undefined || production === null) return null;
+  const url = production.requiredString("url", checkHttpOrHttpsUrl);
+  const environment = production.nullableString("environment", checkEnvironment);
+  if (url === undefined) return null;
+  return { url, environment: environment ?? null };
+}
+
+function checkEnvironment(environment: string): string | null {
+  if (environment.trim() === "") return "an environment can't be blank";
+  return /[\r\n]/.test(environment) ? "an environment is the one line GitHub's Deployments name it" : null;
 }
 
 /** A stand-in for each placeholder, so a template can be checked as the URL it fills in to. */
