@@ -49,3 +49,21 @@ export function recoveryWaits(config: KitConfig): Readonly<Record<Recovery, numb
     unreviewedDraft: 2 * config.roles.review.timeoutMinutes,
   };
 }
+
+/**
+ * The Tick's interval, in minutes: the caller template runs the scheduled Kit
+ * workflow hourly, which a test holds it to (src/loop/recoveryWaits.test.ts).
+ */
+export const TICK_MINUTES = 60;
+
+/**
+ * The Stuck bar for a Product repo, in minutes, at its Kit config: the
+ * slowest recovery's wait plus two Ticks, one for the recovery's own Tick to
+ * come round and one for GitHub running the hourly schedule late. Work the
+ * Kit has made no sign on for this long is past every recovery. It reads the
+ * record's values without naming them, so a recovery added to the record is
+ * counted with no change here.
+ */
+export function stuckBarMinutes(config: KitConfig): number {
+  return Math.max(...Object.values(recoveryWaits(config))) + 2 * TICK_MINUTES;
+}
