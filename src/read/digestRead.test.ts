@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { carriedDigest } from "../loop/digestCarry.ts";
 import type { DigestData } from "../loop/digestContract.ts";
 import { aDigestComment, aNoDigestLine, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { DigestRead, PlaceShown } from "./digestRead.ts";
@@ -63,6 +64,14 @@ describe("The Digest on an open agent pull request's row", () => {
     const carried = aDigestComment(HEAD, "2026-11-08T18:05:00Z", { carriedFrom: EARLIER_HEAD });
 
     expect(digestOn(atTheMergeGate(carried))).toMatchObject({ is: "readable", head: HEAD, carriedFrom: EARLIER_HEAD });
+  });
+
+  it("reads a Digest as Kit code carries one forward: its new head, the head it was written at, and its folds as the writer's run left them", () => {
+    const writtenEarlier = aDigestComment(EARLIER_HEAD, "2026-11-08T17:00:00Z", { folds: FOLDS });
+    const body = carriedDigest(writtenEarlier.body, { repoUrl: "https://github.com/owner/product", pullRequest: 50, headSha: HEAD }, { files: [], changed: [] });
+    const carried = { ...writtenEarlier, body: body ?? "", at: "2026-11-08T18:05:00Z" };
+
+    expect(digestOn(atTheMergeGate(writtenEarlier, carried))).toMatchObject({ is: "readable", head: HEAD, carriedFrom: EARLIER_HEAD, at: "2026-11-08T18:05:00Z", folds: FOLDS });
   });
 
   it("is none when the only Digest is for an earlier head: one for another head is never given", () => {
