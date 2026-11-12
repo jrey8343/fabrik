@@ -6,8 +6,8 @@
 // section, its marker, which the PR snapshot reads back, and withoutEvidence,
 // which keeps both out of agent text. A prototype turn's capture of its
 // variants (#155) shares the capture result, and neither the Reviewer nor the
-// evidence section ever shows it. The galleries, the PR's and the prototype's,
-// are beside it (src/evidence/evidencePage.ts). Pure, no I/O.
+// evidence section ever shows it. The Evidence pages, the PR's and the
+// prototype's, are beside it (src/evidence/evidencePage.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { type CaptureIdentity, isCaptureIdentity, isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
@@ -337,8 +337,8 @@ function filesOf(capture: Capture | VariantCapture): ["image" | "video", string]
 
 /**
  * Each image or video file and each route, viewport and side or variant is
- * one capture's alone, since the galleries pair captures by them and open
- * each file by name.
+ * one capture's alone, since the Evidence pages pair captures by them and
+ * open each file by name.
  */
 function repeatedCaptures(captures: readonly (Capture | VariantCapture | null)[]): string[] {
   const problems: string[] = [];
@@ -513,9 +513,9 @@ function reviewerImageLine({ image, route, viewport, side, status, identity }: C
 }
 
 /**
- * How the evidence section, the galleries and the Reviewer's block name the
- * Capture identity a page was viewed as, each in its own markup: nothing for
- * a page viewed signed out.
+ * How the evidence section, the Evidence pages and the Reviewer's block name
+ * the Capture identity a page was viewed as, each in its own markup: nothing
+ * for a page viewed signed out.
  */
 export function signedInWords(identity: CaptureIdentity | undefined, markup: (name: string) => string): string {
   return identity === undefined ? "" : `, signed in as ${markup(identity)}`;

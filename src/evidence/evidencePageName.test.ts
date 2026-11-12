@@ -16,8 +16,8 @@ const SCANNED = ["src/", ".github/", "prompts/", "skills/", "templates/", "READM
 /** Bodies and rounds as an earlier release wrote them, in the old word, which the Kit must still read. */
 const EARLIER_WORDING = "src/__fixtures__/earlierEvidenceWording.ts";
 
-/** The old word, in any case and inside any identifier. Spelled so this file doesn't hold it. */
-const OLD_WORD = /gal{2}ery/gi;
+/** The old word, singular or plural, in any case and inside any identifier. Spelled so this file doesn't hold it. */
+const OLD_WORD = /gal{2}er(?:y|ies)/gi;
 
 /** The Console's Gallery, capitalised as the glossary has it and standing as a word of its own. */
 function namesTheConsolesScreen(line: string, at: number, found: string): boolean {
@@ -41,6 +41,9 @@ describe("The Kit calls its page of captures the Evidence page", () => {
     expect(oldWordsIn(`export function prototype${Old}() {}`)).toEqual([Old]);
     expect(oldWordsIn(`${Old}Shot`)).toEqual([Old]);
     expect(oldWordsIn(`${old.toUpperCase()}_FILE`)).toEqual([old.toUpperCase()]);
+    const olds = `${old.slice(0, -1)}ies`;
+    expect(oldWordsIn(`Both ${olds} name the Capture identity.`)).toEqual([olds]);
+    expect(oldWordsIn(`${olds.toUpperCase()} and ${Old.slice(0, -1)}ies`)).toEqual([olds.toUpperCase(), `${Old.slice(0, -1)}ies`]);
   });
 
   it("lets the Console's Gallery be named, capitalised as the glossary has it", () => {
