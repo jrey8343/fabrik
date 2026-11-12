@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aDigestFacts, aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
@@ -368,5 +369,31 @@ describe("The Digest carried forward: re-pointing each place at the new head", (
 
     expect(readBack(both).data.items[0]!.places).toMatchObject([{ start: 10, end: 12, inDiff: true }, { start: 40, end: 40, inDiff: false }]);
     expect(readBack(body).data.items[0]!.places).toMatchObject([{ start: 22, end: 24, inDiff: false }, { start: 52, end: 52, inDiff: true }]);
+  });
+});
+
+describe("The README on a Digest carried forward", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const digest = readme.split("\n## Digest\n")[1]?.split("\n## ")[0] ?? "";
+  const carriedForward = digest.split("\n").find((line) => line.startsWith("- **Carried forward**")) ?? "";
+
+  it("the Digest's section has Carried forward after Places and data and before Collapsed", () => {
+    const at = ["Places and data", "Carried forward", "Collapsed"].map((name) => digest.indexOf(`- **${name}**`));
+
+    expect(at.every((index) => index >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+  });
+
+  it("says when a Digest is carried, what is posted, how a place is re-pointed and what happens with the files unread", () => {
+    expect(carriedForward).toContain("no model runs");
+    expect(carriedForward).toContain("their `all` is equal");
+    expect(carriedForward).toContain("the Kit's list of asks is the list that Digest answered");
+    expect(carriedForward).toContain("Carried over from");
+    expect(carriedForward).toContain("because only `main` moved.");
+    expect(carriedForward).toContain("keeps the first `carriedFrom`");
+    expect(carriedForward).toContain("A window that matches exactly once is the place");
+    expect(carriedForward).toContain("`inDiff` is worked out afresh");
+    expect(carriedForward).toContain("No label is added, no run starts and no Run record is written");
+    expect(carriedForward).toContain("nothing is carried");
   });
 });
