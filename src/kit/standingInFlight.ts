@@ -293,6 +293,7 @@ export function runningRunOf(role: AwaitedRole, kind: RunKind | null): RunningRu
     case "design":
       return kind === "prototype" ? "prototype" : "design";
     case "review":
+    case "digest":
     case "triage":
     case "research":
       return role;

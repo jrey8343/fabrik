@@ -10,7 +10,7 @@ import type { RunInFlightFact } from "../github/snapshot.ts";
 import { type Standing, standingAt, type StandingNamed, standingOrder } from "../kit/standing.ts";
 import { type RunningRun, runningRunOf, runningSince } from "../kit/standingInFlight.ts";
 import type { WaitingOnKitSilence } from "../kit/standingSilence.ts";
-import { DESIGN_LABEL, REPLAY_TRIGGER_LABEL, type TriggerLabel } from "../loop/labels.ts";
+import { DESIGN_LABEL, DIGEST_LABEL, REPLAY_TRIGGER_LABEL, type TriggerLabel } from "../loop/labels.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 
@@ -78,9 +78,14 @@ function waitsOnAnyRunOfItsRole(standing: Standing): boolean {
   }
 }
 
-/** Whether a `not-started` Standing's trigger label waits on any run of its role: every one but a Design session's and a Replay's; a Retry's (null) is `agent:implement`. */
+/**
+ * Whether a `not-started` Standing's trigger label waits on any run of its
+ * role: every one but a Design session's, a Replay's and a passed draft's
+ * Digest, whose run always names its pull request; a Retry's (null) is
+ * `agent:implement`.
+ */
 function labelWaitsOnAnyRun(label: TriggerLabel | null): boolean {
-  return label !== DESIGN_LABEL && label !== REPLAY_TRIGGER_LABEL;
+  return label !== DESIGN_LABEL && label !== REPLAY_TRIGGER_LABEL && label !== DIGEST_LABEL;
 }
 
 /** The silences waiting on the Kit whose work waits on any run of its role: an issue's for Triage, and a quiet agent draft's for its Review. */
@@ -127,9 +132,9 @@ function fieldsOf({ schema, repo, issue, pullRequest }: Standing) {
   return { schema, repo, issue, pullRequest, move: "kit", yours: false, stopsWork: false, stuckAt: null, subscription: null } as const;
 }
 
-/** Whether a run names the work a Standing is: a Review's its pull request, any other role's its issue, as the rule counts it. */
+/** Whether a run names the work a Standing is: a Review's and a Digest run's its pull request, any other role's its issue, as the rule counts it. */
 function namesItsWork(run: RunInFlightFact, { issue, pullRequest }: Standing): boolean {
-  if (run.role === "review") return run.pullRequest !== null && run.pullRequest === pullRequest;
+  if (run.role === "review" || run.role === "digest") return run.pullRequest !== null && run.pullRequest === pullRequest;
   return run.issue !== null && run.issue === issue && (run.exact || run.role === "implement" || run.role === "design");
 }
 
@@ -142,6 +147,7 @@ function oldest(runs: readonly RunInFlightFact[]): RunInFlightFact | undefined {
 const RUNNING_PLACES = {
   implement: { work: "ticket", place: "implement" },
   review: { work: "ticket", place: "review" },
+  digest: { work: "ticket", place: "review" },
   design: { work: "design-session", place: "design" },
   triage: { work: "issue", place: "triage" },
   research: { work: "research-decision", place: null },
@@ -153,7 +159,9 @@ function runningOn(standing: Standing, run: RunInFlightFact): StandingNamed<"run
   if (!(role in RUNNING_PLACES)) return null;
   const { work, place } = RUNNING_PLACES[role as keyof typeof RUNNING_PLACES];
   const kind = runningRunOf(role, run.kind) ?? kindByRole(role as keyof typeof RUNNING_PLACES, standing, run);
-  const onIssue = role !== "review" && (role !== "implement" || kind === "implement" || standing.pullRequest === null);
+  const onIssue = role !== "review" && role !== "digest" && (role !== "implement" || kind === "implement" || standing.pullRequest === null);
+  // A Digest run is a passed draft's (#654): the pass is given, as the rule says of it.
+  const passed = role === "digest" ? ({ passed: true } as const) : {};
   return {
     ...fieldsOf(standing),
     work,
@@ -161,7 +169,7 @@ function runningOn(standing: Standing, run: RunInFlightFact): StandingNamed<"run
     name: "running",
     since: runningSince(run),
     awaits: { role, on: onIssue ? "issue" : "pullRequest" },
-    detail: { run: kind, retry: role === "implement" ? run.retry : null, actionsRun: run.run, ...keptKeysOf(standing) },
+    detail: { run: kind, retry: role === "implement" ? run.retry : null, actionsRun: run.run, ...passed, ...keptKeysOf(standing) },
   };
 }
 
