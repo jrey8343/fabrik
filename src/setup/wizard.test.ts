@@ -208,8 +208,18 @@ describe("The setup wizard's Fabrik App stage", () => {
     expect(w.report).toEqual([]);
   });
 
-  /** A comment or issue made through the App `slug`, which the GitHub user `owner` owns. */
-  const actedOnBy = (slug: string, owner: string) => ({ body: "…", performed_via_github_app: { slug, owner: { login: owner } } });
+  /** A comment or issue the App `slug`, which the GitHub user `owner` owns, wrote as its bot. */
+  const actedOnBy = (slug: string, owner: string) => ({
+    body: "…",
+    user: { login: `${slug}[bot]`, type: "Bot" },
+    performed_via_github_app: { slug, owner: { login: owner } },
+  });
+  /** A comment or issue the Operator wrote themself, made through the App `slug`, which they own. */
+  const writtenThroughBy = (slug: string, owner: string) => ({
+    body: "…",
+    user: { login: owner, type: "User" },
+    performed_via_github_app: { slug, owner: { login: owner } },
+  });
   const OPERATOR = { user: { login: "jrey8343" } };
   /** The answers to the App stage that take the default slug, then the rest of TO_THE_SENTRY_STAGE. */
   const TAKING_THE_DEFAULT = ["", "", "", "", "n", ""];
@@ -286,6 +296,18 @@ describe("The setup wizard's Fabrik App stage", () => {
     expect(w.status).toBe(0);
     expect(w.opened[0]).toBe("https://github.com/settings/apps");
     expect(w.stdout).toContain("Setup complete");
+  });
+
+  it("finds no App when the only comment made through one of the Operator's Apps was written by the Operator", async () => {
+    const w = await walk(THE_APP_AND_CLAUDE, TO_THE_SENTRY_STAGE, undefined, {
+      ghApi: { ...OPERATOR, "repos/acme/clinic/issues/comments": [writtenThroughBy("another-app", "jrey8343")] },
+    });
+
+    expect(w.status).toBe(0);
+    expect(w.stdout).not.toContain("Your App");
+    expect(w.stdout).not.toContain("another-app");
+    expect(w.opened[0]).toBe("https://github.com/settings/apps");
+    expect(w.stdout).toContain("its slug is the last part of the page's URL, github.com/settings/apps/<slug>");
   });
 
   it("takes a slug the Operator types over the one it found", async () => {
