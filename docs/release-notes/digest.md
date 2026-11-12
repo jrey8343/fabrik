@@ -41,7 +41,7 @@ The notes for the release that ships the Digest ([#594](https://github.com/jrey8
 
 ## Upgrading
 
-- **A Product repo merges the Kit bump** and does nothing else: no Kit config edit, no Setup run and no new secret. From the first pass after the merge, an agent pull request gets its Digest before the Merge gate opens. A pull request already at the Merge gate has none until its next pass, or until the Operator adds `agent:digest` to it.
+- **A Product repo merges the Kit bump** and does nothing else: no Kit config edit and no new secret. From the first pass after that, an agent pull request gets its Digest before the Merge gate opens. A pull request already at the Merge gate has none until its next pass, or until the Operator adds `agent:digest` to it.
 - **The `fabrik-runs` store's caller**, its `.github/workflows/weekly-summary.yml`, is moved up to the release too, after the Pilot's Kit bump, as for any release that changes the Weekly summary. Until it is, the Weekly summary's cost per merged pull request leaves Digest runs out.
 - **Pull requests from before the release are still read.** A Verdict posted before it has no fingerprint, so a Digest of that pull request says the product code's comparison "could not be established", and its rounds table gives a Verdict's effect on the code as "Not known" wherever it or the Verdict before it has none.
 
