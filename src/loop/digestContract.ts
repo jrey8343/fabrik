@@ -5,7 +5,7 @@
 // read library is to read one through it, so this module imports no package
 // and nothing that runs an agent or a job. Pure.
 import type { DigestAsk, DigestFacts, Round } from "./digestFacts.ts";
-import { MAX_PLACES, type NamedPlace, PLACE_KINDS } from "./digestPlaces.ts";
+import { type DigestHead, type DigestPlace, MAX_PLACES, type NamedPlace, PLACE_KINDS, placeAt } from "./digestPlaces.ts";
 import { markerJson } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
@@ -352,6 +352,8 @@ export interface DigestGiven {
   readonly runUrl: string;
   /** Kit code's facts, from the push job's own read of the pull request's thread: the asks a reply must answer, the Follow-ups it may name, and the rounds. */
   readonly facts: DigestFacts;
+  /** What the head holds of the files the reply's places name, and the pull request's files, from the push job's own read (src/github/digestHead.ts). */
+  readonly head: DigestHead;
 }
 
 /** A Digest's comment, or why Kit code refuses the reply: each reason a clause with no full stop, with "; " between two. */
@@ -418,19 +420,14 @@ function roundsTable(rounds: readonly Round[]): string[] {
   ];
 }
 
-/**
- * The Follow-ups section: each Follow-up the reply names, once, in the order
- * Kit code listed them, as one line with its title and its Open as issue
- * link; or that none is named.
- */
-function followUpLines(shown: readonly string[], listed: DigestFacts["followUps"]): string[] {
-  const lines = listed.filter(({ id }) => shown.includes(id)).map(({ title, url }) => `- ${withoutMentions(title)}: [Open as issue](${url})`);
-  return lines.length === 0 ? ["None named."] : lines;
-}
-
 /** The writer's plain text on one line, with no mention in it. */
 function oneLine(words: string): string {
   return withoutMentions(words.trim().replace(/\s+/g, " "));
+}
+
+/** The writer's text as a Digest shows it: with no mention in it, as a Verdict's findings lose theirs. */
+function shown(words: string): string {
+  return withoutMentions(words.trim());
 }
 
 /** The writer's words as a cell of one of Kit code's tables: one line, with no mention, and no pipe that would end the cell. */
@@ -438,13 +435,106 @@ function cell(words: string): string {
   return oneLine(words).replace(/\|/g, "\\|");
 }
 
+/** One item under Needs your eyes, as a Digest carries it. */
+export interface DigestDataItem {
+  readonly kind: ItemKind;
+  readonly claim: string;
+  readonly sentence: string;
+  /** The places the item points at that resolve in the head, each at most 40 lines (src/loop/digestPlaces.ts). */
+  readonly places: readonly DigestPlace[];
+  /** A captured route. Always null here: an item names no picture yet. */
+  readonly picture: string | null;
+  /** The request the Operator could send as it stands, which GitHub's rendering leaves out; null when the item has none. */
+  readonly suggestedRequest: string | null;
+}
+
 /**
- * Needs your eyes: each item as its bold claim and its sentence, in the
- * order given, or "Nothing." when there is none. An item's suggested request
- * is not rendered: it is for the Console, which reads it as data.
+ * The top of a Digest as data: what Kit code renders above the folds, as
+ * the fields it rendered them from. The asks an item names are checked
+ * before the Digest lands and are not here, and the four folds carry no
+ * data.
  */
-function needsYourEyes(items: readonly DigestItem[]): string[] {
-  return items.length === 0 ? ["Nothing."] : items.map(({ claim, sentence }) => `- **${oneLine(claim)}** ${oneLine(sentence)}`);
+export interface DigestData {
+  readonly items: readonly DigestDataItem[];
+  readonly whatItDoes: string;
+  readonly howItGotHere: string;
+  /** Each Follow-up shown, with its Open as issue link. */
+  readonly followUps: readonly { readonly title: string; readonly url: string }[];
+}
+
+/**
+ * A reply's top as the Digest carries it, from the writer's fields, Kit
+ * code's facts and what the head holds. The items are in kind order with no
+ * suggested request where none may stand (digestItemsOf); each place is as
+ * it resolves in the head, one that does not being dropped and its item
+ * kept (placeAt); the Follow-ups are the ones the reply names, once, in the
+ * order Kit code listed them; and every text has lost its mentions.
+ */
+function digestDataOf(reply: DigestReply, { facts, head }: Pick<DigestGiven, "facts" | "head">): DigestData {
+  return {
+    items: digestItemsOf(reply).map(({ kind, claim, sentence, places, suggestedRequest }) => ({
+      kind,
+      claim: oneLine(claim),
+      sentence: oneLine(sentence),
+      places: places.map((place) => placeAt(place, head)).filter((place) => place !== null),
+      picture: null,
+      suggestedRequest: suggestedRequest === null ? null : shown(suggestedRequest),
+    })),
+    whatItDoes: shown(reply.whatItDoes),
+    howItGotHere: shown(reply.howItGotHere),
+    followUps: facts.followUps.filter(({ id }) => reply.followUps.includes(id)).map(({ title, url }) => ({ title: withoutMentions(title), url })),
+  };
+}
+
+/** Where a Digest is: the Product repo's web address, its pull request, and the head it is written as of, a full sha. */
+export type DigestWhere = Pick<DigestGiven, "repoUrl" | "pullRequest" | "headSha">;
+
+/**
+ * A place as a Digest shows it: a plain link to the file and its lines at
+ * the head, never the lines themselves. `?plain=1` has GitHub show a file
+ * it would render, such as Markdown, as its lines, so the link lands on them.
+ */
+function placeLink({ path, start, end }: DigestPlace, { repoUrl, headSha }: DigestWhere): string {
+  const file = path.split("/").map((part) => encodeURIComponent(part).replace(/[()]/g, (bracket) => (bracket === "(" ? "%28" : "%29"))).join("/");
+  const lines = start === end ? `line ${start}` : `lines ${start} to ${end}`;
+  return `[\`${path}\`, ${lines}](${repoUrl}/blob/${headSha}/${file}?plain=1#L${start}${start === end ? "" : `-L${end}`})`;
+}
+
+/**
+ * The top of a Digest, rendered from its data alone: the line naming the
+ * pull request and the head it is written as of; Needs your eyes, each item
+ * as its bold claim and its sentence, then its places as plain links, or
+ * "Nothing." when there is none; What it does; How it got here; and the
+ * Follow-ups, each as its title and its Open as issue link, or that none is
+ * named. No code appears in it, and an item's suggested request is not
+ * rendered: it is for a reader of the data.
+ */
+export function digestTop(data: DigestData, where: DigestWhere): string {
+  const { repoUrl, pullRequest, headSha } = where;
+  return [
+    `**Digest** of #${pullRequest}, written as of [\`${headSha.slice(0, 7)}\`](${repoUrl}/pull/${pullRequest}/commits/${headSha}).`,
+    "",
+    "### Needs your eyes",
+    "",
+    ...(data.items.length === 0
+      ? ["Nothing."]
+      : data.items.flatMap(({ claim, sentence, places }) => [
+          `- **${oneLine(claim)}** ${oneLine(sentence)}`,
+          ...(places.length === 0 ? [] : [`  ${places.map((place) => placeLink(place, where)).join(" · ")}`]),
+        ])),
+    "",
+    "### What it does",
+    "",
+    shown(data.whatItDoes),
+    "",
+    "### How it got here",
+    "",
+    shown(data.howItGotHere),
+    "",
+    "### Follow-ups",
+    "",
+    ...(data.followUps.length === 0 ? ["None named."] : data.followUps.map(({ title, url }) => `- ${withoutMentions(title)}: [Open as issue](${url})`)),
+  ].join("\n");
 }
 
 /** Each answer, as the criteria table says it. One that is not "in the head" is marked, in bold. */
@@ -599,8 +689,7 @@ function followUpsRefused(shown: readonly string[], listed: DigestFacts["followU
  * request where none may stand (digestItemsOf).
  */
 export function digestCommentOf(reply: DigestReply, given: DigestGiven): DigestComment {
-  const text = (field: string): string => withoutMentions(field.trim());
-  const { repoUrl, pullRequest, headSha, runUrl, facts } = given;
+  const { headSha, runUrl, facts } = given;
   const refusals = [
     ...answersRefused(reply.asks, facts.asks),
     ...itemsRefused(reply.items, reply.asks),
@@ -608,34 +697,18 @@ export function digestCommentOf(reply: DigestReply, given: DigestGiven): DigestC
     ...wordsRefused(reply),
   ];
   if (refusals.length > 0) return { ok: false, refused: refusals.join("; ") };
-  const items = digestItemsOf(reply);
+  const data = digestDataOf(reply, given);
   const body = [
     digestMarker({ head: headSha, asks: facts.asks.map(({ id }) => id) }),
-    `**Digest** of #${pullRequest}, written as of [\`${headSha.slice(0, 7)}\`](${repoUrl}/pull/${pullRequest}/commits/${headSha}).`,
-    "",
-    "### Needs your eyes",
-    "",
-    ...needsYourEyes(items),
-    "",
-    "### What it does",
-    "",
-    text(reply.whatItDoes),
-    "",
-    "### How it got here",
-    "",
-    text(reply.howItGotHere),
-    "",
-    "### Follow-ups",
-    "",
-    ...followUpLines(reply.followUps, facts.followUps),
+    digestTop(data, given),
     "",
     DIGEST_FOLDS_MARKER,
-    ...fold("Walk me through it", text(reply.walkthrough)),
+    ...fold("Walk me through it", shown(reply.walkthrough)),
     "",
-    ...fold("Decided without you, and left alone", text(reply.decided)),
+    ...fold("Decided without you, and left alone", shown(reply.decided)),
     "",
     // Kit code's table, then the writer's one closing line, and nothing else.
-    ...fold("The rounds", [...roundsTable(facts.rounds), "", text(reply.roundsLine).replace(/\s+/g, " ")].join("\n")),
+    ...fold("The rounds", [...roundsTable(facts.rounds), "", shown(reply.roundsLine).replace(/\s+/g, " ")].join("\n")),
     "",
     ...fold("The criteria and how each was checked", criteriaTable(reply.asks, facts.asks).join("\n")),
     "",

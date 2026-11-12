@@ -1,8 +1,43 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aDigestReply } from "../__fixtures__/digests.ts";
-import { type DigestItem, readDigestReply } from "./digestContract.ts";
-import { MAX_PLACE_LINES, MAX_PLACES, type NamedPlace, PLACE_KINDS } from "./digestPlaces.ts";
+import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
+import { type DigestGiven, type DigestItem, type DigestReply, digestCommentOf, readDigestReply } from "./digestContract.ts";
+import { type DigestHead, MAX_PLACE_LINES, MAX_PLACES, type NamedPlace, PLACE_KINDS } from "./digestPlaces.ts";
+
+const HEAD = "a".repeat(40);
+const BLOB = `https://github.com/acme/shop/blob/${HEAD}`;
+
+/** The saved-basket rule at the head: a hundred lines, `const line1 = 1;` to `const line100 = 100;`, ending in a newline. */
+const SAVE = `${Array.from({ length: 100 }, (_, index) => `const line${index + 1} = ${index + 1};`).join("\n")}\n`;
+/** The basket page's copy at the head: five lines, with no newline after the last. */
+const COPY = ["export const copy = {", '  save: "Save basket",', '  saved: "Saved for 24 hours",', '  gone: "Your saved basket has expired",', "};"].join("\n");
+
+/** What the head holds of the two files the places below name; the pull request changes neither. */
+function aHead(overrides: Partial<DigestHead> = {}): DigestHead {
+  return {
+    files: [
+      { path: "src/basket/save.ts", text: SAVE },
+      { path: "src/basket/copy.ts", text: COPY },
+    ],
+    changed: [],
+    ...overrides,
+  };
+}
+
+function given(head: DigestHead = aHead()): DigestGiven {
+  return aDigestGiven({ repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, head });
+}
+
+function bodyOf(reply: DigestReply, from: DigestGiven = given()): string {
+  const comment = digestCommentOf(reply, from);
+  if (!comment.ok) throw new Error(`expected a Digest, got the refusal: ${comment.refused}`);
+  return comment.body;
+}
+
+/** Needs your eyes as the comment shows it: the lines between its heading and the next. */
+function needsYourEyesIn(body: string): string[] {
+  return (body.split("### Needs your eyes\n\n")[1]?.split("\n\n### ")[0] ?? "").split("\n");
+}
 
 /** A place as the writer names one: lines of the saved-basket rule, as code. */
 function aPlace(start: number, end: number, rest: Partial<NamedPlace> = {}): NamedPlace {
@@ -41,6 +76,27 @@ describe("The places an item of the Digest writer's reply names", () => {
     ["what a place is shown as is unknown", { places: [{ ...aPlace(10, 12), as: "prose" }] }, 'items[0].places[0].as must be one of code, words, not "prose"'],
   ])("break the reply's shape when %s, naming it", (_what, broken, error) => {
     expect(readDigestReply(aDigestReply({ items: [{ ...anItem("not-proven"), ...broken } as DigestItem] }))).toEqual({ ok: false, errors: [error] });
+  });
+});
+
+describe("An item's places, in the Digest's comment", () => {
+  it("are plain links to the file and its lines at the head, after the item's sentence", () => {
+    const places = [aPlace(10, 12), aPlace(4, 4, { path: "src/basket/copy.ts", as: "words" })];
+
+    expect(needsYourEyesIn(bodyOf(aDigestReply({ items: [anItem("yours-to-judge", { places }), anItem("not-proven", { claim: "Nothing shows a basket expiring." })] })))).toEqual([
+      "- **Prices hold for 24 hours.** The Ticket said for a while, and the Implementer chose a day.",
+      `  [\`src/basket/save.ts\`, lines 10 to 12](${BLOB}/src/basket/save.ts?plain=1#L10-L12) · [\`src/basket/copy.ts\`, line 4](${BLOB}/src/basket/copy.ts?plain=1#L4)`,
+      "- **Nothing shows a basket expiring.** The Ticket said for a while, and the Implementer chose a day.",
+    ]);
+  });
+
+  it("link a path with a space or a bracket in it so that the link still opens", () => {
+    const path = "docs/saved baskets (v2).md";
+    const head = aHead({ files: [{ path, text: "# Saved baskets\n\nA saved basket keeps its prices for a day.\n" }] });
+
+    expect(needsYourEyesIn(bodyOf(aDigestReply({ items: [anItem("yours-to-judge", { places: [aPlace(3, 3, { path, as: "words" })] })] }), given(head)))[1]).toBe(
+      `  [\`docs/saved baskets (v2).md\`, line 3](${BLOB}/docs/saved%20baskets%20%28v2%29.md?plain=1#L3)`,
+    );
   });
 });
 

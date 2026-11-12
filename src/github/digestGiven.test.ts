@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
-import { digestCommentOf } from "../loop/digestContract.ts";
+import { type DigestReply, digestCommentOf } from "../loop/digestContract.ts";
 import { handBackMarker, RETRY_PUSH_MARKER, verdictMarker } from "../loop/markers.ts";
 import type { ReadClient } from "./client.ts";
 import { readDigestGiven, readDigestThread } from "./digestGiven.ts";
@@ -42,6 +42,10 @@ interface Thread {
   readonly headRefName?: string;
   /** The issues the pull request closes, each with its comments as GraphQL gives them. */
   readonly closes?: readonly { number: number; comments: readonly { body: string; author: { login: string; __typename: string } | null }[] }[];
+  /** The pull request's files, as GitHub's REST API lists them. Left out, the read of them is unexpected. */
+  readonly files?: readonly { filename: string; status: string; patch?: string }[];
+  /** Each file's text at the head, by its path. Left out, a read of any file is unexpected. */
+  readonly texts?: Readonly<Record<string, string>>;
 }
 
 const REVIEW_URL = (id: number) => `https://github.com/acme/shop/pull/50#pullrequestreview-${id}`;
@@ -53,7 +57,7 @@ const LINE_URL = (id: number) => `https://github.com/acme/shop/pull/50#discussio
  * queries select: the thread's opening, and the pull request as the Loop's
  * snapshot reads it.
  */
-function gitHub({ comments = [], reviews = [], lineComments = [], headRefName = "fabrik/ticket-7", closes = [] }: Thread = {}): { client: ReadClient; calls: string[] } {
+function gitHub({ comments = [], reviews = [], lineComments = [], headRefName = "fabrik/ticket-7", closes = [], files, texts }: Thread = {}): { client: ReadClient; calls: string[] } {
   const calls: string[] = [];
   const author = (user: User | null) => (user === null ? null : { login: user.login, __typename: user.type });
   const client: ReadClient = {
@@ -97,9 +101,14 @@ function gitHub({ comments = [], reviews = [], lineComments = [], headRefName = 
       if (route === "/repos/acme/shop/pulls/50/reviews") {
         return reviews.map((review) => ({ html_url: REVIEW_URL(review.id), ...review, body: review.body === undefined ? "Call it a basket." : review.body }));
       }
+      if (route === "/repos/acme/shop/pulls/50/files" && files !== undefined) return files;
       throw new Error(`unexpected REST call ${path}`);
     },
-    fileText: () => Promise.reject(new Error("the thread's read read a file")),
+    fileText: async (_repo, path, ref) => {
+      if (texts === undefined) throw new Error("the thread's read read a file");
+      calls.push(`text ${path}@${ref}`);
+      return texts[path] ?? null;
+    },
   };
   return { client, calls };
 }
@@ -226,7 +235,7 @@ describe("The push job's read of a pull request's thread, for Kit code's facts",
 });
 
 describe("What the push job hands the Digest's contract", () => {
-  const written = { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, runUrl: RUN, operator: "olive" };
+  const written = { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, runUrl: RUN, operator: "olive", output: JSON.stringify(aDigestReply()) };
   const thread: Thread = {
     comments: [
       { user: BOT, body: FLAW, created_at: at(5) },
@@ -241,7 +250,7 @@ describe("What the push job hands the Digest's contract", () => {
     const given = await readDigestGiven(gitHub(thread).client, repo, written);
 
     expect(given).toMatchObject({ repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, runUrl: RUN });
-    expect(Object.keys(given).toSorted()).toEqual(["facts", "headSha", "pullRequest", "repoUrl", "runUrl"]);
+    expect(Object.keys(given).toSorted()).toEqual(["facts", "head", "headSha", "pullRequest", "repoUrl", "runUrl"]);
     expect(given.facts.rounds.map(({ who, what }) => `${who}: ${what}`)).toEqual([
       "implementer: first-run",
       "operator: request-changes",
@@ -298,5 +307,63 @@ describe("What the push job hands the Digest's contract", () => {
     const given = await readDigestGiven(gitHub(thread).client, repo, written);
 
     expect(digestCommentOf(aDigestReply(), given)).toEqual({ ok: false, refused: "the reply left an ask unanswered: `review-8`" });
+  });
+
+  describe("of the head, for the places the writer's reply names", () => {
+    const PATCH = "@@ -1,2 +1,2 @@\n export const hours = 24;\n-export const day = 12;\n+export const day = hours;";
+    const held: Thread = {
+      ...thread,
+      reviews: [],
+      files: [{ filename: "src/basket/save.ts", status: "modified", patch: PATCH }],
+      texts: { "src/basket/save.ts": "export const hours = 24;\nexport const day = hours;\n" },
+    };
+    const item = (places: DigestReply["items"][number]["places"]): DigestReply["items"][number] => ({
+      kind: "yours-to-judge",
+      claim: "Prices hold for 24 hours.",
+      sentence: "The Ticket said for a while.",
+      asks: [],
+      places,
+      suggestedRequest: null,
+    });
+    const reply = aDigestReply({
+      items: [item([{ path: "src/basket/save.ts", start: 1, end: 2, as: "code" }]), item([{ path: "src/basket/gone.ts", start: 4, end: 4, as: "words" }])],
+    });
+
+    it("is each named file's text at the head the Digest is written as of, and the pull request's files", async () => {
+      const { client, calls } = gitHub(held);
+
+      const given = await readDigestGiven(client, repo, { ...written, output: JSON.stringify(reply) });
+
+      expect(given.head).toEqual({
+        files: [
+          { path: "src/basket/save.ts", text: "export const hours = 24;\nexport const day = hours;\n" },
+          { path: "src/basket/gone.ts", text: null },
+        ],
+        changed: [{ path: "src/basket/save.ts", patch: PATCH }],
+      });
+      expect(calls.filter((call) => call.startsWith("text ")).toSorted()).toEqual([`text src/basket/gone.ts@${HEAD}`, `text src/basket/save.ts@${HEAD}`]);
+    });
+
+    it("is what the contract checks each place against: one in the head lands with its link, and one in a file the head lacks is dropped", async () => {
+      const given = await readDigestGiven(gitHub(held).client, repo, { ...written, output: JSON.stringify(reply) });
+      const comment = digestCommentOf(reply, given);
+
+      expect(comment).toMatchObject({
+        ok: true,
+        body: expect.stringContaining(`[\`src/basket/save.ts\`, lines 1 to 2](https://github.com/acme/shop/blob/${HEAD}/src/basket/save.ts?plain=1#L1-L2)`),
+      });
+      expect(comment).toMatchObject({ body: expect.not.stringContaining("gone.ts") });
+    });
+
+    it.each([
+      ["names no place", JSON.stringify(aDigestReply())],
+      ["breaks its shape, which Kit code refuses", JSON.stringify({ items: reply.items })],
+      ["is no JSON", "<digest>"],
+    ])("reads nothing of the head for a reply that %s", async (_what, output) => {
+      const { client, calls } = gitHub(held);
+
+      expect((await readDigestGiven(client, repo, { ...written, output })).head).toEqual({ files: [], changed: [] });
+      expect(calls.filter((call) => call.startsWith("text ") || call.includes("/pulls/50/files"))).toEqual([]);
+    });
   });
 });

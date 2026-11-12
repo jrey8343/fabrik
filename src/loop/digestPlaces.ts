@@ -28,3 +28,44 @@ export interface NamedPlace {
   readonly end: number;
   readonly as: PlaceKind;
 }
+
+/**
+ * A place as a Digest carries it, once Kit code has checked it against the
+ * head: it resolves there and holds at most 40 lines.
+ */
+export interface DigestPlace extends NamedPlace {
+  /** Whether the place can take a pinned comment (see inOneHunk). */
+  readonly inDiff: boolean;
+  /** The fingerprint of its lines at the head (see fingerprintOf). */
+  readonly fingerprint: string;
+}
+
+/**
+ * What the head holds, as far as a Digest's places ask: the text of each
+ * file a place names, and the pull request's files with their patches.
+ */
+export interface DigestHead {
+  /** Each file a place names, with its text at the head: null when the head has no such file, or none that reads as text. */
+  readonly files: readonly { readonly path: string; readonly text: string | null }[];
+  /** The pull request's files, as GitHub's API gives them: each one's path at the head and its patch, null when GitHub gives none. */
+  readonly changed: readonly { readonly path: string; readonly patch: string | null }[];
+}
+
+/**
+ * Whether `path` could be a file's path in a repo, from its root: parts
+ * joined by `/`, none of them empty, `.` or `..`. A place's path is the
+ * Digest writer's word, and no other is ever read or linked.
+ */
+export function isRepoPath(path: string): boolean {
+  return path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+/**
+ * A place as a Digest carries it, or null when it does not resolve in the
+ * head, and is dropped.
+ */
+export function placeAt(named: NamedPlace, head: DigestHead): DigestPlace | null {
+  const text = head.files.find(({ path }) => path === named.path)?.text ?? null;
+  if (text === null) return null;
+  return { ...named, inDiff: false, fingerprint: "" };
+}

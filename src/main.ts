@@ -299,7 +299,7 @@ async function finishedDigestEvent(
 ): Promise<{ event: LoopEvent; source: string }> {
   const result = readAgentRunResult(await readFile(resultPath, "utf8"));
   const { pullRequest, headSha } = input;
-  const given = await readDigestGiven(github, repo, { repoUrl: thisRepoUrl(), pullRequest, headSha, runUrl: thisRunUrl(), operator });
+  const given = await readDigestGiven(github, repo, { repoUrl: thisRepoUrl(), pullRequest, headSha, runUrl: thisRunUrl(), operator, output: result.output });
   return { event: digestEventFrom(result, { pullRequest, headSha }, given, thisRunUrl()), source: `the Digest of #${pullRequest}` };
 }
 

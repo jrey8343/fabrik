@@ -64,7 +64,11 @@ export function aDigestReply(overrides: Partial<DigestReply> = {}): DigestReply 
   };
 }
 
-/** What the push job hands the contract for the Digest of #50 of acme/shop at head `a…a`, with aDigestFacts for its facts. */
+/**
+ * What the push job hands the contract for the Digest of #50 of acme/shop at
+ * head `a…a`, with aDigestFacts for its facts and nothing read of the head,
+ * as for a reply that names no place.
+ */
 export function aDigestGiven(overrides: Partial<DigestGiven> = {}): DigestGiven {
   return {
     repoUrl: "https://github.com/acme/shop",
@@ -72,6 +76,7 @@ export function aDigestGiven(overrides: Partial<DigestGiven> = {}): DigestGiven 
     headSha: HEAD,
     runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
     facts: aDigestFacts(),
+    head: { files: [], changed: [] },
     ...overrides,
   };
 }

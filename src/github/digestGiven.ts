@@ -8,9 +8,10 @@
 // Digest's rounds table is rendered from the push job's own, never from what
 // the agent job passed out.
 import { ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
-import type { DigestGiven } from "../loop/digestContract.ts";
+import { type DigestGiven, parseDigestReply } from "../loop/digestContract.ts";
 import { type DigestThread, digestFactsOf } from "../loop/digestFacts.ts";
 import { allPages, type ReadClient, type Repo } from "./client.ts";
+import { readDigestHead } from "./digestHead.ts";
 import { deferredChangesRequestsOn } from "./snapshot.ts";
 import { countLandedNothing } from "./threads.ts";
 
@@ -25,23 +26,36 @@ export interface DigestWritten {
   readonly runUrl: string;
   /** The Kit config's `operator`, or null when it names none: the repo's owner then, as the Loop's snapshot has it. */
   readonly operator: string | null;
+  /** The Digest writer's reply, as its run gave it, unchecked. It is read here only for the files its places name. */
+  readonly output: string;
 }
 
 /**
  * What Kit code hands the contract for the Digest of `written.pullRequest`
- * at `written.headSha`: what the push job knows already, and Kit code's
- * facts, worked out from the pull request's thread as `github` reads it now.
- * Among the facts are the asks the writer's reply is checked against, so
- * the Operator's Request changes deferred during a Retry are read here as
- * the agent job's inputs step read them, from the Loop's snapshot of the
- * pull request.
+ * at `written.headSha`: what the push job knows already, Kit code's facts,
+ * worked out from the pull request's thread as `github` reads it now, and
+ * what that head holds of the files the reply's places name
+ * (readDigestHead). Among the facts are the asks the writer's reply is
+ * checked against, so the Operator's Request changes deferred during a Retry
+ * are read here as the agent job's inputs step read them, from the Loop's
+ * snapshot of the pull request.
+ *
+ * The reply says only which files to read: each place is checked against
+ * what the read found, never against the reply. One that breaks its shape
+ * is refused whatever the head holds, so nothing of the head is read for it.
  */
 export async function readDigestGiven(github: ReadClient, repo: Repo, written: DigestWritten): Promise<DigestGiven> {
   const { repoUrl, pullRequest, headSha, runUrl } = written;
   const operator = written.operator ?? repo.owner;
-  const deferred = await deferredChangesRequestsOn(github, repo, pullRequest, operator);
-  const thread = await readDigestThread(github, repo, pullRequest, operator, deferred);
-  return { repoUrl, pullRequest, headSha, runUrl, facts: digestFactsOf(thread) };
+  const reply = parseDigestReply(written.output);
+  const named = reply.ok ? reply.output.items.flatMap(({ places }) => places.map(({ path }) => path)) : [];
+  const [facts, head] = await Promise.all([
+    deferredChangesRequestsOn(github, repo, pullRequest, operator)
+      .then((deferred) => readDigestThread(github, repo, pullRequest, operator, deferred))
+      .then(digestFactsOf),
+    readDigestHead(github, repo, pullRequest, headSha, named),
+  ]);
+  return { repoUrl, pullRequest, headSha, runUrl, facts, head };
 }
 
 /** When the pull request opened, its branch, and the comments on each issue it closes, as the Loop's snapshot reads a Ticket's (src/github/snapshot.ts). */
