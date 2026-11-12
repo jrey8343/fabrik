@@ -109,3 +109,79 @@ export function kitSaidOf(plan: Plan | null, ticket: number | null): KitSaid {
     replay: replay === undefined ? null : { issue: replay.issue, ticket: replay.ticket.ticket },
   };
 }
+
+/**
+ * What a Kit job routed, read from its steps as Actions lists them: the line
+ * its closing step is named, or null. It takes the line only from a step that
+ * completed with success and whose name parses as a line at this version. A
+ * step not yet completed is named with the workflow file's unevaluated text, a
+ * skipped one's name is never worked out, a job from a release before the
+ * closing step has none, and a line at a version this release doesn't know is
+ * never guessed at: each gives null. Fields a later release adds are left out.
+ */
+export function kitSaidIn(steps: readonly ActionsStep[]): KitSaid | null {
+  for (const step of steps) {
+    if (step.status !== "completed" || step.conclusion !== "success") continue;
+    const said = kitSaidFrom(step.name);
+    if (said !== null) return said;
+  }
+  return null;
+}
+
+function kitSaidFrom(name: string): KitSaid | null {
+  if (!name.startsWith("{")) return null;
+  let line: unknown;
+  try {
+    line = JSON.parse(name);
+  } catch {
+    return null;
+  }
+  if (!isRecord(line) || line["fabrik"] !== KIT_SAID_VERSION) return null;
+  const { route, run, held, replay } = line;
+  if (!ROUTES.includes(route as KitRoute) || !Array.isArray(held)) return null;
+  const readRun = run === null ? null : runFrom(run);
+  const readHeld = held.map(heldFrom);
+  const readReplay = replay === null ? null : replayFrom(replay);
+  if (readRun === undefined || readReplay === undefined || readHeld.includes(undefined)) return null;
+  return {
+    fabrik: KIT_SAID_VERSION,
+    route: route as KitRoute,
+    run: readRun,
+    held: readHeld.filter((entry) => entry !== undefined),
+    replay: readReplay,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isRole(value: unknown): value is AgentRole {
+  return AGENT_ROLES.includes(value as AgentRole);
+}
+
+/** The run a line names, or undefined when it isn't one. */
+function runFrom(value: unknown): KitSaid["run"] | undefined {
+  if (!isRecord(value)) return undefined;
+  const { role, issue, pullRequest, kind, retry, model } = value;
+  if (!isRole(role) || !isNumber(retry) || typeof model !== "string") return undefined;
+  if ((issue !== null && !isNumber(issue)) || (pullRequest !== null && !isNumber(pullRequest))) return undefined;
+  if (kind !== null && !RUN_KINDS.includes(kind as RunKind)) return undefined;
+  return { role, issue, pullRequest, kind: kind as RunKind | null, retry, model };
+}
+
+/** A held run a line names, or undefined when it isn't one. */
+function heldFrom(value: unknown): KitSaid["held"][number] | undefined {
+  if (!isRecord(value) || !isRole(value["role"]) || !isNumber(value["issue"])) return undefined;
+  return { role: value["role"], issue: value["issue"] };
+}
+
+/** The replay a line names, or undefined when it isn't one. */
+function replayFrom(value: unknown): KitSaid["replay"] | undefined {
+  if (!isRecord(value) || !isNumber(value["issue"]) || !isNumber(value["ticket"])) return undefined;
+  return { issue: value["issue"], ticket: value["ticket"] };
+}
