@@ -39,4 +39,42 @@ describe("The Digest: a pass", () => {
     ]);
     expect(notificationsOf(plan, "jrey")).toEqual(["review request on #50"]);
   });
+
+  /** Whether a plan adds `agent:digest` anywhere, or takes the PR out of draft, or requests a review. */
+  const startsADigestOrOpensTheGate = (plan: Plan): boolean =>
+    actionsOf(plan).some(
+      (action) =>
+        (action.kind === "add-labels" && action.labels.includes("agent:digest")) || action.kind === "mark-ready-for-review" || action.kind === "request-review",
+    );
+
+  it("a pass on a PR that conflicts with main adds no label: it is brought up to date first, and the pass on that head brings the Digest", () => {
+    const conflicting = { main: "c".repeat(40), mergeable: false };
+    const plan = planFor(reviewed("verdict: pass\n\nLooks good."), snapshotOfPullRequest(aPullRequest(), { mergeable: conflicting }), kitConfig());
+
+    expect(actionsOf(plan).map(({ kind }) => kind)).toEqual(["comment", "rebase-onto-main"]);
+    expect(startsADigestOrOpensTheGate(plan)).toBe(false);
+  });
+
+  it("a pass that gives way to a Request changes deferred during a Retry adds no label", () => {
+    const deferred = aPullRequest({
+      unbuiltChangesRequests: [{ review: 777, reviewer: "operator", reviewerIsBot: false, submittedAt: "2026-11-08T05:00:00.000Z" }],
+      notedChangesRequests: [777],
+      deferredChangesRequests: [777],
+    });
+    const plan = planFor(reviewed("verdict: pass\n\nLooks good."), snapshotOfPullRequest(deferred), kitConfig());
+
+    expect(verdictsPostedIn(commentsOf(plan))).toMatchObject([{ verdict: "pass", requestChangesFirst: [777] }]);
+    expect(startsADigestOrOpensTheGate(plan)).toBe(false);
+  });
+
+  it.each([
+    ["an Execution flaw from the Reviewer", reviewed("verdict: execution-flaw\n\nThe empty-cart case throws.")],
+    ["a Design flaw", reviewed("verdict: design-flaw\n\nThe Ticket asks for two contradictory things.")],
+    ["an Execution flaw from red required checks", { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN } as const],
+  ])("%s adds no label", (_what, event: LoopEvent) => {
+    const plan = planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    expect(verdictsPostedIn(commentsOf(plan))).toHaveLength(1);
+    expect(startsADigestOrOpensTheGate(plan)).toBe(false);
+  });
 });
