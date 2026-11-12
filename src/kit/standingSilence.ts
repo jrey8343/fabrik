@@ -3,6 +3,7 @@
 // the repo's bar with no sign from the Kit (src/kit/standingClock.ts), or never
 // where the facts can't date it. With them, the one look-alike that is the
 // Operator's: a passed draft they put back in draft, `parked`.
+import { notDismissedIn, type PullRequestHistoryItem, requestChangesSinceRunIn } from "../github/threads.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { verdictsOn } from "./retroEvidence.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
@@ -11,12 +12,49 @@ import { passAtHeadOf } from "./standingOperator.ts";
 import type { OpenPullRequestFacts } from "./weeklySummary.ts";
 
 /** Which silence a `waiting-on-kit` Standing is. */
-export type WaitingOnKitSilence = "conflicting-draft" | "passed-draft" | "quiet-draft";
+export type WaitingOnKitSilence = "request-changes" | "conflicting-draft" | "passed-draft" | "quiet-draft";
 
 /** Every `waiting-on-kit` and `parked` Standing in the repo: each pull request's first, so a Ticket's own leftover gives way to its draft's. */
 export function silenceStandingsOf(facts: StandingFacts, _now: string): Standing[] {
   const bar = barOf(facts);
-  return facts.github.openPullRequests.flatMap((pullRequest) => draftSilencesOn(pullRequest, facts, bar));
+  return facts.github.openPullRequests.flatMap((pullRequest) => [...requestChangesSilencesOn(pullRequest, facts, bar), ...draftSilencesOn(pullRequest, facts, bar)]);
+}
+
+/**
+ * The Operator's Request changes on an agent PR for a Ticket that no
+ * Request-changes run was started for, by the Loop's own reading of its
+ * history (requestChangesSinceRunIn), as the undelivered-Request-changes
+ * check reads it: not dismissed, not built, and not noted by the Kit. At
+ * Implement, from when the oldest of them was submitted.
+ */
+function requestChangesSilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts, bar: number): StandingNamed<"waiting-on-kit">[] {
+  if (pullRequest.ticket === null) return [];
+  const history = historyOf(pullRequest, facts.appLogin);
+  const { unbuiltChangesRequests, notedChangesRequests } = requestChangesSinceRunIn(history, notDismissedIn(history), facts.operator);
+  const unnoted = unbuiltChangesRequests.filter(({ review, reviewer, reviewerIsBot }) => !reviewerIsBot && reviewer === facts.operator && !notedChangesRequests.includes(review));
+  const oldest = unnoted.map(({ submittedAt }) => submittedAt).toSorted((a, b) => Date.parse(a) - Date.parse(b))[0];
+  if (oldest === undefined) return [];
+  return [waitingOnKit(facts, pullRequest.ticket, pullRequest, "ticket", "implement", oldest, bar, { role: "implement", on: "pullRequest" }, { silence: "request-changes", round: null })];
+}
+
+/**
+ * What tells whether an agent PR's Request changes were built, as the Loop's
+ * snapshot reads it: the Fabrik App's comments, the reviews requesting changes
+ * (a dismissed one's state is no longer that) and its draft changes. An agent
+ * PR opens as a draft; one whose draft changes weren't read has been as it is
+ * all along, so it starts so.
+ */
+function historyOf(pullRequest: OpenPullRequestFacts, appLogin: string): PullRequestHistoryItem[] {
+  const first = pullRequest.draftEvents[0];
+  const opened = first === undefined ? (pullRequest.draft ? "draft" : "ready") : first.kind === "draft" ? "ready" : "draft";
+  return [
+    { kind: opened, at: pullRequest.createdAt },
+    ...pullRequest.comments.filter(({ author }) => author === appLogin).map(({ body, at }): PullRequestHistoryItem => ({ kind: "bot-comment", at, body })),
+    ...pullRequest.reviews
+      .filter(({ state }) => state === "changes-requested")
+      .map(({ id, author, at }): PullRequestHistoryItem => ({ kind: "changes-requested", at, review: id, reviewer: author, reviewerIsBot: author.endsWith("[bot]") })),
+    ...pullRequest.draftEvents.map(({ kind, at }): PullRequestHistoryItem => ({ kind, at })),
+  ];
 }
 
 /**

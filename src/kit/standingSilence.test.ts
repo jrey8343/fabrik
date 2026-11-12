@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aLabelAdded, aReview, aRunInFlight, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { undeliveredMarker } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
@@ -146,5 +147,66 @@ describe("a draft with a pass on its head", () => {
   });
 });
 
+describe("the Operator's Request changes with no run started", () => {
+  const PASSED = "2026-11-08T12:00:00Z";
+  const REQUESTED = PUSHED;
+  /** Agent PR #50 for Ticket 7, passed and taken out of draft by the Fabrik App, then given these reviews and comments. */
+  const atTheGate = (overrides: Parameters<typeof anOpenPullRequest>[0] = {}) =>
+    anOpenPullRequest({
+      number: 50,
+      ticket: 7,
+      draft: false,
+      comments: [aVerdictComment("pass", HEAD, PASSED)],
+      draftEvents: [{ kind: "ready", actor: "fabrik-app[bot]", at: PASSED }],
+      reviews: [aReview(REQUESTED, { id: 901 })],
+      ...overrides,
+    });
+
+  it("is waiting on the Kit at Implement from when it was submitted, for a Request-changes run on the pull request, turning Stuck at the bar", () => {
+    expect(standingsIn({ openPullRequests: [atTheGate()] })).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "implement",
+        name: "waiting-on-kit",
+        move: "kit",
+        yours: false,
+        stopsWork: false,
+        since: REQUESTED,
+        stuckAt: BAR,
+        awaits: { role: "implement", on: "pullRequest" },
+        subscription: null,
+        detail: { silence: "request-changes", round: null },
+      },
+    ]);
+    expect(standingsIn({ openPullRequests: [atTheGate()] }, {}, plus(BAR, -1))).toMatchObject([{ name: "waiting-on-kit" }]);
+    expect(standingsIn({ openPullRequests: [atTheGate()] }, {}, plus(BAR, 1))).toMatchObject([{ name: "stuck", detail: { was: "waiting-on-kit", silence: "request-changes" } }]);
+  });
+
+  it("reads an out-of-draft PR whose draft events weren't read as out of draft all along", () => {
+    expect(standingsIn({ openPullRequests: [atTheGate({ draftEvents: [] })] })).toMatchObject([{ detail: { silence: "request-changes" } }]);
+  });
+
+  it("leaves stuckAt where it was after the Operator's later comment", () => {
+    const comments = [aVerdictComment("pass", HEAD, PASSED), aComment("Any news?", plus(REQUESTED, 30), { author: "operator", byBot: false })];
+    expect(standingsIn({ openPullRequests: [atTheGate({ comments })] })).toMatchObject([{ stuckAt: BAR }]);
+  });
+
+  it("is no such silence once the Kit's note started a run for it, nor for a dismissed one or someone else's", () => {
+    const noted = atTheGate({ comments: [aVerdictComment("pass", HEAD, PASSED), aComment(`${undeliveredMarker([901])}\nStarting it.`, plus(REQUESTED, 90))] });
+    for (const pullRequest of [noted, atTheGate({ reviews: [aReview(REQUESTED, { id: 901, state: "dismissed" })] }), atTheGate({ reviews: [aReview(REQUESTED, { id: 901, author: "someone" })] })]) {
+      expect(standingsIn({ openPullRequests: [pullRequest] })).not.toContainEqual(expect.objectContaining({ detail: expect.objectContaining({ silence: "request-changes" }) }));
+    }
+  });
+
+  it("is running while an Implement run is in flight for its Ticket", () => {
+    expect(standingsIn({ openIssues: [anOpenIssue({ number: 7 })], openPullRequests: [atTheGate()] }, { kit: aKit([aRunInFlight({ issue: 7 })]) })).toMatchObject([
+      { issue: 7, pullRequest: 50, name: "running", detail: { run: "request-changes" } },
+    ]);
+  });
+});
+
 void aLabelAdded;
-void anOpenIssue;

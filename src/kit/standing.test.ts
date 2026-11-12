@@ -80,10 +80,15 @@ describe("the Standing rule", () => {
           atTheGate(64, { reviews: [aReview("2026-11-06T06:00:00Z"), aReview("2026-11-07T06:00:00Z", { state: "approved" })] }),
         ],
       });
-      expect(namesIn(standings)).toEqual([
+      expect(namesIn(standings.filter(({ move }) => move === "operator"))).toEqual([
         { pullRequest: 61, name: "yours-to-merge" },
         { pullRequest: 62, name: "yours-to-merge" },
         { pullRequest: 63, name: "yours-to-merge" },
+      ]);
+      // A Request changes no run was started for is the Kit's, Stuck by now (#608).
+      expect(namesIn(standings.filter(({ move }) => move === "kit"))).toEqual([
+        { pullRequest: 64, name: "stuck" },
+        { pullRequest: 60, name: "stuck" },
       ]);
     });
 
