@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aDesignQueueIssue, aTicket } from "../__fixtures__/snapshots.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
@@ -253,6 +254,113 @@ describe("the wording of a Plain pull request's Standing", () => {
 
   it("says nothing is owed on a draft", () => {
     expect(wordStanding(plain({ draft: true }), minutesAfter(5), ZONE)).toEqual({ pill: "Draft", sentence: "A draft; nothing is owed on it.", remedy: null });
+  });
+});
+
+describe("the wording of a silence that waits on the Kit (#608)", () => {
+  const HEAD = "h".repeat(40);
+  const RUNS = "Check [the Loop's runs](https://github.com/owner/product/actions)";
+  const operators = (body: string, at: string) => aComment(body, at, { author: "operator", byBot: false });
+  /** The one Standing of these facts at SINCE, and as the rule reads them `minutes` on. */
+  const read = (github: Partial<GitHubFacts>, minutes: number) => {
+    const [standing, ...rest] = standingsOf(standingFactsOf({ github: factsOf(github) }), minutesAfter(minutes));
+    if (standing === undefined || rest.length > 0) throw new Error("expected one Standing");
+    return wordStanding(standing, minutesAfter(minutes), ZONE);
+  };
+
+  it.each([
+    [
+      "the Operator's Request changes with no run",
+      { openPullRequests: [anOpenPullRequest({ draft: false, comments: [aVerdictComment("pass", HEAD, "2026-11-08T11:00:00Z")], reviews: [aReview(SINCE)] })] },
+      "You requested changes 40 minutes ago; no run has started. The Kit starts one at an hourly check, once it is sure none is working.",
+      "No run has started for your Request changes of 4 hours ago.",
+      `${RUNS}, then add \`agent:implement\` to #7.`,
+    ],
+    [
+      "a conflicting draft GitHub never reviewed",
+      { openPullRequests: [anOpenPullRequest({ mergeable: false, commits: [{ at: SINCE, byApp: true }] })] },
+      "#50 conflicts with `main`, so GitHub started no Review of its push 40 minutes ago. The Kit brings it up to date at an hourly check.",
+      "#50 has conflicted with `main` since its push 4 hours ago and the Kit has not brought it up to date.",
+      `${RUNS}, then resolve the conflict on the branch and push.`,
+    ],
+    [
+      "an answered needs-info",
+      { openIssues: [anOpenIssue({ labels: ["needs-info"], labelEvents: [aLabelAdded("needs-info", "2026-11-08T11:00:00Z")], comments: [operators("It's Safari.", SINCE)] })] },
+      "The question was answered 40 minutes ago; Triage has not run again.",
+      "Triage has not run since the answer 4 hours ago.",
+      `${RUNS}, then take \`needs-info\` off and add \`needs-triage\`.`,
+    ],
+    [
+      "needs-triage with no run",
+      { openIssues: [anOpenIssue({ labels: ["needs-triage"], labelEvents: [aLabelAdded("needs-triage", SINCE)] })] },
+      "Waiting for Triage since 40 minutes ago; no run has started.",
+      "Triage has not run since `needs-triage` was added 4 hours ago.",
+      `${RUNS}, then take \`needs-triage\` off and add it again.`,
+    ],
+    [
+      "an answered Round with no turn",
+      { openIssues: [anOpenIssue({ labels: ["needs-design"], comments: [aDesignRound(2, "2026-11-08T11:00:00Z"), operators("The second.", SINCE)] })] },
+      "You answered round 2 40 minutes ago; the next turn has not started.",
+      "No turn has started since your answer 4 hours ago.",
+      `${RUNS}, then reply on #12 again.`,
+    ],
+    [
+      "a passed draft whose Merge gate never opened",
+      { openPullRequests: [anOpenPullRequest({ comments: [aVerdictComment("pass", HEAD, SINCE)] })] },
+      "The Reviewer passed #50 40 minutes ago; the Kit has not opened the Merge gate yet.",
+      "The Reviewer passed #50 4 hours ago and the Merge gate never opened.",
+      `${RUNS}, then mark #50 ready for review.`,
+    ],
+    [
+      "a draft with nothing above to explain it",
+      { openPullRequests: [anOpenPullRequest({ commits: [{ at: SINCE, byApp: true }] })] },
+      "Nothing has happened on #50 since 40 minutes ago and no run is working on it.",
+      "The Kit has made no sign on #50 for 4 hours.",
+      `${RUNS}, then add \`agent:review\` to #50.`,
+    ],
+  ] as const)("words %s before the bar and at it, with its remedy", (_, github, before, after, remedy) => {
+    expect(read(github, 40)).toEqual({ pill: "Waiting on the Kit", sentence: before, remedy });
+    expect(read(github, 4 * 60)).toEqual({ pill: "Stuck", sentence: after, remedy });
+  });
+
+  it("says what the Kit does next for a silence it can't date, and only how long it has stood so for one no rule names", () => {
+    const releasing = standingsOf(
+      standingFactsOf({
+        github: factsOf({ openIssues: [anOpenIssue({ number: 14, labels: ["ready-for-agent"], createdAt: SINCE })] }),
+        kit: { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [] } }, runsInFlight: [], headChecks: {} },
+      }),
+      SINCE,
+    );
+    expect(releasing.map((standing) => wordStanding(standing, minutesAfter(40), ZONE))).toEqual([
+      { pill: "Waiting on the Kit", sentence: "Ready and unblocked. Dispatch releases it at the Kit's next hourly check.", remedy: null },
+    ]);
+    expect(wordStanding(theStandingIn({ designQueue: { issues: [aDesignQueueIssue({ number: 21 })], designTurnsInProgress: [] } }), minutesAfter(40), ZONE)).toEqual({
+      pill: "Waiting on the Kit",
+      sentence: "A Design session slot is free. The Design queue starts the session at the Kit's next hourly check.",
+      remedy: null,
+    });
+    expect(wordStanding(theStandingIn({ openReplays: [anOpenReplay({ lastEditedAt: SINCE, body: aReplayBody({ state: "pending" }) })] }), minutesAfter(40), ZONE)).toEqual({
+      pill: "Waiting on the Kit",
+      sentence: "Between its steps for 40 minutes. The Kit takes the next at its next hourly check.",
+      remedy: null,
+    });
+    expect(wordStanding(theStandingIn({ openIssues: [anOpenIssue({ labels: ["needs-design"], createdAt: SINCE })] }), minutesAfter(40), ZONE)).toEqual({
+      pill: "Waiting on the Kit",
+      sentence: "Waiting on the Kit for 40 minutes.",
+      remedy: null,
+    });
+  });
+
+  it("says the Operator parked a passed draft", () => {
+    const parked = anOpenPullRequest({
+      comments: [aVerdictComment("pass", HEAD, "2026-11-08T11:00:00Z")],
+      draftEvents: [{ kind: "ready", actor: "fabrik-app[bot]", at: "2026-11-08T11:01:00Z" }, { kind: "draft", actor: "operator", at: SINCE }],
+    });
+    expect(wordStanding(theStandingIn({ openPullRequests: [parked] }), minutesAfter(40), ZONE)).toEqual({
+      pill: "Parked by you",
+      sentence: "You put #50 back in draft 40 minutes ago, after its pass.",
+      remedy: null,
+    });
   });
 });
 

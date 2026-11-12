@@ -4,7 +4,7 @@
 // itself holds no relative time. The wording never quotes a repo's text.
 import type { HandBack } from "../loop/handBacks.ts";
 import { runNamed } from "../loop/heldRun.ts";
-import { DESIGN_LABEL, DISPATCH_LABEL, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
+import { DESIGN_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
 import type { RunningRun } from "./standingInFlight.ts";
@@ -76,8 +76,13 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     }
     case "not-started":
       return { pill: "Not started", ...notStartedWords(standing, age, false) };
+    case "waiting-on-kit":
+      return { pill: "Waiting on the Kit", ...waitingOnKitWords(standing, age, false) };
     case "stuck": {
-      if (standing.detail.was !== "not-started") throw new Error(`No wording for a Stuck ${standing.detail.was} Standing yet.`);
+      if (standing.detail.was === "waiting-on-kit") {
+        const { was, ...detail } = standing.detail;
+        return { pill: "Stuck", ...waitingOnKitWords({ ...standing, name: was, detail }, age, true) };
+      }
       const { was, ...detail } = standing.detail;
       return { pill: "Stuck", ...notStartedWords({ ...standing, name: was, detail }, age, true) };
     }
@@ -119,6 +124,8 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     }
     case "yours-to-read":
       return { pill: "Yours to read", sentence: readingSentence(standing, age), remedy: null };
+    case "parked":
+      return { pill: "Parked by you", sentence: `You put #${standing.pullRequest} back in draft ${age} ago, after its pass.`, remedy: null };
     case "check-failing": {
       const { check, checkIs } = standing.detail;
       return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing.` : `\`${check}\` has not reported on its head.`, remedy: null };
@@ -133,8 +140,6 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       return { pill: "Blocked", sentence: `Blocked by ${spelled(standing.detail.blockers.map((blocker) => `#${blocker}`), "and")}.`, remedy: null };
     case "waiting-on-author":
       return { pill: "Waiting on its author", sentence: `Triage asked its author, ${standing.detail.author}, a question ${age} ago.`, remedy: null };
-    default:
-      throw new Error(`No wording for a ${standing.name} Standing yet.`);
   }
 }
 
@@ -177,6 +182,53 @@ function notStartedWords({ repo, issue, detail }: StandingNamed<"not-started">, 
     sentence: stuck ? `Nothing has run since the Kit asked for ${asked} ${age} ago.` : `Asked for ${asked} ${age} ago; nothing has started. The Kit adds the label again at its next hourly check.`,
     remedy,
   };
+}
+
+/**
+ * The sentence and remedy of any other silence while the next move is the
+ * Kit's, before the bar or at it (`stuck`), aged from when the next move
+ * became the Kit's. One the rule can't date says what the Kit does next, or
+ * only how long it has stood so, with no remedy, as it never turns Stuck.
+ */
+function waitingOnKitWords({ repo, issue, pullRequest, detail }: StandingNamed<"waiting-on-kit">, age: string, stuck: boolean): Omit<StandingWords, "pill"> {
+  const runs = `Check [the Loop's runs](https://github.com/${repo}/actions)`;
+  const words = (before: string, atTheBar: string, then: string) => ({ sentence: stuck ? atTheBar : before, remedy: `${runs}, then ${then}.` });
+  switch (detail.silence) {
+    case "request-changes":
+      return words(
+        `You requested changes ${age} ago; no run has started. The Kit starts one at an hourly check, once it is sure none is working.`,
+        `No run has started for your Request changes of ${age} ago.`,
+        `add \`${DISPATCH_LABEL}\` to #${issue}`,
+      );
+    case "conflicting-draft":
+      return words(
+        `#${pullRequest} conflicts with \`main\`, so GitHub started no Review of its push ${age} ago. The Kit brings it up to date at an hourly check.`,
+        `#${pullRequest} has conflicted with \`main\` since its push ${age} ago and the Kit has not brought it up to date.`,
+        "resolve the conflict on the branch and push",
+      );
+    case "needs-info-answered":
+      return words(`The question was answered ${age} ago; Triage has not run again.`, `Triage has not run since the answer ${age} ago.`, `take \`${NEEDS_INFO}\` off and add \`${NEEDS_TRIAGE}\``);
+    case "needs-triage":
+      return words(`Waiting for Triage since ${age} ago; no run has started.`, `Triage has not run since \`${NEEDS_TRIAGE}\` was added ${age} ago.`, `take \`${NEEDS_TRIAGE}\` off and add it again`);
+    case "round-answered":
+      return words(`You answered round ${detail.round} ${age} ago; the next turn has not started.`, `No turn has started since your answer ${age} ago.`, `reply on #${issue} again`);
+    case "passed-draft":
+      return words(
+        `The Reviewer passed #${pullRequest} ${age} ago; the Kit has not opened the Merge gate yet.`,
+        `The Reviewer passed #${pullRequest} ${age} ago and the Merge gate never opened.`,
+        `mark #${pullRequest} ready for review`,
+      );
+    case "quiet-draft":
+      return words(`Nothing has happened on #${pullRequest} since ${age} ago and no run is working on it.`, `The Kit has made no sign on #${pullRequest} for ${age}.`, `add \`${REVIEW_LABEL}\` to #${pullRequest}`);
+    case "releasable":
+      return { sentence: "Ready and unblocked. Dispatch releases it at the Kit's next hourly check.", remedy: null };
+    case "design-slot-free":
+      return { sentence: "A Design session slot is free. The Design queue starts the session at the Kit's next hourly check.", remedy: null };
+    case "replay-between-steps":
+      return { sentence: `Between its steps for ${age}. The Kit takes the next at its next hourly check.`, remedy: null };
+    case "left-over":
+      return { sentence: `Waiting on the Kit for ${age}.`, remedy: null };
+  }
 }
 
 /** What reading matter is, and how long it has waited. */
