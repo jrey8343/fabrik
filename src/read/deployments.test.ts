@@ -276,7 +276,8 @@ describe("The Deployments read", () => {
       expect(deployOf(await readWith([]), sha("a"))).toEqual({ is: "running", deployment: 7, commit: sha("a"), at: "2026-11-12T08:02:00Z", log: null });
     });
 
-    it.each(["queued", "in_progress", "pending"])("is running when its latest report is %s", async (state) => {
+    // `waiting` is the first report GitHub makes on a deploy from an Actions job while the environment's protection rules are weighed.
+    it.each(["queued", "in_progress", "pending", "waiting"])("is running when its latest report is %s", async (state) => {
       const read = await readWith([{ state, at: "2026-11-12T08:03:00Z" }]);
       expect(deployOf(read, sha("a"))).toEqual({ is: "running", deployment: 7, commit: sha("a"), at: "2026-11-12T08:02:00Z", log: null });
     });
