@@ -374,13 +374,20 @@ export interface HandBackMark {
   readonly kind: HandBack;
   readonly role?: AgentRole;
   readonly failure?: string;
+  /** The Actions run the notice is about, by its number, where the notice names one: a failed Design-session turn's, a prototype turn's included (#640). */
+  readonly run?: number;
 }
 
 const HAND_BACK_MARKER = /^<!-- fabrik:hand-back (\{.*?\}) -->$/;
 
 /** The hidden line, the last of each notice that hands work back, saying which hand-back it is. Nothing a person sees changes. */
-export function handBackMarker({ kind, role, failure }: HandBackMark): string {
-  return `<!-- fabrik:hand-back ${markerJson({ kind, ...(role === undefined ? {} : { role }), ...(failure === undefined ? {} : { failure }) })} -->`;
+export function handBackMarker({ kind, role, failure, run }: HandBackMark): string {
+  return `<!-- fabrik:hand-back ${markerJson({
+    kind,
+    ...(role === undefined ? {} : { role }),
+    ...(failure === undefined ? {} : { failure }),
+    ...(run === undefined ? {} : { run }),
+  })} -->`;
 }
 
 /** The hand-back a notice's hidden line names, on whichever line it is, or null: read only from the Fabrik App's own comments. */
@@ -389,11 +396,18 @@ export function handBackMarkIn(body: string): HandBackMark | null {
     const json = HAND_BACK_MARKER.exec(line)?.[1];
     if (json === undefined) continue;
     try {
-      const { kind, role, failure } = JSON.parse(json) as Record<string, unknown>;
+      const { kind, role, failure, run } = JSON.parse(json) as Record<string, unknown>;
       if (!(HAND_BACKS as readonly unknown[]).includes(kind)) return null;
       if (role !== undefined && !(AGENT_ROLES as readonly unknown[]).includes(role)) return null;
       if (failure !== undefined && typeof failure !== "string") return null;
-      return { kind: kind as HandBack, ...(role === undefined ? {} : { role: role as AgentRole }), ...(failure === undefined ? {} : { failure }) };
+      // A run that isn't one is left out; the hand-back still reads.
+      const named = Number.isInteger(run) && (run as number) > 0 ? (run as number) : undefined;
+      return {
+        kind: kind as HandBack,
+        ...(role === undefined ? {} : { role: role as AgentRole }),
+        ...(failure === undefined ? {} : { failure }),
+        ...(named === undefined ? {} : { run: named }),
+      };
     } catch {
       return null;
     }

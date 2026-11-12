@@ -470,7 +470,7 @@ const failureNoticeSaying = (how: string) =>
     "This is an Infrastructure failure, so the Loop won't retry it. Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.",
     "",
     `[The run](${RUN})`,
-    '<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design"} -->',
+    '<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design","run":9100} -->',
   ].join("\n");
 
 /** The Operator's reply 9001 that approved #7's request, then the request as the App posted it, then what the plan posted after it. */
@@ -672,7 +672,7 @@ describe("A failed prototype turn", () => {
             "This is an Infrastructure failure, so the Loop won't retry it. Reply on this issue to carry the session on: the turn your reply starts can ask for the prototype again.",
             "",
             `[The run](${RUN})`,
-            '<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design","failure":"timeout"} -->',
+            '<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design","failure":"timeout","run":9100} -->',
           ].join("\n"),
         },
       ],

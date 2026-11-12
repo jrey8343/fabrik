@@ -25,6 +25,18 @@ describe("the hand-back marker", () => {
     expect(handBackMarkIn("<!-- fabrik:hand-back {not json} -->")).toBeNull();
   });
 
+  it("names the Actions run after the failure when it has one, and reads it back", () => {
+    const marker = handBackMarker({ kind: "design-turn-failed", role: "design", failure: "crash", run: 42 });
+    expect(marker).toBe('<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design","failure":"crash","run":42} -->');
+    expect(handBackMarkIn(marker)).toEqual({ kind: "design-turn-failed", role: "design", failure: "crash", run: 42 });
+  });
+
+  it("drops a run that is not a whole number above 0 and keeps the hand-back", () => {
+    for (const run of ["42", 0, -3, 4.5, null]) {
+      expect(handBackMarkIn(`<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design","run":${JSON.stringify(run)}} -->`)).toEqual({ kind: "design-turn-failed", role: "design" });
+    }
+  });
+
   it("reads one quoted in a person's reply only as the line it is, never half a line", () => {
     expect(handBackMarkIn(`> ${handBackMarker({ kind: "closed-by-hand" })}`)).toBeNull();
   });
