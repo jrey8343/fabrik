@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { readMapOffer } from "../agent/inputs.ts";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "../kit/config.ts";
-import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, prototypeRequestMarker, SESSION_FINISHED } from "../loop/markers.ts";
 import { prototypeTurnRefused } from "../loop/failures.ts";
 import { type RoundLine, roundLineOf } from "../loop/roundLine.ts";
 import { aDesignTurnFailedNotice, aMapCapRefusal } from "./builders.ts";
-import { readRound } from "./roundRead.ts";
+import { readRound, roundWaitsIn } from "./roundRead.ts";
 
 const APP = { __typename: "Bot", login: "fabrik-app" };
 const OPERATOR = { __typename: "User", login: "jrey8343" };
@@ -268,5 +269,183 @@ describe("The Round read", () => {
       expect(read).toMatchObject({ waits: "nothing", failedTurn: null });
       expect(counted.failedTurn).toMatchObject({ failedRunning: 2 });
     });
+  });
+
+  describe("waits on nothing", () => {
+    const waitingRound = [aRound(1, "2026-11-12T09:00:00Z")];
+
+    it("on a closed issue, one that still carries needs-design included", async () => {
+      const read = await readRound(repoWith({ state: "CLOSED", comments: waitingRound }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", round: null, failedTurn: null });
+    });
+
+    it("on a closed issue whose last word is a failed turn", async () => {
+      const read = await readRound(
+        repoWith({ state: "CLOSED", comments: [aRawComment(aDesignTurnFailedNotice("2026-11-12T09:00:00Z", 9100).body, "2026-11-12T09:00:00Z")] }).client,
+        "jrey8343/shop",
+        21,
+        CONFIG,
+        "jrey8343",
+        "fabrik-app[bot]",
+        NOW,
+      );
+
+      expect(read).toMatchObject({ waits: "nothing", round: null, failedTurn: null });
+    });
+
+    it("on an issue not in a Design session", async () => {
+      const read = await readRound(repoWith({ labels: ["ready-for-agent"], comments: waitingRound }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", round: null, failedTurn: null });
+    });
+
+    it("once the session has ended, its Rounds left behind with it", async () => {
+      const ended = [...waitingRound, aRawComment(`${SESSION_FINISHED} The Kit filed a Spec.`, "2026-11-12T10:00:00Z")];
+
+      const read = await readRound(repoWith({ comments: ended }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", round: null, failedTurn: null });
+    });
+
+    it("in a session that a Ticket's return started, until it posts a Round of its own", async () => {
+      const returned = [...waitingRound, aRawComment("<!-- fabrik:back-to-design 50 operator -->\nThis Ticket came back from #50.", "2026-11-12T10:00:00Z")];
+
+      const read = await readRound(repoWith({ comments: returned }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", round: null });
+    });
+
+    it("while a prototype is being built", async () => {
+      const request = prototypeRequestMarker({ request: { route: "/cart", variants: 2, brief: "Two ways to show the cart." }, reply: 6001 });
+      const building = [...waitingRound, aRawComment("Yes, prototype it.", "2026-11-12T10:00:00Z", OPERATOR, 6001), aRawComment(`${request}\n**Prototype requested.**`, "2026-11-12T10:30:00Z")];
+
+      const read = await readRound(repoWith({ comments: building }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", round: { round: 1, waiting: false }, failedTurn: null });
+    });
+
+    it("while a turn runs that agent:design started, which no reply did, once the Kit has said more since the Round", async () => {
+      const request = prototypeRequestMarker({ request: { route: "/cart", variants: 2, brief: "Two ways to show the cart." }, reply: null });
+      const building = [...waitingRound, aRawComment(`${request}\n**Prototype requested.**`, "2026-11-12T10:30:00Z")];
+
+      const read = await readRound(repoWith({ comments: building }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read.waits).toBe("nothing");
+    });
+  });
+
+  describe("reads only the Fabrik App's comments as the Kit's", () => {
+    it("never a person's comment that quotes a Round, marker and line included", async () => {
+      const quoted = aRound(2, "2026-11-12T10:30:00Z", anOrdinaryLine(2), 5002);
+      const { client } = repoWith({
+        comments: [aRound(1, "2026-11-12T09:00:00Z", anOrdinaryLine(1), 5001), aRawComment("The cart.", "2026-11-12T10:00:00Z", OPERATOR), { ...quoted, author: SOMEONE }],
+      });
+
+      const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", round: { comment: 5001, waiting: false } });
+    });
+
+    it("never a person's comment that quotes a failed turn's notice", async () => {
+      const notice = aDesignTurnFailedNotice("2026-11-12T10:30:00Z", 9100).body;
+      const { client } = repoWith({ comments: [aRound(1, "2026-11-12T09:00:00Z"), aRawComment("The cart.", "2026-11-12T10:00:00Z", OPERATOR), aRawComment(notice, "2026-11-12T10:30:00Z", SOMEONE)] });
+
+      const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read).toMatchObject({ waits: "nothing", failedTurn: null });
+    });
+
+    it("never another bot's when the App's login is known, and any bot's when it is not", async () => {
+      const other = { __typename: "Bot", login: "renovate" };
+      const comments = [{ ...aRound(1, "2026-11-12T09:00:00Z", anOrdinaryLine(1), 5001), author: other }];
+
+      const known = await readRound(repoWith({ comments }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+      const unknown = await readRound(repoWith({ comments }).client, "jrey8343/shop", 21, CONFIG, "jrey8343", null, NOW);
+
+      expect(known).toMatchObject({ waits: "nothing", round: null });
+      expect(unknown).toMatchObject({ waits: "round", round: { comment: 5001 } });
+    });
+  });
+
+  describe("whether a Map may be offered", () => {
+    const capOf = (maps: number): KitConfigResult => ({ ok: true, config: { ...DEFAULT_KIT_CONFIG, caps: { ...DEFAULT_KIT_CONFIG.caps, maps } } });
+
+    it.each([
+      ["the cap has room", { parent: null }, [], CONFIG, true],
+      ["the open Maps fill the cap", { parent: null }, [12], CONFIG, false],
+      ["the cap is 0", { parent: null }, [], capOf(0), false],
+      ["the issue has a parent Spec", { parent: 3 }, [], CONFIG, false],
+      ["two open Maps leave a cap of 3 room", { parent: null }, [12, 13], capOf(3), true],
+    ] as const)("when %s, as a Design turn on the issue would be told", async (_case, issue, maps, config, offered) => {
+      const { client } = repoWith({ ...issue, comments: [aRound(1, "2026-11-12T09:00:00Z")] }, maps);
+
+      const read = await readRound(client, "jrey8343/shop", 21, config, "jrey8343", "fabrik-app[bot]", NOW);
+      const told = config.ok ? await readMapOffer(client, { owner: "jrey8343", name: "shop" }, config.config, issue.parent === null ? null : { number: issue.parent }) : null;
+
+      expect(read.mapMayBeOffered).toBe(offered);
+      expect(told?.kind === "may-offer").toBe(offered);
+    });
+
+    it("never on a Kit config that does not read, which runs no Design turn", async () => {
+      const read = await readRound(repoWith({ comments: [aRound(1, "2026-11-12T09:00:00Z")] }).client, "jrey8343/shop", 21, { ok: false, errors: ["maxInFlight is not a Kit config field"] }, "jrey8343", "fabrik-app[bot]", NOW);
+
+      expect(read.mapMayBeOffered).toBe(false);
+    });
+  });
+
+  describe("unread", () => {
+    const REFUSAL = new GitHubError("GitHub POST /graphql failed: 403", 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }), request: "POST /graphql" });
+    const UNREAD = { repo: "jrey8343/shop", issue: 21, readAt: NOW, waits: "unread", round: null, failedTurn: null, mapMayBeOffered: false };
+
+    it.each([
+      ["refused", REFUSAL],
+      ["failed", new GitHubError("GitHub POST /graphql failed: 502", 502, { body: "Bad Gateway", request: "POST /graphql" })],
+      ["never answered", new Error("fetch failed")],
+    ])("when GitHub %s the issue's request, or the open Maps', with no Round, no failed turn and no Map offered", async (_how, error) => {
+      const { client } = repoWith({ comments: [aRound(1, "2026-11-12T09:00:00Z")] });
+      const failing = (which: "issue" | "maps"): ReadClient => ({
+        ...client,
+        graphql: <T>(query: string, variables: Record<string, unknown>) => ((variables["map"] === undefined) === (which === "issue") ? Promise.reject(error) : client.graphql<T>(query, variables)),
+      });
+
+      expect(await readRound(failing("issue"), "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW)).toEqual(UNREAD);
+      expect(await readRound(failing("maps"), "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW)).toEqual(UNREAD);
+    });
+
+    it("when the issue is not one GitHub has", async () => {
+      const client: ReadClient = { ...repoWith({}).client, graphql: <T>(_query: string, variables: Record<string, unknown>) => Promise.resolve((variables["map"] === undefined ? { repository: { issue: null } } : { repository: { issues: { nodes: [] } } }) as T) };
+
+      expect(await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW)).toEqual(UNREAD);
+    });
+  });
+
+  it("asks GitHub for the issue's last 100 comments, with who wrote each and each one's id, and for the open Maps", async () => {
+    const { client, queries } = repoWith({ comments: [aRound(1, "2026-11-12T09:00:00Z")] });
+
+    await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+    expect(queries).toHaveLength(2);
+    expect(queries.find((query) => query.includes("issue(number: $issue)"))).toMatch(/comments\(last: 100\) \{ nodes \{ databaseId url body createdAt author \{ login __typename \} \} \}/);
+  });
+
+  it("is plain data: it comes back equal after being written as JSON and read again", async () => {
+    const { client } = repoWith({ comments: [aRound(1, "2026-11-12T06:00:00Z"), aRawComment("The cart.", "2026-11-12T07:00:00Z", OPERATOR), aRawComment(aDesignTurnFailedNotice("2026-11-12T09:00:00Z", 9100).body, "2026-11-12T09:00:00Z")] });
+
+    const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+
+    expect(JSON.parse(JSON.stringify(read))).toStrictEqual(read);
+  });
+});
+
+describe("Whether a Round waits, for a reader that holds the comments", () => {
+  it("is the Round read's own rule over the comments as the gather keeps them", () => {
+    const round = { body: [designRoundMarker(1), "Two things to settle."].join("\n"), author: "fabrik-app[bot]", byBot: true };
+    const someone = { body: "Hm.", author: "someone-else", byBot: false };
+    const operator = { body: "The cart.", author: "jrey8343", byBot: false };
+
+    expect(roundWaitsIn([round, someone], "jrey8343", "fabrik-app[bot]")).toBe(true);
+    expect(roundWaitsIn([round, operator], "jrey8343", "fabrik-app[bot]")).toBe(false);
+    expect(roundWaitsIn([operator], "jrey8343", "fabrik-app[bot]")).toBe(false);
   });
 });
