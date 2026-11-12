@@ -10,7 +10,7 @@ import { type BaseKitConfig, type MergedFile, type ReplayAcceptance, type Replay
 import { type MergedTicketFacts, replayCandidatesOf, replayTicketsIn } from "../kit/replayFacts.ts";
 import { mergedAgentPullRequestsIn } from "../kit/retroEvidence.ts";
 import type { RunRecord } from "../kit/runRecord.ts";
-import { allPages, type GitHub, type Repo } from "./client.ts";
+import { allPages, type ReadClient, type Repo } from "./client.ts";
 import { gatherGitHubFacts } from "./facts.ts";
 
 /**
@@ -35,7 +35,7 @@ export interface ReplayStore {
  * names is a commit in the Fabrik repo, on a branch or not (#449).
  */
 export async function gatherReplayAcceptance(
-  github: GitHub,
+  github: ReadClient,
   repo: Repo,
   now: string,
   tick: Pick<ReplayTick, "operator" | "issues">,
@@ -60,7 +60,7 @@ export async function gatherReplayAcceptance(
  * last edited.
  */
 async function gatherCandidates(
-  github: GitHub,
+  github: ReadClient,
   repo: Repo,
   now: string,
   operator: string,
@@ -89,7 +89,7 @@ async function gatherCandidates(
  * rename's old path, included. A replay arm's gates job reads its merged PR's
  * hidden tests through it too (src/kit/replay-hidden-tests-main.ts).
  */
-export async function filesOf(github: GitHub, repo: Repo, pullRequests: readonly number[]): Promise<Record<number, MergedFile[]>> {
+export async function filesOf(github: ReadClient, repo: Repo, pullRequests: readonly number[]): Promise<Record<number, MergedFile[]>> {
   const each = await Promise.all(
     pullRequests.map(async (number): Promise<[number, MergedFile[]]> => {
       const files = await allPages<{ filename: string; status: string; previous_filename?: string }>(
@@ -124,7 +124,7 @@ interface EditedNode {
  * last edit and its title's last rename, never `updatedAt`, which a comment
  * or a label moves.
  */
-async function lastEditedOf(github: GitHub, repo: Repo, tickets: readonly number[]): Promise<Record<number, ReplayCandidate["lastEdited"]>> {
+async function lastEditedOf(github: ReadClient, repo: Repo, tickets: readonly number[]): Promise<Record<number, ReplayCandidate["lastEdited"]>> {
   const edited: Record<number, ReplayCandidate["lastEdited"]> = {};
   for (let at = 0; at < tickets.length; at += EDITED_PER_QUERY) {
     const chunk = tickets.slice(at, at + EDITED_PER_QUERY);
@@ -154,7 +154,7 @@ function editedAt({ lastEditedAt, timelineItems }: EditedNode): string | null {
 }
 
 /** Whether each sha is a commit in the Fabrik repo, which a candidate Kit sha must be. */
-async function fabrikCommitsOf(github: GitHub, shas: readonly string[]): Promise<Record<string, boolean>> {
+async function fabrikCommitsOf(github: ReadClient, shas: readonly string[]): Promise<Record<string, boolean>> {
   return Object.fromEntries(await Promise.all(shas.map(async (sha): Promise<[string, boolean]> => [sha, await isKitCommit(github, sha)])));
 }
 
@@ -169,7 +169,7 @@ const KIT_CONFIG_FILES: readonly string[] = [KIT_CONFIG_PATH, SKILLS_SOURCES_LOC
  * as resolveKitConfig resolves it, its skills lock and instructions
  * included, its files read in batches through GraphQL.
  */
-async function baseConfigsAt(github: GitHub, repo: Repo, shas: readonly string[]): Promise<Record<string, BaseKitConfig>> {
+async function baseConfigsAt(github: ReadClient, repo: Repo, shas: readonly string[]): Promise<Record<string, BaseKitConfig>> {
   const configs: Record<string, BaseKitConfig> = {};
   for (let at = 0; at < shas.length; at += SHAS_PER_QUERY) {
     const chunk = shas.slice(at, at + SHAS_PER_QUERY);

@@ -35,7 +35,7 @@ import { AUDIT_LABEL, MONITOR_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/l
 import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type CheckState, requiredChecksOutcome } from "../review/checks.ts";
-import { allPages, type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
+import { allPages, GitHubError, pagesOf, type ReadClient, type Repo } from "./client.ts";
 import { leavingOutHeldLines } from "./heldLines.ts";
 import {
   gatherDesignQueueSlice,
@@ -67,7 +67,7 @@ const WINDOW_MS = 37 * DAY_MS;
 const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
-export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
+export function gatherGitHubFacts(github: Pick<ReadClient, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   return gatherFacts(github, repo, now, operator, now - ESCAPE_WINDOWS_REACH_MS);
 }
 
@@ -78,7 +78,7 @@ export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, n
  * usual, so one repo's failure costs the summary only that repo's facts.
  */
 export async function gatherEveryRepoFacts(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repos: readonly Repo[],
   now: number,
   operator: string,
@@ -109,7 +109,7 @@ export async function gatherEveryRepoFacts(
  * check. A head whose read GitHub refuses is left unread too.
  */
 export async function gatherHeadChecks(
-  github: Pick<GitHub, "rest">,
+  github: Pick<ReadClient, "rest">,
   repo: Repo,
   heads: readonly string[],
   listedChecks: readonly string[],
@@ -171,7 +171,7 @@ function requiredChecksOn(checks: readonly CheckState[], listedChecks: readonly 
 }
 
 /** The GitHub facts of one Product repo, as of `now`, with its PRs, default-branch commits and the Operator's issues from `reach` on. */
-async function gatherFacts(client: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
+async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   // A held line is never activity, nor an issue's last comment (#471).
   const github = leavingOutHeldLines(client);
   const since = new Date(now - WINDOW_MS).toISOString();
@@ -237,7 +237,7 @@ async function gatherFacts(client: Pick<GitHub, "graphql">, repo: Repo, now: num
  * for weeks, so its window is read whole.
  */
 export async function gatherRetroFacts(
-  github: Pick<GitHub, "graphql" | "rest">,
+  github: Pick<ReadClient, "graphql" | "rest">,
   repo: Repo,
   now: number,
   operator: string,
@@ -259,7 +259,7 @@ export async function gatherRetroFacts(
 }
 
 /** The newest issues with a weekly gate's label, `fabrik:audit` or `fabrik:retro`, open and closed, read as the gate reads them (weeklyIssuesQuery). */
-async function gatherWeeklyRunIssues(github: Pick<GitHub, "graphql">, repo: Repo, label: string): Promise<WeeklyRunIssueFacts[]> {
+async function gatherWeeklyRunIssues(github: Pick<ReadClient, "graphql">, repo: Repo, label: string): Promise<WeeklyRunIssueFacts[]> {
   const data = await github.graphql<WeeklyIssuesQueryResult>(weeklyIssuesQuery(), { owner: repo.owner, name: repo.name, label });
   return data.repository.issues.nodes.map(({ number, title, author, createdAt, body }) => ({ number, title, author: loginOf(author), createdAt, body }));
 }
@@ -278,7 +278,7 @@ export interface RetroHistoryFacts {
  * the Fabrik App, whose bot login is `appLogin`, opened each (byAppOf) and,
  * on top, their last 100 comments; and every open issue with its body.
  */
-export async function gatherRetroHistory(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string): Promise<RetroHistoryFacts> {
+export async function gatherRetroHistory(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string): Promise<RetroHistoryFacts> {
   const [retros, openIssues] = await Promise.all([
     github.graphql<WeeklyIssuesQueryResult<RawRetroIssue>>(weeklyIssuesQuery(COMMENTS), {
       owner: repo.owner,
@@ -305,7 +305,7 @@ export async function gatherRetroHistory(github: Pick<GitHub, "graphql">, repo: 
  * are read as usual, so one unreadable repo costs the Retro only its issues.
  */
 export async function gatherOpenIssuesOn(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repos: readonly string[],
 ): Promise<{ issues: FromRetroIssueFacts[]; unread: { repo: string; why: string }[] }> {
   const read = await Promise.all(
@@ -332,7 +332,7 @@ export async function gatherOpenIssuesOn(
  * escaped and sampled PR (evidenceTicketsOf, src/kit/retroEvidence.ts). One
  * GitHub no longer has, deleted or gone, is left out; any other failure fails.
  */
-export async function gatherTickets(github: Pick<GitHub, "rest">, repo: Repo, numbers: readonly number[]): Promise<TicketTextFacts[]> {
+export async function gatherTickets(github: Pick<ReadClient, "rest">, repo: Repo, numbers: readonly number[]): Promise<TicketTextFacts[]> {
   const tickets = await Promise.all(
     [...new Set(numbers)].map(async (number): Promise<TicketTextFacts | null> => {
       try {
@@ -348,7 +348,7 @@ export async function gatherTickets(github: Pick<GitHub, "rest">, repo: Repo, nu
 }
 
 /** What a commit changed, as a diff file by file; a file GitHub shows no patch for is named with a note. */
-async function patchOf(github: Pick<GitHub, "rest">, repo: Repo, sha: string): Promise<string> {
+async function patchOf(github: Pick<ReadClient, "rest">, repo: Repo, sha: string): Promise<string> {
   const { files } = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits/${sha}`)) as {
     files: { filename: string; previous_filename?: string; patch?: string }[];
   };
@@ -666,7 +666,7 @@ interface RawDefaultBranchCommit {
 }
 
 /** The PRs merged or closed in the window, agent or not. */
-async function gatherClosedPullRequests(github: Pick<GitHub, "graphql">, repo: Repo, since: string): Promise<RawClosedPullRequest[]> {
+async function gatherClosedPullRequests(github: Pick<ReadClient, "graphql">, repo: Repo, since: string): Promise<RawClosedPullRequest[]> {
   const sinceMs = Date.parse(since);
   const pullRequests = await pagesOf<RawClosedPullRequest>(
     github,
@@ -683,7 +683,7 @@ async function gatherClosedPullRequests(github: Pick<GitHub, "graphql">, repo: R
 }
 
 /** The issues the Operator opened in the window, newest first. */
-async function gatherOperatorIssues(github: Pick<GitHub, "graphql">, repo: Repo, operator: string, since: string): Promise<RawOpenedIssue[]> {
+async function gatherOperatorIssues(github: Pick<ReadClient, "graphql">, repo: Repo, operator: string, since: string): Promise<RawOpenedIssue[]> {
   const sinceMs = Date.parse(since);
   const issues = await pagesOf<RawOpenedIssue>(
     github,
@@ -867,7 +867,7 @@ interface InstallationRepositories {
  * Kit's caller workflow, apart from the store itself. A repo shows up without
  * any configuration once setup has written its caller.
  */
-export async function productReposOf(github: Pick<GitHub, "rest" | "fileText">): Promise<Repo[]> {
+export async function productReposOf(github: Pick<ReadClient, "rest" | "fileText">): Promise<Repo[]> {
   const listed: InstallationRepositories["repositories"] = [];
   for (let page = 1; ; page++) {
     const result = (await github.rest("GET", `/installation/repositories?per_page=100&page=${page}`)) as InstallationRepositories;

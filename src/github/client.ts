@@ -7,6 +7,22 @@ export interface Repo {
 }
 
 /**
+ * The three calls the Kit's GitHub client makes: a REST call, a GraphQL query,
+ * and a file's text at a ref. Every read the read library exports is typed on
+ * it, never on the GitHub class, so a reader can hand in its own client, one
+ * that counts what a read costs or refreshes its credential. The Kit's own
+ * jobs hand in the class.
+ */
+export interface ReadClient {
+  /** A REST call; with `allowNotFound`, a 404 returns null. */
+  rest(method: string, path: string, body?: unknown, options?: { allowNotFound?: boolean }): Promise<unknown>;
+  /** A GraphQL query's data; a query GitHub answers with errors throws a GitHubError. */
+  graphql<T>(query: string, variables: Record<string, unknown>): Promise<T>;
+  /** A file's text from the repo at `ref`, or null if it doesn't exist there. */
+  fileText(repo: Repo, path: string, ref: string): Promise<string | null>;
+}
+
+/**
  * A failed GitHub call, with the status it failed with: a REST call's HTTP
  * status, a GraphQL query's error type as the status GitHub's REST API gives
  * for it (see GRAPHQL_STATUS), or 0 when GitHub never answered.
@@ -112,7 +128,7 @@ export function refusalOf(error: GitHubError): "rate-limited" | "missing-permiss
  * GitHub's check runs do; a page that is the list needs none.
  */
 export async function allPages<T>(
-  github: Pick<GitHub, "rest">,
+  github: Pick<ReadClient, "rest">,
   path: string,
   itemsOf: (page: unknown) => readonly T[] = (page) => page as T[],
 ): Promise<T[]> {
@@ -144,7 +160,7 @@ function worthRetrying(error: GitHubError, write: boolean): boolean {
 const LONGEST_RETRY_WAIT_MS = 60_000;
 
 /** A GitHub API client authenticated as the Fabrik App. */
-export class GitHub {
+export class GitHub implements ReadClient {
   readonly #token: string;
   readonly #apiUrl: string;
   readonly #retryDelaysMs: readonly number[];
@@ -262,7 +278,7 @@ export interface Page<T> {
  * only until `enough` says the rest are too old. A null connection has none.
  */
 export async function pagesOf<T>(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   query: string,
   repo: Repo,
   variables: Record<string, unknown>,
