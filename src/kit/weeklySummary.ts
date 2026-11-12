@@ -3,13 +3,9 @@
 // filed for the week that just ended, or skip in a quiet week. Pure, no I/O, no
 // model call.
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { researchRunFailedIn } from "../github/threads.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
+import type { HandBack } from "../loop/handBacks.ts";
 import {
-  DECISION_TYPES,
-  decisionLabel,
-  type DecisionLabel,
-  MAP_LABEL,
   NEEDS_DESIGN,
   NEEDS_INFO,
   READY_FOR_AGENT,
@@ -20,9 +16,8 @@ import {
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { auditMarksIn, flakyCheckMarksIn, DESIGN_TURN_FAILED_MARKER, refusedByMapCap, retroMarksIn } from "../loop/markers.ts";
+import { auditMarksIn, flakyCheckMarksIn, retroMarksIn } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
-import { whyNotResearchable } from "../loop/research.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, type InfrastructureFailure, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
@@ -46,11 +41,10 @@ import {
   within,
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
-import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
-import { type Standing, standingsOf, type StandingNamed } from "./standing.ts";
+import { type Standing, type StandingName, standingsOf, type StandingNamed } from "./standing.ts";
 import { maxInFlightHoldOf } from "./standingInFlight.ts";
-import { lastAdded, passedMoveOf } from "./standingOperator.ts";
+import { answerOf, lastAdded, passedMoveOf } from "./standingOperator.ts";
 import {
   firstRunOf,
   isLive,
@@ -1165,16 +1159,8 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
   return {
     repo: facts.repo,
     invalidKitConfig: invalid,
-    // An open Audit, Retro, finished Replay or Map waits on the Operator, so it also keeps a quiet week from being skipped.
-    waitingOnYou: oldestFirst([
-      ...standings.flatMap((standing) => waitingItemsOf(standing, facts, items)),
-      ...waitingOnYou(facts, operator, appLogin, items),
-      ...openAuditsOf(facts, appLogin, items),
-      ...openRetrosOf(facts, appLogin, items),
-      ...finishedReplaysOf(facts, operator, items),
-      ...openMapsOf(facts, items),
-      ...failedResearchOf(facts, appLogin, items),
-    ]),
+    // Every Standing whose move is the Operator's: an open Audit, Retro, finished Replay or Map among them also keeps a quiet week from being skipped.
+    waitingOnYou: oldestFirst(standings.filter(listedInWaitingOnYou).flatMap((standing) => waitingItemOf(standing, facts, appLogin, items) ?? [])),
     // A week given up on is Stuck however recently its last run failed: nothing moves it until the next week.
     stuck: oldestFirst([
       ...stuck(facts, records, operator, items, now),
@@ -1208,70 +1194,6 @@ function weekGivenUp(
     if (last === undefined || !within(week, last.createdAt)) return [];
     const givenUp = inWeek.slice(0, FAILED_RUNS_A_WEEK);
     return [{ kind: "weekly-runs-failed", issueName, ...items.issue(last, last.createdAt), failed: givenUp.map((run) => items.issue(run, run.createdAt)) }];
-  });
-}
-
-/** The Fabrik App's open Audits, aged from when each was opened: a person's `fabrik:audit` issue is no Audit. */
-function openAuditsOf({ openAudits }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
-  return openAudits.filter((audit) => audit.author === appLogin).map((audit) => ({ kind: "audit", ...items.issue(audit, audit.createdAt) }));
-}
-
-/** The Fabrik App's open Retros, filled or still pending, aged from when each was opened: a person's `fabrik:retro` issue is no Retro. */
-function openRetrosOf({ openRetros }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
-  return openRetros.filter((retro) => retro.author === appLogin).map((retro) => ({ kind: "retro", ...items.issue(retro, retro.createdAt) }));
-}
-
-/**
- * The Operator's open replay issues whose results are in, by the Replay
- * module's own reading of their markers, aged from when the Kit last wrote
- * the body, which is when it wrote the results: a replay issue someone else
- * filed never runs.
- */
-function finishedReplaysOf({ openReplays }: GitHubFacts, operator: string, items: Items): WaitingItem[] {
-  return openReplays
-    .filter((replay) => isOperatorsReplay(replay, operator) && replayResultsIn(replay.body))
-    .map((replay) => ({ kind: "replay", ...items.issue(replay, replay.lastEditedAt ?? replay.createdAt) }));
-}
-
-/** The Decision labels whose Decisions the Operator resolves live: all but research, which the Researcher resolves AFK. */
-const OPERATOR_DECISION_LABELS: readonly DecisionLabel[] = DECISION_TYPES.filter((type) => type !== "research").map(decisionLabel);
-
-/**
- * Each open Map, read as the Map cap reads them (gatherOpenMaps), aged from
- * when it got `wayfinder:map` (or was opened, for one labelled as it was
- * opened), with how many of its open Decisions wait on the Operator.
- */
-function openMapsOf({ openIssues, openMaps }: GitHubFacts, items: Items): WaitingItem[] {
-  return openIssues.filter((issue) => openMaps.includes(issue.number)).map((map) => ({
-    kind: "map",
-    ...items.issue(map, lastAdded(map.labelEvents, MAP_LABEL) ?? map.createdAt),
-    decisionsWaiting: openIssues.filter(
-      (issue) => map.subIssues.includes(issue.number) && OPERATOR_DECISION_LABELS.some((label) => issue.labels.includes(label)),
-    ).length,
-  }));
-}
-
-/**
- * Each research Decision on an open Map whose last run failed, aged from the
- * Kit's failure notice: by the Kit's own rules for which Decisions the
- * Researcher may run on (whyNotResearchable) and whose last run failed
- * (researchRunFailedIn), so the summary lists just the Decisions Dispatch
- * won't run again until the Operator re-adds agent:research. As Dispatch
- * does, it reads only the comments of the Fabrik App, whose bot login is
- * `appLogin`.
- */
-function failedResearchOf({ openIssues }: GitHubFacts, appLogin: string, items: Items): WaitingItem[] {
-  return openIssues.flatMap((decision): WaitingItem[] => {
-    // A closed parent isn't among the open issues, so it reads as none: no open Map either way.
-    const parent = openIssues.find((issue) => issue.subIssues.includes(decision.number));
-    const parentIssue = parent === undefined ? null : { number: parent.number, open: true, labels: parent.labels };
-    const comments = decision.comments.map((comment) => ({ ...comment, byApp: comment.author === appLogin }));
-    if (whyNotResearchable({ ...decision, open: true, parentIssue }) !== null || !researchRunFailedIn(comments)) return [];
-    const notice = comments.findLast((comment) => comment.byApp);
-    const readded = lastAdded(decision.labelEvents, RESEARCH_LABEL);
-    // Re-added since, it waits on its run again, not on the Operator.
-    if (notice === undefined || (readded !== null && Date.parse(readded) > Date.parse(notice.at))) return [];
-    return [{ kind: "research-failed", ...items.issue(decision, notice.at) }];
   });
 }
 
@@ -1390,51 +1312,76 @@ function oldestFirst<T extends ItemBase>(items: readonly T[]): T[] {
   return items.toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since));
 }
 
+/** The names whose Standings Waiting on you lists, and the hand-backs among `yours-to-do`: a name or hand-back a later rule adds waits for its own line. */
+const LISTED_IN_WAITING_ON_YOU: ReadonlySet<StandingName> = new Set(["yours-to-merge", "design-round", "needs-your-answer", "yours-to-do", "token-refused", "yours-to-read"]);
+const LISTED_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-failed", "design-turn-failed", "map-cap-refused"]);
+
 /**
- * When Triage asked about a `needs-info` issue, or null if it isn't one or
- * someone has answered: from then on Triage or Stuck has it. Only one the
- * Operator filed, or the Fabrik App filed as the Monitor, which can't answer
- * itself (#425), asks the Operator: Triage asks anyone else who filed one.
+ * Whether Waiting on you lists a Standing: every one whose move is the
+ * Operator's, but a weekly-limit issue, which stays under Held, and a Map's
+ * own Decisions, folded into the Map's line.
  */
-function unansweredQuestionOf(issue: OpenIssueFacts): string | null {
-  if (!issue.labels.includes(NEEDS_INFO) || answerOf(issue) !== null) return null;
-  return lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt;
+function listedInWaitingOnYou(standing: Standing): boolean {
+  if (standing.move !== "operator" || !LISTED_IN_WAITING_ON_YOU.has(standing.name) || standing.work === "weekly-limit") return false;
+  if (standing.name === "yours-to-read") return standing.detail.map === null;
+  if (standing.name === "yours-to-do") return standing.detail.handBack === null || LISTED_HAND_BACKS.has(standing.detail.handBack);
+  return true;
 }
 
 /**
- * The Waiting on you line of a Standing whose kind the summary takes from the
- * Standing rule (src/kit/standing.ts): a Design round, `ready-for-human` work
- * and an agent PR at the Merge gate. Titles come from the facts beside it, as
- * a Standing holds none. None for any other Standing yet.
+ * A Standing's Waiting on you line, worded as the Monday issue has always
+ * worded its kind. Titles come from the facts beside it, as a Standing holds
+ * none: null when the facts hold no title for it.
  */
-function waitingItemsOf(standing: Standing, { openIssues, openPullRequests }: GitHubFacts, items: Items): WaitingItem[] {
-  const issue = openIssues.find(({ number }) => number === standing.issue);
-  const pullRequest = openPullRequests.find(({ number }) => number === standing.pullRequest);
+function waitingItemOf(standing: Standing, facts: GitHubFacts, appLogin: string, items: Items): WaitingItem | null {
+  const pullRequest = facts.openPullRequests.find(({ number }) => number === standing.pullRequest);
+  const issue =
+    [...facts.openIssues, ...facts.openAudits, ...facts.openRetros, ...facts.openReplays].find(({ number }) => number === standing.issue) ?? null;
+  const onIssue = issue === null ? null : items.issue(issue, standing.since);
   switch (standing.name) {
-    case "design-round":
-      return issue === undefined ? [] : [{ kind: "design-round", ...items.issue(issue, standing.since) }];
-    case "yours-to-do":
-      if (standing.work === "ready-for-human") return issue === undefined ? [] : [{ kind: "ready-for-human", ...items.issue(issue, standing.since) }];
-      return pullRequest === undefined ? [] : [{ kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) }];
     case "yours-to-merge": {
-      if (pullRequest === undefined) return [];
+      if (pullRequest === undefined) return null;
       const item = items.pullRequest(pullRequest, standing.since);
-      return [{ kind: "merge-gate", ...item, operatorWait: item.age }];
+      return { kind: "merge-gate", ...item, operatorWait: item.age };
     }
+    case "design-round":
+      return onIssue === null ? null : { kind: "design-round", ...onIssue };
+    case "needs-your-answer":
+      return onIssue === null ? null : { kind: standing.detail.author === appLogin ? "monitor-needs-info" : "needs-info", ...onIssue };
+    case "yours-to-do":
+      if (standing.work === "ticket") return pullRequest === undefined ? null : { kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) };
+      if (onIssue === null) return null;
+      switch (standing.detail.handBack) {
+        case "research-failed":
+          return { kind: "research-failed", ...onIssue };
+        case "design-turn-failed":
+          return { kind: "design-turn-failed", ...onIssue };
+        case "map-cap-refused":
+          return { kind: "design-map-cap", ...onIssue };
+        default:
+          // ready-for-human work, and a usage-credits issue, which the Kit opens with the label.
+          return { kind: "ready-for-human", ...onIssue };
+      }
+    // A token-rotation issue, which the Kit opens with ready-for-human.
+    case "token-refused":
+      return onIssue === null ? null : { kind: "ready-for-human", ...onIssue };
+    case "yours-to-read":
+      if (onIssue === null) return null;
+      switch (standing.work) {
+        case "audit":
+          return { kind: "audit", ...onIssue };
+        case "retro":
+          return { kind: "retro", ...onIssue };
+        case "replay":
+          return { kind: "replay", ...onIssue };
+        case "map":
+          return { kind: "map", ...onIssue, decisionsWaiting: standing.detail.decisions.length };
+        default:
+          return null;
+      }
     default:
-      return [];
+      return null;
   }
-}
-
-function waitingOnYou({ openIssues }: GitHubFacts, operator: string, appLogin: string, items: Items): WaitingItem[] {
-  const waiting: WaitingItem[] = [];
-  for (const issue of openIssues) {
-    const stopped = stoppedDesignSessionOf(issue);
-    if (stopped !== null) waiting.push({ kind: stopped.kind, ...items.issue(issue, stopped.at) });
-    const asked = issue.author === appLogin || issue.author === operator ? unansweredQuestionOf(issue) : null;
-    if (asked !== null) waiting.push({ kind: issue.author === appLogin ? "monitor-needs-info" : "needs-info", ...items.issue(issue, asked) });
-  }
-  return oldestFirst(waiting);
 }
 
 /**
@@ -1468,17 +1415,6 @@ function stuck(
     if (move?.kind === "changes-requested") found.push({ kind: "reviewed", ...items.pullRequest(pullRequest, move.since) });
   }
   return oldestFirst(found.filter((item) => now - Date.parse(item.since) > STUCK_AFTER_MS));
-}
-
-/**
- * When a person first answered a `needs-info` issue's question, or null if
- * nobody has. The question is when it last got `needs-info`: a later state
- * change would have taken the label off, and asking again adds it anew. A
- * bot's comment is no answer, as it never sends the issue back to Triage.
- */
-function answerOf(issue: OpenIssueFacts): string | null {
-  const asked = Date.parse(lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt);
-  return issue.comments.find((comment) => !comment.byBot && Date.parse(comment.at) > asked)?.at ?? null;
 }
 
 /**
@@ -1516,18 +1452,6 @@ function usedNoRetry(record: RunRecord): boolean {
 function lastActivityOf(pullRequest: OpenPullRequestFacts): string {
   const times = [pullRequest.createdAt, ...[...pullRequest.commits, ...pullRequest.comments, ...pullRequest.labelEvents].map(({ at }) => at)];
   return times.toSorted((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? pullRequest.createdAt;
-}
-
-/**
- * A Design session whose last comment is the App's failure notice for its
- * turn, or its refusal of a Map the Map cap holds, with when it was posted, or
- * null if its last comment is anything else. Either keeps the session's slot
- * (holdsSlot) with the Operator's reply as the next move.
- */
-function stoppedDesignSessionOf(issue: OpenIssueFacts): { readonly kind: "design-turn-failed" | "design-map-cap"; readonly at: string } | null {
-  const last = issue.comments.at(-1);
-  if (!issue.labels.includes(NEEDS_DESIGN) || last === undefined || !last.byBot || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return null;
-  return { kind: refusedByMapCap(last.body) ? "design-map-cap" : "design-turn-failed", at: last.at };
 }
 
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.

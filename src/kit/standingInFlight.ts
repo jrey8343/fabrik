@@ -24,7 +24,7 @@ import type { AgentRole } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import { type AwaitedRole, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
-import { addedAndStillOn, lastAdded } from "./standingOperator.ts";
+import { addedAndStillOn, answerOf, lastAdded } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
 /** What a `running` Standing's `detail.run` names: the kind of run, as far as the facts tell it. */
@@ -291,12 +291,6 @@ function claimed(events: readonly LabelEvent[], comments: readonly CommentFacts[
 
 function byApp(comments: readonly CommentFacts[], appLogin: string): CommentFacts[] {
   return comments.filter(({ author }) => author === appLogin);
-}
-
-/** When someone answered a `needs-info` question, as the Weekly summary reads it: a person's first comment after the label was last added. */
-function answerOf(issue: OpenIssueFacts): string | null {
-  const asked = Date.parse(lastAdded(issue.labelEvents, NEEDS_INFO) ?? issue.createdAt);
-  return issue.comments.find((comment) => !comment.byBot && Date.parse(comment.at) > asked)?.at ?? null;
 }
 
 /** The kind of work a role's run is for. */

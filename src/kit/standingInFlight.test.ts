@@ -125,7 +125,7 @@ describe("work that goes on without the Operator", () => {
         },
         aKit([aRunInFlight({ role: "triage" })]),
       );
-      expect(runningIn(standings)).toEqual([
+      expect(runningIn(standings.filter(({ name }) => name === "running"))).toEqual([
         { issue: 12, pullRequest: null, name: "running", place: "triage", awaits: { role: "triage", on: "issue" }, detail: { run: "triage", retry: null } },
         { issue: 13, pullRequest: null, name: "running", place: "triage", awaits: { role: "triage", on: "issue" }, detail: { run: "triage", retry: null } },
       ]);
