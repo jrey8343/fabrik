@@ -64,6 +64,15 @@ function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput 
   };
 }
 
+/**
+ * One run of each role on Ticket #7, all ended in the week, each at a cost
+ * no sum of the others comes to: Implement $1, Review $2 and Digest $4 build
+ * the Ticket.
+ */
+const ONE_RUN_OF_EACH_ROLE: RunRecord[] = (["implement", "review", "digest", "triage", "design", "audit", "retro", "research", "score"] as const).map((role, at) =>
+  aRunRecord({ runId: 100 + at, role, issue: 7, pullRequest: role === "review" || role === "digest" ? 50 : null, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 2 ** at }),
+);
+
 /** `owner/product`'s Kit config on `main`, the default one unless a test says so, with nothing for Dispatch to weigh, no run in progress and no Plain head's checks read. */
 function aRepoKit(overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
   return {
@@ -1991,6 +2000,13 @@ describe("the Weekly summary", () => {
       expect(result).toMatchObject({ kind: "summary", summary: { costPerMergedPullRequest: { thisWeek: { usd: 1 } } } });
     });
 
+    it("counts the Ticket's Digest runs beside its Implement and Review runs: a Ticket with one of each role", () => {
+      const result = weeklySummary(input({ records: ONE_RUN_OF_EACH_ROLE, facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-05T00:00:00Z")] })] }));
+
+      // Implement $1, Review $2 and Digest $4, and no other role's.
+      expect(result).toMatchObject({ kind: "summary", summary: { costPerMergedPullRequest: { thisWeek: { usd: 7, unknownCost: 0 } } } });
+    });
+
     it("never counts the record of a judge run that scored a run on the Ticket", () => {
       const result = weeklySummary(
         input({
@@ -2161,6 +2177,13 @@ describe("the Weekly summary", () => {
         kind: "summary",
         summary: { spendNeverMerged: { thisWeek: { usd: 3, unknownCost: 0 }, lastWeek: { usd: 0.5, unknownCost: 0 } } },
       });
+    });
+
+    it("counts the Ticket's Digest runs beside its Implement and Review runs: a Ticket with one of each role", () => {
+      const result = weeklySummary(input({ records: ONE_RUN_OF_EACH_ROLE, facts: [factsOf({ tickets: [aTicketTimeline([], { number: 7, closedAt: "2026-11-04T00:00:00Z" })] })] }));
+
+      // Implement $1, Review $2 and Digest $4, and no other role's.
+      expect(result).toMatchObject({ kind: "summary", summary: { spendNeverMerged: { thisWeek: { usd: 7, unknownCost: 0 } } } });
     });
 
     it("leaves a run whose cost basis is unknown out of the sum, and counts it", () => {
