@@ -31,6 +31,7 @@ const DEFAULTS = {
   extraSkills: { triage: [], design: [], implement: [], review: [] },
   ui: null,
   preview: null,
+  production: null,
 };
 
 describe("Kit config", () => {
@@ -1364,6 +1365,99 @@ describe("The ui and preview blocks, which Visual evidence reads", () => {
     });
 
     expect(!result.ok && result.errors).toEqual(["max_in_flight must be a whole number of at least 0", "ui.paths is missing"]);
+  });
+});
+
+describe("The production block, which says where a Product repo's production is", () => {
+  it.each([`{}`, `{ "production": null }`])("declares no production for %s, and is valid", (text) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("resolves an address with no environment to no environment, for a host that reports no Deployments", () => {
+    const result = resolveKitConfig({ config: `{ "production": { "url": "https://shop.example" } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, production: { url: "https://shop.example", environment: null } } });
+  });
+
+  it("lets null say the host reports no Deployments", () => {
+    const result = resolveKitConfig({ config: `{ "production": { "url": "http://shop.example:8080/", "environment": null } }` });
+
+    expect(result).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, production: { url: "http://shop.example:8080/", environment: null } },
+    });
+  });
+
+  it("resolves an address and an environment to both", () => {
+    const result = resolveKitConfig({
+      config: `{ "production": { "url": "https://shop.example", "environment": "production" } }`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, production: { url: "https://shop.example", environment: "production" } },
+    });
+  });
+
+  it.each([
+    [{ environment: "production" }, "production.url is missing"],
+    [{ url: null }, "production.url must be a string"],
+    [{ url: "shop.example" }, `production.url is "shop.example": a URL must start with http:// or https://`],
+    [{ url: "ftp://shop.example" }, `production.url is "ftp://shop.example": a URL must start with http:// or https://`],
+    [{ url: "https://shop.example", environment: "" }, `production.environment is "": an environment can't be blank`],
+    [{ url: "https://shop.example", environment: "  " }, `production.environment is "  ": an environment can't be blank`],
+    [
+      { url: "https://shop.example", environment: "production\nstaging" },
+      `production.environment is "production\\nstaging": an environment is the one line GitHub's Deployments name it`,
+    ],
+    [{ url: "https://shop.example", environment: 42 }, "production.environment must be a string"],
+    [{ url: "https://shop.example", region: "syd1" }, "production.region is not a Kit config field"],
+    [{ url: "https://shop.example", before_url: "https://shop.example" }, "production.before_url is not a Kit config field"],
+  ])("refuses a production block, naming the field: %j", (block, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ production: block }) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [`{ "production": "https://shop.example" }`, "production must be an object or null"],
+    [`{ "production": ["https://shop.example"] }`, "production must be an object or null"],
+  ])("refuses a production block that isn't an object, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("declares production in a repo with no ui block, and leaves preview untouched", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ ui: null, preview: { url: null }, production: { url: "https://shop.example", environment: "production" } }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, ui: null, preview: null, production: { url: "https://shop.example", environment: "production" } },
+    });
+  });
+
+  it("keeps production declared when ui.before_url is null, and never fills one from the other", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", before_url: null },
+        production: { url: "https://shop.example", environment: null },
+      }),
+    });
+
+    expect(result.ok && result.config.ui?.beforeUrl).toBeNull();
+    expect(result.ok && result.config.production).toEqual({ url: "https://shop.example", environment: null });
+  });
+
+  it("names every problem in the production block at once", () => {
+    const result = resolveKitConfig({ config: JSON.stringify({ production: { environment: "", region: "syd1" } }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        "production.url is missing",
+        `production.environment is "": an environment can't be blank`,
+        "production.region is not a Kit config field",
+      ],
+    });
   });
 });
 
