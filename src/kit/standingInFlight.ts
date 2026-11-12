@@ -10,6 +10,7 @@ import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
 import {
+  DIGEST_LABEL,
   DISPATCH_LABEL,
   MAP_LABEL,
   NEEDS_INFO,
@@ -26,11 +27,11 @@ import { DAY, FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weekly
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import { type AwaitedRole, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
-import { addedAndStillOn, answerOf, lastAdded } from "./standingOperator.ts";
+import { addedAndStillOn, answerOf, lastAdded, passAtHeadOf } from "./standingOperator.ts";
 import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts, WeeklyRunIssueFacts } from "./weeklySummary.ts";
 
 /** What a `running` Standing's `detail.run` names: the kind of run, as far as the facts tell it. */
-export type RunningRun = "implement" | "retry" | "request-changes" | "conflict-only" | "review" | "triage" | "research" | "design" | "prototype";
+export type RunningRun = "implement" | "retry" | "request-changes" | "conflict-only" | "review" | "digest" | "triage" | "research" | "design" | "prototype";
 
 /**
  * Every Standing of the repo's work that goes on without the Operator, or that
@@ -213,7 +214,8 @@ function runningStandingsOf(facts: StandingFacts, runs: readonly RunInFlightFact
   const { github, appLogin, operator } = facts;
   const counted = runs.filter(({ job }) => job !== "waiting-on-checks");
   const issues = github.openIssues.flatMap((issue): Standing[] => {
-    const named = counted.filter((run) => run.issue === issue.number && (run.role === "implement" || run.role === "design" || (run.exact && run.role !== "review")));
+    // A Review's run and a Digest's name the Ticket too, but each is on its pull request, where it is read below.
+    const named = counted.filter((run) => run.issue === issue.number && (run.role === "implement" || run.role === "design" || (run.exact && run.role !== "review" && run.role !== "digest")));
     const waiting = heldWork.has(`#${issue.number}`) ? [] : counted.filter((run) => !run.exact && run.issue === null && run.pullRequest === null && waitsOnRole(issue, run.role, appLogin));
     const run = firstOf(named, waiting);
     const standing = run === undefined ? null : runningOnIssue(issue, run, github.repo, github.openPullRequests, operator, appLogin);
@@ -233,7 +235,39 @@ function runningStandingsOf(facts: StandingFacts, runs: readonly RunInFlightFact
       },
     ];
   });
-  return [...issues, ...pullRequests];
+  // After a run on its Ticket and a Review of it: either overtakes the Digest, which is then dropped.
+  const digests = github.openPullRequests.flatMap((pullRequest): Standing[] => {
+    const run = digestAskedOn(pullRequest) === null ? undefined : digestRunOn(counted, pullRequest.number);
+    if (run === undefined) return [];
+    return [
+      {
+        ...inFlight(github.repo, pullRequest.ticket, pullRequest.number, runningSince(run), "ticket", "review", { role: "digest", on: "pullRequest" }),
+        name: "running",
+        detail: { run: "digest", retry: null, actionsRun: run.run, passed: true },
+      },
+    ];
+  });
+  return [...issues, ...pullRequests, ...digests];
+}
+
+/**
+ * When the Kit asked for a passed draft's Digest (#654): when `agent:digest`
+ * was last added, whoever added it, to an agent draft whose latest Verdict on
+ * its head is a pass, while the label is still on. Null for any other pull
+ * request. The pass is given and the next move is the Kit's: the Merge gate
+ * opens when the Digest's attempt ends, with a Digest or without.
+ */
+export function digestAskedOn(pullRequest: OpenPullRequestFacts): string | null {
+  return pullRequest.draft && passAtHeadOf(pullRequest) !== null ? addedAndStillOn(pullRequest.labelEvents, DIGEST_LABEL) : null;
+}
+
+/**
+ * The Digest run in flight on this pull request, the oldest of them: a Digest
+ * job always names its pull request, so one on another pull request never
+ * counts, though both close one Ticket.
+ */
+export function digestRunOn(runs: readonly RunInFlightFact[], pullRequest: number): RunInFlightFact | undefined {
+  return firstOf(runs.filter((run) => run.role === "digest" && run.pullRequest === pullRequest), []);
 }
 
 /**

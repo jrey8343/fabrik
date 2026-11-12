@@ -480,5 +480,56 @@
       "log": null,
       "deploysUnread": false
     }
+  },
+  "running (digest)": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 7,
+    "pullRequest": 50,
+    "work": "ticket",
+    "place": "review",
+    "name": "running",
+    "move": "kit",
+    "yours": false,
+    "stopsWork": false,
+    "since": "2026-11-08T19:23:00Z",
+    "stuckAt": null,
+    "awaits": { "role": "digest", "on": "pullRequest" },
+    "subscription": null,
+    "detail": { "run": "digest", "retry": null, "actionsRun": 4410, "passed": true, "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
+  },
+  "not-started (digest)": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 7,
+    "pullRequest": 50,
+    "work": "ticket",
+    "place": "review",
+    "name": "not-started",
+    "move": "kit",
+    "yours": false,
+    "stopsWork": false,
+    "since": "2026-11-08T19:21:00Z",
+    "stuckAt": "2026-11-08T22:51:00.000Z",
+    "awaits": { "role": "digest", "on": "pullRequest" },
+    "subscription": null,
+    "detail": { "silence": "trigger-label", "label": "agent:digest", "passed": true, "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
+  },
+  "stuck (digest)": {
+    "schema": 1,
+    "repo": "owner/product",
+    "issue": 7,
+    "pullRequest": 50,
+    "work": "ticket",
+    "place": "review",
+    "name": "stuck",
+    "move": "kit",
+    "yours": true,
+    "stopsWork": true,
+    "since": "2026-11-08T19:21:00Z",
+    "stuckAt": "2026-11-08T22:51:00.000Z",
+    "awaits": { "role": "digest", "on": "pullRequest" },
+    "subscription": null,
+    "detail": { "was": "not-started", "silence": "trigger-label", "label": "agent:digest", "passed": true, "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
   }
 }
