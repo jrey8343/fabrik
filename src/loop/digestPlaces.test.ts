@@ -5,6 +5,8 @@ import { aDigestFacts, aDigestGiven, aDigestReply } from "../__fixtures__/digest
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { forbiddenImportsFrom, modulesImporting, runtimeImportsIn, WORKER_BUILTINS } from "../read/importWalk.ts";
 import {
+  DIGEST_DATA_MARKER,
+  DIGEST_DATA_VERSION,
   DIGEST_FOLDS_MARKER,
   type DigestData,
   type DigestGiven,
@@ -533,6 +535,54 @@ describe("The modules that hold the Digest's contract, its place code and the re
   it("the place code's one built-in is one the read library's entry may import", () => {
     expect(runtimeImportsIn(read(moduleAt("src/loop/digestPlaces.ts")))).toEqual(["node:crypto"]);
     expect(WORKER_BUILTINS).toContain("node:crypto");
+  });
+});
+
+describe("The README's Digest section, on places and data", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("\n## Digest\n")[1]?.split("\n## ")[0] ?? "";
+  const bullets = section.split("\n").filter((line) => line.startsWith("- **"));
+  const places = bullets.find((line) => line.startsWith("- **Places and data**")) ?? "";
+
+  it("comes straight after Needs your eyes", () => {
+    expect(bullets[bullets.findIndex((line) => line.startsWith("- **Needs your eyes**")) + 1]).toBe(places);
+    expect(places).not.toBe("");
+  });
+
+  it("says what a place is, and what Kit code does with each before the Digest lands", () => {
+    for (const said of [
+      "The Digest points and never quotes",
+      "up to three places",
+      "`path`, `start`, `end`",
+      "`code` or `words`",
+      "is dropped, and its item is kept",
+      "cut to its first 40",
+      "`inDiff`",
+      "in one hunk of that file's diff",
+      "the first 12 hex characters of the SHA-256 of its lines",
+      "A fourth place on an item",
+    ]) {
+      expect(places).toContain(said);
+    }
+  });
+
+  it("gives the data line as the contract writes it, where it sits and what it holds", () => {
+    const [, line = ""] = bodyOf(aDigestReply()).split("\n");
+
+    expect(line.replace(/\{.*\}/, '{"v":1,…}')).toBe(`${DIGEST_DATA_MARKER} {"v":1,…} -->`);
+    expect(places).toContain(`\`${DIGEST_DATA_MARKER} {"v":${DIGEST_DATA_VERSION},…} -->\``);
+    expect(places).toContain("the comment's second line");
+    for (const field of ["`items`", "`kind`", "`claim`", "`sentence`", "`places`", "`picture`", "`suggestedRequest`", "`whatItDoes`", "`howItGotHere`", "`followUps`", "`fingerprint`"]) {
+      expect(places).toContain(field);
+    }
+    expect(places).toContain("never parsed from the Markdown");
+    expect(places).toContain("only when a field is removed or changes meaning");
+  });
+
+  it("says the first line's new field, and what a Digest too long for one comment comes to", () => {
+    expect(places).toContain("`carriedFrom`");
+    expect(places).toContain("is refused");
+    expect(places).toContain("65,536");
   });
 });
 

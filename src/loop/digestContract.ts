@@ -786,23 +786,28 @@ function followUpsRefused(shown: readonly string[], listed: DigestFacts["followU
 }
 
 /**
- * The Digest's comment, rendered from the writer's fields and Kit code's
- * facts with only what GitHub renders in a pull request: its hidden first
- * line naming the head, an opening line naming the pull request and that
- * head and the asks answered, an opening line naming the pull request and
- * that head, Needs your eyes, What it does, How it got here and the
- * Follow-ups the reply names, then, under the folds line, the four folds,
- * and last a link to the run. Every mention is taken out, as a Verdict's
- * findings lose theirs.
+ * The Digest's comment, rendered from the writer's fields, Kit code's facts
+ * and what the head holds, with only what GitHub renders in a pull request:
+ * its hidden first line naming the head and the asks answered; its hidden
+ * second line, the top as data (digestDataMarker); the top rendered from
+ * that same data (digestTop), which is an opening line naming the pull
+ * request and that head, Needs your eyes, What it does, How it got here and
+ * the Follow-ups the reply names; then, under the folds line, the four
+ * folds, and last a link to the run. Every mention is taken out, as a
+ * Verdict's findings lose theirs.
  *
  * Refused, never cut, saying every reason: a reply that leaves an ask of Kit
  * code's unanswered or answers under an id that is no ask's; one whose items
  * do not cover every ask that is not in the head, or name an ask they may
  * not; one naming a Follow-up Kit code did not list; one whose top runs
- * over its 180 words; and a comment too long for GitHub.
+ * over its 180 words; and a comment too long for GitHub, its data line
+ * counted, since a Digest posted without its data would be one no reader
+ * could draw.
  *
- * Put right, and the Digest lands: items out of kind order, and a suggested
- * request where none may stand (digestItemsOf).
+ * Put right, and the Digest lands: items out of kind order, a suggested
+ * request where none may stand (digestItemsOf), a place that does not
+ * resolve in the head, which is dropped, and one over 40 lines, which is
+ * cut (placeAt).
  */
 export function digestCommentOf(reply: DigestReply, given: DigestGiven): DigestComment {
   const { headSha, runUrl, facts } = given;
