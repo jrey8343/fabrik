@@ -160,7 +160,7 @@ function failureRound(round: number, operator: string, said: string): string {
 /**
  * The prototype round: a round, so it opens with the next round's marker and
  * carries the session's one @-mention, with the prototype marker under it.
- * The agent's text mentions nobody. The gallery expires, so the round itself
+ * The agent's text mentions nobody. The Evidence page expires, so the round itself
  * describes each variant and links its component on the branch at the head
  * the push left, which outlives it.
  */
@@ -178,7 +178,7 @@ function prototypeRound(
     "",
     withoutMentions(output.intro),
     "",
-    `[The prototype branch](${branchUrl(event)}) · ${galleryLine(event)}`,
+    `[The prototype branch](${branchUrl(event)}) · ${evidencePageLine(event)}`,
     "",
     ...variantLines(output, event),
     "",
@@ -209,16 +209,16 @@ function previewLine(preview: Exclude<RoundPreview, { kind: "none" }>): string {
 }
 
 /**
- * Where the variants can be seen: the gallery, which expires, or, when capture
+ * Where the variants can be seen: the Evidence page, which expires, or, when capture
  * failed after the build, why there's none. Either way the branch holds them.
  */
-function galleryLine({ capture, gallery }: PrototypeRunFinished): string {
+function evidencePageLine({ capture, evidencePage }: PrototypeRunFinished): string {
   if (capture === undefined || capture.outcome === "failed") {
     const why = capture === undefined ? "the prototype job passed out no capture result the push job could read" : `capture failed because ${CAPTURE_FAILED[capture.reason]}`;
-    return `There's no gallery: ${why}. The branch holds the variants, and this comment is the prototype's record.`;
+    return `There's no Evidence page: ${why}. The branch holds the variants, and this comment is the prototype's record.`;
   }
-  if (gallery === null) return "The Kit kept no gallery of the captures, so this comment is the prototype's record.";
-  return `[The gallery](${gallery}) of each variant's screenshots and videos. The gallery expires in about 30 days, so this comment is the prototype's record.`;
+  if (evidencePage === null) return "The Kit kept no Evidence page of the captures, so this comment is the prototype's record.";
+  return `[The Evidence page](${evidencePage}) of each variant's screenshots and videos. The Evidence page expires in about 30 days, so this comment is the prototype's record.`;
 }
 
 /** Why a prototype's capture failed, in plain words, the prototype job having captured. */

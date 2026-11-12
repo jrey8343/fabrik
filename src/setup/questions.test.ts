@@ -1,8 +1,10 @@
-// Setup's questions: time zone, a second Subscription and Dispatch paused. The
-// flags answer them, and the program asks only what they left out, and only on
-// a terminal. Without one, a missing answer means no.
+// Setup's questions: time zone, a second Subscription, Dispatch paused and
+// production. The flags answer them, and the program asks only what they left
+// out, and only on a terminal. Without one, a missing answer means no.
 import { describe, expect, it } from "vitest";
 import { aCleanProduct } from "../__fixtures__/productState.ts";
+import { deploymentsOf, fakeCommands, type Script } from "../__fixtures__/setupCommands.ts";
+import { gatherDeployments } from "./gather.ts";
 import type { ProductState } from "./plan.ts";
 import type { Prompt } from "./prompt.ts";
 import { askQuestions } from "./questions.ts";
@@ -26,10 +28,40 @@ const neverAsked: Prompt = {
   },
 };
 
+/** The first three questions' tests: production's question is answered no by its flag unless a test gives it. */
 async function ask(flags: FlagAnswers, prompt: Prompt | null, state: ProductState = aCleanProduct(), wroteStarter = false) {
   const said: string[] = [];
-  const answers = await askQuestions({ flags, state, wroteStarter, machineTimeZone: "Australia/Sydney", prompt, say: (line) => said.push(line) });
+  const answers = await askQuestions({
+    flags: { productionUrl: null, ...flags },
+    state,
+    wroteStarter,
+    machineTimeZone: "Australia/Sydney",
+    prompt,
+    say: (line) => said.push(line),
+    deployments: async () => {
+      throw new Error("Read the Deployments");
+    },
+  });
   return { answers, said };
+}
+
+const DEPLOYMENTS = "gh api repos/acme/clinic/deployments?per_page=100";
+
+/** Production's question, the other three answered by flag, with the repo's Deployments from a canned gh. */
+async function askProduction(flags: FlagAnswers, prompt: Prompt | null, { config, script = deploymentsOf("acme/clinic", []) }: { config?: string; script?: Script } = {}) {
+  const said: string[] = [];
+  const commands = fakeCommands(script);
+  const state = aCleanProduct(config === undefined ? {} : { files: { ".fabrik/config.json": config } });
+  const answers = await askQuestions({
+    flags: { timeZone: null, secondSubscription: false, paused: false, ...flags },
+    state,
+    wroteStarter: false,
+    machineTimeZone: "Australia/Sydney",
+    prompt,
+    say: (line) => said.push(line),
+    deployments: () => gatherDeployments(commands.run, "/clinic", state.repo),
+  });
+  return { production: answers.production, said, reads: commands.calls.filter((call) => call.line === DEPLOYMENTS).length };
 }
 
 const storeIn = (timeZone: string): ProductState["store"] => ({
@@ -41,9 +73,20 @@ const storeIn = (timeZone: string): ProductState["store"] => ({
 
 describe("Setup's questions", () => {
   it("asks nothing when the flags answer every question", async () => {
-    const { answers } = await ask({ timeZone: "Europe/London", secondSubscription: true, paused: false }, neverAsked);
+    const flags = {
+      timeZone: "Europe/London",
+      secondSubscription: true,
+      paused: false,
+      productionUrl: "https://clinic.example.com",
+      productionEnvironment: "production",
+    };
+    const { answers } = await ask(flags, neverAsked);
 
-    expect(answers).toEqual({ timeZone: "Europe/London", secondSubscription: true });
+    expect(answers).toEqual({
+      timeZone: "Europe/London",
+      secondSubscription: true,
+      production: { url: "https://clinic.example.com", environment: "production" },
+    });
   });
 
   it("takes a no from the flags without asking", async () => {
@@ -203,5 +246,231 @@ describe("Setup's questions", () => {
 
   it("takes the end of the terminal's input as no", async () => {
     expect((await ask({}, scripted(null, null, null))).answers).toEqual({});
+  });
+});
+
+describe("Setup's production question", () => {
+  const ADDRESS = "Production's address, or no to leave production out: ";
+  const address = (offered: string) => `Production's address, or no to leave production out [${offered}]: `;
+  const environment = (offered: string) => `The environment production's deploys carry in GitHub's Deployments, or none [${offered}]: `;
+  const WHICH = "Which one do production's deploys carry? Its number or name, or none: ";
+  const NO_DEPLOYMENTS =
+    "This repo reports no Deployments to GitHub, so merged work won't be followed to production until its deploy runs from an Actions job that names an environment. Setup can write the address alone, with environment null.";
+  const live = (url: string, environment: string | null = "production") => ({ url, environment });
+
+  it("offers production when the repo has Deployments by that name, and the address on its newest successful one, asking once", async () => {
+    const script = deploymentsOf("acme/clinic", [
+      { environment: "preview", url: "https://pr-4.clinic.example.dev" },
+      { environment: "production", state: "failure" },
+      { environment: "production", url: "https://clinic.example.com" },
+    ]);
+    const prompt = scripted("", "");
+
+    const { production, reads } = await askProduction({}, prompt, { script });
+
+    expect(prompt.questions).toEqual([environment("production"), address("https://clinic.example.com")]);
+    expect(production).toEqual(live("https://clinic.example.com"));
+    expect(reads).toBe(1);
+  });
+
+  it("offers the only environment the repo's Deployments carry when none is named production", async () => {
+    const script = deploymentsOf("acme/clinic", [{ environment: "live", url: "https://clinic.example.com" }]);
+    const prompt = scripted("", "");
+
+    const { production } = await askProduction({}, prompt, { script });
+
+    expect(prompt.questions).toEqual([environment("live"), address("https://clinic.example.com")]);
+    expect(production).toEqual(live("https://clinic.example.com", "live"));
+  });
+
+  it("lists several environments and asks which, by number or by name, offering the address of the one chosen", async () => {
+    const script = deploymentsOf("acme/clinic", [
+      { environment: "preview", url: "https://pr-4.clinic.example.dev" },
+      { environment: "live", url: "https://clinic.example.com" },
+    ]);
+
+    for (const choice of ["2", "live"]) {
+      const prompt = scripted(choice, "");
+      const { production, said } = await askProduction({}, prompt, { script });
+
+      expect(said).toContain("This repo's Deployments carry 2 environments: 1. preview, 2. live.");
+      expect(prompt.questions).toEqual([WHICH, address("https://clinic.example.com")]);
+      expect(production).toEqual(live("https://clinic.example.com", "live"));
+    }
+  });
+
+  it("asks which again when the answer is none of them, and takes none as no environment", async () => {
+    const script = deploymentsOf("acme/clinic", [{ environment: "preview" }, { environment: "live" }]);
+    const prompt = scripted("", "3", "none", "https://clinic.example.com");
+
+    const { production, said } = await askProduction({}, prompt, { script });
+
+    expect(said).toContain("Give the number of one of the 2, its name, or none.");
+    expect(prompt.questions).toEqual([WHICH, WHICH, WHICH, ADDRESS]);
+    expect(production).toEqual(live("https://clinic.example.com", null));
+  });
+
+  it("takes another environment name the Operator types", async () => {
+    const script = deploymentsOf("acme/clinic", [{ environment: "production", url: "https://clinic.example.com" }]);
+
+    const { production } = await askProduction({}, scripted("live", "https://www.clinic.example.com"), { script });
+
+    expect(production).toEqual(live("https://www.clinic.example.com", "live"));
+  });
+
+  it("on a repo with no Deployments, says deploys won't be tracked and what would track them, and writes the address with environment null", async () => {
+    const prompt = scripted("https://clinic.example.com");
+
+    const { production, said } = await askProduction({}, prompt);
+
+    expect(said).toContain(NO_DEPLOYMENTS);
+    expect(prompt.questions).toEqual([ADDRESS]);
+    expect(production).toEqual(live("https://clinic.example.com", null));
+  });
+
+  it("offers ui.before_url over a Deployment's address", async () => {
+    const config = '{ "ui": { "before_url": "https://www.clinic.example.com" } }\n';
+    const script = deploymentsOf("acme/clinic", [{ environment: "production", url: "https://clinic.example.com" }]);
+    const prompt = scripted("", "");
+
+    const { production } = await askProduction({}, prompt, { config, script });
+
+    expect(prompt.questions[1]).toBe(address("https://www.clinic.example.com"));
+    expect(production).toEqual(live("https://www.clinic.example.com"));
+  });
+
+  it("offers ui.before_url on a repo with no Deployments", async () => {
+    const config = '{ "ui": { "before_url": "https://www.clinic.example.com" } }\n';
+    const prompt = scripted("");
+
+    const { production } = await askProduction({}, prompt, { config });
+
+    expect(prompt.questions).toEqual([address("https://www.clinic.example.com")]);
+    expect(production).toEqual(live("https://www.clinic.example.com", null));
+  });
+
+  it("with no address to offer, takes no, an empty answer or the end of input as no block", async () => {
+    for (const answer of ["no", "n", "", null]) {
+      expect((await askProduction({}, scripted(answer))).production).toBeUndefined();
+    }
+  });
+
+  it("asks the address again when Kit config would refuse it, and never takes it", async () => {
+    const prompt = scripted("clinic.example.com", "ftp://clinic.example.com", "https://clinic.example.com");
+
+    const { production, said } = await askProduction({}, prompt);
+
+    expect(prompt.questions).toEqual([ADDRESS, ADDRESS, ADDRESS]);
+    expect(said).toContain('Kit config would refuse that: production.url is "ftp://clinic.example.com": a URL must start with http:// or https://.');
+    expect(production).toEqual(live("https://clinic.example.com", null));
+  });
+
+  it("says in one line that the Deployments read was refused, offers no environment, and carries on", async () => {
+    const script = { [DEPLOYMENTS]: { code: 1, stderr: "gh: Resource not accessible by integration (HTTP 403)" } };
+    const prompt = scripted("https://clinic.example.com");
+
+    const { production, said } = await askProduction({}, prompt, { script });
+
+    expect(said.filter((line) => line.includes("403"))).toEqual([
+      "Setup couldn't read this repo's Deployments (gh: Resource not accessible by integration (HTTP 403)), so it offers no environment.",
+    ]);
+    expect(prompt.questions).toEqual([ADDRESS]);
+    expect(production).toEqual(live("https://clinic.example.com", null));
+  });
+
+  describe("with its flags", () => {
+    it("asks nothing and reads nothing when the flags give both", async () => {
+      const { production, reads } = await askProduction({ productionUrl: "https://clinic.example.com", productionEnvironment: null }, neverAsked);
+
+      expect(production).toEqual(live("https://clinic.example.com", null));
+      expect(reads).toBe(0);
+    });
+
+    it("asks nothing with --no-production or an empty --production-url=, which both parse as no", async () => {
+      const { production, said, reads } = await askProduction({ productionUrl: null }, neverAsked);
+
+      expect([production, said, reads]).toEqual([undefined, [], 0]);
+    });
+
+    it("on a terminal, asks only the environment when the address came by flag", async () => {
+      const script = deploymentsOf("acme/clinic", [{ environment: "production", url: "https://pr.clinic.example.dev" }]);
+      const prompt = scripted("");
+
+      const { production } = await askProduction({ productionUrl: "https://clinic.example.com" }, prompt, { script });
+
+      expect(prompt.questions).toEqual([environment("production")]);
+      expect(production).toEqual(live("https://clinic.example.com"));
+    });
+
+    it("on a terminal, asks only the address when the environment came by flag, offering that environment's", async () => {
+      const script = deploymentsOf("acme/clinic", [
+        { environment: "production", url: "https://clinic.example.com" },
+        { environment: "live", url: "https://live.clinic.example.com" },
+      ]);
+      const prompt = scripted("");
+
+      const { production } = await askProduction({ productionEnvironment: "live" }, prompt, { script });
+
+      expect(prompt.questions).toEqual([address("https://live.clinic.example.com")]);
+      expect(production).toEqual(live("https://live.clinic.example.com", "live"));
+    });
+
+    it("without a terminal, writes --production-url= alone with environment null, and reads nothing", async () => {
+      const { production, reads } = await askProduction({ productionUrl: "https://clinic.example.com" }, null);
+
+      expect(production).toEqual(live("https://clinic.example.com", null));
+      expect(reads).toBe(0);
+    });
+
+    it("without a terminal and without the flags, writes no block and reads nothing", async () => {
+      const { production, reads } = await askProduction({}, null);
+
+      expect([production, reads]).toEqual([undefined, 0]);
+    });
+
+    it("without a terminal, says --production-environment= does nothing without an address", async () => {
+      const { production, said } = await askProduction({ productionEnvironment: "production" }, null);
+
+      expect(production).toBeUndefined();
+      expect(said).toEqual(["--production-environment= has no effect without an address: give --production-url= too."]);
+    });
+
+    it("stops the run with Kit config's reason when the address it was given would be refused", async () => {
+      await expect(askProduction({ productionUrl: "ftp://clinic.example.com" }, null)).rejects.toThrow(
+        'Kit config would refuse --production-url=ftp://clinic.example.com: production.url is "ftp://clinic.example.com": a URL must start with http:// or https://',
+      );
+    });
+  });
+
+  describe("on a Kit config it doesn't ask about", () => {
+    const declared = '{\n  "production": { "url": "https://clinic.example.com", "environment": "production" }\n}\n';
+
+    it("doesn't ask a repo that already declares production, or read its Deployments", async () => {
+      const { production, said, reads } = await askProduction({}, neverAsked, { config: declared });
+
+      expect([production, said, reads]).toEqual([undefined, [], 0]);
+    });
+
+    it("says its flags have no effect on a repo that already declares production", async () => {
+      const { production, said } = await askProduction({ productionUrl: "https://www.clinic.example.com" }, null, { config: declared });
+
+      expect(production).toBeUndefined();
+      expect(said).toEqual([".fabrik/config.json already declares production, which Setup leaves as it is, so production's flags have no effect."]);
+    });
+
+    it("asks about the starter on setup's branch, whose production is null", async () => {
+      const prompt = scripted("https://clinic.example.com");
+
+      const { production } = await askProduction({}, prompt, { config: '{\n  "production": null\n}\n' });
+
+      expect(production).toEqual(live("https://clinic.example.com", null));
+    });
+
+    it("doesn't ask about a Kit config that isn't a JSON object, and says why", async () => {
+      const { production, said, reads } = await askProduction({}, neverAsked, { config: "[]\n" });
+
+      expect([production, reads]).toEqual([undefined, 0]);
+      expect(said).toEqual([".fabrik/config.json isn't a JSON object, so Setup doesn't ask about production: fix it, then run setup again."]);
+    });
   });
 });

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import type { UiConfig } from "../kit/config.ts";
 import {
   type Capture,
   type CaptureFailure,
   type CaptureResult,
+  evidenceMarkerIn,
   evidenceSection,
   isUi,
   type MissedShot,
@@ -248,7 +250,7 @@ describe("The capture result", () => {
     expect(parseCaptureResult(text)).toEqual({ ok: false, errors: [expect.stringContaining(error)] });
   });
 
-  // The gallery and the Review job open each image by this name in the capture's folder, so it can't lead out of it.
+  // The Evidence page and the Review job open each image by this name in the capture's folder, so it can't lead out of it.
   it.each(["../agent-result.json", "..", "shots/after-mobile-book.png", "/etc/passwd", "shots\\after.png", ".after.png", "", "after mobile.png"])(
     "refuses an image name that isn't a plain file name: %j",
     (image) => {
@@ -332,14 +334,14 @@ describe("A prototype turn's capture result", () => {
   });
 });
 
-const GALLERY = "https://github.com/acme/shop/actions/runs/9100/artifacts/9201";
+const EVIDENCE_PAGE = "https://github.com/acme/shop/actions/runs/9100/artifacts/9201";
 
 /** The evidence the push job puts together for a UI PR's body: this result, kept by run 9100, with no preview declared. */
 const evidence = (result: CaptureResult, changes: Partial<UiEvidence> = {}): UiEvidence => ({
   result,
   run: 9100,
   artifact: 9202,
-  gallery: GALLERY,
+  evidencePage: EVIDENCE_PAGE,
   preview: { kind: "none" },
   ...changes,
 });
@@ -359,13 +361,13 @@ const allCaptured: CaptureResult<Capture> = {
 };
 
 describe("The evidence section a UI PR's body carries", () => {
-  it("links the gallery, lists each captured route with why it was chosen, and ends with the marker naming where the images are kept", () => {
+  it("links the Evidence page, lists each captured route with why it was chosen, and ends with the marker naming where the images are kept", () => {
     expect(evidenceSection(evidence(allCaptured))).toBe(
       [
         "<!-- fabrik:ui-evidence-start -->",
         "## UI evidence",
         "",
-        `[Open the gallery](<${GALLERY}>) of 6 screenshots: this branch at \`4f2b9c0\` beside the production site, at mobile and desktop widths.`,
+        `[Open the Evidence page](<${EVIDENCE_PAGE}>) of 6 screenshots: this branch at \`4f2b9c0\` beside the production site, at mobile and desktop widths.`,
         "",
         "No preview link: Kit config declares no `preview.url`.",
         "",
@@ -373,9 +375,27 @@ describe("The evidence section a UI PR's body carries", () => {
         "",
         "- `/book`, named by the Ticket",
         "- `/book/waitlist`, named by the Implementer",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/book","/book/waitlist"],"preview":{"is":"none"}} -->`,
       ].join("\n"),
     );
+  });
+
+  it("records the routes it lists, in its order, and that the preview waits on the push when Kit config declares one", () => {
+    const result: CaptureResult = {
+      ...allCaptured,
+      captures: [
+        { route: "/", reason: "default", viewport: "mobile", side: "after", status: 200, image: "after-mobile-home.png" },
+        ...allCaptured.captures.toReversed(),
+      ],
+    };
+
+    expect(evidenceMarkerIn(evidenceSection(evidence(result, { preview: { kind: "pending" } })))).toEqual({
+      run: 9100,
+      artifact: 9202,
+      failure: null,
+      routes: ["/book", "/book/waitlist", "/"],
+      preview: { is: "pending" },
+    });
   });
 
   // The Reviewer, and the Ticket's UI evidence, get nothing from a Prototype.
@@ -387,12 +407,23 @@ describe("The evidence section a UI PR's body carries", () => {
   });
 });
 
-describe("The evidence section's gallery line", () => {
-  it("says so when the run kept the screenshots but no gallery of them", () => {
-    const lines = evidenceSection(evidence(allCaptured, { gallery: null })).split("\n");
+describe("The evidence section's Evidence page line", () => {
+  it("says so when the run kept the screenshots but no Evidence page of them", () => {
+    const lines = evidenceSection(evidence(allCaptured, { evidencePage: null })).split("\n");
 
-    expect(lines).toContain("The Implement run kept no gallery of its 6 screenshots.");
-    expect(lines.some((line) => line.includes("Open the gallery"))).toBe(false);
+    expect(lines).toContain("The Implement run kept no Evidence page of its 6 screenshots.");
+    expect(lines.some((line) => line.includes("Open the Evidence page"))).toBe(false);
+  });
+});
+
+describe("An evidence section an earlier release wrote, naming the Evidence page by its old word", () => {
+  it.each([
+    ["linking its Evidence page", EVIDENCE_PAGE],
+    ["saying it kept none", null],
+  ])("still has its marker found, %s", (_, evidencePage) => {
+    const body = asAnEarlierReleaseWroteIt(`Adds a waitlist to full days.\n\n${evidenceSection(evidence(allCaptured, { evidencePage }))}\n\nCloses #12`);
+
+    expect(evidenceMarkerIn(body)).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/book", "/book/waitlist"], preview: { is: "none" } });
   });
 });
 
@@ -482,10 +513,10 @@ describe("The evidence section of a failed capture", () => {
     ["error", "**Capture failed:** it hit an error the Kit didn't expect, which the Implement job's log shows. There are no screenshots."],
     // The push job's own reason, when the Implement job passed it no capture result it could read.
     ["no-result", "**Capture failed:** it left no result the push job could read: the Implement job's log shows why. There are no screenshots."],
-  ] satisfies [CaptureFailure, string][])("says plainly why when it failed for %s, with no gallery or routes", (reason, why) => {
+  ] satisfies [CaptureFailure, string][])("says plainly why when it failed for %s, with no Evidence page or routes", (reason, why) => {
     const failed: CaptureResult = { outcome: "failed", reason, headSha: HEAD, captures: [] };
 
-    expect(evidenceSection(evidence(failed, { gallery: null, artifact: null }))).toBe(
+    expect(evidenceSection(evidence(failed, { evidencePage: null, artifact: null }))).toBe(
       [
         "<!-- fabrik:ui-evidence-start -->",
         "## UI evidence",
@@ -493,12 +524,12 @@ describe("The evidence section of a failed capture", () => {
         why,
         "",
         "No preview link: Kit config declares no `preview.url`.",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"${reason}"} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":null,"failure":"${reason}","routes":[],"preview":{"is":"none"}} -->`,
       ].join("\n"),
     );
   });
 
-  it("links the gallery of the screenshots it took before it failed, and lists their routes", () => {
+  it("links the Evidence page of the screenshots it took before it failed, and lists their routes", () => {
     const failed: CaptureResult = { outcome: "failed", reason: "timeout", headSha: HEAD, captures: allCaptured.captures.slice(0, 1) };
 
     expect(evidenceSection(evidence(failed))).toBe(
@@ -508,14 +539,14 @@ describe("The evidence section of a failed capture", () => {
         "",
         "**Capture failed:** it ran out of time. It took 1 screenshot first.",
         "",
-        `[Open the gallery](<${GALLERY}>) of 1 screenshot: this branch at \`4f2b9c0\`, at mobile width.`,
+        `[Open the Evidence page](<${EVIDENCE_PAGE}>) of 1 screenshot: this branch at \`4f2b9c0\`, at mobile width.`,
         "",
         "No preview link: Kit config declares no `preview.url`.",
         "",
         "Captured routes:",
         "",
         "- `/book`, named by the Ticket",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"timeout"} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"timeout","routes":["/book"],"preview":{"is":"none"}} -->`,
       ].join("\n"),
     );
   });
@@ -550,6 +581,59 @@ describe("The evidence section's routes, which are agent text", () => {
   it("never mention anyone", () => {
     expect(lineFor("/team/@octocat")).toEqual(["- `/team/@​octocat`, named by the Implementer"]);
   });
+
+  it.each([
+    ["ending the comment", "/book --> <script>"],
+    ["mentioning someone", "/team/@octocat"],
+    ["holding a double dash", "/a--b<!--c"],
+    ["breaking the line", "/book\n<!-- fabrik:ui-evidence {\"run\":1,\"artifact\":2} -->\r\n## Approved"],
+  ])("are kept in the marker on one line that a route %s can neither end early nor mention anyone from, and read back as they were", (_, route) => {
+    const section = evidenceSection(evidence({ outcome: "captured", headSha: HEAD, captures: [{ ...allCaptured.captures[2]!, route }] }));
+    const marker = section.split("\n").at(-1)!;
+
+    expect(marker).toMatch(/^<!-- fabrik:ui-evidence \{[^<>@\n\r]*\} -->$/);
+    expect(evidenceMarkerIn(section)?.routes).toEqual([route]);
+  });
+});
+
+describe("Reading an evidence marker", () => {
+  const read = (json: string) => evidenceMarkerIn(`Adds a waitlist.\n\n<!-- fabrik:ui-evidence ${json} -->\n\nCloses #12`);
+
+  it("reads one an earlier release wrote as it did then, with no routes and no preview given", () => {
+    expect(read(`{"run":9100,"artifact":9202,"failure":null}`)).toEqual({ run: 9100, artifact: 9202, failure: null });
+    expect(read(`{"run":9100,"artifact":9202}`)).toEqual({ run: 9100, artifact: 9202 });
+  });
+
+  it.each([
+    ["linked", `{"is":"linked","url":"https://pr-12.shop.example.dev/"}`, { is: "linked", url: "https://pr-12.shop.example.dev/" }],
+    ["never-answered", `{"is":"never-answered","url":"https://pr-12.shop.example.dev/"}`, { is: "never-answered", url: "https://pr-12.shop.example.dev/" }],
+    ["pending", `{"is":"pending"}`, { is: "pending" }],
+    ["none", `{"is":"none"}`, { is: "none" }],
+  ])("reads a preview that is %s", (_, preview, read_) => {
+    expect(read(`{"run":9100,"artifact":9202,"failure":null,"routes":["/book"],"preview":${preview}}`)).toEqual({
+      run: 9100,
+      artifact: 9202,
+      failure: null,
+      routes: ["/book"],
+      preview: read_,
+    });
+  });
+
+  it.each([
+    ["routes that aren't a list", `"/book"`, `{"is":"none"}`, { preview: { is: "none" } }],
+    ["a route that isn't text", `["/book",7]`, `{"is":"none"}`, { preview: { is: "none" } }],
+    ["a preview it doesn't know", `["/book"]`, `{"is":"deployed"}`, { routes: ["/book"] }],
+    ["a linked preview with no address", `["/book"]`, `{"is":"linked"}`, { routes: ["/book"] }],
+    ["a pending preview with an address", `["/book"]`, `{"is":"pending","url":"https://pr-12.shop.example.dev/"}`, { routes: ["/book"] }],
+    ["a preview that isn't an object", `["/book"]`, `"linked"`, { routes: ["/book"] }],
+  ])("still gives the run, artifact and failure of one with %s, without the field that doesn't read", (_, routes, preview, rest) => {
+    expect(read(`{"run":9100,"artifact":9202,"failure":"timeout","routes":${routes},"preview":${preview}}`)).toEqual({
+      run: 9100,
+      artifact: 9202,
+      failure: "timeout",
+      ...rest,
+    });
+  });
 });
 
 // #235 strips the Implementer's summary with it, and the old body a Retry's agent is shown, so no agent can forge or copy forward a marker.
@@ -576,6 +660,11 @@ describe("Text without its evidence", () => {
     ["a start line with no marker after it", "Adds a waitlist.\n<!-- fabrik:ui-evidence-start -->\nTested by hand.", "Adds a waitlist.\nTested by hand."],
     ["an indented marker with a carriage return", `Adds a waitlist.\n   ${MARKER}\r\nTested by hand.`, "Adds a waitlist.\nTested by hand."],
     ["a marker spaced oddly", `Adds a waitlist.\n<!--fabrik:ui-evidence {"run":1}-->\nTested by hand.`, "Adds a waitlist.\nTested by hand."],
+    [
+      "a marker recording routes and a linked preview",
+      `Adds a waitlist.\n<!-- fabrik:ui-evidence {"run":1,"artifact":2,"failure":null,"routes":["/book"],"preview":{"is":"linked","url":"https://pr-12.shop.example.dev/"}} -->\nTested by hand.`,
+      "Adds a waitlist.\nTested by hand.",
+    ],
     ["a marker in a code block", `Adds a waitlist.\n\`\`\`\n${MARKER}\n\`\`\`\nTested by hand.`, "Adds a waitlist.\n```\n```\nTested by hand."],
   ])("loses any stray evidence line, such as %s, and only that line", (_, text, without) => {
     expect(withoutEvidence(text)).toBe(without);
@@ -674,6 +763,22 @@ describe("Linking the preview in a PR body's evidence section, once the push job
 
     expect(withPreviewLink(edited, 9100, { kind: "linked", url: PREVIEW })).toBe(
       sectionSaying({ kind: "linked", url: PREVIEW }).replace("Adds a waitlist to full days.", "Adds a waitlist to full days.\r\n\r\nThe Operator's note."),
+    );
+  });
+
+  it("edits and records it in a body the Operator saved with \\r\\n line ends, keeping them", () => {
+    const edited = withPreviewLink(body().replaceAll("\n", "\r\n"), 9100, { kind: "never-answered", url: PREVIEW });
+
+    expect(edited).toBe(sectionSaying({ kind: "never-answered", url: PREVIEW }).replaceAll("\n", "\r\n"));
+    expect(evidenceMarkerIn(edited!)?.preview).toEqual({ is: "never-answered", url: PREVIEW });
+  });
+
+  it("records it in the marker, keeping the routes and anything else the marker holds", () => {
+    const waiting = body().replace(`"preview":{"is":"pending"}`, `"preview":{"is":"pending"},"later":1`);
+    const marker = withPreviewLink(waiting, 9100, { kind: "linked", url: PREVIEW })!.split("\n").findLast((line) => line.startsWith("<!-- fabrik:ui-evidence {"));
+
+    expect(marker).toBe(
+      `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/book","/book/waitlist"],"preview":{"is":"linked","url":"https://pr-12.shop.example.dev/"},"later":1} -->`,
     );
   });
 
@@ -828,7 +933,7 @@ describe("UI evidence of a page that wouldn't load", () => {
       missed: [refused("/book", "ticket", "mobile", "after"), refused("/book", "ticket", "desktop", "after")],
     };
 
-    expect(evidenceSection(evidence(nothing, { gallery: null }))).toBe(
+    expect(evidenceSection(evidence(nothing, { evidencePage: null }))).toBe(
       [
         "<!-- fabrik:ui-evidence-start -->",
         "## UI evidence",
@@ -840,7 +945,7 @@ describe("UI evidence of a page that wouldn't load", () => {
         "Captured routes:",
         "",
         "- `/book`, named by the Ticket. Captured: nothing. **Not captured:** After: unreachable, `ERR_CONNECTION_REFUSED`, at mobile and desktop.",
-        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"unreachable"} -->`,
+        `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":"unreachable","routes":["/book"],"preview":{"is":"none"}} -->`,
       ].join("\n"),
     );
   });

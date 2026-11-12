@@ -1,9 +1,10 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { CAPTURED, GALLERY, UI } from "../__fixtures__/uiEvidence.ts";
-import { evidenceSection, type PreviewLink } from "../evidence/uiEvidence.ts";
+import { CAPTURED, EVIDENCE_PAGE, UI } from "../__fixtures__/uiEvidence.ts";
+import { evidenceMarkerIn, evidenceSection, type PreviewLink } from "../evidence/uiEvidence.ts";
 import { applyPlan } from "../github/apply.ts";
 import { planFor } from "../loop/rules.ts";
 import {
@@ -21,7 +22,7 @@ const URL_ = "https://deploy-preview-51--shop.netlify.app/";
 
 /** A UI PR's body as run 9100's push job opened it, its evidence section saying `preview`. */
 const bodySaying = (preview: PreviewLink, run = 9100) =>
-  `Adds a waitlist to full days.\n\n${evidenceSection({ result: CAPTURED, run, artifact: 9202, gallery: GALLERY, preview })}\n\nCloses #7`;
+  `Adds a waitlist to full days.\n\n${evidenceSection({ result: CAPTURED, run, artifact: 9202, evidencePage: EVIDENCE_PAGE, preview })}\n\nCloses #7`;
 
 /** A GitHub holding PR #51 with this body, which `edit` changes, recording every REST call. */
 function pullRequestWith(body: string | null) {
@@ -92,6 +93,19 @@ describe("Linking a UI PR's preview deployment", () => {
     expect(github.calls.at(-1)).toEqual({ method: "PATCH", path: PULL, body: { body: bodySaying({ kind: "never-answered", url: URL_ }) } });
   });
 
+  it.each([
+    ["linked", [200]],
+    ["never-answered", [404]],
+  ] as const)("records in the evidence marker that the preview was %s, with the address it polled, where it said pending", async (is, answers) => {
+    const github = pullRequestWith(bodySaying({ kind: "pending" }));
+    expect(evidenceMarkerIn(bodySaying({ kind: "pending" }))?.preview).toEqual({ is: "pending" });
+
+    await linkPreview(github, repo, { pullRequest: 51, url: URL_, run: 9100 }, pollerAnswering(...answers).poller);
+
+    const { body } = github.calls.at(-1)?.body as { body: string };
+    expect(evidenceMarkerIn(body)).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/waitlist"], preview: { is, url: URL_ } });
+  });
+
   it(`stops polling after ${PREVIEW_POLL_MINUTES} minutes, a Kit constant within the push job's step's timeout, polling one last time at the end`, async () => {
     const { poller, polled } = pollerAnswering(404);
 
@@ -114,6 +128,15 @@ describe("Linking a UI PR's preview deployment", () => {
     await linkPreview(github, repo, { pullRequest: 51, url: URL_, run: 9100 }, poller);
 
     expect(github.calls.at(-1)?.body).toEqual({ body: `${bodySaying({ kind: "linked", url: URL_ })}\n\nThe Operator's note.` });
+  });
+
+  it("links the preview into a section an earlier release wrote, which named the Evidence page by its old word", async () => {
+    const github = pullRequestWith(asAnEarlierReleaseWroteIt(bodySaying({ kind: "pending" })));
+
+    const outcome = await linkPreview(github, repo, { pullRequest: 51, url: URL_, run: 9100 }, pollerAnswering(200).poller);
+
+    expect(outcome).toEqual({ kind: "linked" });
+    expect(github.calls.at(-1)).toEqual({ method: "PATCH", path: PULL, body: { body: asAnEarlierReleaseWroteIt(bodySaying({ kind: "linked", url: URL_ })) } });
   });
 
   it.each([
@@ -182,7 +205,11 @@ describe("Linking each variant's preview in a prototype round", () => {
   async function landed(
     template = "https://{branch_slug}--shop.netlify.app",
     route = "/book",
-    { intro = "Two ways to book a class.", recommendation = "B." }: { intro?: string; recommendation?: string } = {},
+    {
+      intro = "Two ways to book a class.",
+      recommendation = "B.",
+      evidencePage = null,
+    }: { intro?: string; recommendation?: string; evidencePage?: string | null } = {},
   ) {
     const request = { request: { route, variants: 2, brief: "A form, or a stepper." }, reply: 9001 };
     const event = {
@@ -193,7 +220,7 @@ describe("Linking each variant's preview in a prototype round", () => {
       branch: "prototype/7",
       changes: { net: VARIANTS.map(({ component }) => ({ path: component })), commits: [] },
       headSha: HEAD,
-      gallery: null,
+      evidencePage,
       runUrl: `${REPO}/actions/runs/9100/attempts/1`,
       repoUrl: REPO,
     } as const;
@@ -270,6 +297,25 @@ describe("Linking each variant's preview in a prototype round", () => {
       expect((github.comment ?? "").match(/No preview links/g)).toHaveLength(1);
       expect(github.comment).toMatch(new RegExp(`${variantLine("B", 1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n\nNo preview links: `));
     });
+  });
+
+  it.each([
+    ["linking its Evidence page", `${REPO}/actions/runs/9100/artifacts/9201`],
+    ["saying the Kit kept none", null],
+  ])("links each variant's preview into a round an earlier release wrote, which named the Evidence page by its old word, %s", async (_, evidencePage) => {
+    const { github, preview, posted } = await landed(undefined, undefined, { evidencePage });
+    const earlier = asAnEarlierReleaseWroteIt(posted);
+    github.edit(earlier);
+
+    const outcome = await linkPreview(github, repo, preview, pollerAnswering(200).poller);
+
+    expect(outcome).toEqual({ kind: "linked" });
+    expect(github.comment).toBe(
+      earlier.replace(
+        [variantLine("A", 0), variantLine("B", 1), "", "Each variant's preview is linked beside it once the preview deployment answers.", ""].join("\n"),
+        [`${variantLine("A", 0)} · [Preview](${PAGE}?variant=A)`, `${variantLine("B", 1)} · [Preview](${PAGE}?variant=B)`, ""].join("\n"),
+      ),
+    );
   });
 
   it("links a route whose path holds spaces or parentheses without ending its link early", async () => {

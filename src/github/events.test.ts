@@ -245,8 +245,8 @@ describe("A finished Implement run's UI evidence", () => {
   const pushJob = (capture: Omit<CaptureOutputs, "timedOut"> & { timedOut?: boolean }) => ({ timedOut: false, ...capture, run: 9100, repoUrl: "https://github.com/acme/shop" });
   const RUN = "https://github.com/acme/shop/actions/runs/9100/attempts/1";
 
-  it("carries the capture result, the head the run built, and where the push job's own run keeps the images and the gallery", () => {
-    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, galleryArtifact: 9201 }), RUN);
+  it("carries the capture result, the head the run built, and where the push job's own run keeps the images and the Evidence page", () => {
+    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, evidencePageArtifact: 9201 }), RUN);
 
     expect(event).toMatchObject({
       kind: "implement-run-finished",
@@ -257,28 +257,28 @@ describe("A finished Implement run's UI evidence", () => {
         headSha: HEAD,
         run: 9100,
         artifact: 9202,
-        gallery: "https://github.com/acme/shop/actions/runs/9100/artifacts/9201",
+        evidencePage: "https://github.com/acme/shop/actions/runs/9100/artifacts/9201",
       },
     });
   });
 
   it("carries no capture result when capture recorded nothing, as in a repo without a ui block, the Implement job having passed out none", () => {
-    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: null, artifact: null, galleryArtifact: null }), RUN);
+    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: null, artifact: null, evidencePageArtifact: null }), RUN);
 
-    expect(event).toMatchObject({ evidence: { headSha: HEAD, run: 9100, artifact: null, gallery: null } });
+    expect(event).toMatchObject({ evidence: { headSha: HEAD, run: 9100, artifact: null, evidencePage: null } });
     expect(event).not.toHaveProperty("evidence.result");
   });
 
   it("carries a timeout as the capture result when the capture step's own timeout stopped it before it recorded one", () => {
-    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: null, timedOut: true, artifact: null, galleryArtifact: null }), RUN);
+    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: null, timedOut: true, artifact: null, evidencePageArtifact: null }), RUN);
 
     expect(event).toMatchObject({ evidence: { result: { outcome: "failed", reason: "timeout", headSha: HEAD, captures: [] }, headSha: HEAD } });
   });
 
-  it("links no gallery when the run kept no gallery artifact, though it kept the images", () => {
-    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, galleryArtifact: null }), RUN);
+  it("links no Evidence page when the run kept no Evidence page artifact, though it kept the images", () => {
+    const event = agentRunEventFrom(result, changes, null, null, pushJob({ result: captured, artifact: 9202, evidencePageArtifact: null }), RUN);
 
-    expect(event).toMatchObject({ evidence: { artifact: 9202, gallery: null } });
+    expect(event).toMatchObject({ evidence: { artifact: 9202, evidencePage: null } });
   });
 });
 
@@ -476,8 +476,8 @@ describe("A finished prototype turn", () => {
   /** Run 9100's push job, in acme/shop, with what the prototype job passed out. */
   const pushJob = (capture: Omit<CaptureOutputs, "timedOut"> & { timedOut?: boolean }) => ({ timedOut: false, ...capture, run: 9100, repoUrl: REPO });
 
-  it("carries the turn's output, unparsed, the request the Kit job built it on, the branch, what it changes and the head the push leaves, what capture recorded, and the gallery in the push job's own run", () => {
-    const event = prototypeEventFrom(result, request, { changes, head: HEAD }, pushJob({ result: captured, artifact: null, galleryArtifact: 9201 }), RUN);
+  it("carries the turn's output, unparsed, the request the Kit job built it on, the branch, what it changes and the head the push leaves, what capture recorded, and the Evidence page in the push job's own run", () => {
+    const event = prototypeEventFrom(result, request, { changes, head: HEAD }, pushJob({ result: captured, artifact: null, evidencePageArtifact: 9201 }), RUN);
 
     expect(event).toEqual({
       kind: "prototype-run-finished",
@@ -488,27 +488,27 @@ describe("A finished prototype turn", () => {
       changes,
       headSha: HEAD,
       capture: captured,
-      gallery: `${REPO}/actions/runs/9100/artifacts/9201`,
+      evidencePage: `${REPO}/actions/runs/9100/artifacts/9201`,
       runUrl: RUN,
       repoUrl: REPO,
     });
   });
 
-  it("carries no capture result or gallery when the prototype job passed out none, and no head when the turn made no commit", () => {
+  it("carries no capture result or Evidence page when the prototype job passed out none, and no head when the turn made no commit", () => {
     const event = prototypeEventFrom(
       result,
       request,
       { changes: { net: [], commits: [], updatedFromMain: false }, head: null },
-      pushJob({ result: null, artifact: null, galleryArtifact: null }),
+      pushJob({ result: null, artifact: null, evidencePageArtifact: null }),
       RUN,
     );
 
-    expect(event).toMatchObject({ kind: "prototype-run-finished", headSha: null, gallery: null });
+    expect(event).toMatchObject({ kind: "prototype-run-finished", headSha: null, evidencePage: null });
     expect(event).not.toHaveProperty("capture");
   });
 
   it("refuses a result that names no branch, or is another role's", () => {
-    const evidence = pushJob({ result: null, artifact: null, galleryArtifact: null });
+    const evidence = pushJob({ result: null, artifact: null, evidencePageArtifact: null });
     const noBranch = readAgentRunResult(JSON.stringify({ role: "design", issue: 7, output: OUTPUT }));
     const triage = readAgentRunResult(JSON.stringify({ role: "triage", issue: 7, output: "{}" }));
 

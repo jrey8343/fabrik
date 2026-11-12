@@ -26,8 +26,8 @@ export interface CaptureOutputs {
   readonly result: CaptureResult | null;
   /** The id of the zipped artifact of the screenshots and the capture result (`ui-evidence-artifact`). */
   readonly artifact: number | null;
-  /** The id of the unzipped gallery artifact (`ui-gallery-artifact`). */
-  readonly galleryArtifact: number | null;
+  /** The id of the unzipped Evidence page artifact (`ui-evidence-page-artifact`). */
+  readonly evidencePageArtifact: number | null;
   /** Whether the capture step's own timeout stopped it (`ui-capture-timed-out`), so it recorded no result. */
   readonly timedOut: boolean;
 }
@@ -265,7 +265,7 @@ function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {
   return {
     result: read?.ok === true ? read.result : null,
     artifact: numberOr(outputs["ui-evidence-artifact"]),
-    galleryArtifact: numberOr(outputs["ui-gallery-artifact"]),
+    evidencePageArtifact: numberOr(outputs["ui-evidence-page-artifact"]),
     timedOut: outputs["ui-capture-timed-out"] === "true",
   };
 }

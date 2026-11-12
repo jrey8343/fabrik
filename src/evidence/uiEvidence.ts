@@ -7,11 +7,11 @@
 // which keeps both out of agent text. A prototype turn's capture of its
 // variants (#155) shares the capture result, and neither the Reviewer nor the
 // evidence section ever shows it. The galleries, the PR's and the prototype's,
-// are beside it (src/evidence/gallery.ts). Pure, no I/O.
+// are beside it (src/evidence/evidencePage.ts). Pure, no I/O.
 import { posix } from "node:path";
 import { type CaptureIdentity, isCaptureIdentity, isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
-import { linesOutsideCode } from "../loop/markers.ts";
+import { linesOutsideCode, markerJson } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
 import { FULL_SHA } from "../skills/lock.ts";
@@ -372,7 +372,7 @@ function isOneOf<T extends string>(options: readonly T[], value: unknown): value
  * its context, the ones that matter most first: After before Before, mobile
  * before desktop, then routes in reason order (the Ticket's, the
  * Implementer's, the defaults), each reason's routes in the order they were
- * captured. The Operator's gallery has them all. None is ever of a
+ * captured. The Operator's Evidence page has them all. None is ever of a
  * Prototype's variant: the Reviewer gets nothing from a Prototype.
  */
 export function reviewerImages(captures: readonly (Capture | VariantCapture)[]): readonly Capture[] {
@@ -543,14 +543,35 @@ export interface EvidenceMarker {
    * markers recorded it.
    */
   readonly failure?: CaptureFailure | null;
+  /**
+   * The routes the section lists under "Captured routes", in its order: the
+   * Ticket's, then the Implementer's, then the defaults, a route missed
+   * outright among them; empty when capture had none. Absent from a marker
+   * written before markers recorded them, or whose routes don't read.
+   */
+  readonly routes?: readonly string[];
+  /**
+   * What came of the preview deployment: `none` when Kit config declares no
+   * `preview.url`; `pending` until the preview step has polled it, which then
+   * records `linked` or `never-answered` with the address it polled. `linked`
+   * says the branch's address answered within the poll, not that this head
+   * is what answers. Absent from a marker written before markers recorded
+   * it, or whose preview doesn't read.
+   */
+  readonly preview?: MarkerPreview;
 }
+
+/** What came of a pull request's preview deployment, as its evidence marker records it. */
+export type MarkerPreview =
+  | { readonly is: "none" | "pending" }
+  | { readonly is: "linked" | "never-answered"; readonly url: string };
 
 /** A UI pull request's evidence, as the push job puts it together for the PR body. */
 export interface UiEvidence extends Pick<EvidenceMarker, "run" | "artifact"> {
   /** What capture recorded. */
   readonly result: CaptureResult;
-  /** The gallery's web address, or null when the run kept none. */
-  readonly gallery: string | null;
+  /** The Evidence page's web address, or null when the run kept none. */
+  readonly evidencePage: string | null;
   readonly preview: PreviewLink;
 }
 
@@ -560,7 +581,7 @@ const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
 /**
  * The evidence section of a UI pull request's body, between a hidden start
  * line and the marker (evidenceMarkerIn): why capture failed, when it did;
- * the gallery link; the preview link, or why there is none; and each
+ * the Evidence page link; the preview link, or why there is none; and each
  * captured route with why it was chosen, flagged when it answered a server
  * error, or naming what of it wasn't captured and why. A failed capture
  * keeps the screenshots it took first, so the section shows those too. Its
@@ -568,7 +589,7 @@ const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
  * Prototype's variant: a Ticket's UI evidence gets nothing from a Prototype.
  */
 export function evidenceSection(evidence: UiEvidence): string {
-  const { result, gallery, preview } = evidence;
+  const { result, evidencePage, preview } = evidence;
   const captures = sideCaptures(result.captures);
   const missed = result.missed ?? [];
   // Each route once, in reason order as routes are chosen, though a route missed outright has no capture to come first by.
@@ -579,11 +600,11 @@ export function evidenceSection(evidence: UiEvidence): string {
     SECTION_START,
     "## UI evidence",
     ...(result.outcome === "failed" ? ["", failureLine(result.reason, captures)] : []),
-    ...(captures.length === 0 ? [] : ["", galleryLine(gallery, result.headSha, captures)]),
+    ...(captures.length === 0 ? [] : ["", evidencePageLine(evidencePage, result.headSha, captures)]),
     "",
     previewLine(preview),
     ...(routes.length === 0 ? [] : ["", "Captured routes:", "", ...routes.map((chosen) => routeLine(chosen, captures, missed))]),
-    evidenceMarker(evidence),
+    evidenceMarker(evidence, routes.map(({ route }) => route)),
   ].join("\n");
 }
 
@@ -667,7 +688,7 @@ export function isServerError(status: number): boolean {
 
 /**
  * What a screenshot of a page that answered a server error shows, in the
- * words the evidence section, the gallery and the Reviewer's block share:
+ * words the evidence section, the Evidence page and the Reviewer's block share:
  * the page `answered` its status, so what `shows` it is of an error page.
  */
 export function serverErrorWords(answered: string, shows: string): string {
@@ -677,11 +698,11 @@ export function serverErrorWords(answered: string, shows: string): string {
 /** How the evidence names each side. */
 export const SIDE_WORDS: Readonly<Record<CaptureSide, string>> = { before: "Before", after: "After" };
 
-function galleryLine(url: string | null, headSha: string, captures: readonly Capture[]): string {
-  if (url === null) return `The Implement run kept no gallery of its ${screenshots(captures.length)}.`;
+function evidencePageLine(url: string | null, headSha: string, captures: readonly Capture[]): string {
+  if (url === null) return `The Implement run kept no Evidence page of its ${screenshots(captures.length)}.`;
   const besideProduction = captures.some(({ side }) => side === "before") ? " beside the production site" : "";
   const viewports = UI_VIEWPORTS.map(({ name }) => name).filter((name) => captures.some(({ viewport }) => viewport === name));
-  return `${link("Open the gallery", url)} of ${screenshots(captures.length)}: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} ${viewports.length === 1 ? "width" : "widths"}.`;
+  return `${link("Open the Evidence page", url)} of ${screenshots(captures.length)}: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} ${viewports.length === 1 ? "width" : "widths"}.`;
 }
 
 function previewLine(preview: PreviewLink): string {
@@ -698,10 +719,25 @@ function previewLine(preview: PreviewLink): string {
   }
 }
 
-/** The marker line closing the evidence section, which records how its capture ended. */
-function evidenceMarker({ run, artifact, result }: UiEvidence): string {
+/**
+ * The marker line closing the evidence section, which records how its
+ * capture ended, the routes the section lists and what came of the preview.
+ * A route may be agent text, so the JSON can neither end the comment early
+ * nor mention anyone.
+ */
+function evidenceMarker({ run, artifact, result, preview }: UiEvidence, routes: readonly string[]): string {
   const failure = result.outcome === "failed" ? result.reason : null;
-  return `<!-- fabrik:ui-evidence ${JSON.stringify({ run, artifact, failure })} -->`;
+  return markerLine({ run, artifact, failure, routes, preview: markerPreview(preview) });
+}
+
+/** An evidence marker line holding this value, on one line. */
+function markerLine(value: unknown): string {
+  return `<!-- fabrik:ui-evidence ${markerJson(value)} -->`;
+}
+
+/** What the marker records of a preview link. */
+function markerPreview(preview: PreviewLink): MarkerPreview {
+  return preview.kind === "linked" || preview.kind === "never-answered" ? { is: preview.kind, url: preview.url } : { is: preview.kind };
 }
 
 /** The marker line, matched against a whole line with its outer whitespace trimmed. */
@@ -725,7 +761,8 @@ export function evidenceMarkerIn(body: string): EvidenceMarker | null {
  * The body with what came of its preview deployment, once the push job has
  * polled it (src/kit/previewLink.ts): the evidence section run `run` wrote
  * links the preview, or says it never answered, where it said the preview is
- * linked once it answers. The rest of the body stays as it was, whatever the
+ * linked once it answers, and its marker records the same, with the address
+ * polled. The rest of the body stays as it was, whatever the
  * Operator changed. Null when there is nothing to change: the body's marker,
  * the last, isn't that run's, as when a later run has replaced the section,
  * or its section no longer waits on the preview.
@@ -740,7 +777,12 @@ export function withPreviewLink(body: string, run: number, preview: PreviewLink)
   const at = lines.findIndex((line, i) => startAt !== -1 && i > startAt && i < markerAt && line.trim() === waiting);
   if (at === -1) return null;
   // A body the Operator edited on GitHub may end its lines in \r\n.
-  lines[at] = `${previewLine(preview)}${lines[at]!.endsWith("\r") ? "\r" : ""}`;
+  const ending = (line: string) => (line.endsWith("\r") ? "\r" : "");
+  lines[at] = `${previewLine(preview)}${ending(lines[at]!)}`;
+  // The marker records it in the same edit, keeping all else it holds as it was.
+  const marker = lines[markerAt]!;
+  const held = JSON.parse(EVIDENCE_MARKER.exec(marker.trim())![1]!) as Record<string, unknown>;
+  lines[markerAt] = `${markerLine({ ...held, preview: markerPreview(preview) })}${ending(marker)}`;
   return lines.join("\n");
 }
 
@@ -753,10 +795,25 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
     return null;
   }
   if (!isObject(value)) return null;
-  const { run, artifact, failure } = value;
+  const { run, artifact, failure, routes, preview } = value;
   if (!isId(run) || !(artifact === null || isId(artifact))) return null;
-  // A capture outcome it doesn't record, or that doesn't read, leaves where the evidence is kept as it was.
-  return { run, artifact, ...(failure === null || isOneOf(CAPTURE_FAILURES, failure) ? { failure } : {}) };
+  // A field it doesn't record, or that doesn't read, leaves where the evidence is kept, and the other fields, as they were.
+  return {
+    run,
+    artifact,
+    ...(failure === null || isOneOf(CAPTURE_FAILURES, failure) ? { failure } : {}),
+    ...(Array.isArray(routes) && routes.every((route) => typeof route === "string") ? { routes } : {}),
+    ...(markerPreviewOf(preview) ?? {}),
+  };
+}
+
+/** A marker's preview, when it reads: one of its four outcomes, with the address it polled exactly when it was polled. */
+function markerPreviewOf(value: unknown): { preview: MarkerPreview } | null {
+  if (!isObject(value)) return null;
+  const { is, url } = value;
+  if ((is === "none" || is === "pending") && url === undefined) return { preview: { is } };
+  if ((is === "linked" || is === "never-answered") && typeof url === "string") return { preview: { is, url } };
+  return null;
 }
 
 /** A GitHub id: a whole number above zero. */
