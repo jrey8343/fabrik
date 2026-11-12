@@ -871,7 +871,7 @@ describe("the Weekly summary", () => {
               number: 31,
               title: "Which booking providers take group payments?",
               labels: ["wayfinder:research"],
-              // A person's reply leaves the notice standing.
+              // A person's reply leaves the notice in place.
               comments: [failureNotice(31, "2026-11-06T20:00:00Z"), aComment("Odd, it ran fine last time.", "2026-11-07T08:00:00Z", { author: "operator", byBot: false })],
             }),
             // A later run's word, such as its resolution, answers the failure.
@@ -903,7 +903,7 @@ describe("the Weekly summary", () => {
         const waiting = waitingWith({
           openIssues: [
             mapOf(30, [31, 32]),
-            // Another bot's comment after the notice leaves it standing, and the age still runs from the notice.
+            // Another bot's comment after the notice leaves it in place, and the age still runs from the notice.
             anOpenIssue({
               number: 31,
               labels: ["wayfinder:research"],
