@@ -140,6 +140,55 @@ describe("work that goes on without the Operator", () => {
       ]);
     });
 
+    describe("waiting on checks", () => {
+      const checks = aRunInFlight({ role: "review", job: "waiting-on-checks", createdAt: "2026-11-08T19:40:00Z" });
+
+      it("gives an agent draft with no Verdict on its head, while a Review's wait for checks is in flight, waiting on checks at Review", () => {
+        const standings = standingsIn({ openIssues: [ticket(7)], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }, aKit([checks]));
+        expect(standings).toEqual([
+          {
+            schema: 1,
+            repo: "owner/product",
+            issue: 7,
+            pullRequest: 50,
+            work: "ticket",
+            place: "review",
+            name: "waiting-on-checks",
+            move: "kit",
+            yours: false,
+            stopsWork: false,
+            since: "2026-11-08T19:40:00Z",
+            stuckAt: null,
+            awaits: { role: "review", on: "pullRequest" },
+            subscription: null,
+            detail: { plain: null, check: null, checksUnread: false },
+          },
+        ]);
+      });
+
+      it("makes a draft a Review job names running instead, and leaves alone one with a Verdict on its head or out of draft", () => {
+        const standings = standingsIn(
+          {
+            openPullRequests: [
+              anOpenPullRequest({ number: 50, ticket: 7 }),
+              anOpenPullRequest({ number: 51, ticket: 8, comments: [aVerdictComment("execution-flaw", HEAD, "2026-11-08T18:00:00Z")] }),
+              anOpenPullRequest({ number: 52, ticket: 9, draft: false }),
+              anOpenPullRequest({ number: 53, ticket: 10 }),
+            ],
+          },
+          aKit([checks, aRunInFlight({ role: "review", pullRequest: 50 })]),
+        );
+        expect(standings.map(({ pullRequest, name }) => ({ pullRequest, name }))).toEqual([
+          { pullRequest: 50, name: "running" },
+          { pullRequest: 53, name: "waiting-on-checks" },
+        ]);
+      });
+
+      it("gives no draft waiting on checks with no wait for checks in flight", () => {
+        expect(standingsIn({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }, aKit([aRunInFlight({ role: "triage" })]))).toEqual([]);
+      });
+    });
+
     it("gives nothing running with the runs unread, or no Kit read", () => {
       expect(standingsIn({ openIssues: [ticket(7, ["ready-for-agent", "agent:implement"])] }, aKit("unread"))).toEqual([]);
       expect(standingsIn({ openIssues: [ticket(7, ["ready-for-agent", "agent:implement"])] }, null)).toEqual([]);

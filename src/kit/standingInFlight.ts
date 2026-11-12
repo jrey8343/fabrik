@@ -36,7 +36,30 @@ export function inFlightStandingsOf(facts: StandingFacts, _now: string): Standin
   const held = heldStandingsOf(facts);
   const heldWork = new Set(held.map(({ issue, pullRequest, detail }) => (detail.role === "review" ? `pr#${pullRequest}` : `#${issue}`)));
   const specs = new Set(facts.github.openIssues.filter(isSpec).map(({ number }) => number));
-  return [...(runs === null ? [] : runningStandingsOf(facts, runs, heldWork)), ...held].filter(({ issue }) => issue === null || !specs.has(issue));
+  return [...(runs === null ? [] : [...runningStandingsOf(facts, runs, heldWork), ...waitingOnChecksStandingsOf(facts, runs)]), ...held].filter(
+    ({ issue }) => issue === null || !specs.has(issue),
+  );
+}
+
+/**
+ * Each agent draft whose Review is waiting for the Required checks on its
+ * head: one with no Verdict on its head and no Review job naming it, while a
+ * Review's wait for checks, or its re-run of red checks, is in flight. Those
+ * jobs carry no number, so one in flight counts for every such draft, since
+ * the oldest of them began.
+ */
+function waitingOnChecksStandingsOf({ github }: StandingFacts, runs: readonly RunInFlightFact[]): StandingNamed<"waiting-on-checks">[] {
+  const waits = runs.filter(({ role, job }) => role === "review" && job === "waiting-on-checks").toSorted((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  const oldest = waits[0];
+  if (oldest === undefined) return [];
+  const reviewed = new Set(runs.flatMap(({ role, pullRequest }) => (role === "review" && pullRequest !== null ? [pullRequest] : [])));
+  return github.openPullRequests
+    .filter((pullRequest) => pullRequest.draft && !hasVerdictOnHead(pullRequest) && !reviewed.has(pullRequest.number))
+    .map((pullRequest) => ({
+      ...inFlight(github.repo, pullRequest.ticket, pullRequest.number, oldest.createdAt, "ticket", "review", { role: "review", on: "pullRequest" }),
+      name: "waiting-on-checks",
+      detail: { plain: null, check: null, checksUnread: false },
+    }));
 }
 
 /** An open issue labelled `ready-for-agent` with sub-issues, not a Map: a Spec, which has no Standing of its own; its Tickets do. */
