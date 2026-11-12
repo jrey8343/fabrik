@@ -3,15 +3,17 @@ import { PAST_HAND_BACK_NOTICES } from "../__fixtures__/handBackWordings.ts";
 import { aPullRequest } from "../__fixtures__/snapshots.ts";
 import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aRunInFlight, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { conflictRunEnded, requestChangesRunEnded } from "../loop/conflicts.ts";
+import type { HandBack } from "../loop/handBacks.ts";
 import { stopTicketOf } from "../loop/handClosing.ts";
 import { stopForGoneKeptBranch } from "../loop/keptBranch.ts";
 import { handBackMarker } from "../loop/markers.ts";
 import { unstartedRetry } from "../loop/retry.ts";
-import type { Action } from "../loop/types.ts";
+import type { Action, AgentRole } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { landingFailureReport, pushLanding } from "./landingFailure.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { handBackOfNotice } from "./standingHandBacks.ts";
+import { wordStanding } from "./standingWording.ts";
 import type { GitHubFacts } from "./weeklySummary.ts";
 
 describe("reading which hand-back a notice is", () => {
@@ -106,6 +108,8 @@ describe("work the Kit hands back", () => {
   it("gives it the moment the Kit says so: a notice posted at the filing is already the Operator's, with no bar to wait out", () => {
     const [standing] = standingsIn({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"], comments: [infrastructureFailure(NOW)] })] });
     expect(standing).toMatchObject({ name: "yours-to-do", yours: true, stuckAt: null, since: NOW });
+    // A plain value: written as JSON and read back, it is equal.
+    expect(JSON.parse(JSON.stringify(standing))).toEqual(standing);
   });
 
   it("is no longer the Operator's once they add the resuming label, nor once the Kit has said anything since", () => {
@@ -295,5 +299,45 @@ describe("work the Kit hands back", () => {
         expect(standingsIn({ openIssues: [session] })[0]?.detail).toEqual({ handBack: "trigger-swept", role: "design", failure: null, label: "agent:design" });
       });
     });
+  });
+});
+
+describe("the wording of work handed back", () => {
+  const SINCE = "2026-11-08T12:00:00Z";
+  const FORTY_MINUTES_ON = "2026-11-08T12:40:00Z";
+  const handedBack = (handBack: HandBack, role: AgentRole | null, label: string | null, failure: string | null = null): Standing => ({
+    schema: 1,
+    repo: "owner/product",
+    issue: 7,
+    pullRequest: 50,
+    work: "ticket",
+    place: null,
+    name: "yours-to-do",
+    move: "operator",
+    yours: true,
+    stopsWork: true,
+    since: SINCE,
+    stuckAt: null,
+    awaits: null,
+    subscription: null,
+    detail: { handBack, role, failure, label },
+  });
+
+  it.each<[string, Standing, string]>([
+    ["an Infrastructure failure", handedBack("infrastructure-failure", "implement", "agent:implement", "crash"), "The Implement run ended in an Infrastructure failure 40 minutes ago and the Loop won't retry it. Add `agent:implement` again to run it."],
+    ["a Design-session turn's Infrastructure failure", handedBack("infrastructure-failure", "design", "agent:design"), "The Design-session turn ended in an Infrastructure failure 40 minutes ago and the Loop won't retry it. Reply on the issue to run the turn again."],
+    ["an old notice's Infrastructure failure, naming no run", handedBack("infrastructure-failure", null, null), "The run ended in an Infrastructure failure 40 minutes ago and the Loop won't retry it."],
+    ["a Broken run that used no retry", handedBack("broken-run-no-retry", "implement", "agent:implement", "left-branch"), "The Implement run was a Broken run that used no retry. Add `agent:implement` again to run it."],
+    ["a label the sweep took off", handedBack("trigger-swept", "review", "agent:review"), "`agent:review` came off 40 minutes ago: nothing started when it was added, nor when the Kit added it again. Check the Loop's runs, then add it again."],
+    ["a Retry that never started", handedBack("retry-never-started", "implement", "ready-for-agent"), "The Retry never started and #7 is no longer `ready-for-agent`, so none will."],
+    ["a failed push or claim job", handedBack("landing-failed", "implement", "agent:implement"), "The Kit couldn't land a finished run 40 minutes ago. Open the run and re-run its failed jobs."],
+    ["a Request-changes run that committed nothing", handedBack("request-changes-empty", "implement", null), "The Request-changes run committed nothing, so your changes aren't built. It's yours from here."],
+    ["a conflict-only run that didn't land", handedBack("conflict-run-unlanded", "implement", null), "The conflict-only run didn't bring #50 up to date with `main`."],
+    ["a Request-changes run that didn't land", handedBack("request-changes-unlanded", "implement", null), "The Request-changes run on #50 didn't land."],
+    ["an agent PR closed by hand", handedBack("closed-by-hand", "implement", "ready-for-agent"), "Its agent pull request was closed by hand, so the Ticket stopped."],
+    ["a Kept branch gone", handedBack("kept-branch-gone", "implement", "ready-for-agent"), "Marked for a Kept-branch start, but the Kept branch is gone."],
+    ["a research branch the Kit refused", handedBack("research-branch-refused", "research", "agent:research"), "The Kit refused the Research run's branch 40 minutes ago. Add `agent:research` again to run it."],
+  ])("says of %s that it is yours to do, worded from the hand-back, never the notice", (_what, standing, sentence) => {
+    expect(wordStanding(standing, FORTY_MINUTES_ON, "Australia/Sydney")).toEqual({ pill: "Yours to do", sentence, remedy: null });
   });
 });

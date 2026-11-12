@@ -4,7 +4,8 @@
 // itself holds no relative time. The wording never quotes a repo's text.
 import type { HandBack } from "../loop/handBacks.ts";
 import { runNamed } from "../loop/heldRun.ts";
-import { READY_FOR_HUMAN } from "../loop/labels.ts";
+import { DISPATCH_LABEL, READY_FOR_AGENT, READY_FOR_HUMAN } from "../loop/labels.ts";
+import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
 import type { RunningRun } from "./standingInFlight.ts";
@@ -34,11 +35,32 @@ const RUNNING_RUNS: Readonly<Record<RunningRun, string>> = {
 
 /** The sentence for each hand-back a `yours-to-do` Standing names, in the order of HAND_BACKS; one it lacks reads as `ready-for-human` work. */
 const HAND_BACK_SENTENCES: Partial<Record<HandBack, (standing: StandingNamed<"yours-to-do">, age: string) => string>> = {
+  "infrastructure-failure": ({ detail }, age) => {
+    const ended = `The ${handedBackRun(detail.role)} ended in an Infrastructure failure ${age} ago and the Loop won't retry it.`;
+    if (detail.role === "design") return `${ended} Reply on the issue to run the turn again.`;
+    return detail.label === null ? ended : `${ended} Add \`${detail.label}\` again to run it.`;
+  },
+  "broken-run-no-retry": ({ detail }) => `The ${handedBackRun(detail.role)} was a Broken run that used no retry. Add \`${DISPATCH_LABEL}\` again to run it.`,
+  "trigger-swept": ({ detail }, age) =>
+    `${detail.label === null ? "Its trigger label" : `\`${detail.label}\``} came off ${age} ago: nothing started when it was added, nor when the Kit added it again. Check the Loop's runs, then add it again.`,
+  "retry-never-started": ({ issue }) => `The Retry never started and #${issue} is no longer \`${READY_FOR_AGENT}\`, so none will.`,
+  "landing-failed": (_, age) => `The Kit couldn't land a finished run ${age} ago. Open the run and re-run its failed jobs.`,
+  "request-changes-empty": () => "The Request-changes run committed nothing, so your changes aren't built. It's yours from here.",
+  "conflict-run-unlanded": ({ pullRequest }) => `The conflict-only run didn't bring #${pullRequest} up to date with \`main\`.`,
+  "request-changes-unlanded": ({ pullRequest }) => `The Request-changes run on #${pullRequest} didn't land.`,
+  "closed-by-hand": () => "Its agent pull request was closed by hand, so the Ticket stopped.",
+  "kept-branch-gone": () => "Marked for a Kept-branch start, but the Kept branch is gone.",
   "research-failed": ({ detail }, age) => `The Research run failed ${age} ago. Add \`${detail.label}\` again to run it.`,
+  "research-branch-refused": ({ detail }, age) => `The Kit refused the Research run's branch ${age} ago. Add \`${detail.label}\` again to run it.`,
   "design-turn-failed": (_, age) => `A Design-session turn failed ${age} ago. Reply on the issue to run it again.`,
   "map-cap-refused": (_, age) => `The Map cap refused this session's Map ${age} ago. Reply on the issue to carry on.`,
   "weekly-summary-failed": (_, age) => `The Weekly summary run failed ${age} ago, so this week's isn't filed. Open the run and re-run its failed jobs.`,
 };
+
+/** The run a hand-back names, as in "The Implement run": just "run" where an old notice named none. */
+function handedBackRun(role: AgentRole | null): string {
+  return role === null ? "run" : runNamed(role);
+}
 
 /** A Standing's pill, sentence and remedy at `now`, ISO 8601; times it names are told in `timeZone`. */
 export function wordStanding(standing: Standing, now: string, timeZone: string): StandingWords {
