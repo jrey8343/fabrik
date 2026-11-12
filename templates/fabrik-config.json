@@ -54,5 +54,6 @@
   "operator": null,
   "subscriptions": ["Claude token"],
   "ui": null,
-  "preview": { "url": null }
+  "preview": { "url": null },
+  "production": null
 }
