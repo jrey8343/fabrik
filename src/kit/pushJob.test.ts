@@ -279,17 +279,17 @@ describe("What the push job applies", () => {
     });
   });
 
-  it("applies red checks as such, naming the skipped ones: the Reviewer didn't run", () => {
+  it("applies red checks as such: the Reviewer didn't run", () => {
     const input = pushJobInput(
       needs(
         "review",
-        { "review-checks": { result: "success", outputs: { checks: "red", "head-sha": "a".repeat(40), failed: '["build","e2e"]', skipped: '["e2e"]' } }, review: { result: "skipped", outputs: {} } },
+        { "review-checks": { result: "success", outputs: { checks: "red", "head-sha": "a".repeat(40), failed: '["build","e2e"]', "ran-nothing": "[]" } }, review: { result: "skipped", outputs: {} } },
         { ticket: "7", "pull-request": "50" },
       ),
       50,
     );
 
-    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: ["build", "e2e"], skippedChecks: ["e2e"], withResult: false });
+    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: ["build", "e2e"], ranNothing: [], withResult: false });
   });
 
   it("applies the Reviewer's Verdict once green checks let it run", () => {
@@ -302,13 +302,26 @@ describe("What the push job applies", () => {
       50,
     );
 
-    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: [], skippedChecks: [], withResult: true });
+    expect(input).toEqual({ kind: "review", pullRequest: 50, ticket: 7, headSha: "a".repeat(40), failedChecks: [], ranNothing: [], withResult: true });
+  });
+
+  it("carries the checks that ran nothing on green checks to the Reviewer's Verdict", () => {
+    const input = pushJobInput(
+      needs(
+        "review",
+        { "review-checks": { result: "success", outputs: { checks: "green", "head-sha": "a".repeat(40), failed: "[]", "ran-nothing": '["e2e"]' } }, review: ok() },
+        { ticket: "7", "pull-request": "50" },
+      ),
+      50,
+    );
+
+    expect(input).toMatchObject({ kind: "review", withResult: true, ranNothing: ["e2e"] });
   });
 
   describe("after the Kit re-ran red checks (#462)", () => {
     const sha = "a".repeat(40);
     const red = JSON.stringify({ rerun: [{ name: "e2e", link: "https://x/actions/runs/7/job/70", run: 7 }], outside: ["Vercel"] });
-    const firstWait = { result: "success", outputs: { checks: "red", "head-sha": sha, failed: '["e2e","Vercel"]', skipped: "[]", red } };
+    const firstWait = { result: "success", outputs: { checks: "red", "head-sha": sha, failed: '["e2e","Vercel"]', "ran-nothing": "[]", red } };
     const flaky = [{ name: "e2e", red: "https://x/actions/runs/7/job/70", green: "https://x/actions/runs/7/job/99" }];
     const reran = { result: "success", outputs: { rerun: JSON.stringify([{ name: "e2e", link: "https://x/actions/runs/7/job/70", run: 7 }]), "rerun-at": "2026-11-11T11:00:00Z", refused: "" } };
     const review = (jobs: Record<string, { result: string; outputs: Record<string, string> }>) =>
@@ -317,7 +330,7 @@ describe("What the push job applies", () => {
     it("lands the checks that failed again, the outside ones and the flaky ones, as the re-run's wait read them", () => {
       const input = review({
         "rerun-checks": reran,
-        "rerun-wait": { result: "success", outputs: { checks: "red", "head-sha": sha, failed: '["Vercel"]', skipped: "[]", "failed-again": "[]", flaky: JSON.stringify(flaky) } },
+        "rerun-wait": { result: "success", outputs: { checks: "red", "head-sha": sha, failed: '["Vercel"]', "ran-nothing": "[]", "failed-again": "[]", flaky: JSON.stringify(flaky) } },
       });
 
       expect(input).toEqual({
@@ -326,7 +339,7 @@ describe("What the push job applies", () => {
         ticket: 7,
         headSha: sha,
         failedChecks: ["Vercel"],
-        skippedChecks: [],
+        ranNothing: [],
         withResult: false,
         rerun: { outside: ["Vercel"], failedAgain: [], flaky, refused: null },
       });
@@ -335,11 +348,11 @@ describe("What the push job applies", () => {
     it("applies the Reviewer's Verdict, with the flaky checks, once the re-run went green", () => {
       const input = review({
         "rerun-checks": reran,
-        "rerun-wait": { result: "success", outputs: { checks: "green", "head-sha": sha, failed: "[]", skipped: "[]", "failed-again": "[]", flaky: JSON.stringify(flaky) } },
+        "rerun-wait": { result: "success", outputs: { checks: "green", "head-sha": sha, failed: "[]", "ran-nothing": '["visual"]', "failed-again": "[]", flaky: JSON.stringify(flaky) } },
         review: ok(),
       });
 
-      expect(input).toMatchObject({ kind: "review", withResult: true, failedChecks: [], rerun: { failedAgain: [], flaky, outside: ["Vercel"], refused: null } });
+      expect(input).toMatchObject({ kind: "review", withResult: true, failedChecks: [], ranNothing: ["visual"], rerun: { failedAgain: [], flaky, outside: ["Vercel"], refused: null } });
     });
 
     it("lands the first wait's red checks with why, when GitHub refused the re-run", () => {

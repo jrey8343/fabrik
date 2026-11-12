@@ -346,10 +346,8 @@ export type LoopEvent =
       readonly pullRequest: number;
       /** The head commit the checks ran on. */
       readonly headSha: string;
-      /** The required checks that didn't pass; empty when they all did. */
+      /** The required checks that failed or were cancelled; empty when they all passed. */
       readonly failed: readonly string[];
-      /** The ones among `failed` that were skipped or reported neutral, which no Retry changes; absent when none were. */
-      readonly skipped?: readonly string[];
       /** What the Kit's re-run of the red checks came to (#462); absent when it didn't try, as from a Kit before it. */
       readonly rerun?: RerunReport;
       /** The Review run, linked from the Verdict comment. */
@@ -365,6 +363,8 @@ export type LoopEvent =
       readonly output: string;
       /** The red checks that passed when the Kit re-ran them on this head, which let the Reviewer run (#462); absent when none did. */
       readonly flaky?: readonly FlakyCheck[];
+      /** The Required checks that passed on this head only by being skipped or reporting neutral, so ran nothing (#456); absent when none did. */
+      readonly ranNothing?: readonly string[];
       readonly runUrl: string;
       /** The Product repo's web address, such as `https://github.com/acme/shop`, which a pass's Follow-ups open issues on. */
       readonly repoUrl: string;
@@ -1045,6 +1045,12 @@ export interface VerdictRecord {
   readonly ticketNotReady?: true;
   /** On one from red required checks (#462), the ones it named as failed, which a later green on its head is read against; absent otherwise, as on every marker from before them. */
   readonly checks?: readonly string[];
+  /**
+   * On a Reviewer's Verdict, the Required checks that passed on its head only
+   * by being skipped or reporting neutral, so ran nothing there (#456): the
+   * Digest is told them. Absent when none did, as on every marker from before them.
+   */
+  readonly ranNothing?: readonly string[];
   /**
    * True when the checks it named have since passed on its head (#462): a
    * Flaky check, so it no longer counts toward the Ticket's Retries. Read from

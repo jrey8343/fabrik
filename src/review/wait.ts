@@ -12,8 +12,10 @@
 // Writes step outputs:
 //   checks   "green", "red", or "stale" when the PR moved on, closed or left draft while waiting
 //   head-sha the commit the checks ran on
-//   failed   the required checks that didn't pass, as a JSON list
-//   skipped  the ones among them skipped or reported neutral, as a JSON list
+//   failed   the required checks that failed or were cancelled, as a JSON list
+//   ran-nothing on green, the ones that passed only by being skipped or reporting
+//            neutral, as a JSON list, which the Reviewer and the Digest are told
+//            and the step summary names
 //   red      on red, the ones the Kit can re-run and the outside ones (src/review/rerun.ts), as JSON
 // After the Kit re-ran red checks (#462), the same wait runs again as the Re-run
 // checks' wait, given FABRIK_RERUN (the re-run checks, as the red output named
@@ -99,8 +101,10 @@ export interface ChecksWaitOptions {
 
 /** How the wait ended. It gives up at its deadline, naming the listed checks that never reported and those still running. */
 export type ChecksWaitOutcome =
-  | { readonly checks: "green" | "stale"; readonly headSha: string }
-  | { readonly checks: "red"; readonly headSha: string; readonly failed: readonly string[]; readonly skipped: readonly string[] }
+  | { readonly checks: "stale"; readonly headSha: string }
+  /** `ranNothing`: the checks that passed only by being skipped or reporting neutral. */
+  | { readonly checks: "green"; readonly headSha: string; readonly ranNothing: readonly string[] }
+  | { readonly checks: "red"; readonly headSha: string; readonly failed: readonly string[] }
   | { readonly checks: "gave-up"; readonly headSha: string; readonly unreported: readonly string[]; readonly running: readonly string[] };
 
 /** The checks it waits on, as its log names them. */
@@ -145,8 +149,8 @@ export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: C
     const state = await whileWaiting(() => github.pullRequestState());
     if (state.headRefOid !== headSha || state.state !== "OPEN" || !state.isDraft) return { checks: "stale", headSha };
     const result = outcome(await whileWaiting(() => github.checks()), listedChecks);
-    if (result.kind === "green") return { checks: "green", headSha };
-    if (result.kind === "red") return { checks: "red", headSha, failed: result.failed, skipped: result.skipped };
+    if (result.kind === "green") return { checks: "green", headSha, ranNothing: result.ranNothing };
+    if (result.kind === "red") return { checks: "red", headSha, failed: result.failed };
     const line = waitingOn(result.unreported, result.running);
     if (now() - started >= deadlineMs) {
       log(`Gave up waiting after ${Math.round(deadlineMs / 60_000)} minutes, still waiting on ${line}`);
@@ -216,11 +220,17 @@ async function main(productDir: string): Promise<void> {
     return;
   }
   const failed = outcome.checks === "red" ? outcome.failed : [];
-  const skipped = outcome.checks === "red" ? outcome.skipped : [];
+  const ranNothing = outcome.checks === "green" ? outcome.ranNothing : [];
   console.log(`Required checks on #${number} at ${outcome.headSha}: ${outcome.checks}${failed.length > 0 ? ` (${failed.join(", ")})` : ""}`);
-  const lines = [`checks=${outcome.checks}`, `head-sha=${outcome.headSha}`, `failed=${JSON.stringify(failed)}`, `skipped=${JSON.stringify(skipped)}`];
+  const lines = [`checks=${outcome.checks}`, `head-sha=${outcome.headSha}`, `failed=${JSON.stringify(failed)}`, `ran-nothing=${JSON.stringify(ranNothing)}`];
+  const summary = ranNothingLine(ranNothing);
+  if (summary !== null) {
+    console.log(summary);
+    const stepSummary = process.env["GITHUB_STEP_SUMMARY"] ?? "";
+    if (stepSummary !== "") await appendFile(stepSummary, `${summary}\n`);
+  }
   if (rerun === null && outcome.checks === "red") {
-    const red = redChecksOf(last, failed, skipped);
+    const red = redChecksOf(last, failed);
     console.log(`The Kit can re-run ${red.rerun.length === 0 ? "none of them" : red.rerun.map(({ name }) => name).join(", ")}`);
     lines.push(`red=${JSON.stringify(red)}`);
   }
@@ -229,6 +239,17 @@ async function main(productDir: string): Promise<void> {
     lines.push(`failed-again=${JSON.stringify(failedAgain)}`, `flaky=${JSON.stringify(flaky)}`);
   }
   await appendFile(required("GITHUB_OUTPUT"), `${lines.join("\n")}\n`);
+}
+
+/**
+ * The step summary's line on green checks some of which ran nothing: they
+ * passed by being skipped or reporting neutral, as GitHub's merge passes them,
+ * so the pass says nothing of what they would have checked. Null when none did.
+ */
+export function ranNothingLine(ranNothing: readonly string[]): string | null {
+  if (ranNothing.length === 0) return null;
+  const names = ranNothing.map((name) => `\`${name.replaceAll("`", "'")}\``).join(", ");
+  return `These Required checks were skipped or reported neutral, so they passed but ran nothing on this head: ${names}`;
 }
 
 /** The re-run checks the Re-run checks' wait is given, or null for the first wait. */

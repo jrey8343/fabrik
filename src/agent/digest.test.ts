@@ -49,6 +49,7 @@ const FACTS: DigestFacts = {
   ],
   retriesLeft: 1,
   productCode: { kind: "not-established" },
+  requiredChecksRanNothing: [],
   counts: { passes: 1, executionFlaws: 1, designFlaws: 0, retries: 1, conflictOnlyRuns: 0, requestChanges: 1, infrastructureFailures: 0 },
 };
 

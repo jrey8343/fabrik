@@ -5,7 +5,7 @@ const check = (name: string, bucket: CheckState["bucket"]): CheckState => ({ nam
 
 describe("An agent PR's required checks", () => {
   it("are green when every one passed", () => {
-    expect(requiredChecksOutcome([check("build", "pass"), check("test", "pass")], [])).toEqual({ kind: "green" });
+    expect(requiredChecksOutcome([check("build", "pass"), check("test", "pass")], [])).toEqual({ kind: "green", ranNothing: [] });
   });
 
   it("are still pending while any one runs, naming it", () => {
@@ -20,30 +20,39 @@ describe("An agent PR's required checks", () => {
     expect(requiredChecksOutcome([check("build", "fail"), check("test", "pending")], [])).toEqual({
       kind: "red",
       failed: ["build"],
-      skipped: [],
     });
   });
 
-  it("count a cancelled check as not passed", () => {
-    expect(requiredChecksOutcome([check("build", "cancel")], [])).toEqual({ kind: "red", failed: ["build"], skipped: [] });
+  it("count a cancelled check as failing", () => {
+    expect(requiredChecksOutcome([check("build", "cancel")], [])).toEqual({ kind: "red", failed: ["build"] });
   });
 
-  it("count a skipped or neutral check as not passed, naming it as skipped too", () => {
-    expect(requiredChecksOutcome([check("build", "fail"), check("e2e", "skipping")], [])).toEqual({
-      kind: "red",
-      failed: ["build", "e2e"],
-      skipped: ["e2e"],
+  it("are green when a skipped or neutral listed check sits beside passing ones, naming it as having run nothing", () => {
+    expect(requiredChecksOutcome([check("build", "pass"), check("e2e", "skipping")], ["build", "e2e"])).toEqual({
+      kind: "green",
+      ranNothing: ["e2e"],
     });
   });
 
-  it("never name a check as skipped when another run of it failed", () => {
-    expect(requiredChecksOutcome([check("e2e", "skipping"), check("e2e", "fail")], [])).toEqual({ kind: "red", failed: ["e2e"], skipped: [] });
+  it("are green when every check they wait on was skipped or neutral", () => {
+    expect(requiredChecksOutcome([check("build", "skipping"), check("e2e", "skipping")], [])).toEqual({
+      kind: "green",
+      ranNothing: ["build", "e2e"],
+    });
+  });
+
+  it("are red when a skipped check sits beside a failed one, naming only the failed one", () => {
+    expect(requiredChecksOutcome([check("build", "fail"), check("e2e", "skipping")], [])).toEqual({ kind: "red", failed: ["build"] });
+  });
+
+  it("never name a check as having run nothing when another run of it passed", () => {
+    expect(requiredChecksOutcome([check("e2e", "skipping"), check("e2e", "pass")], [])).toEqual({ kind: "green", ranNothing: [] });
   });
 
   it("are only the Required checks the Kit config lists, when it lists some", () => {
     const checks = [check("build", "pass"), check("lint", "fail")];
 
-    expect(requiredChecksOutcome(checks, ["build"])).toEqual({ kind: "green" });
+    expect(requiredChecksOutcome(checks, ["build"])).toEqual({ kind: "green", ranNothing: [] });
   });
 
   it("wait for a Required check the Kit config lists that hasn't reported yet, naming it apart from the ones still running", () => {
@@ -55,7 +64,7 @@ describe("An agent PR's required checks", () => {
   });
 
   it("are green when nothing gates the PR", () => {
-    expect(requiredChecksOutcome([], [])).toEqual({ kind: "green" });
+    expect(requiredChecksOutcome([], [])).toEqual({ kind: "green", ranNothing: [] });
   });
 });
 

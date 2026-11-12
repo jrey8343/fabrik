@@ -325,8 +325,8 @@ export interface FinishedReview {
   readonly repoUrl: string;
   /** The required checks that didn't pass, from the checks job. */
   readonly failedChecks: readonly string[];
-  /** The ones among them that were skipped or reported neutral. */
-  readonly skippedChecks: readonly string[];
+  /** On green checks, the ones that passed by being skipped or reporting neutral, so ran nothing on the head. */
+  readonly ranNothing: readonly string[];
   /** The Reviewer's result, null when red checks kept it from running. */
   readonly result: AgentRunResult | null;
   /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
@@ -337,9 +337,8 @@ export interface FinishedReview {
 export function reviewEventFrom(review: FinishedReview): LoopEvent {
   const { pullRequest, headSha, runUrl, result } = review;
   if (result === null) {
-    const { failedChecks: failed, skippedChecks: skipped } = review;
     const rerun = review.rerun === null ? {} : { rerun: review.rerun };
-    return { kind: "required-checks-finished", pullRequest, headSha, failed, ...(skipped.length === 0 ? {} : { skipped }), ...rerun, runUrl };
+    return { kind: "required-checks-finished", pullRequest, headSha, failed: review.failedChecks, ...rerun, runUrl };
   }
   if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
   if (result.issue !== pullRequest) throw new Error(`The Reviewer's result is for #${result.issue}, not #${pullRequest}`);
@@ -349,6 +348,7 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     headSha,
     output: result.output,
     ...(review.rerun === null || review.rerun.flaky.length === 0 ? {} : { flaky: review.rerun.flaky }),
+    ...(review.ranNothing.length === 0 ? {} : { ranNothing: review.ranNothing }),
     runUrl,
     repoUrl: review.repoUrl,
     ...givenTo(result),

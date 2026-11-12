@@ -1137,14 +1137,14 @@ describe("Reading the Required checks on each open Plain pull request's head", (
         { name: "test", is: "failing" },
         { name: "lint", is: "never-reported" },
       ],
-      // A skipped or cancelled check never counts as a pass.
+      // As GitHub judges a merge: a skipped or neutral check has passed, a cancelled one is failing.
       [head("3")]: [
         { name: "test", is: "failing" },
-        { name: "lint", is: "failing" },
+        { name: "lint", is: "passed" },
       ],
       [head("4")]: [
         { name: "test", is: "running" },
-        { name: "lint", is: "failing" },
+        { name: "lint", is: "passed" },
       ],
     });
   });

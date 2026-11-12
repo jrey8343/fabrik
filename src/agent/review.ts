@@ -38,6 +38,7 @@ export async function reviewContext(
   specFile: string,
   evidenceDir: string | null = null,
   recordedFailure: CaptureFailure | null = null,
+  ranNothing: readonly string[] = [],
 ): Promise<PullRequestRunContext> {
   const { operatorComments, requestedChanges, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
@@ -62,12 +63,34 @@ export async function reviewContext(
       ...fromOperator.parts,
       ...(await ticketContext(productDir, specFile)),
       ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),
+      ...ranNothingBlock(ranNothing),
       ...(evidenceDir === null
         ? []
         : await uiEvidenceContext(productDir, evidenceDir, { head: headOf(pullRequest.headRefOid), recorded: recordedFailure })),
     ],
     operatorComments: fromOperator.given,
   };
+}
+
+/** The Required checks that ran nothing, as the Review's checks job passed them out: a JSON list of names, none when it passed out nothing. */
+export function ranNothingOf(text: string | undefined): string[] {
+  const value: unknown = JSON.parse(text === undefined || text === "" ? "[]" : text);
+  if (!Array.isArray(value) || !value.every((name) => typeof name === "string")) throw new Error("FABRIK_RAN_NOTHING is not a list of check names");
+  return value;
+}
+
+/**
+ * The Required checks that passed on this head only by being skipped or
+ * reporting neutral (#456), which the Review's checks job read from GitHub:
+ * nothing when every one ran. A pass may not lean on them.
+ */
+function ranNothingBlock(ranNothing: readonly string[]): string[] {
+  if (ranNothing.length === 0) return [];
+  return [
+    "## Required checks that ran nothing",
+    "Kit code read these from GitHub: these Required checks were skipped or reported neutral on this head, so they passed as GitHub's merge passes them but ran nothing. They vouch for nothing here.",
+    ranNothing.map((name) => `- \`${name.replaceAll("`", "'")}\``).join("\n"),
+  ];
 }
 
 /**

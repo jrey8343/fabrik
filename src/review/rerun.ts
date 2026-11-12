@@ -30,17 +30,12 @@ const ACTIONS_JOB = /\/actions\/runs\/(\d+)\/job\/\d+/;
 
 /**
  * The red checks split by whether the Kit can re-run them: the GitHub Actions
- * ones, each with its workflow run, and the outside ones. A skipped or neutral
- * check is neither, as no re-run changes it.
+ * ones, each with its workflow run, and the outside ones.
  */
-export function redChecksOf(
-  checks: readonly CheckDetail[],
-  failed: readonly string[],
-  skipped: readonly string[],
-): { rerun: RerunnableCheck[]; outside: string[] } {
+export function redChecksOf(checks: readonly CheckDetail[], failed: readonly string[]): { rerun: RerunnableCheck[]; outside: string[] } {
   const rerun: RerunnableCheck[] = [];
   const outside: string[] = [];
-  for (const name of failed.filter((name) => !skipped.includes(name))) {
+  for (const name of failed) {
     const red = checks.find((check) => check.name === name && (check.bucket === "fail" || check.bucket === "cancel"));
     const run = red === undefined || red.workflow === "" ? undefined : ACTIONS_JOB.exec(red.link)?.[1];
     if (red === undefined || run === undefined) outside.push(name);

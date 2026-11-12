@@ -19,7 +19,7 @@ const outside = (name: string, bucket: CheckDetail["bucket"]): CheckDetail => ({
 describe("The red checks the Kit re-runs", () => {
   it("are the GitHub Actions ones, by their workflow runs, each run once", () => {
     const checks = [actions("unit", "fail", 7), actions("e2e", "cancel", 7), actions("lint", "fail", 8), actions("build", "pass", 9)];
-    expect(redChecksOf(checks, ["unit", "e2e", "lint"], [])).toEqual({
+    expect(redChecksOf(checks, ["unit", "e2e", "lint"])).toEqual({
       rerun: [
         { name: "unit", link: "https://github.com/o/r/actions/runs/7/job/70", run: 7 },
         { name: "e2e", link: "https://github.com/o/r/actions/runs/7/job/70", run: 7 },
@@ -30,19 +30,15 @@ describe("The red checks the Kit re-runs", () => {
   });
 
   it("leave out the ones from an outside service, which only their owner can re-run", () => {
-    expect(redChecksOf([outside("Vercel", "fail"), actions("unit", "fail", 7)], ["Vercel", "unit"], [])).toEqual({
+    expect(redChecksOf([outside("Vercel", "fail"), actions("unit", "fail", 7)], ["Vercel", "unit"])).toEqual({
       rerun: [{ name: "unit", link: "https://github.com/o/r/actions/runs/7/job/70", run: 7 }],
       outside: ["Vercel"],
     });
   });
 
-  it("leave out a skipped or neutral check, which no re-run changes", () => {
-    expect(redChecksOf([actions("e2e", "skipping", 7)], ["e2e"], ["e2e"])).toEqual({ rerun: [], outside: [] });
-  });
-
   it("take a check whose link names no workflow run as an outside one", () => {
     const odd: CheckDetail = { ...actions("unit", "fail", 7), link: "https://github.com/o/r/runs/123" };
-    expect(redChecksOf([odd], ["unit"], [])).toEqual({ rerun: [], outside: ["unit"] });
+    expect(redChecksOf([odd], ["unit"])).toEqual({ rerun: [], outside: ["unit"] });
   });
 });
 
@@ -61,12 +57,12 @@ describe("The checks after the Kit re-ran the red ones", () => {
 
   it("are red once every one has finished and one didn't pass", () => {
     const checks = [outside("Vercel", "fail"), actions("unit", "pass", 7, "2026-11-11T11:01:00Z")];
-    expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "red", failed: ["Vercel"], skipped: [] });
+    expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "red", failed: ["Vercel"] });
   });
 
   it("are green once every re-run check passed", () => {
     const checks = [actions("unit", "pass", 7, "2026-11-11T11:01:00Z"), actions("build", "pass", 9)];
-    expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "green" });
+    expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "green", ranNothing: [] });
   });
 });
 

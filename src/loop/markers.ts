@@ -18,7 +18,7 @@ import { AGENT_ROLES, type AgentRole, type Strength, type VerdictRecord } from "
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, headSha } = record;
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
   const fields = {
@@ -29,6 +29,7 @@ export function verdictMarker(record: VerdictRecord): string {
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     ...(ticketNotReady === true ? { ticketNotReady } : {}),
     ...(checks === undefined ? {} : { checks }),
+    ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;

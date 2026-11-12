@@ -348,6 +348,34 @@ describe("The product code since the first Verdict", () => {
   });
 });
 
+describe("The Required checks that ran nothing on the head", () => {
+  it("are the ones the pass on the head records as skipped or neutral there", () => {
+    const thread = aThread({
+      kitComments: [
+        aVerdict(5, { verdict: "execution-flaw", headSha: sha("a") }),
+        aVerdict(15, { verdict: "pass", headSha: sha("b"), ranNothing: ["e2e", "visual"] }),
+      ],
+    });
+
+    expect(digestFactsOf(thread).requiredChecksRanNothing).toEqual(["e2e", "visual"]);
+  });
+
+  it("are none when every Required check ran on the pass's head", () => {
+    expect(digestFactsOf(aThread({ kitComments: [aVerdict(5, { verdict: "pass", headSha: sha("a") })] })).requiredChecksRanNothing).toEqual([]);
+  });
+
+  it("are never an earlier head's, nor a Verdict's that is no pass", () => {
+    const thread = aThread({
+      kitComments: [
+        aVerdict(5, { verdict: "pass", headSha: sha("a"), ranNothing: ["e2e"] }),
+        aVerdict(15, { verdict: "execution-flaw", headSha: sha("b"), ranNothing: ["visual"] }),
+      ],
+    });
+
+    expect(digestFactsOf(thread).requiredChecksRanNothing).toEqual([]);
+  });
+});
+
 describe("How many Retries are left", () => {
   const flaw = (minute: number, head: string, more: Partial<VerdictRecord> = {}) => aVerdict(minute, { verdict: "execution-flaw", headSha: sha(head), ...more });
   const flakyLine = aNote(8, flakyCheckMarker({ headSha: sha("a"), checks: ["test"], countedBack: true }), "The Flaky check passed on a re-run.");

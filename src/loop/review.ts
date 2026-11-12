@@ -79,8 +79,7 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
     if (event.failed.length === 0) {
       return { kind: "nothing", reason: `#${pullRequest.number}'s required checks passed, so the Reviewer judges it` };
     }
-    const skipped = event.skipped ?? [];
-    const red = event.failed.filter((name) => !skipped.includes(name));
+    const red = event.failed;
     const { rerun } = event;
     // Re-run on the same head and red again (#462): no flake, so the Retry needn't wonder whether one is.
     const again = red.filter((name) => rerun?.failedAgain.includes(name) === true);
@@ -88,7 +87,6 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
     const plain = red.filter((name) => !again.includes(name) && !outside.includes(name));
     const listed = (heading: string, names: readonly string[], after: string[] = []) =>
       names.length === 0 ? [] : [[heading, "", ...names.map((name) => `- ${checkCode(name)}`), ...after].join("\n")];
-    // A skipped or neutral check is no failure a Retry can fix, so the Verdict says so apart from the ones that failed.
     const findings = [
       ...listed("These required checks failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:", again),
       ...listed("These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:", outside),
@@ -96,12 +94,6 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
         "These required checks didn't pass, so the Reviewer didn't run:",
         plain,
         rerun?.refused == null ? [] : ["", `The Kit couldn't re-run them: ${rerun.refused}.`],
-      ),
-      ...listed(
-        red.length === 0
-          ? "These required checks were skipped or reported neutral, so the Reviewer didn't run, and a Retry can't change that:"
-          : "These required checks were skipped or reported neutral, which a Retry can't change:",
-        skipped,
       ),
     ].join("\n\n");
     const held = heldOn(snapshot.kitIssues, config);
@@ -136,6 +128,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
       findings: parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings,
       followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
+      ...(event.ranNothing === undefined ? {} : { ranNothing: event.ranNothing }),
     }, snapshot.operator, held);
     // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
     actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues));
@@ -215,12 +208,15 @@ export function verdictActions(
     followUps = [],
     considered = [],
     checks,
+    ranNothing,
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
     readonly findings: string;
     /** On one from red required checks, the ones it names as failed (#462). */
     readonly checks?: readonly string[];
+    /** On a Reviewer's Verdict, the Required checks that ran nothing on its head (#456). */
+    readonly ranNothing?: readonly string[];
     readonly followUps?: readonly string[];
     readonly considered?: readonly string[];
   },
@@ -238,6 +234,7 @@ export function verdictActions(
     ...(first === null ? {} : { requestChangesFirst: first.reviews }),
     ...(next?.ticketNotReady === true ? { ticketNotReady: true as const } : {}),
     ...(checks === undefined ? {} : { checks }),
+    ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     headSha: event.headSha,
   };
   const by = BY[source];

@@ -76,8 +76,8 @@ export type PushJobInput =
       readonly ticket: number;
       readonly headSha: string;
       readonly failedChecks: readonly string[];
-      /** The ones among them that were skipped or reported neutral. */
-      readonly skippedChecks: readonly string[];
+      /** On green checks, the ones that passed by being skipped or reporting neutral, which ran nothing on the head. */
+      readonly ranNothing: readonly string[];
       /** Whether green checks let the Reviewer run, so its result is there to apply. */
       readonly withResult: boolean;
       /** What the Kit's re-run of the red checks came to (#462); absent when its job didn't run. */
@@ -224,11 +224,11 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       const last = report !== null && rerunWait?.result === "success" ? rerunWait : checks;
       const outcome = last.outputs["checks"];
       const failedChecks = readNames(last.outputs["failed"]);
-      const skippedChecks = readNames(last.outputs["skipped"]);
+      const ranNothing = readNames(last.outputs["ran-nothing"]);
       const rerun = report === null ? {} : { rerun: report };
-      if (outcome === "red") return { kind: "review", pullRequest, ticket, headSha, failedChecks, skippedChecks, withResult: false, ...rerun };
+      if (outcome === "red") return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, withResult: false, ...rerun };
       if (outcome === "green" && reviewer?.result === "success") {
-        return { kind: "review", pullRequest, ticket, headSha, failedChecks, skippedChecks, withResult: true, ...rerun };
+        return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, withResult: true, ...rerun };
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };
     }
@@ -324,7 +324,7 @@ function numberOr(text: string | undefined): number | null {
 function readNames(text: string | undefined): string[] {
   const value: unknown = JSON.parse(text === undefined || text === "" ? "[]" : text);
   if (!Array.isArray(value) || !value.every((name) => typeof name === "string")) {
-    throw new Error("The Review checks job's failed or skipped checks are not a list of names");
+    throw new Error("The Review checks job's failed checks, or those that ran nothing, are not a list of names");
   }
   return value;
 }
