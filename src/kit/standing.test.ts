@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { aRunInFlight, aWeeklyLimitIssue } from "../__fixtures__/weeklySummary.ts";
 import { aTicket } from "../__fixtures__/snapshots.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
@@ -273,7 +273,7 @@ describe("the Standing rule", () => {
 
   describe("a Subscription's issue", () => {
     const listing = (...subscriptions: readonly string[]) =>
-      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, runsInFlight: [] } }) as const;
+      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, runsInFlight: [], headChecks: {} } }) as const;
     /** Open Kit-owned issue `number`, labelled `labels`, naming `subscription` in its body (none when null), opened at `createdAt`: as the open issues and as the Kit's issues. */
     const kitIssue = (number: number, labels: readonly string[], subscription: string | null, createdAt: string, body = "") => ({
       open: anOpenIssue({ number, labels, createdAt, labelEvents: labels.map((label) => aLabelAdded(label, createdAt)) }),
@@ -583,6 +583,37 @@ describe("the Standing rule", () => {
     });
   });
 
+  describe("a Plain pull request", () => {
+    it("is named by its draft, its merge and its Required checks, each with its kind and no place (src/kit/standingPlain.test.ts)", () => {
+      const head = (digit: string) => digit.repeat(40);
+      const kit = {
+        repo: "owner/product",
+        branch: "main",
+        config: { ok: true, config: DEFAULT_KIT_CONFIG },
+        dispatch: null,
+        runsInFlight: [],
+        headChecks: { [head("1")]: [{ name: "test", is: "running" }], [head("2")]: [{ name: "test", is: "failing" }] },
+      } as const;
+      const standings = standingsIn(
+        {
+          plainPullRequests: [
+            aPlainPullRequest({ number: 70, headSha: head("1") }),
+            aPlainPullRequest({ number: 71, headSha: head("2"), author: "operator", headRef: "fabrik/setup-v3.1.0" }),
+            aPlainPullRequest({ number: 72, mergeable: false }),
+            aPlainPullRequest({ number: 73, draft: true, author: "operator", headRef: "fix-typo" }),
+          ],
+        },
+        { kit },
+      );
+      expect(standings.map(({ pullRequest, name, detail }) => ({ pullRequest, name, detail }))).toEqual([
+        { pullRequest: 70, name: "waiting-on-checks", detail: { plain: "kit-bump", check: "test", checksUnread: false } },
+        { pullRequest: 71, name: "check-failing", detail: { plain: "setup", check: "test", checkIs: "failing" } },
+        { pullRequest: 72, name: "conflicts", detail: { plain: "kit-bump" } },
+        { pullRequest: 73, name: "draft", detail: { plain: "other" } },
+      ]);
+    });
+  });
+
   describe("one piece of work", () => {
     it("is one Standing for a Ticket and the agent PR that closes it, carrying both numbers", () => {
       const standings = standingsIn({
@@ -636,6 +667,7 @@ describe("work that goes on without the Operator (#606)", () => {
           branch: "main",
           config: { ok: true, config: DEFAULT_KIT_CONFIG },
           dispatch: { candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 15, openBlockers: [3] })], researchDecisions: [] } },
+          headChecks: {},
           runsInFlight: [
             aRunInFlight({ issue: 7, createdAt: "2026-11-08T19:20:00Z" }),
             aRunInFlight({ issue: 12 }),

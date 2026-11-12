@@ -20,6 +20,9 @@ import type {
   OpenIssueFacts,
   OpenPullRequestFacts,
   OpenRetroFacts,
+  PlainPullRequestFacts,
+  RequiredCheckFact,
+  RequiredChecksFact,
   ReviewFacts,
   SpecFacts,
   TicketFacts,
@@ -30,13 +33,16 @@ import { IMPLEMENTER_AUTHOR, isAgentPullRequest } from "../loop/agentPullRequest
 import { AUDIT_LABEL, MONITOR_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
-import { type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
+import { type CheckState, requiredChecksOutcome } from "../review/checks.ts";
+import { allPages, type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
 import { leavingOutHeldLines } from "./heldLines.ts";
 import {
   gatherDesignQueueSlice,
   gatherKitIssues,
   gatherOpenMaps,
   loginOf,
+  type MergeableState,
+  mergeableOf,
   type RawWeeklyIssue,
   weeklyIssueOf,
   weeklyIssuesQuery,
@@ -91,6 +97,78 @@ export async function gatherEveryRepoFacts(
   };
 }
 
+/**
+ * The Required checks on each of these heads, its open Plain pull requests',
+ * by sha: each check the Kit config lists (`listedChecks`, its
+ * `sandbox.checks`), in its order, judged from the check runs on the head as
+ * the Review's wait judges them (requiredChecksOutcome). Read with a token
+ * holding Checks read. With no checks listed it reads nothing, every head left
+ * unread: it cannot tell which checks the branch requires, and it never counts
+ * every check on the head, since `loop / Kit` reports there and is no Required
+ * check. A head whose read GitHub refuses is left unread too.
+ */
+export async function gatherHeadChecks(
+  github: Pick<GitHub, "rest">,
+  repo: Repo,
+  heads: readonly string[],
+  listedChecks: readonly string[],
+): Promise<Record<string, RequiredChecksFact>> {
+  if (listedChecks.length === 0) return {};
+  const read = await Promise.all(
+    [...new Set(heads)].map(async (head) => {
+      try {
+        const runs = await allPages<RawCheckRun>(github, `/repos/${repo.owner}/${repo.name}/commits/${head}/check-runs`, (page) => (page as { check_runs: RawCheckRun[] }).check_runs);
+        return [[head, requiredChecksOn(runs.map(checkStateOf), listedChecks)] as const];
+      } catch (error) {
+        if (error instanceof GitHubError) return [];
+        throw error;
+      }
+    }),
+  );
+  return Object.fromEntries(read.flat());
+}
+
+/** A check run on a head, as the Checks API lists it. */
+interface RawCheckRun {
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+}
+
+/** A check run's bucket, as `gh pr checks` buckets it for the Review's wait. */
+function checkStateOf({ name, status, conclusion }: RawCheckRun): CheckState {
+  if (status !== "completed") return { name, bucket: "pending" };
+  switch (conclusion) {
+    case "success":
+      return { name, bucket: "pass" };
+    case "skipped":
+    case "neutral":
+      return { name, bucket: "skipping" };
+    case "cancelled":
+      return { name, bucket: "cancel" };
+    default:
+      return { name, bucket: "fail" };
+  }
+}
+
+/** Each listed check on a head, each judged by the Review's rule alone. */
+function requiredChecksOn(checks: readonly CheckState[], listedChecks: readonly string[]): RequiredCheckFact[] {
+  return listedChecks.map((name) => {
+    const outcome = requiredChecksOutcome(
+      checks.filter((check) => check.name === name),
+      [name],
+    );
+    switch (outcome.kind) {
+      case "green":
+        return { name, is: "passed" };
+      case "red":
+        return { name, is: "failing" };
+      case "pending":
+        return { name, is: outcome.running.length > 0 ? "running" : "never-reported" };
+    }
+  });
+}
+
 /** The GitHub facts of one Product repo, as of `now`, with its PRs, default-branch commits and the Operator's issues from `reach` on. */
 async function gatherFacts(client: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   // A held line is never activity, nor an issue's last comment (#471).
@@ -131,6 +209,7 @@ async function gatherFacts(client: Pick<GitHub, "graphql">, repo: Repo, now: num
     mergedPullRequestTitles: closed.flatMap((pr) => (pr.mergedAt === null ? [] : [{ title: pr.title, mergedAt: pr.mergedAt }])),
     openIssues: openIssues.map(openIssueOf),
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
+    plainPullRequests: open.filter((pr) => !isAgent(pr)).map(plainPullRequestOf),
     designQueue,
     monitorIssues: monitorIssues.map(monitorIssueOf),
     escapeMarkerIssues: operatorIssues.filter((issue) => escapeMarkerIn(issue.body) !== null).map(escapeMarkerIssueOf),
@@ -338,7 +417,7 @@ const OPEN_PULL_REQUESTS_QUERY = `
       pullRequests(states: OPEN, first: 25, after: $after) {
         ${PAGE_INFO}
         nodes {
-          number title isDraft headRefOid headRefName createdAt
+          number title isDraft headRefOid headRefName createdAt mergeable
           author ${ACTOR}
           closingIssuesReferences(first: 10) { nodes { number } }
           commits(last: 100) { nodes { ${COMMIT} } }
@@ -508,6 +587,7 @@ interface RawOpenPullRequest {
   headRefOid: string;
   headRefName: string;
   createdAt: string;
+  mergeable: MergeableState;
   author: RawActor | null;
   closingIssuesReferences: { nodes: { number: number }[] };
   commits: { nodes: RawCommit[] };
@@ -665,6 +745,22 @@ function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
     reviews: pr.reviews.nodes.flatMap(reviewOf),
     comments: pr.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(pr.timelineItems.nodes),
+  };
+}
+
+/** An open Plain pull request: who opened it, its branch and head, and whether it is a draft and merges cleanly. Its reviews, labels and comments, which the Kit never acts on, are left out. */
+function plainPullRequestOf(pr: RawOpenPullRequest): PlainPullRequestFacts {
+  return {
+    number: pr.number,
+    title: pr.title,
+    author: loginOf(pr.author),
+    headRef: pr.headRefName,
+    headSha: pr.headRefOid,
+    headCommittedAt: pr.commits.nodes.find(({ commit }) => commit.oid === pr.headRefOid)?.commit.committedDate ?? null,
+    draft: pr.isDraft,
+    mergeable: mergeableOf(pr.mergeable),
+    closes: pr.closingIssuesReferences.nodes[0]?.number ?? null,
+    createdAt: pr.createdAt,
   };
 }
 

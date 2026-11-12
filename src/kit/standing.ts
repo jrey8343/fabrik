@@ -13,6 +13,7 @@ import type { AgentRole } from "../loop/types.ts";
 import { type NotStartedSilence, notStartedStandingsOf } from "./standingClock.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
+import { joinPairing, plainStandingsOf } from "./standingPlain.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
@@ -225,8 +226,13 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
  */
 export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: string): Standing[] {
   if (facts.kind === "store") return storeStandingsOf(facts, now);
-  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...inFlightStandingsOf(facts, now), ...notStartedStandingsOf(facts, now)];
-  return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github)))
+  const candidates: Standing[] = [
+    ...operatorStandingsOf(facts, now),
+    ...inFlightStandingsOf(facts, now),
+    ...notStartedStandingsOf(facts, now),
+    ...plainStandingsOf(facts, now),
+  ];
+  return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github)
     .map((standing) => standingAt(standing, now))
     .toSorted(
     (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),

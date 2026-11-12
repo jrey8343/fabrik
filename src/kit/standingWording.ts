@@ -49,8 +49,16 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       const named = run === "retry" && retry !== null ? `Retry ${retry}` : (RUNNING_RUNS[run as RunningRun] ?? "A run");
       return { pill: "Running", sentence: `${named} has been running for ${age}.`, remedy: null };
     }
-    case "waiting-on-checks":
-      return { pill: "Waiting on checks", sentence: "Its Review is waiting for the Required checks on its head.", remedy: null };
+    case "waiting-on-checks": {
+      const { plain, check, checksUnread } = standing.detail;
+      const sentence =
+        plain === null
+          ? "Its Review is waiting for the Required checks on its head."
+          : checksUnread
+            ? "Waiting on its Required checks, which could not be read."
+            : `Waiting on \`${check}\`.`;
+      return { pill: "Waiting on checks", sentence, remedy: null };
+    }
     case "held": {
       const { carrier, role } = standing.detail;
       return { pill: "Held", sentence: `Its ${runNamed(role)} is held${carrier === null ? "" : ` on #${carrier}`} until a Subscription is free.`, remedy: null };
@@ -73,8 +81,16 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       const { was, ...detail } = standing.detail;
       return { pill: "Stuck", ...notStartedWords({ ...standing, name: was, detail }, age, true) };
     }
-    case "yours-to-merge":
-      return { pill: "Yours to merge", sentence: `Passed Review ${age} ago and is waiting for your merge.`, remedy: null };
+    case "yours-to-merge": {
+      const passed = `with its Required checks passed, since ${age} ago.`;
+      const sentence =
+        standing.detail.plain === null
+          ? `Passed Review ${age} ago and is waiting for your merge.`
+          : standing.work === "plain"
+            ? `Ready, ${passed}`
+            : `Its Pairing session's pull request, #${standing.pullRequest}, is ready, ${passed}`;
+      return { pill: "Yours to merge", sentence, remedy: null };
+    }
     case "design-round": {
       const { round, prototype } = standing.detail;
       const prototypeIs = prototype === "ready" ? ": the prototype is ready to look at" : prototype === "failed" ? ": the prototype failed" : "";
@@ -103,6 +119,16 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     }
     case "yours-to-read":
       return { pill: "Yours to read", sentence: readingSentence(standing, age), remedy: null };
+    case "check-failing": {
+      const { check, checkIs } = standing.detail;
+      return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing.` : `\`${check}\` has not reported on its head.`, remedy: null };
+    }
+    case "conflicts": {
+      const then = standing.detail.plain === "kit-bump" ? "Dependabot rebases it by itself." : "Resolve it on GitHub.";
+      return { pill: "Conflicts with `main`", sentence: `It conflicts with \`main\`. ${then}`, remedy: null };
+    }
+    case "draft":
+      return { pill: "Draft", sentence: "A draft; nothing is owed on it.", remedy: null };
     case "blocked":
       return { pill: "Blocked", sentence: `Blocked by ${spelled(standing.detail.blockers.map((blocker) => `#${blocker}`), "and")}.`, remedy: null };
     case "waiting-on-author":

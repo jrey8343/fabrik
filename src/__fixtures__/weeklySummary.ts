@@ -19,6 +19,7 @@ import type {
   OpenPullRequestFacts,
   OpenReplayFacts,
   OpenRetroFacts,
+  PlainPullRequestFacts,
   ReviewFacts,
   SpecFacts,
   TicketFacts,
@@ -192,6 +193,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     mergedPullRequestTitles: [],
     openIssues: [],
     openPullRequests: [],
+    plainPullRequests: [],
     designQueue: { issues: [], designTurnsInProgress: [] },
     monitorIssues: [],
     escapeMarkerIssues: [],
@@ -318,6 +320,27 @@ export function anOpenPullRequest(
     reviews: [],
     comments: [],
     labelEvents: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Open Plain pull request 70, a Kit bump: Dependabot's, on the branch its
+ * `fabrik` group names (as a real one's), out of draft, merging cleanly,
+ * closing nothing, opened with its head on 2026-11-06 at 20:00.
+ */
+export function aPlainPullRequest(overrides: Partial<PlainPullRequestFacts> = {}): PlainPullRequestFacts {
+  return {
+    number: 70,
+    title: "fabrik: bump the fabrik group with 2 updates",
+    author: "dependabot[bot]",
+    headRef: "dependabot/github_actions/fabrik-d03f57835c",
+    headSha: "p".repeat(40),
+    headCommittedAt: "2026-11-06T20:00:00Z",
+    draft: false,
+    mergeable: true,
+    closes: null,
+    createdAt: "2026-11-06T20:00:00Z",
     ...overrides,
   };
 }

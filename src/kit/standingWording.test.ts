@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { ageSince, wordStanding } from "./standingWording.ts";
-import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
+import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "./weeklySummary.ts";
 
 const SINCE = "2026-11-08T12:00:00Z";
 const minutesAfter = (minutes: number) => new Date(Date.parse(SINCE) + minutes * 60 * 1000).toISOString();
@@ -101,7 +101,7 @@ describe("the wording of a failed research run", () => {
 
 describe("the wording of a Subscription's issue", () => {
   const listing = (...subscriptions: readonly string[]) =>
-    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, runsInFlight: [] }) as const;
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, runsInFlight: [], headChecks: {} }) as const;
   const kitIssue = (number: number, labels: readonly string[], subscription: string, resetsAt: string | null = null) => ({
     open: anOpenIssue({ number, labels, createdAt: SINCE }),
     kit: { number, labels, body: [subscriptionMarker(subscription), ...(resetsAt === null ? [] : [resetsAtMarker(resetsAt)])].join("\n"), comments: [] },
@@ -193,6 +193,66 @@ describe("the wording of a Standing in needs-info", () => {
       sentence: "Triage asked its author, kate, a question 40 minutes ago.",
       remedy: null,
     });
+  });
+});
+
+describe("the wording of a Plain pull request's Standing", () => {
+  const HEAD = "p".repeat(40);
+  const plain = (overrides: Parameters<typeof aPlainPullRequest>[0], checks: RequiredChecksFact = [{ name: "test", is: "passed" }], github: Partial<GitHubFacts> = {}) => {
+    const kit = { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks: { [HEAD]: checks } } as const;
+    const [standing] = standingsOf(standingFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ headSha: HEAD, headCommittedAt: SINCE, createdAt: SINCE, ...overrides })], ...github }), kit }), SINCE);
+    if (standing === undefined) throw new Error("expected a Standing");
+    return standing;
+  };
+
+  it("says a ready one has had its Required checks passed since its head", () => {
+    expect(wordStanding(plain({}), minutesAfter(3 * 60), ZONE)).toEqual({ pill: "Yours to merge", sentence: "Ready, with its Required checks passed, since 3 hours ago.", remedy: null });
+  });
+
+  it("says a Pairing session's pull request joined to its issue is ready", () => {
+    const joined = plain({ number: 80, author: "operator", headRef: "fabrik/pair-12", closes: 12 }, undefined, {
+      openIssues: [anOpenIssue({ number: 12, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-05T20:00:00Z")] })],
+    });
+    expect(wordStanding(joined, minutesAfter(40), ZONE)).toEqual({
+      pill: "Yours to merge",
+      sentence: "Its Pairing session's pull request, #80, is ready, with its Required checks passed, since 40 minutes ago.",
+      remedy: null,
+    });
+  });
+
+  it("names the check it waits on, or says its checks could not be read", () => {
+    expect(wordStanding(plain({}, [{ name: "test", is: "running" }]), minutesAfter(5), ZONE)).toEqual({ pill: "Waiting on checks", sentence: "Waiting on `test`.", remedy: null });
+    expect(wordStanding(plain({}, "unread"), minutesAfter(5), ZONE)).toEqual({
+      pill: "Waiting on checks",
+      sentence: "Waiting on its Required checks, which could not be read.",
+      remedy: null,
+    });
+  });
+
+  it("is pilled with the check that is failing or has never reported", () => {
+    expect(wordStanding(plain({}, [{ name: "lint", is: "failing" }]), minutesAfter(5), ZONE)).toEqual({ pill: "lint", sentence: "`lint` is failing.", remedy: null });
+    expect(wordStanding(plain({}, [{ name: "lint", is: "never-reported" }]), minutesAfter(5), ZONE)).toEqual({
+      pill: "lint",
+      sentence: "`lint` has not reported on its head.",
+      remedy: null,
+    });
+  });
+
+  it("says one that conflicts is resolved on GitHub, but that Dependabot rebases a Kit bump by itself", () => {
+    expect(wordStanding(plain({ mergeable: false, author: "operator", headRef: "fix-typo" }), minutesAfter(5), ZONE)).toEqual({
+      pill: "Conflicts with `main`",
+      sentence: "It conflicts with `main`. Resolve it on GitHub.",
+      remedy: null,
+    });
+    expect(wordStanding(plain({ mergeable: false }), minutesAfter(5), ZONE)).toEqual({
+      pill: "Conflicts with `main`",
+      sentence: "It conflicts with `main`. Dependabot rebases it by itself.",
+      remedy: null,
+    });
+  });
+
+  it("says nothing is owed on a draft", () => {
+    expect(wordStanding(plain({ draft: true }), minutesAfter(5), ZONE)).toEqual({ pill: "Draft", sentence: "A draft; nothing is owed on it.", remedy: null });
   });
 });
 

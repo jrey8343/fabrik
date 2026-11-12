@@ -13,7 +13,7 @@ const NOW = "2026-11-08T20:00:00Z";
 
 /** `owner/product`'s Kit, on the default Kit config, with nothing for Dispatch to weigh and these runs in flight. */
 function aKit(runsInFlight: readonly RunInFlightFact[] | "unread", overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
-  return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: { candidates: { tickets: [], researchDecisions: [] } }, runsInFlight, ...overrides };
+  return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: { candidates: { tickets: [], researchDecisions: [] } }, runsInFlight, headChecks: {}, ...overrides };
 }
 
 function standingsIn(github: Partial<GitHubFacts>, kit: RepoKitFacts | null): Standing[] {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "./client.ts";
-import { gatherEveryRepoFacts, gatherGitHubFacts, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
+import { gatherEveryRepoFacts, gatherGitHubFacts, gatherHeadChecks, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -380,6 +380,91 @@ describe("Gathering a Product repo's GitHub facts", () => {
       [30, [31, 32]],
       [31, []],
     ]);
+  });
+
+  describe("an open Plain pull request", () => {
+    /** Open PR `number`, on `headRefName`, by `author`, out of draft, merging cleanly, closing nothing. */
+    const anOpenRawPullRequest = (number: number, headRefName: string, author: unknown, overrides: Record<string, unknown> = {}) => ({
+      number,
+      title: `PR ${number}`,
+      isDraft: false,
+      headRefOid: String(number % 10).repeat(40),
+      headRefName,
+      createdAt: "2026-11-01T00:00:00Z",
+      mergeable: "MERGEABLE",
+      author,
+      closingIssuesReferences: { nodes: [] },
+      commits: { nodes: [] },
+      reviews: { nodes: [] },
+      comments: { nodes: [] },
+      timelineItems: { nodes: [] },
+      ...overrides,
+    });
+    const DEPENDABOT = { __typename: "Bot", login: "dependabot" };
+
+    it("is kept for every open PR that is no agent PR, whoever opened it, with who opened it, its branch and head, whether it is a draft, whether it merges cleanly and the issue it closes", async () => {
+      const github = repoWith({
+        openPullRequests: [
+          anOpenRawPullRequest(50, "fabrik/ticket-7", APP, { closingIssuesReferences: { nodes: [{ number: 7 }] } }),
+          anOpenRawPullRequest(71, "dependabot/github_actions/fabrik-d03f57835c", DEPENDABOT, {
+            mergeable: "CONFLICTING",
+            commits: { nodes: [aRawCommit("8", "2026-11-02T00:00:00Z", "fabrik: bump", { email: "support@github.com", user: null }), aRawCommit("1", "2026-11-03T00:00:00Z", "fabrik: bump", { email: "support@github.com", user: null })] },
+          }),
+          anOpenRawPullRequest(72, "fabrik/pair-12", OPERATOR, { isDraft: true, mergeable: "UNKNOWN", closingIssuesReferences: { nodes: [{ number: 12 }] } }),
+          // The Operator's own PR from an agent branch is no agent PR: only the Fabrik App opens one.
+          anOpenRawPullRequest(73, "fabrik/ticket-9", OPERATOR),
+        ],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+      expect(facts.plainPullRequests).toEqual([
+        {
+          number: 71,
+          title: "PR 71",
+          author: "dependabot[bot]",
+          headRef: "dependabot/github_actions/fabrik-d03f57835c",
+          headSha: "1".repeat(40),
+          headCommittedAt: "2026-11-03T00:00:00Z",
+          draft: false,
+          mergeable: false,
+          closes: null,
+          createdAt: "2026-11-01T00:00:00Z",
+        },
+        {
+          number: 72,
+          title: "PR 72",
+          author: "jrey8343",
+          headRef: "fabrik/pair-12",
+          headSha: "2".repeat(40),
+          headCommittedAt: null,
+          draft: true,
+          mergeable: null,
+          closes: 12,
+          createdAt: "2026-11-01T00:00:00Z",
+        },
+        expect.objectContaining({ number: 73, author: "jrey8343", headRef: "fabrik/ticket-9", mergeable: true }),
+      ]);
+      // The metrics read agent PRs alone.
+      expect(facts.openPullRequests.map(({ number }) => number)).toEqual([50]);
+    });
+
+    it("keeps none of its reviews, labels or comments, so a Request changes, needs-design or a comment on one changes nothing", async () => {
+      const plain = anOpenRawPullRequest(74, "fix-typo", OPERATOR);
+      const touched = {
+        ...plain,
+        reviews: { nodes: [{ author: OPERATOR, state: "CHANGES_REQUESTED", submittedAt: "2026-11-02T01:00:00Z", body: "Not yet.", comments: { nodes: [] } }] },
+        comments: { nodes: [{ author: OPERATOR, body: "What about this?", createdAt: "2026-11-02T02:00:00Z" }] },
+        timelineItems: { nodes: [aRawLabelEvent("needs-design", "2026-11-02T03:00:00Z", OPERATOR)] },
+      };
+
+      const [before, after] = await Promise.all([
+        gatherGitHubFacts(repoWith({ openPullRequests: [plain] }), repo, NOW, OPERATOR.login),
+        gatherGitHubFacts(repoWith({ openPullRequests: [touched] }), repo, NOW, OPERATOR.login),
+      ]);
+
+      expect(after.plainPullRequests).toEqual(before.plainPullRequests);
+    });
   });
 
   it("holds the open agent PRs alone, with their Ticket from Closes #n, head, draft state, commits, reviews and activity", async () => {
@@ -919,5 +1004,85 @@ describe("Reading the open issues on other repos a Retro's proposals may be file
       { repo: "jrey8343/skills", number: 12, title: "Route handlers skill", body: "From retro jrey8343/shop#99" },
     ]);
     expect(unread).toEqual([{ repo: "jrey8343/private-skills", why: "GitHub GraphQL error: Could not resolve to a Repository" }]);
+  });
+});
+
+describe("Reading the Required checks on each open Plain pull request's head", () => {
+  const head = (digit: string) => digit.repeat(40);
+  /** A check run on a head: one finished, with its conclusion, or one still `in_progress` or `queued`. */
+  const aCheckRun = (name: string, status: string, conclusion: string | null = null) => ({ name, status, conclusion });
+
+  /** The Checks API over these heads' check runs, a head given as a GitHubError failing its read; with every path it was asked. */
+  function checksOn(runs: Record<string, readonly unknown[] | GitHubError>) {
+    const asked: string[] = [];
+    return {
+      asked,
+      async rest(method: string, path: string): Promise<unknown> {
+        expect(method).toBe("GET");
+        asked.push(path);
+        const match = /^\/repos\/jrey8343\/shop\/commits\/([0-9a-f]{40})\/check-runs\?per_page=100&page=1$/.exec(path);
+        if (match === null) throw new Error(`Unexpected call: ${path}`);
+        const found = runs[match[1]!];
+        if (found instanceof GitHubError) throw found;
+        return { total_count: found?.length ?? 0, check_runs: found ?? [] };
+      },
+    };
+  }
+
+  it("judges each check the Kit config lists, in its order, as the Review's wait does: passed, running, failing, or never reported on the head", async () => {
+    const github = checksOn({
+      [head("1")]: [aCheckRun("test", "completed", "success"), aCheckRun("lint", "in_progress")],
+      [head("2")]: [aCheckRun("test", "completed", "failure")],
+      [head("3")]: [aCheckRun("lint", "completed", "skipped"), aCheckRun("test", "completed", "cancelled")],
+      [head("4")]: [aCheckRun("test", "queued"), aCheckRun("lint", "completed", "neutral")],
+    });
+
+    expect(await gatherHeadChecks(github, repo, [head("1"), head("2"), head("3"), head("4")], ["test", "lint"])).toEqual({
+      [head("1")]: [
+        { name: "test", is: "passed" },
+        { name: "lint", is: "running" },
+      ],
+      [head("2")]: [
+        { name: "test", is: "failing" },
+        { name: "lint", is: "never-reported" },
+      ],
+      // A skipped or cancelled check never counts as a pass.
+      [head("3")]: [
+        { name: "test", is: "failing" },
+        { name: "lint", is: "failing" },
+      ],
+      [head("4")]: [
+        { name: "test", is: "running" },
+        { name: "lint", is: "failing" },
+      ],
+    });
+  });
+
+  it("reads no check the Kit config doesn't list, loop / Kit among them, and reads loop / Kit only when it is listed", async () => {
+    const github = checksOn({ [head("1")]: [aCheckRun("loop / Kit", "completed", "failure"), aCheckRun("test", "completed", "success")] });
+
+    expect(await gatherHeadChecks(github, repo, [head("1")], ["test"])).toEqual({ [head("1")]: [{ name: "test", is: "passed" }] });
+    expect(await gatherHeadChecks(github, repo, [head("1")], ["test", "loop / Kit"])).toEqual({
+      [head("1")]: [
+        { name: "test", is: "passed" },
+        { name: "loop / Kit", is: "failing" },
+      ],
+    });
+  });
+
+  it("leaves every head unread, asking nothing, when the Kit config lists no checks: it cannot tell which the branch requires", async () => {
+    const github = checksOn({ [head("1")]: [aCheckRun("loop / Kit", "completed", "success")] });
+
+    expect(await gatherHeadChecks(github, repo, [head("1")], [])).toEqual({});
+    expect(github.asked).toEqual([]);
+  });
+
+  it("leaves a head whose read GitHub refused unread, and reads the rest", async () => {
+    const github = checksOn({
+      [head("1")]: new GitHubError("GitHub GET failed: 403", 403, { body: "Resource not accessible by integration" }),
+      [head("2")]: [aCheckRun("test", "completed", "success")],
+    });
+
+    expect(await gatherHeadChecks(github, repo, [head("1"), head("2")], ["test"])).toEqual({ [head("2")]: [{ name: "test", is: "passed" }] });
   });
 });
