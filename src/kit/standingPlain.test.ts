@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aLabelAdded, anOpenIssue, aPlainPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
 import type { GitHubFacts, RepoKitFacts, RequiredChecksFact } from "./weeklySummary.ts";
@@ -198,6 +198,13 @@ describe("a Plain pull request's Standing", () => {
     it("is the pull request's own Standing, carrying the issue's number, when issue 12 is open with no Standing of its own", () => {
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 12, labels: [] })], plainPullRequests: [pairing({ mergeable: false })] })).toEqual([
         expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", stopsWork: false, detail: { plain: "pairing" } }),
+      ]);
+    });
+
+    it("is the issue's own Standing, carrying the pull request's number, when that Standing already carries the issue's open agent PR", () => {
+      const standings = standingsIn({ openIssues: [handedOver], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 12, draft: false })], plainPullRequests: [pairing({ draft: true })] });
+      expect(standings.filter(({ issue, pullRequest }) => issue === 12 || pullRequest === 80)).toEqual([
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "ready-for-human", name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft" } }),
       ]);
     });
 

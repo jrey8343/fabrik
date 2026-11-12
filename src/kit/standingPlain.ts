@@ -48,9 +48,11 @@ export function plainStandingsOf({ github, kit, operator, appLogin }: StandingFa
  * own, that one keeps its work, name and mark and carries in its detail the
  * name the pull request would have had, until that name is `yours-to-merge`:
  * then it takes it, with the mark off, since no Plain pull request stops work.
- * Where the issue has none, the pull request's Standing carries its number.
- * With the issue closed or missing, or its Standings all with an agent PR of
- * their own, the pull request stands by itself.
+ * One that carries no pull request is joined first; else one carrying the
+ * issue's open agent PR is, the Pairing session's number taking the agent
+ * PR's, as the Operator pairing on the issue is its live work. Where the issue
+ * has none, the pull request's Standing carries its number. With the issue
+ * closed or missing the pull request stands by itself.
  */
 export function joinPairing(standings: readonly Standing[], { plainPullRequests, openIssues }: GitHubFacts): Standing[] {
   const replaced = new Map<Standing, Standing | null>();
@@ -60,7 +62,8 @@ export function joinPairing(standings: readonly Standing[], { plainPullRequests,
     const issue = headRef === undefined ? null : pairedIssueOf(headRef);
     if (issue === null || !openIssues.some(({ number }) => number === issue)) continue;
     const own = standings.filter((standing) => standing.issue === issue && standing !== pairing);
-    const joinable = own.find((standing) => standing.pullRequest === null && !replaced.has(standing));
+    const unjoined = own.filter((standing) => !replaced.has(standing));
+    const joinable = unjoined.find((standing) => standing.pullRequest === null) ?? unjoined[0];
     if (joinable !== undefined) {
       replaced.set(joinable, joined(joinable, pairing));
       replaced.set(pairing, null);
