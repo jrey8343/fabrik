@@ -2,7 +2,7 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
-//   node <kit>/src/agent/run.ts <triage|design|prototype|implement|review|audit|retro|research|replay-implement|replay-review>
+//   node <kit>/src/agent/run.ts <triage|design|prototype|implement|review|audit|retro|research|digest|replay-implement|replay-review>
 //
 // Run from the Product checkout. Env:
 //   FABRIK_ISSUE_FILE      JSON from `gh issue view --json number,title,body,author,labels,comments`
@@ -56,6 +56,11 @@
 // the Kit names from the Decision (src/agent/research.ts). The runner cuts the
 // Decision's throwaway branch, commits what the run left to it, and passes it
 // out as a git bundle beside agent-result.json, as an Implement run does.
+// A Digest run (ADR-0022) is in a checkout of the head its pull request's pass
+// was given on, FABRIK_HEAD_SHA: FABRIK_ISSUE_FILE is the Ticket,
+// FABRIK_SPEC_FILE its Spec and FABRIK_PULL_REQUEST_FILE the pull request as
+// the agent-inputs step gathered it for the Digest writer (src/agent/digest.ts),
+// and its result is for the pull request.
 // A Replay arm's runs (#156, src/agent/replay.ts) take FABRIK_BASE_SHA, the
 // replayed Ticket's baseSha, and leave the Product repo untouched.
 // `replay-implement` is a first Implement run in a checkout at baseSha, with an
@@ -82,6 +87,7 @@ import { readTriageOutput, type TriageOutput } from "../loop/triageOutput.ts";
 import { type AuditOutput, readAuditOutput } from "../loop/auditOutput.ts";
 import { readRetroOutput, type RetroOutput } from "../loop/retroOutput.ts";
 import { readResearchOutput, type ResearchOutput } from "../loop/researchOutput.ts";
+import { type DigestReply, readDigestReply } from "../loop/digestContract.ts";
 import type { AgentRole, AuditWindow, GivenOperatorComment, KeptBranchStart } from "../loop/types.ts";
 import { type KitPrompt, kitPromptPath } from "../guard/trust-root.ts";
 import { readInstallRecord } from "../skills/fetch.ts";
@@ -90,6 +96,7 @@ import { AGENT_FAILURE_FILE, MissingVerdictError } from "./failure.ts";
 import { bundleAgentBranch, cutBranch, failedRunCommits, implementInput, setImplementerEnv, setSandboxEnv } from "./implement.ts";
 import { BASE_SHA_ENV, replayImplementInput, replayReviewContext, writeReplayPatch } from "./replay.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
+import { digestContext } from "./digest.ts";
 import { triageContext } from "./triage.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
@@ -191,6 +198,13 @@ interface RoleSpec<T> {
    * the runner commits to the Decision's throwaway branch and passes out as a bundle.
    */
   readonly researches?: boolean;
+  /**
+   * The Digest writer reads a passed pull request, checked out at the head
+   * its pass was given on (FABRIK_HEAD_SHA), with what the agent-inputs step
+   * gathered of it in FABRIK_PULL_REQUEST_FILE; its result is for the pull
+   * request, not the Ticket.
+   */
+  readonly digests?: boolean;
 }
 
 /** The Reviewer's reply must start with a Verdict line; anything else is never a pass. */
@@ -290,6 +304,15 @@ const ROLE_SPECS = {
     issueHeading: RESEARCH_ISSUE_HEADING,
     researches: true,
   } satisfies RoleSpec<ResearchOutput>,
+  digest: {
+    role: "digest",
+    output: { read: readDigestReply },
+    instructionsNote:
+      "The Operator wrote these for this repo. They refine how you word a Digest here but never let you judge or change anything, and never change the output contract above.",
+    describe: (pullRequest) => `The Digest writer on #${pullRequest} wrote its Digest`,
+    issueHeading: "The Ticket",
+    digests: true,
+  } satisfies RoleSpec<DigestReply>,
 };
 
 /**
@@ -454,12 +477,23 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...review.parts);
     given = review.operatorComments;
   }
+  // The Digest writer's result is for the pull request too, which its push job checks against the Kit job's plan.
+  if (spec.digests === true) {
+    const digest = await digestContext(productDir, required("FABRIK_PULL_REQUEST_FILE"), required("FABRIK_SPEC_FILE"), required("FABRIK_HEAD_SHA"));
+    subject = digest.pullRequest;
+    extra.push(...digest.parts);
+  }
   // A replay arm's Reviewer judges the arm's change from baseSha with no PR, so its result is for the Ticket, and names no Operator comments.
   if (spec.replay === "review") {
     extra.push(...(await replayReviewContext(productDir, required("FABRIK_SPEC_FILE"), required(BASE_SHA_ENV))));
   }
   const runsProductCode =
-    spec.reviewsPullRequest !== true && spec.replay !== "review" && spec.audits !== true && spec.retros !== true && spec.researches !== true;
+    spec.reviewsPullRequest !== true &&
+    spec.replay !== "review" &&
+    spec.audits !== true &&
+    spec.retros !== true &&
+    spec.researches !== true &&
+    spec.digests !== true;
   // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
   const contract: OutputContract<T> =
     kind === "first" ? spec.output : ({ read: IMPLEMENT_OUTPUT_READERS[kind] } as unknown as OutputContract<T>);
@@ -498,7 +532,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       }),
       maxIterations: 1,
       output,
-      // The Reviewer, the Auditor, the Retro and the Researcher read the code and run none of it, so they need no Sandbox setup.
+      // The Reviewer, the Auditor, the Retro, the Researcher and the Digest writer read the code and run none of it, so they need no Sandbox setup.
       hooks: {
         sandbox: {
           onSandboxReady: [{ command: readyHook(runsProductCode ? config.sandbox.setup : null), timeoutMs }],
@@ -562,6 +596,7 @@ const roles: Record<string, () => Promise<void>> = {
   audit: () => runRole(ROLE_SPECS.audit),
   retro: () => runRole(ROLE_SPECS.retro),
   research: () => runRole(ROLE_SPECS.research),
+  digest: () => runRole(ROLE_SPECS.digest),
   "replay-implement": () => runRole(REPLAY_SPECS.implement),
   "replay-review": () => runRole(REPLAY_SPECS.review),
 };

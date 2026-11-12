@@ -17,12 +17,15 @@
 //                                (readRecentIssues, #363)
 //   FABRIK_AUDIT_COMMIT          for an Auditor run, the pending Audit's marked commit (FABRIK_ISSUE is the
 //                                Audit): writes audit.json, the Auditor's inputs (readAuditInputs)
+//   FABRIK_ROLE=digest           writes pull-request.json as the Digest writer is given the PR (readDigestPullRequest):
+//                                with the Operator's words, every Verdict, the Kit's notes and whether UI evidence exists
 //   FABRIK_OUT_DIR               optional, where a failed GitHub call leaves its failure report
 //                                (AGENT_FAILURE_FILE), for the push job's notice to name (#328)
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
+import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
@@ -258,7 +261,7 @@ export async function readSentBack(github: Reader, repo: Repo, sentBack: SentBac
 }
 
 /** Every Verdict the Fabrik App posted on the PR, oldest first, each with its whole comment. */
-async function verdictsOn(github: Reader, repo: Repo, pullRequest: number): Promise<unknown[]> {
+async function verdictsOn(github: Reader, repo: Repo, pullRequest: number): Promise<GivenVerdict[]> {
   const comments = await allPages<{ body: string; user: RestUser | null }>(
     github,
     `/repos/${repo.owner}/${repo.name}/issues/${pullRequest}/comments`,
@@ -455,6 +458,68 @@ export async function readPullRequest(
   return withComments
     ? { number, title, body, comments: comments.nodes, operatorComments, ...amended }
     : { number, title, body, baseRefName, headRefName, headRefOid, operatorComments, ...amended };
+}
+
+/** A Verdict as the Digest writer is given it: what it was, who gave it, the head it judged, and its whole comment. */
+export interface GivenVerdict {
+  readonly verdict: string;
+  readonly source: string;
+  readonly headSha: string;
+  readonly comment: string;
+}
+
+/** The pull request as the Digest writer is given it (ADR-0022). */
+export interface DigestPullRequest {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  /** The branch it merges into, which the writer reads the change against. */
+  readonly baseRefName: string;
+  /** The Operator's comments, as the Reviewer is given them. */
+  readonly operatorComments: readonly OperatorComment[];
+  /** The Operator's Request changes with their line comments, as the Reviewer is given them; absent when there are none. */
+  readonly requestedChanges?: readonly RequestedChange[];
+  /** Every Verdict the Fabrik App gave it, oldest first. */
+  readonly verdicts: readonly GivenVerdict[];
+  /** The Kit's own notes on its thread, oldest first: every comment of the Kit's that is no Verdict, held lines left out. */
+  readonly kitNotes: readonly string[];
+  /** Whether its body's evidence marker names screenshots its Implement run kept. */
+  readonly uiEvidence: boolean;
+}
+
+/**
+ * The PR as the Digest writer is given it: its title, body and base branch;
+ * the Operator's Request changes with their line comments and the Operator's
+ * comments, as readPullRequest gives a Reviewer them, `deferred` ones left
+ * out; every Verdict with the head it judged; the Kit's own notes on the
+ * thread, oldest first, among its latest hundred comments; and whether UI
+ * evidence exists. Nobody else's words are in it, and nothing from the run
+ * store: no transcript and no Run record. The Verdicts and the notes come
+ * only from what readPullRequest and verdictsOn hand back, so whatever those
+ * keep from an agent is kept from this one.
+ */
+export async function readDigestPullRequest(
+  github: Reader,
+  repo: Repo,
+  number: number,
+  { operator, deferred = [] }: { readonly operator: string; readonly deferred?: readonly number[] },
+): Promise<DigestPullRequest> {
+  const [read, verdicts, rest] = await Promise.all([
+    readPullRequest(github, repo, number, { withComments: true, operator, deferred }),
+    verdictsOn(github, repo, number),
+    github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`),
+  ]);
+  const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges"> & {
+    comments: { body: string; author: { __typename: string } | null }[];
+  };
+  return {
+    ...pullRequest,
+    baseRefName: (rest as { base: { ref: string } }).base.ref,
+    verdicts,
+    // Only a bot's comments are the Kit's, as only a bot's markers are read; its Verdicts are given apart, whole.
+    kitNotes: comments.filter(({ body, author }) => author?.__typename === "Bot" && verdictsIn([body]).length === 0).map(({ body }) => body),
+    uiEvidence: (evidenceMarkerIn(pullRequest.body)?.artifact ?? null) !== null,
+  };
 }
 
 /** The Operator's review requesting changes, its inline comments included. */
@@ -853,10 +918,12 @@ async function main(outDir: string): Promise<void> {
     const withComments = process.env["FABRIK_PULL_REQUEST_COMMENTS"] === "true";
     // A Review or a Retry isn't given the Operator's Request changes deferred while a Retry was in flight (#427); their run is.
     const deferred = review === null ? await deferredChangesRequestsOn(github, repo, pullRequest, operator) : [];
-    await writeFile(
-      join(outDir, "pull-request.json"),
-      JSON.stringify(await readPullRequest(github, repo, pullRequest, { withComments, operator, deferred })),
-    );
+    // The Digest writer is given the PR as no other role is: with every Verdict and the Kit's notes (ADR-0022).
+    const given =
+      process.env["FABRIK_ROLE"] === "digest"
+        ? await readDigestPullRequest(github, repo, pullRequest, { operator, deferred })
+        : await readPullRequest(github, repo, pullRequest, { withComments, operator, deferred });
+    await writeFile(join(outDir, "pull-request.json"), JSON.stringify(given));
     if (review !== null) await writeFile(join(outDir, "review.json"), JSON.stringify(await readReview(github, repo, pullRequest, review)));
   }
   if (auditCommit !== "") {
