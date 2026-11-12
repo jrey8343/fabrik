@@ -68,6 +68,7 @@ import {
   newerSchemaOf,
   NO_DEPLOY_SEEN_MINUTES,
   parseCaptureResult,
+  productionPageUrl,
   readCaller,
   readDeployments,
   readOutcomes,
@@ -870,6 +871,11 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       "<html>Not Found</html>",
     ),
   ],
+  productionPageUrl: () =>
+    productionPageUrl(
+      { url: "https://shop.example", environment: "production" },
+      "/book?when=today",
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
