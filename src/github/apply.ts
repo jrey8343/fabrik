@@ -360,6 +360,8 @@ async function apply(
     // applyPlan carries it out, since what follows it depends on how the rebase went.
     case "rebase-onto-main":
       throw new Error("A rebase onto main is applied by applyPlan");
+    case "carry-digest":
+      throw new Error("A Digest is carried forward by applyPlan");
     case "push-branch":
       if (branches === null) throw new Error(`This job holds no branch to push (${action.branch})`);
       await branches.push(action.branch);

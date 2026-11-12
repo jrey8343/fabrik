@@ -899,6 +899,16 @@ export interface PullRequestSnapshot {
    * no-Digest line. A collapsed one is here whole, as GitHub still returns it.
    */
   readonly digests: readonly DigestOnThread[];
+  /**
+   * The Kit's list of asks on it now, by id, oldest first: each Request
+   * changes of the Operator's a Review is given and each line comment in it,
+   * as a Digest's first line records the ones it answered
+   * (src/loop/digestFacts.ts). No snapshot read from GitHub holds it: the
+   * push job reads it for a Reviewer's Verdict, only where the last Digest
+   * could be carried forward (src/github/digestCarry.ts). Absent when it
+   * wasn't read, or couldn't be: nothing is carried forward then.
+   */
+  readonly asks?: readonly string[];
 }
 
 /** A Digest comment on a pull request's thread, as the snapshot reads it. */
@@ -1834,6 +1844,28 @@ export type Action =
       /** The comment's node id. */
       readonly node: string;
       readonly classifier: "OUTDATED";
+    }
+  | {
+      /**
+       * Posts a pull request's last Digest again for a new head, carried
+       * forward because only `main` moved (ADR-0022), with no model run. The
+       * adapter reads what `headSha` holds of the files that Digest's places
+       * name, posts the carried comment, each place re-pointed to where its
+       * lines now are (src/loop/digestCarry.ts), then applies `carried`.
+       * When the files cannot be read there, or the carried comment would be
+       * too long for GitHub, it posts nothing and applies `otherwise`: what
+       * the pass does with no Digest to carry.
+       */
+      readonly kind: "carry-digest";
+      readonly pullRequest: number;
+      /** The head the pass was given on, which the carried Digest is posted for. */
+      readonly headSha: string;
+      /** The Product repo's web address, which the carried Digest's links start from. */
+      readonly repoUrl: string;
+      /** The last Digest's comment, as it was posted. */
+      readonly digest: string;
+      readonly carried: readonly Action[];
+      readonly otherwise: readonly Action[];
     };
 
 /**
