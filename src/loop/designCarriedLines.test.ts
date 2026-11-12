@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { KIT } from "../__fixtures__/repoScan.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Plan } from "./types.ts";
@@ -354,6 +357,26 @@ describe("A Design session's rewrite keeps the issue's From PR line, so the issu
         planFor(turnFinished(output), inSession(""), kitConfig()),
       );
     }
+  });
+});
+
+// A session taken live rewrites the issue's body itself, so its skill is what
+// carries the lines there: nothing of the Kit's rewrite runs for it.
+describe("A Design session taken live is told to carry every line an async session's rewrite carries", () => {
+  const skill = readFileSync(resolve(KIT, "skills", "fabrik-live-design", "SKILL.md"), "utf8");
+  const carry = skill.split("\n").find((line) => line.startsWith("- Carry any ")) ?? "";
+
+  it.each([
+    ["`From audit #<n>` line", "From audit #40"],
+    ["`<!-- fabrik:escape … -->` line", "<!-- fabrik:escape strong #31 #35 -->"],
+    ["`From retro #<n>` or `From retro <owner>/<repo>#<n>` line", "From retro #52"],
+    ["`From retro #<n>` or `From retro <owner>/<repo>#<n>` line", "From retro acme/shop#52"],
+    ["`From PR #<n>` line", "From PR #88"],
+  ])("names the %s among the lines to carry, as the Kit's rewrite carries one", (named, line) => {
+    const plan = planFor(turnFinished(agentBrief), inSession(`Work it out once.\n\n${line}`), kitConfig());
+
+    expect(rewrittenBody(plan)?.split("\n").slice(-2)).toEqual(["", line]);
+    expect(carry).toContain(named);
   });
 });
 
