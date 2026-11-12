@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { aDesignQueueIssue, aResearchDecision, aTicket, kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aDesignRound, aLabelAdded, aReview, aRunInFlight, aVerdictComment, anOpenIssue, anOpenPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aLabelAdded, aReplayBody, aReview, aRunInFlight, aVerdictComment, anOpenIssue, anOpenPullRequest, anOpenReplay, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { undeliveredMarker } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
@@ -350,5 +350,56 @@ describe("silences the rule cannot date", () => {
       },
     ]);
     expect(standingsIn({ designQueue: { issues: [waiting, holding(22), holding(23)], designTurnsInProgress: [] } })).toMatchObject([{ issue: 21, name: "waiting-for-slot" }]);
+  });
+
+  it("gives the Operator's Replay between its steps waiting on the Kit with no place, since its body was last written, and someone else's none", () => {
+    const between = anOpenReplay({ body: aReplayBody({ state: "pending" }) });
+    expect(standingsIn({ openReplays: [between] })).toEqual([
+      {
+        schema: 1,
+        repo: "owner/product",
+        issue: 140,
+        pullRequest: null,
+        work: "replay",
+        place: null,
+        name: "waiting-on-kit",
+        move: "kit",
+        yours: false,
+        stopsWork: false,
+        since: "2026-11-06T20:00:00Z",
+        stuckAt: null,
+        awaits: { role: "replay", on: "issue" },
+        subscription: null,
+        detail: { silence: "replay-between-steps", round: null },
+      },
+    ]);
+    expect(standingsIn({ openReplays: [{ ...between, author: "someone" }] })).toEqual([]);
+  });
+
+  describe("anything else left over", () => {
+    const LABELLED = "2026-11-06T12:00:00Z";
+    const leftOver = { name: "waiting-on-kit", move: "kit", yours: false, stopsWork: false, stuckAt: null, awaits: null, detail: { silence: "left-over", round: null } };
+
+    it.each([
+      ["needs-design with no Design queue read", "needs-design", "design-session", "design"],
+      ["ready-for-agent with no Dispatch read", "ready-for-agent", "ticket", "implement"],
+    ] as const)("gives an open issue labelled %s waiting on the Kit with no stuckAt, since the label", (_, label, work, place) => {
+      const issue = anOpenIssue({ number: 30, labels: [label], labelEvents: [aLabelAdded(label, LABELLED)] });
+      expect(standingsIn({ openIssues: [issue] }, { kit: null })).toEqual([
+        { schema: 1, repo: "owner/product", issue: 30, pullRequest: null, work, place, since: LABELLED, subscription: null, ...leftOver },
+      ]);
+    });
+
+    it("gives an open agent PR out of draft that nothing names waiting on the Kit with no stuckAt, since it left draft", () => {
+      const pullRequest = anOpenPullRequest({ number: 50, ticket: 7, draft: false, draftEvents: [{ kind: "ready", actor: "operator", at: LABELLED }] });
+      expect(standingsIn({ openPullRequests: [pullRequest] })).toEqual([
+        { schema: 1, repo: "owner/product", issue: 7, pullRequest: 50, work: "ticket", place: "merge-gate", since: LABELLED, subscription: null, ...leftOver },
+      ]);
+    });
+
+    it("gives none to an issue with none of those labels, or to a Spec", () => {
+      const spec = anOpenIssue({ number: 5, labels: ["ready-for-agent"], subIssues: [6] });
+      expect(standingsIn({ openIssues: [anOpenIssue({ number: 31, labels: ["bug"] }), spec] }, { kit: null })).toEqual([]);
+    });
   });
 });

@@ -16,8 +16,11 @@ function aKit(runsInFlight: readonly RunInFlightFact[] | "unread", overrides: Pa
   return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: { candidates: { tickets: [], researchDecisions: [] } }, runsInFlight, headChecks: {}, ...overrides };
 }
 
+/** The Standings of these facts, but the silences that wait on the Kit (#608), which src/kit/standingSilence.test.ts holds. */
 function standingsIn(github: Partial<GitHubFacts>, kit: RepoKitFacts | null): Standing[] {
-  return standingsOf(standingFactsOf({ github: factsOf(github), kit }), NOW);
+  return standingsOf(standingFactsOf({ github: factsOf(github), kit }), NOW).filter(
+    (standing) => standing.name !== "waiting-on-kit" && !(standing.name === "stuck" && standing.detail.was === "waiting-on-kit"),
+  );
 }
 
 const ticket = (number: number, labels: readonly string[] = ["ready-for-agent"]) => anOpenIssue({ number, labels });

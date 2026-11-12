@@ -6,13 +6,14 @@
 import { notDismissedIn, type PullRequestHistoryItem, requestChangesSinceRunIn } from "../github/threads.ts";
 import { waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf } from "../loop/heldRun.ts";
-import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE } from "../loop/labels.ts";
+import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { verdictsOn } from "./retroEvidence.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { barOf, clockOf, stuckAtOf } from "./standingClock.ts";
-import { designSessionsStartingOf, maxInFlightHoldOf, readySince } from "./standingInFlight.ts";
+import { designSessionsStartingOf, isSpec, maxInFlightHoldOf, readySince } from "./standingInFlight.ts";
 import { answerOf, lastAdded, passAtHeadOf } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
@@ -26,7 +27,9 @@ export type WaitingOnKitSilence =
   | "passed-draft"
   | "quiet-draft"
   | "releasable"
-  | "design-slot-free";
+  | "design-slot-free"
+  | "replay-between-steps"
+  | "left-over";
 
 /** Every `waiting-on-kit` and `parked` Standing in the repo: each pull request's first, so a Ticket's own leftover gives way to its draft's. */
 export function silenceStandingsOf(facts: StandingFacts, _now: string): Standing[] {
@@ -36,7 +39,52 @@ export function silenceStandingsOf(facts: StandingFacts, _now: string): Standing
     ...facts.github.openIssues.flatMap((issue) => issueSilencesOn(issue, facts, bar)),
     ...releasableSilencesOf(facts),
     ...designSlotFreeSilencesOf(facts),
+    ...replaySilencesOf(facts),
+    // Last, so each gives way to any silence above on the same work.
+    ...facts.github.openPullRequests.flatMap((pullRequest) => leftOverOnPullRequest(pullRequest, facts)),
+    ...facts.github.openIssues.flatMap((issue) => leftOverOnIssue(issue, facts)),
   ];
+}
+
+/** The state labels an open issue on the Loop carries, in the order a left-over one is read by: its work and place on the Loop. */
+const LEFT_OVER_LABELS: readonly { readonly label: string; readonly work: StandingWork; readonly place: StandingPlace }[] = [
+  { label: NEEDS_TRIAGE, work: "issue", place: "triage" },
+  { label: NEEDS_INFO, work: "issue", place: "triage" },
+  { label: NEEDS_DESIGN, work: "design-session", place: "design" },
+  { label: READY_FOR_AGENT, work: "ticket", place: "implement" },
+];
+
+/**
+ * An open issue labelled `needs-triage`, `needs-info`, `needs-design` or
+ * `ready-for-agent` that no rule names: waiting on the Kit, never Stuck, as
+ * the rule can't date it, since its label was last added, or it was opened. A
+ * Spec has none of its own.
+ */
+function leftOverOnIssue(issue: OpenIssueFacts, facts: StandingFacts): StandingNamed<"waiting-on-kit">[] {
+  const on = LEFT_OVER_LABELS.find(({ label }) => issue.labels.includes(label));
+  if (on === undefined || isSpec(issue)) return [];
+  return [waitingOnKit(facts, issue.number, null, on.work, on.place, lastAdded(issue.labelEvents, on.label) ?? issue.createdAt, null, null, { silence: "left-over", round: null })];
+}
+
+/** An open agent PR out of draft that no rule names: waiting on the Kit at the Merge gate, never Stuck, since it last left draft, or was last pushed. */
+function leftOverOnPullRequest(pullRequest: OpenPullRequestFacts, facts: StandingFacts): StandingNamed<"waiting-on-kit">[] {
+  if (pullRequest.draft) return [];
+  const since = pullRequest.draftEvents.findLast(({ kind }) => kind === "ready")?.at ?? lastPushOf(pullRequest);
+  return [waitingOnKit(facts, pullRequest.ticket, pullRequest, "ticket", "merge-gate", since, null, null, { silence: "left-over", round: null })];
+}
+
+/**
+ * Each of the Operator's open Replays with its results not yet in and nothing
+ * of its own running: between its steps, which the Kit takes at its hourly
+ * check. Never Stuck, as the facts don't say when its last step ended; the
+ * `agent:replay` the Kit adds starts a clock. Since its body was last written.
+ */
+function replaySilencesOf(facts: StandingFacts): StandingNamed<"waiting-on-kit">[] {
+  return facts.github.openReplays
+    .filter((replay) => isOperatorsReplay(replay, facts.operator) && !replayResultsIn(replay.body))
+    .map((replay) =>
+      waitingOnKit(facts, replay.number, null, "replay", null, replay.lastEditedAt ?? replay.createdAt, null, { role: "replay", on: "issue" }, { silence: "replay-between-steps", round: null }),
+    );
 }
 
 /**

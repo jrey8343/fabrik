@@ -1,13 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import type { RunInFlightFact } from "../github/snapshot.ts";
 import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { aRunInFlight, aWeeklyLimitIssue } from "../__fixtures__/weeklySummary.ts";
 import { aTicket } from "../__fixtures__/snapshots.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
+import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingAt, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
+import { isSpec } from "./standingInFlight.ts";
 import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -262,7 +265,8 @@ describe("the Standing rule", () => {
           designing(14, [{ ...aDesignTurnFailedNotice("2026-11-06T20:00:00Z"), author: "other-app[bot]" }]),
         ],
       });
-      expect(standings).toEqual([]);
+      // Each waits on the Kit instead (#608).
+      expect(standings.filter(({ move }) => move === "operator")).toEqual([]);
     });
 
     it("gives no Design round once the Operator answered it, or for a Round marker another bot or a person posted", () => {
@@ -436,7 +440,8 @@ describe("the Standing rule", () => {
           anOpenReplay({ number: 142, author: "someone-else" }),
         ],
       });
-      expect(standings).toEqual([reading(140, "replay", "2026-11-06T20:00:00Z")]);
+      // #141, between its steps, waits on the Kit (#608).
+      expect(standings.filter(({ move }) => move === "operator")).toEqual([reading(140, "replay", "2026-11-06T20:00:00Z")]);
     });
 
     it("gives an open Map one, since it got wayfinder:map, carrying its open grilling, prototype and task Decisions, and each of them one carrying the Map", () => {
@@ -727,20 +732,82 @@ describe("a run that was asked for and never began (#607)", () => {
   });
 });
 
+describe("every other silence, and a draft the Operator parked (#608)", () => {
+  const PUSHED = "2026-11-08T19:20:00Z";
+  /** Agent draft #50 for Ticket 7, last pushed by the Fabrik App at PUSHED. */
+  const draft = (overrides: Parameters<typeof anOpenPullRequest>[0] = {}) => anOpenPullRequest({ number: 50, ticket: 7, commits: [{ at: PUSHED, byApp: true }], ...overrides });
+  const kit = (runsInFlight: readonly RunInFlightFact[] = []) =>
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: { candidates: { tickets: [], researchDecisions: [] } }, runsInFlight, headChecks: {} }) as const;
+
+  it("gives a quiet draft waiting on the Kit a minute before the bar and Stuck a minute after it", () => {
+    expect(standingsIn({ openPullRequests: [draft()] }, { kit: kit() }, "2026-11-08T22:49:00Z")).toMatchObject([
+      { issue: 7, pullRequest: 50, name: "waiting-on-kit", stuckAt: "2026-11-08T22:50:00.000Z", detail: { silence: "quiet-draft" } },
+    ]);
+    expect(standingsIn({ openPullRequests: [draft()] }, { kit: kit() }, "2026-11-08T22:51:00Z")).toMatchObject([{ name: "stuck", detail: { was: "waiting-on-kit" } }]);
+  });
+
+  it("gives a draft with a pass the Operator put back in draft parked, theirs, stopping no work and never Stuck; never taken out of draft, the passed-draft silence", () => {
+    const pass = aVerdictComment("pass", HEAD, PUSHED);
+    const parked = draft({ comments: [pass], draftEvents: [{ kind: "ready", actor: "fabrik-app[bot]", at: "2026-11-08T19:21:00Z" }, { kind: "draft", actor: "operator", at: "2026-11-08T19:40:00Z" }] });
+    expect(standingsIn({ openPullRequests: [parked] }, { kit: kit() }, "2027-01-01T00:00:00Z")).toMatchObject([
+      { name: "parked", move: "operator", yours: true, stopsWork: false, since: "2026-11-08T19:40:00Z", stuckAt: null },
+    ]);
+    expect(standingsIn({ openPullRequests: [draft({ comments: [pass] })] }, { kit: kit() })).toMatchObject([{ name: "waiting-on-kit", since: PUSHED, detail: { silence: "passed-draft" } }]);
+  });
+
+  it("gives a draft with a run in flight on it running, and one whose Ticket's run is held held", () => {
+    expect(standingsIn({ openPullRequests: [draft()] }, { kit: kit([aRunInFlight({ role: "review", pullRequest: 50 })]) })).toMatchObject([{ issue: 7, pullRequest: 50, name: "running" }]);
+    const held = aWeeklyLimitIssue(null, [{ role: "implement", issue: 7, label: "agent:implement" }], { commentedAt: ["2026-11-08T10:00:00Z"] });
+    expect(standingsIn({ openPullRequests: [draft()], kitIssues: [held] }, { kit: kit() })).toMatchObject([{ issue: 7, pullRequest: 50, name: "held" }]);
+  });
+
+  it("gives a releasable Ticket with a free slot waiting on the Kit with no stuckAt", () => {
+    const ready = anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", "2026-11-05T12:00:00Z")] });
+    const releasing = { ...kit(), dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [] } } };
+    expect(standingsIn({ openIssues: [ready] }, { kit: releasing })).toMatchObject([{ issue: 14, name: "waiting-on-kit", stuckAt: null, detail: { silence: "releasable" } }]);
+  });
+});
+
 // After every test above: these read what they produced.
 describe("a Standing, as plain data", () => {
   const MINUTE = 60 * 1000;
   const fixture = JSON.parse(readFileSync(new URL("../__fixtures__/standings.json", import.meta.url), "utf8")) as Record<string, Record<string, unknown>>;
   const all = () => produced.flatMap(({ standings }) => standings);
 
+  it("gives every open issue on the Loop exactly one, a Spec aside, and every open agent PR one it shares with its Ticket, in every read the tests above made, and none to an issue with no such label", () => {
+    // The state labels, and the Kit's own labels on an issue whose rule needs no other fact.
+    const onTheLoop = [NEEDS_TRIAGE, NEEDS_INFO, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, WEEKLY_LIMIT_LABEL, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL];
+    let issues = 0;
+    for (const { facts, standings } of produced) {
+      const { openIssues, openPullRequests, plainPullRequests } = facts.github;
+      for (const pullRequest of openPullRequests) {
+        const its = standings.filter((standing) => standing.pullRequest === pullRequest.number);
+        expect(its, `#${pullRequest.number}`).toHaveLength(1);
+        if (openIssues.some(({ number }) => number === pullRequest.ticket)) expect(its[0]?.issue).toBe(pullRequest.ticket);
+      }
+      for (const issue of openIssues) {
+        const its = standings.filter((standing) => standing.issue === issue.number);
+        const closing = openPullRequests.filter(({ ticket }) => ticket === issue.number).length;
+        if (issue.labels.some((label) => onTheLoop.includes(label)) && !isSpec(issue)) {
+          issues += 1;
+          // Two open agent PRs that close one Ticket are kept apart.
+          expect(its, `#${issue.number}`).toHaveLength(Math.max(1, closing));
+        } else if (issue.labels.length === 0 && closing === 0 && !plainPullRequests.some(({ closes }) => closes === issue.number)) {
+          expect(its, `#${issue.number}`).toEqual([]);
+        }
+      }
+    }
+    expect(issues).toBeGreaterThan(0);
+  });
+
   it("survives a JSON round trip unchanged, every one the tests above produced", () => {
     expect(all().length).toBeGreaterThan(0);
     for (const standing of all()) expect(JSON.parse(JSON.stringify(standing))).toStrictEqual(standing);
   });
 
-  it("stops work only when the Operator's, never for reading matter, and always for any other move of theirs but a Plain pull request's or a failed Weekly summary run's", () => {
+  it("stops work only when the Operator's, never for reading matter or a parked draft, and always for any other move of theirs but a Plain pull request's or a failed Weekly summary run's", () => {
     for (const standing of all()) {
-      if (!standing.yours || standing.name === "yours-to-read") expect(standing).toMatchObject({ stopsWork: false });
+      if (!standing.yours || standing.name === "yours-to-read" || standing.name === "parked") expect(standing).toMatchObject({ stopsWork: false });
       else if (standing.work !== "plain" && standing.work !== "weekly-summary") expect(standing).toMatchObject({ stopsWork: true });
     }
     expect(all().some(({ name }) => name === "yours-to-read")).toBe(true);
