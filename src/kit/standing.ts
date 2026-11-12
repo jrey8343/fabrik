@@ -9,6 +9,7 @@
 // shown (src/kit/standingWording.ts).
 import type { HandBack } from "../loop/handBacks.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { handBackStandingsOf } from "./standingHandBacks.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
@@ -208,7 +209,7 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
  */
 export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: string): Standing[] {
   if (facts.kind === "store") return storeStandingsOf(facts, now);
-  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...inFlightStandingsOf(facts, now)];
+  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...inFlightStandingsOf(facts, now), ...handBackStandingsOf(facts, now)];
   return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))).toSorted(
     (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
   );
@@ -216,17 +217,24 @@ export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: stri
 
 /**
  * The first Standing in the order of reading for each piece of work; of two
- * that rank alike, the first found. Two open agent pull requests that close
- * one Ticket are kept apart, as neither hides the other.
+ * that rank alike, the first found, but that work the Kit handed back, naming
+ * which hand-back, is read so before as `ready-for-human` work whose reason
+ * isn't named. Two open agent pull requests that close one Ticket are kept
+ * apart, as neither hides the other.
  */
 function oneForEachWork(candidates: readonly Standing[]): Standing[] {
   const kept = new Map<string, Standing>();
   for (const candidate of candidates) {
     const key = `${workKeyOf(candidate)} ${candidate.pullRequest ?? ""}`;
     const held = kept.get(key);
-    if (held === undefined || READING_ORDER[READING_OF[candidate.name]] < READING_ORDER[READING_OF[held.name]]) kept.set(key, candidate);
+    if (held === undefined || READING_ORDER[READING_OF[candidate.name]] < READING_ORDER[READING_OF[held.name]] || namesItsHandBack(candidate, held)) kept.set(key, candidate);
   }
   return [...kept.values()];
+}
+
+/** Whether `candidate` names the hand-back that `held`, the same work's `yours-to-do`, leaves unnamed. */
+function namesItsHandBack(candidate: Standing, held: Standing): boolean {
+  return candidate.name === "yours-to-do" && held.name === "yours-to-do" && candidate.detail.handBack !== null && held.detail.handBack === null;
 }
 
 /** A Standing on an issue, carrying the number of the open agent pull request that closes it, if it lacks one. */
