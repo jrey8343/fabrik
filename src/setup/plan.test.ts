@@ -681,6 +681,12 @@ describe("Branch protection", () => {
       expect(entry()).not.toMatch(/admin enforcement included/);
       expect(entry()).not.toMatch(/merge past/);
     });
+
+    it("names enforcement switched off by hand among what a later run puts back", () => {
+      const rerun = readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n").find((l) => l.startsWith("Running Setup again on a working install")) ?? "";
+
+      expect(rerun).toMatch(/admin enforcement was switched off by hand.*is made to hold admins to its rules again/);
+    });
   });
 
   describe("as the README's Merge gate section tells it", () => {
