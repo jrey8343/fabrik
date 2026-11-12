@@ -15,6 +15,8 @@ import { withoutMentions } from "./mentions.ts";
 import { retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
+import { changeLine } from "./changeFingerprint.ts";
+import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import { parseVerdict } from "./verdict.ts";
 import type {
   Action,
@@ -202,7 +204,9 @@ export interface AnswerLines {
  * left; a Design flaw, or an Execution flaw with none left, sends the Ticket
  * back to design. A pass's Follow-ups (src/loop/followUps.ts) follow its
  * findings. A Reviewer's Verdict ends with the Operator comments it
- * weighed, as `considered` (src/loop/considered.ts) renders them.
+ * weighed, as `considered` (src/loop/considered.ts) renders them. Whatever
+ * its source, the comment's second line is the fingerprint of the PR's own
+ * change (src/loop/changeFingerprint.ts), when the snapshot holds one (#643).
  */
 export function verdictActions(
   event: { readonly headSha: string; readonly runUrl: string },
@@ -240,8 +244,7 @@ export function verdictActions(
     headSha: event.headSha,
   };
   const by = BY[source];
-  const body = [
-    verdictMarker(record),
+  const lines = [
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run" : ""}.`,
@@ -251,7 +254,12 @@ export function verdictActions(
     "",
     `[The run](${event.runUrl})`,
     ...considered,
-  ].join("\n");
+  ];
+  // The fingerprint of the PR's own change (#643), when the push job read one at the head this Verdict is on.
+  const change = pullRequest.change !== undefined && pullRequest.headSha === event.headSha ? [changeLine(pullRequest.change)] : [];
+  const withChange = [verdictMarker(record), ...change, ...lines].join("\n");
+  // A Verdict never fails for want of one: a line that would take the comment past GitHub's limit is left out.
+  const body = withChange.length <= GITHUB_COMMENT_LIMIT ? withChange : [verdictMarker(record), ...lines].join("\n");
   // ready-for-human, which the Kit put on the PR when a run it started there ended without pushing, comes off too:
   // with a Verdict, the PR is back in the Loop.
   const labelsOff: Action[] = ([REVIEW_LABEL, READY_FOR_HUMAN] as const)
