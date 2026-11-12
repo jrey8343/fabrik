@@ -8,6 +8,7 @@
 // holds no relative time. Its wording ("40 minutes ago") is made when it is
 // shown (src/kit/standingWording.ts).
 import type { HandBack } from "../loop/handBacks.ts";
+import type { TriggerLabel } from "../loop/labels.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { type NotStartedSilence, notStartedStandingsOf } from "./standingClock.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
@@ -76,11 +77,14 @@ export const STANDING_NAMES = [
 export type StandingName = (typeof STANDING_NAMES)[number];
 
 /** What a `not-started` Standing's wording is made of. */
-interface NotStartedDetail {
-  /** Which run was asked for and how (src/kit/standingClock.ts). */
-  readonly silence: NotStartedSilence;
-  readonly label: string | null;
-}
+/**
+ * What a `not-started` Standing's wording is made of: which run was asked for
+ * and how (src/kit/standingClock.ts), and the trigger label that asked, null
+ * for a Retry a Verdict announced.
+ */
+type NotStartedDetail =
+  | { readonly silence: Exclude<NotStartedSilence, "retry">; readonly label: TriggerLabel }
+  | { readonly silence: Extract<NotStartedSilence, "retry">; readonly label: null };
 
 /** What a `waiting-on-kit` Standing's wording is made of: nothing yet, until the rule builds one. */
 type WaitingOnKitDetail = Readonly<Record<never, never>>;

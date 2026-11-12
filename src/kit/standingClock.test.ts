@@ -16,6 +16,7 @@ import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
 import type { CommentFacts } from "./retroEvidence.ts";
+import { wordStanding } from "./standingWording.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -301,5 +302,75 @@ describe("a run that was asked for and never began", () => {
     const held = aWeeklyLimitIssue(null, [{ role: "implement", issue: 7, label: "agent:implement" }], { commentedAt: ["2026-11-06T09:00:00Z"] });
     const standings = standingsIn({ openIssues: [askedFor("2026-11-06T08:00:00Z")], kitIssues: [held] });
     expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([{ issue: 7, name: "held" }]);
+  });
+  describe("in words", () => {
+    const ZONE = "Australia/Sydney";
+    const RUNS = "[the Loop's runs](https://github.com/owner/product/actions)";
+    const LABELLED = "2026-11-08T19:20:00Z";
+    /** The one Standing these facts give at `now`, worded then. */
+    const wordedAt = (github: Partial<GitHubFacts>, now: string) => {
+      const [standing, ...rest] = standingsIn(github, {}, now);
+      if (standing === undefined || rest.length > 0) throw new Error("expected one Standing");
+      return wordStanding(standing, now, ZONE);
+    };
+
+    it("says a trigger label asked for a run that hasn't started, and that the Kit adds it again, then at the bar that nothing has run", () => {
+      const facts = { openIssues: [askedFor(LABELLED)] };
+      const remedy = `Check ${RUNS}, then add \`agent:implement\` again.`;
+      expect(wordedAt(facts, "2026-11-08T20:00:00Z")).toEqual({
+        pill: "Not started",
+        sentence: "Asked for an Implement run 40 minutes ago; nothing has started. The Kit adds the label again at its next hourly check.",
+        remedy,
+      });
+      expect(wordedAt(facts, "2026-11-08T23:20:00Z")).toEqual({ pill: "Stuck", sentence: "Nothing has run since the Kit asked for an Implement run 4 hours ago.", remedy });
+    });
+
+    it.each([
+      ["agent:design", ["needs-design"], "a Design-session turn"],
+      ["agent:research", ["wayfinder:research"], "a Research run"],
+      ["agent:replay", [], "a Replay"],
+    ] as const)("names the run %s asks for", (label, labels, run) => {
+      const issue = anOpenIssue({ number: 20, labels: [...labels, label], labelEvents: [aLabelAdded(label, LABELLED)] });
+      expect(wordedAt({ openIssues: [issue] }, "2026-11-08T20:00:00Z")).toMatchObject({
+        sentence: `Asked for ${run} 40 minutes ago; nothing has started. The Kit adds the label again at its next hourly check.`,
+        remedy: `Check ${RUNS}, then add \`${label}\` again.`,
+      });
+    });
+
+    it("names a Review for agent:review on a pull request", () => {
+      const pullRequest = anOpenPullRequest({ number: 50, ticket: 7, labelEvents: [aLabelAdded("agent:review", LABELLED)] });
+      expect(wordedAt({ openPullRequests: [pullRequest] }, "2026-11-08T20:00:00Z").sentence).toBe(
+        "Asked for a Review 40 minutes ago; nothing has started. The Kit adds the label again at its next hourly check.",
+      );
+    });
+
+    it("says the Kit added the label again after the sweep's re-add, and that it hands this over next, then at the bar that nothing has run since", () => {
+      const READDED = "2026-11-08T19:30:00Z";
+      const issue = askedFor("unused", {
+        labelEvents: [aLabelAdded("agent:implement", "2026-11-08T17:00:00Z", { actor: "operator" }), aLabelAdded("agent:implement", READDED, { action: "unlabeled" }), aLabelAdded("agent:implement", READDED)],
+        comments: [aComment(`${stuckTriggerReaddedMarker("agent:implement")}\nAdded again.`, READDED)],
+      });
+      const remedy = `Check ${RUNS}, then add \`agent:implement\` again.`;
+      expect(wordedAt({ openIssues: [issue] }, "2026-11-08T20:00:00Z")).toEqual({
+        pill: "Not started",
+        sentence: "The Kit added `agent:implement` again 30 minutes ago; nothing has started. At its next hourly check it takes the label off and hands this to you.",
+        remedy,
+      });
+      expect(wordedAt({ openIssues: [issue] }, "2026-11-08T23:30:00Z")).toEqual({ pill: "Stuck", sentence: "Nothing has run since the Kit added `agent:implement` again 4 hours ago.", remedy });
+    });
+
+    it("says an Execution flaw called for a Retry that hasn't started, and when the Kit adds agent:implement again, then at the bar that no Retry has started", () => {
+      const facts = {
+        openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })],
+        openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, comments: [aVerdictComment("execution-flaw", "h".repeat(40), LABELLED)] })],
+      };
+      const remedy = `Check ${RUNS}, then add \`agent:implement\` to #7.`;
+      expect(wordedAt(facts, "2026-11-08T20:00:00Z")).toEqual({
+        pill: "Not started",
+        sentence: "An Execution flaw called for a Retry 40 minutes ago; nothing has started. The Kit adds `agent:implement` to #7 again once the Implement job's timeout has passed.",
+        remedy,
+      });
+      expect(wordedAt(facts, "2026-11-08T23:20:00Z")).toEqual({ pill: "Stuck", sentence: "No Retry has started since the Execution flaw 4 hours ago.", remedy });
+    });
   });
 });

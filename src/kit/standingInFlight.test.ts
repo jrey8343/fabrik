@@ -174,7 +174,8 @@ describe("work that goes on without the Operator", () => {
           {
             openPullRequests: [
               anOpenPullRequest({ number: 50, ticket: 7 }),
-              anOpenPullRequest({ number: 51, ticket: 8, comments: [aVerdictComment("execution-flaw", HEAD, "2026-11-08T18:00:00Z")] }),
+              // A pass, since an Execution flaw on a draft announces a Retry, a not-started Standing of its own (#607).
+              anOpenPullRequest({ number: 51, ticket: 8, comments: [aVerdictComment("pass", HEAD, "2026-11-08T18:00:00Z")] }),
               anOpenPullRequest({ number: 52, ticket: 9, draft: false }),
               anOpenPullRequest({ number: 53, ticket: 10 }),
             ],

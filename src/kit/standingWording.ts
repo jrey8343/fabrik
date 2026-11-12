@@ -4,7 +4,7 @@
 // itself holds no relative time. The wording never quotes a repo's text.
 import type { HandBack } from "../loop/handBacks.ts";
 import { runNamed } from "../loop/heldRun.ts";
-import { READY_FOR_HUMAN } from "../loop/labels.ts";
+import { DESIGN_LABEL, DISPATCH_LABEL, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
 import type { RunningRun } from "./standingInFlight.ts";
@@ -66,6 +66,13 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       const resets = resetsAt === null ? "; when it resets is not known" : ` and resets ${readable(resetsAt, timeZone)}`;
       return { pill: "Used up", sentence: `${standing.subscription} reached its weekly limit${resets}. Runs go to the next Subscription.`, remedy: null };
     }
+    case "not-started":
+      return { pill: "Not started", ...notStartedWords(standing, age, false) };
+    case "stuck": {
+      if (standing.detail.was !== "not-started") throw new Error(`No wording for a Stuck ${standing.detail.was} Standing yet.`);
+      const { was, ...detail } = standing.detail;
+      return { pill: "Stuck", ...notStartedWords({ ...standing, name: was, detail }, age, true) };
+    }
     case "yours-to-merge":
       return { pill: "Yours to merge", sentence: `Passed Review ${age} ago and is waiting for your merge.`, remedy: null };
     case "design-round": {
@@ -103,6 +110,47 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     default:
       throw new Error(`No wording for a ${standing.name} Standing yet.`);
   }
+}
+
+/** The run each trigger label asks for, as a not-started Standing's sentence names it. */
+const ASKED_RUNS: Readonly<Record<TriggerLabel, string>> = {
+  [DISPATCH_LABEL]: "an Implement run",
+  [DESIGN_LABEL]: "a Design-session turn",
+  [REVIEW_LABEL]: "a Review",
+  [RESEARCH_LABEL]: "a Research run",
+  [REPLAY_TRIGGER_LABEL]: "a Replay",
+};
+
+/**
+ * The sentence and remedy of a run that was asked for and never began, before
+ * the bar or at it (`stuck`), aged from when it was asked for. "The Loop's
+ * runs" links to the repo's Actions runs.
+ */
+function notStartedWords({ repo, issue, detail }: StandingNamed<"not-started">, age: string, stuck: boolean): Omit<StandingWords, "pill"> {
+  const runs = `Check [the Loop's runs](https://github.com/${repo}/actions)`;
+  if (detail.silence === "retry") {
+    return {
+      sentence: stuck
+        ? `No Retry has started since the Execution flaw ${age} ago.`
+        : `An Execution flaw called for a Retry ${age} ago; nothing has started. The Kit adds \`${DISPATCH_LABEL}\` to #${issue} again once the Implement job's timeout has passed.`,
+      remedy: `${runs}, then add \`${DISPATCH_LABEL}\` to #${issue}.`,
+    };
+  }
+  const { label } = detail;
+  const remedy = `${runs}, then add \`${label}\` again.`;
+  if (detail.silence === "trigger-readded") {
+    return {
+      sentence: stuck
+        ? `Nothing has run since the Kit added \`${label}\` again ${age} ago.`
+        : `The Kit added \`${label}\` again ${age} ago; nothing has started. At its next hourly check it takes the label off and hands this to you.`,
+      remedy,
+    };
+  }
+  const asked = ASKED_RUNS[label];
+  return {
+    sentence: stuck ? `Nothing has run since the Kit asked for ${asked} ${age} ago.` : `Asked for ${asked} ${age} ago; nothing has started. The Kit adds the label again at its next hourly check.`,
+    remedy,
+  };
 }
 
 /** What reading matter is, and how long it has waited. */
