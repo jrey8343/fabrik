@@ -6,8 +6,10 @@
 // the thread (src/github/digestGiven.ts), never from anything an agent
 // passed out. Pure, no I/O.
 import { verdictsIn } from "../github/threads.ts";
+import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEffect } from "./changeFingerprint.ts";
+import { listedFollowUpsIn } from "./followUps.ts";
 import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
-import { retryNumber } from "./retry.ts";
+import { MAX_RETRIES, retryNumber } from "./retry.ts";
 import type { Verdict, VerdictRecord } from "./types.ts";
 
 /** A pull request's thread, as much of it as the facts are worked out from. */
@@ -49,6 +51,21 @@ export interface Round {
   readonly retry?: number;
   /** On a Verdict the Kit gave itself: what for. */
   readonly why?: "retry-changed-nothing" | "broken-run";
+  /**
+   * On a Verdict: what the pull request's own change had changed of the code
+   * since the Verdict before it, by their fingerprints. Null on the first
+   * Verdict and on every other row, which the table leaves blank.
+   */
+  readonly effect: VerdictEffect | null;
+}
+
+/** A Follow-up a pass on the pull request named, as the facts list it. */
+export interface DigestFollowUp {
+  /** Kit code's id for it on this thread: `f1`, `f2`, … in the order listed. */
+  readonly id: string;
+  readonly title: string;
+  /** Its Open as issue link, as its Verdict comment has it. */
+  readonly url: string;
 }
 
 /** How many rounds of each counted kind the thread holds. */
@@ -69,6 +86,19 @@ export interface DigestFacts {
   readonly rounds: readonly Round[];
   /** The rounds, counted. */
   readonly counts: RoundCounts;
+  /** The Follow-ups of every pass on the pull request, in the order their Verdicts list them. The writer says which to show, by id. */
+  readonly followUps: readonly DigestFollowUp[];
+  /** How many of the Ticket's Retries are left, by the Retry rules' own count (src/loop/retry.ts): what the next Execution flaw would find. */
+  readonly retriesLeft: number;
+  /**
+   * The product code since the first Verdict: unchanged; changed, with the
+   * files that differ; or not established. The first Verdict is the first
+   * on the pull request whatever its source, compared with the pass on the
+   * head. A Digest is written, and lands, only while the latest Verdict is
+   * that pass (src/loop/digest.ts), so that is the Verdict compared; while
+   * it is no pass, or either records no fingerprint, it is not established.
+   */
+  readonly productCode: ProductChange;
 }
 
 /** One thing on the thread, at its time. */
@@ -91,23 +121,36 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
   // Stable, so things at the same time keep the order they were read in, the Kit's comments first.
   const entries = [...thread.kitComments, ...asked].sort((a: Entry, b: Entry) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
 
-  const rounds: Round[] = [{ who: "implementer", what: "first-run" }];
+  const rounds: Round[] = [row("implementer", "first-run")];
   // The Kit's comments so far, which say what the Kit had counted when each round came.
   const sofar: string[] = [];
+  let before: VerdictRecord | undefined;
   for (const entry of entries) {
     if ("review" in entry) {
-      rounds.push({ who: "operator", what: "request-changes" });
+      rounds.push(row("operator", "request-changes"));
       continue;
     }
     const { body } = entry;
     const [verdict] = verdictsIn([body]);
-    if (verdict !== undefined) rounds.push({ ...VERDICT_BY[verdict.source], what: verdict.verdict });
-    else rounds.push(...noteRound(body, sofar, thread.landedNothing));
+    if (verdict !== undefined) {
+      rounds.push({ ...VERDICT_BY[verdict.source], what: verdict.verdict, effect: before === undefined ? null : verdictEffect(before.change, verdict.change) });
+      before = verdict;
+    } else {
+      rounds.push(...noteRound(body, sofar, thread.landedNothing));
+    }
     sofar.push(body);
   }
   const count = (what: RoundWhat): number => rounds.filter((round) => round.what === what).length;
+  const verdicts = verdictsIn(bodies);
+  const [first, latest] = [verdicts[0], verdicts.at(-1)];
   return {
     rounds,
+    followUps: bodies
+      .flatMap((body) => (verdictsIn([body])[0]?.verdict === "pass" ? listedFollowUpsIn(body) : []))
+      .map(({ title, url }, index) => ({ id: `f${index + 1}`, title, url })),
+    // The next flaw would call for Retry `retryNumber`, so the ones before it are used.
+    retriesLeft: Math.max(0, MAX_RETRIES + 1 - retryNumber(verdicts, thread.landedNothing)),
+    productCode: latest?.verdict === "pass" ? productChangeBetween(first?.change, latest.change) : { kind: "not-established" },
     counts: {
       passes: count("pass"),
       executionFlaws: count("execution-flaw"),
@@ -120,17 +163,22 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
   };
 }
 
+/** A row that is no Verdict, so it says nothing of the code. */
+function row(who: RoundWho, what: RoundWhat): Round {
+  return { who, what, effect: null };
+}
+
 /** The round a note of the Kit's records, if it records one: a push, or a failure notice. */
 function noteRound(body: string, sofar: readonly string[], landedNothing: number): Round[] {
   if (body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH)) {
     // The Retry the latest Verdict called for, numbered as the Retry rules numbered it then.
-    return [{ who: "implementer", what: "retry", retry: retryNumber(verdictsIn(sofar).slice(0, -1), landedNothing) }];
+    return [{ ...row("implementer", "retry"), retry: retryNumber(verdictsIn(sofar).slice(0, -1), landedNothing) }];
   }
-  if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) return [{ who: "implementer", what: "request-changes-run" }];
-  if (body.startsWith(CONFLICT_RUN_MARKER)) return [{ who: "implementer", what: "conflict-only-run" }];
-  if (conflictAttemptIn(body)?.outcome === "rebased") return [{ who: "kit", what: "rebase" }];
+  if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) return [row("implementer", "request-changes-run")];
+  if (body.startsWith(CONFLICT_RUN_MARKER)) return [row("implementer", "conflict-only-run")];
+  if (conflictAttemptIn(body)?.outcome === "rebased") return [row("kit", "rebase")];
   const handBack = handBackMarkIn(body)?.kind;
-  if (handBack === "infrastructure-failure") return [{ who: "kit", what: "infrastructure-failure" }];
-  if (handBack === "broken-run-no-retry") return [{ who: "kit", what: "broken-run" }];
+  if (handBack === "infrastructure-failure") return [row("kit", "infrastructure-failure")];
+  if (handBack === "broken-run-no-retry") return [row("kit", "broken-run")];
   return [];
 }

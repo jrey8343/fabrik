@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { type ChangeFingerprint, changeLine } from "./changeFingerprint.ts";
+import { type ChangeFingerprint, changeFingerprintOf, changeLine } from "./changeFingerprint.ts";
 import { type DigestThread, digestFactsOf } from "./digestFacts.ts";
+import { aPullRequest } from "../__fixtures__/snapshots.ts";
+import { verdictsIn } from "../github/threads.ts";
+import { followUpsSection, newIssueUrl } from "./followUps.ts";
+import { retryAfterFlaw } from "./retry.ts";
+import type { FollowUp } from "./verdict.ts";
 import {
   conflictAttemptMarker,
   CONFLICT_RUN_MARKER,
+  flakyCheckMarker,
   handBackMarker,
   pushedHeadMarker,
   REQUEST_CHANGES_RUN_MARKER,
@@ -55,6 +61,22 @@ const anInfrastructureFailure = (minute: number) =>
 function aThread(overrides: Partial<DigestThread> = {}): DigestThread {
   return { openedAt: at(0), kitComments: [], requestChanges: [], landedNothing: 0, ...overrides };
 }
+
+/** The fingerprint of a change that adds one line to each of these files, built from its diff as Git prints it. */
+function aChange(lines: Readonly<Record<string, string>>): ChangeFingerprint {
+  return changeFingerprintOf(
+    Object.entries(lines)
+      .map(([path, line]) =>
+        [`diff --git a/${path} b/${path}`, `index ${"1".repeat(40)}..${"2".repeat(40)} 100644`, `--- a/${path}`, `+++ b/${path}`, "@@ -1,0 +1,1 @@", `+${line}`, ""].join("\n"),
+      )
+      .join(""),
+  );
+}
+
+// A change to the cart and its test; the same with only the test changed again; and that with the cart changed again too.
+const FIRST = aChange({ "src/cart.ts": "total()", "src/cart.test.ts": "it sums" });
+const TESTS_MOVED = aChange({ "src/cart.ts": "total()", "src/cart.test.ts": "it sums twice" });
+const PRODUCT_MOVED = aChange({ "src/cart.ts": "total(rounded)", "src/cart.test.ts": "it sums twice" });
 
 describe("The rounds Kit code builds from a pull request's thread", () => {
   /**
@@ -180,5 +202,171 @@ describe("The rounds Kit code builds from a pull request's thread", () => {
       "operator: request-changes",
       "reviewer: execution-flaw",
     ]);
+  });
+});
+
+describe("Each Verdict's effect on the code, against the Verdict before it", () => {
+  const effects = (thread: DigestThread) => digestFactsOf(thread).rounds.map(({ what, effect }) => [what, effect]);
+
+  it("is product code, tests only or none as its fingerprint differs from the one before, and blank on the first Verdict and on every other row", () => {
+    const thread = aThread({
+      kitComments: [
+        aVerdict(5, { verdict: "execution-flaw", headSha: sha("a"), change: FIRST }),
+        aRetryPush(10, sha("b")),
+        aVerdict(15, { verdict: "execution-flaw", headSha: sha("b"), change: TESTS_MOVED }),
+        aRetryPush(20, sha("c")),
+        aVerdict(25, { verdict: "pass", headSha: sha("c"), change: PRODUCT_MOVED }),
+        aRebase(30),
+        aVerdict(35, { verdict: "pass", headSha: sha("d"), change: PRODUCT_MOVED }),
+      ],
+    });
+
+    expect(effects(thread)).toEqual([
+      ["first-run", null],
+      ["execution-flaw", null],
+      ["retry", null],
+      ["execution-flaw", "tests-only"],
+      ["retry", null],
+      ["pass", "product-code"],
+      ["rebase", null],
+      ["pass", "none"],
+    ]);
+  });
+
+  it("is not known when it or the Verdict before it records no fingerprint", () => {
+    const thread = aThread({
+      kitComments: [
+        aVerdict(5, { verdict: "execution-flaw", headSha: sha("a") }),
+        aVerdict(15, { verdict: "execution-flaw", headSha: sha("b"), change: FIRST }),
+        aVerdict(25, { verdict: "execution-flaw", headSha: sha("c") }),
+        aVerdict(35, { verdict: "pass", headSha: sha("d"), change: FIRST }),
+      ],
+    });
+
+    expect(effects(thread).slice(1)).toEqual([
+      ["execution-flaw", null],
+      ["execution-flaw", "not-known"],
+      ["execution-flaw", "not-known"],
+      ["pass", "not-known"],
+    ]);
+  });
+});
+
+describe("The product code since the first Verdict", () => {
+  /** A first Verdict recording `first`, a Retry, then the pass on the head recording `pass`. */
+  const since = (first: ChangeFingerprint | undefined, pass: ChangeFingerprint | undefined) =>
+    digestFactsOf(
+      aThread({
+        kitComments: [
+          aVerdict(5, { verdict: "execution-flaw", headSha: sha("a"), ...(first === undefined ? {} : { change: first }) }),
+          aRetryPush(10, sha("b")),
+          aVerdict(15, { verdict: "pass", headSha: sha("b"), ...(pass === undefined ? {} : { change: pass }) }),
+        ],
+      }),
+    ).productCode;
+
+  it("is unchanged when only tests moved between the first Verdict and the pass on the head", () => {
+    expect(since(FIRST, TESTS_MOVED)).toEqual({ kind: "unchanged" });
+  });
+
+  it("is changed, with the product files that differ and never a test file", () => {
+    expect(since(FIRST, PRODUCT_MOVED)).toEqual({ kind: "changed", files: ["src/cart.ts"] });
+  });
+
+  it("could not be established when either Verdict records no fingerprint, as one from before the fingerprint does", () => {
+    expect(since(undefined, PRODUCT_MOVED)).toEqual({ kind: "not-established" });
+    expect(since(FIRST, undefined)).toEqual({ kind: "not-established" });
+  });
+
+  it("takes the first Verdict whatever its source, one from red Required checks included", () => {
+    const thread = aThread({
+      kitComments: [
+        aVerdict(5, { verdict: "execution-flaw", source: "ci", checks: ["test"], headSha: sha("a"), change: FIRST }),
+        aRetryPush(10, sha("b")),
+        aVerdict(15, { verdict: "execution-flaw", headSha: sha("b"), change: PRODUCT_MOVED }),
+        aRetryPush(20, sha("c")),
+        aVerdict(25, { verdict: "pass", headSha: sha("c"), change: PRODUCT_MOVED }),
+      ],
+    });
+
+    expect(digestFactsOf(thread).productCode).toEqual({ kind: "changed", files: ["src/cart.ts"] });
+  });
+
+  it("is unchanged on a pull request whose first Verdict is the pass on its head", () => {
+    expect(digestFactsOf(aThread({ kitComments: [aVerdict(5, { verdict: "pass", headSha: sha("a"), change: FIRST })] })).productCode).toEqual({ kind: "unchanged" });
+  });
+
+  it("could not be established while the latest Verdict is no pass, there being no pass on the head to compare", () => {
+    const thread = aThread({
+      kitComments: [aVerdict(5, { verdict: "pass", headSha: sha("a"), change: FIRST }), aVerdict(15, { verdict: "execution-flaw", headSha: sha("b"), change: FIRST })],
+    });
+
+    expect(digestFactsOf(thread).productCode).toEqual({ kind: "not-established" });
+    expect(digestFactsOf(aThread()).productCode).toEqual({ kind: "not-established" });
+  });
+});
+
+describe("How many Retries are left", () => {
+  const flaw = (minute: number, head: string, more: Partial<VerdictRecord> = {}) => aVerdict(minute, { verdict: "execution-flaw", headSha: sha(head), ...more });
+  const flakyLine = aNote(8, flakyCheckMarker({ headSha: sha("a"), checks: ["test"], countedBack: true }), "The Flaky check passed on a re-run.");
+
+  const THREADS: readonly (readonly [string, DigestThread, number])[] = [
+    ["both, on a pull request with no Execution flaw", aThread({ kitComments: [aVerdict(5, { verdict: "pass", headSha: sha("a") })] }), 2],
+    ["one, after an Execution flaw that called for a Retry", aThread({ kitComments: [flaw(5, "a"), aRetryPush(10, sha("b")), aVerdict(15, { verdict: "pass", headSha: sha("b") })] }), 1],
+    ["none, after two", aThread({ kitComments: [flaw(5, "a"), flaw(15, "b"), aVerdict(25, { verdict: "pass", headSha: sha("c") })] }), 0],
+    ["none, never fewer, after a third flaw", aThread({ kitComments: [flaw(5, "a"), flaw(15, "b"), flaw(25, "c")] }), 0],
+    ["one fewer for each run that landed nothing before the pull request opened", aThread({ kitComments: [flaw(5, "a")], landedNothing: 1 }), 0],
+    ["both, after a flaw that gave way to the Operator's Request changes", aThread({ kitComments: [flaw(5, "a", { requestChangesFirst: [8] })] }), 2],
+    ["both, after a flaw from a Flaky check that the Kit counted back", aThread({ kitComments: [flaw(5, "a", { source: "ci", checks: ["test"] }), flakyLine] }), 2],
+  ];
+
+  it.each(THREADS)("is %s", (_name, thread, left) => {
+    expect(digestFactsOf(thread).retriesLeft).toBe(left);
+  });
+
+  it.each(THREADS)("is what the Retry rules give the next Execution flaw on the same thread: %s", (_name, thread, left) => {
+    const snapshot = aPullRequest({ verdicts: verdictsIn(thread.kitComments.map(({ body }) => body)), ticketLandedNothing: thread.landedNothing });
+
+    const next = retryAfterFlaw(snapshot, null);
+
+    // The rules give the next flaw Retry 1 of 2 with both left, Retry 2 of 2 with one, and none with none.
+    expect(next?.line.slice(0, "Retry 1 of 2".length) ?? null).toBe(left === 0 ? null : `Retry ${3 - left} of 2`);
+  });
+});
+
+describe("The Follow-ups of every pass on the pull request", () => {
+  const REPO = "https://github.com/acme/shop";
+  const RATE_LIMIT = { title: "Rate limit the cart", body: "Saving has no limit.\n\nA shopper can save a thousand times a second." };
+  const DEAD_CODE = { title: "Delete the old basket page", body: "" };
+  const COPY = { title: "Say 'basket' in the emails", body: "They still say cart." };
+  /** A pass whose comment lists these Follow-ups after its findings, as the Kit posts one (src/loop/followUps.ts). */
+  const aPassNaming = (minute: number, head: string, followUps: readonly FollowUp[]) =>
+    aVerdict(minute, { verdict: "pass", headSha: sha(head) }, ["", "### Checked", "", "Every criterion.", ...followUpsSection(followUps, REPO, 50), "", "[The run](https://github.com/acme/shop/actions/runs/42/attempts/1)"].join("\n"));
+
+  it("are listed in the order their Verdicts name them, each with an id, its title and its Open as issue link as the Verdict has it", () => {
+    const thread = aThread({
+      kitComments: [aPassNaming(5, "a", [RATE_LIMIT, DEAD_CODE]), aRebase(10), aPassNaming(15, "b", [COPY])],
+    });
+
+    const { followUps } = digestFactsOf(thread);
+
+    expect(followUps).toEqual([
+      { id: "f1", title: "Rate limit the cart", url: newIssueUrl(REPO, RATE_LIMIT.title, RATE_LIMIT.body, "From PR #50") },
+      { id: "f2", title: "Delete the old basket page", url: newIssueUrl(REPO, DEAD_CODE.title, DEAD_CODE.body, "From PR #50") },
+      { id: "f3", title: "Say 'basket' in the emails", url: newIssueUrl(REPO, COPY.title, COPY.body, "From PR #50") },
+    ]);
+    expect(followUps[0]?.url).toMatch(/^https:\/\/github\.com\/acme\/shop\/issues\/new\?title=Rate\+limit\+the\+cart&body=Saving\+has\+no\+limit\./);
+    expect(thread.kitComments[0]?.body).toContain(`[Open as issue](${followUps[0]?.url})`);
+  });
+
+  it("are none on a pull request whose passes name none", () => {
+    expect(digestFactsOf(aThread({ kitComments: [aPassNaming(5, "a", [])] })).followUps).toEqual([]);
+    expect(digestFactsOf(aThread()).followUps).toEqual([]);
+  });
+
+  it("are never taken from a Verdict that is no pass, whatever its findings quote", () => {
+    const quoting = aVerdict(5, { verdict: "execution-flaw", headSha: sha("a") }, ["", "The cart throws.", ...followUpsSection([RATE_LIMIT], REPO, 50)].join("\n"));
+
+    expect(digestFactsOf(aThread({ kitComments: [quoting] })).followUps).toEqual([]);
   });
 });
