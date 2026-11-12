@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
+import {
+  anIssue,
+  aPullRequest,
+  aTicket,
+  dispatchSnapshotOf,
+  HEAD_SHA,
+  kitConfig,
+  notificationsOf,
+  snapshotOf,
+  snapshotOfPullRequest,
+  verdictsPostedIn,
+} from "../__fixtures__/snapshots.ts";
+import { leftDraftSinceVerdictIn, type PullRequestHistoryItem, verdictsIn } from "../github/threads.ts";
 import { digestCommentOf, noDigestLine } from "./digestContract.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot } from "./types.ts";
@@ -179,5 +191,143 @@ describe("The Digest: the Merge gate opens when the attempt ends", () => {
 
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "comment", issue: 50, body: line }, ...THE_GATE_OPENS] });
     expect(notificationsOf(plan, "jrey")).toEqual(["review request on #50"]);
+  });
+
+  describe("dropped: nothing is posted, the label comes off and the gate stays closed", () => {
+    const dropped = [
+      // It gets a Review of its own, whose pass brings the next Digest.
+      ["a head the PR has moved on from", aPassedDraft({ headSha: "b".repeat(40) })],
+      // That run lands first.
+      ["a PR with a run now in flight", aPassedDraft({ conflictRunInFlight: "c".repeat(40) })],
+      // It has no gate.
+      ["a closed PR", aPassedDraft({ open: false })],
+    ] as const;
+
+    it.each(dropped)("a Digest for %s", (_what, pullRequest) => {
+      expect(actionsOf(landedOn(pullRequest))).toEqual([{ kind: "remove-label", issue: 50, label: "agent:digest" }]);
+    });
+
+    it.each(dropped)("a failed attempt for %s", (_what, pullRequest) => {
+      expect(actionsOf(failedOn(pullRequest))).toEqual([{ kind: "remove-label", issue: 50, label: "agent:digest" }]);
+    });
+  });
+
+  describe("only once for a pass", () => {
+    const opened = [
+      // As when the Operator added the label by hand.
+      ["a PR already at the Merge gate", aPassedDraft({ draft: false, leftDraftSinceVerdict: true })],
+      ["a PR the Operator put back in draft after the gate opened", aPassedDraft({ draft: true, leftDraftSinceVerdict: true })],
+    ] as const;
+
+    it.each(opened)("on %s a Digest is posted and the label comes off, and nothing else moves: no second review request", (_what, pullRequest) => {
+      const plan = landedOn(pullRequest);
+
+      expect(actionsOf(plan).map(({ kind }) => kind)).toEqual(["comment", "remove-label"]);
+      expect(notificationsOf(plan, "jrey")).toEqual([]);
+    });
+
+    it.each(opened)("on %s the no-Digest line is posted and the label comes off, and nothing else moves", (_what, pullRequest) => {
+      const plan = failedOn(pullRequest);
+
+      expect(actionsOf(plan)).toEqual([
+        { kind: "comment", issue: 50, body: noDigestLine({ head: HEAD_SHA, how: "failed", runUrl: RUN }) },
+        { kind: "remove-label", issue: 50, label: "agent:digest" },
+      ]);
+      expect(notificationsOf(plan, "jrey")).toEqual([]);
+    });
+  });
+});
+
+/** PR #50 for Ticket #7 from its first Review on, each plan landed on it as the adapter would, and read back as the snapshot reads it. */
+class Thread {
+  readonly history: PullRequestHistoryItem[] = [];
+  draft = true;
+  labels: string[] = [];
+  /** How many times the Operator's review was requested. */
+  reviewRequests = 0;
+  private minute = 0;
+
+  private at(): string {
+    this.minute += 1;
+    return new Date(Date.UTC(2026, 10, 9, 5, this.minute)).toISOString();
+  }
+
+  pullRequest(): PullRequestSnapshot {
+    const comments = this.history.flatMap((item) => (item.kind === "bot-comment" ? [item.body] : []));
+    return aPullRequest({ draft: this.draft, labels: this.labels, verdicts: verdictsIn(comments), leftDraftSinceVerdict: leftDraftSinceVerdictIn(this.history) });
+  }
+
+  /** The Loop's plan for this event on the PR as it stands, landed. */
+  plan(event: LoopEvent): Plan {
+    const plan = planFor(event, snapshotOfPullRequest(this.pullRequest(), { operator: "jrey" }), kitConfig());
+    for (const action of actionsOf(plan)) {
+      if (action.kind === "comment" && action.issue === 50) this.history.push({ kind: "bot-comment", at: this.at(), body: action.body });
+      if (action.kind === "add-labels" && action.issue === 50) this.labels = [...this.labels, ...action.labels];
+      if (action.kind === "remove-label" && action.issue === 50) this.labels = this.labels.filter((label) => label !== action.label);
+      if (action.kind === "mark-ready-for-review") this.setDraft(false);
+      if (action.kind === "request-review") this.reviewRequests += 1;
+    }
+    return plan;
+  }
+
+  /** The PR goes to draft or comes out of it, as the Operator or a plan has it. */
+  setDraft(draft: boolean): void {
+    this.draft = draft;
+    this.history.push({ kind: draft ? "draft" : "ready", at: this.at() });
+  }
+
+  /** The Operator adds `agent:digest` by hand, and the Loop hears of it. */
+  labelledByHand(): Plan {
+    this.labels = [...this.labels, "agent:digest"];
+    return this.plan({ kind: "pull-request-labeled", pullRequest: 50, label: "agent:digest" });
+  }
+}
+
+describe("The Digest: a pass, its Digest and the gate, on one PR", () => {
+  it("the pass leaves a labelled draft with no review asked, and the Digest opens the gate with the one review request", () => {
+    const thread = new Thread();
+
+    thread.plan(reviewed("verdict: pass\n\nLooks good."));
+    expect(thread).toMatchObject({ draft: true, labels: ["agent:digest"], reviewRequests: 0 });
+
+    // The label the pass added starts the Digest writer at the head the pass was given on.
+    expect(actionsOf(thread.plan({ kind: "pull-request-labeled", pullRequest: 50, label: "agent:digest" }))).toMatchObject([
+      { kind: "start-agent-run", role: "digest", issue: 50, headSha: HEAD_SHA },
+    ]);
+
+    thread.plan(written());
+    expect(thread).toMatchObject({ draft: false, labels: [], reviewRequests: 1 });
+  });
+
+  it("a second Digest for the same pass, asked for by hand at the gate or after the Operator put the PR back in draft, requests no second review", () => {
+    const thread = new Thread();
+    thread.plan(reviewed("verdict: pass\n\nLooks good."));
+    thread.plan(written());
+
+    expect(actionsOf(thread.labelledByHand())).toMatchObject([{ kind: "start-agent-run", role: "digest" }]);
+    thread.plan(written());
+    expect(thread).toMatchObject({ draft: false, labels: [], reviewRequests: 1 });
+
+    thread.setDraft(true);
+    expect(actionsOf(thread.labelledByHand())).toMatchObject([{ kind: "start-agent-run", role: "digest" }]);
+    thread.plan(written());
+    expect(thread).toMatchObject({ draft: true, labels: [], reviewRequests: 1 });
+  });
+
+  it("a passed draft waiting on its Digest holds its max_in_flight slot, as every agent draft does, until the gate opens", () => {
+    const oneAtATime = kitConfig({ maxInFlight: 1 });
+    /** A Dispatch check with Ticket #12 ready, counting #50 while it is a draft. */
+    const dispatch = (thread: Thread): Plan =>
+      planFor({ kind: "dispatch-check" }, dispatchSnapshotOf([aTicket({ number: 12 })], { openAgentDraftPullRequests: thread.draft ? 1 : 0 }), oneAtATime);
+    const thread = new Thread();
+
+    thread.plan(reviewed("verdict: pass\n\nLooks good."));
+    expect(dispatch(thread)).toEqual({
+      kind: "nothing",
+      reason: "max_in_flight is 1 and 1 are in flight (1 open agent draft PR, 0 Implement runs in progress, 0 dispatched and waiting), so #12 wait",
+    });
+
+    thread.plan(written());
+    expect(dispatch(thread)).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 12, labels: ["agent:implement"] }] });
   });
 });
