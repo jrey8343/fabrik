@@ -35,7 +35,8 @@ describe("The Digest's comment", () => {
   it("is rendered from the reply's fields and Kit code's facts: the hidden first line naming the head and the asks answered, an opening line, the four sections, the folds line and the four folds, and a link to the run", () => {
     expect(bodyOf(aReply())).toBe(
       [
-        `<!-- fabrik:digest {"head":"${HEAD}","asks":[]} -->`,
+        `<!-- fabrik:digest {"head":"${HEAD}","asks":[],"carriedFrom":null} -->`,
+        `<!-- fabrik:digest-data {"v":1,"items":[],"whatItDoes":"A shopper can now save their basket from /basket. A saved basket keeps its prices for a day.","howItGotHere":"One Review passed it at the first head.","followUps":[]} -->`,
         `**Digest** of #50, written as of [\`aaaaaaa\`](https://github.com/acme/shop/pull/50/commits/${HEAD}).`,
         "",
         "### Needs your eyes",
@@ -106,7 +107,7 @@ describe("The Digest's comment", () => {
   it("names its head on its first line, which reads back", () => {
     const body = bodyOf(aReply());
 
-    expect(digestMarkIn(body)).toEqual({ head: HEAD, asks: [] });
+    expect(digestMarkIn(body)).toEqual({ head: HEAD, asks: [], carriedFrom: null });
     expect(isDigestComment(body)).toBe(true);
   });
 

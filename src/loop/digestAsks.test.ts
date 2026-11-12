@@ -371,7 +371,7 @@ describe("Needs your eyes, a Digest's first section", () => {
     const body = bodyOf(aDigestReply({ asks: FOUR_ANSWERS, items: [] }));
 
     expect(needsYourEyesOf(body)).toBe("Nothing.");
-    expect(body.split("\n").slice(1, 6)).toEqual([expect.stringMatching(/^\*\*Digest\*\* of #50/), "", "### Needs your eyes", "", "Nothing."]);
+    expect(body.split("\n").slice(2, 7)).toEqual([expect.stringMatching(/^\*\*Digest\*\* of #50/), "", "### Needs your eyes", "", "Nothing."]);
     expect(body.indexOf("### Needs your eyes")).toBeLessThan(body.indexOf("### What it does"));
   });
 
@@ -390,7 +390,8 @@ describe("Needs your eyes, a Digest's first section", () => {
       "- **The empty basket's wording is new.** It now reads \"Nothing saved yet\". Only you can say whether a shopper should read that.",
       "- **No picture of the saved basket.** The page changed and nothing shows it.",
     ]);
-    expect(body).not.toContain("Add a screenshot of the saved basket.");
+    // It is in the hidden data line alone, for a reader of the data (src/loop/digestPlaces.test.ts).
+    expect(body.split("\n").slice(2).join("\n")).not.toContain("Add a screenshot of the saved basket.");
   });
 
   it("takes every mention out of an item", () => {
@@ -451,20 +452,20 @@ describe("A Digest's hidden first line", () => {
   it("carries the ids of Kit code's asks the Digest answered, after its head, and never a criterion's", () => {
     const body = bodyOf(aDigestReply({ asks: [aCriterion(1), ...FOUR_ANSWERS, aCriterion(2)] }));
 
-    expect(body.split("\n")[0]).toBe(`<!-- fabrik:digest {"head":"${HEAD}","asks":["review-8","review-11","inline-12","inline-13"]} -->`);
-    expect(digestMarkIn(body)).toEqual({ head: HEAD, asks: ["review-8", "review-11", "inline-12", "inline-13"] });
+    expect(body.split("\n")[0]).toBe(`<!-- fabrik:digest {"head":"${HEAD}","asks":["review-8","review-11","inline-12","inline-13"],"carriedFrom":null} -->`);
+    expect(digestMarkIn(body)).toEqual({ head: HEAD, asks: ["review-8", "review-11", "inline-12", "inline-13"], carriedFrom: null });
   });
 
   it("carries an empty list on a pull request the Operator never requested changes on", () => {
     const body = bodyOf(aDigestReply(), aDigestGiven());
 
-    expect(body.split("\n")[0]).toBe(`<!-- fabrik:digest {"head":"${HEAD}","asks":[]} -->`);
-    expect(digestMarkIn(body)).toEqual({ head: HEAD, asks: [] });
+    expect(body.split("\n")[0]).toBe(`<!-- fabrik:digest {"head":"${HEAD}","asks":[],"carriedFrom":null} -->`);
+    expect(digestMarkIn(body)).toEqual({ head: HEAD, asks: [], carriedFrom: null });
   });
 
   it("reads back as answering no ask when it records none, as a Digest from before the asks were listed does", () => {
-    expect(digestMarkIn(`<!-- fabrik:digest {"head":"${HEAD}"} -->\n**Digest** of #50`)).toEqual({ head: HEAD, asks: [] });
-    expect(digestMarkIn(`<!-- fabrik:digest {"head":"${HEAD}","asks":"review-8"} -->\n**Digest** of #50`)).toEqual({ head: HEAD, asks: [] });
+    expect(digestMarkIn(`<!-- fabrik:digest {"head":"${HEAD}"} -->\n**Digest** of #50`)).toEqual({ head: HEAD, asks: [], carriedFrom: null });
+    expect(digestMarkIn(`<!-- fabrik:digest {"head":"${HEAD}","asks":"review-8"} -->\n**Digest** of #50`)).toEqual({ head: HEAD, asks: [], carriedFrom: null });
   });
 });
 
@@ -560,7 +561,7 @@ describe("The README's Digest section, on Needs your eyes", () => {
   it("gives the comment's first line as the contract writes it", () => {
     const firstLine = (bodyOf(aDigestReply({ asks: FOUR_ANSWERS })).split("\n")[0] ?? "").replace(/"[0-9a-f]{40}"/, "…").replace(/\[[^\]]*\]/, "[…]");
 
-    expect(firstLine).toBe('<!-- fabrik:digest {"head":…,"asks":[…]} -->');
+    expect(firstLine).toBe('<!-- fabrik:digest {"head":…,"asks":[…],"carriedFrom":null} -->');
     expect(section).toContain(`\`${firstLine}\``);
   });
 });

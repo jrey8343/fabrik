@@ -24,12 +24,24 @@ export interface DigestMark {
    * head, so a later list can be compared with this one.
    */
   readonly asks: readonly string[];
+  /** On a Digest carried forward when only `main` moved: the head it was first written at, a full sha. Null on one written fresh. */
+  readonly carriedFrom: string | null;
 }
 
-/** A Digest comment's hidden first line, such as `<!-- fabrik:digest {"head":"…","asks":["review-8"]} -->`. */
-export function digestMarker({ head, asks }: DigestMark): string {
-  return `${DIGEST_MARKER} ${markerJson({ head, asks })} -->`;
+/** A Digest comment's hidden first line, such as `<!-- fabrik:digest {"head":"…","asks":["review-8"],"carriedFrom":null} -->`. */
+export function digestMarker({ head, asks, carriedFrom }: DigestMark): string {
+  return `${DIGEST_MARKER} ${markerJson({ head, asks, carriedFrom })} -->`;
 }
+
+/** What a Digest comment's hidden second line opens with: its data line. */
+export const DIGEST_DATA_MARKER = "<!-- fabrik:digest-data";
+
+/**
+ * The version of the data line this release writes, and the only one its
+ * reader knows. It goes up only when a field is removed or changes meaning:
+ * a field added leaves it where it is.
+ */
+export const DIGEST_DATA_VERSION = 1;
 
 /** The hidden line the Digest's folds sit under: everything from it down is the folds. */
 export const DIGEST_FOLDS_MARKER = "<!-- fabrik:digest-folds -->";
@@ -91,13 +103,18 @@ function firstLineOf(body: string, marker: string): Record<string, unknown> | nu
 
 /**
  * What a Digest comment's first line names, or null for any other comment:
- * its head, and the asks it answered, none when the line records none. Only
- * a comment the Fabrik App wrote is a Digest: the caller checks that.
+ * its head; the asks it answered, none when the line records none; and the
+ * head it was carried forward from, null when the line records none. Only a
+ * comment the Fabrik App wrote is a Digest: the caller checks that.
  */
 export function digestMarkIn(body: string): DigestMark | null {
-  const { head, asks } = firstLineOf(body, DIGEST_MARKER) ?? {};
+  const { head, asks, carriedFrom } = firstLineOf(body, DIGEST_MARKER) ?? {};
   if (typeof head !== "string") return null;
-  return { head, asks: Array.isArray(asks) && asks.every((id) => typeof id === "string") ? asks : [] };
+  return {
+    head,
+    asks: Array.isArray(asks) && asks.every((id) => typeof id === "string") ? asks : [],
+    carriedFrom: typeof carriedFrom === "string" ? carriedFrom : null,
+  };
 }
 
 /** The head and how a no-Digest line's first line names, or null for any other comment. */
@@ -452,9 +469,12 @@ export interface DigestDataItem {
  * The top of a Digest as data: what Kit code renders above the folds, as
  * the fields it rendered them from. The asks an item names are checked
  * before the Digest lands and are not here, and the four folds carry no
- * data.
+ * data. It is the read library's Digest type: a reader draws the Digest
+ * from it and never parses the Markdown.
  */
 export interface DigestData {
+  readonly v: typeof DIGEST_DATA_VERSION;
+  /** Needs your eyes, in the order shown. None is the "Nothing" case. */
   readonly items: readonly DigestDataItem[];
   readonly whatItDoes: string;
   readonly howItGotHere: string;
@@ -472,6 +492,7 @@ export interface DigestData {
  */
 function digestDataOf(reply: DigestReply, { facts, head }: Pick<DigestGiven, "facts" | "head">): DigestData {
   return {
+    v: DIGEST_DATA_VERSION,
     items: digestItemsOf(reply).map(({ kind, claim, sentence, places, suggestedRequest }) => ({
       kind,
       claim: oneLine(claim),
@@ -484,6 +505,98 @@ function digestDataOf(reply: DigestReply, { facts, head }: Pick<DigestGiven, "fa
     howItGotHere: shown(reply.howItGotHere),
     followUps: facts.followUps.filter(({ id }) => reply.followUps.includes(id)).map(({ title, url }) => ({ title: withoutMentions(title), url })),
   };
+}
+
+/**
+ * A Digest comment's hidden second line: the whole top of the Digest as one
+ * line of JSON, such as `<!-- fabrik:digest-data {"v":1,"items":[…],…} -->`.
+ * Kit code writes it from the same fields it renders the top from
+ * (digestTop), so neither is ever parsed from the other. It is spelled as
+ * the Kit's text-carrying markers are, so no text in it can close the
+ * comment early or mention anyone.
+ */
+export function digestDataMarker(data: DigestData): string {
+  return `${DIGEST_DATA_MARKER} ${markerJson(data)} -->`;
+}
+
+function isPlace(value: unknown): value is DigestPlace {
+  if (!isObject(value)) return false;
+  const { path, start, end, as, inDiff, fingerprint } = value;
+  return typeof path === "string" && Number.isInteger(start) && Number.isInteger(end) && PLACE_KINDS.some((kind) => kind === as) && typeof inDiff === "boolean" && typeof fingerprint === "string";
+}
+
+function isDataItem(value: unknown): value is DigestDataItem {
+  if (!isObject(value)) return false;
+  const { kind, claim, sentence, places, picture, suggestedRequest } = value;
+  return (
+    ITEM_KINDS.some((one) => one === kind) &&
+    typeof claim === "string" &&
+    typeof sentence === "string" &&
+    Array.isArray(places) &&
+    places.every(isPlace) &&
+    (picture === null || typeof picture === "string") &&
+    (suggestedRequest === null || typeof suggestedRequest === "string")
+  );
+}
+
+/** Whether a value has every field of a data line at this release's version, each of its type. A field it does not know is no fault: a later release may add one. */
+function isDigestData(value: Record<string, unknown>): boolean {
+  const { v, items, whatItDoes, howItGotHere, followUps } = value;
+  return (
+    v === DIGEST_DATA_VERSION &&
+    Array.isArray(items) &&
+    items.every(isDataItem) &&
+    typeof whatItDoes === "string" &&
+    typeof howItGotHere === "string" &&
+    Array.isArray(followUps) &&
+    followUps.every((followUp) => isObject(followUp) && typeof followUp["title"] === "string" && typeof followUp["url"] === "string")
+  );
+}
+
+/**
+ * A Digest's comment, read back: the head it is written as of, the asks it
+ * answered and the head it was carried forward from, from its first line;
+ * its data, from its second; and its folds, the Markdown from the folds
+ * line down, the run's link included. Or why it gives none of them.
+ */
+export type DigestCommentRead =
+  | { readonly ok: true; readonly head: string; readonly asks: readonly string[]; readonly carriedFrom: string | null; readonly data: DigestData; readonly folds: string }
+  | {
+      readonly ok: false;
+      /**
+       * `not-a-digest`: the comment's first line is no Digest's. `no-data`:
+       * no data line is under it, as on a Digest written before the line
+       * was. `malformed`: the data line does not parse, or is not the shape
+       * its version names. `unknown-version`: it is at a version this
+       * release does not know.
+       */
+      readonly why: "not-a-digest" | "no-data" | "malformed" | "unknown-version";
+    };
+
+/**
+ * Reads a Digest's comment back from its text. The data comes from the
+ * hidden second line alone, and the head, the asks and the carry from the
+ * first: nothing is ever read, or guessed, from the Markdown, which is only
+ * handed on as the folds. Only a comment the Fabrik App wrote is a Digest:
+ * the caller checks that, as for the first line (digestMarkIn).
+ */
+export function readDigestComment(body: string): DigestCommentRead {
+  const mark = digestMarkIn(body);
+  if (mark === null) return { ok: false, why: "not-a-digest" };
+  const lines = body.split("\n");
+  const second = lines[1] ?? "";
+  if (!second.startsWith(`${DIGEST_DATA_MARKER} `) || !second.endsWith(" -->")) return { ok: false, why: "no-data" };
+  let value: unknown;
+  try {
+    value = JSON.parse(second.slice(DIGEST_DATA_MARKER.length + 1, -" -->".length));
+  } catch {
+    return { ok: false, why: "malformed" };
+  }
+  if (!isObject(value) || typeof value["v"] !== "number") return { ok: false, why: "malformed" };
+  if (value["v"] !== DIGEST_DATA_VERSION) return { ok: false, why: "unknown-version" };
+  if (!isDigestData(value)) return { ok: false, why: "malformed" };
+  const foldsLine = lines.indexOf(DIGEST_FOLDS_MARKER);
+  return { ok: true, ...mark, data: value as unknown as DigestData, folds: foldsLine === -1 ? "" : lines.slice(foldsLine + 1).join("\n") };
 }
 
 /** Where a Digest is: the Product repo's web address, its pull request, and the head it is written as of, a full sha. */
@@ -699,7 +812,8 @@ export function digestCommentOf(reply: DigestReply, given: DigestGiven): DigestC
   if (refusals.length > 0) return { ok: false, refused: refusals.join("; ") };
   const data = digestDataOf(reply, given);
   const body = [
-    digestMarker({ head: headSha, asks: facts.asks.map(({ id }) => id) }),
+    digestMarker({ head: headSha, asks: facts.asks.map(({ id }) => id), carriedFrom: null }),
+    digestDataMarker(data),
     digestTop(data, given),
     "",
     DIGEST_FOLDS_MARKER,

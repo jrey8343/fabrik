@@ -7,6 +7,7 @@
 // this module, and the read library and the carry-forward are to read a
 // place's lines through it, so it imports no package and no Node built-in a
 // Worker can't load. Pure.
+import { createHash } from "node:crypto";
 
 /** What a place is shown as: code, or words an End user reads. */
 export const PLACE_KINDS = ["code", "words"] as const;
@@ -61,11 +62,46 @@ export function isRepoPath(path: string): boolean {
 }
 
 /**
+ * A file's lines: its text split at each line break, a break after the last
+ * line starting no line of its own. A file with no text has none, and one
+ * that is not text, told as Git tells it by a NUL character, has none a
+ * place could point at.
+ */
+export function linesOf(text: string): string[] {
+  if (text === "" || text.includes("\u0000")) return [];
+  const lines = text.split(/\r?\n/);
+  return text.endsWith("\n") ? lines.slice(0, -1) : lines;
+}
+
+/**
+ * The lines `start` to `end` of a file, both included, the first line being
+ * 1, or null when the file has no such range: its first line is before the
+ * file's first or after its last, or its last line is past the file's end.
+ */
+export function linesAt(lines: readonly string[], { start, end }: Pick<NamedPlace, "start" | "end">): string[] | null {
+  if (start < 1 || start > end || end > lines.length) return null;
+  return lines.slice(start - 1, end);
+}
+
+/**
+ * A place's fingerprint: the first 12 hex characters of the SHA-256 of its
+ * lines, joined by newlines. A reader that fetches the lines again checks
+ * them against it, and a carried Digest finds its lines again by it.
+ */
+export function fingerprintOf(lines: readonly string[]): string {
+  return createHash("sha256").update(lines.join("\n"), "utf8").digest("hex").slice(0, 12);
+}
+
+/**
  * A place as a Digest carries it, or null when it does not resolve in the
- * head, and is dropped.
+ * head, and is dropped: its file is not in the head, its lines run past the
+ * end of the file, or its first line is after its last. A wrong line number
+ * costs its item that one link and never the Digest.
  */
 export function placeAt(named: NamedPlace, head: DigestHead): DigestPlace | null {
   const text = head.files.find(({ path }) => path === named.path)?.text ?? null;
-  if (text === null) return null;
-  return { ...named, inDiff: false, fingerprint: "" };
+  const lines = text === null ? null : linesAt(linesOf(text), named);
+  if (lines === null) return null;
+  const { path, start, end, as } = named;
+  return { path, start, end, as, inDiff: false, fingerprint: fingerprintOf(lines) };
 }
