@@ -94,7 +94,13 @@ export type { StoreFacts } from "./store.ts";
 
 // The join with runs
 
+export { joinRuns } from "./joinRuns.ts";
+
 // The Required checks
+
+export { joinChecks } from "./joinChecks.ts";
+export { headsToCheck, readRequiredChecks, requiredChecksFactOf } from "./requiredChecks.ts";
+export type { HeadCheck, RequiredChecksRead } from "./requiredChecks.ts";
 
 // The caller read
 
@@ -114,6 +120,9 @@ export { runwayOf } from "./runway.ts";
 export type { Runway } from "./runway.ts";
 
 // The issues to roll in by hand
+
+export { readIssuesToRollIn } from "./rollIn.ts";
+export type { IssuesToRollIn, IssueToRollIn } from "./rollIn.ts";
 
 // Outcomes
 

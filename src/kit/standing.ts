@@ -96,7 +96,8 @@ type WaitingOnKitDetail = { readonly silence: WaitingOnKitSilence; readonly roun
 
 /** What each name's wording is made of: numbers, labels, check names and logins, never a repo's text. */
 export interface StandingDetails {
-  readonly running: { readonly run: string; readonly retry: number | null };
+  /** `run` is the kind of run and `retry` its Retry number; `actionsRun` is its Actions run's number (#621). */
+  readonly running: { readonly run: string; readonly retry: number | null; readonly actionsRun: number };
   readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean };
   /**
    * A Held run's role and the Carrier its newest held marker is on; or, for an
@@ -257,9 +258,12 @@ export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: stri
   return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github)
     .map((standing) => withHead(standing, facts.github))
     .map((standing) => standingAt(standing, now))
-    .toSorted(
-    (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
-  );
+    .toSorted(standingOrder);
+}
+
+/** The order the rule gives a repo's Standings in: oldest first, then by issue, then by pull request. */
+export function standingOrder(a: Standing, b: Standing): number {
+  return Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0);
 }
 
 /**

@@ -50,18 +50,24 @@ import {
   GitHubError,
   gitHubMessageOf,
   hasUnknownCostBasis,
+  headsToCheck,
   homeFactsOf,
   isLive,
+  joinChecks,
+  joinRuns,
   KIT_SAID_VERSION,
   kitSaidIn,
   newerSchemaOf,
   readCaller,
   readOutcomes,
+  readIssuesToRollIn,
   readKitConfigSources,
   readRunRecord,
+  readRequiredChecks,
   readRuns,
   readSpend,
   refusalOf,
+  requiredChecksFactOf,
   resolveKitConfig,
   rowsOf,
   RUN_RECORD_SCHEMA,
@@ -85,6 +91,9 @@ import type {
   CallerRead,
   CostFigure,
   Facts,
+  HeadCheck,
+  IssuesToRollIn,
+  IssueToRollIn,
   KitConfig,
   KitConfigResult,
   KitConfigSources,
@@ -94,6 +103,7 @@ import type {
   ReadClient,
   RepoRead,
   Repo,
+  RequiredChecksRead,
   Row,
   RunInFlight,
   RunKind,
@@ -226,6 +236,16 @@ const A_RUNS_READ = {
   runs: [A_RUN_IN_FLIGHT],
   tick: { lastStartedAt: "2026-11-09T11:55:00Z" },
 } as const satisfies RunsRead;
+
+/** `owner/product`'s Required checks read at NOW: `main` holds admins to its rules and requires `test`, which passed on Plain pull request 70's head. */
+const A_CHECKS_READ = {
+  repo: "owner/product",
+  branch: "main",
+  readAt: NOW,
+  required: ["test"],
+  holdsAdmins: "yes",
+  heads: { ["p".repeat(40)]: [{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-09T11:30:00Z" }] },
+} as const satisfies RequiredChecksRead;
 
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
@@ -482,14 +502,44 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   rowsOf: () =>
     rowsOf(
       homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
-      "unread",
-      {},
+      A_RUNS_READ,
+      A_CHECKS_READ,
       NOW,
     ),
 
   // The join with runs
 
+  joinRuns: () =>
+    joinRuns(
+      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null }],
+      { ...A_RUNS_READ, runs: [{ ...A_RUN_IN_FLIGHT, issue: 7, pullRequest: null, kind: "first", retry: null }] },
+      NOW,
+    ),
+
   // The Required checks
+
+  headsToCheck: () =>
+    headsToCheck(
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, NOW),
+    ),
+  joinChecks: () =>
+    joinChecks(
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, NOW),
+      A_CHECKS_READ,
+      NOW,
+    ),
+  readRequiredChecks: () =>
+    readRequiredChecks(
+      REFUSING_CLIENT,
+      "owner/product",
+      ["p".repeat(40)],
+      NOW,
+    ),
+  requiredChecksFactOf: () =>
+    requiredChecksFactOf(
+      A_CHECKS_READ,
+      "p".repeat(40),
+    ),
 
   // The caller read
 
@@ -558,6 +608,15 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     ),
 
   // The issues to roll in by hand
+
+  readIssuesToRollIn: () =>
+    readIssuesToRollIn(
+      REFUSING_CLIENT,
+      "owner/product",
+      { standing: { ...A_KEPT_STANDING, pullRequest: 50 }, related: [], mentions: [{ issue: 40, title: "The cart is slow" }] },
+      1,
+      "fabrik-app[bot]",
+    ),
 
   // Outcomes
 
@@ -633,6 +692,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     release: "v3.1.0",
     operator: "owner",
     kitConfig: { ok: true, config: DEFAULT_KIT_CONFIG },
+    uiBlock: "no",
     facts: homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
     unread: null,
   } satisfies RepoRead,
@@ -644,6 +704,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     mentions: [{ issue: 40, title: "The cart is slow" }],
     relatedTo: 51,
     followUps: [{ title: "Cache the prices", body: "The prices are read on every request.", filedAs: 30 }],
+    ticketClosed: null,
   } satisfies Row,
   StoreFacts: {
     kind: "store",
@@ -664,6 +725,9 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The join with runs
 
   // The Required checks
+
+  HeadCheck: { name: "test", is: "never-reported", url: null, at: null } satisfies HeadCheck,
+  RequiredChecksRead: A_CHECKS_READ satisfies RequiredChecksRead,
 
   // The caller read
 
@@ -700,6 +764,16 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   Runway: { kind: "runs-out", at: "2026-11-11T05:00:00.000Z", heldUntil: "2026-11-13T04:00:00.000Z" } satisfies Runway,
 
   // The issues to roll in by hand
+
+  IssuesToRollIn: {
+    page: 1,
+    issues: [
+      { issue: 40, title: "The cart is slow", mentions: true },
+      { issue: 41, title: "Round the totals", mentions: false },
+    ],
+    more: false,
+  } satisfies IssuesToRollIn,
+  IssueToRollIn: { issue: 40, title: "The cart is slow", mentions: true } satisfies IssueToRollIn,
 
   // Outcomes
 

@@ -14,7 +14,7 @@ import { pagesOf, type ReadClient, type Repo } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
-import { type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
+import { KIT_CONFIG_PATH, type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type { GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
 import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
@@ -65,8 +65,14 @@ export interface RepoReadProduct {
   readonly release: string | null;
   /** The Operator: the Kit config's `operator`, else the repo's owner. */
   readonly operator: string;
-  /** The Kit's own answer: the resolved Kit config, or its errors. */
+  /** The Kit's own answer: the resolved Kit config, or its errors, one of which says so when it could not be read. */
   readonly kitConfig: KitConfigResult;
+  /**
+   * Whether its Kit config has a `ui` block: "no" for `ui: null` or none, so
+   * that nothing is captured and no Prototype is offered there; "unknown"
+   * when the Kit config is invalid or could not be read.
+   */
+  readonly uiBlock: "yes" | "no" | "unknown";
   /** Null when they could not be read. */
   readonly facts: Facts | null;
   /** Why the facts could not be read, or null when they were. */
@@ -108,6 +114,12 @@ export interface CrossReferenceFacts {
   readonly repo: string;
 }
 
+/** Whether an open agent pull request's Ticket is closed, as GitHub gives it with the pull request. */
+export interface TicketStateFacts {
+  readonly ticket: number;
+  readonly closed: boolean;
+}
+
 /**
  * What a gather reads of one Product repo: the facts the Standing rule reads,
  * and what a reader shows beside a Standing. Plain data: written as JSON and
@@ -128,6 +140,8 @@ export interface Facts {
   readonly mergedLastDay: readonly MergedLastDayFacts[];
   /** The issues GitHub cross-references to each open agent pull request. */
   readonly crossReferences: readonly CrossReferenceFacts[];
+  /** Whether each open agent pull request's Ticket is closed; a Ticket GitHub gave no state of is not here. */
+  readonly ticketStates: readonly TicketStateFacts[];
 }
 
 /**
@@ -136,8 +150,9 @@ export interface Facts {
  * its own few facts instead (./store.ts). For any other repo, first its
  * caller workflow at its default branch's head: with none that pins the Kit
  * it is no Product repo, and nothing more is read. Otherwise the release it
- * pins, its Operator and its Kit config, whatever happens to the rest; then
- * its facts, null with why when a query of them fails. `appLogin`, the Fabrik
+ * pins, its Operator, its Kit config and whether that has a `ui` block,
+ * whatever happens to the rest; then its facts, null with why when a query of
+ * them fails or the Kit config could not be read. `appLogin`, the Fabrik
  * App's bot login, may be left out: any bot's text is then taken for the
  * App's, as the Kit job does.
  */
@@ -150,15 +165,30 @@ export async function gatherRepo(client: ReadClient, repo: string, now: string, 
   const caller = branch === null ? null : await client.fileText(at, CALLER_PATH, branch.target.oid);
   if (branch === null || caller === null || fabrikRefsIn(caller).length === 0) return { repo, product: false, store: false };
   const pins = checkCallerWorkflow(caller);
-  const kitConfig = resolveKitConfig(await readKitConfigSources(client, at, branch.target.oid));
+  const release = pins.ok ? pins.release : null;
+  let kitConfig: KitConfigResult;
+  try {
+    kitConfig = resolveKitConfig(await readKitConfigSources(client, at, branch.target.oid));
+  } catch (error) {
+    // With no Kit config to read the repo by, none of its facts are read either.
+    const why = messageOf(error);
+    const unreadConfig = { ok: false, errors: [`${KIT_CONFIG_PATH} could not be read: ${why}`] } as const;
+    return { repo, product: true, release, operator: repository.owner.login, kitConfig: unreadConfig, uiBlock: "unknown", facts: null, unread: why };
+  }
   const operator = (kitConfig.ok ? kitConfig.config.operator : null) ?? repository.owner.login;
-  const product = { repo, product: true, release: pins.ok ? pins.release : null, operator, kitConfig } as const;
+  const uiBlock = !kitConfig.ok ? "unknown" : kitConfig.config.ui === null ? "no" : "yes";
+  const product = { repo, product: true, release, operator, kitConfig, uiBlock } as const;
   try {
     const kit = { repo, branch: branch.name, config: kitConfig };
     return { ...product, facts: await gatherFacts(client, at, kit, operator, appLogin, now), unread: null };
   } catch (error) {
-    return { ...product, facts: null, unread: error instanceof Error ? error.message : String(error) };
+    return { ...product, facts: null, unread: messageOf(error) };
   }
+}
+
+/** What a failed read says of why it failed. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** The facts of one Product repo, as of `now`. */
@@ -239,6 +269,11 @@ async function gatherFacts(
           : [{ pullRequest: number, issue: source.number, title: source.title ?? "", open: source.state === "OPEN", repo: source.repository?.nameWithOwner ?? "" }],
       ),
     ),
+    ticketStates: agent.flatMap(({ closingIssuesReferences }) => {
+      // The Ticket is the first issue an agent pull request closes, as the Weekly summary's mapping takes it.
+      const ticket = closingIssuesReferences.nodes[0];
+      return ticket?.state === undefined ? [] : [{ ticket: ticket.number, closed: ticket.state === "CLOSED" }];
+    }),
   };
 }
 

@@ -14,7 +14,7 @@
     "stuckAt": null,
     "awaits": { "role": "implement", "on": "issue" },
     "subscription": null,
-    "detail": { "run": "implement", "retry": null }
+    "detail": { "run": "implement", "retry": null, "actionsRun": 1 }
   },
   "waiting-on-checks": {
     "schema": 1,

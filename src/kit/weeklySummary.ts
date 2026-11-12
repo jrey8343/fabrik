@@ -218,6 +218,13 @@ export interface PlainPullRequestFacts {
 export interface RequiredCheckFact {
   readonly name: string;
   readonly is: "passed" | "running" | "failing" | "never-reported";
+  /**
+   * When the report that decides it was made, ISO 8601, null for a check
+   * never reported. The read library's Required checks read gives it; the
+   * Weekly summary's read leaves it out, and its Plain Standings stand since
+   * the pull request's head.
+   */
+  readonly at?: string | null;
 }
 
 /** Each Required check the Kit config lists, on one head, in the order it lists them; or the whole fact unread. */
