@@ -665,6 +665,17 @@ describe("The Retro's prompt", () => {
     for (const line of [escapes, sample]) expect(line).toContain("Ticket, with its title and body as it stands now");
   });
 
+  it("calls each run's transcript in the evidence its trimmed transcript, as the bundle's field does", async () => {
+    const text = await prompt("retro");
+    const evidence = section(text, "The evidence").split("\n");
+    const item = (heading: string) => evidence.find((line) => line.startsWith(`- "${heading}"`)) ?? "";
+
+    expect(item(RETRO_SECTIONS.escapes)).toContain("the last passing Review run on the PR with its trimmed transcript.");
+    expect(item(RETRO_SECTIONS.lowScores)).toContain("and the run's trimmed transcript.");
+    expect(item(RETRO_SECTIONS.sample)).toContain("its Verdicts, Run records and trimmed transcripts,");
+    expect(section(text, "Tracing an escape")).toContain("read the passing Review run's trimmed transcript beside");
+  });
+
   it("traces each escape, from its passing Review run's transcript, to the gate that should have caught it", async () => {
     const tracing = section(await prompt("retro"), "Tracing an escape");
     expect(tracing).toContain("transcript");

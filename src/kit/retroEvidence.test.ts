@@ -45,8 +45,8 @@ import {
 } from "./retroEvidence.ts";
 import { judgePrompt } from "./scorerPrompt.ts";
 
-/** The digest of `transcript` that the judge reads in its prompt: the body of the prompt's one fenced transcript block. */
-function theJudgesDigestOf(transcript: readonly string[]): string {
+/** The trimmed transcript of `transcript` that the judge reads in its prompt: the body of the prompt's one fenced transcript block. */
+function asTheJudgeReads(transcript: readonly string[]): string {
   const { prompt } = judgePrompt({ transcript, ticket: { title: "A Ticket", body: "" }, run: { kind: "first", retry: 0, timedOut: false }, brief: null, rubrics: [] });
   const [block] = [...prompt.matchAll(/^(`{3,})text\n([\s\S]*?)\n\1$/gm)];
   if (block?.[2] === undefined) throw new Error("The judge prompt holds no transcript block");
@@ -442,7 +442,7 @@ describe("the evidence bundle", () => {
             { ref: "runs/owner/product/2026-11/1002-1-implement.json", record: retry },
             { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass },
           ],
-          lastPassingReview: { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass, digest: null },
+          lastPassingReview: { ref: "runs/owner/product/2026-11/1003-1-review.json", record: lastPass, trimmedTranscript: null },
         },
         { ref: "#51", number: 51, title: "Build the thing", ticket: null, records: [], lastPassingReview: null },
       ]);
@@ -481,7 +481,7 @@ describe("the evidence bundle", () => {
       expect(evidenceTicketsOf(input).toSorted((a, b) => a - b)).toEqual([7, 10]);
     });
 
-    it("carries the last passing Review record's transcript digest, the one the judge reads, or none when the store has no transcript", () => {
+    it("carries the last passing Review record's trimmed transcript, the one the judge reads, or none when the store has no transcript", () => {
       const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
       const review = aRecordWithTranscript({ runId: 1001, role: "review", pullRequest: 50, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
       const untranscribed = aRunRecord({ runId: 1002, role: "review", pullRequest: 51, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
@@ -496,11 +496,11 @@ describe("the evidence bundle", () => {
           }),
         }),
       );
-      const [withDigest, withNone, withLost] = escapes[0]?.pullRequests ?? [];
-      expect(withDigest?.lastPassingReview?.digest).toBe(theJudgesDigestOf(transcript));
-      expect(withDigest?.lastPassingReview?.digest).toContain('#1 Read {"file_path":"src/cart.ts"}\n#1 result: export const cart = [];');
-      expect(withNone?.lastPassingReview?.digest).toBeNull();
-      expect(withLost?.lastPassingReview?.digest).toBeNull();
+      const [withTranscript, withNone, withLost] = escapes[0]?.pullRequests ?? [];
+      expect(withTranscript?.lastPassingReview?.trimmedTranscript).toBe(asTheJudgeReads(transcript));
+      expect(withTranscript?.lastPassingReview?.trimmedTranscript).toContain('#1 Read {"file_path":"src/cart.ts"}\n#1 result: export const cart = [];');
+      expect(withNone?.lastPassingReview?.trimmedTranscript).toBeNull();
+      expect(withLost?.lastPassingReview?.trimmedTranscript).toBeNull();
     });
 
     it("never holds another repo's Run records, though they name the same Ticket and PR", () => {
@@ -763,7 +763,7 @@ describe("the evidence bundle", () => {
     const failing = aScoreEntry({ score: 0.4, pass: false, label: "re-reads", rationale: "Read src/cart.ts four times (#2, #5, #9, #12)." });
     const passing = aScoreEntry({ scorer: "ticket-compliance", threshold: 0.8, score: 0.9, label: "compliant", rationale: "Built what was asked." });
 
-    it("holds each score file whose run ended in the window with a failing entry, by its score path, with every entry and the run's transcript digest", () => {
+    it("holds each score file whose run ended in the window with a failing entry, by its score path, with every entry and the run's trimmed transcript", () => {
       const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
       const flailed = aRecordWithTranscript({ runId: 1000, endedAt: "2026-11-03T00:00:00Z" });
       const clean = aRecordWithTranscript({ runId: 1001, endedAt: "2026-11-03T00:00:00Z" });
@@ -787,7 +787,7 @@ describe("the evidence bundle", () => {
       expect(lowScores).toEqual([
         {
           ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json",
-          run: { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: flailed, digest: theJudgesDigestOf(transcript) },
+          run: { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: flailed, trimmedTranscript: asTheJudgeReads(transcript) },
           entries: [
             { scorer: "efficiency", score: 0.4, pass: false, label: "re-reads", rationale: "Read src/cart.ts four times (#2, #5, #9, #12)." },
             { scorer: "ticket-compliance", score: 0.9, pass: true, label: "compliant", rationale: "Built what was asked." },
@@ -796,7 +796,7 @@ describe("the evidence bundle", () => {
       ]);
     });
 
-    it("goes by when a run was scored when the store holds no record of it, and gives it no digest", () => {
+    it("goes by when a run was scored when the store holds no record of it, and gives it no trimmed transcript", () => {
       const { lowScores } = evidenceBundle(
         aRetroEvidenceInput({
           scoreFiles: {
@@ -859,7 +859,7 @@ describe("the evidence bundle", () => {
       expect(sampled).toBeLessThan(250);
     });
 
-    it("carries each sampled PR's Ticket with its title and body, its Verdicts as the Fabrik App posted them, and the agent runs on its Ticket with their transcripts' digests", () => {
+    it("carries each sampled PR's Ticket with its title and body, its Verdicts as the Fabrik App posted them, and the agent runs on its Ticket with their trimmed transcripts", () => {
       const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
       const implement = aRecordWithTranscript({ runId: 1000, issue: 7, pullRequest: 12, endedAt: "2026-11-01T00:00:00Z" });
       const review = aRecordWithTranscript({ runId: 1001, role: "review", issue: 7, pullRequest: 12, verdict: "pass", endedAt: "2026-11-02T00:00:00Z" });
@@ -896,9 +896,9 @@ describe("the evidence bundle", () => {
           ticket: { ref: "#7", number: 7, title: "Build the cart", body: "A cart that totals its lines." },
           verdicts: [{ verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: verdict.body }],
           records: [
-            { ref: "runs/owner/product/2026-10/999-1-implement.json", record: untranscribed, digest: null },
-            { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: implement, digest: theJudgesDigestOf(transcript) },
-            { ref: "runs/owner/product/2026-11/1001-1-review.json", record: review, digest: theJudgesDigestOf(transcript) },
+            { ref: "runs/owner/product/2026-10/999-1-implement.json", record: untranscribed, trimmedTranscript: null },
+            { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: implement, trimmedTranscript: asTheJudgeReads(transcript) },
+            { ref: "runs/owner/product/2026-11/1001-1-review.json", record: review, trimmedTranscript: asTheJudgeReads(transcript) },
           ],
         },
       ]);
@@ -1120,16 +1120,16 @@ describe("the evidence bundle", () => {
     const CUT = /\[… \d+ characters cut …\]/;
     const GONE = /^\[… \d+ characters cut …\]$/;
     type Left = "whole" | "cut" | "gone" | "missing";
-    const leftOfDigest = (digest: string | null | undefined): Left =>
-      digest == null ? "missing" : GONE.test(digest) ? "gone" : CUT.test(digest) ? (digest.includes('#1 Read {"file_path":') ? "cut" : "gone") : "whole";
+    const leftOfTranscript = (text: string | null | undefined): Left =>
+      text == null ? "missing" : GONE.test(text) ? "gone" : CUT.test(text) ? (text.includes('#1 Read {"file_path":') ? "cut" : "gone") : "whole";
     const leftOfPatch = (cut: string | undefined): Left => (cut === patch ? "whole" : cut !== undefined && GONE.test(cut) ? "gone" : "cut");
     function leftIn(bundle: EvidenceBundle) {
       const push = bundle.feedback.flatMap(({ items }) => items).find((item) => item.kind === "push");
       return {
-        sample: leftOfDigest(bundle.sample[0]?.records[0]?.digest),
-        lowScores: leftOfDigest(bundle.lowScores[0]?.run?.digest),
+        sample: leftOfTranscript(bundle.sample[0]?.records[0]?.trimmedTranscript),
+        lowScores: leftOfTranscript(bundle.lowScores[0]?.run?.trimmedTranscript),
         patches: leftOfPatch(push?.kind === "push" ? push.patch : undefined),
-        escapes: leftOfDigest(bundle.escapes[0]?.pullRequests[0]?.lastPassingReview?.digest),
+        escapes: leftOfTranscript(bundle.escapes[0]?.pullRequests[0]?.lastPassingReview?.trimmedTranscript),
       };
     }
 
@@ -1152,7 +1152,7 @@ describe("the evidence bundle", () => {
       expect(bundle.trimmed).toBe(true);
     });
 
-    it("reads each run's transcript from the store once, however often it digests it again to fit", () => {
+    it("reads each run's transcript from the store once, however often it trims it again to fit", () => {
       const reads: string[] = [];
       const counting = (path: string) => {
         reads.push(path);
@@ -1165,9 +1165,9 @@ describe("the evidence bundle", () => {
       expect(reads.toSorted()).toEqual([sampled, lowScoring, passingReview].map(({ transcript }) => transcript).toSorted());
     });
 
-    it("keeps a cut transcript's tool calls, as the judge's digest does, until it has to cut the transcript whole", () => {
-      const digest = overBy(30_000).sample[0]?.records[0]?.digest ?? "";
-      expect(digest).toMatch(/^#1 Read \{"file_path":"src\/sampled.ts"\}\n#1 result: s+\[… \d+ characters cut …\]s+$/m);
+    it("keeps a cut transcript's tool calls, as the judge's trimmed transcript does, until it has to cut the transcript whole", () => {
+      const cut = overBy(30_000).sample[0]?.records[0]?.trimmedTranscript ?? "";
+      expect(cut).toMatch(/^#1 Read \{"file_path":"src\/sampled.ts"\}\n#1 result: s+\[… \d+ characters cut …\]s+$/m);
     });
 
     it("never cuts refs, Verdicts, review comments or the streak table, however far over it is", () => {
