@@ -565,7 +565,8 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
     current !== null &&
     current.required_pull_request_reviews !== null &&
     bypassAllowances(current).length === 0 &&
-    listedChecks.every((check) => requiredChecks(current).includes(check));
+    listedChecks.every((check) => requiredChecks(current).includes(check)) &&
+    current.enforce_admins;
   if (satisfied) return [];
   const checks = found.required_status_checks;
   // Empty lists take away any bypass. GitHub rejects the field (HTTP 422) on a

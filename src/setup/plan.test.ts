@@ -608,8 +608,18 @@ describe("Branch protection", () => {
     expect(plan.notes).toContain("main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again.");
   });
 
-  it("leaves protection alone when it already requires all of that", () => {
-    const state = aCleanProduct({ files: withChecks(["build"]), protection: aProtectedBranch(["build", "lint"]) });
+  it("holds admins to the rules of a branch that has everything else, changing nothing more", () => {
+    const found = aProtectedBranch(["build", "lint"], { required_linear_history: true });
+    const state = aCleanProduct({ files: withChecks(["build"]), protection: found });
+
+    const [action] = protects(state);
+
+    expect(action?.protection).toEqual({ ...found, enforce_admins: true });
+    expect(describeAction(action!)).toBe("protect main: admins held to the rules: no → yes; every other setting stays as it is");
+  });
+
+  it("leaves protection alone when it already requires all of that and holds admins to its rules", () => {
+    const state = aCleanProduct({ files: withChecks(["build"]), protection: aProtectedBranch(["build", "lint"], { enforce_admins: true }) });
 
     expect(protects(state)).toEqual([]);
   });
