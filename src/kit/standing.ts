@@ -11,6 +11,7 @@ import type { HandBack } from "../loop/handBacks.ts";
 import type { TriggerLabel } from "../loop/labels.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { type NotStartedSilence, notStartedStandingsOf } from "./standingClock.ts";
+import { silenceStandingsOf, type WaitingOnKitSilence } from "./standingSilence.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
 import { joinPairing, plainStandingsOf } from "./standingPlain.ts";
@@ -87,8 +88,11 @@ type NotStartedDetail =
   | { readonly silence: Exclude<NotStartedSilence, "retry">; readonly label: TriggerLabel }
   | { readonly silence: Extract<NotStartedSilence, "retry">; readonly label: null };
 
-/** What a `waiting-on-kit` Standing's wording is made of: nothing yet, until the rule builds one. */
-type WaitingOnKitDetail = Readonly<Record<never, never>>;
+/**
+ * What a `waiting-on-kit` Standing's wording is made of: which silence it is
+ * (src/kit/standingSilence.ts), and for an answered Round, its number.
+ */
+type WaitingOnKitDetail = { readonly silence: WaitingOnKitSilence; readonly round: number | null };
 
 /** What each name's wording is made of: numbers, labels, check names and logins, never a repo's text. */
 export interface StandingDetails {
@@ -230,6 +234,7 @@ export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: stri
     ...operatorStandingsOf(facts, now),
     ...inFlightStandingsOf(facts, now),
     ...notStartedStandingsOf(facts, now),
+    ...silenceStandingsOf(facts, now),
     ...plainStandingsOf(facts, now),
   ];
   return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github)

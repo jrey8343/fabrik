@@ -182,14 +182,15 @@ describe("work that goes on without the Operator", () => {
           },
           aKit([checks, aRunInFlight({ role: "review", pullRequest: 50 })]),
         );
-        expect(standings.map(({ pullRequest, name }) => ({ pullRequest, name }))).toEqual([
+        // The others wait on the Kit (#608).
+        expect(standings.filter(({ name }) => name !== "waiting-on-kit").map(({ pullRequest, name }) => ({ pullRequest, name }))).toEqual([
           { pullRequest: 50, name: "running" },
           { pullRequest: 53, name: "waiting-on-checks" },
         ]);
       });
 
       it("gives no draft waiting on checks with no wait for checks in flight", () => {
-        expect(standingsIn({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }, aKit([aRunInFlight({ role: "triage" })]))).toEqual([]);
+        expect(standingsIn({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }, aKit([aRunInFlight({ role: "triage" })])).filter(({ name }) => name === "waiting-on-checks")).toEqual([]);
       });
     });
 

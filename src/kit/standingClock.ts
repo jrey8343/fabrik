@@ -42,7 +42,7 @@ const ROLES_BEHIND: Readonly<Record<TriggerLabel, readonly AwaitedRole[]>> = {
  * Kit config wasn't read or is invalid. With the runs unread, no run is known.
  */
 export function notStartedStandingsOf(facts: StandingFacts, _now: string): Standing[] {
-  const bar = stuckBarMinutes(facts.kit?.config.ok === true ? facts.kit.config.config : DEFAULT_KIT_CONFIG);
+  const bar = barOf(facts);
   const runs = facts.kit === null || facts.kit.runsInFlight === "unread" ? [] : facts.kit.runsInFlight;
   return [
     // First, so a Retry is read as one, not as the agent:implement on its Ticket the Verdict added for it.
@@ -78,8 +78,13 @@ export function clockOf(since: string, issue: number | null, pullRequests: reado
   return signs.reduce((latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest), since);
 }
 
+/** The repo's Stuck bar in minutes, from its own Kit config, or the Kit's default timeouts' when it wasn't read or is invalid. */
+export function barOf({ kit }: Pick<StandingFacts, "kit">): number {
+  return stuckBarMinutes(kit?.config.ok === true ? kit.config.config : DEFAULT_KIT_CONFIG);
+}
+
 /** When a silence on the clock turns Stuck: the clock plus the repo's bar, in minutes. */
-function stuckAtOf(clock: string, bar: number): string {
+export function stuckAtOf(clock: string, bar: number): string {
   return new Date(Date.parse(clock) + bar * 60_000).toISOString();
 }
 

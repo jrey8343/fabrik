@@ -178,7 +178,7 @@ describe("a run that was asked for and never began", () => {
 
     it("leaves a pull request alone once agent:review came off it", () => {
       const pullRequest = anOpenPullRequest({ number: 50, ticket: 7, labelEvents: [aLabelAdded("agent:review", AT), aLabelAdded("agent:review", "2026-11-08T19:25:00Z", { action: "unlabeled" })] });
-      expect(standingsIn({ openPullRequests: [pullRequest] })).toEqual([]);
+      expect(standingsIn({ openPullRequests: [pullRequest] }).filter(({ name }) => name === "not-started")).toEqual([]);
     });
   });
 

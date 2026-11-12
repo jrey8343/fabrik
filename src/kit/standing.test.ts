@@ -95,7 +95,7 @@ describe("the Standing rule", () => {
           atTheGate(62, { comments: [passed, aVerdictComment("execution-flaw", HEAD, "2026-11-06T20:00:00Z")] }),
         ],
       });
-      expect(standings).toEqual([]);
+      expect(standings.filter(({ move }) => move === "operator")).toEqual([]);
     });
   });
 
@@ -623,7 +623,10 @@ describe("the Standing rule", () => {
           anOpenPullRequest({ number: 51, ticket: 8 }),
         ],
       });
-      expect(standings).toEqual([expect.objectContaining({ issue: 7, pullRequest: 50, work: "ready-for-human", name: "yours-to-do" })]);
+      expect(standings).toEqual([
+        expect.objectContaining({ issue: 8, pullRequest: 51, name: "stuck" }),
+        expect.objectContaining({ issue: 7, pullRequest: 50, work: "ready-for-human", name: "yours-to-do" }),
+      ]);
     });
 
     it("keeps two open agent PRs that close the same Ticket apart, the Ticket's own Standing going with the lower", () => {
@@ -753,7 +756,9 @@ describe("a Standing, as plain data", () => {
 
   it("has the fixture's fields, and its detail's, so removing or renaming one fails here", () => {
     for (const [name, kept] of Object.entries(fixture)) {
-      const standing = all().find((read) => read.name === name);
+      // A stuck Standing's detail is the name it was's: the fixture's is matched by its `was`.
+      const was = (kept.detail as { was?: string }).was;
+      const standing = all().find((read) => read.name === name && (was === undefined || ("was" in read.detail && read.detail.was === was)));
       if (standing === undefined) throw new Error(`no test above produces a ${name} Standing`);
       expect(Object.keys(kept).toSorted()).toEqual(Object.keys(standing).toSorted());
       expect(Object.keys(kept.detail as object).toSorted()).toEqual(Object.keys(standing.detail).toSorted());
