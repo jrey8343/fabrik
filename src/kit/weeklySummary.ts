@@ -1155,7 +1155,7 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
   const now = Date.parse(filedAt);
   const items = itemsIn(facts.repo, now);
   const { thisWeek } = weeksEndingAt(now, timeZone);
-  const standings = standingsOf({ kind: "product", github: facts, kit, operator, appLogin }, filedAt);
+  const standings = standingsOf({ kind: "product", github: facts, kit, operator, appLogin, runsEnded: [] }, filedAt);
   return {
     repo: facts.repo,
     invalidKitConfig: invalid,

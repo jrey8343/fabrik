@@ -34,6 +34,14 @@ export interface LabelEvent {
   readonly at: string;
 }
 
+/** A pull request going into draft or out of it, by whom and when. */
+export interface DraftEvent {
+  readonly kind: "draft" | "ready";
+  readonly actor: string;
+  /** ISO 8601. */
+  readonly at: string;
+}
+
 /** An issue a Ticket is blocked by. */
 export interface BlockerFacts {
   readonly number: number;
@@ -138,6 +146,8 @@ export interface OpenPullRequestFacts {
   /** Oldest first. */
   readonly comments: readonly CommentFacts[];
   readonly labelEvents: readonly LabelEvent[];
+  /** When it went into draft and out of it, and who did it, oldest first; absent where they weren't read. */
+  readonly draftEvents?: readonly DraftEvent[];
 }
 
 /** A commit on the default branch. */

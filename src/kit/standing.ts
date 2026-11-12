@@ -167,6 +167,17 @@ export interface StandingFacts {
   readonly operator: string;
   /** The Fabrik App's bot login. */
   readonly appLogin: string;
+  /** When a run on a piece of work ended, where the reader knows: the Weekly summary's gather reads only unfinished runs, so it gives none. */
+  readonly runsEnded: readonly RunEndedFact[];
+}
+
+/** A run that ended, on an issue or a pull request, and when: a sign from the Kit on that work. */
+export interface RunEndedFact {
+  readonly issue: number | null;
+  readonly pullRequest: number | null;
+  readonly role: AwaitedRole;
+  /** ISO 8601. */
+  readonly at: string;
 }
 
 /** Which piece of work a Standing is: its issue, or its pull request when it has no issue. */

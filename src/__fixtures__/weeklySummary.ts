@@ -343,7 +343,7 @@ export function anOpenMonitorIssue(overrides: Partial<MonitorIssueFacts> = {}): 
 
 /** What the Standing rule reads of `owner/product`: its GitHub facts, nothing in them unless a test says so, no Kit config read, and the Operator and the Fabrik App by login. */
 export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> = {}): StandingFacts {
-  return { kind: "product", github: factsOf(), kit: null, operator: "operator", appLogin: "fabrik-app[bot]", ...overrides };
+  return { kind: "product", github: factsOf(), kit: null, operator: "operator", appLogin: "fabrik-app[bot]", runsEnded: [], ...overrides };
 }
 
 /** An Implement run in flight on no Ticket the job names, running, its workflow run created an hour before the filing, unless a test says otherwise. */
