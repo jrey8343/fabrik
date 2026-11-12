@@ -154,7 +154,7 @@ describe("The checks before setup plans anything", () => {
 
   it("stop when the default branch here isn't the one on origin", async () => {
     expect(await problem({ [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` } })).toBe(
-      "main here isn't the same as on origin (4ae2317 here, 9f86d08 on origin). Pull or push so they match, then run setup again.",
+      "main here isn't the same as on origin (4ae2317 here, 9f86d08 on origin). Pull, or take the commits made here to origin through a pull request, then run setup again.",
     );
   });
 
