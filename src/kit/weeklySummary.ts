@@ -40,6 +40,7 @@ import {
   within,
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
+import { averageCostOf, BUILD_ROLES, costOf, costPerMergedPullRequestOf, endedBy } from "./mergedCost.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type PlainKind, type Standing, standingsOf, type StandingNamed } from "./standing.ts";
 import { givenUpWeeksOf, maxInFlightHoldOf } from "./standingInFlight.ts";
@@ -53,11 +54,13 @@ import {
   RUN_RECORD_SCHEMA,
   type RunRecord,
   runKey,
-  UNKNOWN_COST_BASIS,
   type UnreadableRunRecords,
   WEEKLY_LIMIT,
 } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
+
+// The sums of records' costs live with the cost per merged pull request (./mergedCost.ts).
+export { costOf, hasUnknownCostBasis } from "./mergedCost.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
 export type {
@@ -896,7 +899,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     records: records.length,
     cost,
     unknownCost,
-    costPerMergedPullRequest: costPerMergedPullRequestOf(week, input.records, merged),
+    costPerMergedPullRequest: costPerMergedPullRequestFigureOf(week, input.records, merged),
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
     weeklyLimit: lastWeeklyLimitOf(records),
@@ -1106,18 +1109,14 @@ function mean(values: readonly number[]): number | null {
   return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-/** The roles whose runs build a Ticket: Implement (Retries and Step-ups among them) and Review. */
-const BUILD_ROLES: readonly RunRecord["role"][] = ["implement", "review"];
-
-function costPerMergedPullRequestOf(week: Week, records: readonly RunRecord[], merged: readonly MergedAgentPullRequest[]): CostFigure {
-  const ended = endedBy(week, records);
-  const perPullRequest = merged.map(({ repo, pullRequest }) =>
-    ended.filter(
-      (record) =>
-        record.repo === repo && pullRequest.ticket !== null && record.issue === pullRequest.ticket && BUILD_ROLES.includes(record.role),
-    ),
+/** The cost per merged pull request by the shared figure (./mergedCost.ts), each pull request with the Ticket its `Closes #n` names. */
+function costPerMergedPullRequestFigureOf(week: Week, records: readonly RunRecord[], merged: readonly MergedAgentPullRequest[]): CostFigure {
+  const { usd, unknownCost } = costPerMergedPullRequestOf(
+    week,
+    records,
+    merged.map(({ repo, pullRequest }) => ({ repo, ticket: pullRequest.ticket })),
   );
-  return averageCostOf(perPullRequest);
+  return { usd, unknownCost };
 }
 
 function costPerSpecOf(week: Week, input: WeeklySummaryInput): CostFigure {
@@ -1164,17 +1163,6 @@ function leftDesignIn(week: Week, spec: SpecFacts, appLogin: string): boolean {
   );
 }
 
-/** Each group's summed cost, averaged over the groups, or null for no groups. */
-function averageCostOf(groups: readonly (readonly RunRecord[])[]): CostFigure {
-  const total = costOf(groups.flat());
-  return { usd: groups.length === 0 ? null : total.usd / groups.length, unknownCost: total.unknownCost };
-}
-
-/** The records that ended before the week did, whatever week they ended in. */
-function endedBy(week: Week, records: readonly RunRecord[]): RunRecord[] {
-  return records.filter((record) => Date.parse(record.endedAt) < week.end);
-}
-
 /** The latest weekly-limit reading among these records, sorted by when they ended, or null if none read one. */
 function lastWeeklyLimitOf(records: readonly RunRecord[]): RateLimitReading | null {
   return records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null;
@@ -1187,23 +1175,6 @@ function subscriptionsOf(records: readonly RunRecord[]): WeekMetrics["subscripti
     const its = records.filter((record) => record.subscription === subscription);
     return { subscription, cost: costOf(its).usd, weeklyLimit: lastWeeklyLimitOf(its) };
   });
-}
-
-/**
- * The summed cost of these records, leaving out (and counting) those whose
- * cost basis is unknown. A run with no cost figure at all, one that ended
- * without a result, such as a timeout, adds nothing and isn't counted.
- */
-export function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: number } {
-  return {
-    usd: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
-    unknownCost: records.filter(hasUnknownCostBasis).length,
-  };
-}
-
-/** Whether any of the run's models has an unknown cost basis, which leaves the run with no total (src/kit/runRecord.ts). */
-export function hasUnknownCostBasis(record: RunRecord): boolean {
-  return Object.values(record.modelUsage).some((usage) => usage.costBasis === UNKNOWN_COST_BASIS);
 }
 
 // Per repo: what waits on the Operator and what is stuck, as of the filing.
