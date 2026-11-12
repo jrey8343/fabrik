@@ -8,7 +8,6 @@
 // to a Round the session has moved past. Read only, with the reader's
 // credential.
 import type { ReadClient } from "../github/client.ts";
-import { ACTOR } from "../github/facts.ts";
 import { gatherOpenMaps, loginOf } from "../github/snapshot.ts";
 import { currentDesignSessionIn } from "../github/threads.ts";
 import type { KitConfigResult } from "../kit/config.ts";
@@ -18,6 +17,7 @@ import { NEEDS_DESIGN } from "../loop/labels.ts";
 import { mapOfferOf } from "../loop/mapCap.ts";
 import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, handBackMarkIn, refusedByMapCap } from "../loop/markers.ts";
 import { type RoundLine, roundLineIn } from "../loop/roundLine.ts";
+import { COMMENTS_WITH_IDS, type RawHomeComment } from "./homeQueries.ts";
 
 /** What waits on the Operator in one issue's Design session, as a Round read gives it. */
 export interface RoundRead {
@@ -81,7 +81,7 @@ const ISSUE_QUERY = `
         state
         labels(first: 100) { nodes { name } }
         parent { number }
-        comments(last: 100) { nodes { databaseId url body createdAt author ${ACTOR} } }
+        ${COMMENTS_WITH_IDS}
       }
     }
   }
@@ -92,15 +92,7 @@ interface RawIssue {
   state: "OPEN" | "CLOSED";
   labels: { nodes: { name: string }[] };
   parent: { number: number } | null;
-  comments: { nodes: RawComment[] };
-}
-
-interface RawComment {
-  databaseId: number;
-  url: string;
-  body: string;
-  createdAt: string;
-  author: { login: string; __typename: string } | null;
+  comments: { nodes: RawHomeComment[] };
 }
 
 /** A comment of the issue's, its author read as the Kit reads one. */

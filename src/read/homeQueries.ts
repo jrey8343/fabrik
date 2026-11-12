@@ -10,9 +10,9 @@
 import { ACTOR, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
 
 /** An issue's or a pull request's last 100 comments, as the Weekly summary reads them, with each one's id: a Prototype's round is known by its comment. */
-const COMMENTS = `comments(last: 100) { nodes { databaseId url body createdAt author ${ACTOR} } }`;
+export const COMMENTS_WITH_IDS = `comments(last: 100) { nodes { databaseId url body createdAt author ${ACTOR} } }`;
 
-/** A comment as COMMENTS reads it. */
+/** A comment as COMMENTS_WITH_IDS reads it. */
 export interface RawHomeComment {
   databaseId: number;
   url: string;
@@ -61,7 +61,7 @@ export const OPEN_PULL_REQUESTS_QUERY = `
           closingIssuesReferences(first: 10) { nodes { number state } }
           commits(last: 100) { nodes { ${COMMIT} } }
           ${REVIEWS}
-          ${COMMENTS}
+          ${COMMENTS_WITH_IDS}
           ${LABEL_EVENTS}
           ${DRAFT_EVENTS}
           ${CROSS_REFERENCES}
@@ -101,7 +101,7 @@ export const OPEN_ISSUES_QUERY = `
           number title state createdAt closedAt lastEditedAt body
           author ${ACTOR}
           labels(first: 50) { nodes { name } }
-          ${COMMENTS}
+          ${COMMENTS_WITH_IDS}
           ${LABEL_EVENTS}
           subIssues(first: 100) { nodes { number } }
         }
