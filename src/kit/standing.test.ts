@@ -280,6 +280,31 @@ describe("the Standing rule", () => {
       // Each waits on the Kit's next turn instead (#608).
       expect(standings.filter(({ move }) => move === "operator")).toEqual([]);
     });
+
+    it("gives no Design round to an issue that has left Design by hand, its last comment still a Round", () => {
+      const standings = standingsIn(
+        {
+          openIssues: [
+            anOpenIssue({ number: 12, labels: ["ready-for-agent"], comments: [aDesignRound(2, "2026-11-05T20:00:00Z")] }),
+            anOpenIssue({ number: 13, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z")], comments: [aDesignRound(3, "2026-11-05T20:00:00Z")] }),
+          ],
+        },
+        {
+          kit: {
+            repo: "owner/product",
+            branch: "main",
+            config: { ok: true, config: DEFAULT_KIT_CONFIG },
+            dispatch: null,
+            headChecks: {},
+            runsInFlight: [aRunInFlight({ issue: 12, createdAt: "2026-11-08T19:20:00Z" })],
+          },
+        },
+      );
+      expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([
+        { issue: 13, name: "yours-to-do" },
+        { issue: 12, name: "running" },
+      ]);
+    });
   });
 
   describe("a Subscription's issue", () => {

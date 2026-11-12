@@ -2347,7 +2347,7 @@ describe("the Weekly summary", () => {
       const body = bodyOf(
         factsOf({
           openIssues: [
-            anOpenIssue({ number: 12, title: "Design the thing", comments: [aDesignRound(2, hoursAgo(72))] }),
+            anOpenIssue({ number: 12, title: "Design the thing", labels: ["needs-design"], comments: [aDesignRound(2, hoursAgo(72))] }),
             readyForHuman(13, 30),
           ],
           openPullRequests: [anOpenPullRequest({ draft: false, comments: [aVerdictComment("pass", head, hoursAgo(5))] })],

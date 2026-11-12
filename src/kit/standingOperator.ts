@@ -119,14 +119,15 @@ function readingMatterOf({ repo, openAudits, openRetros, openReplays, openIssues
 }
 
 /**
- * A Design session whose last comment is the Fabrik App's Round, a prototype
- * round and a prototype's failure round included: the Operator's answer is
- * the next move, since the Round. Only the App's own comment counts, so
- * quoting a Round's marker fakes nothing.
+ * A `needs-design` issue whose last comment is the Fabrik App's Round, a
+ * prototype round and a prototype's failure round included: the Operator's
+ * answer is the next move, since the Round. Only the App's own comment
+ * counts, so quoting a Round's marker fakes nothing; one that has left Design
+ * by hand is read by its labels as they are now.
  */
 function designRoundStandingsOf(issue: OpenIssueFacts, repo: string, appLogin: string): StandingNamed<"design-round">[] {
   const last = issue.comments.at(-1);
-  if (last === undefined || !last.byBot || last.author !== appLogin) return [];
+  if (!issue.labels.includes(NEEDS_DESIGN) || last === undefined || !last.byBot || last.author !== appLogin) return [];
   const [first = "", second = ""] = last.body.split("\n", 2);
   const round = DESIGN_ROUND_MARKER.exec(first)?.[1];
   if (round === undefined) return [];
