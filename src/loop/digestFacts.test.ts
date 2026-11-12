@@ -445,7 +445,7 @@ describe("The Follow-ups a Digest shows", () => {
 describe("The rounds fold", () => {
   /** The folds of a Digest, each as GitHub is given it: everything under the folds line but the link to the run. */
   const foldsOf = (body: string) => (body.split(`\n${DIGEST_FOLDS_MARKER}\n`)[1] ?? "").split("\n\n[The run](")[0] ?? "";
-  const roundsFoldOf = (body: string) => foldsOf(body).slice(foldsOf(body).indexOf("<details>\n<summary>The rounds</summary>"));
+  const roundsFoldOf = (body: string) => `${foldsOf(body).slice(foldsOf(body).indexOf("<details>\n<summary>The rounds</summary>")).split("\n</details>")[0]}\n</details>`;
 
   it("is Kit code's table of the rounds from the thread, with who, what and the effect on the code, then the writer's closing line, and nothing else", () => {
     const facts = digestFactsOf(
@@ -464,7 +464,9 @@ describe("The rounds fold", () => {
       }),
     );
 
-    const body = bodyOf(aDigestReply({ roundsLine: "Both passes agree; the Request-changes run changed nothing the second Review weighed." }), aDigestGiven({ facts }));
+    // The thread's one Request changes is an ask, which a reply has to answer to land.
+    const asks = [{ id: "review-8", answer: "in-head", where: "src/basket/save.ts", checkedBy: "reading" }] as const;
+    const body = bodyOf(aDigestReply({ asks, roundsLine: "Both passes agree; the Request-changes run changed nothing the second Review weighed." }), aDigestGiven({ facts }));
 
     expect(roundsFoldOf(body)).toBe(
       [
@@ -490,15 +492,16 @@ describe("The rounds fold", () => {
     );
   });
 
-  it("comes third, inside a details block, after Walk me through it and Decided without you, and before the link to the run", () => {
+  it("comes third, inside a details block, after Walk me through it and Decided without you, and before the criteria and the link to the run", () => {
     const body = bodyOf(aDigestReply(), aDigestGiven());
 
     expect(foldsOf(body).match(/<summary>(.*)<\/summary>/g)).toEqual([
       "<summary>Walk me through it</summary>",
       "<summary>Decided without you, and left alone</summary>",
       "<summary>The rounds</summary>",
+      "<summary>The criteria and how each was checked</summary>",
     ]);
-    expect(foldsOf(body).endsWith(roundsFoldOf(body))).toBe(true);
+    expect(foldsOf(body)).toContain(`${roundsFoldOf(body)}\n\n<details>\n<summary>The criteria and how each was checked</summary>`);
     expect(body.endsWith(`</details>\n\n[The run](${aDigestGiven().runUrl})`)).toBe(true);
   });
 

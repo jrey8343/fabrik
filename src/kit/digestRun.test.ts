@@ -175,7 +175,7 @@ describe("The README's Digest section", () => {
 
   it("says what the label is honoured on, what the writer is, and the first line of the comment and of the no-Digest line, as the contract writes them", () => {
     const digest = digestCommentOf(aDigestReply(), aDigestGiven({ headSha: HEAD_SHA, runUrl: RUN }));
-    const firstLine = (body: string) => (body.split("\n")[0] ?? "").replace(/"[0-9a-f]{40}"/, "…").replace(/"how":"[a-z-]+"/, '"how":…');
+    const firstLine = (body: string) => (body.split("\n")[0] ?? "").replace(/"[0-9a-f]{40}"/, "…").replace(/"how":"[a-z-]+"/, '"how":…').replace(/"asks":\[[^\]]*\]/, '"asks":[…]');
 
     expect(section).toContain("- **The label**: adding `agent:digest` to an agent pull request");
     expect(section).toContain("whose latest Verdict is a pass on its current head");

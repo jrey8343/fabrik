@@ -287,9 +287,16 @@ describe("What the push job hands the Digest's contract", () => {
 
   it("is what the contract renders a Digest from, beside the writer's reply", async () => {
     const given = await readDigestGiven(gitHub(thread).client, repo, written);
-    const comment = digestCommentOf(aDigestReply(), given);
+    const comment = digestCommentOf(aDigestReply({ asks: [{ id: "review-8", answer: "in-head", where: "src/basket/save.ts", checkedBy: "reading" }] }), given);
 
     expect(comment).toMatchObject({ ok: true, body: expect.stringContaining(`[The run](${RUN})`) });
     expect(comment).toMatchObject({ body: expect.stringContaining("| The Kit | An Infrastructure failure | |") });
+    expect(comment).toMatchObject({ body: expect.stringContaining(`| Your [Request changes](${REVIEW_URL(8)}) | In the head | Reading | src/basket/save.ts |`) });
+  });
+
+  it("is what the contract refuses a reply against: one that skips an ask the push job read", async () => {
+    const given = await readDigestGiven(gitHub(thread).client, repo, written);
+
+    expect(digestCommentOf(aDigestReply(), given)).toEqual({ ok: false, refused: "the reply left an ask unanswered: `review-8`" });
   });
 });

@@ -109,7 +109,7 @@ describe("The Digest: landing", () => {
     const [comment] = actionsOf(landed(written({ output: JSON.stringify({ ...REPLY, decided: "- @operator decided nothing." }) })));
     const body = comment?.kind === "comment" ? comment.body : "";
 
-    expect(body.split("\n")[0]).toBe(`<!-- fabrik:digest {"head":"${HEAD_SHA}"} -->`);
+    expect(body.split("\n")[0]).toBe(`<!-- fabrik:digest {"head":"${HEAD_SHA}","asks":[]} -->`);
     expect(body).toContain("### What it does");
     expect(body).toContain("### How it got here");
     expect(body).toContain("<summary>Walk me through it</summary>");

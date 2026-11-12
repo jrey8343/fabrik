@@ -45,9 +45,15 @@ export function aRequestChanges(review: number, at: string, overrides: Partial<T
   };
 }
 
-/** A reply as the Digest writer emits one, keeping its shape: it shows no Follow-up. */
+/**
+ * A reply as the Digest writer emits one, keeping its shape: it answers the
+ * Ticket's one criterion as in the head, has nothing for the Operator's eyes
+ * and shows no Follow-up.
+ */
 export function aDigestReply(overrides: Partial<DigestReply> = {}): DigestReply {
   return {
+    asks: [{ id: "c1", criterion: "A shopper can save their basket from /basket.", answer: "in-head", where: "src/basket/save.test.ts", checkedBy: "test" }],
+    items: [],
     whatItDoes: "A shopper can now save their basket from /basket. A saved basket keeps its prices for a day.",
     howItGotHere: "One Review passed it at the first head. The product code is unchanged since that Verdict.",
     followUps: [],
