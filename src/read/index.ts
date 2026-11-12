@@ -90,6 +90,7 @@ export { gatherRepo } from "./gather.ts";
 export { rowsOf } from "./rows.ts";
 export type { Facts, RepoRead } from "./gather.ts";
 export type { Row } from "./rows.ts";
+export type { StoreFacts } from "./store.ts";
 
 // The join with runs
 

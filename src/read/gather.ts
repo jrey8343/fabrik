@@ -15,6 +15,7 @@ import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
 import { type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
+import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type { GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
 import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
@@ -28,6 +29,7 @@ import {
   REPO_QUERY,
   type RepoQueryResult,
 } from "./homeQueries.ts";
+import { gatherStore, type StoreFacts } from "./store.ts";
 
 /** How far back the merged agent pull requests reach. */
 const MERGED_REACH_MS = 24 * 60 * 60 * 1000;
@@ -37,6 +39,21 @@ export interface RepoReadNotProduct {
   /** `owner/name`. */
   readonly repo: string;
   readonly product: false;
+  readonly store: false;
+}
+
+/** The store beside the Run records (RUN_STORE): the release its caller pins, and the few facts the store's Standing rule reads (./store.ts). */
+export interface RepoReadStore {
+  /** `owner/name`. */
+  readonly repo: string;
+  readonly product: false;
+  readonly store: true;
+  /** The release the store's caller workflow pins, or null when it pins none exactly. */
+  readonly release: string | null;
+  /** Null when they could not be read. */
+  readonly facts: StoreFacts | null;
+  /** Why the facts could not be read, or null when they were. */
+  readonly unread: string | null;
 }
 
 /** A Product repo: what the Kit works out at its default branch's head, and its facts. */
@@ -57,7 +74,7 @@ export interface RepoReadProduct {
 }
 
 /** What a gather gives of one repo. */
-export type RepoRead = RepoReadNotProduct | RepoReadProduct;
+export type RepoRead = RepoReadNotProduct | RepoReadProduct | RepoReadStore;
 
 /** The repo's Kit config and what Dispatch weighs there: the Weekly summary's Kit facts but for the runs and the checks, which their own reads give. */
 export type KitFacts = Omit<RepoKitFacts, "runsInFlight" | "headChecks">;
@@ -114,7 +131,9 @@ export interface Facts {
 }
 
 /**
- * One repo, `owner/name`, read at `now`, ISO 8601, with `client`. First its
+ * One repo, `owner/name`, read at `now`, ISO 8601, with `client`. The store
+ * beside the Run records, known by the Kit's own constant for it, is read for
+ * its own few facts instead (./store.ts). For any other repo, first its
  * caller workflow at its default branch's head: with none that pins the Kit
  * it is no Product repo, and nothing more is read. Otherwise the release it
  * pins, its Operator and its Kit config, whatever happens to the rest; then
@@ -123,12 +142,13 @@ export interface Facts {
  * App's, as the Kit job does.
  */
 export async function gatherRepo(client: ReadClient, repo: string, now: string, appLogin: string | null = null): Promise<RepoRead> {
+  if (repo === RUN_STORE_REPO) return gatherStore(client, now, appLogin);
   const [owner = "", name = ""] = repo.split("/");
   const at: Repo = { owner, name };
   const { repository } = await client.graphql<RepoQueryResult>(REPO_QUERY, { owner, name });
   const branch = repository.defaultBranchRef;
   const caller = branch === null ? null : await client.fileText(at, CALLER_PATH, branch.target.oid);
-  if (branch === null || caller === null || fabrikRefsIn(caller).length === 0) return { repo, product: false };
+  if (branch === null || caller === null || fabrikRefsIn(caller).length === 0) return { repo, product: false, store: false };
   const pins = checkCallerWorkflow(caller);
   const kitConfig = resolveKitConfig(await readKitConfigSources(client, at, branch.target.oid));
   const operator = (kitConfig.ok ? kitConfig.config.operator : null) ?? repository.owner.login;

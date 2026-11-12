@@ -81,7 +81,7 @@ describe("a gather shaped for Home", () => {
     ] as const)("with %s is no Product repo, and nothing but its caller workflow is read", async (_what, raw) => {
       const { client, calls } = repoWith(raw);
 
-      expect(await gatherRepo(client, "jrey8343/shop", NOW)).toEqual({ repo: "jrey8343/shop", product: false });
+      expect(await gatherRepo(client, "jrey8343/shop", NOW)).toEqual({ repo: "jrey8343/shop", product: false, store: false });
       expect(calls.files).toEqual([CALLER_PATH]);
       expect(calls.queries).toHaveLength(1);
     });
@@ -89,7 +89,7 @@ describe("a gather shaped for Home", () => {
     it("with no default branch yet is no Product repo, and reads no file", async () => {
       const { client, calls } = repoWith({ branch: null, files: { [CALLER_PATH]: CALLER } });
 
-      expect(await gatherRepo(client, "jrey8343/shop", NOW)).toEqual({ repo: "jrey8343/shop", product: false });
+      expect(await gatherRepo(client, "jrey8343/shop", NOW)).toEqual({ repo: "jrey8343/shop", product: false, store: false });
       expect(calls.files).toEqual([]);
     });
   });
@@ -165,6 +165,25 @@ describe("a gather shaped for Home", () => {
 
     it("asks for no connection inside a connection inside a connection, the shape GitHub charges for", async () => {
       for (const query of await everyQuery()) expect(threeDeepConnectionsIn(query)).toEqual([]);
+    });
+
+    it("asks the store, known by the Kit's own constant for it, nothing it asks a Product repo, and reads it as the store", async () => {
+      const asked: string[] = [];
+      const store: ReadClient = {
+        rest: () => Promise.reject(new Error("The gather reads no REST")),
+        fileText: async () => "jobs:\n  summary:\n    uses: jrey8343/fabrik/.github/workflows/weekly-summary.yml@v3.1.0\n",
+        async graphql<T>(query: string): Promise<T> {
+          asked.push(query);
+          return { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } as T;
+        },
+      };
+
+      const read = await gatherRepo(store, "jrey8343/fabrik-runs", NOW);
+      const productQueries = await everyQuery();
+
+      expect(read).toMatchObject({ repo: "jrey8343/fabrik-runs", product: false, store: true, release: "v3.1.0", unread: null });
+      expect(asked.length).toBeGreaterThan(0);
+      expect(asked.filter((query) => productQueries.includes(query))).toEqual([]);
     });
   });
 
