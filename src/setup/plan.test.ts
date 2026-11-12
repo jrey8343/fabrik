@@ -669,6 +669,20 @@ describe("Branch protection", () => {
     expect(protects(afterApplying(state, plan))).toEqual([]);
   });
 
+  describe("as the README's entry under adopting the Kit tells it", () => {
+    const entry = () => readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n").find((l) => l.startsWith("- **Branch protection**")) ?? "";
+
+    it("names admins held to the rules among the settings Setup sets, with no flag or Kit config key for it", () => {
+      expect(entry()).toContain("admins held to the rules");
+      expect(entry()).toMatch(/no flag and no Kit config key/);
+    });
+
+    it("no longer keeps admin enforcement as found, or lets the Operator merge past the rules", () => {
+      expect(entry()).not.toMatch(/admin enforcement included/);
+      expect(entry()).not.toMatch(/merge past/);
+    });
+  });
+
   describe("a Kit config with Extra skills", () => {
     const config = JSON.stringify({ sandbox: { checks: ["build"] }, roles: { design: { skills: ["jrey8343/skills/event-storming"] } } });
     const pin = (repository: string) => JSON.stringify([{ repository, sha: "a".repeat(40) }]);
