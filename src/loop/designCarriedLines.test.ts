@@ -285,6 +285,76 @@ describe("A Design session's rewrite keeps the issue's From PR line, so the issu
       ].join("\n"),
     );
   });
+
+  it("ends the Operator brief and the Map with it too, since each rewrites the filed issue in place", () => {
+    for (const output of [operatorBrief, map]) {
+      expect(rewrittenBody(planFor(turnFinished(output), inSession(filedFollowUp), kitConfig()))?.split("\n").slice(-3)).toEqual([
+        "<sub>Written by the Fabrik Design session in the thread below. The original issue is in this issue's edit history.</sub>",
+        "",
+        "From PR #88",
+      ]);
+    }
+  });
+
+  it("ends the Spec that supersedes the issue with it, and gives the Tickets under it none", () => {
+    const plan = planFor(turnFinished(spec), inSession(filedFollowUp), kitConfig());
+
+    expect(createdBody(plan, "spec")).toBe(
+      [
+        "## Problem Statement",
+        "",
+        "Booking and billing share one module.",
+        "",
+        "<sub>Written by the Fabrik Design session on #7, which this Spec supersedes.</sub>",
+        "",
+        "From PR #88",
+      ].join("\n"),
+    );
+    expect(createdBody(plan, "ticket:split")).toBe("## What to build\n\nMove billing into its own module.");
+  });
+
+  it("carries it beside an Audit's line and an escape marker, all three in the order the old body has them", () => {
+    const plan = planFor(turnFinished(operatorBrief), inSession(`${filedFollowUp}\nFrom audit #40\n<!-- fabrik:escape strong #31 -->`), kitConfig());
+
+    expect(rewrittenBody(plan)?.split("\n").slice(-4)).toEqual(["", "From PR #88", "From audit #40", "<!-- fabrik:escape strong #31 -->"]);
+  });
+
+  it("carries it after an Audit's line and an escape marker when the old body has it last", () => {
+    const plan = planFor(turnFinished(agentBrief), inSession(`${filedCandidate}\nFrom PR #88`), kitConfig());
+
+    expect(rewrittenBody(plan)?.split("\n").slice(-4)).toEqual(["", "From audit #40", "<!-- fabrik:escape strong #31 #35 -->", "From PR #88"]);
+  });
+
+  it("carries the line even when the Operator indented it, writing it as the line alone", () => {
+    const plan = planFor(turnFinished(agentBrief), inSession("Work it out once.\n\n  From PR #88\t"), kitConfig());
+
+    expect(rewrittenBody(plan)?.split("\n").slice(-2)).toEqual(["", "From PR #88"]);
+  });
+
+  it("carries no From PR line quoted in a fenced code block", () => {
+    for (const fence of ["```", "~~~"]) {
+      const quoting = ["The link wrote:", "", fence, "From PR #88", fence, "", "Work it out once."].join("\n");
+
+      for (const output of [operatorBrief, agentBrief, spec, map]) {
+        expect(planFor(turnFinished(output), inSession(quoting), kitConfig())).toEqual(
+          planFor(turnFinished(output), inSession("Work it out once."), kitConfig()),
+        );
+      }
+    }
+  });
+
+  it.each([
+    ["text before the words", "As said, From PR #88"],
+    ["text after the words", "From PR #88 and the one before it"],
+    ["the words in a quote", "> From PR #88"],
+    ["no number a pull request could have", "From PR #0"],
+  ])("carries no line with %s, since only the whole line is the Kit's", (_, line) => {
+    for (const output of [operatorBrief, agentBrief, spec, map]) {
+      expect(planFor(turnFinished(output), inSession(`Work it out once.\n\n${line}`), kitConfig())).toEqual(
+        planFor(turnFinished(output), inSession(""), kitConfig()),
+      );
+    }
+  });
 });
 
 /** The body of the issue the plan creates under this key. */
