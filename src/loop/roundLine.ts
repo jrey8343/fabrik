@@ -35,7 +35,8 @@ export type RoundLine = {
   readonly asksMap?: true;
 };
 
-const ROUND_LINE = /^<!-- fabrik:round-line (.*) -->$/;
+/** The hidden line, its JSON captured; a comment whose lines come back ending in CRLF still reads, as JSON holds no bare `\r`. */
+const ROUND_LINE = /^<!-- fabrik:round-line (.*) -->\r?$/;
 
 /**
  * The hidden line that holds a Round's fields, as the Kit's markers that

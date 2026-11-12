@@ -22,6 +22,13 @@ describe("Reading a Round's hidden line", () => {
     expect(roundLineIn(roundWith(lineOf(byOperator)))).toEqual(byOperator);
   });
 
+  it("reads a Round whose lines come back ending in CRLF, as an edited comment's can", () => {
+    const crlf = roundWith(lineOf(FIELDS)).replaceAll("\n", "\r\n");
+
+    expect(roundLineIn(crlf)).toEqual(FIELDS);
+    expect(withoutRoundLines(crlf)).toBe(`${MARKER}\n${VISIBLE}`.replaceAll("\n", "\r\n"));
+  });
+
   it("ignores a key it doesn't know, so a later release may add one", () => {
     expect(roundLineIn(roundWith(lineOf({ ...FIELDS, later: "something", questions: [{ ...FIELDS.questions[0], why: "x" }] })))).toEqual(FIELDS);
   });
