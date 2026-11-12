@@ -2671,6 +2671,7 @@ describe("Gathering a Design-session turn's starting reply", () => {
       branch: "prototype/7",
       changes: { net: [], commits: [] },
       headSha: null,
+      captures: null,
       evidencePage: null,
       runUrl: "https://github.com/acme/shop/actions/runs/9100/attempts/1",
       repoUrl: "https://github.com/acme/shop",

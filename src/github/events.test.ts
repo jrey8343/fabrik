@@ -476,8 +476,8 @@ describe("A finished prototype turn", () => {
   /** Run 9100's push job, in acme/shop, with what the prototype job passed out. */
   const pushJob = (capture: Omit<CaptureOutputs, "timedOut"> & { timedOut?: boolean }) => ({ timedOut: false, ...capture, run: 9100, repoUrl: REPO });
 
-  it("carries the turn's output, unparsed, the request the Kit job built it on, the branch, what it changes and the head the push leaves, what capture recorded, and the Evidence page in the push job's own run", () => {
-    const event = prototypeEventFrom(result, request, { changes, head: HEAD }, pushJob({ result: captured, artifact: null, evidencePageArtifact: 9201 }), RUN);
+  it("carries the turn's output, unparsed, the request the Kit job built it on, the branch, what it changes and the head the push leaves, what capture recorded, its captures, and the Evidence page in the push job's own run", () => {
+    const event = prototypeEventFrom(result, request, { changes, head: HEAD }, pushJob({ result: captured, artifact: 9202, evidencePageArtifact: 9201 }), RUN);
 
     expect(event).toEqual({
       kind: "prototype-run-finished",
@@ -488,13 +488,21 @@ describe("A finished prototype turn", () => {
       changes,
       headSha: HEAD,
       capture: captured,
+      captures: { run: 9100, artifact: 9202 },
       evidencePage: `${REPO}/actions/runs/9100/artifacts/9201`,
       runUrl: RUN,
       repoUrl: REPO,
     });
   });
 
-  it("carries no capture result or Evidence page when the prototype job passed out none, and no head when the turn made no commit", () => {
+  // Capture recorded a result, but keeping the captures failed: the Evidence page may still have been kept.
+  it("carries no captures when the prototype job kept no artifact of them", () => {
+    const event = prototypeEventFrom(result, request, { changes, head: HEAD }, pushJob({ result: captured, artifact: null, evidencePageArtifact: 9201 }), RUN);
+
+    expect(event).toMatchObject({ kind: "prototype-run-finished", capture: captured, captures: null, evidencePage: `${REPO}/actions/runs/9100/artifacts/9201` });
+  });
+
+  it("carries no capture result, captures or Evidence page when the prototype job passed out none, and no head when the turn made no commit", () => {
     const event = prototypeEventFrom(
       result,
       request,
@@ -503,7 +511,7 @@ describe("A finished prototype turn", () => {
       RUN,
     );
 
-    expect(event).toMatchObject({ kind: "prototype-run-finished", headSha: null, evidencePage: null });
+    expect(event).toMatchObject({ kind: "prototype-run-finished", headSha: null, captures: null, evidencePage: null });
     expect(event).not.toHaveProperty("capture");
   });
 

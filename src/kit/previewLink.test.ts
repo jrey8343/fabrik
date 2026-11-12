@@ -221,6 +221,7 @@ describe("Linking each variant's preview in a prototype round", () => {
       branch: "prototype/7",
       changes: { net: VARIANTS.map(({ component }) => ({ path: component })), commits: [] },
       headSha: HEAD,
+      captures: { run: 9100, artifact: 9202 },
       evidencePage,
       runUrl: `${REPO}/actions/runs/9100/attempts/1`,
       repoUrl: REPO,

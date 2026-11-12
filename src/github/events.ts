@@ -306,6 +306,8 @@ export function prototypeEventFrom(
     changes: branch.changes,
     headSha: branch.head,
     ...(evidence.result === null ? {} : { capture: evidence.result }),
+    // The zipped captures, which the job uploads to its own run, the push job's too.
+    captures: evidence.artifact === null ? null : { run: evidence.run, artifact: evidence.artifact },
     evidencePage: evidencePageOf(evidence),
     runUrl,
     repoUrl: evidence.repoUrl,
