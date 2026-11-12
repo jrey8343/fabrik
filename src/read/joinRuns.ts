@@ -10,6 +10,7 @@ import type { RunInFlightFact } from "../github/snapshot.ts";
 import { type Standing, standingAt, type StandingNamed, standingOrder } from "../kit/standing.ts";
 import { type RunningRun, runningRunOf, runningSince } from "../kit/standingInFlight.ts";
 import type { WaitingOnKitSilence } from "../kit/standingSilence.ts";
+import { DESIGN_LABEL, REPLAY_TRIGGER_LABEL, type TriggerLabel } from "../loop/labels.ts";
 import type { Row } from "./rows.ts";
 import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 
@@ -39,19 +40,48 @@ function settled(standing: Standing, runs: readonly RunInFlightFact[]): Standing
   const { role } = standing.awaits;
   const counted = runs.filter((run) => run.role === role && run.job !== "waiting-on-checks");
   const named = counted.filter((run) => namesItsWork(run, standing));
-  const unnamed = WAITS_ON_ANY_RUN_OF_ITS_ROLE.has(standing.name) ? counted.filter((run) => !run.exact && run.pullRequest === null && (run.role === "review" || run.issue === null)) : [];
+  const unnamed = waitsOnAnyRunOfItsRole(standing) ? counted.filter((run) => !run.exact && run.pullRequest === null && (run.role === "review" || run.issue === null)) : [];
   const run = oldest(named) ?? oldest(unnamed);
   if (run !== undefined) return runningOn(standing, run) ?? standing;
   return role === "review" ? waitingOnChecks(standing, runs) : standing;
 }
 
 /**
- * The names of a Standing that waits on any run of its role: a run told by its
- * job's name that carries no number counts for it, as the rule counts one for
- * work whose trigger label is on or just claimed. A Held run's work, one a
- * slot holds and a blocked Ticket are not among them.
+ * Whether a kept Standing shows that it waits on any run of its role, so a run
+ * told by its job's name that carries no number counts for it, as the rule
+ * counts one (waitsOnRole, waitsOnReview): a trigger label on its work, the
+ * Kit's own for a Retry it announced among them; `needs-triage` or an answered
+ * `needs-info` on its issue; an agent draft with no Verdict on its head; or
+ * already running on such a run. The rule counts none for a Design session,
+ * whose run names its issue, nor for a Replay; and a Request changes, a
+ * conflicting draft, a releasable Ticket or a draft with a pass on its head
+ * shows no trigger label on its work, so none counts for those. A Held run's
+ * work, one a slot holds and a blocked Ticket are not among them.
  */
-const WAITS_ON_ANY_RUN_OF_ITS_ROLE: ReadonlySet<Standing["name"]> = new Set(["not-started", "waiting-on-kit", "stuck", "running"]);
+function waitsOnAnyRunOfItsRole(standing: Standing): boolean {
+  switch (standing.name) {
+    case "running":
+      return true;
+    case "waiting-on-checks":
+      return standing.detail.plain === null;
+    case "not-started":
+      return labelWaitsOnAnyRun(standing.detail.label);
+    case "waiting-on-kit":
+      return SILENCES_ON_ANY_RUN.has(standing.detail.silence);
+    case "stuck":
+      return standing.detail.was === "not-started" ? labelWaitsOnAnyRun(standing.detail.label) : SILENCES_ON_ANY_RUN.has(standing.detail.silence);
+    default:
+      return false;
+  }
+}
+
+/** Whether a `not-started` Standing's trigger label waits on any run of its role: every one but a Design session's and a Replay's; a Retry's (null) is `agent:implement`. */
+function labelWaitsOnAnyRun(label: TriggerLabel | null): boolean {
+  return label !== DESIGN_LABEL && label !== REPLAY_TRIGGER_LABEL;
+}
+
+/** The silences waiting on the Kit whose work waits on any run of its role: an issue's for Triage, and a quiet agent draft's for its Review. */
+const SILENCES_ON_ANY_RUN: ReadonlySet<WaitingOnKitSilence> = new Set(["needs-triage", "needs-info-answered", "quiet-draft"]);
 
 /**
  * An agent draft whose Review is waiting for the Required checks on its head,

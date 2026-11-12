@@ -32,6 +32,16 @@ const A_REQUEST_CHANGES = {
   openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [aVerdictComment("pass", "h".repeat(40), "2026-11-08T17:00:00Z")], reviews: [aReview("2026-11-08T19:00:00Z")] })],
 } as const;
 
+/** A Review run told by its job's name, from a release before the closing line: it carries no number and no kind. */
+const A_NUMBERLESS_REVIEW = (job: RunInFlight["job"]) =>
+  aRunRead({ role: "review", exact: false, issue: null, pullRequest: null, kind: null, job, run: 4440, createdAt: "2026-11-08T19:50:00Z", startedAt: job === "running" ? "2026-11-08T19:55:00Z" : null });
+
+/** An Implement run told by its job's name that carries no number and no kind. */
+const A_NUMBERLESS_IMPLEMENT = aRunRead({ role: "implement", exact: false, issue: null, pullRequest: null, kind: null, run: 4450, createdAt: "2026-11-08T19:50:00Z", startedAt: "2026-11-08T19:51:00Z" });
+
+/** Ticket 7's agent draft 50, quiet since its last push, a pass on its head. */
+const A_PASSED_DRAFT: OpenPullRequestFacts = { ...A_QUIET_DRAFT, comments: [aVerdictComment("pass", "h".repeat(40), "2026-11-08T19:35:00Z")] };
+
 /** An Implement job on Ticket 7 told by its name, from a release before the closing line: it carries no kind. */
 const AN_IMPLEMENT_JOB_ON_7 = aRunRead({ role: "implement", issue: 7, exact: false, run: 4430, createdAt: "2026-11-08T19:50:00Z" });
 
@@ -92,7 +102,12 @@ const CASES = {
     },
     [aRunRead({ role: "implement", exact: false, run: 4420, createdAt: "2026-11-08T19:50:00Z", startedAt: "2026-11-08T19:53:00Z" })],
   ),
+  reviewingNumberless: aCase({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [A_QUIET_DRAFT] }, [A_NUMBERLESS_REVIEW("running")], {
+    earlier: aRunsRead([A_NUMBERLESS_REVIEW("waiting-on-checks")]),
+  }),
+  passedDraftNumberless: aCase({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [A_PASSED_DRAFT] }, [A_NUMBERLESS_REVIEW("running")]),
   requestChanges: aCase(A_REQUEST_CHANGES, [AN_IMPLEMENT_JOB_ON_7]),
+  requestChangesNumberless: aCase(A_REQUEST_CHANGES, [A_NUMBERLESS_IMPLEMENT]),
   requestChangesUnderWay: aCase(A_REQUEST_CHANGES, [{ ...AN_IMPLEMENT_JOB_ON_7, startedAt: "2026-11-08T19:55:00Z" }], { earlier: aRunsRead([AN_IMPLEMENT_JOB_ON_7]) }),
   unread: aCase({ openIssues: [aTicketAwaitingImplement(12, "2026-11-08T15:00:00Z"), aTicketAwaitingImplement(14, "2026-11-08T19:40:00Z")] }, "unread", {
     keptAt: "2026-11-08T15:30:00Z",
@@ -187,6 +202,22 @@ describe("rows settled against fresh runs with no gather", () => {
       { issue: 12, pullRequest: null, name: "running" },
       { issue: 14, pullRequest: null, name: "running" },
     ]);
+  });
+
+  it("make a kept agent draft waiting on checks running once its Review, told by its job's name with no number, is", () => {
+    expect(namesOf(keptOf(CASES.reviewingNumberless))).toEqual([{ issue: 7, pullRequest: 50, name: "waiting-on-checks" }]);
+
+    expect(joinedOf(CASES.reviewingNumberless).map(({ standing }) => standing)).toEqual([
+      expect.objectContaining({ name: "running", since: "2026-11-08T19:55:00Z", awaits: { role: "review", on: "pullRequest" }, detail: { run: "review", retry: null, actionsRun: 4440, head: "h".repeat(40) } }),
+    ]);
+  });
+
+  it("count a run with no number only for a row whose Standing shows it waits on any run of its role, as the rule counts one", () => {
+    expect(namesOf(keptOf(CASES.requestChangesNumberless))).toEqual([{ issue: 7, pullRequest: 50, name: "waiting-on-kit" }]);
+    expect(joinedOf(CASES.requestChangesNumberless)).toEqual(keptOf(CASES.requestChangesNumberless));
+
+    expect(namesOf(keptOf(CASES.passedDraftNumberless))).toEqual([{ issue: 7, pullRequest: 50, name: "waiting-on-kit" }]);
+    expect(joinedOf(CASES.passedDraftNumberless)).toEqual(keptOf(CASES.passedDraftNumberless));
   });
 
   it("name a run that carries no kind by the run the kept row waits for, or the one it already names", () => {
