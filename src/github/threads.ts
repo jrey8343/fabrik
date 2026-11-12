@@ -29,7 +29,7 @@ import {
   RETRY_ENDED_MARKER,
   RETRY_PUSH_MARKER,
   RETRY_RESTARTED_MARKER,
-  SESSION_FINISHED,
+  sessionFinishedIn,
   startedReviewsIn,
   stuckTriggerGaveUpMarker,
   stuckTriggerReaddedMarker,
@@ -646,7 +646,7 @@ function isPrototypeRound(body: string): boolean {
 
 /** Whether the App's comment ends the Design session, async or live, or notes the return that starts a new one. */
 function endsDesignSession(body: string): boolean {
-  return body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body) || sentBackIn(body) !== null;
+  return sessionFinishedIn(body) || LIVE_OUTCOME_MARKER.test(body) || sentBackIn(body) !== null;
 }
 
 /**
@@ -678,7 +678,7 @@ function latestKitWordIs(marker: string, comments: readonly KitComment[]): boole
 
 /** Whether a comment is part of a Design session: a round, or the session's end, async or live. */
 function isDesignSessionComment(body: string): boolean {
-  return DESIGN_ROUND_MARKER.test(body) || body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body);
+  return DESIGN_ROUND_MARKER.test(body) || sessionFinishedIn(body) || LIVE_OUTCOME_MARKER.test(body);
 }
 
 /** The Kit's note that a Ticket came back from this PR, read from a comment's first line; null if it isn't one. */

@@ -343,7 +343,7 @@ export function aRetroIssue(overrides: Partial<RetroIssueSnapshot> = {}): RetroI
 
 /** A PR an Auditor named: by default a merged agent PR. */
 export function aNamedPullRequest(overrides: Partial<NamedPullRequestSnapshot> = {}): NamedPullRequestSnapshot {
-  return { number: 31, merged: true, headRef: "fabrik/ticket-7", isAgent: true, ...overrides };
+  return { number: 31, open: false, merged: true, headRef: "fabrik/ticket-7", isAgent: true, ...overrides };
 }
 
 /** An Audit run's snapshot: by default the App's pending Audit #97 at AUDITED_SHA, and the PRs its Auditor named. */

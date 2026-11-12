@@ -1214,9 +1214,11 @@ export interface Snapshot {
    */
   readonly replay: ReplaySnapshot | null;
   /**
-   * Gathered for an Audit run finishing only, whose Audit is `issue`: each PR
-   * its reply names under "Introduced by" that GitHub has, in any order. A
-   * number naming no PR isn't here.
+   * Gathered for an Audit run finishing, whose Audit is `issue`: each PR its
+   * reply names under "Introduced by" that GitHub has, in any order. And for a
+   * Design-session turn finishing in a Roll-in: the pull request it names,
+   * if GitHub has it. A number naming no PR isn't here. Null for any other
+   * event, and for a Design-session turn that ends any other way.
    */
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
   /**
@@ -1358,9 +1360,11 @@ export interface HeldTargetSnapshot {
   readonly labeledAt?: Readonly<Record<string, string>>;
 }
 
-/** A PR an Auditor named, as GitHub has it (src/loop/auditLanding.ts). */
+/** A PR an Auditor named (src/loop/auditLanding.ts), or the one a Design session's Roll-in names (src/loop/design.ts), as GitHub has it. */
 export interface NamedPullRequestSnapshot {
   readonly number: number;
+  /** Whether it is open: neither merged nor closed. */
+  readonly open: boolean;
   readonly merged: boolean;
   /** Its head branch. */
   readonly headRef: string;

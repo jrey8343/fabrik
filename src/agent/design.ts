@@ -10,7 +10,7 @@
 import type { KitConfig } from "../kit/config.ts";
 import { whyNoPrototype } from "../loop/design.ts";
 import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_CAP, prototypeBranchFor } from "../loop/designOutput.ts";
-import { BROKEN_RUN_MARKER, EMPTY_DIFF_MARKER, isBrokenRunComment, isEmptyDiffComment, LIVE_OUTCOME_MARKER, SESSION_FINISHED } from "../loop/markers.ts";
+import { BROKEN_RUN_MARKER, EMPTY_DIFF_MARKER, isBrokenRunComment, isEmptyDiffComment, LIVE_OUTCOME_MARKER, sessionFinishedIn } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 import { type FiledFromPullRequest, filedFromRef, headIsFetched } from "./filedFromFetch.ts";
@@ -197,7 +197,7 @@ export function landedNothingContext(issue: unknown): string[] {
     // Only the Kit's comments count, so quoting a marker plants no reason and ends no session (#426).
     if (comment?.byBot !== true) continue;
     const body = text(comment.body);
-    if (body.startsWith(SESSION_FINISHED) || LIVE_OUTCOME_MARKER.test(body)) bodies = [];
+    if (sessionFinishedIn(body) || LIVE_OUTCOME_MARKER.test(body)) bodies = [];
     else if (isEmptyDiffComment(body)) bodies.push(body.slice(EMPTY_DIFF_MARKER.length).trim());
     else if (isBrokenRunComment(body)) bodies.push(body.slice(BROKEN_RUN_MARKER.length).trim());
   }

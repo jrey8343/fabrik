@@ -16,6 +16,7 @@ import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
+import { parseDesignTurnOutput } from "../loop/designOutput.ts";
 import { digestMarkIn } from "../loop/digestContract.ts";
 import { heldRunsIn, isCarrier } from "../loop/heldRun.ts";
 import { makesUnusable } from "../loop/subscriptions.ts";
@@ -567,7 +568,7 @@ export async function gatherSnapshot(
     gatherStartingComment(github, repo, event),
     gatherReviewInlineComments(github, repo, event),
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
-    event.kind === "audit-run-finished" ? gatherNamedPullRequests(github, repo, event.output) : null,
+    gatherNamedPullRequests(github, repo, event),
   ]);
   // A Design turn's Map is weighed against the Map cap, which counts every open Map.
   const openMaps =
@@ -872,19 +873,35 @@ async function escapeFiledSince(github: Pick<ReadClient, "graphql">, repo: Repo,
 /** A PR as the REST API returns it: the fields an Auditor's named PRs are read from. */
 interface RestPullRequest {
   number: number;
+  state: string;
   merged: boolean;
   head: { ref: string };
   user: { type: string } | null;
 }
 
 /**
- * For an Audit run finishing: each PR its reply names under "Introduced by",
- * once. A number GitHub has no PR for is left out, and a reply that breaks
- * its contract names none, since the core fails its Audit.
+ * The PRs a finished run's reply names, as GitHub has them, or null for an
+ * event whose reply names none the core reads. For an Audit run finishing:
+ * each PR its reply names under "Introduced by", once; a reply that breaks
+ * its contract names none, since the core fails its Audit. For a
+ * Design-session turn finishing in a Roll-in: the one pull request it is to
+ * be settled onto; a turn that ends any other way, or whose reply breaks its
+ * contract, reads none. A number GitHub has no PR for is left out.
  */
-async function gatherNamedPullRequests(github: ReadClient, repo: Repo, output: string): Promise<NamedPullRequestSnapshot[]> {
-  const parsed = parseAuditOutput(output);
-  const named = parsed.ok ? [...new Set(parsed.output.candidates.flatMap((candidate) => candidate.introducedBy))] : [];
+async function gatherNamedPullRequests(github: ReadClient, repo: Repo, event: LoopEvent): Promise<NamedPullRequestSnapshot[] | null> {
+  if (event.kind === "audit-run-finished") {
+    const parsed = parseAuditOutput(event.output);
+    return readPullRequests(github, repo, parsed.ok ? [...new Set(parsed.output.candidates.flatMap((candidate) => candidate.introducedBy))] : []);
+  }
+  if (event.kind === "agent-run-finished" && event.role === "design") {
+    const parsed = parseDesignTurnOutput(event.output, event.issue);
+    return parsed.ok && parsed.output.kind === "roll-in" ? readPullRequests(github, repo, [parsed.output.pullRequest]) : null;
+  }
+  return null;
+}
+
+/** Each of these pull requests that GitHub has, by number, in the order given. */
+async function readPullRequests(github: ReadClient, repo: Repo, named: readonly number[]): Promise<NamedPullRequestSnapshot[]> {
   const pulls = await Promise.all(
     named.map(
       (number) =>
@@ -897,6 +914,7 @@ async function gatherNamedPullRequests(github: ReadClient, repo: Repo, output: s
       : [
           {
             number: pull.number,
+            open: pull.state === "open",
             merged: pull.merged,
             headRef: pull.head.ref,
             isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
