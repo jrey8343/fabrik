@@ -343,7 +343,8 @@ jobs:
     # PR, it reads that closed PR into issue.json's sentBack (readSentBack in
     # src/agent/inputs.ts). Without it the turn fails before its agent starts (#328).
     # On an issue filed from a pull request, it reads that pull request too
-    # (readFiledFrom, #659).
+    # (readFiledFrom, #659). contents: read is all the fetch of that pull
+    # request's head takes (#660), so the job holds what it held.
     permissions:
       contents: read
       issues: read

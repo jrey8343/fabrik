@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { filedFromContext } from "./design.ts";
 import { AGENT_FAILURE_FILE, readFailureReport } from "./failure.ts";
 import { fetchFiledFrom, filedFromRef, UnfetchedHeadError } from "./filedFromFetch.ts";
 import { FILED_FROM_FILE, type FiledFrom } from "./inputs.ts";
@@ -130,6 +131,28 @@ describe("The Design job's fetch of the pull request its issue was filed from", 
     expect(await git(checkout, "show", `${ref}:src/waitlist.ts`)).toBe("waitlist v2");
     // Main's own commits since the branch was cut are no part of it.
     expect(lines(await git(checkout, "log", "--format=%s", `${ref}..HEAD`))).toEqual(["Main moves on again", "Main moves on"]);
+  });
+
+  it("leaves the checkout as the turn's prompt says it is: the ref and the head commit it names, and each command it gives reads the branch", async () => {
+    const ref = (await fetchFiledFrom(checkout, REMOTE(), filedFrom()))!;
+
+    const section = filedFromContext(filedFrom()).join("\n\n");
+    expect(section).toContain(`its head commit, \`${await git(checkout, "rev-parse", ref)}\`, is fetched to the ref \`${ref}\``);
+    const commands = (/```sh\n([^`]*)\n```/.exec(section)?.[1] ?? "").split("\n").filter((line) => !line.startsWith("#"));
+    const [log, diff, show] = await Promise.all(
+      commands.map((command) => {
+        const [program = "", ...args] = command.replace("path/to/file", "src/waitlist.ts").split(" ");
+        return run(program, args, { cwd: checkout, env }).then(({ stdout }) => stdout);
+      }),
+    );
+
+    expect(commands).toHaveLength(3);
+    expect(lines(log ?? "").filter((line) => line.startsWith("    "))).toEqual(["    Add the waitlist page", "    Add the waitlist table"]);
+    expect(lines(diff ?? "").filter((line) => /^[+-][^+-]/.test(line))).toEqual(["+page", "+waitlist v2"]);
+    expect(show).toBe("waitlist v2\n");
+    // Reading it changed nothing.
+    expect(await git(checkout, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    expect(await git(checkout, "rev-parse", "HEAD")).toBe(main);
   });
 
   it("leaves the working tree and the checked-out commit as they were: the default branch's", async () => {
