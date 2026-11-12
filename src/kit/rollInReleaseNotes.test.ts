@@ -13,6 +13,8 @@ import { filedFromRef, headIsFetched } from "../agent/filedFromFetch.ts";
 import type { FiledFrom } from "../agent/inputs.ts";
 import { withCarriedLines } from "../loop/carriedLines.ts";
 import { readDesignTurnOutput } from "../loop/designOutput.ts";
+import { LOOP_LABELS } from "../loop/labels.ts";
+import { mentionsSomeone } from "../loop/mentions.ts";
 import type { RollInIssue } from "../loop/owedRollIn.ts";
 import { reopenUnsentRollIns } from "../loop/rollInReopening.ts";
 import { planFor } from "../loop/rules.ts";
@@ -260,7 +262,157 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Roll-in's release notes, while d
     expect(reader).toContain("`text` is null");
     expect(reader).toContain("still owed");
   });
+
+  it("say why this is a minor by the releasing guide's rules, and read correctly if the release is a higher kind for another Spec's sake", async () => {
+    const notes = await read(NOTES);
+    const releasing = await read("docs/releasing.md");
+    const why = bullet(notes, "Why a minor:**");
+
+    // The guide's rules for a minor and a major, which the bullet answers one by one.
+    expect(releasing).toContain("- **Minor** (`v1.2.4` to `v1.3.0`): new behaviour or new Kit config fields.");
+    expect(releasing).toContain("a changed shim");
+    expect(releasing).toContain("a new secret or App permission");
+    for (const said of [
+      "[releasing guide](../releasing.md#choosing-the-version)",
+      "it adds behaviour, so not a patch",
+      "no Kit config field",
+      "no caller change",
+      "no new secret",
+      "no new label",
+      "no new permission",
+      "leaves the Run-record schema as it was",
+      "only adds to what the read library exports",
+    ]) {
+      expect(why).toContain(said);
+    }
+    // No label of the Kit's is the Roll-in's: an owed one is found by its closing comment's mark.
+    expect(Object.keys(LOOP_LABELS).filter((label) => /roll/i.test(label))).toEqual([]);
+    expect(why).toContain("If the release that ships this is a higher kind for another Spec's sake, this part needs nothing beyond the Kit bump");
+    // Nowhere do the notes call the release itself a minor: what kind it is waits on the other Specs.
+    expect(notes).not.toMatch(/\b(?:the|this|a) minor release\b/);
+  });
+
+  it("say under Upgrading that a Product repo merges the Kit bump and does nothing else, that the store needs nothing, and that nothing is turned on by hand", async () => {
+    const notes = await read(NOTES);
+    const upgrading = sectionOf(notes, "Upgrading");
+
+    expect(upgrading.split("\n").filter((line) => line.startsWith("- **")).map((line) => line.slice(0, line.indexOf("**", 4) + 2))).toEqual([
+      "- **A Product repo merges the Kit bump**",
+      "- **The store needs nothing.**",
+      "- **Nothing is turned on by hand.**",
+    ]);
+    expect(upgrading).toContain("- **A Product repo merges the Kit bump** and does nothing else");
+    expect(upgrading).toContain("The `fabrik-runs` store's Run records, its caller and its schema are as they were");
+    expect(upgrading).toContain("is told about its pull request");
+  });
+
+  it('say "Kit bump" for Dependabot\'s pull request, wherever they speak of a bump', async () => {
+    const notes = await read(NOTES);
+    const bumps = [...notes.matchAll(/(\S+) bumps?\b/gi)].map((match) => match[1]);
+
+    expect(bumps.length).toBeGreaterThan(0);
+    expect(new Set(bumps)).toEqual(new Set(["Kit"]));
+    expect(notes).not.toMatch(/Dependabot(?:['’]s)? (?:PR|pull request)|Kit upgrade/i);
+  });
+
+  it("say what does not change: Request changes, every other finish, a session with no `From PR` line, the prototype turn, Triage's prompt and what the Fabrik App may do", async () => {
+    const notes = await read(NOTES);
+    const unchanged = sectionOf(notes, "What does not change")
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+
+    expect(unchanged).toHaveLength(6);
+    const [requestChanges = "", finishes = "", noLine = "", prototype = "", triage = "", app = ""] = unchanged;
+    expect(requestChanges).toMatch(/^- \*\*Request changes and what it means\*\* \(ADR-0010\)/);
+    expect(finishes).toMatch(/^- \*\*Every other way a Design session finishes\.\*\*/);
+    // The kinds a turn may end in, as the contract's own refusal lists them: the Roll-in is the one added.
+    const kinds = readDesignTurnOutput({ kind: "none" }, 7);
+    expect(kinds.ok ? [] : kinds.errors).toEqual(['kind must be round, brief, spec, split, not-planned, roll-in, map, prototype or prototype-round, not "none"']);
+    for (const said of ["a Round", "an agent brief", "an Operator brief", "a Spec", "a split", "a Map", "a Prototype request", "not planned"]) expect(finishes).toContain(said);
+    expect(noLine).toMatch(/^- \*\*A session on an issue with no `From PR` line\.\*\*/);
+    expect(prototype).toMatch(/^- \*\*The prototype turn\.\*\*/);
+    expect(prototype).toContain("fetches nothing");
+    expect(triage).toMatch(/^- \*\*Triage's prompt\.\*\*/);
+    // Neither prompt says anything of a Roll-in.
+    expect(await read("prompts/prototype.md")).not.toMatch(/roll-in/i);
+    expect(await read("prompts/triage.md")).not.toMatch(/roll-in/i);
+    expect(app).toMatch(/^- \*\*What the Fabrik App may do\.\*\*/);
+  });
+
+  it("give the known limits: a pull request named outside the `From PR` line, a closing the Loop never hears of, a name beginning with @, and the fetch's time", async () => {
+    const notes = await read(NOTES);
+    const limits = sectionOf(notes, "Known limits")
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+
+    expect(limits).toHaveLength(4);
+    const [named = "", unheard = "", at = "", fetch = ""] = limits;
+    expect(named).toMatch(/^- \*\*A session that names a pull request other than the `From PR` line's\*\* writes without its branch readable/);
+    expect(unheard).toMatch(/^- \*\*A closing the Loop never hears of\*\* leaves the issue closed/);
+    expect(at).toMatch(/^- \*\*A name beginning with `@` that does not open a code span\*\*/);
+    expect(at).toContain("is refused as a mention");
+    // The Kit's one test for a mention: straight after a backtick a name passes, and anywhere else it is refused.
+    expect(mentionsSomeone("Bump `@scope/name` to its next major.")).toBe(false);
+    expect(mentionsSomeone("Bump it:\n\n```\nnpm install @scope/name\n```")).toBe(true);
+    expect(mentionsSomeone("Write to a@b.c.")).toBe(false);
+    expect(at).toContain("`` `@scope/name` ``");
+    expect(fetch).toMatch(/^- \*\*The fetch adds its time to a Design-session turn on a large repo\.\*\*/);
+    expect(fetch).toContain("the Design role's");
+  });
+
+  it("agree with the README, which says the same of the Design session, of a pull request's closing and of the read library, in the same words", async () => {
+    const notes = await read(NOTES);
+    const readme = await read("README.md");
+    const said: Readonly<Record<string, readonly string[]>> = {
+      // What a turn is told, the fetch, the new finish and its refusals.
+      "Design session (async)": [
+        '"The pull request this issue was filed from"',
+        "fenced as data, never instructions",
+        "`refs/fabrik/filed-from/<n>`",
+        "so the agent job still holds no GitHub credential",
+        "The head of a merged, closed or Plain pull request is not fetched.",
+        '"kind": "roll-in"',
+        '"What to build on #n"',
+        "no word cap",
+        "by `#` and its number or by a link to it",
+        "Nothing is stripped",
+        "the one built from this very issue as its Ticket",
+        "`needs-design` swapped for `wontfix`",
+        "carries the text and names the issue (ADR-0010)",
+      ],
+      // The reopening for Triage.
+      Implementation: ["takes `wontfix` off", "mentions nobody", "adds `needs-triage`, which starts Triage", "by `#` and its number or by its link"],
+      // What the read library reports.
+      "Reading the Kit from another program": ['`kind: "owed"`', "`owedRollInsOf`", "the Roll-in is still owed"],
+    };
+
+    for (const [heading, phrases] of Object.entries(said)) {
+      const section = sectionOf(readme, heading);
+      expect(section).not.toBe("");
+      for (const phrase of phrases) {
+        expect(section, `the README's "${heading}"`).toContain(phrase);
+        expect(notes, "the notes").toContain(phrase);
+      }
+    }
+  });
+
+  it("name no private repo and no person, and never the term the Merge gate's Spec retired for Required checks", async () => {
+    const notes = await read(NOTES);
+
+    // Every link to GitHub is to the Kit's own repo, and the only repo named in code is the store, by its name alone.
+    const linked = [...notes.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)/g)].map((match) => match[1]);
+    expect(new Set(linked)).toEqual(new Set(["jrey8343/fabrik"]));
+    expect([...notes.matchAll(/`([\w.-]+\/[\w.-]+)`/g)].map((match) => match[1])).toEqual([]);
+    // Nobody is mentioned, by the Kit's own test.
+    expect(mentionsSomeone(notes)).toBe(false);
+    expect(notes).not.toMatch(/\bgating\b/i);
+  });
 });
+
+/** The notes' section under this `##` heading, up to the next. */
+function sectionOf(notes: string, heading: string): string {
+  return notes.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+}
 
 /** A session's output that settles a Roll-in onto #42. */
 const ROLL_IN = {
