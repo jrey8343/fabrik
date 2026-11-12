@@ -939,6 +939,7 @@ describe("loop.yml's prototype job", () => {
     const step = (pattern: string) => steps()[stepAt(pattern)] ?? "";
     const capture = () => step("id: capture\n");
     const evidencePage = () => step("id: evidence-page\n");
+    const captures = () => step("id: evidence\n");
 
     it("captures after the agent step has ended and before its result goes to the push job, from the Kit's program in its prototype mode", () => {
       expect(stepAt("id: capture\n")).toBeGreaterThan(stepAt("id: agent\n"));
@@ -975,10 +976,35 @@ describe("loop.yml's prototype job", () => {
       expect(evidencePage()).toContain("if-no-files-found: ignore");
     });
 
+    // #638: the captures folder as it is, so one variant's screenshot or video can be fetched from it, as the Implement job keeps a PR's.
+    it("keeps the captures folder zipped, as it is, for 30 days, under the name the Implement job's upload has, apart from the push job's artifacts", () => {
+      expect(stepAt("id: evidence\n")).toBeGreaterThan(stepAt("id: capture\n"));
+      expect(captures()).toContain("uses: actions/upload-artifact@");
+      expect(captures()).toContain("name: fabrik-ui-evidence\n");
+      expect(captures()).toContain(`path: \${{ runner.temp }}/fabrik-out/${EVIDENCE_DIR}/\n`);
+      expect(captures()).not.toContain("archive:");
+      expect(captures()).toContain("retention-days: 30\n");
+      expect(captures()).not.toMatch(/name: fabrik-agent-/);
+    });
+
+    it("keeps the captures whenever capture recorded a result, whether it captured or failed, never failing the job", () => {
+      expect(captures()).toContain("if: steps.capture.outputs.ui-capture-result != ''\n");
+      expect(captures()).toContain("continue-on-error: true");
+      expect(captures()).toContain("if-no-files-found: ignore");
+    });
+
+    // Stored, a player's byte range would pass straight to GitHub's storage; but every artifact kept so far is deflated, so a reader goes by each entry's own method either way.
+    it("sets no compression level on either job's uploads, leaving the upload's default", () => {
+      expect(prototype()).not.toContain("compression-level");
+      expect(job("implement")).not.toContain("compression-level");
+    });
+
     // The push job links the Evidence page from its own run by this id, never from an address the agent's runner passed out (src/github/events.ts).
-    it("passes out the capture result and the Evidence page's artifact id, under the names the Implement job passes them out by, for the push job", () => {
+    it("passes out the capture result and the ids of its two artifacts, under the names the Implement job passes them out by, for the push job", () => {
       expect(prototype()).toContain("ui-capture-result: ${{ steps.capture.outputs.ui-capture-result }}");
+      expect(prototype()).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
       expect(prototype()).toContain("ui-evidence-page-artifact: ${{ steps.evidence-page.outputs.artifact-id }}");
+      expect(job("implement")).toContain("ui-evidence-artifact: ${{ steps.evidence.outputs.artifact-id }}");
       expect(job("implement")).toContain("ui-evidence-page-artifact: ${{ steps.evidence-page.outputs.artifact-id }}");
     });
   });
