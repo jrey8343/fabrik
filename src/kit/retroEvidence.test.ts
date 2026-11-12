@@ -13,22 +13,20 @@ import {
   A_REPLAY,
   aComment,
   aCommit,
-  anAnswersComment,
   aFollowUpIssue,
-  anEscapeMarkerIssue,
   aLabelAdded,
   aMergedPullRequest,
+  anAnswersComment,
+  anEscapeMarkerIssue,
   anOpenPullRequest,
   aReplayRunRecord,
   aReview,
   aRunRecord,
-  aScoreEntry,
-  aScoreFile,
-  aSkippedScoreFile,
   aTicketTimeline,
   aVerdictComment,
   factsOf,
-} from "../__fixtures__/weeklySummary.ts";
+} from "../read/builders.ts";
+import { aScoreEntry, aScoreFile, aSkippedScoreFile } from "../__fixtures__/weeklySummary.ts";
 import { fromRetroLine } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import {

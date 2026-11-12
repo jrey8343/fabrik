@@ -10,6 +10,7 @@ import {
   type KitConfigSources,
   SKILLS_SOURCES_LOCK_PATH,
 } from "../kit/config.ts";
+import type { ActionsStep } from "../kit/kitSaid.ts";
 import { isOperatorsReplay } from "../kit/replay.ts";
 import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
@@ -66,7 +67,7 @@ import type {
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { uncountedFlaws } from "../loop/flakyChecks.ts";
-import { allPages, type GitHub, GitHubError, pagesOf, type Repo, refusalOf } from "./client.ts";
+import { allPages, GitHubError, pagesOf, type ReadClient, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
   countLandedNothing,
@@ -225,7 +226,7 @@ const DEFAULT_BRANCH_QUERY = `
 `;
 
 /** The default branch's name and its head, a full sha, or null when it has none. */
-export async function defaultBranchOf(github: Pick<GitHub, "graphql">, repo: Repo): Promise<{ readonly name: string; readonly head: string } | null> {
+export async function defaultBranchOf(github: Pick<ReadClient, "graphql">, repo: Repo): Promise<{ readonly name: string; readonly head: string } | null> {
   const data = await github.graphql<{ repository: { defaultBranchRef: { name: string; target: { oid: string } } | null } }>(DEFAULT_BRANCH_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -258,7 +259,7 @@ const EARLIER_COMMENT_PAGES = 9;
  * has grown.
  */
 async function withEarlierComments<Node extends { number: number; comments: PullRequestComments }>(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repo: Repo,
   pullRequest: Node,
 ): Promise<Node> {
@@ -500,6 +501,21 @@ export const RERUN_CHECKS_JOB_NAME = "Re-run red checks";
 export const RERUN_WAIT_JOB_NAME = "Re-run checks' wait";
 
 /**
+ * The name of the Kit job in .github/workflows/loop.yml (a test holds the two
+ * together), whose closing step's name says what it routed (#616). Called
+ * from a Product repo's caller workflow, it shows up as `<caller job> / Kit`.
+ */
+export const KIT_JOB_NAME = "Kit";
+
+/**
+ * The names of a Replay's jobs in .github/workflows/loop.yml (a test holds
+ * them together): each of its Arms' jobs, followed by ` (<arm>)`, and the job
+ * that records it, which a Replay's run is in flight until (#617).
+ */
+export const REPLAY_ARM_JOB_NAMES = ["Replay implement", "Replay gates", "Replay review", "Replay score"] as const;
+export const REPLAY_RECORD_JOB_NAME = "Replay record";
+
+/**
  * Reads the current GitHub state the event needs, fresh rather than from the
  * event payload. The Operator is the Kit config's `operator`, or else the
  * repo's owner. `appLogin` is the Fabrik App's bot login, its slug with
@@ -519,13 +535,13 @@ export const RERUN_WAIT_JOB_NAME = "Re-run checks' wait";
  * claim weighs, and nothing of the store.
  */
 export async function gatherSnapshot(
-  client: GitHub,
+  client: ReadClient,
   repo: Repo,
   event: LoopEvent,
   operator: string | null,
   appLogin: string | null,
-  actions: GitHub | null = null,
-  store: Pick<GitHub, "rest"> | null = null,
+  actions: ReadClient | null = null,
+  store: Pick<ReadClient, "rest"> | null = null,
   replayStore: ReplayStore | null = null,
   wait: (ms: number) => Promise<void> = sleep,
 ): Promise<Snapshot> {
@@ -608,7 +624,7 @@ interface RawHeadCheckRun {
  * Checks: read; without it the sweep is "no-permission", and does nothing.
  */
 async function gatherFlakySweep(
-  github: Pick<GitHub, "rest">,
+  github: Pick<ReadClient, "rest">,
   repo: Repo,
   candidates: readonly ConflictCandidate[],
 ): Promise<FlawHeadChecks[] | "no-permission"> {
@@ -693,7 +709,7 @@ export interface WeeklyIssuesQueryResult<Issue extends RawWeeklyIssue = RawWeekl
  * whether the Fabrik App, whose bot login is `appLogin`, opened each (see
  * byAppOf): what the audit gate weighs on a scheduled tick.
  */
-async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string | null): Promise<AuditSnapshot> {
+async function gatherAuditSlice(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string | null): Promise<AuditSnapshot> {
   return auditSliceOf(await queryWeeklyIssues(github, repo, AUDIT_LABEL), appLogin);
 }
 
@@ -707,13 +723,13 @@ async function gatherAuditSlice(github: Pick<GitHub, "graphql">, repo: Repo, app
  * weighs, and never another bot's. A pending Audit a person opened is no
  * Audit here.
  */
-export async function gatherAuditSliceFor(github: Pick<GitHub, "graphql">, repo: Repo, pending: number): Promise<AuditSnapshot> {
+export async function gatherAuditSliceFor(github: Pick<ReadClient, "graphql">, repo: Repo, pending: number): Promise<AuditSnapshot> {
   const data = await queryWeeklyIssues(github, repo, AUDIT_LABEL);
   const opener = data.repository.issues.nodes.find((issue) => issue.number === pending)?.author ?? null;
   return auditSliceOf(data, opener?.__typename === "Bot" ? loginOf(opener) : null);
 }
 
-function queryWeeklyIssues(github: Pick<GitHub, "graphql">, repo: Repo, label: string): Promise<WeeklyIssuesQueryResult> {
+function queryWeeklyIssues(github: Pick<ReadClient, "graphql">, repo: Repo, label: string): Promise<WeeklyIssuesQueryResult> {
   return github.graphql<WeeklyIssuesQueryResult>(WEEKLY_ISSUES_QUERY, { owner: repo.owner, name: repo.name, label });
 }
 
@@ -751,12 +767,12 @@ export function weeklyIssueOf(issue: RawWeeklyIssue, appLogin: string | null): W
  * finder); null when it found none, so the store isn't ready.
  */
 async function gatherRetroSlice(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repo: Repo,
   now: string,
   operator: string,
   appLogin: string | null,
-  store: Pick<GitHub, "rest"> | null,
+  store: Pick<ReadClient, "rest"> | null,
 ): Promise<RetroSnapshot> {
   const [storeReady, data] = await Promise.all([
     store === null ? false : storeIsPrivate(store),
@@ -793,7 +809,7 @@ interface ClosedPullRequestNode {
 }
 
 /** Whether an agent PR (src/loop/agentPullRequest.ts) merged, or closed unmerged, at or after `since`. */
-async function agentPullRequestClosedSince(github: Pick<GitHub, "graphql">, repo: Repo, since: number): Promise<boolean> {
+async function agentPullRequestClosedSince(github: Pick<ReadClient, "graphql">, repo: Repo, since: number): Promise<boolean> {
   const closedAgentPullRequest = (pr: ClosedPullRequestNode) =>
     pr.closedAt !== null &&
     Date.parse(pr.closedAt) >= since &&
@@ -826,7 +842,7 @@ const ISSUES_OPENED_BY_QUERY = `
  * after `since`, such as a filed Audit candidate: an Architectural escape,
  * which only the Operator's issues count as.
  */
-async function escapeFiledSince(github: Pick<GitHub, "graphql">, repo: Repo, operator: string, since: number): Promise<boolean> {
+async function escapeFiledSince(github: Pick<ReadClient, "graphql">, repo: Repo, operator: string, since: number): Promise<boolean> {
   const filed = (issue: { createdAt: string; body: string }) => Date.parse(issue.createdAt) >= since && escapeMarkerIn(issue.body) !== null;
   const issues = await pagesOf<{ createdAt: string; body: string }>(
     github,
@@ -852,7 +868,7 @@ interface RestPullRequest {
  * once. A number GitHub has no PR for is left out, and a reply that breaks
  * its contract names none, since the core fails its Audit.
  */
-async function gatherNamedPullRequests(github: GitHub, repo: Repo, output: string): Promise<NamedPullRequestSnapshot[]> {
+async function gatherNamedPullRequests(github: ReadClient, repo: Repo, output: string): Promise<NamedPullRequestSnapshot[]> {
   const parsed = parseAuditOutput(output);
   const named = parsed.ok ? [...new Set(parsed.output.candidates.flatMap((candidate) => candidate.introducedBy))] : [];
   const pulls = await Promise.all(
@@ -901,7 +917,7 @@ export interface OpenMap {
  * by hand: what the Map cap counts (src/loop/mapCap.ts). Read for a
  * Design-session turn landing, and for the turn's inputs (src/agent/inputs.ts).
  */
-export async function gatherOpenMaps(github: Pick<GitHub, "graphql">, repo: Repo): Promise<OpenMap[]> {
+export async function gatherOpenMaps(github: Pick<ReadClient, "graphql">, repo: Repo): Promise<OpenMap[]> {
   const data = await github.graphql<{ repository: { issues: { nodes: OpenMap[] } } }>(OPEN_MAPS_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -916,7 +932,7 @@ export async function gatherOpenMaps(github: Pick<GitHub, "graphql">, repo: Repo
  * the issue. Only a 404 means it was deleted; any other failed read fails the
  * run, as every failed read does, and never counts as deleted.
  */
-async function gatherStartingComment(github: GitHub, repo: Repo, event: LoopEvent): Promise<StartingComment | null> {
+async function gatherStartingComment(github: ReadClient, repo: Repo, event: LoopEvent): Promise<StartingComment | null> {
   const id = event.kind === "agent-run-finished" ? event.startedBy : event.kind === "prototype-run-finished" ? event.request.reply : null;
   if (id === undefined || id === null) return null;
   const comment = await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/comments/${id}`, undefined, {
@@ -930,7 +946,7 @@ async function gatherStartingComment(github: GitHub, repo: Repo, event: LoopEven
  * is enough to say so. A review with a body is acknowledged either way, so
  * nothing is read for it.
  */
-async function gatherReviewInlineComments(github: GitHub, repo: Repo, event: LoopEvent): Promise<boolean | null> {
+async function gatherReviewInlineComments(github: ReadClient, repo: Repo, event: LoopEvent): Promise<boolean | null> {
   if (event.kind !== "pull-request-commented" || event.on.kind !== "review" || event.on.hasBody) return null;
   const path = `/repos/${repo.owner}/${repo.name}/pulls/${event.pullRequest}/reviews/${event.on.review}/comments?per_page=1`;
   const comments = (await github.rest("GET", path)) as unknown[];
@@ -974,7 +990,7 @@ interface SpecQueryResult {
   };
 }
 
-async function gatherSpec(github: GitHub, repo: Repo, number: number): Promise<SpecSnapshot | null> {
+async function gatherSpec(github: ReadClient, repo: Repo, number: number): Promise<SpecSnapshot | null> {
   const data = await github.graphql<SpecQueryResult>(SPEC_QUERY, { owner: repo.owner, name: repo.name, number });
   const spec = data.repository.issue;
   if (spec === null) return null;
@@ -995,12 +1011,12 @@ async function gatherSpec(github: GitHub, repo: Repo, number: number): Promise<S
 
 /** The part of the snapshot the event is about, or null for an event about the repo as a whole. */
 async function gatherEventPart(
-  github: GitHub,
+  github: ReadClient,
   repo: Repo,
   event: LoopEvent,
   operator: string | null,
   appLogin: string | null,
-  actions: GitHub | null,
+  actions: ReadClient | null,
 ): Promise<EventPart | null> {
   switch (event.kind) {
     case "pull-request-pushed":
@@ -1154,7 +1170,7 @@ interface KitIssuesQueryResult {
  * the Loop's.
  */
 export async function gatherKitIssues(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repo: Repo,
   appLogin: string | null,
   labels: readonly string[] = KIT_ISSUE_LABELS,
@@ -1186,7 +1202,7 @@ export async function gatherKitIssues(
 }
 
 /** A Kit-owned issue as kitIssues holds it: only the App's own text, every comment of it. */
-async function kitIssueOf(github: Pick<GitHub, "graphql">, repo: Repo, issue: KitIssueNode, appLogin: string | null): Promise<KitIssueSnapshot> {
+async function kitIssueOf(github: Pick<ReadClient, "graphql">, repo: Repo, issue: KitIssueNode, appLogin: string | null): Promise<KitIssueSnapshot> {
   const comments = [...(await earlierComments(github, repo, issue.number, issue.comments)), ...issue.comments.nodes];
   const apps = comments.filter((comment) => byAppOf(comment.author, appLogin));
   // When its held markers were posted, so a resume that landed after them isn't given again (#438).
@@ -1221,7 +1237,7 @@ const KIT_ISSUE_QUERY = `
  * one: for a weekly-limit, usage-credits or token-rotation issue closed by
  * hand, whose held markers kitIssues no longer reads (#440, #470).
  */
-async function gatherKitIssue(github: GitHub, repo: Repo, number: number, appLogin: string | null): Promise<KitIssueSnapshot | null> {
+async function gatherKitIssue(github: ReadClient, repo: Repo, number: number, appLogin: string | null): Promise<KitIssueSnapshot | null> {
   const data = await github.graphql<{ repository: { closedKitIssue: KitIssueNode | null } }>(KIT_ISSUE_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -1233,7 +1249,7 @@ async function gatherKitIssue(github: GitHub, repo: Repo, number: number, appLog
 
 /** The comments before this page, oldest first. */
 async function earlierComments(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repo: Repo,
   number: number,
   page: KitIssueComments,
@@ -1302,7 +1318,7 @@ const REPLAY_ISSUES_QUERY = `
  * request waits, what accepting it weighs (src/github/replaySlice.ts).
  */
 async function gatherReplaySlice(
-  github: GitHub,
+  github: ReadClient,
   repo: Repo,
   now: string,
   kitIssues: readonly KitIssueSnapshot[],
@@ -1334,7 +1350,7 @@ interface ReplayIssuesQueryResult {
 }
 
 /** Every open replay issue, with who filed it, its body whole, its labels and the App's comments, every one. */
-async function gatherReplayIssues(github: GitHub, repo: Repo, appLogin: string | null): Promise<ReplayIssueSnapshot[]> {
+async function gatherReplayIssues(github: ReadClient, repo: Repo, appLogin: string | null): Promise<ReplayIssueSnapshot[]> {
   const data = await github.graphql<ReplayIssuesQueryResult>(REPLAY_ISSUES_QUERY, { owner: repo.owner, name: repo.name, replay: REPLAY_LABEL });
   return Promise.all(
     data.repository.issues.nodes.map(async (issue): Promise<ReplayIssueSnapshot> => {
@@ -1379,7 +1395,7 @@ const HELD_TARGET_FIELDS =
  * by hand (#440). A number naming nothing GitHub has is left out.
  */
 async function gatherHeld(
-  github: GitHub,
+  github: ReadClient,
   repo: Repo,
   kitIssues: readonly KitIssueSnapshot[],
   appLogin: string | null,
@@ -1492,7 +1508,7 @@ interface KeptBranchQueryResult {
  * A Ticket's Kept branch (#536): its agent branch on the remote now, with the
  * latest PR from it that closed unmerged, or null when the branch is gone.
  */
-async function keptBranchOf(github: Pick<GitHub, "graphql">, repo: Repo, ticket: number): Promise<KeptBranch | null> {
+async function keptBranchOf(github: Pick<ReadClient, "graphql">, repo: Repo, ticket: number): Promise<KeptBranch | null> {
   const data = await github.graphql<KeptBranchQueryResult>(KEPT_BRANCH_QUERY, {
     owner: repo.owner,
     name: repo.name,
@@ -1505,7 +1521,7 @@ async function keptBranchOf(github: Pick<GitHub, "graphql">, repo: Repo, ticket:
 }
 
 /** The Ticket's Kept branch while it's marked for a Kept-branch start; null, unread, when it isn't. */
-async function keptBranchIfMarked(github: Pick<GitHub, "graphql">, repo: Repo, ticket: number, labels: readonly string[]): Promise<KeptBranch | null> {
+async function keptBranchIfMarked(github: Pick<ReadClient, "graphql">, repo: Repo, ticket: number, labels: readonly string[]): Promise<KeptBranch | null> {
   return labels.includes(KEPT_BRANCH_LABEL) ? keptBranchOf(github, repo, ticket) : null;
 }
 
@@ -1514,7 +1530,7 @@ function pullRequestsIn(closedBy: { nodes: readonly { number: number; state: "OP
   return closedBy.nodes.filter((pr) => pr.state === state).map((pr) => pr.number).sort((a, b) => a - b);
 }
 
-async function gatherIssue(github: GitHub, repo: Repo, number: number, operator: string | null, appLogin: string | null): Promise<EventPart> {
+async function gatherIssue(github: ReadClient, repo: Repo, number: number, operator: string | null, appLogin: string | null): Promise<EventPart> {
   const data = await github.graphql<IssueQueryResult>(ISSUE_QUERY, { owner: repo.owner, name: repo.name, number });
   const issue = data.repository.issue;
   if (issue === null) {
@@ -1578,12 +1594,12 @@ async function gatherIssue(github: GitHub, repo: Repo, number: number, operator:
  * (#427), as the Loop's snapshot reads them, for a Review's or a Retry's
  * inputs to leave out.
  */
-export async function deferredChangesRequestsOn(github: GitHub, repo: Repo, number: number, operator: string): Promise<readonly number[]> {
+export async function deferredChangesRequestsOn(github: ReadClient, repo: Repo, number: number, operator: string): Promise<readonly number[]> {
   return (await gatherPullRequest(github, repo, number, operator, null)).pullRequest?.deferredChangesRequests ?? [];
 }
 
 async function gatherPullRequest(
-  github: GitHub,
+  github: ReadClient,
   repo: Repo,
   number: number,
   operator: string | null,
@@ -1796,8 +1812,8 @@ interface ConflictsQueryResult {
  * whether an Implement job is under way (#387); without one, that's unknown.
  */
 async function gatherConflicts(
-  github: Pick<GitHub, "graphql">,
-  actions: Pick<GitHub, "rest"> | null,
+  github: Pick<ReadClient, "graphql">,
+  actions: Pick<ReadClient, "rest"> | null,
   repo: Repo,
   now: string,
   appLogin: string | null,
@@ -1855,7 +1871,7 @@ interface MergeableQueryResult {
  * still working it out, it reads again, as the conflict check does,
  * MERGEABLE_READS times at most; one still unknown after that is unknown.
  */
-async function gatherMergeable(github: Pick<GitHub, "graphql">, repo: Repo, number: number, wait: (ms: number) => Promise<void>): Promise<MergeableSnapshot> {
+async function gatherMergeable(github: Pick<ReadClient, "graphql">, repo: Repo, number: number, wait: (ms: number) => Promise<void>): Promise<MergeableSnapshot> {
   const read = async (): Promise<MergeableSnapshot> => {
     const data = await github.graphql<MergeableQueryResult>(MERGEABLE_QUERY, { owner: repo.owner, name: repo.name, number });
     return { main: data.repository.defaultBranchRef?.target.oid ?? null, mergeable: mergeableOf(data.repository.pullRequest?.mergeable ?? "UNKNOWN") };
@@ -1864,8 +1880,8 @@ async function gatherMergeable(github: Pick<GitHub, "graphql">, repo: Repo, numb
 }
 
 async function gatherDispatch(
-  github: GitHub,
-  actions: GitHub,
+  github: ReadClient,
+  actions: ReadClient,
   repo: Repo,
   operator: string | null,
   appLogin: string | null,
@@ -1899,7 +1915,7 @@ async function gatherDispatch(
  * replay step lets them go first (src/loop/replayGate.ts).
  */
 export async function gatherDispatchCandidates(
-  github: GitHub,
+  github: ReadClient,
   repo: Repo,
   appLogin: string | null,
 ): Promise<Pick<DispatchSnapshot, "tickets" | "researchDecisions">> {
@@ -1912,7 +1928,7 @@ export async function gatherDispatchCandidates(
  * the Fabrik App's comments on it, and the query's last page, which also holds
  * the repo's open PRs and its owner.
  */
-async function gatherDispatchTickets(github: GitHub, repo: Repo, appLogin: string | null): Promise<{ tickets: TicketSnapshot[]; page: DispatchQueryResult }> {
+async function gatherDispatchTickets(github: ReadClient, repo: Repo, appLogin: string | null): Promise<{ tickets: TicketSnapshot[]; page: DispatchQueryResult }> {
   const tickets: TicketSnapshot[] = [];
   let after: string | null = null;
   let page: DispatchQueryResult;
@@ -1954,7 +1970,7 @@ async function gatherDispatchTickets(github: GitHub, repo: Repo, appLogin: strin
  * may run on it (#154), its last run's word read from the comments of the
  * Fabrik App, whose bot login is `appLogin` (see byAppOf).
  */
-async function gatherResearchDecisions(github: GitHub, repo: Repo, appLogin: string | null): Promise<ResearchDecisionSnapshot[]> {
+async function gatherResearchDecisions(github: ReadClient, repo: Repo, appLogin: string | null): Promise<ResearchDecisionSnapshot[]> {
   const decisions: ResearchDecisionSnapshot[] = [];
   let after: string | null = null;
   do {
@@ -1985,8 +2001,8 @@ async function gatherResearchDecisions(github: GitHub, repo: Repo, appLogin: str
 
 /** A Design queue check's slice, and the repo's owner, the Operator unless one is named. */
 async function gatherDesignQueue(
-  github: GitHub,
-  actions: GitHub | null,
+  github: ReadClient,
+  actions: ReadClient | null,
   repo: Repo,
   operator: string | null,
   appLogin: string | null,
@@ -2007,8 +2023,8 @@ async function gatherDesignQueue(
  * comments of the Fabrik App, whose bot login is `appLogin` (see byAppOf).
  */
 export async function gatherDesignQueueSlice(
-  github: Pick<GitHub, "graphql">,
-  actions: Pick<GitHub, "rest"> | null,
+  github: Pick<ReadClient, "graphql">,
+  actions: Pick<ReadClient, "rest"> | null,
   repo: Repo,
   appLogin: string | null,
 ): Promise<{ readonly designQueue: DesignQueueSnapshot; readonly owner: string }> {
@@ -2099,15 +2115,27 @@ function firstTurnClaimed(timeline: readonly LabelTimelineItem[]): boolean {
 /** Workflow-run statuses, short of completed, whose Implement job may still hold a slot. */
 const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "requested"] as const;
 
-interface Job {
+/** A job of a workflow run not yet completed, as Actions lists it, with what it says of its run. */
+export interface ActionsJob {
   /** The workflow run the job is in. */
-  run: number;
+  readonly run: number;
+  /** That workflow run's attempt. */
+  readonly attempt: number;
   /** When Actions created that workflow run, ISO 8601. */
-  createdAt: string;
-  name: string;
-  status: string;
-  conclusion: string | null;
+  readonly createdAt: string;
+  /** That workflow run's page. */
+  readonly runUrl: string;
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  /** When the job got a runner, ISO 8601; null while it has none. */
+  readonly startedAt: string | null;
+  /** The job's page, where its live log is. */
+  readonly url: string;
+  readonly steps: readonly ActionsStep[];
 }
+
+type Job = ActionsJob;
 
 /**
  * The Implement jobs under way and the Research jobs not yet finished, across
@@ -2120,7 +2148,7 @@ interface Job {
  * first, for the Weekly summary's Held (#476): a run of an earlier Kit
  * release names none.
  */
-export async function countDispatchedRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<DispatchedRuns> {
+export async function countDispatchedRuns(github: Pick<ReadClient, "rest">, repo: Repo): Promise<DispatchedRuns> {
   return dispatchedRunsOf(await readRunsInFlight(github, repo));
 }
 
@@ -2158,41 +2186,75 @@ export interface RunInFlightFact {
   readonly job: RunJob;
   /** When Actions created its workflow run, ISO 8601. */
   readonly createdAt: string;
+  /** Whether it was read from the Kit job's closing line (#617), which names all the work it counts for, rather than from a job's name. */
+  readonly exact: boolean;
+  /** Its Actions run, and that run's attempt. */
+  readonly run: number;
+  readonly attempt: number;
+  /** When its agent job got a runner, ISO 8601; null until it has. */
+  readonly startedAt: string | null;
+}
+
+/** A run in flight as a job's name tells it, and the job that tells it. */
+export interface RunByJobName {
+  readonly fact: RunInFlightFact;
+  readonly job: ActionsJob;
 }
 
 /**
  * The runs in flight across every workflow run in the repo not yet finished,
- * one per job the Loop names (#606): the one read Dispatch's count, the
- * Weekly summary's Held and the Standing rule share. A job its run skipped is
- * no run. An Implement job counts until its run's push job has landed it, as
- * Dispatch counts it (implementJobsUnderWay); a Review's wait for checks only
- * while it is under way; any other job while its run is unfinished, as the
- * stuck-trigger sweep counts it. Throws when the Actions API can't be read.
+ * one per job the Loop names (#606): the one read Dispatch's count and the
+ * stuck-trigger sweep share (runsByJobNamesOf). Throws when the Actions API
+ * can't be read.
  */
-export async function readRunsInFlight(github: Pick<GitHub, "rest">, repo: Repo): Promise<RunInFlightFact[]> {
-  const jobs = await jobsOfUnfinishedRuns(github, repo);
+export async function readRunsInFlight(github: Pick<ReadClient, "rest">, repo: Repo): Promise<RunInFlightFact[]> {
+  return runsByJobNamesOf(await jobsOfUnfinishedRuns(github, repo)).map(({ fact }) => fact);
+}
+
+/**
+ * The runs in flight these jobs' names tell, none of them exact, one per job
+ * the Loop names (#606). A job its run skipped is no run, since its name is
+ * never worked out. An Implement job counts until its run's push job has
+ * landed it, as Dispatch counts it (implementJobsUnderWay); a Review's wait
+ * for checks only while it is under way, with no start, since its Review job
+ * isn't listed yet; any other job while its run is unfinished, as the
+ * stuck-trigger sweep counts it.
+ */
+export function runsByJobNamesOf(jobs: readonly ActionsJob[]): RunByJobName[] {
   const implement = new Set(implementJobsUnderWay(jobs));
-  return jobs.flatMap((job): RunInFlightFact[] => {
+  return jobs.flatMap((job): RunByJobName[] => {
     if (job.conclusion === "skipped") return [];
-    const ran = { issue: null, pullRequest: null, retry: null, kind: null, job: jobOf(job), createdAt: job.createdAt } as const;
+    const ran = {
+      issue: null,
+      pullRequest: null,
+      retry: null,
+      kind: null,
+      job: jobOf(job),
+      createdAt: job.createdAt,
+      exact: false,
+      run: job.run,
+      attempt: job.attempt,
+      startedAt: job.startedAt,
+    } as const;
+    const fact = (fact: RunInFlightFact): RunByJobName[] => [{ fact, job }];
     const implementName = IMPLEMENT_JOB.exec(job.name);
     if (implementName !== null) {
       if (!implement.has(job)) return [];
       const retry = implementName[2] === undefined ? null : Number(implementName[2]);
-      return [{ ...ran, role: "implement", issue: numberOrNull(implementName[1]), retry, kind: retry === null ? null : "retry" }];
+      return fact({ ...ran, role: "implement", issue: numberOrNull(implementName[1]), retry, kind: retry === null ? null : "retry" });
     }
     const reviewName = REVIEW_JOB.exec(job.name);
-    if (reviewName !== null) return [{ ...ran, role: "review", pullRequest: numberOrNull(reviewName[1]) }];
+    if (reviewName !== null) return fact({ ...ran, role: "review", pullRequest: numberOrNull(reviewName[1]) });
     if ([REVIEW_CHECKS_JOB_NAME, RERUN_CHECKS_JOB_NAME, RERUN_WAIT_JOB_NAME].some((name) => isJobNamed(job.name, name))) {
-      return job.status === "completed" ? [] : [{ ...ran, role: "review", job: "waiting-on-checks" }];
+      return job.status === "completed" ? [] : fact({ ...ran, role: "review", job: "waiting-on-checks", startedAt: null });
     }
     const designName = DESIGN_JOB.exec(job.name);
     if (designName !== null) {
       const prototype = isJobNamed(job.name.replace(/ #[0-9]+$/, ""), PROTOTYPE_JOB_NAME);
-      return [{ ...ran, role: "design", issue: numberOrNull(designName[1]), kind: prototype ? "prototype" : null }];
+      return fact({ ...ran, role: "design", issue: numberOrNull(designName[1]), kind: prototype ? "prototype" : null });
     }
     const unnumbered = UNNUMBERED_JOBS.find(([name]) => isJobNamed(job.name, name));
-    return unnumbered === undefined ? [] : [{ ...ran, role: unnumbered[1] }];
+    return unnumbered === undefined ? [] : fact({ ...ran, role: unnumbered[1] });
   });
 }
 
@@ -2204,8 +2266,8 @@ const UNNUMBERED_JOBS: readonly (readonly [string, AgentRole])[] = [
   [RETRO_JOB_NAME, "retro"],
 ];
 
-/** Where a job is, from its status. */
-function jobOf({ status }: Job): RunJob {
+/** Where a job is, from its status: done is landing. The runs read (src/read/runs.ts) tells an agent job's by it too. */
+export function jobOf({ status }: Job): RunJob {
   if (status === "completed") return "landing";
   if (status === "in_progress") return "running";
   return status === "queued" ? "waiting-for-runner" : "blocked";
@@ -2241,8 +2303,27 @@ function implementJobsUnderWay(jobs: readonly Job[]): Job[] {
 }
 
 /** Whether a job's name is `jobName`, or `<caller job> / <jobName>` when a Product repo's caller workflow ran it. */
-function isJobNamed(name: string, jobName: string): boolean {
+export function isJobNamed(name: string, jobName: string): boolean {
   return name === jobName || name.endsWith(` / ${jobName}`);
+}
+
+/**
+ * Whether a job's name is that of the agent job a route to `role` starts: an
+ * Implement or Review job, named for its work or not, a Design-session or
+ * prototype turn, or a Triage, Audit, Retro or Research job. Never asked of a
+ * skipped job, whose name is never worked out.
+ */
+export function isAgentJobNamed(role: AgentRole, name: string): boolean {
+  switch (role) {
+    case "implement":
+      return IMPLEMENT_JOB.test(name);
+    case "review":
+      return REVIEW_JOB.test(name);
+    case "design":
+      return DESIGN_JOB.test(name);
+    default:
+      return UNNUMBERED_JOBS.some(([jobName, jobRole]) => jobRole === role && isJobNamed(name, jobName));
+  }
 }
 
 /**
@@ -2259,7 +2340,7 @@ const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #([1-9][0-9]*
  * couldn't be read, so a failed read only leaves a stalled run alone, never
  * the rest of the conflict check.
  */
-async function readImplementJobUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Promise<boolean | null> {
+async function readImplementJobUnderWay(github: Pick<ReadClient, "rest">, repo: Repo): Promise<boolean | null> {
   try {
     return implementJobsUnderWay(await jobsOfUnfinishedRuns(github, repo)).length > 0;
   } catch {
@@ -2280,7 +2361,7 @@ const DESIGN_JOB = new RegExp(`^(?:.+ / )?(?:${DESIGN_JOB_NAME}|${PROTOTYPE_JOB_
  * Prototype, and so has no round yet, keeps its slot while it builds. A
  * Design or prototype job skipped because the run went another way is no turn.
  */
-export async function designTurnsInProgress(github: Pick<GitHub, "rest">, repo: Repo): Promise<number[]> {
+export async function designTurnsInProgress(github: Pick<ReadClient, "rest">, repo: Repo): Promise<number[]> {
   const jobs = await jobsOfUnfinishedRuns(github, repo);
   const issues = new Set(
     jobs
@@ -2298,8 +2379,8 @@ export async function designTurnsInProgress(github: Pick<GitHub, "rest">, repo: 
  * fails, neither: the sweep then leaves every label alone.
  */
 async function gatherTriggerSweep(
-  github: Pick<GitHub, "graphql">,
-  actions: Pick<GitHub, "rest"> | null,
+  github: Pick<ReadClient, "graphql">,
+  actions: Pick<ReadClient, "rest"> | null,
   repo: Repo,
   appLogin: string | null,
 ): Promise<TriggerSweepSnapshot> {
@@ -2318,7 +2399,7 @@ async function gatherTriggerSweep(
  * Dispatch reads it (implementJobsUnderWay); null when the Actions API
  * couldn't be read.
  */
-async function readRolesUnderWay(github: Pick<GitHub, "rest">, repo: Repo): Promise<RolesUnderWay | null> {
+async function readRolesUnderWay(github: Pick<ReadClient, "rest">, repo: Repo): Promise<RolesUnderWay | null> {
   let jobs: Job[];
   try {
     jobs = (await jobsOfUnfinishedRuns(github, repo)).filter(({ conclusion }) => conclusion !== "skipped");
@@ -2366,7 +2447,7 @@ type LabelledTriggersQueryResult = {
  * came off. Only the Fabrik App's comments count as the Kit's word.
  */
 async function gatherLabelledTriggers(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repo: Repo,
   kind: "issues" | "pullRequests",
   appLogin: string | null,
@@ -2402,29 +2483,60 @@ function triggerHistoryOf(items: readonly TriggerTimelineItem[], appLogin: strin
   });
 }
 
-/** Every job, finished or not, of every workflow run not yet completed. */
-async function jobsOfUnfinishedRuns(github: Pick<GitHub, "rest">, repo: Repo): Promise<Job[]> {
+interface ListedWorkflowRun {
+  readonly id: number;
+  readonly created_at: string;
+  readonly run_attempt?: number;
+  readonly html_url?: string;
+}
+
+interface ListedJob {
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion?: string | null;
+  readonly started_at?: string | null;
+  readonly html_url?: string | null;
+  readonly steps?: readonly { readonly name: string; readonly status: string; readonly conclusion?: string | null }[];
+}
+
+/**
+ * Every job, finished or not, of every workflow run not yet completed, each
+ * with its steps: one listing per unfinished status, then one of each run's
+ * jobs. A job has a start only once it is in progress or done, since Actions
+ * gives a queued job one too. Throws when the Actions API can't be read.
+ */
+export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, repo: Repo): Promise<ActionsJob[]> {
   const base = `/repos/${repo.owner}/${repo.name}/actions`;
-  const runs = new Map<number, string>();
+  const runs = new Map<number, ListedWorkflowRun>();
   for (const status of UNFINISHED_RUNS) {
-    const page = (await github.rest("GET", `${base}/runs?status=${status}&per_page=100`)) as {
-      workflow_runs: { id: number; created_at: string }[];
-    };
-    for (const run of page.workflow_runs) runs.set(run.id, run.created_at);
+    const page = (await github.rest("GET", `${base}/runs?status=${status}&per_page=100`)) as { workflow_runs: ListedWorkflowRun[] };
+    for (const run of page.workflow_runs) runs.set(run.id, run);
   }
-  const jobs: Job[] = [];
-  for (const [id, createdAt] of runs) {
-    const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as {
-      jobs: { name: string; status: string; conclusion?: string | null }[];
-    };
-    jobs.push(...page.jobs.map((job) => ({ run: id, createdAt, name: job.name, status: job.status, conclusion: job.conclusion ?? null })));
+  const jobs: ActionsJob[] = [];
+  for (const [id, run] of runs) {
+    const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] };
+    const runUrl = run.html_url ?? `https://github.com/${repo.owner}/${repo.name}/actions/runs/${id}`;
+    jobs.push(
+      ...page.jobs.map((job) => ({
+        run: id,
+        attempt: run.run_attempt ?? 1,
+        createdAt: run.created_at,
+        runUrl,
+        name: job.name,
+        status: job.status,
+        conclusion: job.conclusion ?? null,
+        startedAt: job.status === "in_progress" || job.status === "completed" ? (job.started_at ?? null) : null,
+        url: job.html_url ?? runUrl,
+        steps: (job.steps ?? []).map((step) => ({ name: step.name, status: step.status, conclusion: step.conclusion ?? null })),
+      })),
+    );
   }
   return jobs;
 }
 
 /** Reads the Kit config folder's files from the Product repo at `ref`, through the API. */
 export async function readKitConfigSources(
-  github: Pick<GitHub, "fileText">,
+  github: Pick<ReadClient, "fileText">,
   repo: Repo,
   ref: string,
 ): Promise<KitConfigSources> {

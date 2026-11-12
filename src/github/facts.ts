@@ -35,7 +35,7 @@ import { AUDIT_LABEL, MONITOR_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/l
 import { escapeMarkerIn, fromPullRequestIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type CheckState, requiredChecksOutcome } from "../review/checks.ts";
-import { allPages, type GitHub, GitHubError, pagesOf, type Repo } from "./client.ts";
+import { allPages, GitHubError, pagesOf, type ReadClient, type Repo } from "./client.ts";
 import { leavingOutHeldLines } from "./heldLines.ts";
 import {
   gatherDesignQueueSlice,
@@ -67,7 +67,7 @@ const WINDOW_MS = 37 * DAY_MS;
 const ESCAPE_WINDOWS_REACH_MS = 97 * DAY_MS;
 
 /** The GitHub facts the Weekly summary reads of one Product repo, as of `now`, with the Operator's login. */
-export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
+export function gatherGitHubFacts(github: Pick<ReadClient, "graphql">, repo: Repo, now: number, operator: string): Promise<GitHubFacts> {
   return gatherFacts(github, repo, now, operator, now - ESCAPE_WINDOWS_REACH_MS);
 }
 
@@ -78,7 +78,7 @@ export function gatherGitHubFacts(github: Pick<GitHub, "graphql">, repo: Repo, n
  * usual, so one repo's failure costs the summary only that repo's facts.
  */
 export async function gatherEveryRepoFacts(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repos: readonly Repo[],
   now: number,
   operator: string,
@@ -109,7 +109,7 @@ export async function gatherEveryRepoFacts(
  * check. A head whose read GitHub refuses is left unread too.
  */
 export async function gatherHeadChecks(
-  github: Pick<GitHub, "rest">,
+  github: Pick<ReadClient, "rest">,
   repo: Repo,
   heads: readonly string[],
   listedChecks: readonly string[],
@@ -171,7 +171,7 @@ function requiredChecksOn(checks: readonly CheckState[], listedChecks: readonly 
 }
 
 /** The GitHub facts of one Product repo, as of `now`, with its PRs, default-branch commits and the Operator's issues from `reach` on. */
-async function gatherFacts(client: Pick<GitHub, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
+async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now: number, operator: string, reach: number): Promise<GitHubFacts> {
   // A held line is never activity, nor an issue's last comment (#471).
   const github = leavingOutHeldLines(client);
   const since = new Date(now - WINDOW_MS).toISOString();
@@ -237,7 +237,7 @@ async function gatherFacts(client: Pick<GitHub, "graphql">, repo: Repo, now: num
  * for weeks, so its window is read whole.
  */
 export async function gatherRetroFacts(
-  github: Pick<GitHub, "graphql" | "rest">,
+  github: Pick<ReadClient, "graphql" | "rest">,
   repo: Repo,
   now: number,
   operator: string,
@@ -259,7 +259,7 @@ export async function gatherRetroFacts(
 }
 
 /** The newest issues with a weekly gate's label, `fabrik:audit` or `fabrik:retro`, open and closed, read as the gate reads them (weeklyIssuesQuery). */
-async function gatherWeeklyRunIssues(github: Pick<GitHub, "graphql">, repo: Repo, label: string): Promise<WeeklyRunIssueFacts[]> {
+export async function gatherWeeklyRunIssues(github: Pick<ReadClient, "graphql">, repo: Repo, label: string): Promise<WeeklyRunIssueFacts[]> {
   const data = await github.graphql<WeeklyIssuesQueryResult>(weeklyIssuesQuery(), { owner: repo.owner, name: repo.name, label });
   return data.repository.issues.nodes.map(({ number, title, author, createdAt, body }) => ({ number, title, author: loginOf(author), createdAt, body }));
 }
@@ -278,7 +278,7 @@ export interface RetroHistoryFacts {
  * the Fabrik App, whose bot login is `appLogin`, opened each (byAppOf) and,
  * on top, their last 100 comments; and every open issue with its body.
  */
-export async function gatherRetroHistory(github: Pick<GitHub, "graphql">, repo: Repo, appLogin: string): Promise<RetroHistoryFacts> {
+export async function gatherRetroHistory(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string): Promise<RetroHistoryFacts> {
   const [retros, openIssues] = await Promise.all([
     github.graphql<WeeklyIssuesQueryResult<RawRetroIssue>>(weeklyIssuesQuery(COMMENTS), {
       owner: repo.owner,
@@ -305,7 +305,7 @@ export async function gatherRetroHistory(github: Pick<GitHub, "graphql">, repo: 
  * are read as usual, so one unreadable repo costs the Retro only its issues.
  */
 export async function gatherOpenIssuesOn(
-  github: Pick<GitHub, "graphql">,
+  github: Pick<ReadClient, "graphql">,
   repos: readonly string[],
 ): Promise<{ issues: FromRetroIssueFacts[]; unread: { repo: string; why: string }[] }> {
   const read = await Promise.all(
@@ -332,7 +332,7 @@ export async function gatherOpenIssuesOn(
  * escaped and sampled PR (evidenceTicketsOf, src/kit/retroEvidence.ts). One
  * GitHub no longer has, deleted or gone, is left out; any other failure fails.
  */
-export async function gatherTickets(github: Pick<GitHub, "rest">, repo: Repo, numbers: readonly number[]): Promise<TicketTextFacts[]> {
+export async function gatherTickets(github: Pick<ReadClient, "rest">, repo: Repo, numbers: readonly number[]): Promise<TicketTextFacts[]> {
   const tickets = await Promise.all(
     [...new Set(numbers)].map(async (number): Promise<TicketTextFacts | null> => {
       try {
@@ -348,7 +348,7 @@ export async function gatherTickets(github: Pick<GitHub, "rest">, repo: Repo, nu
 }
 
 /** What a commit changed, as a diff file by file; a file GitHub shows no patch for is named with a note. */
-async function patchOf(github: Pick<GitHub, "rest">, repo: Repo, sha: string): Promise<string> {
+async function patchOf(github: Pick<ReadClient, "rest">, repo: Repo, sha: string): Promise<string> {
   const { files } = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits/${sha}`)) as {
     files: { filename: string; previous_filename?: string; patch?: string }[];
   };
@@ -364,8 +364,8 @@ async function patchOf(github: Pick<GitHub, "rest">, repo: Repo, sha: string): P
 
 // --- The queries --------------------------------------------------------------
 
-const ACTOR = "{ login __typename }";
-const LABEL_EVENTS = `
+export const ACTOR = "{ login __typename }";
+export const LABEL_EVENTS = `
   timelineItems(last: 100, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
     nodes {
       __typename
@@ -375,7 +375,7 @@ const LABEL_EVENTS = `
   }
 `;
 // Aliased, as the label events read the same connection with other arguments.
-const DRAFT_EVENTS = `
+export const DRAFT_EVENTS = `
   draftEvents: timelineItems(last: 100, itemTypes: [CONVERT_TO_DRAFT_EVENT, READY_FOR_REVIEW_EVENT]) {
     nodes {
       __typename
@@ -384,10 +384,10 @@ const DRAFT_EVENTS = `
     }
   }
 `;
-const COMMENTS = `comments(last: 100) { nodes { url body createdAt author ${ACTOR} } }`;
-const COMMIT = "commit { oid message committedDate author { email user { login } } }";
+export const COMMENTS = `comments(last: 100) { nodes { url body createdAt author ${ACTOR} } }`;
+export const COMMIT = "commit { oid message committedDate author { email user { login } } }";
 const REVIEWS = `reviews(first: 100) { nodes { databaseId url author ${ACTOR} state submittedAt body comments(first: 50) { nodes { path line body } } } }`;
-const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
+export const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
 
 const OPEN_ISSUE_BODIES_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
@@ -541,7 +541,7 @@ const DEFAULT_BRANCH_QUERY = `
   }
 `;
 
-interface RawActor {
+export interface RawActor {
   login: string;
   __typename: string;
 }
@@ -564,7 +564,7 @@ interface RawCommit {
   commit: { oid: string; message: string; committedDate: string; author: { email: string | null; user: { login: string } | null } | null };
 }
 
-interface RawReview {
+export interface RawReview {
   databaseId: number;
   url: string;
   author: RawActor | null;
@@ -592,7 +592,7 @@ interface RawClosedPullRequest {
   files: { nodes: { path: string }[] };
 }
 
-interface RawOpenPullRequest {
+export interface RawOpenPullRequest {
   number: number;
   title: string;
   isDraft: boolean;
@@ -616,7 +616,7 @@ interface RawDraftEvent {
   actor: RawActor | null;
 }
 
-interface RawIssue {
+export interface RawIssue {
   number: number;
   title: string;
   author: RawActor | null;
@@ -648,7 +648,7 @@ interface RawOpenedIssue {
   author: RawActor | null;
 }
 
-interface RawOpenKitIssue {
+export interface RawOpenKitIssue {
   number: number;
   title: string;
   createdAt: string;
@@ -666,7 +666,7 @@ interface RawDefaultBranchCommit {
 }
 
 /** The PRs merged or closed in the window, agent or not. */
-async function gatherClosedPullRequests(github: Pick<GitHub, "graphql">, repo: Repo, since: string): Promise<RawClosedPullRequest[]> {
+async function gatherClosedPullRequests(github: Pick<ReadClient, "graphql">, repo: Repo, since: string): Promise<RawClosedPullRequest[]> {
   const sinceMs = Date.parse(since);
   const pullRequests = await pagesOf<RawClosedPullRequest>(
     github,
@@ -683,7 +683,7 @@ async function gatherClosedPullRequests(github: Pick<GitHub, "graphql">, repo: R
 }
 
 /** The issues the Operator opened in the window, newest first. */
-async function gatherOperatorIssues(github: Pick<GitHub, "graphql">, repo: Repo, operator: string, since: string): Promise<RawOpenedIssue[]> {
+async function gatherOperatorIssues(github: Pick<ReadClient, "graphql">, repo: Repo, operator: string, since: string): Promise<RawOpenedIssue[]> {
   const sinceMs = Date.parse(since);
   const issues = await pagesOf<RawOpenedIssue>(
     github,
@@ -698,7 +698,7 @@ async function gatherOperatorIssues(github: Pick<GitHub, "graphql">, repo: Repo,
 
 // --- Into the summary's facts -------------------------------------------------
 
-function isAgent(pullRequest: { headRefName: string; author: RawActor | null }): boolean {
+export function isAgent(pullRequest: { headRefName: string; author: RawActor | null }): boolean {
   return isAgentPullRequest({ headRef: pullRequest.headRefName, authorIsBot: pullRequest.author?.__typename === "Bot" });
 }
 
@@ -753,7 +753,7 @@ function commitOf({ commit }: RawCommit): CommitFacts {
   };
 }
 
-function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
+export function openPullRequestOf(pr: RawOpenPullRequest): OpenPullRequestFacts {
   return {
     number: pr.number,
     ticket: pr.closingIssuesReferences.nodes[0]?.number ?? null,
@@ -778,7 +778,7 @@ function draftEventsOf(nodes: readonly RawDraftEvent[]): DraftEvent[] {
 }
 
 /** An open Plain pull request: who opened it, its branch and head, whether it is a draft and merges cleanly, and when its draft state last changed. Its reviews, labels and comments, which the Kit never acts on, are left out. */
-function plainPullRequestOf(pr: RawOpenPullRequest): PlainPullRequestFacts {
+export function plainPullRequestOf(pr: RawOpenPullRequest): PlainPullRequestFacts {
   return {
     number: pr.number,
     title: pr.title,
@@ -811,7 +811,7 @@ function specOf(issue: RawIssue): SpecFacts {
   };
 }
 
-function openIssueOf(issue: RawIssue): OpenIssueFacts {
+export function openIssueOf(issue: RawIssue): OpenIssueFacts {
   return {
     number: issue.number,
     title: issue.title,
@@ -840,7 +840,7 @@ function monitorIssueOf(issue: RawMonitorIssue): MonitorIssueFacts {
   return { number: issue.number, author: loginOf(issue.author), body: issue.body };
 }
 
-function openKitIssueOf(issue: RawOpenKitIssue): OpenAuditFacts & OpenRetroFacts {
+export function openKitIssueOf(issue: RawOpenKitIssue): OpenAuditFacts & OpenRetroFacts {
   return { number: issue.number, title: issue.title, author: loginOf(issue.author), createdAt: issue.createdAt };
 }
 
@@ -867,7 +867,7 @@ interface InstallationRepositories {
  * Kit's caller workflow, apart from the store itself. A repo shows up without
  * any configuration once setup has written its caller.
  */
-export async function productReposOf(github: Pick<GitHub, "rest" | "fileText">): Promise<Repo[]> {
+export async function productReposOf(github: Pick<ReadClient, "rest" | "fileText">): Promise<Repo[]> {
   const listed: InstallationRepositories["repositories"] = [];
   for (let page = 1; ; page++) {
     const result = (await github.rest("GET", `/installation/repositories?per_page=100&page=${page}`)) as InstallationRepositories;

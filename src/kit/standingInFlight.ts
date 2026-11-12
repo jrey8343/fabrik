@@ -4,7 +4,7 @@
 // (`waiting-for-slot`), and a Ticket or research Decision its blockers hold
 // (`blocked`). Each is read by the Loop's own rule for it, so the Standing and
 // the Loop can't disagree, and none can turn Stuck.
-import { dispatchedRunsOf, type RunInFlightFact } from "../github/snapshot.ts";
+import { dispatchedRunsOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
 import { conflictRunInFlightIn } from "../github/threads.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
@@ -172,23 +172,28 @@ export function readySince(openIssues: readonly OpenIssueFacts[], number: number
 /**
  * Each agent draft whose Review is waiting for the Required checks on its
  * head: one with no Verdict on its head and no Review job naming it, while a
- * Review's wait for checks, or its re-run of red checks, is in flight. Those
- * jobs carry no number, so one in flight counts for every such draft, since
- * the oldest of them began, though never for a Held run, which the Kit hasn't
- * started.
+ * Review's wait for checks, or its re-run of red checks, is in flight for it,
+ * since the oldest such wait began, though never for a Held run, which the
+ * Kit hasn't started. An exact wait names its pull request (#617); one told by
+ * its job's name carries no number, so it counts for every such draft.
  */
 function waitingOnChecksStandingsOf({ github }: StandingFacts, runs: readonly RunInFlightFact[], heldWork: ReadonlySet<string>): StandingNamed<"waiting-on-checks">[] {
   const waits = runs.filter(({ role, job }) => role === "review" && job === "waiting-on-checks").toSorted((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  const oldest = waits[0];
-  if (oldest === undefined) return [];
-  const reviewed = new Set(runs.flatMap(({ role, pullRequest }) => (role === "review" && pullRequest !== null ? [pullRequest] : [])));
+  if (waits.length === 0) return [];
+  const reviewed = new Set(runs.flatMap(({ role, job, pullRequest }) => (role === "review" && job !== "waiting-on-checks" && pullRequest !== null ? [pullRequest] : [])));
   return github.openPullRequests
     .filter((pullRequest) => pullRequest.draft && !hasVerdictOnHead(pullRequest) && !reviewed.has(pullRequest.number) && !heldWork.has(`pr#${pullRequest.number}`))
-    .map((pullRequest) => ({
-      ...inFlight(github.repo, pullRequest.ticket, pullRequest.number, oldest.createdAt, "ticket", "review", { role: "review", on: "pullRequest" }),
-      name: "waiting-on-checks",
-      detail: { plain: null, check: null, checksUnread: false },
-    }));
+    .flatMap((pullRequest): StandingNamed<"waiting-on-checks">[] => {
+      const oldest = waits.find((wait) => (wait.exact ? wait.pullRequest === pullRequest.number : wait.pullRequest === null));
+      if (oldest === undefined) return [];
+      return [
+        {
+          ...inFlight(github.repo, pullRequest.ticket, pullRequest.number, oldest.createdAt, "ticket", "review", { role: "review", on: "pullRequest" }),
+          name: "waiting-on-checks",
+          detail: { plain: null, check: null, checksUnread: false },
+        },
+      ];
+    });
 }
 
 /** An open issue labelled `ready-for-agent` with sub-issues, not a Map: a Spec, which has no Standing of its own; its Tickets do. */
@@ -197,17 +202,19 @@ export function isSpec(issue: OpenIssueFacts): boolean {
 }
 
 /**
- * Each piece of work with a run in flight for it: one its job names, or one
- * whose name carries no number, which counts for every piece of work waiting
- * on its role, as the stuck-trigger sweep counts it, though never for a Held
- * run, which the Kit hasn't started. A named run comes first, then the oldest.
+ * Each piece of work with a run in flight for it: one that names it, or one
+ * told by its job's name that carries no number, which counts for every piece
+ * of work waiting on its role, as the stuck-trigger sweep counts it, though
+ * never for a Held run, which the Kit hasn't started. An exact run, read from
+ * the Kit job's closing line, counts only for the work it names (#617). A
+ * named run comes first, then the oldest.
  */
 function runningStandingsOf(facts: StandingFacts, runs: readonly RunInFlightFact[], heldWork: ReadonlySet<string>): Standing[] {
   const { github, appLogin, operator } = facts;
   const counted = runs.filter(({ job }) => job !== "waiting-on-checks");
   const issues = github.openIssues.flatMap((issue): Standing[] => {
-    const named = counted.filter((run) => run.issue === issue.number && (run.role === "implement" || run.role === "design"));
-    const waiting = heldWork.has(`#${issue.number}`) ? [] : counted.filter((run) => run.issue === null && run.pullRequest === null && waitsOnRole(issue, run.role, appLogin));
+    const named = counted.filter((run) => run.issue === issue.number && (run.role === "implement" || run.role === "design" || (run.exact && run.role !== "review")));
+    const waiting = heldWork.has(`#${issue.number}`) ? [] : counted.filter((run) => !run.exact && run.issue === null && run.pullRequest === null && waitsOnRole(issue, run.role, appLogin));
     const run = firstOf(named, waiting);
     const standing = run === undefined ? null : runningOnIssue(issue, run, github.repo, github.openPullRequests, operator, appLogin);
     return standing === null ? [] : [standing];
@@ -215,12 +222,49 @@ function runningStandingsOf(facts: StandingFacts, runs: readonly RunInFlightFact
   const pullRequests = github.openPullRequests.flatMap((pullRequest): Standing[] => {
     const named = counted.filter((run) => run.role === "review" && run.pullRequest === pullRequest.number);
     const waits = !heldWork.has(`pr#${pullRequest.number}`) && waitsOnReview(pullRequest, appLogin);
-    const waiting = waits ? counted.filter((run) => run.role === "review" && run.pullRequest === null) : [];
+    const waiting = waits ? counted.filter((run) => !run.exact && run.role === "review" && run.pullRequest === null) : [];
     const run = firstOf(named, waiting);
     if (run === undefined) return [];
-    return [{ ...inFlight(github.repo, pullRequest.ticket, pullRequest.number, run.createdAt, "ticket", "review", { role: "review", on: "pullRequest" }), name: "running", detail: { run: "review", retry: null } }];
+    return [
+      {
+        ...inFlight(github.repo, pullRequest.ticket, pullRequest.number, runningSince(run), "ticket", "review", { role: "review", on: "pullRequest" }),
+        name: "running",
+        detail: { run: "review", retry: null, actionsRun: run.run },
+      },
+    ];
   });
   return [...issues, ...pullRequests];
+}
+
+/**
+ * When a `running` Standing came to stand so: when its run's agent job got a
+ * runner, or when Actions created the run while it has none (#621). The join
+ * with runs (src/read/joinRuns.ts) takes the same time, so the two agree.
+ */
+export function runningSince(run: Pick<RunInFlightFact, "startedAt" | "createdAt">): string {
+  return run.startedAt ?? run.createdAt;
+}
+
+/**
+ * What a `running` Standing's `detail.run` names for a run of this role, as
+ * the run's own kind tells it (#621): an exact run, read from the Kit job's
+ * closing line, always carries one. Null when the run carries no kind, or for
+ * a role no `running` Standing awaits.
+ */
+export function runningRunOf(role: AwaitedRole, kind: RunKind | null): RunningRun | null {
+  if (kind === null) return null;
+  switch (role) {
+    case "implement":
+      return kind === "first" || kind === "prototype" ? "implement" : kind;
+    case "design":
+      return kind === "prototype" ? "prototype" : "design";
+    case "review":
+    case "triage":
+    case "research":
+      return role;
+    default:
+      return null;
+  }
 }
 
 /** The run that counts: the oldest one the job names, else the oldest that counts for all waiting on its role. */
@@ -239,18 +283,18 @@ function runningOnIssue(
   appLogin: string,
 ): StandingNamed<"running"> | null {
   const running = (work: StandingWork, place: StandingPlace | null, role: AwaitedRole, kind: RunningRun, retry: number | null = null, pullRequest: number | null = null) => ({
-    ...inFlight(repo, issue.number, pullRequest, run.createdAt, work, place, { role, on: pullRequest === null ? "issue" : "pullRequest" }),
+    ...inFlight(repo, issue.number, pullRequest, runningSince(run), work, place, { role, on: pullRequest === null ? "issue" : "pullRequest" }),
     name: "running" as const,
-    detail: { run: kind, retry },
+    detail: { run: kind, retry, actionsRun: run.run },
   });
   switch (run.role) {
     case "implement": {
       const pullRequest = openPullRequests.filter(({ ticket }) => ticket === issue.number).toSorted((a, b) => a.number - b.number)[0];
-      const kind = run.retry !== null ? "retry" : pullRequest === undefined ? "implement" : implementRunOn(pullRequest, operator, appLogin);
+      const kind = runningRunOf("implement", run.kind) ?? (run.retry !== null ? "retry" : pullRequest === undefined ? "implement" : implementRunOn(pullRequest, operator, appLogin));
       return running("ticket", "implement", "implement", kind, run.retry, kind === "implement" ? null : (pullRequest?.number ?? null));
     }
     case "design":
-      return running("design-session", "design", "design", run.kind === "prototype" ? "prototype" : "design");
+      return running("design-session", "design", "design", runningRunOf("design", run.kind) ?? "design");
     case "triage":
       return running("issue", "triage", "triage", "triage");
     case "research":

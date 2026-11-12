@@ -7,10 +7,10 @@
 // what a query returns. Their REST reads of comments keep only the Operator's,
 // so a held line, the App's, never reaches them.
 import { isHeldLine } from "../loop/heldLine.ts";
-import type { GitHub } from "./client.ts";
+import type { ReadClient } from "./client.ts";
 
 /** `github`, whose GraphQL answers carry no held line. Every other call is its own. */
-export function leavingOutHeldLines<Reader extends Pick<GitHub, "graphql">>(github: Reader): Reader {
+export function leavingOutHeldLines<Reader extends Pick<ReadClient, "graphql">>(github: Reader): Reader {
   return new Proxy(github, {
     get(target, property) {
       if (property === "graphql") {

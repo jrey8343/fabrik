@@ -4,10 +4,10 @@
 // same week never files a second. And what a failed run files instead, so a
 // failed run is never taken for a quiet week (#445). Pure, no I/O.
 import { whatFailed } from "./landingFailure.ts";
+import { FAILED_OPENING, WEEKLY_SUMMARY_FAILED_MARKER, WEEKLY_SUMMARY_FAILED_TITLE } from "./weeklyMarks.ts";
 import type { WeeklySummaryResult } from "./weeklySummary.ts";
 
-/** The label on every Weekly summary issue, by which the next week's filing finds it. */
-export const WEEKLY_SUMMARY_LABEL = "fabrik:weekly-summary";
+export { isWeeklyFailureNotice, WEEKLY_SUMMARY_FAILED_MARKER, WEEKLY_SUMMARY_FAILED_TITLE, WEEKLY_SUMMARY_LABEL } from "./weeklyMarks.ts";
 
 /** A Weekly summary issue already in the store. */
 export interface SummaryIssue {
@@ -35,26 +35,6 @@ export function weeklyFilingOf(
   return thisWeek === undefined
     ? { kind: "file", title: result.title, body: result.body, close }
     : { kind: "update", issue: thisWeek.number, body: result.body, close };
-}
-
-/** The title of the issue a failed run files when no Weekly summary was ever filed to comment on. */
-export const WEEKLY_SUMMARY_FAILED_TITLE = "Weekly summary failed";
-
-/**
- * The hidden last line of a failed run's notice, on the comment and on the
- * issue it files alike, by which the store's Standing knows the notice for
- * what it is (src/kit/standingStore.ts). Its visible text is unchanged.
- */
-export const WEEKLY_SUMMARY_FAILED_MARKER = "<!-- fabrik:weekly-summary-failed -->";
-
-/** How a failed run's notice opens, after its @-mention: an earlier release's notice, with no marker, is known by it. */
-const FAILED_OPENING = "**The Weekly summary failed**";
-
-/** Whether `body` is a failed Weekly summary run's notice: it carries the marker, or, from an earlier release, opens with an @-mention and the notice's words. */
-export function isWeeklyFailureNotice(body: string): boolean {
-  if (body.split("\n").some((line) => line.trim() === WEEKLY_SUMMARY_FAILED_MARKER)) return true;
-  const mention = /^@\S+ /.exec(body)?.[0];
-  return mention !== undefined && body.slice(mention.length).startsWith(FAILED_OPENING);
 }
 
 /** What a failed run files in the store: a comment on the newest summary, or an issue of its own when there's none. */

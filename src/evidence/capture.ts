@@ -7,6 +7,7 @@
 import { type CaptureIdentity, captureIdentityOf, slug, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import type { PrototypeVariant } from "../loop/designOutput.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
+import { CAPTURE_TIMEOUT_MINUTES } from "./captureTimeout.ts";
 import { gallery, type GalleryShot, prototypeGallery, type VariantShot } from "./gallery.ts";
 import {
   type Capture,
@@ -22,6 +23,8 @@ import {
   type VariantCapture,
   variantPage,
 } from "./uiEvidence.ts";
+
+export { CAPTURE_TIMEOUT_MINUTES, implementJobTimeoutMinutes } from "./captureTimeout.ts";
 
 /**
  * Where the capture step writes, in the agent's output directory: this
@@ -164,25 +167,6 @@ export type CaptureOutcome<C extends Capture | VariantCapture = Capture> =
   | { readonly kind: "off" }
   | { readonly kind: "skipped"; readonly why: string }
   | { readonly kind: "recorded"; readonly result: CaptureResult<C> };
-
-/**
- * The capture step's own timeout-minutes in loop.yml: a Kit constant, so a
- * slow build or server can never hold the Implement job past its budget.
- */
-export const CAPTURE_TIMEOUT_MINUTES = 20;
-
-/** Room in the Implement job beyond its agent's and capture's timeouts, for its other steps. */
-const JOB_STEPS_MINUTES = 10;
-
-/**
- * The Implement job's timeout-minutes, which the Kit job passes out: the
- * agent step stops at the role's own timeout, so this is long enough for
- * capture after it too, and a slow capture never cancels the job before
- * its result uploads.
- */
-export function implementJobTimeoutMinutes(implementTimeoutMinutes: number): number {
-  return implementTimeoutMinutes + CAPTURE_TIMEOUT_MINUTES + JOB_STEPS_MINUTES;
-}
 
 /** How long capture gives itself, inside its step's timeout, so it's always left time to write what it took. */
 const CAPTURE_BUDGET_MS = (CAPTURE_TIMEOUT_MINUTES - 2) * 60_000;

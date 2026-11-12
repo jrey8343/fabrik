@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, aRunInFlight, aVerdictComment, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aLabelAdded,
+  anOpenIssue,
+  anOpenPullRequest,
+  aReview,
+  aRunInFlight,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  standingFactsOf,
+} from "../read/builders.ts";
 import {
   BROKEN_RUN_MARKER,
   EMPTY_DIFF_MARKER,
@@ -169,7 +180,7 @@ describe("a run that was asked for and never began", () => {
         openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, labelEvents: [aLabelAdded("agent:review", AT)] })],
       });
       expect(whatIn(standings)).toEqual([
-        { issue: 7, pullRequest: 50, work: "ticket", place: "review", name: "not-started", awaits: { role: "review", on: "pullRequest" }, detail: { silence: "trigger-label", label: "agent:review" } },
+        { issue: 7, pullRequest: 50, work: "ticket", place: "review", name: "not-started", awaits: { role: "review", on: "pullRequest" }, detail: { silence: "trigger-label", label: "agent:review", head: "h".repeat(40) } },
         { issue: 20, pullRequest: null, work: "design-session", place: "design", name: "not-started", awaits: { role: "design", on: "issue" }, detail: { silence: "trigger-label", label: "agent:design" } },
         { issue: 21, pullRequest: null, work: "research-decision", place: null, name: "not-started", awaits: { role: "research", on: "issue" }, detail: { silence: "trigger-label", label: "agent:research" } },
         { issue: 22, pullRequest: null, work: "replay", place: null, name: "not-started", awaits: { role: "replay", on: "issue" }, detail: { silence: "trigger-label", label: "agent:replay" } },
@@ -208,6 +219,11 @@ describe("a run that was asked for and never began", () => {
 
     it("is not-started still while the only run of its role is named for other work", () => {
       const standings = standingsIn({ openIssues: [askedFor("2026-11-08T19:20:00Z")] }, { kit: aKit([aRunInFlight({ issue: 9 })]) });
+      expect(namesIn(standings)).toEqual([{ issue: 7, pullRequest: null, name: "not-started" }]);
+    });
+
+    it("is not-started still while the only run of its role is exact and names no work, since an exact run counts only for the work it names (#617)", () => {
+      const standings = standingsIn({ openIssues: [askedFor("2026-11-08T19:20:00Z")] }, { kit: aKit([aRunInFlight({ exact: true })]) });
       expect(namesIn(standings)).toEqual([{ issue: 7, pullRequest: null, name: "not-started" }]);
     });
 
@@ -252,7 +268,7 @@ describe("a run that was asked for and never began", () => {
           stuckAt: "2026-11-08T22:30:00.000Z",
           awaits: { role: "implement", on: "pullRequest" },
           subscription: null,
-          detail: { silence: "retry", label: null },
+          detail: { silence: "retry", label: null, head: HEAD },
         },
       ]);
     });

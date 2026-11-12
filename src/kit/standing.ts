@@ -14,7 +14,7 @@ import { type NotStartedSilence, notStartedStandingsOf } from "./standingClock.t
 import { handBackStandingsOf } from "./standingHandBacks.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
-import { joinPairing, plainStandingsOf } from "./standingPlain.ts";
+import { joinPairing, pairingsOf, plainStandingsOf } from "./standingPlain.ts";
 import { silenceStandingsOf, type WaitingOnKitSilence } from "./standingSilence.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
@@ -96,7 +96,8 @@ type WaitingOnKitDetail = { readonly silence: WaitingOnKitSilence; readonly roun
 
 /** What each name's wording is made of: numbers, labels, check names and logins, never a repo's text. */
 export interface StandingDetails {
-  readonly running: { readonly run: string; readonly retry: number | null };
+  /** `run` is the kind of run and `retry` its Retry number; `actionsRun` is its Actions run's number (#621). */
+  readonly running: { readonly run: string; readonly retry: number | null; readonly actionsRun: number };
   readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean };
   /**
    * A Held run's role and the Carrier its newest held marker is on; or, for an
@@ -166,9 +167,18 @@ interface PairingDetail {
   readonly pullRequest?: StandingName;
 }
 
+/**
+ * The head commit of the work's open pull request, a full sha, on every
+ * Standing that has one: which head a reader reads the Required checks of
+ * (#618). A Standing with no open pull request has no such key.
+ */
+interface HeadDetail {
+  readonly head?: string;
+}
+
 /** Where one piece of work stands and whose move is next: `name` and `detail` are one union, so each name fixes what its wording may read. */
 export type Standing = {
-  readonly [N in StandingName]: StandingFields & { readonly name: N; readonly detail: StandingDetails[N] & PairingDetail };
+  readonly [N in StandingName]: StandingFields & { readonly name: N; readonly detail: StandingDetails[N] & PairingDetail & HeadDetail };
 }[StandingName];
 
 /** The Standing of one name. */
@@ -237,6 +247,29 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
  */
 export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: string): Standing[] {
   if (facts.kind === "store") return storeStandingsOf(facts, now);
+  return joinPairing(unjoinedStandingsOf(facts, now), facts.github)
+    .map((standing) => withHead(standing, facts.github))
+    .map((standing) => standingAt(standing, now))
+    .toSorted(standingOrder);
+}
+
+/**
+ * For each Pairing session's pull request joined to its issue's own Standing,
+ * by the pull request's number, that own Standing as it stands at `now` before
+ * the join: what the issue's Standing goes back to, carrying the pull
+ * request's name, once the pull request that took it over as yours to merge
+ * no longer is (src/read/joinChecks.ts).
+ */
+export function pairedOwnStandingsOf(facts: StandingFacts, now: string): ReadonlyMap<number, Standing> {
+  return new Map(
+    pairingsOf(unjoinedStandingsOf(facts, now), facts.github).flatMap(({ pairing, own }): [number, Standing][] =>
+      own === null || pairing.pullRequest === null ? [] : [[pairing.pullRequest, standingAt(own, now)]],
+    ),
+  );
+}
+
+/** One Standing for each piece of work, each carrying its open pull request, before a Pairing session's pull request is joined to its issue's. */
+function unjoinedStandingsOf(facts: StandingFacts, now: string): Standing[] {
   const candidates: Standing[] = [
     ...operatorStandingsOf(facts, now),
     ...inFlightStandingsOf(facts, now),
@@ -245,11 +278,12 @@ export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: stri
     ...handBackStandingsOf(facts, now),
     ...plainStandingsOf(facts, now),
   ];
-  return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github)
-    .map((standing) => standingAt(standing, now))
-    .toSorted(
-    (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
-  );
+  return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github)));
+}
+
+/** The order the rule gives a repo's Standings in: oldest first, then by issue, then by pull request. */
+export function standingOrder(a: Standing, b: Standing): number {
+  return Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0);
 }
 
 /**
@@ -294,4 +328,11 @@ function withItsPullRequest(standing: Standing, { openPullRequests }: GitHubFact
   if (standing.issue === null || standing.pullRequest !== null) return standing;
   const closing = openPullRequests.filter(({ ticket }) => ticket === standing.issue).map(({ number }) => number).toSorted((a, b) => a - b)[0];
   return closing === undefined ? standing : { ...standing, pullRequest: closing };
+}
+
+/** A Standing carrying its open pull request's head commit in `detail.head`, an agent PR's or a Plain one's; one with none is returned as it is. */
+function withHead(standing: Standing, { openPullRequests, plainPullRequests }: GitHubFacts): Standing {
+  if (standing.pullRequest === null) return standing;
+  const head = [...openPullRequests, ...plainPullRequests].find(({ number }) => number === standing.pullRequest)?.headSha;
+  return head === undefined ? standing : ({ ...standing, detail: { ...standing.detail, head } } as Standing);
 }

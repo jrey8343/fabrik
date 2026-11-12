@@ -143,6 +143,9 @@ jobs:
       # The one output that holds agent text, the Design agent's brief, so a job reads it only through
       # `env:`, never in a `run:` script, where it could inject a command.
       prototype_request: ${{ steps.route.outputs.prototype_request }}
+      # What this job routed, held and declined included, as one line of JSON (src/kit/kitSaid.ts, #616): the
+      # closing step's name. It holds no text a person or an agent wrote.
+      kit-said: ${{ steps.route.outputs.kit-said }}
     steps:
       # No expression context names a called workflow's ref or commit, so read
       # them from the OIDC token's job_workflow_ref and job_workflow_sha claims.
@@ -203,6 +206,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node kit/src/kit/jobs.ts product
+
+      # Says what the routing step routed, held and declined included, in its name, for a reader of Actions while
+      # the run is in flight (#616). It does nothing, and runs only when routing succeeded: a Kit job that failed
+      # says so by failing, with no line.
+      - name: ${{ steps.route.outputs.kit-said }}
+        run: "true"
 
   triage:
     name: Triage

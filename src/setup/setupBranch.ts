@@ -8,11 +8,9 @@ import type { OriginTips } from "./checks.ts";
 import { ok, type Run } from "./exec.ts";
 import { prBody, withEarlierDone } from "./finish.ts";
 import type { Published, RunSummary } from "./oneRun.ts";
+import { setupBranch } from "./setupBranchName.ts";
 
-/** The branch setup applies its plan on, and a later run of the same release picks up. */
-export function setupBranch(release: string): string {
-  return `fabrik/setup-${release}`;
-}
+export { setupBranch } from "./setupBranchName.ts";
 
 /**
  * Every path the clone has uncommitted, untracked ones included. The checks

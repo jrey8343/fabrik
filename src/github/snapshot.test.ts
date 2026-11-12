@@ -17,7 +17,7 @@ import {
 } from "../__fixtures__/snapshots.ts";
 import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
-import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord } from "../read/builders.ts";
 import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
 import type { RunRecord } from "../kit/runRecord.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
@@ -35,12 +35,15 @@ import {
   designTurnsInProgress,
   gatherSnapshot as gatherFrom,
   IMPLEMENT_JOB_NAME,
+  KIT_JOB_NAME,
   MERGEABLE_READS,
   MERGEABLE_WAIT_MS,
   PROTOTYPE_JOB_NAME,
   PUSH_JOB_NAME,
   readKitConfigSources,
   readRunsInFlight,
+  REPLAY_ARM_JOB_NAMES,
+  REPLAY_RECORD_JOB_NAME,
   RERUN_CHECKS_JOB_NAME,
   RERUN_WAIT_JOB_NAME,
   RESEARCH_JOB_NAME,
@@ -180,7 +183,8 @@ describe("Counting the Research runs a Dispatch check sees in flight", () => {
 });
 
 describe("Reading the runs in flight, by the names the Loop gives its jobs (#606)", () => {
-  const run = (overrides: Partial<RunInFlightFact>): RunInFlightFact => ({
+  /** A run in flight in Actions run `id`, told by its job's name, so never exact. */
+  const run = (id: number, overrides: Partial<RunInFlightFact>): RunInFlightFact => ({
     role: "implement",
     issue: null,
     pullRequest: null,
@@ -188,6 +192,10 @@ describe("Reading the runs in flight, by the names the Loop gives its jobs (#606
     kind: null,
     job: "running",
     createdAt: "2026-11-08T19:00:00Z",
+    exact: false,
+    run: id,
+    attempt: 1,
+    startedAt: null,
     ...overrides,
   });
 
@@ -199,9 +207,9 @@ describe("Reading the runs in flight, by the names the Loop gives its jobs (#606
     ]);
 
     expect(await readRunsInFlight(actions, repo)).toEqual([
-      run({ issue: 12, createdAt: "2026-11-08T18:00:00Z" }),
-      run({ issue: 14, retry: 2, kind: "retry" }),
-      run({}),
+      run(1, { issue: 12, createdAt: "2026-11-08T18:00:00Z" }),
+      run(2, { issue: 14, retry: 2, kind: "retry" }),
+      run(3, {}),
     ]);
   });
 
@@ -218,14 +226,14 @@ describe("Reading the runs in flight, by the names the Loop gives its jobs (#606
     ]);
 
     expect(await readRunsInFlight(actions, repo)).toEqual([
-      run({ role: "review", pullRequest: 50 }),
-      run({ role: "design", issue: 7 }),
-      run({ role: "design", issue: 9, kind: "prototype" }),
-      run({ role: "triage" }),
-      run({ role: "research" }),
-      run({ role: "audit" }),
-      run({ role: "retro" }),
-      run({ role: "review" }),
+      run(1, { role: "review", pullRequest: 50 }),
+      run(2, { role: "design", issue: 7 }),
+      run(3, { role: "design", issue: 9, kind: "prototype" }),
+      run(4, { role: "triage" }),
+      run(5, { role: "research" }),
+      run(6, { role: "audit" }),
+      run(7, { role: "retro" }),
+      run(8, { role: "review" }),
     ]);
   });
 
@@ -237,9 +245,9 @@ describe("Reading the runs in flight, by the names the Loop gives its jobs (#606
     ]);
 
     expect(await readRunsInFlight(actions, repo)).toEqual([
-      run({ role: "review", job: "waiting-on-checks" }),
-      run({ role: "review", job: "waiting-on-checks" }),
-      run({ role: "review", job: "waiting-on-checks" }),
+      run(1, { role: "review", job: "waiting-on-checks" }),
+      run(2, { role: "review", job: "waiting-on-checks" }),
+      run(3, { role: "review", job: "waiting-on-checks" }),
     ]);
   });
 
@@ -251,7 +259,7 @@ describe("Reading the runs in flight, by the names the Loop gives its jobs (#606
       { id: 4, status: "completed", jobs: [{ name: "fabrik / Implement #14", status: "in_progress" }] },
     ]);
 
-    expect(await readRunsInFlight(actions, repo)).toEqual([run({ issue: 12, job: "landing" })]);
+    expect(await readRunsInFlight(actions, repo)).toEqual([run(1, { issue: 12, job: "landing" })]);
   });
 
   it("says whether a job waits behind its concurrency group or for a runner", async () => {
@@ -262,9 +270,9 @@ describe("Reading the runs in flight, by the names the Loop gives its jobs (#606
     ]);
 
     expect(await readRunsInFlight(actions, repo)).toEqual([
-      run({ issue: 12, job: "waiting-for-runner" }),
-      run({ issue: 13, job: "blocked" }),
-      run({ issue: 14, job: "blocked" }),
+      run(1, { issue: 12, job: "waiting-for-runner" }),
+      run(2, { issue: 13, job: "blocked" }),
+      run(3, { issue: 14, job: "blocked" }),
     ]);
   });
 
@@ -288,9 +296,18 @@ describe("The names of the jobs the runs in flight are read by (#606)", () => {
     ["rerun-checks", () => RERUN_CHECKS_JOB_NAME],
     ["rerun-wait", () => RERUN_WAIT_JOB_NAME],
     ["review-checks", () => REVIEW_CHECKS_JOB_NAME],
+    ["kit", () => KIT_JOB_NAME],
+    ["replay-record", () => REPLAY_RECORD_JOB_NAME],
   ])("are the names loop.yml gives its %s job", async (job, name) => {
     const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
     expect(new RegExp(`^ {2}${job}:\\n {4}name: (.+)$`, "m").exec(workflow)?.[1]).toBe(name());
+  });
+
+  it("are the names loop.yml gives a Replay's Arms' jobs, each followed by its arm (#617)", async () => {
+    const workflow = await readFile(new URL("../../.github/workflows/loop.yml", import.meta.url), "utf8");
+    const arms = ["replay-implement", "replay-gates", "replay-review", "replay-score"].map((job) => new RegExp(`^ {2}${job}:\\n {4}name: (.+)$`, "m").exec(workflow)?.[1]);
+
+    expect(arms).toEqual(REPLAY_ARM_JOB_NAMES.map((name) => `"${name} (\${{ matrix.arm }})"`));
   });
 
   it("is the Review job's name followed by its pull request", async () => {

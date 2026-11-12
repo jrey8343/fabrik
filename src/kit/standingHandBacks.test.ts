@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PAST_HAND_BACK_NOTICES } from "../__fixtures__/handBackWordings.ts";
 import { aPullRequest } from "../__fixtures__/snapshots.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aRunInFlight, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aRunInFlight, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../read/builders.ts";
 import { conflictRunEnded, requestChangesRunEnded } from "../loop/conflicts.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import { stopTicketOf } from "../loop/handClosing.ts";
@@ -15,6 +15,9 @@ import { type Standing, standingsOf } from "./standing.ts";
 import { handBackOfNotice } from "./standingHandBacks.ts";
 import { wordStanding } from "./standingWording.ts";
 import type { GitHubFacts } from "./weeklySummary.ts";
+
+/** The head of an open agent PR, as anOpenPullRequest builds it. */
+const HEAD = "h".repeat(40);
 
 describe("reading which hand-back a notice is", () => {
   it("reads the hidden line, wherever it is", () => {
@@ -167,7 +170,7 @@ describe("work the Kit hands back", () => {
         openPullRequests: onPullRequest ? [anOpenPullRequest({ number: 50, ticket: 7, comments: [notice] })] : [],
       });
       expect(standings.map(({ name, detail }) => ({ name, detail }))).toEqual([
-        { name: "yours-to-do", detail: { handBack, role: role ?? null, failure: null, label: role === "review" ? "agent:review" : role === "triage" ? "needs-triage" : "agent:implement" } },
+        { name: "yours-to-do", detail: { handBack, role: role ?? null, failure: null, label: role === "review" ? "agent:review" : role === "triage" ? "needs-triage" : "agent:implement", ...(onPullRequest ? { head: HEAD } : {}) } },
       ]);
     },
   );
@@ -204,7 +207,7 @@ describe("work the Kit hands back", () => {
     ] as const)("an agent PR handed back by %s, at the Merge gate while it carries ready-for-human", (_what, actions, handBack) => {
       const pullRequest = anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [said(actions)], labelEvents: [readyForHuman] });
       expect(handedBackIn(standingsIn({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [pullRequest] }))).toEqual([
-        { issue: 7, pullRequest: 50, name: "yours-to-do", work: "ticket", place: "merge-gate", since: at, detail: { handBack, role: "implement", failure: null, label: null } },
+        { issue: 7, pullRequest: 50, name: "yours-to-do", work: "ticket", place: "merge-gate", since: at, detail: { handBack, role: "implement", failure: null, label: null, head: HEAD } },
       ]);
       const labelOff = { ...pullRequest, labelEvents: [readyForHuman, { ...readyForHuman, action: "unlabeled" as const, at: "2026-11-08T19:30:00Z" }] };
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [labelOff] }).filter(({ name }) => name === "yours-to-do")).toEqual([]);
@@ -215,7 +218,7 @@ describe("work the Kit hands back", () => {
       const ended = unstartedRetry(aPullRequest({ number: 50, ticket: 7, ticketLabels: ["enhancement"], verdicts: [flaw], verdictPostedAt: "2026-11-08T12:00:00Z", headSha: "a".repeat(40) }), "operator", "2026-11-08T19:00:00Z", 90, false);
       const standings = standingsIn({ openIssues: [anOpenIssue({ number: 7, labels: ["enhancement"] })], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, comments: [said(ended ?? [])] })] });
       expect(handedBackIn(standings)).toEqual([
-        { issue: 7, pullRequest: 50, name: "yours-to-do", work: "ticket", place: "review", since: at, detail: { handBack: "retry-never-started", role: "implement", failure: null, label: "ready-for-agent" } },
+        { issue: 7, pullRequest: 50, name: "yours-to-do", work: "ticket", place: "review", since: at, detail: { handBack: "retry-never-started", role: "implement", failure: null, label: "ready-for-agent", head: HEAD } },
       ]);
     });
 
@@ -234,6 +237,7 @@ describe("work the Kit hands back", () => {
         role: "review",
         failure: null,
         label: "agent:review",
+        head: HEAD,
       });
       const readded = { ...pullRequest, labelEvents: [aLabelAdded("agent:review", "2026-11-08T19:10:00Z", { actor: "operator" })] };
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [readded] }).filter(({ name }) => name === "yours-to-do")).toEqual([]);
@@ -258,7 +262,7 @@ describe("work the Kit hands back", () => {
         at,
       );
       const standings = standingsIn({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, comments: [notice] })] });
-      expect(handedBackIn(standings)[0]?.detail).toEqual({ handBack: "broken-run-no-retry", role: "implement", failure: "left-branch", label: "agent:implement" });
+      expect(handedBackIn(standings)[0]?.detail).toEqual({ handBack: "broken-run-no-retry", role: "implement", failure: "left-branch", label: "agent:implement", head: HEAD });
     });
 
     it("a Request-changes run that committed nothing, while its PR carries ready-for-human", () => {
@@ -274,7 +278,7 @@ describe("work the Kit hands back", () => {
         openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })],
         openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [notice], labelEvents: [readyForHuman] })],
       });
-      expect(handedBackIn(standings)[0]?.detail).toEqual({ handBack: "request-changes-empty", role: "implement", failure: null, label: null });
+      expect(handedBackIn(standings)[0]?.detail).toEqual({ handBack: "request-changes-empty", role: "implement", failure: null, label: null, head: HEAD });
     });
 
     describe("on a research Decision and a Design session, read with their own markers", () => {

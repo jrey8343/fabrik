@@ -14,7 +14,7 @@
     "stuckAt": null,
     "awaits": { "role": "implement", "on": "issue" },
     "subscription": null,
-    "detail": { "run": "implement", "retry": null }
+    "detail": { "run": "implement", "retry": null, "actionsRun": 1 }
   },
   "waiting-on-checks": {
     "schema": 1,
@@ -31,7 +31,7 @@
     "stuckAt": null,
     "awaits": { "role": "review", "on": "pullRequest" },
     "subscription": null,
-    "detail": { "plain": null, "check": null, "checksUnread": false }
+    "detail": { "plain": null, "check": null, "checksUnread": false, "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
   },
   "held": {
     "schema": 1,
@@ -116,7 +116,7 @@
     "stuckAt": "2026-11-08T22:50:00.000Z",
     "awaits": { "role": "review", "on": "pullRequest" },
     "subscription": null,
-    "detail": { "silence": "quiet-draft", "round": null }
+    "detail": { "silence": "quiet-draft", "round": null, "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
   },
   "stuck": {
     "schema": 1,
@@ -150,7 +150,7 @@
     "stuckAt": null,
     "awaits": null,
     "subscription": null,
-    "detail": { "plain": null }
+    "detail": { "plain": null, "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
   },
   "design-round": {
     "schema": 1,
@@ -269,7 +269,7 @@
     "stuckAt": null,
     "awaits": null,
     "subscription": null,
-    "detail": {}
+    "detail": { "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
   },
   "check-failing": {
     "schema": 1,
@@ -286,7 +286,7 @@
     "stuckAt": null,
     "awaits": null,
     "subscription": null,
-    "detail": { "plain": "setup", "check": "test", "checkIs": "failing" }
+    "detail": { "plain": "setup", "check": "test", "checkIs": "failing", "head": "pppppppppppppppppppppppppppppppppppppppp" }
   },
   "conflicts": {
     "schema": 1,
@@ -303,7 +303,7 @@
     "stuckAt": null,
     "awaits": null,
     "subscription": null,
-    "detail": { "plain": "kit-bump" }
+    "detail": { "plain": "kit-bump", "head": "pppppppppppppppppppppppppppppppppppppppp" }
   },
   "draft": {
     "schema": 1,
@@ -320,7 +320,7 @@
     "stuckAt": null,
     "awaits": null,
     "subscription": null,
-    "detail": { "plain": "other" }
+    "detail": { "plain": "other", "head": "pppppppppppppppppppppppppppppppppppppppp" }
   },
   "blocked": {
     "schema": 1,

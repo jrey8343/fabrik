@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { aDesignQueueIssue, aResearchDecision, aTicket, kitConfig } from "../__fixtures__/snapshots.ts";
-import { aComment, aDesignRound, aLabelAdded, aReplayBody, aReview, aRunInFlight, aVerdictComment, anOpenIssue, anOpenPullRequest, anOpenReplay, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aDesignRound,
+  aLabelAdded,
+  anOpenIssue,
+  anOpenPullRequest,
+  anOpenReplay,
+  aReplayBody,
+  aReview,
+  aRunInFlight,
+  aVerdictComment,
+  factsOf,
+  standingFactsOf,
+} from "../read/builders.ts";
 import { undeliveredMarker } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
@@ -48,7 +61,7 @@ describe("a draft with nothing to explain it", () => {
         stuckAt: BAR,
         awaits: { role: "review", on: "pullRequest" },
         subscription: null,
-        detail: { silence: "quiet-draft", round: null },
+        detail: { silence: "quiet-draft", round: null, head: HEAD },
       },
     ]);
   });
@@ -133,7 +146,7 @@ describe("a draft with a pass on its head", () => {
         stuckAt: null,
         awaits: null,
         subscription: null,
-        detail: {},
+        detail: { head: HEAD },
       },
     ]);
     expect(standingsIn({ openPullRequests: [parked] }, {}, "2027-01-01T00:00:00Z")).toMatchObject([{ name: "parked" }]);
@@ -179,7 +192,7 @@ describe("the Operator's Request changes with no run started", () => {
         stuckAt: BAR,
         awaits: { role: "implement", on: "pullRequest" },
         subscription: null,
-        detail: { silence: "request-changes", round: null },
+        detail: { silence: "request-changes", round: null, head: HEAD },
       },
     ]);
     expect(standingsIn({ openPullRequests: [atTheGate()] }, {}, plus(BAR, -1))).toMatchObject([{ name: "waiting-on-kit" }]);
@@ -394,7 +407,7 @@ describe("silences the rule cannot date", () => {
     it("gives an open agent PR out of draft that nothing names waiting on the Kit with no stuckAt, since it left draft", () => {
       const pullRequest = anOpenPullRequest({ number: 50, ticket: 7, draft: false, draftEvents: [{ kind: "ready", actor: "operator", at: LABELLED }] });
       expect(standingsIn({ openPullRequests: [pullRequest] })).toEqual([
-        { schema: 1, repo: "owner/product", issue: 7, pullRequest: 50, work: "ticket", place: "merge-gate", since: LABELLED, subscription: null, ...leftOver },
+        { schema: 1, repo: "owner/product", issue: 7, pullRequest: 50, work: "ticket", place: "merge-gate", since: LABELLED, subscription: null, ...leftOver, detail: { ...leftOver.detail, head: HEAD } },
       ]);
     });
 

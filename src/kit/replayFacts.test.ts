@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aReading } from "../__fixtures__/replay.ts";
-import { A_REPLAY, aRunRecord } from "../__fixtures__/weeklySummary.ts";
-import { newestWeeklyLimits, replayCandidatesOf, replayStorePaths, replayTicketsIn } from "./replayFacts.ts";
+import { A_REPLAY, aRunRecord } from "../read/builders.ts";
+import { newestWeeklyLimits, replayCandidatesOf, replayStorePaths, replayTicketsIn, subscriptionReadingsOf } from "./replayFacts.ts";
 
 /** Wednesday 2026-11-11, so the store's last two months are October and November 2026. */
 const NOW = "2026-11-11T04:00:00.000Z";
@@ -44,6 +44,47 @@ describe("The newest weekly-limit reading on each Subscription, as the spare-cap
 
     expect(newestWeeklyLimits(records, NOW)).toEqual({ "Claude token": aReading(0.2) });
     expect(newestWeeklyLimits(records.slice(0, 1), NOW)).toEqual({});
+  });
+});
+
+describe("Each Subscription's last weekly-limit reading, with when it was read and when its week resets", () => {
+  it("is each Subscription's newest, read when its run ended, its reset as a time", () => {
+    const records = [
+      aRunRecord({ endedAt: "2026-11-09T10:00:00Z", rateLimit: aReading(0.3) }),
+      aRunRecord({ endedAt: "2026-11-10T10:00:00Z", rateLimit: aReading(0.42) }),
+      aRunRecord({ endedAt: "2026-11-10T09:00:00Z", subscription: "Claude token 2", replay: A_REPLAY, rateLimit: aReading(0.6, "allowed_warning") }),
+    ];
+
+    expect(subscriptionReadingsOf(records, NOW)).toEqual([
+      { subscription: "Claude token", share: 0.42, said: "allowed", readAt: "2026-11-10T10:00:00Z", resetsAt: "2026-11-16T04:00:00.000Z" },
+      { subscription: "Claude token 2", share: 0.6, said: "allowed_warning", readAt: "2026-11-10T09:00:00Z", resetsAt: "2026-11-16T04:00:00.000Z" },
+    ]);
+  });
+
+  it("skips a record with no reading, or only the five-hour limit's, and leaves out a Subscription with none", () => {
+    const records = [
+      aRunRecord({ endedAt: "2026-11-09T10:00:00Z", rateLimit: aReading(0.7) }),
+      aRunRecord({ endedAt: "2026-11-10T10:00:00Z", rateLimit: null }),
+      aRunRecord({ endedAt: "2026-11-10T11:00:00Z", rateLimit: { ...aReading(0.1), rateLimitType: "five_hour" } }),
+      aRunRecord({ endedAt: "2026-11-10T12:00:00Z", subscription: "Claude token 2", rateLimit: { ...aReading(0.2), rateLimitType: "five_hour" } }),
+      aRunRecord({ endedAt: "2026-11-10T13:00:00Z", subscription: "Claude token 3", rateLimit: null }),
+    ];
+
+    expect(subscriptionReadingsOf(records, NOW)).toEqual([
+      { subscription: "Claude token", share: 0.7, said: "allowed", readAt: "2026-11-09T10:00:00Z", resetsAt: "2026-11-16T04:00:00.000Z" },
+    ]);
+  });
+
+  it("gives a reading with no share, no word or no reset as null for each", () => {
+    const records = [aRunRecord({ endedAt: "2026-11-10T10:00:00Z", rateLimit: { status: null, rateLimitType: "seven_day", utilization: null, resetsAt: null } })];
+
+    expect(subscriptionReadingsOf(records, NOW)).toEqual([{ subscription: "Claude token", share: null, said: null, readAt: "2026-11-10T10:00:00Z", resetsAt: null }]);
+  });
+
+  it("reads only the store's last two months, this month and the one before", () => {
+    const records = [aRunRecord({ endedAt: "2026-09-30T23:00:00Z", rateLimit: aReading(0.8) })];
+
+    expect(subscriptionReadingsOf(records, NOW)).toEqual([]);
   });
 });
 

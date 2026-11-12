@@ -148,15 +148,18 @@ function retrySilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts
 }
 
 /**
- * Whether a run of the label's role is in flight for this work: one its job
- * names, or one whose name carries no number, which counts for every piece of
- * work waiting on its role, as the stuck-trigger sweep counts it.
+ * Whether a run of the label's role is in flight for this work: one that names
+ * it, or one told by its job's name that carries no number, which counts for
+ * every piece of work waiting on its role, as the stuck-trigger sweep counts
+ * it. An exact run counts only for the work it names (#617).
  */
 function hasRunBehind(label: TriggerLabel, runs: readonly RunInFlightFact[], issue: number | null, pullRequest: number | null): boolean {
   return runs.some(
     (run) =>
       ROLES_BEHIND[label].includes(run.role) &&
-      ((run.issue === null && run.pullRequest === null) || (run.issue !== null && run.issue === issue) || (run.pullRequest !== null && run.pullRequest === pullRequest)),
+      ((!run.exact && run.issue === null && run.pullRequest === null) ||
+        (run.issue !== null && run.issue === issue) ||
+        (run.pullRequest !== null && run.pullRequest === pullRequest)),
   );
 }
 

@@ -40,6 +40,7 @@ import {
   within,
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
+import { averageCostOf, BUILD_ROLES, costOf, costPerMergedPullRequestOf, endedBy } from "./mergedCost.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type PlainKind, type Standing, standingsOf, type StandingNamed } from "./standing.ts";
 import { givenUpWeeksOf, maxInFlightHoldOf } from "./standingInFlight.ts";
@@ -53,11 +54,13 @@ import {
   RUN_RECORD_SCHEMA,
   type RunRecord,
   runKey,
-  UNKNOWN_COST_BASIS,
   type UnreadableRunRecords,
   WEEKLY_LIMIT,
 } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
+
+// The sums of records' costs live with the cost per merged pull request (./mergedCost.ts).
+export { costOf, hasUnknownCostBasis } from "./mergedCost.ts";
 
 // The GitHub facts the metrics read are the Retro evidence module's (src/kit/retroEvidence.ts).
 export type {
@@ -215,6 +218,13 @@ export interface PlainPullRequestFacts {
 export interface RequiredCheckFact {
   readonly name: string;
   readonly is: "passed" | "running" | "failing" | "never-reported";
+  /**
+   * When the report that decides it was made, ISO 8601, null for a check
+   * never reported. The read library's Required checks read gives it; the
+   * Weekly summary's read leaves it out, and its Plain Standings stand since
+   * the pull request's head.
+   */
+  readonly at?: string | null;
 }
 
 /** Each Required check the Kit config lists, on one head, in the order it lists them; or the whole fact unread. */
@@ -234,9 +244,11 @@ export interface RepoKitFacts {
   /** What a Dispatch check weighs, read as it reads it; null when the Kit config is invalid, as then nothing is read. */
   readonly dispatch: DispatchFacts | null;
   /**
-   * The runs in flight in the repo (readRunsInFlight), read once, whatever its
-   * Kit config: Dispatch's count is made from them (dispatchedRunsOf).
-   * `unread` when the Actions token wasn't minted or GitHub wouldn't list them.
+   * The runs in flight in the repo, from the read library's runs read through
+   * its one converter (runsInFlightFactOf, src/read/runs.ts), read once,
+   * whatever its Kit config: Dispatch's count is made from them
+   * (dispatchedRunsOf). `unread` when the Actions token wasn't minted or
+   * GitHub wouldn't list them.
    */
   readonly runsInFlight: readonly RunInFlightFact[] | "unread";
   /**
@@ -894,7 +906,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     records: records.length,
     cost,
     unknownCost,
-    costPerMergedPullRequest: costPerMergedPullRequestOf(week, input.records, merged),
+    costPerMergedPullRequest: costPerMergedPullRequestFigureOf(week, input.records, merged),
     costPerSpec: costPerSpecOf(week, input),
     spendNeverMerged: spendNeverMergedOf(week, input),
     weeklyLimit: lastWeeklyLimitOf(records),
@@ -1104,18 +1116,14 @@ function mean(values: readonly number[]): number | null {
   return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-/** The roles whose runs build a Ticket: Implement (Retries and Step-ups among them) and Review. */
-const BUILD_ROLES: readonly RunRecord["role"][] = ["implement", "review"];
-
-function costPerMergedPullRequestOf(week: Week, records: readonly RunRecord[], merged: readonly MergedAgentPullRequest[]): CostFigure {
-  const ended = endedBy(week, records);
-  const perPullRequest = merged.map(({ repo, pullRequest }) =>
-    ended.filter(
-      (record) =>
-        record.repo === repo && pullRequest.ticket !== null && record.issue === pullRequest.ticket && BUILD_ROLES.includes(record.role),
-    ),
+/** The cost per merged pull request by the shared figure (./mergedCost.ts), each pull request with the Ticket its `Closes #n` names. */
+function costPerMergedPullRequestFigureOf(week: Week, records: readonly RunRecord[], merged: readonly MergedAgentPullRequest[]): CostFigure {
+  const { usd, unknownCost } = costPerMergedPullRequestOf(
+    week,
+    records,
+    merged.map(({ repo, pullRequest }) => ({ repo, ticket: pullRequest.ticket })),
   );
-  return averageCostOf(perPullRequest);
+  return { usd, unknownCost };
 }
 
 function costPerSpecOf(week: Week, input: WeeklySummaryInput): CostFigure {
@@ -1162,17 +1170,6 @@ function leftDesignIn(week: Week, spec: SpecFacts, appLogin: string): boolean {
   );
 }
 
-/** Each group's summed cost, averaged over the groups, or null for no groups. */
-function averageCostOf(groups: readonly (readonly RunRecord[])[]): CostFigure {
-  const total = costOf(groups.flat());
-  return { usd: groups.length === 0 ? null : total.usd / groups.length, unknownCost: total.unknownCost };
-}
-
-/** The records that ended before the week did, whatever week they ended in. */
-function endedBy(week: Week, records: readonly RunRecord[]): RunRecord[] {
-  return records.filter((record) => Date.parse(record.endedAt) < week.end);
-}
-
 /** The latest weekly-limit reading among these records, sorted by when they ended, or null if none read one. */
 function lastWeeklyLimitOf(records: readonly RunRecord[]): RateLimitReading | null {
   return records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null;
@@ -1185,23 +1182,6 @@ function subscriptionsOf(records: readonly RunRecord[]): WeekMetrics["subscripti
     const its = records.filter((record) => record.subscription === subscription);
     return { subscription, cost: costOf(its).usd, weeklyLimit: lastWeeklyLimitOf(its) };
   });
-}
-
-/**
- * The summed cost of these records, leaving out (and counting) those whose
- * cost basis is unknown. A run with no cost figure at all, one that ended
- * without a result, such as a timeout, adds nothing and isn't counted.
- */
-function costOf(records: readonly RunRecord[]): CostFigure & { readonly usd: number } {
-  return {
-    usd: records.reduce((sum, record) => sum + (record.totalCostUsd ?? 0), 0),
-    unknownCost: records.filter(hasUnknownCostBasis).length,
-  };
-}
-
-/** Whether any of the run's models has an unknown cost basis, which leaves the run with no total (src/kit/runRecord.ts). */
-function hasUnknownCostBasis(record: RunRecord): boolean {
-  return Object.values(record.modelUsage).some((usage) => usage.costBasis === UNKNOWN_COST_BASIS);
 }
 
 // Per repo: what waits on the Operator and what is stuck, as of the filing.
@@ -1527,7 +1507,7 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, listedWith: Liste
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.
 
 /** A week as the instants it starts at (inclusive) and ends at (exclusive), and its Monday's date. */
-interface Week extends Window {
+export interface Week extends Window {
   readonly monday: string;
 }
 
@@ -1536,7 +1516,7 @@ const REVERT_WINDOW_MS = 30 * DAY_MS;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /** The week ending at the last Monday 00:00 at or before `now`, and the week before it. */
-function weeksEndingAt(now: number, timeZone: string): { thisWeek: Week; lastWeek: Week } {
+export function weeksEndingAt(now: number, timeZone: string): { thisWeek: Week; lastWeek: Week } {
   const today = wallClock(now, timeZone);
   // A calendar date as midnight UTC, so date arithmetic never meets a DST change.
   const thisMonday = Date.UTC(today.year, today.month - 1, today.day) - WEEKDAYS.indexOf(today.weekday) * DAY_MS;

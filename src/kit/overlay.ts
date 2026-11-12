@@ -5,13 +5,13 @@
 // programs and the Scorers' rubrics stay the pinned release (ADR-0003's addendum).
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { type GitHub, GitHubError } from "../github/client.ts";
+import { GitHubError, type ReadClient } from "../github/client.ts";
 import { KIT_PROMPT_NAMES, kitPromptPath } from "../guard/trust-root.ts";
 import { FULL_SHA, readSkillsLock, SKILLS_LOCK_PATH } from "../skills/lock.ts";
 import { KIT_REPO } from "./caller.ts";
 
 /** What the overlay reads of the Fabrik repo, through a read-only token. */
-export type KitReader = Pick<GitHub, "rest" | "fileText">;
+export type KitReader = Pick<ReadClient, "rest" | "fileText">;
 
 /**
  * The Kit files a candidate sha may change: the Kit's prompts, which the
@@ -35,7 +35,7 @@ const KIT = { owner, name };
  * forked too, so this reads one of those as the Fabrik repo's; the Operator,
  * who alone starts a Replay, names the sha.
  */
-export async function isKitCommit(github: Pick<GitHub, "rest">, sha: string): Promise<boolean> {
+export async function isKitCommit(github: Pick<ReadClient, "rest">, sha: string): Promise<boolean> {
   const path = `/repos/${KIT_REPO}/commits/${sha}`;
   const commit = await github.rest("GET", path, undefined, { allowNotFound: true }).catch((error: unknown) => {
     // GitHub answers a sha it has no commit for with a 422, or a 404.

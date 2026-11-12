@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { acceptedBody, aReading, aReplayIssue, replaySlice } from "../__fixtures__/replay.ts";
 import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { aRunRecord } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord } from "../read/builders.ts";
 import { replayMarksIn, type ReplayTicketEnd } from "../kit/replay.ts";
 import { planFor } from "./rules.ts";
 import type { IssueSnapshot, KitIssueSnapshot, LoopEvent, Plan, ReplayIssueSnapshot, ReplaySnapshot, Snapshot } from "./types.ts";

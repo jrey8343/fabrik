@@ -4,7 +4,7 @@
 // leaves nothing a user's gh can read, so for that one the wizard writes a
 // line to the file FABRIK_WIZARD_REPORT names.
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import type { Env } from "./exec.ts";
 
 /** The wizard, beside the setup program in the release setup runs from. */

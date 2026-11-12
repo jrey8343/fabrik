@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, factsOf, standingFactsOf } from "../read/builders.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
 import type { GitHubFacts, RepoKitFacts, RequiredChecksFact } from "./weeklySummary.ts";
@@ -46,7 +46,7 @@ describe("a Plain pull request's Standing", () => {
         stuckAt: null,
         awaits: null,
         subscription: null,
-        detail: { plain: "kit-bump" },
+        detail: { plain: "kit-bump", head: HEAD },
       },
     ]);
   });
@@ -58,11 +58,11 @@ describe("a Plain pull request's Standing", () => {
       standing === undefined ? undefined : { name: standing.name, move: standing.move, yours: standing.yours, stopsWork: standing.stopsWork, detail: standing.detail };
 
     it("is a draft, nobody's move, for a draft", () => {
-      expect(named(standingOf({ draft: true }))).toEqual({ name: "draft", move: "nobody", yours: false, stopsWork: false, detail: { plain: "kit-bump" } });
+      expect(named(standingOf({ draft: true }))).toEqual({ name: "draft", move: "nobody", yours: false, stopsWork: false, detail: { plain: "kit-bump", head: HEAD } });
     });
 
     it("conflicts, the Operator's, for one that cannot merge cleanly, and reads one GitHub hasn't worked out yet as merging cleanly", () => {
-      expect(named(standingOf({ mergeable: false }))).toEqual({ name: "conflicts", move: "operator", yours: true, stopsWork: false, detail: { plain: "kit-bump" } });
+      expect(named(standingOf({ mergeable: false }))).toEqual({ name: "conflicts", move: "operator", yours: true, stopsWork: false, detail: { plain: "kit-bump", head: HEAD } });
       expect(standingOf({ mergeable: null })?.name).toBe("yours-to-merge");
     });
 
@@ -77,7 +77,7 @@ describe("a Plain pull request's Standing", () => {
         move: "operator",
         yours: true,
         stopsWork: false,
-        detail: { plain: "kit-bump", check: "lint", checkIs: "failing" },
+        detail: { plain: "kit-bump", check: "lint", checkIs: "failing", head: HEAD },
       });
     });
 
@@ -91,7 +91,7 @@ describe("a Plain pull request's Standing", () => {
         move: "kit",
         yours: false,
         stopsWork: false,
-        detail: { plain: "kit-bump", check: "test", checksUnread: false },
+        detail: { plain: "kit-bump", check: "test", checksUnread: false, head: HEAD },
       });
     });
 
@@ -105,7 +105,7 @@ describe("a Plain pull request's Standing", () => {
         move: "operator",
         yours: true,
         stopsWork: false,
-        detail: { plain: "kit-bump", check: "lint", checkIs: "never-reported" },
+        detail: { plain: "kit-bump", check: "lint", checkIs: "never-reported", head: HEAD },
       });
     });
 
@@ -119,12 +119,15 @@ describe("a Plain pull request's Standing", () => {
       });
     });
 
-    it("is waiting on checks it could not read when the head's checks are unread, the repo's Kit wasn't read, or no check is listed", () => {
-      const unread = { name: "waiting-on-checks", move: "kit", yours: false, stopsWork: false, detail: { plain: "kit-bump", check: null, checksUnread: true } };
+    it("is waiting on checks it could not read when the head's checks are unread, or the repo's Kit wasn't read", () => {
+      const unread = { name: "waiting-on-checks", move: "kit", yours: false, stopsWork: false, detail: { plain: "kit-bump", check: null, checksUnread: true, head: HEAD } };
       expect(named(standingOf({}, "unread"))).toEqual(unread);
       expect(named(standingsIn({ plainPullRequests: [aPlainPullRequest()] }, kitWith({}))[0])).toEqual(unread);
       expect(named(standingsIn({ plainPullRequests: [aPlainPullRequest()] }, null)[0])).toEqual(unread);
-      expect(named(standingOf({}, []))).toEqual(unread);
+    });
+
+    it("is yours to merge when the head has an empty list, as a branch requiring no checks gives: none required is all passed", () => {
+      expect(named(standingOf({}, []))).toEqual({ name: "yours-to-merge", move: "operator", yours: true, stopsWork: false, detail: { plain: "kit-bump", head: HEAD } });
     });
 
     it("never reads a check the Kit config doesn't list: what the gather leaves out of the fact names nothing", () => {
@@ -137,6 +140,27 @@ describe("a Plain pull request's Standing", () => {
     expect(sinceOf({ createdAt: "2026-11-01T00:00:00Z", headCommittedAt: "2026-11-07T09:00:00Z" })).toBe("2026-11-07T09:00:00Z");
     expect(sinceOf({ createdAt: "2026-11-07T00:00:00Z", headCommittedAt: "2026-11-01T09:00:00Z" })).toBe("2026-11-07T00:00:00Z");
     expect(sinceOf({ createdAt: "2026-11-07T00:00:00Z", headCommittedAt: null })).toBe("2026-11-07T00:00:00Z");
+  });
+
+  describe("read with the time of each check's report", () => {
+    const sinceOf = (checks: RequiredChecksFact, overrides: Parameters<typeof aPlainPullRequest>[0] = {}) =>
+      standingsIn({ plainPullRequests: [aPlainPullRequest(overrides)] }, kitWith({ [HEAD]: checks }))[0]?.since;
+
+    it("stands since the last Required check passed, when every one has", () => {
+      expect(sinceOf([{ name: "test", is: "passed", at: "2026-11-07T09:30:00Z" }, { name: "lint", is: "passed", at: "2026-11-07T09:10:00Z" }])).toBe("2026-11-07T09:30:00Z");
+    });
+
+    it("stands since the report of the check it names: the failing one, or the one still running", () => {
+      expect(sinceOf([{ name: "test", is: "running", at: "2026-11-07T09:00:00Z" }, { name: "lint", is: "failing", at: "2026-11-07T09:20:00Z" }])).toBe("2026-11-07T09:20:00Z");
+      expect(sinceOf([{ name: "test", is: "passed", at: "2026-11-07T09:40:00Z" }, { name: "lint", is: "running", at: "2026-11-07T09:05:00Z" }])).toBe("2026-11-07T09:05:00Z");
+    });
+
+    it("stands since its head, opening or draft change as before when no report decided it: a check never reported, none required, or a draft", () => {
+      expect(sinceOf([{ name: "test", is: "passed", at: "2026-11-07T09:30:00Z" }, { name: "lint", is: "never-reported", at: null }])).toBe("2026-11-06T20:00:00Z");
+      expect(sinceOf([])).toBe("2026-11-06T20:00:00Z");
+      expect(sinceOf([{ name: "test", is: "failing", at: "2026-11-07T09:30:00Z" }], { draft: true })).toBe("2026-11-06T20:00:00Z");
+      expect(sinceOf([{ name: "test", is: "failing", at: "2026-11-07T09:30:00Z" }], { mergeable: false })).toBe("2026-11-06T20:00:00Z");
+    });
   });
 
   it("stands since it last left draft or went into it, when that came after its head and its opening", () => {
@@ -168,7 +192,7 @@ describe("a Plain pull request's Standing", () => {
           stuckAt: null,
           awaits: null,
           subscription: null,
-          detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft" },
+          detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft", head: HEAD },
         },
       ]);
     });
@@ -190,34 +214,34 @@ describe("a Plain pull request's Standing", () => {
           stuckAt: null,
           awaits: null,
           subscription: null,
-          detail: { plain: "pairing", pullRequest: "yours-to-merge" },
+          detail: { plain: "pairing", pullRequest: "yours-to-merge", head: HEAD },
         },
       ]);
     });
 
     it("is the pull request's own Standing, carrying the issue's number, when issue 12 is open with no Standing of its own", () => {
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 12, labels: [] })], plainPullRequests: [pairing({ mergeable: false })] })).toEqual([
-        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", stopsWork: false, detail: { plain: "pairing" } }),
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", stopsWork: false, detail: { plain: "pairing", head: HEAD } }),
       ]);
     });
 
     it("is the issue's own Standing, carrying the pull request's number, when that Standing already carries the issue's open agent PR", () => {
       const standings = standingsIn({ openIssues: [handedOver], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 12, draft: false })], plainPullRequests: [pairing({ draft: true })] });
       expect(standings.filter(({ issue, pullRequest }) => issue === 12 || pullRequest === 80)).toEqual([
-        expect.objectContaining({ issue: 12, pullRequest: 80, work: "ready-for-human", name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft" } }),
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "ready-for-human", name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft", head: HEAD } }),
       ]);
     });
 
     it("joins issue 12 when its body closes another issue first", () => {
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 12, labels: [] })], plainPullRequests: [pairing({ closes: [5, 12], mergeable: false })] })).toEqual([
-        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", detail: { plain: "pairing" } }),
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", detail: { plain: "pairing", head: HEAD } }),
       ]);
     });
 
     it("stands by itself when issue 12 is closed or missing", () => {
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"] })], plainPullRequests: [pairing()] })).toEqual([
         expect.objectContaining({ issue: 13, pullRequest: null, name: "yours-to-do" }),
-        expect.objectContaining({ issue: null, pullRequest: 80, work: "plain", name: "yours-to-merge", detail: { plain: "pairing" } }),
+        expect.objectContaining({ issue: null, pullRequest: 80, work: "plain", name: "yours-to-merge", detail: { plain: "pairing", head: HEAD } }),
       ]);
     });
   });

@@ -1,14 +1,14 @@
-// Small builders for the Retro evidence bundle's tests, beside the Weekly
-// summary's record and GitHub-facts builders (./weeklySummary.ts) that the
-// bundle's tests build its facts with: say only what a test cares about.
+// Small builders for the Retro evidence bundle's tests, beside the Kit's
+// record and GitHub-facts builders (src/read/builders.ts) that the bundle's
+// tests build its facts with: say only what a test cares about.
 import type { CommentFacts, RetroEvidenceInput, RetroIssueFacts } from "../kit/retroEvidence.ts";
 import { type RunRecord, runStoreName } from "../kit/runRecord.ts";
 import { followUpsSection } from "../loop/followUps.ts";
 import { verdictActions } from "../loop/review.ts";
 import type { Verdict } from "../loop/types.ts";
 import type { FollowUp } from "../loop/verdict.ts";
+import { aComment, aRunRecord, factsOf } from "../read/builders.ts";
 import { aPullRequest, aRetroIssue, retroBody } from "./snapshots.ts";
-import { aComment, aRunRecord, factsOf } from "./weeklySummary.ts";
 
 /**
  * What a Retro reads of `owner/product` as it fills Retro 120, whose window

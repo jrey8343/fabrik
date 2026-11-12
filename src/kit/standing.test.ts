@@ -1,8 +1,26 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
-import { aRunInFlight, aWeeklyLimitIssue } from "../__fixtures__/weeklySummary.ts";
+import {
+  aComment,
+  aDesignRound,
+  aDesignTurnFailedNotice,
+  aLabelAdded,
+  aMapCapRefusal,
+  anOpenAudit,
+  anOpenIssue,
+  anOpenPullRequest,
+  anOpenReplay,
+  anOpenRetro,
+  aPlainPullRequest,
+  aReplayBody,
+  aReview,
+  aRunInFlight,
+  aVerdictComment,
+  aWeeklyLimitIssue,
+  factsOf,
+  standingFactsOf,
+} from "../read/builders.ts";
 import { aTicket } from "../__fixtures__/snapshots.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";
@@ -48,7 +66,7 @@ describe("the Standing rule", () => {
           stuckAt: null,
           awaits: null,
           subscription: null,
-          detail: { plain: null },
+          detail: { plain: null, head: HEAD },
         },
       ]);
     });
@@ -129,7 +147,7 @@ describe("the Standing rule", () => {
           stuckAt: null,
           awaits: null,
           subscription: null,
-          detail: { handBack: null, role: null, failure: null, label: null },
+          detail: { handBack: null, role: null, failure: null, label: null, head: HEAD },
         },
       ]);
     });
@@ -644,10 +662,10 @@ describe("the Standing rule", () => {
         { kit },
       );
       expect(standings.map(({ pullRequest, name, detail }) => ({ pullRequest, name, detail }))).toEqual([
-        { pullRequest: 70, name: "waiting-on-checks", detail: { plain: "kit-bump", check: "test", checksUnread: false } },
-        { pullRequest: 71, name: "check-failing", detail: { plain: "setup", check: "test", checkIs: "failing" } },
-        { pullRequest: 72, name: "conflicts", detail: { plain: "kit-bump" } },
-        { pullRequest: 73, name: "draft", detail: { plain: "other" } },
+        { pullRequest: 70, name: "waiting-on-checks", detail: { plain: "kit-bump", check: "test", checksUnread: false, head: head("1") } },
+        { pullRequest: 71, name: "check-failing", detail: { plain: "setup", check: "test", checkIs: "failing", head: head("2") } },
+        { pullRequest: 72, name: "conflicts", detail: { plain: "kit-bump", head: head("p") } },
+        { pullRequest: 73, name: "draft", detail: { plain: "other", head: head("p") } },
       ]);
     });
   });
@@ -688,6 +706,31 @@ describe("the Standing rule", () => {
         { issue: null, pullRequest: 50 },
         { issue: null, pullRequest: 51 },
       ]);
+    });
+
+    it("carries its open pull request's head commit in detail.head, an agent PR's, a Plain one's and a Pairing session's, and no such key with none (#618)", () => {
+      const head = (digit: string) => digit.repeat(40);
+      const standings = standingsIn({
+        openIssues: [
+          anOpenIssue({ number: 7, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z")] }),
+          anOpenIssue({ number: 9, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-06T21:00:00Z")] }),
+          anOpenIssue({ number: 12 }),
+        ],
+        openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, headSha: head("1") })],
+        plainPullRequests: [
+          aPlainPullRequest({ number: 70, headSha: head("2") }),
+          aPlainPullRequest({ number: 71, headSha: head("3"), author: "operator", headRef: "fabrik/pair-12", closes: [12] }),
+        ],
+      });
+      const heads = standings.map((standing) => ({ issue: standing.issue, pullRequest: standing.pullRequest, head: "head" in standing.detail ? standing.detail.head : "none" }));
+      expect(heads).toEqual(
+        expect.arrayContaining([
+          { issue: 7, pullRequest: 50, head: head("1") },
+          { issue: 9, pullRequest: null, head: "none" },
+          { issue: null, pullRequest: 70, head: head("2") },
+          { issue: 12, pullRequest: 71, head: head("3") },
+        ]),
+      );
     });
   });
 });
@@ -858,7 +901,10 @@ describe("a Standing, as plain data", () => {
     for (const [name, kept] of Object.entries(fixture)) {
       // A stuck Standing's detail is the name it was's: the fixture's is matched by its `was`.
       const was = (kept.detail as { was?: string }).was;
-      const standing = all().find((read) => read.name === name && (was === undefined || ("was" in read.detail && read.detail.was === was)));
+      // `detail.head` is on a Standing with an open pull request only: the fixture's is matched by whether it has one.
+      const standing = all().find(
+        (read) => read.name === name && (was === undefined || ("was" in read.detail && read.detail.was === was)) && (read.pullRequest === null) === (kept["pullRequest"] === null),
+      );
       if (standing === undefined) throw new Error(`no test above produces a ${name} Standing`);
       expect(Object.keys(kept).toSorted()).toEqual(Object.keys(standing).toSorted());
       expect(Object.keys(kept.detail as object).toSorted()).toEqual(Object.keys(standing.detail).toSorted());

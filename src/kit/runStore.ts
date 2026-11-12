@@ -2,7 +2,7 @@
 // shared by every Product repo. A Kit constant, like the Kit's own repo, not a
 // Kit config field; so are the judge's model and timeout, which score the runs
 // recorded there.
-import { type GitHub, GitHubError } from "../github/client.ts";
+import { GitHubError, type ReadClient } from "../github/client.ts";
 
 export const RUN_STORE = { owner: "jrey8343", name: "fabrik-runs" } as const;
 
@@ -34,7 +34,7 @@ export const JUDGE_TIMEOUT_MINUTES = 15;
  * (its JWT). A 404 means the store doesn't exist yet or the App isn't on it:
  * setup isn't done, which is no failure.
  */
-export async function storeInstalled(app: Pick<GitHub, "rest">): Promise<boolean> {
+export async function storeInstalled(app: Pick<ReadClient, "rest">): Promise<boolean> {
   try {
     await app.rest("GET", `/repos/${RUN_STORE.owner}/${RUN_STORE.name}/installation`);
     return true;
@@ -49,7 +49,7 @@ export async function storeInstalled(app: Pick<GitHub, "rest">): Promise<boolean
  * Product repos' issues and transcripts their code, so a store others can
  * read is never written to, and a Retro never reads one.
  */
-export async function storeIsPrivate(store: Pick<GitHub, "rest">): Promise<boolean> {
+export async function storeIsPrivate(store: Pick<ReadClient, "rest">): Promise<boolean> {
   const repo = (await store.rest("GET", `/repos/${RUN_STORE.owner}/${RUN_STORE.name}`)) as { private?: unknown };
   return repo.private === true;
 }
