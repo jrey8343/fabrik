@@ -147,3 +147,9 @@ export type { MergedLastDayFacts } from "../kit/standingProduction.ts";
 export { readRound } from "./roundRead.ts";
 export type { RoundLine } from "../loop/roundLine.ts";
 export type { RoundRead } from "./roundRead.ts";
+
+// Captured routes and Prototypes on rows
+
+export { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+export { roundLineIn } from "../loop/roundLine.ts";
+export type { EvidenceMarker } from "../evidence/uiEvidence.ts";

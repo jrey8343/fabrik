@@ -48,6 +48,7 @@ import {
   costOf,
   costPerMergedPullRequestOf,
   DEFAULT_KIT_CONFIG,
+  evidenceMarkerIn,
   gatherRepo,
   GitHub,
   GitHubError,
@@ -78,6 +79,7 @@ import {
   refusalOf,
   requiredChecksFactOf,
   resolveKitConfig,
+  roundLineIn,
   rowsOf,
   RUN_RECORD_SCHEMA,
   runnerTimeOf,
@@ -101,6 +103,7 @@ import type {
   CostFigure,
   DeploymentsRead,
   DeployOf,
+  EvidenceMarker,
   Facts,
   HeadCheck,
   IssuesToRollIn,
@@ -331,6 +334,45 @@ const A_ROUND_LINE = {
   questions: [{ question: "Which page first?", recommendation: "The cart, as it's where people stop." }],
   asksMap: true,
 } as const satisfies RoundLine;
+
+/** A UI pull request's evidence marker, as the push job writes it and the preview step completes it. */
+const A_UI_EVIDENCE_MARKER = {
+  run: 4410,
+  artifact: 901,
+  failure: null,
+  routes: ["/book?when=today", "/"],
+  preview: { is: "linked", url: "https://fabrik-ticket-7.shop.example.dev/" },
+} as const satisfies EvidenceMarker;
+
+/** The body of a UI pull request the Fabrik App opened, its evidence section closed by its marker. */
+const A_UI_PULL_REQUEST_BODY = [
+  "The Implementer built the booking page.",
+  "",
+  "<!-- fabrik:ui-evidence-start -->",
+  "## UI evidence",
+  `<!-- fabrik:ui-evidence ${JSON.stringify(A_UI_EVIDENCE_MARKER)} -->`,
+].join("\n");
+
+/** A prototype round as the Fabrik App posts it: the Round's marker, the prototype round's, then its line. */
+const A_PROTOTYPE_ROUND = [
+  "<!-- fabrik:design-round 2 -->",
+  "<!-- fabrik:prototype-round -->",
+  `<!-- fabrik:round-line ${JSON.stringify({
+    v: 1,
+    kind: "prototype",
+    round: 2,
+    intro: "Two takes on the booking page.",
+    questions: [{ question: "Which variant?", recommendation: "B, as it shows the price first." }],
+    route: "/book",
+    recommended: "B",
+    variants: [
+      { letter: "A", summary: "The calendar first.", component: "https://github.com/owner/product/blob/b1/src/BookA.tsx", preview: null },
+      { letter: "B", summary: "The price first.", component: "https://github.com/owner/product/blob/b1/src/BookB.tsx", preview: null },
+    ],
+    captures: { run: 4420, artifact: 902 },
+  })} -->`,
+  "Two takes on the booking page.",
+].join("\n");
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -778,6 +820,17 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
         NOW,
       ),
     ]),
+
+  // Captured routes and Prototypes on rows
+
+  evidenceMarkerIn: () =>
+    evidenceMarkerIn(
+      A_UI_PULL_REQUEST_BODY,
+    ),
+  roundLineIn: () =>
+    roundLineIn(
+      A_PROTOTYPE_ROUND,
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -984,6 +1037,10 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     failedTurn: null,
     mapMayBeOffered: true,
   } satisfies RoundRead,
+
+  // Captured routes and Prototypes on rows
+
+  EvidenceMarker: A_UI_EVIDENCE_MARKER satisfies EvidenceMarker,
 };
 
 /**
