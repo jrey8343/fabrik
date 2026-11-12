@@ -45,7 +45,7 @@ async function ask(flags: FlagAnswers, prompt: Prompt | null, state: ProductStat
   return { answers, said };
 }
 
-const DEPLOYMENTS = "gh api repos/acme/clinic/deployments?per_page=100";
+const DEPLOYMENTS = "gh api repos/acme/clinic/deployments?per_page=100&page=1";
 
 /** Production's question, the other three answered by flag, with the repo's Deployments from a canned gh. */
 async function askProduction(flags: FlagAnswers, prompt: Prompt | null, { config, script = deploymentsOf("acme/clinic", []) }: { config?: string; script?: Script } = {}) {

@@ -126,7 +126,7 @@ export function deploymentsOf(repo: string, deployments: readonly CannedDeployme
     environment,
     created_at: new Date(Date.UTC(2026, 10, 1, ids[i])).toISOString(),
   }));
-  const script: Record<string, Answer> = { [`gh api repos/${repo}/deployments?per_page=100`]: { stdout: JSON.stringify(listed) } };
+  const script: Record<string, Answer> = { [`gh api repos/${repo}/deployments?per_page=100&page=1`]: { stdout: JSON.stringify(listed) } };
   deployments.forEach(({ state = "success", url = "" }, i) => {
     script[`gh api repos/${repo}/deployments/${ids[i]}/statuses?per_page=100`] = { stdout: JSON.stringify([{ state, environment_url: url }]) };
   });

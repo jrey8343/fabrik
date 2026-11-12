@@ -29,15 +29,16 @@ export async function gatherState(run: Run, productDir: string, repo: ProductSta
   return { repo, files, labels, secrets, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
 }
 
-/** How many of an environment's newest Deployments setup reads the statuses of, looking for its address. */
-const DEPLOYMENTS_PER_ENVIRONMENT = 5;
+/** A page of the repo's Deployments, as many as GitHub gives to one. */
+const DEPLOYMENTS_PAGE = 100;
 
 /**
- * The environments the repo's Deployments carry, from its newest hundred, and
+ * The environments the repo's Deployments carry, from every page of them, and
  * each one's address on its newest successful Deployment where GitHub has one:
  * a Deployment succeeded if any of its statuses was ever `success`, as GitHub
- * turns an earlier success `inactive`. A refused read is said, never thrown:
- * production's question is no reason for setup to stop.
+ * turns an earlier success `inactive`. It reads an environment's Deployments'
+ * statuses newest first, stopping at the first that succeeded. A refused read
+ * is said, never thrown: production's question is no reason for setup to stop.
  */
 export async function gatherDeployments(run: Run, cwd: string, repo: ProductState["repo"]): Promise<DeploymentsSeen> {
   try {
@@ -47,18 +48,27 @@ export async function gatherDeployments(run: Run, cwd: string, repo: ProductStat
   }
 }
 
+interface ListedDeployment {
+  readonly id: number;
+  readonly environment: string;
+  readonly created_at?: string;
+}
+
 async function readDeployments(run: Run, cwd: string, repo: ProductState["repo"]): Promise<DeploymentsSeen> {
-  const listed = await run("gh", ["api", `repos/${repo.owner}/${repo.name}/deployments?per_page=100`], { cwd });
-  if (listed.code !== 0) return { read: false, why: firstLine(listed.stderr || listed.stdout) };
-  const deployments = (JSON.parse(listed.stdout) as { id: number; environment: string; created_at?: string }[]).toSorted((a, b) =>
-    (b.created_at ?? "").localeCompare(a.created_at ?? ""),
-  );
+  const listed: ListedDeployment[] = [];
+  for (let page = 1; ; page++) {
+    const read = await run("gh", ["api", `repos/${repo.owner}/${repo.name}/deployments?per_page=${DEPLOYMENTS_PAGE}&page=${page}`], { cwd });
+    if (read.code !== 0) return { read: false, why: firstLine(read.stderr || read.stdout) };
+    const batch = JSON.parse(read.stdout) as ListedDeployment[];
+    listed.push(...batch);
+    if (batch.length < DEPLOYMENTS_PAGE) break;
+  }
+  const deployments = listed.toSorted((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
   const names = [...new Set(deployments.map((deployment) => deployment.environment))];
   const environments = [];
   for (const name of names) {
-    const newest = deployments.filter((deployment) => deployment.environment === name).slice(0, DEPLOYMENTS_PER_ENVIRONMENT);
     let url: string | null = null;
-    for (const { id } of newest) {
+    for (const { id } of deployments.filter((deployment) => deployment.environment === name)) {
       const read = await run("gh", ["api", `repos/${repo.owner}/${repo.name}/deployments/${id}/statuses?per_page=100`], { cwd });
       if (read.code !== 0) continue;
       const success = (JSON.parse(read.stdout) as { state: string; environment_url?: string | null }[]).find((status) => status.state === "success");

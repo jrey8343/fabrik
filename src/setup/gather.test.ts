@@ -6,7 +6,8 @@ import { type Answer, fakeCommands } from "../__fixtures__/setupCommands.ts";
 import { gatherDeployments } from "./gather.ts";
 
 const REPO = { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false };
-const LIST = "gh api repos/acme/clinic/deployments?per_page=100";
+const page = (n: number) => `gh api repos/acme/clinic/deployments?per_page=100&page=${n}`;
+const LIST = page(1);
 const statuses = (id: number) => `gh api repos/acme/clinic/deployments/${id}/statuses?per_page=100`;
 
 const json = (value: unknown): Answer => ({ stdout: JSON.stringify(value) });
@@ -64,15 +65,36 @@ describe("Reading a repo's Deployments for production's question", () => {
     expect((await read({ [LIST]: json([]) })).seen).toEqual({ read: true, environments: [] });
   });
 
-  it("reads at most five Deployments of an environment for its address", async () => {
-    const many = Array.from({ length: 8 }, (_, i) => deployment(8 - i, "production", `2026-11-0${8 - i}T09:00:00Z`));
+  it("lists an environment none of whose Deployments is among the newest hundred", async () => {
+    const previews = Array.from({ length: 100 }, (_, i) => deployment(200 - i, "preview", `2026-11-10T09:${String(i % 60).padStart(2, "0")}:00Z`));
+    const script: Record<string, Answer> = {
+      [page(1)]: json(previews),
+      [page(2)]: json([deployment(1, "production", "2026-10-01T09:00:00Z")]),
+      [statuses(1)]: json([status("success", "https://clinic.example.com")]),
+    };
+    for (const { id } of previews) script[statuses(id)] = json([status("success", "https://pr.clinic.example.dev")]);
+
+    const { seen } = await read(script);
+
+    expect(seen).toEqual({
+      read: true,
+      environments: [
+        { name: "preview", url: "https://pr.clinic.example.dev" },
+        { name: "production", url: "https://clinic.example.com" },
+      ],
+    });
+  });
+
+  it("reads further back than a run of failed Deployments for the newest that succeeded, and no further", async () => {
+    const many = Array.from({ length: 9 }, (_, i) => deployment(9 - i, "production", `2026-11-0${9 - i}T09:00:00Z`));
     const script: Record<string, Answer> = { [LIST]: json(many) };
     for (const { id } of many) script[statuses(id)] = json([status("failure")]);
+    script[statuses(2)] = json([status("inactive", "https://clinic.example.com"), status("success", "https://clinic.example.com")]);
 
     const { seen, calls } = await read(script);
 
-    expect(seen).toEqual({ read: true, environments: [{ name: "production", url: null }] });
-    expect(calls.filter((line) => line.includes("/statuses"))).toHaveLength(5);
+    expect(seen).toEqual({ read: true, environments: [{ name: "production", url: "https://clinic.example.com" }] });
+    expect(calls.filter((line) => line.includes("/statuses"))).toEqual([9, 8, 7, 6, 5, 4, 3, 2].map(statuses));
   });
 
   it("says why when the read is refused, and fails nothing", async () => {
