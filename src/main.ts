@@ -17,12 +17,14 @@ import {
   agentRunEventFrom,
   checkBuiltAsPlanned,
   auditEventFrom,
+  digestEventFrom,
   loopEventFrom,
   prototypeEventFrom,
   researchEventFrom,
   retroEventFrom,
   reviewEventFrom,
 } from "./github/events.ts";
+import { readDigestGiven } from "./github/digestGiven.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
@@ -53,8 +55,10 @@ type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranc
  * (FABRIK_REPLAY_RUN_ENDED), how its run ended; a Dispatch check in the
  * Dispatch job (FABRIK_DISPATCH_CHECK); a Design queue check in the Design
  * queue job (FABRIK_DESIGN_QUEUE_CHECK); otherwise the Actions event itself.
+ * `github` is the Fabrik App's client, which a Digest run's push job reads
+ * what Kit code hands the Digest's contract through.
  */
-async function loopEvent(repo: Repo, config: KitConfig): Promise<EventSource> {
+async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise<EventSource> {
   const replayEnded = process.env["FABRIK_REPLAY_RUN_ENDED"];
   if (replayEnded !== undefined && replayEnded !== "") return replayRunEvent(replayEnded, config);
   if (process.env["FABRIK_DISPATCH_CHECK"] === "true") {
@@ -93,6 +97,8 @@ async function loopEvent(repo: Repo, config: KitConfig): Promise<EventSource> {
       return { ...(await failedRunEvent(input, join(agentDir, AGENT_FAILURE_FILE))), branch: null };
     case "review":
       return { ...(await finishedReviewEvent(input, join(agentDir, AGENT_RESULT_FILE))), branch: null };
+    case "digest":
+      return { ...(await finishedDigestEvent(input, join(agentDir, AGENT_RESULT_FILE), github, repo)), branch: null };
     case "agent-result":
       return agentResultEvent(input, join(agentDir, AGENT_RESULT_FILE), repo);
   }
@@ -203,6 +209,7 @@ async function failedRunEvent(
     ...(input.subscription === undefined ? {} : { subscription: input.subscription }),
     ...(input.prototype === undefined ? {} : { prototype: input.prototype }),
     ...(input.conflict === undefined ? {} : { conflict: input.conflict }),
+    ...(input.digest === undefined ? {} : { digest: input.digest }),
   });
   return { event, source: `the failed ${input.role} run on #${input.issue}` };
 }
@@ -274,6 +281,23 @@ async function finishedReviewEvent(
     event,
     source: result === null ? `the red required checks on #${input.pullRequest}` : `the Review of #${input.pullRequest}`,
   };
+}
+
+/**
+ * The Digest writer's reply, from its result, for the pull request and the
+ * head the Kit job's plan named, with what Kit code hands the Digest's
+ * contract beside it (src/github/digestGiven.ts), none of it the agent's word.
+ */
+async function finishedDigestEvent(
+  input: Extract<PushJobInput, { kind: "digest" }>,
+  resultPath: string,
+  github: GitHub,
+  repo: Repo,
+): Promise<{ event: LoopEvent; source: string }> {
+  const result = readAgentRunResult(await readFile(resultPath, "utf8"));
+  const { pullRequest, headSha } = input;
+  const given = await readDigestGiven(github, repo, { repoUrl: thisRepoUrl(), pullRequest, headSha, runUrl: thisRunUrl() });
+  return { event: digestEventFrom(result, { pullRequest, headSha }, given, thisRunUrl()), source: `the Digest of #${pullRequest}` };
 }
 
 /**
@@ -421,7 +445,7 @@ async function main(landing: Landing | null): Promise<void> {
   }
   operator = config.operator;
 
-  const { event, source, branch, why } = await loopEvent(repo, config);
+  const { event, source, branch, why } = await loopEvent(repo, config, github);
   if (event === null) {
     await report(`Nothing to do: ${why ?? `the Loop doesn't act on ${source}`}`);
     return;

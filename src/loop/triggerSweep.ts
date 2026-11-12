@@ -22,6 +22,7 @@ export const TRIGGER_ROLES: Readonly<Record<TriggerLabel, AgentRole | null>> = {
   "agent:review": "review",
   "agent:research": "research",
   "agent:replay": null,
+  "agent:digest": "digest",
 };
 
 function roleOfTrigger(label: TriggerLabel): { readonly role?: AgentRole } {
@@ -86,6 +87,9 @@ function hasRunBehind({ number, label }: LabelledTrigger, underWay: RolesUnderWa
       return underWay.designTurns.includes(number);
     case "agent:replay":
       return underWay.claim || underWay.implement || underWay.review;
+    // The sweep leaves agent:digest alone: it reads as always having a run behind it, until the sweep is given its rule for a lost start.
+    case "agent:digest":
+      return true;
   }
 }
 

@@ -4,7 +4,7 @@
 // itself holds no relative time. The wording never quotes a repo's text.
 import type { HandBack } from "../loop/handBacks.ts";
 import { RUN_NAMES, runNamed } from "../loop/heldRun.ts";
-import { DESIGN_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
+import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
@@ -190,6 +190,7 @@ const ASKED_RUNS: Readonly<Record<TriggerLabel, string>> = {
   [REVIEW_LABEL]: "a Review",
   [RESEARCH_LABEL]: "a Research run",
   [REPLAY_TRIGGER_LABEL]: "a Replay",
+  [DIGEST_LABEL]: "a Digest run",
 };
 
 /**

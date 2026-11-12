@@ -473,6 +473,14 @@ export const REVIEW_CHECKS_JOB_NAME = "Review checks";
 export const REVIEW_JOB_NAME = "Review";
 
 /**
+ * The name of the Digest job in .github/workflows/loop.yml, which follows it
+ * with ` PR #<agent PR>`, as the Review job does (a test holds the two
+ * together). Called from a Product repo's caller workflow, it shows up as
+ * `<caller job> / Digest PR #50`.
+ */
+export const DIGEST_JOB_NAME = "Digest";
+
+/**
  * The name of the Design job in .github/workflows/loop.yml, which follows it
  * with ` #<issue>` (a test holds the two together). Called from a Product
  * repo's caller workflow, it shows up as `<caller job> / Design-session turn #7`.
@@ -1023,6 +1031,7 @@ async function gatherEventPart(
     case "pull-request-labeled":
     case "required-checks-finished":
     case "review-run-finished":
+    case "digest-run-finished":
     case "pull-request-left-draft":
     case "pull-request-closed":
     case "pull-request-changes-requested":
@@ -1047,7 +1056,8 @@ async function gatherEventPart(
     case "agent-run-failed": {
       // A failed Implement run on a Ticket with an open PR may be a Broken Retry, which posts a Verdict there (#434).
       const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
-      const open = event.role === "implement" && event.prototype !== true ? ticket.issue?.openPullRequests[0] : undefined;
+      // A failed Digest run's no-Digest line goes on the PR the Kit job named, closed by now or not.
+      const open = event.digest?.pullRequest ?? (event.role === "implement" && event.prototype !== true ? ticket.issue?.openPullRequests[0] : undefined);
       if (open === undefined) return ticket;
       const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);
       return { ...ticket, pullRequest };
@@ -2309,8 +2319,8 @@ export function isJobNamed(name: string, jobName: string): boolean {
 
 /**
  * Whether a job's name is that of the agent job a route to `role` starts: an
- * Implement or Review job, named for its work or not, a Design-session or
- * prototype turn, or a Triage, Audit, Retro or Research job. Never asked of a
+ * Implement or Review job, named for its work or not, a Digest job, a
+ * Design-session or prototype turn, or a Triage, Audit, Retro or Research job. Never asked of a
  * skipped job, whose name is never worked out.
  */
 export function isAgentJobNamed(role: AgentRole, name: string): boolean {
@@ -2319,6 +2329,8 @@ export function isAgentJobNamed(role: AgentRole, name: string): boolean {
       return IMPLEMENT_JOB.test(name);
     case "review":
       return REVIEW_JOB.test(name);
+    case "digest":
+      return DIGEST_JOB.test(name);
     case "design":
       return DESIGN_JOB.test(name);
     default:
@@ -2333,6 +2345,9 @@ export function isAgentJobNamed(role: AgentRole, name: string): boolean {
  */
 const IMPLEMENT_JOB = new RegExp(`^(?:.+ / )?${IMPLEMENT_JOB_NAME}(?: #([1-9][0-9]*)(?: \\(Retry ([1-9][0-9]*)\\))?)?$`);
 const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #([1-9][0-9]*))?$`);
+
+/** A Digest job's name, as a caller workflow shows it or not: always named for its pull request, since no release ran one unnamed. */
+const DIGEST_JOB = new RegExp(`^(?:.+ / )?${DIGEST_JOB_NAME} PR #([1-9][0-9]*)$`);
 
 /**
  * Whether an Implement job is under way anywhere in the repo (#387), as

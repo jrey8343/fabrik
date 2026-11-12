@@ -6,14 +6,15 @@ import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, Repl
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
+import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
 import type { PrototypeRequestMarker } from "./markers.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
-export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research";
+export type AgentRole = "triage" | "design" | "implement" | "review" | "audit" | "retro" | "research" | "digest";
 
-export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research"];
+export const AGENT_ROLES: readonly AgentRole[] = ["triage", "design", "implement", "review", "audit", "retro", "research", "digest"];
 
 /** How an agent job, or the Review checks job (src/review/wait.ts), says it failed, in the report it leaves for the push job (src/agent/failure.ts). */
 export type ReportedFailure =
@@ -213,10 +214,10 @@ export type LoopEvent =
   | {
       readonly kind: "agent-run-finished";
       /**
-       * Implement, Review, Auditor, Retro and Researcher runs finish through
-       * their own events, which carry what their push jobs hold.
+       * Implement, Review, Auditor, Retro, Researcher and Digest runs finish
+       * through their own events, which carry what their push jobs hold.
        */
-      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro" | "research">;
+      readonly role: Exclude<AgentRole, "implement" | "review" | "audit" | "retro" | "research" | "digest">;
       readonly issue: number;
       /** The text the agent emitted as its structured output, unparsed. */
       readonly output: string;
@@ -313,6 +314,12 @@ export type LoopEvent =
        * PR it was on, and the default branch's head it was started for.
        */
       readonly conflict?: { readonly pullRequest: number; readonly main: string };
+      /**
+       * For a Digest run, from the Kit job's outputs: the agent PR it was
+       * on, and the head it was to write the Digest as of. `issue` is that
+       * PR's Ticket.
+       */
+      readonly digest?: { readonly pullRequest: number; readonly headSha: string };
     }
   | { readonly kind: "issue-closed"; readonly issue: number }
   /** A PR was opened or pushed to, so its required checks start; a Review waits for them. */
@@ -348,6 +355,19 @@ export type LoopEvent =
       readonly repoUrl: string;
       /** The Operator comments the Reviewer was given; none when left out. */
       readonly operatorComments?: readonly GivenOperatorComment[];
+    }
+  | {
+      /** The Digest writer finished on an agent PR; its push job holds the reply, not yet posted (ADR-0022). */
+      readonly kind: "digest-run-finished";
+      readonly pullRequest: number;
+      /** The head the run was started at, which the pass was given on: from the Kit job's plan, never from the agent. */
+      readonly headSha: string;
+      /** The Digest writer's structured output, the `<digest>` tag's JSON, unparsed (src/loop/digestContract.ts). */
+      readonly output: string;
+      /** What Kit code hands the contract beside the reply, which the push job read (src/github/digestGiven.ts), never the agent. */
+      readonly given: DigestGiven;
+      /** The Actions run, which the Digest and a no-Digest line link to. */
+      readonly runUrl: string;
     }
   | {
       /** The Auditor finished on a pending Audit; its push job holds the reply, not yet landed (#150). */
@@ -1544,6 +1564,8 @@ export type Action =
       readonly keptBranch?: KeptBranchStart;
       /** For an Auditor run: the pending Audit's marked commit, which its job checks out and reads up to. */
       readonly commit?: string;
+      /** For a Digest run: the head its pass was given on, which its job checks out and its Digest is written as of. */
+      readonly headSha?: string;
       /**
        * For a Review of a UI PR: where its marker says the UI evidence is kept,
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.

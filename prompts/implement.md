@@ -75,7 +75,7 @@ The Kit refuses, and hands to the Operator, any branch that changes a file that 
 
 - `AGENTS.md` or `CLAUDE.md`, in any folder
 - anything under `.claude/settings*` or `.claude/skills/`, in any folder
-- the Kit's prompts, `prompts/triage.md`, `prompts/design.md`, `prompts/prototype.md`, `prompts/implement.md`, `prompts/review.md`, `prompts/audit.md`, `prompts/retro.md` and `prompts/research.md`, and anything under `prompts/scorers/`
+- the Kit's prompts, `prompts/triage.md`, `prompts/design.md`, `prompts/prototype.md`, `prompts/implement.md`, `prompts/review.md`, `prompts/audit.md`, `prompts/retro.md`, `prompts/research.md` and `prompts/digest.md`, and anything under `prompts/scorers/`
 - anything under `.fabrik/` or `.github/workflows/`
 - anything under `docs/product/` at the repo root, where the Vision and Roadmap live (a `docs/product/` folder elsewhere is fine)
 - `CODING_STANDARDS.md` at the repo root

@@ -166,8 +166,9 @@ function givenBackSince({ run, heldAt }: Waiting, on: HeldTargetSnapshot): boole
  * null while it still is. A Triage run was held on an issue with no state
  * label (needs-triage came off), a Design-session turn on a needs-design one,
  * an Implement run on a ready-for-agent Ticket, a Review on a draft agent PR,
- * an Auditor run on the App's pending Audit, and a Researcher run on a
- * research Decision.
+ * an Auditor run on the App's pending Audit, a Researcher run on a
+ * research Decision, and a Digest run on an open agent PR, whose label's own
+ * rule declines it once its pass no longer stands (src/loop/digest.ts).
  */
 function movedOn(run: HeldRun, on: HeldTargetSnapshot): string | null {
   const name = `The ${runNamed(run.role)}'s`;
@@ -193,5 +194,7 @@ function movedOn(run: HeldRun, on: HeldTargetSnapshot): string | null {
     case "research":
       // Its Map isn't read here: agent:research, given back, starts nothing under a closed one (src/loop/research.ts).
       return on.labels.includes(RESEARCH_DECISION_LABEL) ? null : `${name} #${on.number} is no longer a research Decision`;
+    case "digest":
+      return null;
   }
 }

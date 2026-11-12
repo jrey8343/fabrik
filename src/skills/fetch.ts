@@ -25,8 +25,8 @@ const OLD_SKILLS_MARKER = ".fabrik-skills-sha";
 
 /**
  * Which Extra skill picks a fetch installs: one role's, or every role's (a
- * session at the wheel). The Auditor and the Retro take none, so their runs
- * get the Base skills alone (ADR-0008).
+ * session at the wheel). The Auditor, the Retro, the Researcher and the
+ * Digest writer take none, so their runs get the Base skills alone (ADR-0008).
  */
 export type SkillsToInstall = AgentRole | "every";
 

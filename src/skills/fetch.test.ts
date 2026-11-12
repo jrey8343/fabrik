@@ -149,6 +149,7 @@ describe("Installing a Product repo's Extra skills", () => {
     ["an Auditor", "audit"],
     ["a Retro", "retro"],
     ["a Researcher", "research"],
+    ["a Digest", "digest"],
   ] as const)("installs only the Base skills for %s run, and downloads no Skills source, whatever the roles pick", async (_run, role) => {
     const product = await aProductCheckout(PINS, {
       design: ["jrey8343/skills/event-storming"],

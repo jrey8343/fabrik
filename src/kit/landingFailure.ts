@@ -60,6 +60,7 @@ const RUN_NAMES: Readonly<Record<AgentRole, string>> = {
   audit: "Audit run",
   retro: "Retro run",
   research: "Research run",
+  digest: "Digest run",
 };
 
 /**
@@ -111,7 +112,14 @@ export function pushLanding(input: PushJobInput, runUrl: string): Landing | null
         agentWork: input.withResult,
         role: "review",
       };
+    case "digest":
+      return { ...push, doing: `the Digest of #${input.pullRequest}`, target: input.pullRequest, agentWork: true, role: "digest" };
     case "agent-failure":
+      // A failed Digest run lands its no-Digest line, on its PR, never a failure notice on its Ticket.
+      if (input.digest !== undefined) {
+        const { pullRequest } = input.digest;
+        return { ...push, doing: `the no-Digest line of the ${RUN_NAMES.digest} on #${pullRequest}`, target: pullRequest, agentWork: false, role: "digest" };
+      }
       return {
         ...push,
         doing: `the failure notice of the ${RUN_NAMES[input.role]} on #${input.issue}`,

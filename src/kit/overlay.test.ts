@@ -20,6 +20,7 @@ const PINNED: Record<string, string> = {
   "prompts/audit.md": "The pinned audit prompt\n",
   "prompts/retro.md": "The pinned retro prompt\n",
   "prompts/research.md": "The pinned research prompt\n",
+  "prompts/digest.md": "The pinned digest prompt\n",
   "prompts/scorers/efficiency.md": "The pinned efficiency rubric\n",
   "skills.lock.json": PINNED_LOCK,
   "skills/fabrik-pair/SKILL.md": "The pinned pairing skill\n",

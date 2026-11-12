@@ -20,10 +20,13 @@
 // that Subscription (#433), held even with no weekly-limit issue open, its
 // marker on a usage-credits or token-rotation issue (#470). An Auditor or Retro
 // run is never re-run or held: the tick can't start one at a reset, so its
-// Audit or Retro fails, for the tick to try again.
+// Audit or Retro fails, for the tick to try again. A failed Digest run gets
+// no failure notice at all: the no-Digest line says so on its PR, mentioning
+// nobody (src/loop/digest.ts).
 import { keptBranchOff } from "./backToDesign.ts";
 import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
+import { noDigestAfter } from "./digest.ts";
 import { heldLineOn, heldRunName } from "./heldLine.ts";
 import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
 import { heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
@@ -220,6 +223,8 @@ function heldOnRefusal(
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig, pullRequest: PullRequestSnapshot | null = null): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
+  // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again.
+  if (run.role === "digest") return noDigestAfter(run, failure, pullRequest);
   const ranOn = ranOnOf(run, config);
   const failedRun = run.prototype === true ? `The prototype turn on #${run.issue}` : `The ${runNamed(run.role)} on #${run.issue}`;
   const refused = heldOnRefusal(run, failure, context, ranOn);

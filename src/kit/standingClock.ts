@@ -6,7 +6,7 @@
 // comment, label or review never does.
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { countLandedNothing, pushedSinceVerdictIn, retryNoteSinceVerdictIn } from "../github/threads.ts";
-import { DESIGN_LABEL, DISPATCH_LABEL, READY_FOR_AGENT, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
+import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, READY_FOR_AGENT, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
 import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
 import { stuckBarMinutes } from "../loop/recoveryWaits.ts";
 import { MAX_RETRIES, retryNumber } from "../loop/retry.ts";
@@ -34,6 +34,7 @@ const ROLES_BEHIND: Readonly<Record<TriggerLabel, readonly AwaitedRole[]>> = {
   [REVIEW_LABEL]: ["review"],
   [RESEARCH_LABEL]: ["research"],
   [REPLAY_TRIGGER_LABEL]: ["replay", "implement", "review"],
+  [DIGEST_LABEL]: ["digest"],
 };
 
 /**

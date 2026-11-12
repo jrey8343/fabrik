@@ -1,0 +1,123 @@
+// The Digest's rules (ADR-0022): when `agent:digest` starts the Digest writer
+// on a pull request, and how its attempt lands. Pure, no I/O.
+import { declineTrigger } from "./declineTrigger.ts";
+import { digestCommentOf, noDigestLine, parseDigestReply } from "./digestContract.ts";
+import { DIGEST_LABEL } from "./labels.ts";
+import { runInFlight, runName } from "./retry.ts";
+import type { Action, InfrastructureFailure, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
+
+/**
+ * `agent:digest` added to a pull request, whoever added it, starts a Digest
+ * run at the head its pass was given on: only on an open agent pull request
+ * whose latest Verdict is a pass on its current head, with no run in flight
+ * on it and the Digest on. Otherwise the label comes off with one line
+ * saying why, as a declined `agent:review` does. In draft or at the Merge
+ * gate alike: the label never moves the gate.
+ */
+export function startDigestOnLabel(pullRequest: PullRequestSnapshot, config: KitConfig): Plan {
+  const why = whyNoDigest(pullRequest, config);
+  if (why !== null) return { kind: "act", actions: declineTrigger(pullRequest.number, DIGEST_LABEL, why) };
+  const { model, effort, timeoutMinutes } = config.roles.digest;
+  return {
+    kind: "act",
+    actions: [{ kind: "start-agent-run", role: "digest", issue: pullRequest.number, headSha: pullRequest.headSha, model, effort, timeoutMinutes }],
+  };
+}
+
+/** Why `agent:digest` starts no Digest run on this pull request, as a clause with no full stop, or null when it starts one. */
+function whyNoDigest(pullRequest: PullRequestSnapshot, config: KitConfig): string | null {
+  const { number } = pullRequest;
+  if (!config.digest.enabled) return "the Digest is off in this repo's Kit config (`digest.enabled`)";
+  if (!pullRequest.isAgent) return `#${number} isn't an agent PR`;
+  if (pullRequest.ticket === null) return `#${number}'s branch names no Ticket`;
+  if (!pullRequest.open) return `#${number} is closed`;
+  const run = runInFlight(pullRequest);
+  if (run !== null) return `${runName(run)} on #${number} is still in flight`;
+  if (!passedAt(pullRequest, pullRequest.headSha)) return `#${number} has no pass on its current head, ${pullRequest.headSha.slice(0, 7)}`;
+  return null;
+}
+
+type Written = Extract<LoopEvent, { kind: "digest-run-finished" }>;
+type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
+
+const MISSING_PULL_REQUEST: Plan = { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the pull request" };
+
+/**
+ * How a finished Digest run lands, in the push job. Whichever way, the label
+ * comes off, last, so adding it again is a fresh event:
+ * - dropped, when the pull request is closed, its head has moved, a run is
+ *   now in flight on it, or its latest Verdict is no longer that pass:
+ *   nothing is posted;
+ * - refused, when the reply breaks its shape or Kit code refuses the Digest
+ *   it would render: the no-Digest line is posted, with Kit code's reason;
+ * - otherwise the Digest is posted, once, and never edited.
+ * Nothing else moves: not the pull request's draft state, not a review
+ * request. Nothing in the Loop moves because of what a Digest says.
+ */
+export function landDigest(event: Written, { pullRequest }: Pick<Snapshot, "pullRequest">): Plan {
+  if (pullRequest === null) return MISSING_PULL_REQUEST;
+  const dropped = whyDropped(pullRequest, event.headSha);
+  if (dropped !== null) return drop(pullRequest, dropped);
+  const reply = parseDigestReply(event.output);
+  const comment = reply.ok ? digestCommentOf(reply.output, event.given) : { ok: false as const, refused: reply.errors.join("; ") };
+  const body = comment.ok ? comment.body : noDigestLine({ head: event.headSha, how: "refused", reason: comment.refused, runUrl: event.runUrl });
+  return attemptEnded(pullRequest, body);
+}
+
+/**
+ * A Digest run that failed or ran past its time limit, in the push job:
+ * the no-Digest line says how, on the pull request, and the label comes
+ * off. No failure notice follows, nobody is mentioned, nothing is handed to
+ * the Operator and nothing counts against the Ticket's Retries. A reply
+ * the agent job's own check refused reads as refused here too. One for a
+ * pull request that has moved on is dropped, as a finished one is.
+ */
+export function noDigestAfter(run: FailedRun, failure: InfrastructureFailure, pullRequest: PullRequestSnapshot | null): Plan {
+  if (pullRequest === null || run.digest === undefined || run.digest.pullRequest !== pullRequest.number) return MISSING_PULL_REQUEST;
+  const head = run.digest.headSha;
+  const dropped = whyDropped(pullRequest, head);
+  if (dropped !== null) return drop(pullRequest, dropped);
+  const { runUrl } = run;
+  if (failure === "timeout") return attemptEnded(pullRequest, noDigestLine({ head, how: "timed-out", runUrl }));
+  if (failure === "missing-output") return attemptEnded(pullRequest, noDigestLine({ head, how: "refused", reason: REFUSED_IN_AGENT_JOB, runUrl }));
+  return attemptEnded(pullRequest, noDigestLine({ head, how: "failed", runUrl }));
+}
+
+/** Kit code's reason on a reply the agent job's check refused: its own words, never the agent's. */
+const REFUSED_IN_AGENT_JOB = "it broke the reply's shape in the agent job";
+
+/** What an attempt that ends with something to say comes to: its one comment, then the label off. */
+function attemptEnded(pullRequest: PullRequestSnapshot, body: string): Plan {
+  return { kind: "act", actions: [{ kind: "comment", issue: pullRequest.number, body }, labelOff(pullRequest)] };
+}
+
+/** A dropped attempt: nothing is posted, the label comes off, and the step summary says why. */
+function drop(pullRequest: PullRequestSnapshot, why: string): Plan {
+  return { kind: "act", actions: [labelOff(pullRequest)], notes: [`The Digest of #${pullRequest.number} was dropped: ${why}`] };
+}
+
+function labelOff(pullRequest: PullRequestSnapshot): Action {
+  return { kind: "remove-label", issue: pullRequest.number, label: DIGEST_LABEL };
+}
+
+/**
+ * Why a Digest written as of `headSha` is not the pull request's to have any
+ * more, or null while it is: the pull request closed, its head moved, a run
+ * is now in flight on it, or its latest Verdict is no longer that pass.
+ */
+function whyDropped(pullRequest: PullRequestSnapshot, headSha: string): string | null {
+  const { number } = pullRequest;
+  const short = headSha.slice(0, 7);
+  if (!pullRequest.open) return `#${number} is closed`;
+  if (pullRequest.headSha !== headSha) return `#${number} has moved on from ${short}`;
+  const run = runInFlight(pullRequest);
+  if (run !== null) return `${runName(run)} on #${number} is in flight`;
+  if (!passedAt(pullRequest, headSha)) return `#${number}'s latest Verdict is no longer the pass on ${short}`;
+  return null;
+}
+
+/** Whether the pull request's latest Verdict is a pass given on `headSha`. */
+function passedAt(pullRequest: PullRequestSnapshot, headSha: string): boolean {
+  const latest = pullRequest.verdicts.at(-1);
+  return latest !== undefined && latest.verdict === "pass" && latest.headSha === headSha;
+}

@@ -31,6 +31,11 @@ export interface KitConfig {
     readonly retro: AgentRole;
     /** The Researcher; it takes no Extra skills (ADR-0008). */
     readonly research: AgentRole;
+    /**
+     * The Digest writer (ADR-0022); it takes no Extra skills (ADR-0008). Left
+     * out, its model and effort are this repo's own `roles.review`.
+     */
+    readonly digest: AgentRole;
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
@@ -60,6 +65,10 @@ export interface KitConfig {
     /** The UTC day of the week the Retro runs; null turns the Retro off. */
     readonly day: RetroDay | null;
   };
+  readonly digest: {
+    /** Whether the Kit writes Digests in this repo; false declines `agent:digest`. */
+    readonly enabled: boolean;
+  };
   /** The Operator's GitHub login; null means the Product repo's owner. */
   readonly operator: string | null;
   /**
@@ -67,7 +76,7 @@ export interface KitConfig {
    * the name of a `Fabrik` vault item holding that Subscription's token.
    */
   readonly subscriptions: readonly string[];
-  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's, the Retro's and the Researcher's included. */
+  /** Each role's own instructions from .fabrik/<role>.md, the Auditor's, the Retro's, the Researcher's and the Digest writer's included. */
   readonly instructions: Readonly<Record<InstructedRole, string | null>>;
   /** The Product repo's own Skills sources, from .fabrik/skills.lock.json. */
   readonly skillsSources: readonly SkillsSource[];
@@ -349,15 +358,15 @@ export type Phase = "triage" | "design" | "implement" | "review";
 
 export const PHASES: readonly Phase[] = ["triage", "design", "implement", "review"];
 
-/** Whether an AFK role is a Phase, and so takes Extra skills: the Auditor and the Retro take none (ADR-0008). */
+/** Whether an AFK role is a Phase, and so takes Extra skills: the Auditor, the Retro, the Researcher and the Digest writer take none (ADR-0008). */
 export function isPhase(role: AgentRoleName): role is Phase {
   return (PHASES as readonly AgentRoleName[]).includes(role);
 }
 
 /**
  * The roles a Product repo can give its own instructions in .fabrik/<role>.md:
- * every AFK role, so every Phase, the Auditor, the Retro and the Researcher,
- * which take no Extra skills (ADR-0008) and so are no Phase.
+ * every AFK role, so every Phase, the Auditor, the Retro, the Researcher and
+ * the Digest writer, which take no Extra skills (ADR-0008) and so are no Phase.
  */
 export type InstructedRole = AgentRoleName;
 
@@ -404,6 +413,8 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     audit: { model: OPUS, effort: null, timeoutMinutes: 45 },
     retro: { model: OPUS, effort: null, timeoutMinutes: 45 },
     research: { model: OPUS, effort: null, timeoutMinutes: 30 },
+    // The Reviewer's model and effort, which a repo's own roles.review replaces (readConfig).
+    digest: { model: OPUS, effort: null, timeoutMinutes: 10 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: OPUS, effort: null },
   },
@@ -415,10 +426,11 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   // Saturday, a day before the Audit's Sunday, so the two frontier runs never share an
   // hour and both are open by Monday's Weekly summary.
   retro: { day: "saturday" },
+  digest: { enabled: true },
   operator: null,
   // The V1 vault item, so a repo that lists none keeps the one Subscription it always ran on.
   subscriptions: ["Claude token"],
-  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null, research: null },
+  instructions: { triage: null, design: null, implement: null, review: null, audit: null, retro: null, research: null, digest: null },
   skillsSources: [],
   extraSkills: { triage: [], design: [], implement: [], review: [] },
   // Visual evidence is off until a Product repo turns it on with /fabrik-visual-evidence.
@@ -601,6 +613,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
   const defaults = DEFAULT_KIT_CONFIG;
   const sandbox = file.object("sandbox");
   const roles = file.object("roles");
+  const review = readPickingRole(roles.object("review"), defaults.roles.review, picks, "review");
   return {
     ...defaults,
     sandbox: {
@@ -615,10 +628,12 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
       triage: readPickingRole(roles.object("triage"), defaults.roles.triage, picks, "triage"),
       design: readPickingRole(roles.object("design"), defaults.roles.design, picks, "design"),
       implement: readPickingRole(roles.object("implement"), defaults.roles.implement, picks, "implement"),
-      review: readPickingRole(roles.object("review"), defaults.roles.review, picks, "review"),
+      review,
       audit: readAgentRole(roles.object("audit"), defaults.roles.audit),
       retro: readAgentRole(roles.object("retro"), defaults.roles.retro),
       research: readAgentRole(roles.object("research"), defaults.roles.research),
+      // The Digest writer runs on this repo's Reviewer's model and effort unless it sets its own, within its own time limit.
+      digest: readAgentRole(roles.object("digest"), { ...review, timeoutMinutes: defaults.roles.digest.timeoutMinutes }),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },
@@ -627,6 +642,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     monitor: readMonitor(file.object("monitor"), defaults.monitor),
     audit: readAudit(file.object("audit"), defaults.audit),
     retro: readRetro(file.object("retro"), defaults.retro),
+    digest: { enabled: file.object("digest").boolean("enabled") ?? defaults.digest.enabled },
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
     subscriptions: file.subscriptions("subscriptions") ?? defaults.subscriptions,
     ui: readUi(file.nullableObject("ui")),

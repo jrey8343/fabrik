@@ -23,7 +23,7 @@ import { brokenRunOf, infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
 import { type AgentRole, type BrokenRun, type InfrastructureFailure, isStepUpReason, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
-import { isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RERUN_WAIT_JOB, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
+import { DIGEST_JOB, isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RERUN_WAIT_JOB, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
@@ -269,6 +269,9 @@ function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): 
       if (!input.withResult) return null;
       return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null, broken: null };
     }
+    // A Digest run is recorded as any run is, on its Ticket and pull request.
+    case "digest":
+      return { role: "digest", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs[DIGEST_JOB], failure: null, broken: null };
     case "agent-failure": {
       const { role, issue, jobResult, secretsStep } = input;
       const job = failedJob(end.needs, role);

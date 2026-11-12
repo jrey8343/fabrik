@@ -1291,6 +1291,54 @@ describe("Gathering the labels of the Ticket a pull request was cut for", () => 
   });
 });
 
+describe("Gathering what a Digest run's push job lands on (ADR-0022)", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
+
+  /** A GitHub holding a Ticket and the pull request cut for it: each query is answered by the fake that holds what it asks for. */
+  function ticketAndPullRequest(): GitHub {
+    const issues = issueGitHub({ labels: ["ready-for-agent"] });
+    const pullRequests = pullRequestGitHub({ body: "Saves the cart.\n\nCloses #7", closing: [{ number: 7, labels: ["ready-for-agent"] }] });
+    return {
+      graphql: (query: string, variables: Record<string, unknown>) => (query.includes("pullRequest(number: $number)") ? pullRequests : issues).graphql(query, variables),
+    } as unknown as GitHub;
+  }
+
+  it("gathers the pull request a finished Digest run wrote of", async () => {
+    const written = {
+      kind: "digest-run-finished",
+      pullRequest: 50,
+      headSha: HEAD_SHA,
+      output: "{}",
+      given: { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN },
+      runUrl: RUN,
+    } as const;
+
+    const snapshot = await gatherSnapshot(ticketAndPullRequest(), repo, written, null, APP_LOGIN);
+
+    expect(snapshot.pullRequest).toMatchObject({ number: 50, isAgent: true, ticket: 7, headSha: HEAD_SHA });
+    expect(snapshot.issue).toBeNull();
+  });
+
+  // The Ticket's own list of open pull requests may no longer hold it: a failed run's line goes where the Kit job's plan said.
+  it("gathers the Ticket and the pull request a failed Digest run names, though the Ticket lists no open pull request", async () => {
+    const failed = {
+      kind: "agent-run-failed",
+      role: "digest",
+      issue: 98,
+      runUrl: RUN,
+      jobResult: "cancelled",
+      secretsStep: "success",
+      report: null,
+      digest: { pullRequest: 50, headSha: HEAD_SHA },
+    } as const;
+
+    const snapshot = await gatherSnapshot(ticketAndPullRequest(), repo, failed, null, APP_LOGIN);
+
+    expect(snapshot.issue).toMatchObject({ number: 98, openPullRequests: [] });
+    expect(snapshot.pullRequest).toMatchObject({ number: 50, headSha: HEAD_SHA });
+  });
+});
+
 describe("Gathering the empty diffs of the Ticket a pull request was cut for (#415)", () => {
   const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
   const gathered = async (closing: readonly ClosingIssue[]) =>
@@ -3499,7 +3547,7 @@ describe("Gathering a scheduled tick's trigger-sweep slice (#419)", () => {
     ]);
     // Closed ones are never swept.
     expect(asked.map(({ query }) => /(issues|pullRequests)\(states: OPEN, labels: \$triggers/.exec(query)?.[1])).toEqual(["issues", "pullRequests"]);
-    expect(asked[0]?.variables["triggers"]).toEqual(["agent:implement", "agent:design", "agent:review", "agent:research", "agent:replay"]);
+    expect(asked[0]?.variables["triggers"]).toEqual(["agent:implement", "agent:design", "agent:review", "agent:research", "agent:replay", "agent:digest"]);
   });
 
   it("reads which roles have a job under way in an unfinished run, called from a caller workflow or not, leaving out jobs their run skipped", async () => {

@@ -369,6 +369,7 @@ export function workOf(role: AgentRole): StandingWork {
     audit: "audit",
     retro: "retro",
     research: "research-decision",
+    digest: "ticket",
   };
   return works[role];
 }
@@ -383,6 +384,7 @@ function placeOf(role: AgentRole): StandingPlace | null {
     audit: null,
     retro: null,
     research: null,
+    digest: "review",
   };
   return places[role];
 }
