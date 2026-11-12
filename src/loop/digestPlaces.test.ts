@@ -613,7 +613,7 @@ describe("The Digest writer's prompt, on places", () => {
   });
 
   it("gives places their part of the reply's shape", () => {
-    expect(output).toContain("Each has `kind`, `claim`, `sentence`, `asks`, `places` and `suggestedRequest`");
+    expect(output).toContain("Each has `kind`, `claim`, `sentence`, `asks`, `places`, `picture` and `suggestedRequest`");
     expect(output).toContain("`places` is a list of at most three places, each with `path`, `start`, `end` and `as`, and an empty list when the item is about no lines");
   });
 

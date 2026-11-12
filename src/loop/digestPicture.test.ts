@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { type DigestData, type DigestGiven, type DigestItem, type DigestReply, digestCommentOf, readDigestComment, readDigestReply } from "./digestContract.ts";
@@ -143,5 +144,90 @@ describe("An item's picture, in the Digest", () => {
       "- **The saved basket's page is new.** Nothing but its picture shows how it reads on a phone.",
       "- **The saved basket's page is new.** Nothing but its picture shows how it reads on a phone.",
     ]);
+  });
+});
+
+describe("The Digest writer's prompt, on a picture", () => {
+  const prompt = readFileSync(new URL("../../prompts/digest.md", import.meta.url), "utf8");
+  const givenSection = prompt.split("\n## What you are given\n")[1]?.split("\n## ")[0] ?? "";
+  const eyes = prompt.split("\n### Needs your eyes\n")[1]?.split(/\n###? /)[0] ?? "";
+  const output = prompt.split("\n## Your output\n")[1] ?? "";
+
+  it("says the writer is given the captured routes, under UI evidence", () => {
+    expect(givenSection).toContain(
+      '- "UI evidence": whether the pull request has screenshots of its pages, and its captured routes, the routes those screenshots are of, or that it has none.',
+    );
+  });
+
+  it("carries the addition: an item about a screen may name one captured route, and a changed screen with no captured route is a not-proven item", () => {
+    expect(eyes).toContain("`picture`, on an item about a screen: one captured route, or `null`.");
+    expect(eyes).toContain("An item about a screen may name one captured route as its picture");
+    expect(eyes).toContain("A changed screen with no captured route is a `not-proven` item");
+  });
+
+  it("has the writer name the route exactly as the captured routes list it, and never embed or link an image", () => {
+    expect(eyes).toContain('exactly as "UI evidence" lists it');
+    expect(eyes).toContain("At most one on an item");
+    expect(eyes).toContain("Never embed or link an image");
+  });
+
+  it("says what the Kit does with a picture: one that is no captured route is dropped, and its item kept", () => {
+    expect(eyes).toContain("The Kit drops a picture whose route is not a captured route, and keeps the item");
+    expect(eyes).toContain("The Kit names the route after the item's places");
+  });
+
+  it("gives the picture its part of the reply's shape", () => {
+    expect(output).toContain("Each has `kind`, `claim`, `sentence`, `asks`, `places`, `picture` and `suggestedRequest`");
+    expect(output).toContain("`picture` is one captured route as text, or `null`");
+    expect(output).toContain("the link to each place, each picture's route,");
+  });
+
+  it("keeps its own example to the rule: an item about a screen names one route as its picture, and the others name none", () => {
+    const read = readDigestReply(JSON.parse(/<digest>\n([\s\S]*?)\n<\/digest>/.exec(prompt)?.[1] ?? "null"));
+    if (!read.ok) throw new Error(read.errors.join("; "));
+
+    expect(read.output.items.map(({ kind, picture }) => [kind, picture])).toEqual([
+      ["asked-not-here", "/basket"],
+      ["yours-to-judge", null],
+      ["not-proven", null],
+    ]);
+  });
+});
+
+describe("The README's Digest section, on a picture", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("\n## Digest\n")[1]?.split("\n## ")[0] ?? "";
+  const bullets = section.split("\n").filter((line) => line.startsWith("- **"));
+  const picture = bullets.find((line) => line.startsWith("- **A picture**")) ?? "";
+
+  it("comes straight after Places and data", () => {
+    expect(bullets[bullets.findIndex((line) => line.startsWith("- **Places and data**")) + 1]).toBe(picture);
+    expect(picture).not.toBe("");
+  });
+
+  it("says what a picture is, where its routes come from and what Kit code does with one before the Digest lands", () => {
+    for (const said of [
+      "one picture",
+      "a route the pull request's UI evidence captured",
+      "never embeds or links an image",
+      "`routes`",
+      "compared exactly",
+      "is dropped, and its item is kept",
+      "no UI evidence",
+      "written before markers recorded",
+      "after the item's places",
+      "`picture`",
+      "or null",
+    ]) {
+      expect(picture).toContain(said);
+    }
+  });
+
+  it("says the writer is told the captured routes, where the section says what the writer is given", () => {
+    expect(bullets.find((line) => line.startsWith("- **The Digest writer**")) ?? "").toContain("whether UI evidence exists, and the routes it captured");
+  });
+
+  it("no longer says the data's picture is null for now", () => {
+    expect(section).not.toContain("null for now");
   });
 });
