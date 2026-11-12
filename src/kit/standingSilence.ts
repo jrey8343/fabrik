@@ -203,6 +203,8 @@ function draftSilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts
     const parkedAt = after.findLast(({ kind }) => kind === "draft");
     if (parkedAt !== undefined && parkedAt.actor !== facts.appLogin) return [parked(facts.github.repo, pullRequest, parkedAt.at)];
     // Once it left draft since the pass, the Merge gate opened; a draft again is read as any other.
+    // With `agent:digest` on, the draft waits on its Digest, which is read before this (digestSilencesOn, src/kit/standingClock.ts):
+    // this is the passed draft with no label and no run, its clock restarting when the Fabrik App takes the label off.
     if (after.length === 0) return [silence("passed-draft", "review", passed)];
   }
   // GitHub starts no Review of a push while the PR conflicts: the Kit's conflict-only run brings it up to date. Not yet known reads as merging cleanly.
