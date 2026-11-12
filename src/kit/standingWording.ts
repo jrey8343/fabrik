@@ -30,8 +30,6 @@ const RUNNING_RUNS: Readonly<Record<RunningRun, string>> = {
   research: "A Research run",
   design: "A Design-session turn",
   prototype: "A Prototype turn",
-  audit: "An Audit run",
-  retro: "A Retro run",
 };
 
 /** The sentence for each hand-back a `yours-to-do` Standing names, in the order of HAND_BACKS; one it lacks reads as `ready-for-human` work. */

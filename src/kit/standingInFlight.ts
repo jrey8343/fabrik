@@ -28,7 +28,7 @@ import { addedAndStillOn, lastAdded } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
 /** What a `running` Standing's `detail.run` names: the kind of run, as far as the facts tell it. */
-export type RunningRun = "implement" | "retry" | "request-changes" | "conflict-only" | "review" | "triage" | "research" | "design" | "prototype" | "audit" | "retro";
+export type RunningRun = "implement" | "retry" | "request-changes" | "conflict-only" | "review" | "triage" | "research" | "design" | "prototype";
 
 /** Every Standing of the repo's work that goes on without the Operator, or that nothing moves while its blockers are open. A Spec has none. */
 export function inFlightStandingsOf(facts: StandingFacts, _now: string): Standing[] {
