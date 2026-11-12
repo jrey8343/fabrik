@@ -63,9 +63,13 @@ export interface PlannedWithChange {
  * The plan for a snapshot, with the PR's change fingerprint on the Verdict it
  * posts. No snapshot holds the fingerprint until it's read, so the snapshot
  * is planned first without it; only a plan that posts a Verdict has `read`
- * fetch anything, and the snapshot is then planned again holding it. A
- * Verdict never fails for want of one: when it can't be read, the first plan
- * stands, and `unread` says why for the step summary.
+ * fetch anything, and the snapshot is then planned again holding it. The
+ * fingerprint is read at the head the Verdict judged. That is the PR's head
+ * for every Verdict but the Kit's own on a Retry that changed nothing, which
+ * is on the head the Retry started at: when the branch moved meanwhile, the
+ * fingerprint of that earlier head goes in apart (`changeAt`), never as the
+ * one of the PR's head. A Verdict never fails for want of one: when it can't
+ * be read, the first plan stands, and `unread` says why for the step summary.
  */
 export async function planWithChange(
   snapshot: Snapshot,
@@ -80,16 +84,14 @@ export async function planWithChange(
     plan: first,
     unread: `The Verdict on #${pullRequest.number} was posted without a change fingerprint: ${why}.`,
   });
-  if (verdict.headSha !== pullRequest.headSha) {
-    return without(`it is on ${verdict.headSha.slice(0, 7)}, which the pull request has moved on from`);
-  }
+  const { headSha } = verdict;
   let change: ChangeFingerprint;
   try {
-    change = await read(pullRequest.headSha);
+    change = await read(headSha);
   } catch (error) {
-    return without(`the fingerprint could not be read at ${pullRequest.headSha.slice(0, 7)} (${error instanceof Error ? error.message : String(error)})`);
+    return without(`the fingerprint could not be read at ${headSha.slice(0, 7)} (${error instanceof Error ? error.message : String(error)})`);
   }
-  const second = plan({ ...snapshot, pullRequest: { ...pullRequest, change } });
+  const second = plan({ ...snapshot, pullRequest: { ...pullRequest, ...(headSha === pullRequest.headSha ? { change } : { changeAt: { headSha, change } }) } });
   const recorded = verdictPostedIn(second);
   if (recorded === null || !recorded.change) return without("the comment had no room for its line");
   return { plan: second, unread: null };

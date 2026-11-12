@@ -298,11 +298,13 @@ describe("The push job's plan, with the change fingerprint on its Verdict", () =
     );
   });
 
-  it("reads none for a Verdict on a head the PR has moved on from, and says so", async () => {
-    const flaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "b".repeat(40) } as const;
+  describe("for a Verdict on a head the PR has moved on from, as a Retry that changed nothing gets when the branch moved while it ran", () => {
+    const MOVED_TO = "b".repeat(40);
+    const flaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: MOVED_TO } as const;
     const snapshot = snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] }), {
-      pullRequest: aPullRequest({ headSha: "b".repeat(40), ticketLabels: ["ready-for-agent"], verdicts: [flaw] }),
+      pullRequest: aPullRequest({ headSha: MOVED_TO, ticketLabels: ["ready-for-agent"], verdicts: [flaw] }),
     });
+    /** The Retry started at HEAD_SHA and committed nothing: its Verdict is on that head. */
     const changedNothing: LoopEvent = {
       kind: "implement-run-finished",
       issue: 7,
@@ -313,14 +315,42 @@ describe("The push job's plan, with the change fingerprint on its Verdict", () =
       fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1" },
       runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
     };
-    const { heads, read } = reader();
 
-    const { plan, unread } = await planWithChange(snapshot, (given) => planFor(changedNothing, given, config), read);
+    it("reads the fingerprint at the head the Verdict judged, and the Verdict carries it", async () => {
+      const { heads, read } = reader();
 
-    expect(heads).toEqual([]);
-    expect(verdictCommentsOf(plan)).toHaveLength(1);
-    expect(verdictCommentsOf(plan)[0]).not.toContain("fabrik:change");
-    expect(unread).toBe("The Verdict on #50 was posted without a change fingerprint: it is on aaaaaaa, which the pull request has moved on from.");
+      const { plan, unread } = await planWithChange(snapshot, (given) => planFor(changedNothing, given, config), read);
+
+      expect(heads).toEqual([HEAD_SHA]);
+      expect(verdictsIn(verdictCommentsOf(plan))).toMatchObject([{ source: "empty-diff", headSha: HEAD_SHA, change: CHANGE }]);
+      expect(unread).toBeNull();
+      // But for that line, the plan is the one the snapshot gives without it.
+      const bare = planFor(changedNothing, snapshot, config);
+      expect(JSON.parse(JSON.stringify(plan).replace(`${JSON.stringify(changeLine(CHANGE)).slice(1, -1)}\\n`, ""))).toEqual(bare);
+    });
+
+    it("never hands the plan that fingerprint as the one of the PR's own head", async () => {
+      const given: (ChangeFingerprint | undefined)[] = [];
+
+      await planWithChange(
+        snapshot,
+        (planned) => {
+          given.push(planned.pullRequest?.change);
+          return planFor(changedNothing, planned, config);
+        },
+        reader().read,
+      );
+
+      expect(given).toEqual([undefined, undefined]);
+    });
+
+    it("still posts the Verdict when the fingerprint can't be read there, without the line, and says so", async () => {
+      const { plan, unread } = await planWithChange(snapshot, (given) => planFor(changedNothing, given, config), reader(new Error("the fetch failed")).read);
+
+      expect(plan).toEqual(planFor(changedNothing, snapshot, config));
+      expect(verdictCommentsOf(plan)[0]).not.toContain("fabrik:change");
+      expect(unread).toBe("The Verdict on #50 was posted without a change fingerprint: the fingerprint could not be read at aaaaaaa (the fetch failed).");
+    });
   });
 
   it("says so when the Verdict's comment had no room for the line", async () => {

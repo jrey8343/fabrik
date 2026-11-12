@@ -790,6 +790,14 @@ export interface PullRequestSnapshot {
    * read, or couldn't be: the Verdict is posted without it.
    */
   readonly change?: ChangeFingerprint;
+  /**
+   * The fingerprint of its own change at a head it has since moved on from,
+   * for the Verdict the plan posts on that head: the Kit's own on a Retry
+   * that changed nothing, when the branch moved while the Retry ran. Read as
+   * `change` is, and kept apart from it, which is always of `headSha`.
+   * Absent on every other snapshot.
+   */
+  readonly changeAt?: { readonly headSha: string; readonly change: ChangeFingerprint };
   /** Whether its latest push came from a Request-changes run, so a Verdict on it is marked as one. */
   readonly requestChangesRun: boolean;
   /** Whether its latest push came from a conflict-only run (#304), so a Verdict on it is marked as one. */

@@ -252,8 +252,10 @@ export function verdictActions(
     `[The run](${event.runUrl})`,
     ...considered,
   ];
-  // The fingerprint of the PR's own change (#643), when the push job read one at the head this Verdict is on.
-  const change = pullRequest.change !== undefined && pullRequest.headSha === event.headSha ? [changeLine(pullRequest.change)] : [];
+  // The fingerprint of the PR's own change (#643), when the push job read one at the head this Verdict is on:
+  // the PR's own head, or the head a Retry that changed nothing started at, which the PR may have moved on from.
+  const read = pullRequest.headSha === event.headSha ? pullRequest.change : pullRequest.changeAt?.headSha === event.headSha ? pullRequest.changeAt.change : undefined;
+  const change = read === undefined ? [] : [changeLine(read)];
   const withChange = [verdictMarker(record), ...change, ...lines].join("\n");
   // A Verdict never fails for want of one: a line that would take the comment past GitHub's limit is left out.
   const body = withChange.length <= GITHUB_COMMENT_LIMIT ? withChange : [verdictMarker(record), ...lines].join("\n");
