@@ -6,13 +6,15 @@
 // comment, label or review never does.
 import { stuckBarMinutes } from "../loop/recoveryWaits.ts";
 import { DISPATCH_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
+import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import type { CommentFacts, LabelEvent } from "./retroEvidence.ts";
 import { type AwaitedRole, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { lastAdded } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
 /** Which silence a `not-started` Standing is: a trigger label with no run behind it, the same after the sweep's re-add, or a Retry a Verdict announced. */
-export type NotStartedSilence = "trigger-label";
+export type NotStartedSilence = "trigger-label" | "trigger-readded";
 
 /** What each trigger label asks for, on an issue: the work it is, its place on the Loop and the run it awaits. */
 const ASKED_ON_ISSUES: Partial<Record<TriggerLabel, { readonly work: StandingWork; readonly place: StandingPlace | null; readonly role: AwaitedRole }>> = {
@@ -84,8 +86,21 @@ function triggerSilencesOn(issue: OpenIssueFacts, facts: StandingFacts, bar: num
         stuckAt: stuckAtOf(clockOf(since, issue.number, pullRequestsOf(issue.number, facts), facts), bar),
         awaits: { role: asked.role, on: "issue" },
         subscription: null,
-        detail: { silence: "trigger-label", label },
+        detail: { silence: readdedSinceOff(label, issue.labelEvents, issue.comments, facts.appLogin) ? "trigger-readded" : "trigger-label", label },
       },
     ];
   });
+}
+
+/**
+ * Whether the stuck-trigger sweep's re-add of `label` is the latest word on
+ * it: the Fabrik App's re-add note came after the label last came off, as
+ * stuckTriggerReaddedIn reads it from one timeline. The re-add takes the
+ * label off and adds it in the same second as its note, so a note at that
+ * second counts as after.
+ */
+function readdedSinceOff(label: TriggerLabel, events: readonly LabelEvent[], comments: readonly CommentFacts[], appLogin: string): boolean {
+  const off = events.filter((event) => event.label === label && event.action === "unlabeled").map(({ at }) => Date.parse(at));
+  const lastOff = off.length === 0 ? -Infinity : Math.max(...off);
+  return comments.some(({ author, body, at }) => author === appLogin && body.startsWith(stuckTriggerReaddedMarker(label)) && Date.parse(at) >= lastOff);
 }

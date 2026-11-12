@@ -9,7 +9,7 @@
 // shown (src/kit/standingWording.ts).
 import type { HandBack } from "../loop/handBacks.ts";
 import type { AgentRole } from "../loop/types.ts";
-import { notStartedStandingsOf } from "./standingClock.ts";
+import { type NotStartedSilence, notStartedStandingsOf } from "./standingClock.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
@@ -77,7 +77,8 @@ export type StandingName = (typeof STANDING_NAMES)[number];
 
 /** What a `not-started` Standing's wording is made of. */
 interface NotStartedDetail {
-  readonly silence: string;
+  /** Which run was asked for and how (src/kit/standingClock.ts). */
+  readonly silence: NotStartedSilence;
   readonly label: string | null;
 }
 

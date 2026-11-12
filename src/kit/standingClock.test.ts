@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { aComment, aCommit, aLabelAdded, anOpenIssue, anOpenPullRequest, aReview, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
@@ -112,6 +113,35 @@ describe("a run that was asked for and never began", () => {
 
     it("never runs back for a sign from before the label", () => {
       expect(withSigns({ issue: { comments: [aComment("Earlier.", "2026-11-08T18:00:00Z")] } })).toMatchObject([{ stuckAt: "2026-11-08T22:50:00.000Z" }]);
+    });
+  });
+
+  describe("after the stuck-trigger sweep's re-add", () => {
+    const READDED = "2026-11-08T19:30:00Z";
+    const readdedLabels = [
+      aLabelAdded("ready-for-agent", "2026-11-08T10:00:00Z"),
+      aLabelAdded("agent:implement", "2026-11-08T17:00:00Z", { actor: "operator" }),
+      aLabelAdded("agent:implement", READDED, { action: "unlabeled" }),
+      aLabelAdded("agent:implement", READDED),
+    ];
+    const readdNote = aComment(`${stuckTriggerReaddedMarker("agent:implement")}\n\`agent:implement\` sat 150 minutes with no run behind it, so the Kit added it again.`, READDED);
+
+    it("is still not-started, says the Kit added the label again, and counts the full bar from the re-add", () => {
+      expect(standingsIn({ openIssues: [askedFor("unused", { labelEvents: readdedLabels, comments: [readdNote] })] })).toMatchObject([
+        { name: "not-started", since: READDED, stuckAt: "2026-11-08T23:00:00.000Z", detail: { silence: "trigger-readded", label: "agent:implement" } },
+      ]);
+    });
+
+    it("is a plain trigger label again once the label came off and was added since the re-add", () => {
+      const again = [...readdedLabels, aLabelAdded("agent:implement", "2026-11-08T19:40:00Z", { action: "unlabeled", actor: "operator" }), aLabelAdded("agent:implement", "2026-11-08T19:45:00Z", { actor: "operator" })];
+      expect(standingsIn({ openIssues: [askedFor("unused", { labelEvents: again, comments: [readdNote] })] })).toMatchObject([
+        { name: "not-started", since: "2026-11-08T19:45:00Z", detail: { silence: "trigger-label", label: "agent:implement" } },
+      ]);
+    });
+
+    it("never reads a person's comment that quotes the marker as a re-add", () => {
+      const quoted = aComment(readdNote.body, READDED, { author: "operator", byBot: false });
+      expect(standingsIn({ openIssues: [askedFor("unused", { labelEvents: readdedLabels, comments: [quoted] })] })).toMatchObject([{ detail: { silence: "trigger-label" } }]);
     });
   });
 });
