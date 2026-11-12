@@ -440,10 +440,11 @@ function stillBlockedNote(blocking: readonly number[]): string[] {
 /**
  * Why a Roll-in can't be settled onto `pullRequest`, as GitHub has it among
  * `named`, or null when it can: only an open agent pull request takes one,
- * and never the one built from this very issue as its Ticket, which closing
- * the issue would close. It need not be the pull request the issue's `From PR`
- * line names: the session may name any the Operator agreed to. A number
- * GitHub has no pull request for isn't among `named`.
+ * and never the issue's own, the one built from this very issue as its
+ * Ticket, since closing a Ticket closes its drafts. It need not be the pull
+ * request the issue's `From PR` line names: the session may name any the
+ * Operator agreed to. A number GitHub has no pull request for isn't among
+ * `named`.
  */
 function whyNoRollIn(issueNumber: number, pullRequest: number, named: readonly NamedPullRequestSnapshot[]): string | null {
   const onto = `a Roll-in can't be settled onto #${pullRequest}`;
@@ -473,8 +474,9 @@ export function rollInNotSentLine(issueNumber: number, pullRequest: number): str
  * mark and its data line, hidden, which rollInIn reads back, then what a
  * person reads. The Markdown and the data are both written from the fields,
  * neither from the other. The contract refused a text that mentions anyone,
- * so the comment mentions nobody, and it goes on the issue only: nothing is
- * put on the pull request, where a Retry would read it as sent.
+ * so the comment mentions nobody. It goes on the issue only: the Kit puts
+ * nothing on the pull request, where a Retry would read it, and sends
+ * nothing (ADR-0010).
  */
 export function rollInComment(issueNumber: number, pullRequest: number, text: RollInText, blocking: readonly number[] = []): string {
   return [

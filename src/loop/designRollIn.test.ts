@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { aNamedPullRequest, anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { landedNothingContext } from "../agent/design.ts";
+import { replySchemaOf } from "../agent/launch.ts";
 import { countLandedNothing, currentDesignSessionIn, designSessionOf, designTurnFailedIn, pendingPrototypeIn, unansweredPrototypesIn } from "../github/threads.ts";
+import { readDesignTurnOutput } from "./designOutput.ts";
 import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, rollInIn, sessionFinishedIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent, NamedPullRequestSnapshot, Plan } from "./types.ts";
@@ -62,6 +64,93 @@ describe("A Design session finishes by settling a Roll-in", () => {
         { kind: "check-design-queue" },
       ],
     });
+  });
+});
+
+describe("What a Roll-in's closing comment ends with", () => {
+  const NOT_SENT = "Nothing has been sent to #42. The Operator sends this Roll-in with a Request changes on #42 that carries this text and names this issue, #7.";
+
+  it("on a Ticket under a Spec, closes it the same way and says which Tickets stay blocked by it", () => {
+    const ticket = inSession({ parent: 3, openBlocking: [8, 9] });
+    const plan = land(rollIn, naming(ticket));
+    if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
+    const [comment, ...rest] = plan.actions;
+
+    expect(comment?.kind === "comment" && comment.body.split("\n").slice(-3)).toEqual([
+      NOT_SENT,
+      "",
+      "#8, #9 stay blocked by it: an issue closed as not planned never lands its work, so Dispatch won't start them until the Operator removes the blocked-by edge.",
+    ]);
+    expect(rest).toEqual([
+      { kind: "remove-label", issue: 7, label: "needs-design" },
+      { kind: "add-labels", issue: 7, labels: ["wontfix"] },
+      { kind: "close", issue: 7, reason: "not_planned" },
+      { kind: "check-design-queue" },
+    ]);
+  });
+
+  it("links the Operator comments the turn weighed, among those it was given, under everything else, the hidden lines still first", () => {
+    const given = [
+      { id: "conversation-3", url: "https://github.com/acme/shop/pull/50#issuecomment-3" },
+      { id: "inline-8", url: "https://github.com/acme/shop/pull/50#discussion_r8" },
+    ];
+    const plan = planFor(finished({ ...rollIn, operatorCommentsConsidered: ["inline-8", "never-given"] }, { operatorComments: given }), naming(), kitConfig());
+    const comment = plan.kind === "act" ? plan.actions[0] : undefined;
+    const lines = comment?.kind === "comment" ? comment.body.split("\n") : [];
+
+    expect(lines.slice(0, 1)).toEqual(["<!-- fabrik:roll-in 42 -->"]);
+    expect(lines.slice(-5)).toEqual([NOT_SENT, "", "### Operator comments considered", "", "- [`inline-8`](https://github.com/acme/shop/pull/50#discussion_r8)"]);
+    expect(rollInIn(lines.join("\n"))).toEqual({ pullRequest: 42, text: { summary: rollIn.summary, acceptanceCriteria: rollIn.acceptanceCriteria } });
+  });
+});
+
+describe("A roll-in output the contract refuses", () => {
+  const NAMES_ISSUE =
+    "a roll-in's summary names this issue, #7, by its number or its link: the Implementer and the Reviewer are never given the issue, so the text has to stand alone";
+  const MENTIONS =
+    "a roll-in's acceptance criterion 1 mentions someone, which would notify them when the Operator sends it: write a name that begins with @ as inline code of its own";
+  const refused = [
+    ["a summary that names the issue", { ...rollIn, summary: "Finish what #7 asked for." }, NAMES_ISSUE],
+    ["a criterion that mentions someone", { ...rollIn, acceptanceCriteria: ["The total shows the way @jrey drew it."] }, MENTIONS],
+  ] as const;
+
+  it.each(refused)("fails the turn in the push job with nothing changed, for %s", (_, output, error) => {
+    expect(land(output)).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: `The Design-session turn on #7 emitted output that breaks its contract: ${error}`,
+    });
+  });
+
+  // The agent job checks a reply through this schema, and asks the agent once to put right what it reports (src/agent/run.ts).
+  it.each(refused)("is the one check the agent job asks the turn to put right, for %s", async (_, output, error) => {
+    const schema = replySchemaOf((value) => readDesignTurnOutput(value, 7));
+
+    expect(await schema["~standard"].validate(output)).toEqual({ issues: [{ message: error }] });
+    expect(await schema["~standard"].validate(rollIn)).toEqual({ value: rollIn });
+  });
+
+  it.each([
+    ["no summary", { ...rollIn, summary: undefined }],
+    ["an empty summary", { ...rollIn, summary: " " }],
+    ["no criteria", { ...rollIn, acceptanceCriteria: [] }],
+    ["an empty criterion", { ...rollIn, acceptanceCriteria: ["The total shows.", ""] }],
+    ["a pull request that is not a whole number above zero", { ...rollIn, pullRequest: 4.2 }],
+  ])("fails the turn, changing nothing, with %s", (_, output) => {
+    expect(land(output)).toMatchObject({ kind: "fail", failure: "infrastructure", reason: expect.stringContaining("emitted output that breaks its contract: a roll-in needs") });
+  });
+});
+
+describe("A Roll-in settled on an issue that left its Design session while the turn ran", () => {
+  it.each([
+    ["closed", inSession({ open: false }), "#7 is closed"],
+    ["lost needs-design", inSession({ labels: ["enhancement", "ready-for-agent"] }), "#7 no longer has needs-design"],
+  ])("gets nothing when the issue %s", (_, issue, reason) => {
+    expect(land(rollIn, naming(issue))).toEqual({ kind: "nothing", reason });
+  });
+
+  it("gets nothing, and no failure, even when the pull request can no longer take a Roll-in", () => {
+    expect(land(rollIn, naming(inSession({ open: false }), [openAgentPullRequest({ open: false, merged: true })]))).toEqual({ kind: "nothing", reason: "#7 is closed" });
   });
 });
 

@@ -5,6 +5,10 @@
 // (large), or, for a Ticket already under a Spec, sibling Tickets under that
 // Spec. Any Ticket in an outcome may instead be an Operator step. Or the
 // session ends as not planned: the Operator decided the issue won't be built.
+// Or it ends by settling a Roll-in: the Operator decided the issue's work is
+// to be built on an open agent pull request, and the output carries what to
+// build there, which may neither name the session's own issue nor mention
+// anyone, so both sides read the contract against the issue's number.
 // Or, when the destination is too foggy to design in one session, the issue
 // becomes a Map with its first Decisions. Two kinds carry a Prototype (#155)
 // and end nothing: an ordinary turn's `prototype`, the request the Operator
