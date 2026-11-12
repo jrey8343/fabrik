@@ -1,11 +1,13 @@
 // The Standings of the factory's own work (src/kit/standing.ts): what the
 // store beside the Run records holds for the Operator. Its open Weekly summary
-// to read, and a ready-for-human issue there, such as one filed for a Product
-// repo the Fabrik App can no longer reach. Built from a few facts of the
+// to read, a failed Weekly summary run to re-run, and a ready-for-human issue
+// there, such as one filed for a Product repo the Fabrik App can no longer
+// reach. Built from a few facts of the
 // store's own, which this module shapes; reading them from GitHub is the read
 // library's. The Weekly summary never lists these: it does not list itself.
 import { RUN_STORE_REPO } from "./runStore.ts";
 import { type Standing, STANDING_SCHEMA, type StandingNamed } from "./standing.ts";
+import { readyForHumanStandingOf } from "./standingOperator.ts";
 import { isWeeklyFailureNotice } from "./weeklyFiling.ts";
 import type { OpenIssueFacts } from "./weeklySummary.ts";
 
@@ -31,11 +33,13 @@ export interface StoreStandingFacts {
 }
 
 /** The store's Standings at `now`, oldest first, each carrying the store as its repo: one per issue, a failed run before what is to read. */
-export function storeStandingsOf({ summaries, failedSummaryIssues }: StoreStandingFacts, _now: string): Standing[] {
+export function storeStandingsOf({ summaries, failedSummaryIssues, readyForHuman }: StoreStandingFacts, now: string): Standing[] {
   const candidates: Standing[] = [
     ...failedOnSummaryOf(summaries),
     // Filed when there was no summary to comment on, it stands until it is closed.
     ...failedSummaryIssues.map(({ number, createdAt }) => failedRunStandingOf(number, createdAt)),
+    // As one stands in a Product repo.
+    ...readyForHuman.map((issue) => readyForHumanStandingOf(issue, RUN_STORE_REPO, now)),
     ...summaries.filter(({ open }) => open).map(openSummaryStandingOf),
   ];
   return candidates

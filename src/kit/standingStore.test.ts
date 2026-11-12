@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type Standing, standingsOf } from "./standing.ts";
 import { aSummaryIssue, storeFactsOf } from "../__fixtures__/standingStore.ts";
+import { aLabelAdded, anOpenIssue } from "../__fixtures__/weeklySummary.ts";
 import type { StoreStandingFacts } from "./standingStore.ts";
 import { weeklyFailureOf } from "./weeklyFiling.ts";
 
@@ -108,5 +109,43 @@ describe("the store's Standings", () => {
       ]);
       expect(storeStandingsIn({ failedSummaryIssues: [] })).toEqual([]);
     });
+  });
+
+  it("gives an open ready-for-human issue there, such as one for a Product repo the Fabrik App can't reach, yours to do and stopping work, as in a Product repo", () => {
+    const standings = storeStandingsIn({
+      readyForHuman: [anOpenIssue({ number: 14, author: "fabrik-app[bot]", labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-08T03:00:00Z")] })],
+    });
+    expect(standings).toEqual([
+      {
+        schema: 1,
+        repo: "jrey8343/fabrik-runs",
+        issue: 14,
+        pullRequest: null,
+        work: "ready-for-human",
+        place: null,
+        name: "yours-to-do",
+        move: "operator",
+        yours: true,
+        stopsWork: true,
+        since: "2026-11-08T03:00:00Z",
+        stuckAt: null,
+        awaits: null,
+        subscription: null,
+        detail: { handBack: null, role: null, failure: null, label: null },
+      },
+    ]);
+  });
+});
+
+// After every test above: these read what they produced.
+describe("a store Standing, as plain data", () => {
+  it("survives a JSON round trip unchanged, every one the tests above produced", () => {
+    const all = produced.flatMap(({ standings }) => standings);
+    expect(all.length).toBeGreaterThan(0);
+    for (const standing of all) expect(JSON.parse(JSON.stringify(standing))).toStrictEqual(standing);
+  });
+
+  it("is the same for the same facts read a minute later", () => {
+    for (const { facts, standings } of produced) expect(standingsOf(facts, "2026-11-09T20:01:00Z")).toStrictEqual(standings);
   });
 });
