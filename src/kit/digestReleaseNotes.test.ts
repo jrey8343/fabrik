@@ -22,14 +22,14 @@ const NOTES = "docs/release-notes/digest.md";
 const read = (path: string): Promise<string> => readFile(join(KIT, path), "utf8");
 
 describe.skipIf(RELEASED_NOTES.has(NOTES))("The Digest's release notes, while drafted", () => {
-  it("open with what they are the notes for, and the releasing guide lists them last among the drafted notes", async () => {
+  it("open with what they are the notes for, and the releasing guide lists them after the production notes among the drafted notes", async () => {
     const notes = await read(NOTES);
     expect(notes.split("\n")[0]).toBe("# Release notes: The Digest");
     expect(notes).toMatch(/^The notes for the release that ships the Digest /m);
     expect(notes).toContain("Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.");
     const releasing = await read("docs/releasing.md");
     const drafted = releasing.split("\n").find((line) => line.includes("Notes drafted ahead of a release are in `docs/release-notes/`"));
-    expect(drafted).toContain("[the production minor's](release-notes/production.md) and [the Digest minor's](release-notes/digest.md).");
+    expect(drafted).toContain("[the production minor's](release-notes/production.md), [the Digest minor's](release-notes/digest.md)");
   });
 
   it("say what the Operator sees at the Merge gate as the contract renders it: the top's four sections and the four folds, each by its name, in order", async () => {
