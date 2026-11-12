@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
-import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { Facts, IssueBodyFacts } from "./gather.ts";
 import { type Row, rowsOf } from "./rows.ts";
 
@@ -48,6 +48,35 @@ describe("a candidate", () => {
     expect(pullRequestRow(facts)?.related).toEqual([{ issue: 30, title: "Cache the prices", kind: "candidate" }]);
     expect(issueRow(facts)?.relatedTo).toBe(50);
   });
-});
 
-void aComment;
+  describe("relates nothing", () => {
+    const unrelated = (facts: Facts) => {
+      expect(pullRequestRow(facts)?.related).toEqual([]);
+      expect(issueRow(facts)?.relatedTo).toBeNull();
+    };
+
+    it("with the line in an issue someone else opened", () => {
+      unrelated(repoWith({ issues: [{ ...FILED, author: "someone" }], bodies: [{ issue: 30, body: FROM_PR_50 }] }));
+    });
+
+    it("with the line only in a comment", () => {
+      unrelated(repoWith({ issues: [{ ...FILED, comments: [aComment("From PR #50", "2026-11-08T14:00:00Z", { author: "operator", byBot: false })] }], bodies: [{ issue: 30, body: "The prices are slow." }] }));
+    });
+
+    it("with the line quoted as code", () => {
+      unrelated(repoWith({ issues: [FILED], bodies: [{ issue: 30, body: "Like this:\n\n```\nFrom PR #50\n```" }] }));
+    });
+
+    it("naming a Plain pull request", () => {
+      const facts = repoWith({ issues: [FILED], bodies: [{ issue: 30, body: "From PR #70" }] });
+      const withPlain = { ...facts, github: { ...facts.github, plainPullRequests: [aPlainPullRequest({ number: 70 })] } };
+
+      unrelated(withPlain);
+      expect(pullRequestRow(withPlain, 70)?.related).toEqual([]);
+    });
+
+    it("naming a pull request that merged or closed, which is no longer open", () => {
+      unrelated(repoWith({ issues: [FILED], bodies: [{ issue: 30, body: "From PR #49" }] }));
+    });
+  });
+});
