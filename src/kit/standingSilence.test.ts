@@ -258,6 +258,7 @@ describe("an issue waiting on Triage", () => {
     expect(standingsIn({ openIssues: [triage] })).toMatchObject([
       { issue: 13, work: "issue", place: "triage", name: "waiting-on-kit", since: PUSHED, stuckAt: BAR, awaits: { role: "triage", on: "issue" }, detail: { silence: "needs-triage", round: null } },
     ]);
+    expect(standingsIn({ openIssues: [triage] }, {}, plus(BAR, -1))).toMatchObject([{ name: "waiting-on-kit" }]);
     expect(standingsIn({ openIssues: [triage] }, {}, plus(BAR, 1))).toMatchObject([{ name: "stuck", detail: { was: "waiting-on-kit", silence: "needs-triage" } }]);
     expect(standingsIn({ openIssues: [anOpenIssue({ number: 13, labels: ["needs-triage"], createdAt: PUSHED })] })).toMatchObject([{ since: PUSHED, stuckAt: BAR }]);
   });
