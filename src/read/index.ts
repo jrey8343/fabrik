@@ -35,6 +35,12 @@ export type { StandingWords } from "../kit/standingWording.ts";
 
 // The closing line and the runs read
 
+export { KIT_SAID_VERSION, kitSaidIn } from "../kit/kitSaid.ts";
+export { readRuns, runsInFlightFactOf, TICK_DEAD_MINUTES } from "./runs.ts";
+export type { ActionsStep, KitSaid } from "../kit/kitSaid.ts";
+export type { RunKind } from "../github/snapshot.ts";
+export type { RunInFlight, RunsRead } from "./runs.ts";
+
 // The gather and the rows
 
 // The join with runs
