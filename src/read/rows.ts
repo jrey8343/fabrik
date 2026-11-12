@@ -7,6 +7,7 @@
 // data: written as JSON and read back a row is equal.
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
+import { plainSinceOf } from "../kit/standingPlain.ts";
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
 import type { Facts } from "./gather.ts";
@@ -38,6 +39,15 @@ export interface Row {
    * with its Ticket closed.
    */
   readonly ticketClosed: "yes" | "no" | "unknown" | null;
+  /**
+   * On a row whose name hangs on an open Plain pull request's Required checks,
+   * that pull request's own or a Pairing session's joined to its issue's: what
+   * the join with checks needs to settle the row as the rule does. `since` is
+   * when the pull request came to stand as it is, the latest of its head, its
+   * opening and its last draft change (plainSinceOf), the time the rule gives
+   * it when no report of its checks decides its name. Null on any other row.
+   */
+  readonly plainPullRequest: { readonly since: string } | null;
 }
 
 /** The last runs read (./runs.ts), or null when none is held. */
@@ -79,7 +89,7 @@ function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredCheck
  * Ticket's state.
  */
 export function bareRowOf(standing: Standing, title: string, lastWord: Row["lastWord"]): Row {
-  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null };
+  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null };
 }
 
 /**
@@ -97,7 +107,14 @@ function rowOf(standing: Standing, facts: Facts): Row {
     followUps: pullRequest === null ? [] : followUpsOf(facts, pullRequest),
     relatedTo: issue === null ? null : relatedToOf(facts, issue),
     ticketClosed: pullRequest === null ? null : ticketClosedOf(facts, pullRequest),
+    plainPullRequest: pullRequest === null ? null : plainPullRequestOf(facts, pullRequest),
   };
+}
+
+/** What the join with checks needs of open Plain pull request `pullRequest`; null when it is no open Plain pull request. */
+function plainPullRequestOf({ github }: Facts, pullRequest: number): Row["plainPullRequest"] {
+  const plain = github.plainPullRequests.find(({ number }) => number === pullRequest);
+  return plain === undefined ? null : { since: plainSinceOf(plain) };
 }
 
 /** Whether open agent pull request `pullRequest`'s Ticket is closed; null when it is no open agent pull request. */

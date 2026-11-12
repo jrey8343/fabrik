@@ -13,8 +13,9 @@ import type { Row } from "./rows.ts";
  * The kept rows as they stand at `now`, ISO 8601, with the Required checks of
  * `read`, in the order they were kept. A Plain row that is neither a draft nor
  * in conflict takes the name the rule gives for the fresh checks on its head,
- * since the report that decided it (kept as it was when no report did, as for
- * a check never reported). A Pairing session's pull request joined to its
+ * since the report that decided it; when no report did, as for a check never
+ * reported or a branch requiring none, since the pull request's own time the
+ * row carries (Row's `plainPullRequest`). A Pairing session's pull request joined to its
  * issue's row is settled the same way inside that row. A head the read does
  * not hold, or holds as unread, leaves its row as it was, and so does every
  * agent row: a red check at the Merge gate changes no Standing. Every row is
@@ -22,21 +23,26 @@ import type { Row } from "./rows.ts";
  */
 export function joinChecks(rows: readonly Row[], read: RequiredChecksRead, now: string): Row[] {
   return rows.map((row) => {
-    const standing = standingAt(settledWith(row.standing, read), now);
+    const standing = standingAt(settledWith(row, read), now);
     return standing === row.standing ? row : { ...row, standing };
   });
 }
 
-/** A kept Standing with the fresh checks on its head, or as it was when they leave it so. */
-function settledWith(standing: Standing, read: RequiredChecksRead): Standing {
+/** A kept row's Standing with the fresh checks on its head, or as it was when they leave it so. */
+function settledWith({ standing, plainPullRequest }: Row, read: RequiredChecksRead): Standing {
   const { head } = standing.detail;
   if (head === undefined) return standing;
   const checks = requiredChecksFactOf(read, head);
   if (checks === "unread") return standing;
-  if (standing.detail.pullRequest !== undefined) return pairingSettled(standing, checks, head);
+  if (standing.detail.pullRequest !== undefined) return pairingSettled(standing, checks, head, plainPullRequest);
   if (standing.work !== "plain" || standing.name === "draft" || standing.name === "conflicts" || !("plain" in standing.detail) || standing.detail.plain === null) return standing;
   const { name, decidedAt } = plainNameForChecks(standing.detail.plain, checks);
-  return { ...standing, ...name, since: decidedAt ?? standing.since, detail: { ...name.detail, head } } as Standing;
+  return { ...standing, ...name, since: decidedAt ?? ownSinceOf(standing, plainPullRequest), detail: { ...name.detail, head } } as Standing;
+}
+
+/** The time the rule gives a Plain pull request's name when no report decides it: the pull request's own, or, on a row that does not carry it, the time the row had. */
+function ownSinceOf(standing: Standing, plainPullRequest: Row["plainPullRequest"]): string {
+  return plainPullRequest?.since ?? standing.since;
 }
 
 /**
@@ -46,12 +52,12 @@ function settledWith(standing: Standing, read: RequiredChecksRead): Standing {
  * One the pull request already took over, the issue's own Standing gone, and
  * one whose pull request is a draft or in conflict, are left as they were.
  */
-function pairingSettled(standing: Standing, checks: Exclude<ReturnType<typeof requiredChecksFactOf>, "unread">, head: string): Standing {
+function pairingSettled(standing: Standing, checks: Exclude<ReturnType<typeof requiredChecksFactOf>, "unread">, head: string, plainPullRequest: Row["plainPullRequest"]): Standing {
   const was = standing.detail.pullRequest;
   if (was === "yours-to-merge" || was === "draft" || was === "conflicts") return standing;
   const { name, decidedAt } = plainNameForChecks("pairing", checks);
   if (name.name !== "yours-to-merge") return { ...standing, detail: { ...standing.detail, pullRequest: name.name } } as Standing;
-  const pairing = { ...standing, ...name, since: decidedAt ?? standing.since } as Standing;
+  const pairing = { ...standing, ...name, since: decidedAt ?? ownSinceOf(standing, plainPullRequest) } as Standing;
   const taken = joined(standing, pairing);
   return { ...taken, detail: { ...taken.detail, head } } as Standing;
 }

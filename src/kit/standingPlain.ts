@@ -33,7 +33,7 @@ export function plainStandingsOf({ github, kit, operator, appLogin }: StandingFa
       work: "plain",
       place: null,
       stopsWork: false,
-      since: sinceOf(pullRequest),
+      since: plainSinceOf(pullRequest),
       stuckAt: null,
       awaits: null,
       subscription: null,
@@ -87,9 +87,10 @@ export function joined(own: Standing, pairing: Standing): Standing {
 /**
  * Since when it stands so, the latest of: its head, whose checks it is read
  * by; its opening; and when it last left draft or went into it, so one marked
- * ready an hour ago has been ready to merge for an hour.
+ * ready an hour ago has been ready to merge for an hour. Its Standing takes
+ * this time whenever no report of its checks decides its name.
  */
-function sinceOf({ createdAt, headCommittedAt, draftChangedAt }: PlainPullRequestFacts): string {
+export function plainSinceOf({ createdAt, headCommittedAt, draftChangedAt }: PlainPullRequestFacts): string {
   return [headCommittedAt, draftChangedAt].reduce<string>((latest, at) => (at !== null && Date.parse(at) > Date.parse(latest) ? at : latest), createdAt);
 }
 

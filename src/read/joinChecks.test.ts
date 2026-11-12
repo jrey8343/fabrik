@@ -58,12 +58,21 @@ describe("the join of kept rows with a Required checks read", () => {
       expect(joined).toEqual(rule);
     });
 
-    it("named for a check never reported, keeps the time it had", () => {
+    it("named for a check never reported, which no report decides, since the pull request's own time, as the rule gives it", () => {
       const unreported = aChecksRead({ [head("1")]: [check("test", "passed", "2026-11-12T09:00:00Z"), check("lint", "never-reported", null)] });
 
-      const { kept, joined } = joinedAndRule(plainFacts(), EARLIER, unreported);
+      const { kept, joined, rule } = joinedAndRule(plainFacts({ headCommittedAt: "2026-11-11T15:00:00Z" }), EARLIER, unreported);
 
-      expect(joined.map(({ standing }) => standing)).toMatchObject([{ name: "check-failing", since: kept[0]?.standing.since, detail: { check: "lint", checkIs: "never-reported" } }]);
+      expect(kept.map(({ standing }) => standing.since)).toEqual(["2026-11-12T09:01:00Z"]);
+      expect(joined.map(({ standing }) => standing)).toMatchObject([{ name: "check-failing", since: "2026-11-11T15:00:00Z", detail: { check: "lint", checkIs: "never-reported" } }]);
+      expect(joined).toEqual(rule);
+    });
+
+    it("check failing, comes back yours to merge on a branch now requiring nothing, since the pull request's own time, as the rule gives it", () => {
+      const { joined, rule } = joinedAndRule(plainFacts({ headCommittedAt: "2026-11-11T15:00:00Z" }), LINT_FAILED, { ...aChecksRead({ [head("1")]: [] }), required: [] });
+
+      expect(joined.map(({ standing }) => [standing.name, standing.since])).toEqual([["yours-to-merge", "2026-11-11T15:00:00Z"]]);
+      expect(joined).toEqual(rule);
     });
 
     it("kept with no checks read, comes back as the rule gives it with the read", () => {
@@ -132,6 +141,13 @@ describe("the join of kept rows with a Required checks read", () => {
       expect(joined.map(({ standing }) => standing)).toMatchObject([
         { issue: 12, pullRequest: 80, name: "yours-to-merge", move: "operator", stopsWork: false, since: "2026-11-12T09:40:00Z", detail: { plain: "pairing", pullRequest: "yours-to-merge", head: head("1") } },
       ]);
+      expect(joined).toEqual(rule);
+    });
+
+    it("takes yours to merge on a branch requiring nothing, which no report decides, since the pull request's own time, as the rule gives it", () => {
+      const { joined, rule } = joinedAndRule(pairingFacts, null, { ...aChecksRead({ [head("1")]: [] }), required: [] });
+
+      expect(joined.map(({ standing }) => [standing.name, standing.since])).toEqual([["yours-to-merge", "2026-11-06T20:00:00Z"]]);
       expect(joined).toEqual(rule);
     });
   });
