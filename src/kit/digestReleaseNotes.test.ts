@@ -152,6 +152,77 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Digest's release notes, while dr
     expect(bullet("A word changed:**")).toContain("the trimmed transcript");
     expect(bullet("A word changed:**")).toContain("One stored score-file field keeps its old name");
   });
+
+  it("say why this is a minor by the releasing guide's rules, and read correctly if the release is a major for another Spec's reason", async () => {
+    const notes = await read(NOTES);
+    const releasing = await read("docs/releasing.md");
+    const why = notes.split("\n").find((line) => line.startsWith("- **Why a minor:**")) ?? "";
+
+    // The guide's rules for a minor and a major, which the bullet answers one by one.
+    expect(releasing).toContain("- **Minor** (`v1.2.4` to `v1.3.0`): new behaviour or new Kit config fields. Every new field has a default");
+    expect(releasing).toContain("a changed shim");
+    expect(releasing).toContain("a new secret or App permission");
+    for (const said of [
+      "[releasing guide](../releasing.md#choosing-the-version)",
+      "it adds behaviour, so not a patch",
+      "two Kit config fields, each with a default",
+      "changes no shim",
+      "no new secret",
+      "no new permission for the Fabrik App",
+      "leaves the Run-record schema as it was",
+      "only adds to what the read library exports",
+    ]) {
+      expect(why).toContain(said);
+    }
+    expect(why).toContain("takes the highest kind any of them needs");
+    expect(why).toContain("If that is a major for another Spec's reason");
+    // Nowhere do the notes call the release itself a minor: what kind it is waits on the other Specs.
+    expect(notes).not.toMatch(/\b(?:the|this|a) minor release\b/);
+  });
+
+  it("name the store's caller under Upgrading, and say a Product repo merges the Kit bump and does nothing else", async () => {
+    const notes = await read(NOTES);
+    const upgrading = notes.split("\n## Upgrading\n")[1]?.split("\n## ")[0] ?? "";
+
+    expect(upgrading).toContain("- **A Product repo merges the Kit bump** and does nothing else");
+    expect(upgrading).toContain("`fabrik-runs` store's caller");
+    expect(upgrading).toContain("`.github/workflows/weekly-summary.yml`");
+    expect(upgrading).toContain("leaves Digest runs out");
+  });
+
+  it('say "Kit bump" for Dependabot\'s pull request, wherever they speak of a bump', async () => {
+    const notes = await read(NOTES);
+    const bumps = [...notes.matchAll(/(\S+) bumps?\b/gi)].map((match) => match[1]);
+
+    expect(bumps.length).toBeGreaterThan(0);
+    expect(new Set(bumps)).toEqual(new Set(["Kit"]));
+    expect(notes).not.toMatch(/Dependabot(?:['’]s)? (?:PR|pull request)|Kit upgrade/i);
+  });
+
+  it("give the check on the Pilot as seven steps: a first Digest, its places, its cost, a second with the collapse, a carry-forward, the label by hand, and what the trial did not exercise", async () => {
+    const notes = await read(NOTES);
+    const check = notes.split("\n## To check it on the Pilot\n")[1]?.split("\n## ")[0] ?? "";
+    const steps = check.split("\n").filter((line) => /^\d+\. /.test(line));
+
+    expect(steps.map((step) => Number(step.split(".")[0]))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    const [first = "", places = "", cost = "", second = "", carried = "", byHand = "", untried = ""] = steps;
+    expect(first).toContain("`agent:digest` appears");
+    expect(first).toContain(`"${DIGEST_JOB_NAME} PR"`);
+    expect(first).toContain("only then is the review requested");
+    expect(places).toContain("Open each place's link");
+    expect(places).toContain(`within ${MAX_TOP_WORDS} words`);
+    expect(cost).toContain("Run records in role `digest`");
+    expect(cost).toContain("against the trial's figures");
+    expect(second).toContain("the older one is collapsed");
+    expect(second).toContain("was not seen before the release");
+    expect(carried).toContain("carried forward");
+    expect(carried).toContain("only behind `main`");
+    expect(byHand).toContain("Add `agent:digest` by hand");
+    expect(byHand).toContain("nothing else moves");
+    expect(untried).toContain("names a picture");
+    expect(untried).toContain("line comment");
+    expect(untried).toContain("The trial exercised neither");
+  });
 });
 
 /** A Digest's comment, as the contract renders the fixture reply at head `a…a`. */
