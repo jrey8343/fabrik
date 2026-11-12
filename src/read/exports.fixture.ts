@@ -12,6 +12,7 @@ import {
   GitHubError,
   gitHubMessageOf,
   newerSchemaOf,
+  readCaller,
   readKitConfigSources,
   readRunRecord,
   refusalOf,
@@ -27,6 +28,7 @@ import {
 } from "./index.ts";
 import type {
   CallerCheck,
+  CallerRead,
   KitConfig,
   KitConfigResult,
   KitConfigSources,
@@ -188,6 +190,23 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // The caller read
 
+  readCaller: () =>
+    readCaller(
+      {
+        rest: () => Promise.resolve({ head: { sha: "abc123" }, base: { ref: "main" } }),
+        fileText: (repo, path, ref) =>
+          Promise.resolve(
+            repo.owner === "owner"
+              ? `jobs:\n  tick:\n    uses: jrey8343/fabrik/.github/workflows/schedule.yml@${ref === "main" ? "v1.0.0" : "v1.1.0"}\n    permissions:\n      id-token: write\n`
+              : path === ".github/workflows/schedule.yml" && ref === "v1.1.0"
+                ? "on:\n  workflow_call:\njobs:\n  tick:\n    permissions:\n      id-token: write\n      actions: read\n"
+                : null,
+          ),
+      },
+      "owner/product",
+      42,
+    ),
+
   // Spend
 
   // The runway
@@ -242,6 +261,17 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The Required checks
 
   // The caller read
+
+  CallerRead: {
+    changes: true,
+    from: "v1.0.0",
+    to: "v1.1.0",
+    errors: [
+      ".github/workflows/fabrik.yml: the tick job's permissions: lacks `actions: read`, which the tick job of jrey8343/fabrik/.github/workflows/schedule.yml@v1.1.0 asks for. " +
+        "GitHub checks every uses: job of a workflow before any job's if:, so until the line is added every run of this workflow fails at startup, whatever the event. " +
+        "Add `actions: read` under the tick job's permissions: before merging.",
+    ],
+  } satisfies CallerRead,
 
   // Spend
 
