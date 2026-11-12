@@ -53,14 +53,17 @@ import {
   readCaller,
   readKitConfigSources,
   readRunRecord,
+  readSpend,
   refusalOf,
   resolveKitConfig,
   RUN_RECORD_SCHEMA,
+  runnerTimeOf,
   STANDING_NAMES,
   STANDING_SCHEMA,
   standingAt,
   standingsOf,
   stuckBarMinutes,
+  subscriptionReadingsOf,
   TICK_MINUTES,
   weeksEndingAt,
   wordStanding,
@@ -74,12 +77,15 @@ import type {
   KitConfigSources,
   ReadClient,
   Repo,
+  RunnerTime,
   RunRecord,
+  SpendRead,
   Standing,
   StandingFacts,
   StandingName,
   StandingWords,
   StoreStandingFacts,
+  SubscriptionReading,
   Week,
 } from "./index.ts";
 
@@ -139,6 +145,9 @@ function aSchema7Record(): unknown {
   const { brokenRun: _left, ...fields } = aRunRecord();
   return { ...fields, schema: 7 };
 }
+
+/** A weekly-limit reading, 42% used, its week resetting on 2026-11-13 at 04:00 UTC. */
+const A_WEEKLY_READING = { status: "allowed", rateLimitType: "seven_day", utilization: 0.42, resetsAt: Date.parse("2026-11-13T04:00:00Z") / 1000 };
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -365,6 +374,39 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // Spend
 
+  readSpend: () =>
+    readSpend(
+      {
+        rest: (_method, path) =>
+          Promise.resolve({
+            truncated: false,
+            tree: path.endsWith("/HEAD")
+              ? [{ path: "runs", type: "tree", sha: "runs" }]
+              : path.endsWith("/runs")
+                ? [{ path: "owner", type: "tree", sha: "owner" }]
+                : path.endsWith("/owner")
+                  ? [{ path: "product", type: "tree", sha: "product" }]
+                  : path.endsWith("/product")
+                    ? [{ path: "2026-11", type: "tree", sha: "2026-11" }]
+                    : [{ path: "1000-1-implement.json", type: "blob", sha: "a-blob" }],
+          }),
+        fileText: (_repo, path) =>
+          Promise.resolve(path.startsWith("runs/") ? JSON.stringify(aSchema7Record()) : '    - cron: "0 8 * * 1"\n      timezone: "Europe/London"\n'),
+      },
+      ["2026-11"],
+      (path) => path.endsWith("/999-1-implement.json"),
+      NOW,
+    ),
+  subscriptionReadingsOf: () =>
+    subscriptionReadingsOf(
+      [aRunRecord({ endedAt: "2026-11-08T19:00:00Z", rateLimit: A_WEEKLY_READING })],
+      NOW,
+    ),
+  runnerTimeOf: () =>
+    runnerTimeOf(
+      [aRunRecord({ durationMs: 61_000 }), aRunRecord({ runId: 1001, durationMs: null })],
+    ),
+
   // The runway
 
   // The issues to roll in by hand
@@ -433,6 +475,21 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   } satisfies CallerRead,
 
   // Spend
+
+  SpendRead: {
+    kind: "read",
+    records: { "runs/owner/product/2026-11/1000-1-implement.json": aRunRecord() },
+    unreadable: { count: 1, newestSchema: RUN_RECORD_SCHEMA + 1 },
+    timeZone: "Europe/London",
+  } satisfies SpendRead,
+  SubscriptionReading: {
+    subscription: "Claude token",
+    share: 0.42,
+    said: "allowed",
+    readAt: "2026-11-08T19:00:00Z",
+    resetsAt: "2026-11-13T04:00:00.000Z",
+  } satisfies SubscriptionReading,
+  RunnerTime: { minutes: 3, uncounted: 1 } satisfies RunnerTime,
 
   // The runway
 

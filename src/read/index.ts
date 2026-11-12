@@ -90,6 +90,11 @@ export type { CallerRead } from "./caller.ts";
 
 // Spend
 
+export { subscriptionReadingsOf } from "../kit/replayFacts.ts";
+export { readSpend, runnerTimeOf } from "./spend.ts";
+export type { SubscriptionReading } from "../kit/replayFacts.ts";
+export type { RunnerTime, SpendRead } from "./spend.ts";
+
 // The runway
 
 // The issues to roll in by hand
