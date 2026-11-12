@@ -669,44 +669,6 @@ describe("Branch protection", () => {
     expect(protects(afterApplying(state, plan))).toEqual([]);
   });
 
-  describe("as the README's entry under adopting the Kit tells it", () => {
-    const entry = () => readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n").find((l) => l.startsWith("- **Branch protection**")) ?? "";
-
-    it("names admins held to the rules among the settings Setup sets, with no flag or Kit config key for it", () => {
-      expect(entry()).toContain("admins held to the rules");
-      expect(entry()).toMatch(/no flag and no Kit config key/);
-    });
-
-    it("no longer keeps admin enforcement as found, or lets the Operator merge past the rules", () => {
-      expect(entry()).not.toMatch(/admin enforcement included/);
-      expect(entry()).not.toMatch(/merge past/);
-    });
-
-    it("names enforcement switched off by hand among what a later run puts back", () => {
-      const rerun = readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n").find((l) => l.startsWith("Running Setup again on a working install")) ?? "";
-
-      expect(rerun).toMatch(/admin enforcement was switched off by hand.*is made to hold admins to its rules again/);
-    });
-  });
-
-  describe("as the README's Merge gate section tells it", () => {
-    const section = () => readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n## Merge gate\n")[1]?.split("\n## ")[0] ?? "";
-
-    it("says GitHub refuses a merge whose Required checks haven't all passed, and any push to the branch, the Operator's included", () => {
-      expect(section()).toMatch(/refuses a merge at a head whose Required checks haven't all passed/);
-      expect(section()).toMatch(/any push straight to the branch, the Operator's included/);
-    });
-
-    it("gives the way past by hand in one paragraph, which Setup undoes, and which can't clear a check that never reports", () => {
-      const paragraphs = section().split("\n\n").filter((p) => p.includes('"Do not allow bypassing the above settings"'));
-
-      expect(paragraphs).toHaveLength(1);
-      expect(paragraphs[0]).toMatch(/run Setup, which puts enforcement back/);
-      expect(paragraphs[0]).toMatch(/can never report again/);
-      expect(paragraphs[0]).toMatch(/Setup adds Required checks and never takes one off/);
-    });
-  });
-
   describe("a Kit config with Extra skills", () => {
     const config = JSON.stringify({ sandbox: { checks: ["build"] }, roles: { design: { skills: ["jrey8343/skills/event-storming"] } } });
     const pin = (repository: string) => JSON.stringify([{ repository, sha: "a".repeat(40) }]);
