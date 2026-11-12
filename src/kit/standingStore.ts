@@ -6,6 +6,7 @@
 // library's. The Weekly summary never lists these: it does not list itself.
 import { RUN_STORE_REPO } from "./runStore.ts";
 import { type Standing, STANDING_SCHEMA, type StandingNamed } from "./standing.ts";
+import { isWeeklyFailureNotice } from "./weeklyFiling.ts";
 import type { OpenIssueFacts } from "./weeklySummary.ts";
 
 /** A Weekly summary issue in the store, open or closed. */
@@ -29,9 +30,40 @@ export interface StoreStandingFacts {
   readonly readyForHuman: readonly OpenIssueFacts[];
 }
 
-/** The store's Standings at `now`, oldest first, each carrying the store as its repo. */
-export function storeStandingsOf({ summaries }: StoreStandingFacts, _now: string): Standing[] {
-  return summaries.filter(({ open }) => open).map((summary) => openSummaryStandingOf(summary));
+/** The store's Standings at `now`, oldest first, each carrying the store as its repo: one per issue, a failed run before what is to read. */
+export function storeStandingsOf({ summaries, failedSummaryIssues }: StoreStandingFacts, _now: string): Standing[] {
+  const candidates: Standing[] = [
+    ...failedOnSummaryOf(summaries),
+    // Filed when there was no summary to comment on, it stands until it is closed.
+    ...failedSummaryIssues.map(({ number, createdAt }) => failedRunStandingOf(number, createdAt)),
+    ...summaries.filter(({ open }) => open).map(openSummaryStandingOf),
+  ];
+  return candidates
+    .filter((standing, at) => candidates.findIndex(({ issue }) => issue === standing.issue) === at)
+    .toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0));
+}
+
+/**
+ * A failed Weekly summary run that commented on the newest summary, open or
+ * closed: the Operator's to do, not stopping work since nothing waits on it,
+ * while its notice is the Fabrik App's last comment there and the summary's
+ * body has not been written since, as a re-run that succeeded writes it.
+ */
+function failedOnSummaryOf([newest]: readonly WeeklySummaryIssueFacts[]): StandingNamed<"yours-to-do">[] {
+  const last = newest?.appComments.at(-1);
+  if (newest === undefined || last === undefined || !isWeeklyFailureNotice(last.body) || Date.parse(newest.bodyWrittenAt) > Date.parse(last.at)) return [];
+  return [failedRunStandingOf(newest.number, last.at)];
+}
+
+/** A failed Weekly summary run, on the issue its notice is on, since the notice. */
+function failedRunStandingOf(issue: number, since: string): StandingNamed<"yours-to-do"> {
+  return {
+    ...theOperators(issue, since),
+    stopsWork: false,
+    work: "weekly-summary",
+    name: "yours-to-do",
+    detail: { handBack: "weekly-summary-failed", role: null, failure: null, label: null },
+  };
 }
 
 /** The open Weekly summary: the Operator's to read, never stopping work, since its body was written. */
