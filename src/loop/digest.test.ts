@@ -118,11 +118,9 @@ describe("The Digest: landing", () => {
     expect(notificationsOf(landed(written({ output: JSON.stringify({ ...REPLY, decided: "- @operator decided nothing." }) })))).toEqual([]);
   });
 
-  it.each([
-    ["at the Merge gate", aPassedPullRequest()],
-    ["still in draft", aPassedPullRequest({ draft: true, leftDraftSinceVerdict: false })],
-  ])("on a pull request %s it changes no draft state and requests no review", (_where, pullRequest) => {
-    const kinds = actionsOf(landed(written(), pullRequest)).map(({ kind }) => kind);
+  // What landing does on a passed draft, where the Merge gate has yet to open, is src/loop/digestGate.test.ts's.
+  it("on a pull request at the Merge gate it changes no draft state and requests no review", () => {
+    const kinds = actionsOf(landed(written(), aPassedPullRequest())).map(({ kind }) => kind);
 
     expect(kinds).toEqual(["comment", "remove-label"]);
   });

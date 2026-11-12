@@ -223,8 +223,8 @@ function heldOnRefusal(
 export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig, pullRequest: PullRequestSnapshot | null = null): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
-  // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again.
-  if (run.role === "digest") return noDigestAfter(run, failure, pullRequest);
+  // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again. The gate opens all the same.
+  if (run.role === "digest") return noDigestAfter(run, failure, pullRequest, operator);
   const ranOn = ranOnOf(run, config);
   const failedRun = run.prototype === true ? `The prototype turn on #${run.issue}` : `The ${runNamed(run.role)} on #${run.issue}`;
   const refused = heldOnRefusal(run, failure, context, ranOn);

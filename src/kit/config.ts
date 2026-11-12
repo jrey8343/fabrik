@@ -66,7 +66,7 @@ export interface KitConfig {
     readonly day: RetroDay | null;
   };
   readonly digest: {
-    /** Whether the Kit writes Digests in this repo; false declines `agent:digest`. */
+    /** Whether the Kit writes Digests in this repo; false has a pass open the Merge gate itself, and declines `agent:digest`. */
     readonly enabled: boolean;
   };
   /** The Operator's GitHub login; null means the Product repo's owner. */
