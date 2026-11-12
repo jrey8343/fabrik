@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import type { UiConfig } from "../kit/config.ts";
 import {
   type Capture,
   type CaptureFailure,
   type CaptureResult,
+  evidenceMarkerIn,
   evidenceSection,
   isUi,
   type MissedShot,
@@ -393,6 +395,17 @@ describe("The evidence section's Evidence page line", () => {
 
     expect(lines).toContain("The Implement run kept no Evidence page of its 6 screenshots.");
     expect(lines.some((line) => line.includes("Open the Evidence page"))).toBe(false);
+  });
+});
+
+describe("An evidence section an earlier release wrote, naming the Evidence page by its old word", () => {
+  it.each([
+    ["linking its Evidence page", EVIDENCE_PAGE],
+    ["saying it kept none", null],
+  ])("still has its marker found, %s", (_, evidencePage) => {
+    const body = asAnEarlierReleaseWroteIt(`Adds a waitlist to full days.\n\n${evidenceSection(evidence(allCaptured, { evidencePage }))}\n\nCloses #12`);
+
+    expect(evidenceMarkerIn(body)).toEqual({ run: 9100, artifact: 9202, failure: null });
   });
 });
 
