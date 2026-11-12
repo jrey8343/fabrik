@@ -152,12 +152,12 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
     case "unreported-checks": {
       const unreported = run.report?.checks ?? [];
       // A report that lost its check names still says what to look for, without naming one.
-      if (unreported.length === 0) return "a required check never reported on this PR; check the gating checks' workflow names and `paths:` filters against `sandbox.checks`";
+      if (unreported.length === 0) return "a Required check never reported on this PR; check the workflow names and `paths:` filters of the Required checks `sandbox.checks` lists";
       const [checks, its, workflows, names, filters, it] =
         unreported.length === 1
           ? (["check", "its", "workflow's", "name", "filter", "it"] as const)
           : (["checks", "their", "workflows'", "names", "filters", "them"] as const);
-      return `the required ${checks} ${checkNames(unreported)} never reported on this PR; check ${its} ${workflows} ${names} and \`paths:\` ${filters}, or drop ${it} from \`sandbox.checks\``;
+      return `the Required ${checks} ${checkNames(unreported)} never reported on this PR; check ${its} ${workflows} ${names} and \`paths:\` ${filters}, or drop ${it} from \`sandbox.checks\``;
     }
   }
 }

@@ -4,7 +4,8 @@
 // whenever that changes, and every few minutes while it doesn't, and gives up
 // a few minutes short of its job's timeout (the Review timeout). Giving up, or
 // any error, fails the job and leaves a failure report for the push job's
-// notice: a gating check that never reported is named, as no re-run fixes it.
+// notice: a Required check the Kit config lists that never reported is named,
+// as no re-run fixes it.
 //   node src/review/wait.ts <product checkout>
 // Env: GH_TOKEN (read-only), GITHUB_REPOSITORY, FABRIK_PULL_REQUEST, GITHUB_OUTPUT,
 //   FABRIK_REVIEW_TIMEOUT_MINUTES (the job's timeout), FABRIK_OUT_DIR (where the failure report goes).
@@ -17,7 +18,7 @@
 // After the Kit re-ran red checks (#462), the same wait runs again as the Re-run
 // checks' wait, given FABRIK_RERUN (the re-run checks, as the red output named
 // them), FABRIK_RERUN_AT and FABRIK_HEAD_SHA: it waits until the re-run checks
-// have reported again on that head, and then for every gating check, and also writes
+// have reported again on that head, and then for every check it waits on, and also writes
 //   failed-again the re-run checks that failed again, as a JSON list
 //   flaky        the re-run checks that passed, with their red and green runs, as JSON
 import { execFile } from "node:child_process";
@@ -33,7 +34,7 @@ import { type CheckDetail, type RerunnableCheck, redChecksOf, rerunOutcome, sett
 
 const run = promisify(execFile);
 
-/** Long enough for a fresh push's check suites to register before an empty list counts as nothing gating. */
+/** Long enough for a fresh push's check suites to register before an empty list counts as nothing to wait on. */
 const SETTLE_MS = 60_000;
 const POLL_MS = 30_000;
 /** How often it says what it waits on while that doesn't change. */
@@ -70,10 +71,10 @@ async function pullRequestState(repo: string, number: string): Promise<PullReque
   return JSON.parse(stdout) as PullRequestState;
 }
 
-/** The PR head's checks: every one when Kit config names the gating checks, else only the required ones. */
-async function checksOf(repo: string, number: string, gating: readonly string[]): Promise<CheckDetail[]> {
+/** The PR head's checks: every one when the Kit config lists Required checks, else only the required ones. */
+async function checksOf(repo: string, number: string, listedChecks: readonly string[]): Promise<CheckDetail[]> {
   const args = ["pr", "checks", number, "--repo", repo, "--json", "name,bucket,link,workflow,startedAt"];
-  return checksFromGh(await gh(...args, ...(gating.length === 0 ? ["--required"] : []))) as CheckDetail[];
+  return checksFromGh(await gh(...args, ...(listedChecks.length === 0 ? ["--required"] : []))) as CheckDetail[];
 }
 
 /** What the wait reads from GitHub: the PR's state, and its head's checks. */
@@ -83,8 +84,8 @@ export interface ChecksWaitGitHub {
 }
 
 export interface ChecksWaitOptions {
-  /** The Kit config's gating checks; empty for the branch protection's required ones. */
-  readonly gating: readonly string[];
+  /** The Required checks the Kit config lists; empty for the branch protection's required ones. */
+  readonly listedChecks: readonly string[];
   /** How long it waits, from its start, before it gives up. */
   readonly deadlineMs: number;
   readonly now: () => number;
@@ -93,10 +94,10 @@ export interface ChecksWaitOptions {
   /** The head it waits on, when an earlier job named it: the PR having moved off it makes the wait stale. */
   readonly headSha?: string;
   /** How the checks it reads have ended; requiredChecksOutcome when not given. */
-  readonly outcome?: (checks: readonly CheckDetail[], gating: readonly string[]) => ChecksOutcome;
+  readonly outcome?: (checks: readonly CheckDetail[], listedChecks: readonly string[]) => ChecksOutcome;
 }
 
-/** How the wait ended. It gives up at its deadline, naming the gating checks that never reported and those still running. */
+/** How the wait ended. It gives up at its deadline, naming the listed checks that never reported and those still running. */
 export type ChecksWaitOutcome =
   | { readonly checks: "green" | "stale"; readonly headSha: string }
   | { readonly checks: "red"; readonly headSha: string; readonly failed: readonly string[]; readonly skipped: readonly string[] }
@@ -129,11 +130,12 @@ async function whileWaiting<T>(read: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Waits for the PR's gating checks on the head it started at: polls until they
+ * Waits for the PR's checks on the head it started at, the Required checks
+ * the Kit config lists or else the branch's required ones: polls until they
  * all passed or one didn't, the PR moves on, or its deadline passes.
  */
 export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: ChecksWaitOptions): Promise<ChecksWaitOutcome> {
-  const { gating, deadlineMs, now, sleep, log, outcome = requiredChecksOutcome } = options;
+  const { listedChecks, deadlineMs, now, sleep, log, outcome = requiredChecksOutcome } = options;
   const started = now();
   const headSha = options.headSha ?? (await whileWaiting(() => github.pullRequestState())).headRefOid;
   await sleep(SETTLE_MS);
@@ -142,7 +144,7 @@ export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: C
   for (;;) {
     const state = await whileWaiting(() => github.pullRequestState());
     if (state.headRefOid !== headSha || state.state !== "OPEN" || !state.isDraft) return { checks: "stale", headSha };
-    const result = outcome(await whileWaiting(() => github.checks()), gating);
+    const result = outcome(await whileWaiting(() => github.checks()), listedChecks);
     if (result.kind === "green") return { checks: "green", headSha };
     if (result.kind === "red") return { checks: "red", headSha, failed: result.failed, skipped: result.skipped };
     const line = waitingOn(result.unreported, result.running);
@@ -161,7 +163,7 @@ export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: C
 
 /**
  * The failure report a wait that gave up leaves for the push job's notice: the
- * gating checks that never reported, if any did not, as no re-run fixes those;
+ * listed checks that never reported, if any did not, as no re-run fixes those;
  * else a timeout naming the checks still running.
  */
 export function gaveUpReport(outcome: Extract<ChecksWaitOutcome, { checks: "gave-up" }>): FailureReport {
@@ -185,7 +187,7 @@ export function errorReport(error: unknown): FailureReport {
 async function main(productDir: string): Promise<void> {
   const resolved = await readKitConfigFromCheckout(productDir);
   if (!resolved.ok) throw new Error(`The Kit config is invalid:\n${resolved.errors.map((e) => `- ${e}`).join("\n")}`);
-  const gating = resolved.config.sandbox.checks;
+  const listedChecks = resolved.config.sandbox.checks;
   const repo = required("GITHUB_REPOSITORY");
   const number = required("FABRIK_PULL_REQUEST");
   const timeoutMinutes = Number(required("FABRIK_REVIEW_TIMEOUT_MINUTES"));
@@ -197,11 +199,11 @@ async function main(productDir: string): Promise<void> {
   const outcome = await waitForRequiredChecks(
     {
       pullRequestState: () => pullRequestState(repo, number),
-      checks: async () => (last = await checksOf(repo, number, gating)),
+      checks: async () => (last = await checksOf(repo, number, listedChecks)),
     },
     {
-      gating,
-      ...(rerun === null ? {} : { headSha: required("FABRIK_HEAD_SHA"), outcome: (checks, gating) => settledChecksOutcome(checks, gating, { rerun: rerun.map(({ name }) => name), rerunAt }) }),
+      listedChecks,
+      ...(rerun === null ? {} : { headSha: required("FABRIK_HEAD_SHA"), outcome: (checks, listed) => settledChecksOutcome(checks, listed, { rerun: rerun.map(({ name }) => name), rerunAt }) }),
       deadlineMs: Math.max(timeoutMinutes * 60_000 - TIMEOUT_MARGIN_MS, SETTLE_MS),
       now: Date.now,
       sleep: (ms) => sleep(ms),

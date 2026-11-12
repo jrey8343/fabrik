@@ -278,7 +278,7 @@ describe("Failure notices", () => {
     const review = (report: NonNullable<Extract<LoopEvent, { kind: "agent-run-failed" }>["report"]>) =>
       planFor(failed({ role: "review", report }), snapshotOf(issue), kitConfig());
 
-    it("names a gating check that never reported, says where to look, and that re-adding the label won't change it", () => {
+    it("names a Required check that never reported, says where to look, and that re-adding the label won't change it", () => {
       const plan = review({ failure: "unreported-checks", detail: "", checks: ["e2e"] });
 
       expect(plan).toEqual({
@@ -290,7 +290,7 @@ describe("Failure notices", () => {
       });
       expect(commentOf(plan)).toBe(
         [
-          "@operator The Review run on #7 failed: the required check `e2e` never reported on this PR; check its workflow's name and `paths:` filter, or drop it from `sandbox.checks`.",
+          "@operator The Review run on #7 failed: the Required check `e2e` never reported on this PR; check its workflow's name and `paths:` filter, or drop it from `sandbox.checks`.",
           "",
           "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-adding the `agent:review` label won't change this. After fixing the workflow or `sandbox.checks`, re-add `agent:review` on this PR to run it again.",
           "",
@@ -299,11 +299,11 @@ describe("Failure notices", () => {
       );
     });
 
-    it("names every gating check that never reported", () => {
+    it("names every Required check that never reported", () => {
       const body = commentOf(review({ failure: "unreported-checks", detail: "", checks: ["e2e", "smoke"] }));
 
       expect(body).toContain(
-        "failed: the required checks `e2e` and `smoke` never reported on this PR; check their workflows' names and `paths:` filters, or drop them from `sandbox.checks`.",
+        "failed: the Required checks `e2e` and `smoke` never reported on this PR; check their workflows' names and `paths:` filters, or drop them from `sandbox.checks`.",
       );
     });
 
@@ -311,7 +311,7 @@ describe("Failure notices", () => {
       const body = commentOf(review({ failure: "unreported-checks", detail: "" }));
 
       expect(body).toContain(
-        "failed: a required check never reported on this PR; check the gating checks' workflow names and `paths:` filters against `sandbox.checks`.",
+        "failed: a Required check never reported on this PR; check the workflow names and `paths:` filters of the Required checks `sandbox.checks` lists.",
       );
     });
 

@@ -56,20 +56,20 @@ export interface Rerun {
 }
 
 /**
- * The gating checks' outcome after a re-run. A re-run check that started
- * before the re-run reads as it did then, so it's still pending; and the
- * outcome is red only once nothing gating is still running, as a re-run check
+ * The outcome of the checks the Review waits on after a re-run. A re-run
+ * check that started before the re-run reads as it did then, so it's still
+ * pending; and the outcome is red only once none of them is still running, as a re-run check
  * may yet pass beside an outside check that stays red.
  */
-export function settledChecksOutcome(checks: readonly CheckDetail[], gating: readonly string[], { rerun, rerunAt }: Rerun): ChecksOutcome {
+export function settledChecksOutcome(checks: readonly CheckDetail[], listedChecks: readonly string[], { rerun, rerunAt }: Rerun): ChecksOutcome {
   const since = Date.parse(rerunAt);
   const fresh = checks.map((check): CheckState => {
     const stale = rerun.includes(check.name) && !(Date.parse(check.startedAt ?? "") >= since);
     return { name: check.name, bucket: stale ? "pending" : check.bucket };
   });
-  const outcome = requiredChecksOutcome(fresh, gating);
+  const outcome = requiredChecksOutcome(fresh, listedChecks);
   if (outcome.kind !== "red") return outcome;
-  const gate = gating.length === 0 ? fresh : fresh.filter((check) => gating.includes(check.name));
+  const gate = listedChecks.length === 0 ? fresh : fresh.filter((check) => listedChecks.includes(check.name));
   const running = [...new Set(gate.filter((check) => check.bucket === "pending").map((check) => check.name))];
   return running.length === 0 ? outcome : { kind: "pending", unreported: [], running };
 }

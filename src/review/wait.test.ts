@@ -23,8 +23,8 @@ function fakes(rounds: readonly (readonly CheckDetail[])[], states: readonly Pul
   return {
     github,
     logged,
-    options: (gating: readonly string[], deadlineMs = 27 * MINUTE) => ({
-      gating,
+    options: (listedChecks: readonly string[], deadlineMs = 27 * MINUTE) => ({
+      listedChecks,
       deadlineMs,
       now: () => now,
       sleep: async (ms: number) => {
@@ -40,7 +40,7 @@ function fakes(rounds: readonly (readonly CheckDetail[])[], states: readonly Pul
 const check = (name: string, bucket: CheckDetail["bucket"]): CheckDetail => ({ name, bucket, link: "", workflow: "" });
 
 describe("Waiting for an agent PR's required checks", () => {
-  it("ends green once every gating check passed", async () => {
+  it("ends green once every Required check the Kit config lists passed", async () => {
     const { github, options } = fakes([[check("build", "pending")], [check("build", "pass")]]);
 
     expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "green", headSha: HEAD });
@@ -65,7 +65,7 @@ describe("Waiting for an agent PR's required checks", () => {
     expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "stale", headSha: HEAD });
   });
 
-  it("gives up at its own deadline on a gating check that never reported, naming it", async () => {
+  it("gives up at its own deadline on a Required check the Kit config lists that never reported, naming it", async () => {
     const { github, options } = fakes([[check("build", "pass")]]);
 
     expect(await waitForRequiredChecks(github, options(["build", "e2e"]))).toEqual({
@@ -140,7 +140,7 @@ describe("Waiting for an agent PR's required checks", () => {
 });
 
 describe("What a wait that gave up reports", () => {
-  it("names the gating checks that never reported, even with others still running", () => {
+  it("names the Required checks the Kit config lists that never reported, even with others still running", () => {
     expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: ["e2e"], running: ["build"] })).toEqual({
       failure: "unreported-checks",
       detail: "",
@@ -148,7 +148,7 @@ describe("What a wait that gave up reports", () => {
     });
   });
 
-  it("is a timeout naming the checks still running when every gating check reported", () => {
+  it("is a timeout naming the checks still running when every Required check the Kit config lists reported", () => {
     expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: [], running: ["build", "lint"] })).toEqual({
       failure: "timeout",
       detail: "",
