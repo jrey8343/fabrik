@@ -148,7 +148,7 @@ describe("The Digest: never a Held run, when agent:digest is added", () => {
   it("a label the rule declines is declined as ever, with no no-Digest line", () => {
     const plan = labelledOn(aPassedDraft({ verdicts: [] }), NONE_FREE);
 
-    expect(commentsOn(plan, 50)).toEqual(["agent:digest came off and nothing started: #50 has no pass on its current head, aaaaaaa."]);
+    expect(commentsOn(plan, 50)).toEqual(["agent:digest came off and nothing started: #50 has no pass on aaaaaaa as its latest Verdict."]);
   });
 
   it("with one Subscription still free, the label starts the Digest writer on it", () => {
@@ -378,8 +378,8 @@ describe("The Digest: a lost start, at the stuck-trigger sweep", () => {
   });
 
   it.each([
-    ["a run is now in flight on it", aPassedDraft({ conflictRunInFlight: "c".repeat(40) }), "The conflict-only run on #50 is still in flight"],
-    ["its head has no pass on it", aPassedDraft({ headSha: "b".repeat(40) }), "#50 has no pass on its current head, bbbbbbb"],
+    ["a run is now in flight on it", aPassedDraft({ conflictRunInFlight: "c".repeat(40) }), "The conflict-only run on #50 is in flight"],
+    ["its head has no pass on it", aPassedDraft({ headSha: "b".repeat(40) }), "#50 has no pass on bbbbbbb as its latest Verdict"],
   ])("a lost start on a pull request overtaken since, where %s, is dropped as any attempt is: the label comes off, nothing is posted and the gate stays closed", (_what, pullRequest, why) => {
     const plan = swept([onFifty()], [pullRequest]);
 

@@ -44,16 +44,21 @@ function whyNoDigest(pullRequest: PullRequestSnapshot, config: KitConfig): strin
 }
 
 /**
- * Why a pull request has nothing a Digest could be written of now, or null
- * while it has: it is closed, a run is in flight on it, or its latest
- * Verdict is not a pass on its current head.
+ * Why a pull request has nothing a Digest as of `headSha` could be written
+ * of, or landed for, now, or null while it has: it is closed, its head has
+ * moved on from that one, a run is in flight on it, or its latest Verdict is
+ * not a pass on that head. The one rule for a Digest's start and for its
+ * end: the label starts a run only while this is null for the pull
+ * request's head, and an attempt that ends when it no longer is, is dropped.
  */
-function whyNothingToDigest(pullRequest: PullRequestSnapshot): string | null {
+function whyNothingToDigest(pullRequest: PullRequestSnapshot, headSha: string = pullRequest.headSha): string | null {
   const { number } = pullRequest;
+  const short = headSha.slice(0, 7);
   if (!pullRequest.open) return `#${number} is closed`;
+  if (pullRequest.headSha !== headSha) return `#${number} has moved on from ${short}`;
   const run = runInFlight(pullRequest);
-  if (run !== null) return `${runName(run)} on #${number} is still in flight`;
-  if (!passedAt(pullRequest, pullRequest.headSha)) return `#${number} has no pass on its current head, ${pullRequest.headSha.slice(0, 7)}`;
+  if (run !== null) return `${runName(run)} on #${number} is in flight`;
+  if (!passedAt(pullRequest, headSha)) return `#${number} has no pass on ${short} as its latest Verdict`;
   return null;
 }
 
@@ -155,8 +160,9 @@ const MISSING_PULL_REQUEST: Plan = { kind: "fail", failure: "infrastructure", re
  * How a finished Digest run lands, in the push job. Whichever way, the label
  * comes off, so adding it again is a fresh event:
  * - dropped, when the pull request is closed, its head has moved, a run is
- *   now in flight on it, or its latest Verdict is no longer that pass:
- *   nothing is posted and the gate stays closed;
+ *   now in flight on it, or its latest Verdict is no longer that pass
+ *   (`whyNothingToDigest`, the rule the label starts a run by): nothing is
+ *   posted and the gate stays closed;
  * - refused, when the reply breaks its shape or Kit code refuses the Digest
  *   it would render: the no-Digest line is posted, with Kit code's reason,
  *   then the gate opens;
@@ -168,7 +174,7 @@ const MISSING_PULL_REQUEST: Plan = { kind: "fail", failure: "infrastructure", re
  */
 export function landDigest(event: Written, { pullRequest, operator }: Pick<Snapshot, "pullRequest" | "operator">): Plan {
   if (pullRequest === null) return MISSING_PULL_REQUEST;
-  const dropped = whyDropped(pullRequest, event.headSha);
+  const dropped = whyNothingToDigest(pullRequest, event.headSha);
   if (dropped !== null) return drop(pullRequest, dropped);
   const reply = parseDigestReply(event.output);
   const comment = reply.ok ? digestCommentOf(reply.output, event.given) : { ok: false as const, refused: reply.errors.join("; ") };
@@ -203,7 +209,7 @@ export function collapseOlder(pullRequest: PullRequestSnapshot): Action[] {
 export function noDigestAfter(run: FailedRun, failure: InfrastructureFailure, pullRequest: PullRequestSnapshot | null, operator: string): Plan {
   if (pullRequest === null || run.digest === undefined || run.digest.pullRequest !== pullRequest.number) return MISSING_PULL_REQUEST;
   const head = run.digest.headSha;
-  const dropped = whyDropped(pullRequest, head);
+  const dropped = whyNothingToDigest(pullRequest, head);
   if (dropped !== null) return drop(pullRequest, dropped);
   const { runUrl } = run;
   if (failure === "timeout") return attemptEnded(pullRequest, noDigestLine({ head, how: "timed-out", runUrl }), operator);
@@ -251,22 +257,6 @@ function drop(pullRequest: PullRequestSnapshot, why: string): Plan {
 
 function labelOff(pullRequest: PullRequestSnapshot): Action {
   return { kind: "remove-label", issue: pullRequest.number, label: DIGEST_LABEL };
-}
-
-/**
- * Why a Digest written as of `headSha` is not the pull request's to have any
- * more, or null while it is: the pull request closed, its head moved, a run
- * is now in flight on it, or its latest Verdict is no longer that pass.
- */
-function whyDropped(pullRequest: PullRequestSnapshot, headSha: string): string | null {
-  const { number } = pullRequest;
-  const short = headSha.slice(0, 7);
-  if (!pullRequest.open) return `#${number} is closed`;
-  if (pullRequest.headSha !== headSha) return `#${number} has moved on from ${short}`;
-  const run = runInFlight(pullRequest);
-  if (run !== null) return `${runName(run)} on #${number} is in flight`;
-  if (!passedAt(pullRequest, headSha)) return `#${number}'s latest Verdict is no longer the pass on ${short}`;
-  return null;
 }
 
 /** Whether the pull request's latest Verdict is a pass given on `headSha`. */

@@ -157,7 +157,7 @@ describe("The Digest: landing", () => {
   it("a Digest whose pass is no longer the pull request's latest Verdict posts nothing and takes the label off", () => {
     const plan = landed(written(), aPassedPullRequest({ verdicts: [aVerdict(), aVerdict({ verdict: "execution-flaw", source: "ci", ticketNotReady: true })] }));
 
-    expect(plan).toEqual({ kind: "act", actions: ONLY_THE_LABEL_OFF, notes: ["The Digest of #50 was dropped: #50's latest Verdict is no longer the pass on aaaaaaa"] });
+    expect(plan).toEqual({ kind: "act", actions: ONLY_THE_LABEL_OFF, notes: ["The Digest of #50 was dropped: #50 has no pass on aaaaaaa as its latest Verdict"] });
   });
 
   it("a dropped Digest is dropped whatever its reply holds, shape broken or not", () => {
@@ -275,25 +275,25 @@ describe("The Digest: agent:digest declined", () => {
   });
 
   it("comes off a pull request with no Verdict, saying it has no pass on its current head", () => {
-    expect(labelled(aPassedPullRequest({ verdicts: [] }))).toEqual(declined("#50 has no pass on its current head, aaaaaaa"));
+    expect(labelled(aPassedPullRequest({ verdicts: [] }))).toEqual(declined("#50 has no pass on aaaaaaa as its latest Verdict"));
   });
 
   it("comes off one whose latest Verdict is a flaw, though an earlier one was a pass", () => {
     const flawed = aPassedPullRequest({ draft: true, leftDraftSinceVerdict: false, verdicts: [aVerdict(), aVerdict({ verdict: "design-flaw" })] });
 
-    expect(labelled(flawed)).toEqual(declined("#50 has no pass on its current head, aaaaaaa"));
+    expect(labelled(flawed)).toEqual(declined("#50 has no pass on aaaaaaa as its latest Verdict"));
   });
 
   it("comes off one whose pass was given on an earlier head", () => {
     const moved = aPassedPullRequest({ verdicts: [aVerdict({ headSha: "b".repeat(40) })] });
 
-    expect(labelled(moved)).toEqual(declined("#50 has no pass on its current head, aaaaaaa"));
+    expect(labelled(moved)).toEqual(declined("#50 has no pass on aaaaaaa as its latest Verdict"));
   });
 
   it("comes off one with a run in flight on it, naming the run", () => {
     const building = aPassedPullRequest({ draft: true, leftDraftSinceVerdict: false, requestChangesRunInFlight: 901 });
 
-    expect(labelled(building)).toEqual(declined("The Operator's Request-changes run on #50 is still in flight"));
+    expect(labelled(building)).toEqual(declined("The Operator's Request-changes run on #50 is in flight"));
   });
 
   it("comes off a pull request that is not an agent's", () => {
