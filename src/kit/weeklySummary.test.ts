@@ -36,7 +36,7 @@ import {
 } from "../__fixtures__/weeklySummary.ts";
 import { aMonitorIssueBody, AGROUP_STATS } from "../__fixtures__/monitor.ts";
 import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
-import { RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { handBackMarker, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import type { RepoHealthFacts } from "./loopHealth.ts";
 import { RUN_RECORD_SCHEMA, readRunRecord, type RunRecord } from "./runRecord.ts";
@@ -1090,200 +1090,136 @@ describe("the Weekly summary", () => {
     });
   });
 
+  // Stuck is the silences at the repo's bar (#527): 3 hours 30 minutes on default timeouts, from the Kit's last sign (#610).
   describe("Stuck", () => {
     const HOUR = 60 * 60 * 1000;
-    const hoursAgo = (hours: number) => new Date(Date.parse(NOW) - hours * HOUR).toISOString();
-    const person = (body: string, at: string) => aComment(body, at, { author: "someone", byBot: false });
-    const stuckIn = (facts: Parameters<typeof factsOf>[0], records = [aRunRecord()]) => {
-      const result = weeklySummary(input({ records, facts: [factsOf(facts)] }));
+    const MINUTE = 60 * 1000;
+    const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString();
+    const hoursAgo = (hours: number) => ago(hours * HOUR);
+    const RUNS = "Check [the Loop's runs](https://github.com/owner/product/actions)";
+    const summaryWith = (facts: Parameters<typeof factsOf>[0], kit: RepoKitFacts | null = aRepoKit(), records = [aRunRecord()]) => {
+      const result = weeklySummary(input({ records, facts: [factsOf(facts)], kits: kit === null ? [] : [kit] }));
       if (result.kind !== "summary") throw new Error("expected a summary");
-      return result.summary.repos[0]?.stuck;
+      return result;
     };
-    const askedOn = (labelledAt: string, comments: Parameters<typeof aComment>[] = []) =>
-      anOpenIssue({
-        number: 20,
-        title: "It crashes",
-        labels: ["needs-info"],
-        labelEvents: [aLabelAdded("needs-info", labelledAt)],
-        comments: [aComment("Which version are you on?", labelledAt), ...comments.map((args) => aComment(...args))],
-      });
+    const stuckIn = (facts: Parameters<typeof factsOf>[0], kit: RepoKitFacts | null = aRepoKit()) => summaryWith(facts, kit).summary.repos[0]?.stuck;
+    const draft = (pushedAt: string, overrides: Parameters<typeof anOpenPullRequest>[0] = {}) => anOpenPullRequest({ number: 51, commits: [{ at: pushedAt }], ...overrides });
 
-    it.each([
-      [23, []],
-      [25, [{ kind: "needs-info-answered", number: 20, title: "It crashes", url: "https://github.com/owner/product/issues/20" }]],
-    ])("lists a needs-info issue someone answered %i hours ago with no state change since only past 24 hours", (hours, stuck) => {
-      const issue = askedOn(hoursAgo(30), [["Version 2.", hoursAgo(hours), { author: "someone", byBot: false }]]);
-      expect(stuckIn({ openIssues: [issue] })).toMatchObject(stuck);
-    });
-
-    it("dates an answered needs-info issue from the first answer after the question", () => {
-      const issue = askedOn(hoursAgo(50), [
-        ["An earlier thought.", hoursAgo(60), { author: "someone", byBot: false }],
-        ["Version 2.", hoursAgo(40), { author: "someone", byBot: false }],
-        ["Also on 3.", hoursAgo(30), { author: "someone", byBot: false }],
-      ]);
-      expect(stuckIn({ openIssues: [issue] })).toMatchObject([{ kind: "needs-info-answered", since: hoursAgo(40), age: 40 * HOUR }]);
-    });
-
-    it("doesn't list a needs-info issue only a bot answered, or one whose answer came before the question", () => {
-      const botOnly = askedOn(hoursAgo(50), [["Thanks for the report!", hoursAgo(40), { author: "dependabot[bot]", byBot: true }]]);
-      const answeredBefore = { ...askedOn(hoursAgo(50)), number: 21, comments: [person("Version 2.", hoursAgo(60))] };
-      expect(stuckIn({ openIssues: [botOnly, answeredBefore] })).toEqual([]);
-    });
-
-    it("doesn't list a needs-info issue whose state changed after the answer", () => {
-      const issue = {
-        ...askedOn(hoursAgo(50), [["Version 2.", hoursAgo(40), { author: "someone", byBot: false }]]),
-        labelEvents: [
-          aLabelAdded("needs-info", hoursAgo(50)),
-          aLabelAdded("needs-info", hoursAgo(35), { action: "unlabeled" }),
-          aLabelAdded("needs-triage", hoursAgo(35)),
-          aLabelAdded("needs-info", hoursAgo(30)),
-        ],
-      };
-      expect(stuckIn({ openIssues: [issue] })).toEqual([]);
-    });
-
-    it.each([
-      ["commit", (at: string) => anOpenPullRequest({ number: 51, commits: [{ at }] })],
-      ["comment", (at: string) => anOpenPullRequest({ number: 51, comments: [aComment("Still going.", at)] })],
-      ["label event", (at: string) => anOpenPullRequest({ number: 51, labelEvents: [aLabelAdded("agent:review", at)] })],
-    ])("lists a draft agent PR whose last %s came more than 24 hours ago", (_, draft) => {
-      expect(stuckIn({ openPullRequests: [draft(hoursAgo(23))] })).toEqual([]);
-      expect(stuckIn({ openPullRequests: [draft(hoursAgo(25))] })).toEqual([
+    it("lists an agent draft silent for 23 hours, the bar passed, with its sentence at the bar and its remedy", () => {
+      expect(stuckIn({ openPullRequests: [draft(hoursAgo(23))] })).toEqual([
         {
-          kind: "idle-draft",
+          kind: "silence",
           number: 51,
           title: "Build the thing",
           url: "https://github.com/owner/product/pull/51",
-          since: hoursAgo(25),
-          age: 25 * HOUR,
+          since: hoursAgo(23),
+          age: 23 * HOUR,
+          sentence: "The Kit has made no sign on #51 for 23 hours.",
+          remedy: `${RUNS}, then add \`agent:review\` to #51.`,
         },
       ]);
     });
 
-    it.each([
-      [23, []],
-      [38, [{ kind: "reviewed", number: 60, title: "Build the thing", url: "https://github.com/owner/product/pull/60", since: hoursAgo(38), age: 38 * HOUR }]],
-    ])("lists a PR the Operator requested changes on %i hours ago, after its pass, only past 24 hours (#481, #604)", (hours, stuck) => {
-      const pullRequest = anOpenPullRequest({
-        number: 60,
-        draft: false,
-        comments: [aVerdictComment("pass", "h".repeat(40), hoursAgo(60))],
-        reviews: [aReview(hoursAgo(50), { state: "commented" }), aReview(hoursAgo(hours), { body: "Rebase, please." })],
-      });
-      expect(stuckIn({ openPullRequests: [pullRequest] })).toEqual(stuck);
-    });
-
-    it("doesn't list a PR the Operator only commented on or approved after its pass: it is still at the Merge gate (#604)", () => {
-      const pullRequest = anOpenPullRequest({
-        number: 60,
-        draft: false,
-        comments: [aVerdictComment("pass", "h".repeat(40), hoursAgo(60))],
-        reviews: [aReview(hoursAgo(50), { state: "commented" }), aReview(hoursAgo(38), { state: "approved", body: "Rebase, please." })],
-      });
-      expect(stuckIn({ openPullRequests: [pullRequest] })).toEqual([]);
-    });
-
-    it("doesn't list an agent PR out of draft, however long it has been quiet", () => {
-      expect(stuckIn({ openPullRequests: [anOpenPullRequest({ draft: false })] })).toEqual([]);
+    it("doesn't list one silent for 3 hours, short of the bar", () => {
+      expect(stuckIn({ openPullRequests: [draft(hoursAgo(3))] })).toEqual([]);
     });
 
     it.each([
-      [23, []],
-      [25, [{ kind: "infrastructure-failure", number: 7, title: "Build the thing", url: "https://github.com/owner/product/issues/7", failure: "timeout" }]],
-    ])("lists an open Ticket whose latest record, %i hours ago, ended in an Infrastructure failure, only past 24 hours", (hours, stuck) => {
-      const records = [
-        aRunRecord({ endedAt: hoursAgo(40) }),
-        aRunRecord({ endedAt: hoursAgo(hours), jobResult: "cancelled", infrastructureFailure: "timeout" }),
-      ];
-      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] }, records)).toMatchObject(stuck);
+      [3 * HOUR + 31 * MINUTE, 1],
+      [3 * HOUR + 29 * MINUTE, 0],
+    ])("turns a silence Stuck at 3 hours 30 minutes on default timeouts: %i ms gives %i", (silent, listed) => {
+      expect(stuckIn({ openPullRequests: [draft(ago(silent))] })).toHaveLength(listed);
     });
 
-    it("doesn't list a Ticket that has a record after its Infrastructure failure, or one that's closed", () => {
-      const records = [
-        aRunRecord({ endedAt: hoursAgo(40), infrastructureFailure: "provider-error" }),
-        aRunRecord({ endedAt: hoursAgo(30) }),
-        aRunRecord({ issue: 8, endedAt: hoursAgo(40), infrastructureFailure: "provider-error" }), // Ticket 8 is closed
-        aRunRecord({ repo: "owner/other", issue: 12, endedAt: hoursAgo(40), infrastructureFailure: "crash" }), // another repo's 12
-      ];
-      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7 }), anOpenIssue({ number: 12 })] }, records)).toEqual([]);
+    it.each([
+      [4 * HOUR + 40 * MINUTE, 1],
+      [4 * HOUR + 20 * MINUTE, 0],
+    ])("turns a silence Stuck at 4 hours 30 minutes in a repo with a two-hour Implement timeout: %i ms gives %i", (silent, listed) => {
+      const config = { ...DEFAULT_KIT_CONFIG, roles: { ...DEFAULT_KIT_CONFIG.roles, implement: { ...DEFAULT_KIT_CONFIG.roles.implement, timeoutMinutes: 120 } } };
+      expect(stuckIn({ openPullRequests: [draft(ago(silent))] }, aRepoKit({ config: { ok: true, config } }))).toHaveLength(listed);
     });
 
-    it("doesn't list an issue whose failed run was a Triage or a Design turn, as it isn't a Ticket", () => {
-      const records = [
-        aRunRecord({ role: "triage", issue: 13, pullRequest: null, endedAt: hoursAgo(40), infrastructureFailure: "crash" }),
-        aRunRecord({ role: "design", issue: 14, pullRequest: null, endedAt: hoursAgo(40), infrastructureFailure: "timeout" }),
-      ];
-      expect(stuckIn({ openIssues: [anOpenIssue({ number: 13 }), anOpenIssue({ number: 14 })] }, records)).toEqual([]);
+    it("keeps a draft Stuck though a person commented on it since", () => {
+      const commented = draft(hoursAgo(23), { comments: [aComment("What's happening?", hoursAgo(1), { author: "operator", byBot: false })] });
+      expect(stuckIn({ openPullRequests: [commented] })).toMatchObject([{ number: 51, since: hoursAgo(23) }]);
     });
 
-    it("a judge run's record neither hides the failed run it scored nor is listed for failing itself", () => {
-      const records = [
-        aRunRecord({ endedAt: hoursAgo(30), jobResult: "cancelled", infrastructureFailure: "timeout" }),
-        aRunRecord({ role: "score", endedAt: hoursAgo(29), baseSha: null }), // scored the timed-out run, after it
-        aRunRecord({ issue: 9, endedAt: hoursAgo(40) }),
-        aRunRecord({ role: "score", issue: 9, endedAt: hoursAgo(39), baseSha: null, jobResult: "failure", infrastructureFailure: "crash" }),
-      ];
-      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" }), anOpenIssue({ number: 9 })] }, records)).toEqual([
+    it("lists a needs-info issue answered 4 hours ago, with its sentence and remedy", () => {
+      const issue = anOpenIssue({
+        number: 20,
+        title: "It crashes",
+        labels: ["needs-info"],
+        labelEvents: [aLabelAdded("needs-info", hoursAgo(30))],
+        comments: [aComment("Which version are you on?", hoursAgo(30)), aComment("Version 2.", hoursAgo(4), { author: "someone", byBot: false })],
+      });
+      expect(stuckIn({ openIssues: [issue] })).toEqual([
         {
-          kind: "infrastructure-failure",
-          number: 7,
-          title: "Build the thing",
-          url: "https://github.com/owner/product/issues/7",
-          since: hoursAgo(30),
-          age: 30 * HOUR,
-          failure: "timeout",
+          kind: "silence",
+          number: 20,
+          title: "It crashes",
+          url: "https://github.com/owner/product/issues/20",
+          since: hoursAgo(4),
+          age: 4 * HOUR,
+          sentence: "Triage has not run since the answer 4 hours ago.",
+          remedy: `${RUNS}, then take \`needs-info\` off and add \`needs-triage\`.`,
         },
       ]);
     });
-    // #434: the Kit re-runs a counted Broken run itself; one on a Request-changes or conflict-only run waits for the Operator.
-    describe("whose last run was a Broken run", () => {
-      const broken = { endedAt: hoursAgo(40), jobResult: "failure", infrastructureFailure: null, brokenRun: "left-branch" } as const;
 
-      it.each([
-        ["a first run", aRunRecord({ ...broken, pullRequest: null })],
-        ["a Retry", aRunRecord({ ...broken, retry: 1 })],
-      ])("doesn't list it on %s, which the Kit re-runs itself", (_, record) => {
-        expect(stuckIn({ openIssues: [anOpenIssue({ number: 7 })] }, [record])).toEqual([]);
-      });
-
-      it.each([
-        ["a Request-changes run", aRunRecord({ ...broken, requestChanges: true, stepUp: true, stepUpReason: "request-changes" })],
-        ["a conflict-only run", aRunRecord({ ...broken, stepUp: true, stepUpReason: "conflict-only" })],
-      ])("lists it on %s, which uses no retry and waits for the Operator", (_, record) => {
-        const found = stuckIn({ openIssues: [anOpenIssue({ number: 7 })] }, [record]);
-
-        expect(found).toMatchObject([{ kind: "broken-run", number: 7, brokenRun: "left-branch", age: 40 * HOUR }]);
-      });
+    it("lists the longest silent first", () => {
+      const answered = anOpenIssue({ number: 20, labels: ["needs-info"], comments: [aComment("Which version?", hoursAgo(30)), aComment("2.", hoursAgo(4), { author: "someone", byBot: false })] });
+      expect(stuckIn({ openIssues: [answered], openPullRequests: [draft(hoursAgo(23))] })?.map(({ number }) => number)).toEqual([51, 20]);
     });
 
-    describe("with a held run", () => {
-      const heldImplement = { role: "implement", issue: 7, label: "agent:implement" } as const;
+    it("never lists a Ticket whose last run ended in an Infrastructure failure, however old", () => {
+      const notice = aComment(`The Implement run on #7 failed: it timed out.\n\n${handBackMarker({ kind: "infrastructure-failure", role: "implement", failure: "timeout" })}`, hoursAgo(200));
+      expect(stuckIn({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"], comments: [notice] })] })).toEqual([]);
+    });
 
-      it.each([
-        ["an Implement run refused on its weekly limit", aRunRecord({ endedAt: hoursAgo(48), jobResult: "failure", infrastructureFailure: "weekly-limit" }), heldImplement],
-        ["an Implement run killed for spending usage credits", aRunRecord({ endedAt: hoursAgo(48), jobResult: "failure", infrastructureFailure: "usage-credits" }), heldImplement],
-        [
-          "a Review run refused on its weekly limit, held on its PR",
-          aRunRecord({ role: "review", endedAt: hoursAgo(48), jobResult: "failure", infrastructureFailure: "weekly-limit" }),
-          { role: "review", issue: 50, label: "agent:review" } as const,
-        ],
-      ])("doesn't list a Ticket whose last run, %s, the Kit holds and resumes itself", (_, record, held) => {
-        const facts = { openIssues: [anOpenIssue({ number: 7 })], kitIssues: [aWeeklyLimitIssue(null, [held])] };
-        expect(stuckIn(facts, [record])).toEqual([]);
+    it("never lists a Held run, a Ticket waiting for a slot or work with a run in flight", () => {
+      const held = draft(hoursAgo(96), { number: 52, ticket: 9 });
+      const running = draft(hoursAgo(96), { number: 53, ticket: 10 });
+      const kit = aRepoKit({
+        config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight: 0 } },
+        dispatch: { candidates: { tickets: [aTicket({ number: 14, labels: ["ready-for-agent"] })], researchDecisions: [] } },
+        runsInFlight: [aRunInFlight({ role: "review", pullRequest: 53 })],
+      });
+      const facts = {
+        openIssues: [anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", hoursAgo(96))] })],
+        openPullRequests: [held, running],
+        kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 9, label: "agent:implement" }])],
+      };
+      expect(stuckIn(facts, kit)).toEqual([]);
+    });
+
+    it("reads no Run record: a failed run on record lists nothing anywhere", () => {
+      const records = [aRunRecord({ endedAt: hoursAgo(40), jobResult: "cancelled", infrastructureFailure: "timeout" })];
+      const result = summaryWith({ openIssues: [anOpenIssue({ number: 7 })] }, aRepoKit(), records);
+      expect(result.summary.repos[0]).toMatchObject({ waitingOnYou: [], stuck: [], held: null });
+    });
+
+    describe("with the runs in progress unread", () => {
+      const unread = aRepoKit({ runsInFlight: "unread" });
+
+      it("still files, its Stuck section opening with a line saying a run may be working", () => {
+        const result = summaryWith({ openPullRequests: [draft(hoursAgo(23))] }, unread);
+        expect(result.summary.repos[0]?.runsUnread).toBe(true);
+        expect(result.body).toContain(
+          [
+            "### Stuck",
+            "",
+            "The runs in progress could not be read, so a run may be working on some of these.",
+            "",
+            `- [#51](https://github.com/owner/product/pull/51) Build the thing: The Kit has made no sign on #51 for 23 hours. ${RUNS}, then add \`agent:review\` to #51.`,
+            "",
+          ].join("\n"),
+        );
       });
 
-      it("still lists a Ticket whose weekly-limit failure no open weekly-limit issue holds", () => {
-        const record = aRunRecord({ endedAt: hoursAgo(48), jobResult: "failure", infrastructureFailure: "weekly-limit" });
-        const facts = { openIssues: [anOpenIssue({ number: 7 })], kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 9, label: "agent:implement" }])] };
-        expect(stuckIn(facts, [record])).toMatchObject([{ kind: "infrastructure-failure", number: 7, failure: "weekly-limit" }]);
-      });
-
-      it("doesn't list a held Retry's draft as idle", () => {
-        const draft = anOpenPullRequest({ number: 51, ticket: 9, commits: [{ at: hoursAgo(96) }] });
-        const facts = { openPullRequests: [draft], kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 9, label: "agent:implement" }])] };
-        expect(stuckIn(facts)).toEqual([]);
+      it("shows no Stuck section when it lists nothing", () => {
+        const result = summaryWith({ openIssues: [anOpenIssue({ labels: ["ready-for-human"] })] }, unread);
+        expect(result.body).not.toContain("### Stuck");
+        expect(result.body).not.toContain("The runs in progress could not be read");
       });
     });
   });
@@ -1816,7 +1752,7 @@ describe("the Weekly summary", () => {
         if (result.kind !== "summary") throw new Error("expected a summary");
         expect(result.body).toContain(
           [
-            "- [#52](https://github.com/owner/product/pull/52) Build it: a draft with no activity for 2 days",
+            "- [#52](https://github.com/owner/product/pull/52) Build it: The Kit has made no sign on #52 for 2 days. Check [the Loop's runs](https://github.com/owner/product/actions), then add `agent:review` to #52.",
             "",
             "### Architectural escapes this week",
             "",
@@ -2361,7 +2297,7 @@ describe("the Weekly summary", () => {
       expect(body).toContain(["## owner/other", "", "### Waiting on you", "", "Nothing waiting on you.", ""].join("\n"));
     });
 
-    it("says a PR handed back with ready-for-human is handed to the Operator, one they approved is still at the Merge gate, and one they requested changes on is Stuck on the Kit (#481, #604)", () => {
+    it("says a PR handed back with ready-for-human is handed to the Operator, one they approved is still at the Merge gate, and one they requested changes on no run started for is Stuck past the bar (#481, #604, #610)", () => {
       const passed = aVerdictComment("pass", head, hoursAgo(60));
       const body = bodyOf(
         factsOf({
@@ -2374,8 +2310,10 @@ describe("the Weekly summary", () => {
       );
       expect(body).toContain("- [#60](https://github.com/owner/product/pull/60) Build the thing: handed to you with `ready-for-human` 30 hours ago\n");
       expect(body).toContain("- [#61](https://github.com/owner/product/pull/61) Build the thing: at the Merge gate, Operator wait 2 days\n");
-      expect(body).toContain(["### Stuck", "", "- [#62](https://github.com/owner/product/pull/62) Build the thing: reviewed by you 38 hours ago; the Kit hasn't acted"].join("\n"));
-      expect(body).not.toContain("[#61](https://github.com/owner/product/pull/61) Build the thing: reviewed by you");
+      expect(body).toContain(
+        "- [#62](https://github.com/owner/product/pull/62) Build the thing: No run has started for your Request changes of 38 hours ago. Check [the Loop's runs](https://github.com/owner/product/actions), then add `agent:implement` to #7.\n",
+      );
+      expect(body).not.toContain("[#61](https://github.com/owner/product/pull/61) Build the thing: No run");
     });
 
     it("lists an open Audit with how long it has been open", () => {
@@ -2498,7 +2436,8 @@ describe("the Weekly summary", () => {
       );
     });
 
-    it("lists the repo's Stuck work, and leaves Stuck out when nothing is", () => {
+    it("lists the repo's Stuck work, longest first, each with its sentence at the bar and its remedy, and leaves Stuck out when nothing is (#610)", () => {
+      const runs = "Check [the Loop's runs](https://github.com/owner/product/actions)";
       const stuckBody = bodyOf(
         factsOf({
           openIssues: [
@@ -2518,29 +2457,14 @@ describe("the Weekly summary", () => {
         [
           "### Stuck",
           "",
-          "- [#20](https://github.com/owner/product/issues/20) It crashes: needs-info answered 26 hours ago, not picked up",
-          "- [#51](https://github.com/owner/product/pull/51) Build it: a draft with no activity for 25 hours",
+          // No Kit read, so no runs in progress either.
+          "The runs in progress could not be read, so a run may be working on some of these.",
+          "",
+          `- [#20](https://github.com/owner/product/issues/20) It crashes: Triage has not run since the answer 26 hours ago. ${runs}, then take \`needs-info\` off and add \`needs-triage\`.`,
+          `- [#51](https://github.com/owner/product/pull/51) Build it: The Kit has made no sign on #51 for 25 hours. ${runs}, then add \`agent:review\` to #51.`,
           "",
         ].join("\n"),
       );
-      const failedBody = weeklySummary(
-        input({
-          records: [aRunRecord({ endedAt: hoursAgo(49), jobResult: "cancelled", infrastructureFailure: "timeout" })],
-          facts: [factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] })],
-        }),
-      );
-      expect(failedBody).toMatchObject({
-        body: expect.stringContaining("- [#7](https://github.com/owner/product/issues/7) Build the thing: last run ended in an Infrastructure failure (timeout) 2 days ago"),
-      });
-      const unreadBody = weeklySummary(
-        input({
-          records: [aRunRecord({ endedAt: hoursAgo(49), jobResult: "failure", infrastructureFailure: "unread-inputs" })],
-          facts: [factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing" })] })],
-        }),
-      );
-      expect(unreadBody).toMatchObject({
-        body: expect.stringContaining("Build the thing: last run ended in an Infrastructure failure (unread-inputs) 2 days ago"),
-      });
       expect(bodyOf(factsOf())).not.toContain("Stuck");
     });
 

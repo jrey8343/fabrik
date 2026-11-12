@@ -7,7 +7,6 @@ import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import {
   NEEDS_DESIGN,
-  NEEDS_INFO,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
   RESEARCH_LABEL,
@@ -18,7 +17,7 @@ import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { DESIGN_TURN_FAILED_MARKER, flakyCheckMarksIn, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
-import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, type InfrastructureFailure, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type AgentRole, type DesignQueueSnapshot, type DispatchSnapshot, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "./config.ts";
@@ -43,7 +42,8 @@ import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type R
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type PlainKind, type Standing, type StandingName, standingsOf, type StandingNamed } from "./standing.ts";
 import { givenUpWeeksOf, maxInFlightHoldOf } from "./standingInFlight.ts";
-import { answerOf, lastAdded, passedMoveOf, readyForHumanStandingOf } from "./standingOperator.ts";
+import { wordStanding } from "./standingWording.ts";
+import { passedMoveOf, readyForHumanStandingOf } from "./standingOperator.ts";
 import {
   firstRunOf,
   isLive,
@@ -474,8 +474,10 @@ export interface RepoSection {
   readonly invalidKitConfig: InvalidKitConfig | null;
   /** Oldest first. */
   readonly waitingOnYou: readonly WaitingItem[];
-  /** Loop work that hasn't moved in more than 24 hours, longest-stuck first. */
+  /** Every Standing named `stuck`: work silent past the repo's bar, longest first. */
   readonly stuck: readonly StuckItem[];
+  /** Whether the runs in progress couldn't be read, so a run may be working on something listed as Stuck. */
+  readonly runsUnread: boolean;
   /** The work a cap holds in the repo, or null when it holds nothing. */
   readonly held: Held | null;
   /** Why the repo's GitHub facts couldn't be read this run, or null when they were: an unread repo has nothing waiting, stuck or held. */
@@ -648,22 +650,12 @@ export type WaitingItem =
   /** A Plain pull request ready to merge, every Required check passed, waiting since its head; a Pairing session's among them, joined to its issue or not. */
   | (ItemBase & { readonly kind: "plain-ready"; readonly plain: PlainKind });
 
-/** Loop work that hasn't moved in more than 24 hours, since `since`. */
-export type StuckItem =
-  /** A `needs-info` issue a person answered after the question, with no state change since the answer. */
-  | (ItemBase & { readonly kind: "needs-info-answered" })
-  /** A draft agent PR with no commit, comment or label event since `since`. */
-  | (ItemBase & { readonly kind: "idle-draft" })
-  /** An agent PR out of draft the Operator requested changes on at `since`, after its passing Verdict, not dismissed, that the Kit hasn't acted on. */
-  | (ItemBase & { readonly kind: "reviewed" })
-  /** An open Ticket whose latest record, ended at `since`, was an Infrastructure failure or timeout. */
-  | (ItemBase & { readonly kind: "infrastructure-failure"; readonly failure: InfrastructureFailure })
-  /**
-   * An open Ticket whose latest record, ended at `since`, was a Broken run
-   * that used no retry (#434): a Request-changes or conflict-only run's, which
-   * waits for the Operator. One the Kit counted and re-runs itself isn't listed.
-   */
-  | (ItemBase & { readonly kind: "broken-run"; readonly brokenRun: BrokenRun });
+/**
+ * Work whose next move is the Kit's, silent since `since` past the repo's bar
+ * with no sign from the Kit: a Standing named `stuck`, with its sentence at
+ * the bar and its remedy (src/kit/standingWording.ts).
+ */
+export type StuckItem = ItemBase & { readonly kind: "silence"; readonly sentence: string; readonly remedy: string | null };
 
 export interface RevertRate {
   readonly reverted: number;
@@ -752,7 +744,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   };
   const repos: RepoSection[] = [
     ...input.facts.map((facts) => ({ ...repoSectionOf(facts, input), health: healthOf(facts.repo) })),
-    ...input.unread.map(({ repo, why }) => ({ repo, invalidKitConfig: null, waitingOnYou: [], stuck: [], held: null, unread: why, health: healthOf(repo) })),
+    ...input.unread.map(({ repo, why }) => ({ repo, invalidKitConfig: null, waitingOnYou: [], stuck: [], runsUnread: false, held: null, unread: why, health: healthOf(repo) })),
   ];
   // Held work counts too, so a queue never sits unseen through a week nothing ran,
   // and so does a repo that couldn't be read, so its failure is never taken for a quiet week,
@@ -1195,9 +1187,12 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 // Per repo: what waits on the Operator and what is stuck, as of the filing.
 
 /** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
-const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
-
-function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: filedAt, timeZone, kits }: WeeklySummaryInput): Omit<RepoSection, "health"> {
+/**
+ * A repo's three lists, read off its Standings (src/kit/standing.ts), so the
+ * Monday issue and the Console can't disagree: no Run record is read for any
+ * of them, only for the metrics.
+ */
+function repoSectionOf(facts: GitHubFacts, { operator, appLogin, now: filedAt, timeZone, kits }: WeeklySummaryInput): Omit<RepoSection, "health"> {
   const kit = kits.find((read) => read.repo === facts.repo) ?? null;
   const invalid = kit === null || kit.config.ok ? null : { branch: kit.branch, errors: kit.config.errors };
   const now = Date.parse(filedAt);
@@ -1209,10 +1204,27 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
     invalidKitConfig: invalid,
     // Every Standing whose move is the Operator's: an open Audit, Retro, finished Replay or Map among them also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst(standings.filter(listedInWaitingOnYou).flatMap((standing) => waitingItemOf(standing, facts, operator, appLogin, items) ?? [])),
-    stuck: stuck(facts, records, operator, items, now),
+    // Every silence at the repo's bar, longest first.
+    stuck: oldestFirst(standings.flatMap((standing) => (standing.name === "stuck" ? (stuckItemOf(standing, facts, items, filedAt, timeZone) ?? []) : []))),
+    runsUnread: kit === null || kit.runsInFlight === "unread",
     held: heldIn(facts, kit, invalid === null, standings, appLogin, now, thisWeek, items),
     unread: null,
   };
+}
+
+/**
+ * A Stuck Standing's line: the issue or pull request its Kit waits on, with
+ * the Standing's sentence at the bar and its remedy. Null when the facts hold
+ * no title for it.
+ */
+function stuckItemOf(standing: StandingNamed<"stuck">, facts: GitHubFacts, items: Items, filedAt: string, timeZone: string): StuckItem | null {
+  const pullRequest = facts.openPullRequests.find(({ number }) => number === standing.pullRequest);
+  const issue = [...facts.openIssues, ...facts.openReplays].find(({ number }) => number === standing.issue);
+  const onPullRequest = pullRequest !== undefined && (standing.awaits?.on === "pullRequest" || issue === undefined);
+  const item = onPullRequest ? items.pullRequest(pullRequest, standing.since) : issue === undefined ? null : items.issue(issue, standing.since);
+  if (item === null) return null;
+  const { sentence, remedy } = wordStanding(standing, filedAt, timeZone);
+  return { kind: "silence", ...item, sentence, remedy };
 }
 
 /**
@@ -1473,76 +1485,6 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, operator: string,
   }
 }
 
-/**
- * Loop work that hasn't moved in more than 24 hours. A Held run isn't stuck:
- * the Kit resumes it itself at the reset, and Held names it, so a Ticket or
- * PR a held marker names is left out, its failed run and its draft alike.
- */
-function stuck(
-  { repo, openIssues, openPullRequests, kitIssues }: GitHubFacts,
-  records: readonly RunRecord[],
-  operator: string,
-  items: Items,
-  now: number,
-): StuckItem[] {
-  const held = new Set(waitingHeldRuns(kitIssues).map(({ run }) => run.issue));
-  const isHeld = (...numbers: readonly (number | null)[]) => numbers.some((number) => number !== null && held.has(number));
-  const found: StuckItem[] = [];
-  for (const issue of openIssues) {
-    const answered = issue.labels.includes(NEEDS_INFO) ? answerOf(issue) : null;
-    if (answered !== null) found.push({ kind: "needs-info-answered", ...items.issue(issue, answered) });
-    const failed = failedLastRunOf(issue, repo, records);
-    if (failed?.kind === "infrastructure-failure" && !isHeld(issue.number, failed.pullRequest)) {
-      found.push({ kind: "infrastructure-failure", ...items.issue(issue, failed.endedAt), failure: failed.failure });
-    }
-    if (failed?.kind === "broken-run") found.push({ kind: "broken-run", ...items.issue(issue, failed.endedAt), brokenRun: failed.brokenRun });
-  }
-  for (const pullRequest of openPullRequests) {
-    if (isHeld(pullRequest.number, pullRequest.ticket)) continue;
-    if (pullRequest.draft) found.push({ kind: "idle-draft", ...items.pullRequest(pullRequest, lastActivityOf(pullRequest)) });
-    const move = passedMoveOf(pullRequest, operator);
-    if (move?.kind === "changes-requested") found.push({ kind: "reviewed", ...items.pullRequest(pullRequest, move.since) });
-  }
-  return oldestFirst(found.filter((item) => now - Date.parse(item.since) > STUCK_AFTER_MS));
-}
-
-/**
- * An open Ticket's latest record, if it ended in an Infrastructure failure,
- * or a Broken run that used no retry (#434): the run nothing has picked up
- * again. A Broken run on a first run or a Retry is an Execution flaw the Kit
- * re-runs itself, so it isn't one. A judge run's record (role `score`) is left
- * out: scoring a run never picks its Ticket up, and a judge's own failure
- * never leaves the Ticket stuck. With the run's PR, where a Review is held.
- */
-function failedLastRunOf(
-  issue: OpenIssueFacts,
-  repo: string,
-  records: readonly RunRecord[],
-):
-  | { readonly kind: "infrastructure-failure"; readonly endedAt: string; readonly failure: InfrastructureFailure; readonly pullRequest: number | null }
-  | { readonly kind: "broken-run"; readonly endedAt: string; readonly brokenRun: BrokenRun }
-  | null {
-  const latest = records
-    .filter((record) => record.repo === repo && record.issue === issue.number && record.role !== "score")
-    .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
-    .at(-1);
-  if (latest === undefined || (latest.role !== "implement" && latest.role !== "review")) return null;
-  if (latest.brokenRun !== null) return usedNoRetry(latest) ? { kind: "broken-run", endedAt: latest.endedAt, brokenRun: latest.brokenRun } : null;
-  if (latest.infrastructureFailure === null) return null;
-  return { kind: "infrastructure-failure", endedAt: latest.endedAt, failure: latest.infrastructureFailure, pullRequest: latest.pullRequest };
-}
-
-/** Whether an Implement run's record is a Request-changes or conflict-only run's, which uses no retry (#393, #304). */
-function usedNoRetry(record: RunRecord): boolean {
-  return record.requestChanges || record.stepUpReason === "conflict-only";
-}
-
-/** A PR's latest commit, comment or label event, or when it was opened. */
-function lastActivityOf(pullRequest: OpenPullRequestFacts): string {
-  const times = [pullRequest.createdAt, ...[...pullRequest.commits, ...pullRequest.comments, ...pullRequest.labelEvents].map(({ at }) => at)];
-  return times.toSorted((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? pullRequest.createdAt;
-}
-
 // The week: Monday 00:00 to Monday 00:00 in the Operator's time zone.
 
 /** A week as the instants it starts at (inclusive) and ends at (exclusive), and its Monday's date. */
@@ -1797,7 +1739,7 @@ function heldRunsLines(repo: string, { runs, weeklyLimitIssues }: HeldRuns, time
 const SHOWN_ITEMS = 10;
 
 function repoLines(
-  { repo, invalidKitConfig, waitingOnYou, stuck, unread, health }: RepoSection,
+  { repo, invalidKitConfig, waitingOnYou, stuck, runsUnread, unread, health }: RepoSection,
   timeZone: string,
   escapes: readonly EscapeThisWeek[],
   reviewMisses: readonly ReviewMissThisWeek[],
@@ -1818,7 +1760,9 @@ function repoLines(
     const rest = waitingOnYou.slice(SHOWN_ITEMS);
     if (rest.length > 0) lines.push(`<details><summary>${rest.length} more</summary>`, "", ...rest.map(waitingLine), "", "</details>", "");
   }
-  if (stuck.length > 0) lines.push("### Stuck", "", ...stuck.map(stuckLine), "");
+  // With the runs unread, any of these may have a run working on it: the section says so first, though that alone never makes one.
+  const unreadRuns = runsUnread ? ["The runs in progress could not be read, so a run may be working on some of these.", ""] : [];
+  if (stuck.length > 0) lines.push("### Stuck", "", ...unreadRuns, ...stuck.map(stuckLine), "");
   if (escapes.length > 0) lines.push("### Architectural escapes this week", "", ...escapes.flatMap(escapeLines), "");
   if (reviewMisses.length > 0) lines.push("### Review misses this week", "", ...reviewMisses.map(reviewMissLine), "");
   lines.push(...trailing, liveLinks(repo), "");
@@ -1890,19 +1834,9 @@ const PLAIN_PHRASES: Readonly<Record<PlainKind, string>> = {
   other: "a pull request",
 };
 
+/** A silence at the bar: the Standing's sentence, then its remedy. */
 function stuckLine(item: StuckItem): string {
-  switch (item.kind) {
-    case "needs-info-answered":
-      return itemLine(item, `needs-info answered ${duration(item.age)} ago, not picked up`);
-    case "idle-draft":
-      return itemLine(item, `a draft with no activity for ${duration(item.age)}`);
-    case "reviewed":
-      return itemLine(item, `reviewed by you ${duration(item.age)} ago; the Kit hasn't acted`);
-    case "infrastructure-failure":
-      return itemLine(item, `last run ended in an Infrastructure failure (${item.failure}) ${duration(item.age)} ago`);
-    case "broken-run":
-      return itemLine(item, `last run was a Broken run (${item.brokenRun}) ${duration(item.age)} ago, which uses no retry; re-add \`agent:implement\` to run it again`);
-  }
+  return itemLine(item, item.remedy === null ? item.sentence : `${item.sentence} ${item.remedy}`);
 }
 
 /** `no Decisions`, `1 Decision` or `2 Decisions`. */
