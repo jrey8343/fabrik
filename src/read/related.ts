@@ -4,7 +4,9 @@
 // readers, never guessed: a candidate's `From PR` line by the reader of that
 // line, a Follow-up by the reader of a Verdict's Follow-ups. Decided in #530
 // and #574. Pure, no I/O: worked out from a gather's facts (./gather.ts).
+import { verdictsOn } from "../kit/retroEvidence.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
+import { followUpsIn } from "../loop/followUps.ts";
 import {
   AUDIT_LABEL,
   DECISION_TYPES,
@@ -128,6 +130,27 @@ export function mentionsOf(facts: Facts, pullRequest: number): { readonly issue:
     mentions.push({ issue, title });
   }
   return mentions;
+}
+
+/**
+ * The Follow-ups the pass on open agent pull request `pullRequest`'s head
+ * named, in the Verdict's order, each with its title, its body and the
+ * number of the related issue that has exactly its title, compared as the
+ * Retro's evidence compares a filed Follow-up's, else null. None when the
+ * latest Verdict on its head is not a pass, or it has none there. A Verdict
+ * is read from a bot's comment alone, so quoting one fakes nothing.
+ */
+export function followUpsOf(facts: Facts, pullRequest: number): { readonly title: string; readonly body: string; readonly filedAs: number | null }[] {
+  const open = facts.github.openPullRequests.find(({ number }) => number === pullRequest);
+  if (open === undefined) return [];
+  const onHead = open.comments.filter((comment) => verdictsOn([comment]).some(({ record }) => record.headSha === open.headSha)).at(-1);
+  if (onHead === undefined || verdictsOn([onHead]).at(-1)?.record.verdict !== "pass") return [];
+  const related = relatedOf(facts, pullRequest);
+  return followUpsIn(onHead.body).map(({ title, body }) => ({
+    title,
+    body,
+    filedAs: related.find((issue) => issue.title.trim() === title.trim())?.issue ?? null,
+  }));
 }
 
 /** The open agent pull request issue `issue` could be rolled in to, or null. */

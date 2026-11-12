@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { OpenIssueFacts, OpenPullRequestFacts, ReviewFacts } from "../kit/weeklySummary.ts";
+import type { CommentFacts, OpenIssueFacts, OpenPullRequestFacts, ReviewFacts } from "../kit/weeklySummary.ts";
+import { followUpsSection } from "../loop/followUps.ts";
+import type { Verdict } from "../loop/types.ts";
 import { aComment, aLabelAdded, aReview, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { CrossReferenceFacts, Facts, IssueBodyFacts } from "./gather.ts";
 import { neverRelatedKindOf } from "./related.ts";
@@ -221,6 +223,53 @@ describe("a mention", () => {
     const facts = repoWith({ crossReferences: [crossReference(40, "The cart is slow")] });
 
     expect(rowsIn(facts).filter(({ mentions }) => mentions.length > 0).map(({ standing }) => standing.pullRequest)).toEqual([50]);
+  });
+});
+
+describe("the Follow-ups", () => {
+  const FOLLOW_UPS = [
+    { title: "Cache the prices", body: "The prices are read on every request.\n\n- once per page" },
+    { title: "Tidy the cart", body: "" },
+  ];
+  /** The Fabrik App's Verdict on `headSha` at `at`, listing these Follow-ups. */
+  const verdictListing = (verdict: Verdict, headSha: string, at: string, followUps = FOLLOW_UPS) => {
+    const comment = aVerdictComment(verdict, headSha, at);
+    return { ...comment, body: [comment.body, ...followUpsSection(followUps, "https://github.com/owner/product", 50)].join("\n") };
+  };
+  const withComments = (...comments: CommentFacts[]): Facts =>
+    homeFactsOf({ github: factsOf({ openIssues: [TICKET], openPullRequests: [{ ...PULL_REQUEST, comments }] }) });
+
+  it("of a pass on the pull request's head are both given, with title and body, in the Verdict's order, none filed", () => {
+    expect(pullRequestRow(withComments(verdictListing("pass", HEAD, "2026-11-08T12:00:00Z")))?.followUps).toEqual([
+      { title: "Cache the prices", body: "The prices are read on every request.\n\n- once per page", filedAs: null },
+      { title: "Tidy the cart", body: "", filedAs: null },
+    ]);
+  });
+
+  it("are none from a Verdict that is not a pass", () => {
+    expect(pullRequestRow(withComments(verdictListing("execution-flaw", HEAD, "2026-11-08T12:00:00Z")))?.followUps).toEqual([]);
+  });
+
+  it("are none from a pass on an earlier head", () => {
+    expect(pullRequestRow(withComments(verdictListing("pass", "e".repeat(40), "2026-11-08T12:00:00Z")))?.followUps).toEqual([]);
+  });
+
+  it("are none once a later Verdict on the same head is not a pass", () => {
+    const facts = withComments(verdictListing("pass", HEAD, "2026-11-08T12:00:00Z"), aVerdictComment("execution-flaw", HEAD, "2026-11-08T13:00:00Z"));
+
+    expect(pullRequestRow(facts)?.followUps).toEqual([]);
+  });
+
+  it("are none from someone quoting a pass", () => {
+    const quoted = { ...verdictListing("pass", HEAD, "2026-11-08T12:00:00Z"), author: "someone", byBot: false };
+
+    expect(pullRequestRow(withComments(quoted))?.followUps).toEqual([]);
+  });
+
+  it("are on the pull request's row alone", () => {
+    const facts = withComments(verdictListing("pass", HEAD, "2026-11-08T12:00:00Z"));
+
+    expect(rowsIn(facts).filter(({ followUps }) => followUps.length > 0).map(({ standing }) => standing.pullRequest)).toEqual([50]);
   });
 });
 
