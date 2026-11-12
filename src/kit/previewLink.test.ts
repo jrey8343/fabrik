@@ -6,6 +6,7 @@ import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { CAPTURED, EVIDENCE_PAGE, UI } from "../__fixtures__/uiEvidence.ts";
 import { evidenceSection, type PreviewLink } from "../evidence/uiEvidence.ts";
 import { applyPlan } from "../github/apply.ts";
+import { roundLineIn, withoutRoundLines } from "../loop/roundLine.ts";
 import { planFor } from "../loop/rules.ts";
 import {
   httpStatus,
@@ -230,8 +231,9 @@ describe("Linking each variant's preview in a prototype round", () => {
     expect(outcome).toEqual({ kind: "linked" });
     expect(polled.map(({ url }) => url)).toEqual([PAGE, PAGE, PAGE]);
     expect(github.calls.map(({ method, path }) => `${method} ${path}`)).toEqual([`GET ${ROUND_COMMENT}`, `PATCH ${ROUND_COMMENT}`]);
-    expect(github.comment).toBe(
-      posted.replace(
+    // Its hidden line aside (#636), the round is edited as it always was.
+    expect(withoutRoundLines(github.comment ?? "")).toBe(
+      withoutRoundLines(posted).replace(
         [variantLine("A", 0), variantLine("B", 1), "", "Each variant's preview is linked beside it once the preview deployment answers.", ""].join("\n"),
         [`${variantLine("A", 0)} · [Preview](${PAGE}?variant=A)`, `${variantLine("B", 1)} · [Preview](${PAGE}?variant=B)`, ""].join("\n"),
       ),
@@ -256,6 +258,91 @@ describe("Linking each variant's preview in a prototype round", () => {
       ),
     );
     expect(github.comment).not.toContain("?variant=");
+    expect(previewsIn(github.comment)).toEqual([null, null]);
+  });
+
+  /** Each variant's preview, as the round's hidden line holds it (#636). */
+  const previewsIn = (body: string | null) => {
+    const line = roundLineIn(body ?? "");
+    return line?.kind === "prototype" ? line.variants.map(({ preview }) => preview) : `no prototype line in ${JSON.stringify(body)}`;
+  };
+
+  /** The address each variant's visible line links its preview at. */
+  const linkedIn = (body: string | null) => (body ?? "").split("\n").flatMap((line) => /^- \*\*[A-Z]\.\*\* .* · \[Preview\]\((.*)\)$/.exec(line)?.slice(1) ?? []);
+
+  describe("the round's hidden line (#636)", () => {
+    it("is null for every preview as the round is posted", async () => {
+      const { posted } = await landed();
+
+      expect(previewsIn(posted)).toEqual([null, null]);
+    });
+
+    it("sets each variant's preview, in the same edit, to the address its visible line links", async () => {
+      const { github, preview, posted } = await landed();
+
+      await linkPreview(github, repo, preview, pollerAnswering(200).poller);
+
+      expect(linkedIn(github.comment)).toEqual([`${PAGE}?variant=A`, `${PAGE}?variant=B`]);
+      expect(previewsIn(github.comment)).toEqual(linkedIn(github.comment));
+      expect(github.calls.filter(({ method }) => method === "PATCH")).toHaveLength(1);
+      // Only the previews change: the rest of the line is as it was posted.
+      const before = roundLineIn(posted);
+      const after = roundLineIn(github.comment ?? "");
+      expect(after?.kind === "prototype" && { ...after, variants: after.variants.map((variant) => ({ ...variant, preview: null })) }).toEqual(before);
+    });
+
+    it("holds the escaped address a route with parentheses is linked at", async () => {
+      const { github, preview } = await landed("https://{branch_slug}--shop.netlify.app", "/book (new)");
+
+      await linkPreview(github, repo, preview, pollerAnswering(200).poller);
+
+      expect(previewsIn(github.comment)).toEqual(linkedIn(github.comment));
+      expect(previewsIn(github.comment)).toEqual([
+        "https://prototype-7--shop.netlify.app/book%20%28new%29?variant=A",
+        "https://prototype-7--shop.netlify.app/book%20%28new%29?variant=B",
+      ]);
+    });
+
+    it("keeps each preview in a round whose lines an edit on GitHub ended in CRLF", async () => {
+      const { github, preview, posted } = await landed();
+      github.edit(posted.replaceAll("\n", "\r\n"));
+
+      await linkPreview(github, repo, preview, pollerAnswering(200).poller);
+
+      expect(github.comment?.split("\n").every((line) => line.endsWith("\r") || line === github.comment?.split("\n").at(-1))).toBe(true);
+      expect(previewsIn(github.comment)).toEqual([`${PAGE}?variant=A`, `${PAGE}?variant=B`]);
+    });
+
+    it("is taken out when the links would take the round past GitHub's limit for a comment, the visible edit as it would have been", async () => {
+      const short = (await landed(undefined, undefined, { intro: "a" })).posted.length;
+      // Each `a` of the intro adds two characters, once shown and once in the line: the round posted 2 or 3 short of the limit.
+      const { github, preview, posted } = await landed(undefined, undefined, { intro: "a".repeat(1 + Math.floor((65_534 - short) / 2)) });
+      expect(posted.length).toBeGreaterThanOrEqual(65_533);
+      expect(posted.length).toBeLessThanOrEqual(65_534);
+      expect(roundLineIn(posted)).not.toBeNull();
+
+      await linkPreview(github, repo, preview, pollerAnswering(200).poller);
+
+      expect(roundLineIn(github.comment ?? "")).toBeNull();
+      expect(github.comment?.length).toBeLessThanOrEqual(65_536);
+      expect(linkedIn(github.comment)).toEqual([`${PAGE}?variant=A`, `${PAGE}?variant=B`]);
+    });
+
+    it.each([
+      ["linked", 200, `${PAGE}?variant=A`],
+      ["never answered", 404, null],
+    ] as const)("still edits a round an earlier release posted with no line, when the preview %s, adding none", async (_, answer, firstLink) => {
+      const { github, preview, posted } = await landed();
+      const earlier = withoutRoundLines(posted);
+      github.edit(earlier);
+
+      const outcome = await linkPreview(github, repo, preview, pollerAnswering(answer).poller);
+
+      expect(outcome.kind).not.toBe("unchanged");
+      expect(roundLineIn(github.comment ?? "")).toBeNull();
+      expect(github.comment?.split("\n")[1]).toBe("<!-- fabrik:prototype-round -->");
+      expect(linkedIn(github.comment)[0] ?? null).toBe(firstLink);
+    });
   });
 
   describe("whatever the agent's text holds", () => {
@@ -291,7 +378,8 @@ describe("Linking each variant's preview in a prototype round", () => {
     ["saying the Kit kept none", null],
   ])("links each variant's preview into a round an earlier release wrote, which named the Evidence page by its old word, %s", async (_, evidencePage) => {
     const { github, preview, posted } = await landed(undefined, undefined, { evidencePage });
-    const earlier = asAnEarlierReleaseWroteIt(posted);
+    // An earlier release wrote no hidden line either (#636).
+    const earlier = asAnEarlierReleaseWroteIt(withoutRoundLines(posted));
     github.edit(earlier);
 
     const outcome = await linkPreview(github, repo, preview, pollerAnswering(200).poller);
