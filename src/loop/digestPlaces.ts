@@ -93,7 +93,7 @@ export function fingerprintOf(lines: readonly string[]): string {
 }
 
 /** A hunk's header in a patch: `@@ -8,7 +8,8 @@`, the head's side after the `+`, a count left out being 1. */
-const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+export const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
 
 /**
  * The hunks of a file's patch, as GitHub's API gives a pull request's files:
