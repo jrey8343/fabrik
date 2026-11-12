@@ -608,9 +608,12 @@ export type DigestWhere = Pick<DigestGiven, "repoUrl" | "pullRequest" | "headSha
  * it would render, such as Markdown, as its lines, so the link lands on them.
  */
 function placeLink({ path, start, end }: DigestPlace, { repoUrl, headSha }: DigestWhere): string {
-  const file = path.split("/").map((part) => encodeURIComponent(part).replace(/[()]/g, (bracket) => (bracket === "(" ? "%28" : "%29"))).join("/");
+  // A bracket left as it is would end the link's address early.
+  const file = path.split("/").map((part) => encodeURIComponent(part).replace(/\(/g, "%28").replace(/\)/g, "%29")).join("/");
+  // As code, where nothing in a path is Markdown or a mention; a path with a backtick or a line break in it can't be, so it is plain words.
+  const named = /[`\r\n]/.test(path) ? withoutMentions(path.replace(/\s+/g, " ").replace(/[\\`*_[\]<>]/g, "\\$&")) : `\`${path}\``;
   const lines = start === end ? `line ${start}` : `lines ${start} to ${end}`;
-  return `[\`${path}\`, ${lines}](${repoUrl}/blob/${headSha}/${file}?plain=1#L${start}${start === end ? "" : `-L${end}`})`;
+  return `[${named}, ${lines}](${repoUrl}/blob/${headSha}/${file}?plain=1#L${start}${start === end ? "" : `-L${end}`})`;
 }
 
 /**

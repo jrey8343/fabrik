@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
-import { type DigestReply, digestCommentOf } from "../loop/digestContract.ts";
+import { type DigestReply, digestCommentOf, readDigestComment } from "../loop/digestContract.ts";
 import { handBackMarker, RETRY_PUSH_MARKER, verdictMarker } from "../loop/markers.ts";
 import type { ReadClient } from "./client.ts";
 import { readDigestGiven, readDigestThread } from "./digestGiven.ts";
@@ -353,6 +353,11 @@ describe("What the push job hands the Digest's contract", () => {
         body: expect.stringContaining(`[\`src/basket/save.ts\`, lines 1 to 2](https://github.com/acme/shop/blob/${HEAD}/src/basket/save.ts?plain=1#L1-L2)`),
       });
       expect(comment).toMatchObject({ body: expect.not.stringContaining("gone.ts") });
+      // Both lines are in the one hunk GitHub gave for the file, so the place can take a pinned comment.
+      expect(readDigestComment(comment.ok ? comment.body : "")).toMatchObject({
+        ok: true,
+        data: { items: [{ places: [{ path: "src/basket/save.ts", start: 1, end: 2, as: "code", inDiff: true, fingerprint: "7af22881610a" }] }, { places: [] }] },
+      });
     });
 
     it.each([

@@ -92,16 +92,54 @@ export function fingerprintOf(lines: readonly string[]): string {
   return createHash("sha256").update(lines.join("\n"), "utf8").digest("hex").slice(0, 12);
 }
 
+/** A hunk's header in a patch: `@@ -8,7 +8,8 @@`, the head's side after the `+`, a count left out being 1. */
+const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+
+/**
+ * The hunks of a file's patch, as GitHub's API gives a pull request's files:
+ * each one's first and last line on the head's side, its unchanged lines
+ * counting. A hunk that leaves no line on the head's side, having only
+ * removed some, holds none and is left out. Every line under a header opens
+ * with a space, a `+`, a `-` or a backslash, so only a header opens with `@@`.
+ */
+export function hunksIn(patch: string): { readonly start: number; readonly end: number }[] {
+  return patch.split("\n").flatMap((line) => {
+    const [, first, count] = HUNK_HEADER.exec(line) ?? [];
+    if (first === undefined) return [];
+    const start = Number(first);
+    const lines = count === undefined ? 1 : Number(count);
+    return lines === 0 ? [] : [{ start, end: start + lines - 1 }];
+  });
+}
+
+/**
+ * Whether a place can take a pinned comment, its `inDiff`: every line of it
+ * lies in one hunk of its file's diff in the pull request, on the head's
+ * side. `changed` is the pull request's files (DigestHead). It is false in
+ * a file the pull request does not change, and in one GitHub gives no patch
+ * for.
+ */
+export function inOneHunk({ path, start, end }: Pick<NamedPlace, "path" | "start" | "end">, changed: DigestHead["changed"]): boolean {
+  const patch = changed.find((file) => file.path === path)?.patch ?? null;
+  return patch !== null && hunksIn(patch).some((hunk) => hunk.start <= start && end <= hunk.end);
+}
+
 /**
  * A place as a Digest carries it, or null when it does not resolve in the
  * head, and is dropped: its file is not in the head, its lines run past the
  * end of the file, or its first line is after its last. A wrong line number
  * costs its item that one link and never the Digest.
+ *
+ * One that resolves is cut to its first 40 lines when it is longer. Whether
+ * it can take a pinned comment and its fingerprint are both worked out
+ * after the cut, of the lines it then holds.
  */
 export function placeAt(named: NamedPlace, head: DigestHead): DigestPlace | null {
-  const text = head.files.find(({ path }) => path === named.path)?.text ?? null;
+  const { path, start, as } = named;
+  const text = isRepoPath(path) ? (head.files.find((file) => file.path === path)?.text ?? null) : null;
   const lines = text === null ? null : linesAt(linesOf(text), named);
   if (lines === null) return null;
-  const { path, start, end, as } = named;
-  return { path, start, end, as, inDiff: false, fingerprint: fingerprintOf(lines) };
+  const kept = lines.slice(0, MAX_PLACE_LINES);
+  const end = start + kept.length - 1;
+  return { path, start, end, as, inDiff: inOneHunk({ path, start, end }, head.changed), fingerprint: fingerprintOf(kept) };
 }

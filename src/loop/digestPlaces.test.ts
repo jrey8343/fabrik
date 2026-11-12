@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { aDigestFacts, aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
+import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { forbiddenImportsFrom, modulesImporting, runtimeImportsIn, WORKER_BUILTINS } from "../read/importWalk.ts";
 import {
   DIGEST_FOLDS_MARKER,
   type DigestData,
@@ -16,6 +19,8 @@ import {
   readDigestReply,
 } from "./digestContract.ts";
 import { type DigestHead, type DigestPlace, MAX_PLACE_LINES, MAX_PLACES, type NamedPlace, PLACE_KINDS } from "./digestPlaces.ts";
+import { planFor } from "./rules.ts";
+import type { Action } from "./types.ts";
 
 const HEAD = "a".repeat(40);
 const BLOB = `https://github.com/acme/shop/blob/${HEAD}`;
@@ -113,6 +118,25 @@ describe("An item's places, in the Digest's comment", () => {
   });
 });
 
+describe("An item's places, in the Digest's comment, at a path Markdown would trip on", () => {
+  it("names a path with a backtick in it as plain words, so the link's own words stay whole and mention nobody", () => {
+    const path = "docs/@olive's `saved` [basket].md";
+    const head = aHead({ files: [{ path, text: "A saved basket keeps its prices for a day.\n" }] });
+
+    expect(needsYourEyesIn(bodyOf(aDigestReply({ items: [anItem("yours-to-judge", { places: [aPlace(1, 1, { path, as: "words" })] })] }), given(head)))[1]).toBe(
+      `  [docs/@​olive's \\\`saved\\\` \\[basket\\].md, line 1](${BLOB}/docs/%40olive's%20%60saved%60%20%5Bbasket%5D.md?plain=1#L1)`,
+    );
+  });
+
+  it("drops a place whose path is no file's path in a repo, whatever was read for it", () => {
+    const paths = ["../shop/src/basket/save.ts", "/src/basket/save.ts", "src//basket/save.ts", "./src/basket/save.ts"];
+    const head = aHead({ files: paths.map((path) => ({ path, text: SAVE })) });
+
+    expect(needsYourEyesIn(bodyOf(aDigestReply({ items: [anItem("yours-to-judge", { places: paths.slice(0, 3).map((path) => aPlace(1, 3, { path })) })] }), given(head)))).toHaveLength(1);
+    expect(needsYourEyesIn(bodyOf(aDigestReply({ items: [anItem("yours-to-judge", { places: [aPlace(1, 3, { path: paths[3] })] })] }), given(head)))).toHaveLength(1);
+  });
+});
+
 describe("A place that does not resolve in the head", () => {
   const SENTENCE = "- **Prices hold for 24 hours.** The Ticket said for a while, and the Implementer chose a day.";
   const link = (path: string, lines: string, anchor: string) => `[\`${path}\`, ${lines}](${BLOB}/${path}?plain=1#${anchor})`;
@@ -169,8 +193,105 @@ function placesOf(body: string): DigestPlace[][] {
   return dataOf(body).items.map(({ places }) => [...places]);
 }
 
+/** A Digest with one item, the Operator's to judge, that names these places. */
+function pointingAt(places: readonly NamedPlace[], head: DigestHead = aHead()): string {
+  return bodyOf(aDigestReply({ items: [anItem("yours-to-judge", { places })] }), given(head));
+}
+
+describe("A place's lines, as a Digest carries them", () => {
+  // Each fingerprint below was worked out apart from the Kit, with `shasum -a 256` over the lines joined by newlines.
+  it("are cut to the first 40 when the place is longer, with a fingerprint of those 40 and a link to them", () => {
+    const body = pointingAt([aPlace(21, 80)]);
+
+    expect(placesOf(body)).toEqual([[{ path: "src/basket/save.ts", start: 21, end: 60, as: "code", inDiff: false, fingerprint: "7e78da4c27f9" }]]);
+    expect(needsYourEyesIn(body)[1]).toBe(`  [\`src/basket/save.ts\`, lines 21 to 60](${BLOB}/src/basket/save.ts?plain=1#L21-L60)`);
+  });
+
+  it("are left whole at 40 lines, and cut at 41", () => {
+    const forty = { path: "src/basket/save.ts", start: 21, end: 60, as: "code", inDiff: false, fingerprint: "7e78da4c27f9" };
+
+    expect(placesOf(pointingAt([aPlace(21, 60), aPlace(21, 61)]))).toEqual([[forty, forty]]);
+  });
+
+  it("are never cut to fit a file they run past the end of: such a place is dropped", () => {
+    expect(placesOf(pointingAt([aPlace(70, 120)]))).toEqual([[]]);
+  });
+
+  it("have a fingerprint of 12 hex characters of the SHA-256 of the lines at the head, joined by newlines", () => {
+    expect(placesOf(pointingAt([aPlace(10, 12), aPlace(5, 5), aPlace(2, 4, { path: "src/basket/copy.ts", as: "words" })]))).toEqual([
+      [
+        { path: "src/basket/save.ts", start: 10, end: 12, as: "code", inDiff: false, fingerprint: "79e380d6cca3" },
+        { path: "src/basket/save.ts", start: 5, end: 5, as: "code", inDiff: false, fingerprint: "7dc94023053f" },
+        { path: "src/basket/copy.ts", start: 2, end: 4, as: "words", inDiff: false, fingerprint: "42190ee3e49e" },
+      ],
+    ]);
+  });
+
+  it("are the same lines whether the file ends its lines with a line feed or with a carriage return and one", () => {
+    const fingerprints = ["first\nsecond\nthird\n", "first\r\nsecond\r\nthird\r\n"].map((text) => placesOf(pointingAt([aPlace(1, 2, { path: "notes.txt" })], aHead({ files: [{ path: "notes.txt", text }] }))));
+
+    expect(fingerprints).toEqual([[[expect.objectContaining({ fingerprint: "4252f8d56b4b" })]], [[expect.objectContaining({ fingerprint: "4252f8d56b4b" })]]]);
+  });
+});
+
+describe("Whether a place can take a pinned comment: its `inDiff`", () => {
+  const line = (number: number) => `const line${number} = ${number};`;
+  /** The pull request's patch of the saved-basket rule, as GitHub's API gives it: two hunks, lines 8 to 15 and 29 to 37 on the head's side. */
+  const PATCH = [
+    "@@ -8,7 +8,8 @@ const line7 = 7;",
+    ...[8, 9, 10].map((number) => ` ${line(number)}`),
+    "-const line11 = 0;",
+    ...[11, 12].map((number) => `+${line(number)}`),
+    ...[13, 14, 15].map((number) => ` ${line(number)}`),
+    "@@ -28,6 +29,9 @@ const line28 = 28;",
+    ...[29, 30, 31].map((number) => ` ${line(number)}`),
+    ...[32, 33, 34].map((number) => `+${line(number)}`),
+    ...[35, 36, 37].map((number) => ` ${line(number)}`),
+  ].join("\n");
+  const changing = (changed: DigestHead["changed"]) => aHead({ changed });
+  const HEAD_HELD = changing([{ path: "src/basket/save.ts", patch: PATCH }]);
+  const inDiffOf = (places: readonly NamedPlace[], head: DigestHead = HEAD_HELD) => placesOf(pointingAt(places, head)).flat().map(({ start, end, inDiff }) => `${start}-${end}: ${inDiff}`);
+
+  it("is true when every line of it lies in one hunk of its file's diff, on the head's side, the hunk's unchanged lines counting", () => {
+    expect(inDiffOf([aPlace(11, 12), aPlace(8, 15), aPlace(13, 15)])).toEqual(["11-12: true", "8-15: true", "13-15: true"]);
+    expect(inDiffOf([aPlace(29, 29), aPlace(32, 37)])).toEqual(["29-29: true", "32-37: true"]);
+  });
+
+  it("is false when it spans two hunks, runs out of one, or lies between them", () => {
+    expect(inDiffOf([aPlace(12, 31), aPlace(14, 16), aPlace(20, 22)])).toEqual(["12-31: false", "14-16: false", "20-22: false"]);
+    expect(inDiffOf([aPlace(7, 9), aPlace(1, 3), aPlace(38, 40)])).toEqual(["7-9: false", "1-3: false", "38-40: false"]);
+  });
+
+  it("is false in a file the pull request does not change, and the place still lands", () => {
+    expect(inDiffOf([aPlace(2, 4, { path: "src/basket/copy.ts", as: "words" })])).toEqual(["2-4: false"]);
+  });
+
+  it("is false in a file GitHub gives no patch for, as for one whose diff is too large", () => {
+    expect(inDiffOf([aPlace(11, 12)], changing([{ path: "src/basket/save.ts", patch: null }]))).toEqual(["11-12: false"]);
+  });
+
+  it("is worked out after the cut: a place of 60 lines whose first 40 lie in one hunk is in the diff", () => {
+    const added = changing([{ path: "src/basket/save.ts", patch: ["@@ -0,0 +1,100 @@", ...Array.from({ length: 100 }, (_, index) => `+${line(index + 1)}`)].join("\n") }]);
+
+    expect(inDiffOf([aPlace(21, 80)], added)).toEqual(["21-60: true"]);
+    expect(inDiffOf([aPlace(8, 60)])).toEqual(["8-47: false"]);
+  });
+
+  it("reads a hunk that names no count as one line, and one that leaves no line on the head's side as holding none", () => {
+    const oneLine = changing([{ path: "src/basket/save.ts", patch: `@@ -5 +5 @@\n-const line5 = 0;\n+${line(5)}\n@@ -9,2 +8,0 @@\n-const gone = 1;\n-const gone = 2;` }]);
+
+    expect(inDiffOf([aPlace(5, 5), aPlace(5, 6), aPlace(8, 8)], oneLine)).toEqual(["5-5: true", "5-6: false", "8-8: false"]);
+  });
+
+  it("takes a hunk only from a header of the patch's own, never from a changed line that reads like one", () => {
+    const quoting = changing([{ path: "src/basket/save.ts", patch: `@@ -5 +5 @@\n-const line5 = 0;\n+${line(5)}\n+@@ -1,100 +1,100 @@\n @@ -1,100 +1,100 @@` }]);
+
+    expect(inDiffOf([aPlace(5, 5), aPlace(40, 44)], quoting)).toEqual(["5-5: true", "40-44: false"]);
+  });
+});
+
 describe("The Digest's data line", () => {
-  const WHAT = "A shopper can now save their basket from /basket. A saved basket keeps its prices for a day.";
+  const WHAT ="A shopper can now save their basket from /basket. A saved basket keeps its prices for a day.";
   const HOW = "One Review passed it at the first head. The product code is unchanged since that Verdict.";
 
   it("is the comment's second line, hidden, under a first line that still names the head", () => {
@@ -353,6 +474,65 @@ describe("Reading a Digest's comment back", () => {
     const later = line.replace('{"v":1,', '{"v":1,"risk":"low",');
 
     expect(readDigestComment(withDataLine(later))).toMatchObject({ ok: true, data: { ...dataOf(BODY), risk: "low" } });
+  });
+});
+
+describe("A Digest with places, as the push job lands it", () => {
+  const pullRequest = aPullRequest({ labels: ["agent:digest"], verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] });
+  const GIVEN = aDigestGiven({ headSha: HEAD_SHA, head: aHead() });
+
+  function landed(reply: unknown): Action[] {
+    const plan = planFor({ kind: "digest-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: JSON.stringify(reply), given: GIVEN, runUrl: GIVEN.runUrl }, snapshotOfPullRequest(pullRequest), kitConfig());
+    return plan.kind === "act" ? [...plan.actions] : [];
+  }
+  const GATE_OPENS = ["remove-label", "mark-ready-for-review", "request-review"];
+
+  it("lands with its data when a place does not resolve: the wrong place costs that link, never the account", () => {
+    const [comment, ...rest] = landed(aDigestReply({ items: [anItem("yours-to-judge", { places: [aPlace(10, 12), aPlace(500, 510), aPlace(3, 5, { path: "src/basket/gone.ts" })] })] }));
+    const body = comment?.kind === "comment" ? comment.body : "";
+
+    expect(digestMarkIn(body)).toEqual({ head: HEAD_SHA, asks: [], carriedFrom: null });
+    expect(placesOf(body)).toEqual([[{ path: "src/basket/save.ts", start: 10, end: 12, as: "code", inDiff: false, fingerprint: "79e380d6cca3" }]]);
+    expect(rest.map(({ kind }) => kind)).toEqual(GATE_OPENS);
+  });
+
+  it("is refused when an item names four places: the no-Digest line says so, and the gate opens all the same", () => {
+    const four = [aPlace(1, 3), aPlace(10, 12), aPlace(30, 34), aPlace(40, 44)];
+    const [comment, ...rest] = landed(aDigestReply({ items: [anItem("yours-to-judge", { places: four })] }));
+
+    expect(comment).toEqual({
+      kind: "comment",
+      issue: 50,
+      body: noDigestLine({ head: HEAD_SHA, how: "refused", reason: "items[0].places must be a list of at most 3 places, not 4", runUrl: GIVEN.runUrl }),
+    });
+    expect(rest.map(({ kind }) => kind)).toEqual(GATE_OPENS);
+  });
+
+  it("is refused when its comment, data line and all, would be longer than GitHub takes: the no-Digest line says so", () => {
+    const [comment, ...rest] = landed(aDigestReply({ items: [anItem("yours-to-judge", { claim: "<".repeat(900) })], walkthrough: "x".repeat(60_000) }));
+    const body = comment?.kind === "comment" ? comment.body : "";
+
+    expect(body.split("\n")[0]).toBe(`<!-- fabrik:no-digest {"head":"${HEAD_SHA}","how":"refused"} -->`);
+    expect(body).toMatch(/No Digest could be written for this head, `[0-9a-f]{7}`: `refused`, Kit code refused the Digest writer's reply \(the Digest would be 6\d{4} characters, over GitHub's limit of 65536 for a comment\)\./);
+    expect(rest.map(({ kind }) => kind)).toEqual(GATE_OPENS);
+  });
+});
+
+describe("The modules that hold the Digest's contract, its place code and the read of the head", () => {
+  const read = (path: string) => readFileSync(path, "utf8");
+  const moduleAt = (path: string) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
+
+  it.each(["src/loop/digestContract.ts", "src/loop/digestPlaces.ts", "src/github/digestHead.ts"])("%s imports no npm package and no Node built-in a Worker can't load, nor reaches a module that does", (path) => {
+    expect(forbiddenImportsFrom(moduleAt(path), read)).toEqual([]);
+  });
+
+  it.each(["src/loop/digestContract.ts", "src/loop/digestPlaces.ts", "src/github/digestHead.ts"])("%s reaches nothing typed on the Kit's client class, so a reader's own three-call client serves", (path) => {
+    expect(modulesImporting("GitHub", moduleAt(path), read)).toEqual([]);
+  });
+
+  it("the place code's one built-in is one the read library's entry may import", () => {
+    expect(runtimeImportsIn(read(moduleAt("src/loop/digestPlaces.ts")))).toEqual(["node:crypto"]);
+    expect(WORKER_BUILTINS).toContain("node:crypto");
   });
 });
 
