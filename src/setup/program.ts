@@ -20,7 +20,7 @@ import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
 import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips } from "./checks.ts";
 import { type Env, ok, type Run } from "./exec.ts";
 import { appliedLines, closingLines, setupCommand } from "./finish.ts";
-import { gatherState, vaultItems } from "./gather.ts";
+import { gatherDeployments, gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type OneRunSteps, readinessOf, runOnce, wizardGaps } from "./oneRun.ts";
 import {
@@ -118,7 +118,15 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
     // The default branch the checks found has no Kit config, so one here is the starter setup wrote on its branch.
     const config = await run("git", ["cat-file", "-e", `${checked.origin.defaultBranch}:${KIT_CONFIG_PATH}`], { cwd: productDir });
     const wroteStarter = config.code !== 0;
-    const answers = await askQuestions({ flags: args.answers, state, wroteStarter, machineTimeZone: io.machineTimeZone, prompt: io.prompt, say: io.say });
+    const answers = await askQuestions({
+      flags: args.answers,
+      state,
+      wroteStarter,
+      machineTimeZone: io.machineTimeZone,
+      prompt: io.prompt,
+      say: io.say,
+      deployments: () => gatherDeployments(run, productDir, checked.repo),
+    });
     const plan = planSetup(state, kit, answers, { wroteStarter });
     const branch = setupBranch(args.release);
     // On the default branch, nothing to apply is a working install, but for what a wizard stage stores.
