@@ -25,6 +25,7 @@ import { aTicket } from "../__fixtures__/snapshots.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { roundLineOf } from "../loop/roundLine.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingAt, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
@@ -243,6 +244,13 @@ describe("the Standing rule", () => {
         { issue: 12, name: "design-round", detail: { round: 3, prototype: "ready" } },
         { issue: 13, name: "design-round", detail: { round: 4, prototype: "failed" } },
       ]);
+    });
+
+    it("reads a Round carrying its hidden line as an ordinary Round, not a prototype round", () => {
+      const line = roundLineOf({ v: 1, kind: "round", round: 3, intro: "Hi.", questions: [{ question: "Q?", recommendation: "R." }], asksMap: true });
+      const round = aComment(`${designRoundMarker(3)}\n${line}\n@operator **Design session, round 3.**`, "2026-11-05T20:00:00Z");
+      const standings = standingsIn({ openIssues: [designing(12, [round])] });
+      expect(standings.map(({ issue, name, detail }) => ({ issue, name, detail }))).toEqual([{ issue: 12, name: "design-round", detail: { round: 3, prototype: null } }]);
     });
 
     it("gives a Design session whose last word is the Kit's notice that a turn failed one Standing, yours to do at Design, stopping work, since the notice", () => {
