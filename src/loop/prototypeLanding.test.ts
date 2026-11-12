@@ -205,7 +205,7 @@ describe("Landing a prototype turn whose build or dev server failed", () => {
   it("pushes the branch, then posts a prototype failure round numbered after the last, saying what failed, linking the branch, and asking whether to carry on without a prototype, recommending it", () => {
     const plan = planFor(finished({ capture: failed("build-failed"), evidencePage: null }), inSession(), kitConfig());
 
-    expect(plan).toEqual({
+    expect(shownBy(plan)).toEqual({
       kind: "act",
       actions: [
         { kind: "push-prototype-branch", issue: 7 },
@@ -330,7 +330,7 @@ describe("The trust-root guard on a prototype branch (ADR-0005)", () => {
 
     const plan = planFor(finished({ changes }), inSession(), kitConfig());
 
-    expect(plan).toEqual({
+    expect(shownBy(plan)).toEqual({
       kind: "act",
       actions: [
         {
@@ -372,7 +372,7 @@ describe("Landing a prototype turn that made no commit", () => {
   it("pushes nothing, and posts a prototype failure round saying nothing was built", () => {
     const plan = planFor(finished({ changes: { net: [], commits: [] }, headSha: null, capture: undefined, evidencePage: null }), inSession(), kitConfig());
 
-    expect(plan).toEqual({
+    expect(shownBy(plan)).toEqual({
       kind: "act",
       actions: [
         {
@@ -781,5 +781,36 @@ describe("A prototype round's hidden line", () => {
     expect(unansweredPrototypesIn(thread)).toEqual([]);
     expect(pendingPrototypeIn(thread)).toBeNull();
     expect(designSessionOf(thread).designRounds).toBe(1);
+  });
+});
+
+// A prototype failure round's fields as data (#636): its hidden line, the third, under the round's marker and the failure marker.
+describe("A prototype failure round's hidden line", () => {
+  const CARRY_ON = "Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.";
+
+  it.each([
+    ["whose build failed", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "build-failed", captures: [] }, evidencePage: null })],
+    ["whose dev server didn't start", finished({ capture: { ...CAPTURED, outcome: "failed", reason: "server-did-not-start", captures: [] }, evidencePage: null })],
+    ["that changes a Trust-root file", finished({ changes: { net: [{ path: "AGENTS.md" }], commits: [{ path: "AGENTS.md" }] } })],
+    ["that built nothing", finished({ changes: { net: [], commits: [] }, headSha: null, output: JSON.stringify({ ...ROUND, intro: "Built nothing, as @jrey's `.claude/` <rule> said." }) })],
+  ])("puts the line third on the failure round of a prototype %s: what stopped it, the Kit's question and recommendation, and \"Try again\"", (_name, event) => {
+    const plan = planFor(event, inSession(), kitConfig());
+
+    const body = commentsOf(plan).at(-1) ?? "";
+    expect(body.split("\n").slice(0, 2)).toEqual(["<!-- fabrik:design-round 3 -->", "<!-- fabrik:prototype-failed -->"]);
+    expect(body.split("\n")[2]).toMatch(/^<!-- fabrik:round-line \{.*\} -->$/);
+    const shown = withoutRoundLines(body).split("\n");
+    // What stopped the prototype, as the round says it: between the round's opening line and its question.
+    const said = shown.slice(4, -3).join("\n");
+    expect(roundLineIn(body)).toEqual({
+      v: 1,
+      kind: "prototype-failed",
+      round: 3,
+      intro: said,
+      questions: [{ question: "Carry on without a prototype, or try again?", recommendation: CARRY_ON }],
+      otherAnswers: ["Try again"],
+    });
+    expect(shown.slice(-2)).toEqual(["**1. Carry on without a prototype, or try again?**", `➡️ Recommended: ${CARRY_ON}`]);
+    expect(notificationsOf(plan, "jrey")).toEqual(["mention on #7"]);
   });
 });

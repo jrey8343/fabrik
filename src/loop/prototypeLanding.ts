@@ -146,17 +146,36 @@ function sameRequest({ request: a, reply: replyA }: PrototypeRequestMarker, { re
  * that `yes` never spends another prototype turn's Sandbox time.
  */
 function failureRound(round: number, operator: string, said: string): string {
-  return [
-    designRoundMarker(round),
-    PROTOTYPE_FAILURE_ROUND_MARKER,
-    `@${operator} **Design session, round ${round}: the prototype failed.** Reply with how you'd go on, or \`yes\` to take the recommendation.`,
-    "",
-    said,
-    "",
-    "**1. Carry on without a prototype, or try again?**",
-    "➡️ Recommended: Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.",
-  ].join("\n");
+  return withinCommentLimit(
+    [
+      designRoundMarker(round),
+      PROTOTYPE_FAILURE_ROUND_MARKER,
+      roundLineOf({
+        v: ROUND_LINE_VERSION,
+        kind: "prototype-failed",
+        round,
+        intro: said,
+        questions: [{ question: CARRY_ON_QUESTION, recommendation: CARRY_ON }],
+        otherAnswers: [TRY_AGAIN],
+      }),
+      `@${operator} **Design session, round ${round}: the prototype failed.** Reply with how you'd go on, or \`yes\` to take the recommendation.`,
+      "",
+      said,
+      "",
+      `**1. ${CARRY_ON_QUESTION}**`,
+      `➡️ Recommended: ${CARRY_ON}`,
+    ].join("\n"),
+  );
 }
+
+/** A prototype failure round's one question, which the Kit writes. */
+const CARRY_ON_QUESTION = "Carry on without a prototype, or try again?";
+
+/** What the Kit recommends on a prototype failure round. */
+const CARRY_ON = "Carry on without a prototype. Trying again spends another prototype turn's Sandbox time, and may fail the same way.";
+
+/** The answer the Kit offers on a prototype failure round beside its recommendation. */
+const TRY_AGAIN = "Try again";
 
 /**
  * The prototype round: a round, so it opens with the next round's marker and
