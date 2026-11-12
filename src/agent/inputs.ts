@@ -30,6 +30,17 @@ import { readDigestThread } from "../github/digestGiven.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { capturedRoutesOf, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
+import {
+  byTime,
+  lineOf,
+  operatorsRequestChangesIn,
+  readWrittenOn,
+  type Written,
+  type WrittenComment,
+  type WrittenOn,
+  type WrittenReview,
+  writtenBy,
+} from "../github/writtenOn.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
@@ -203,11 +214,6 @@ type IssueComment = NonNullable<IssueQueryResult["repository"]["issue"]>["commen
 /** Past this many characters, the sent-back PR's diff is cut short; its file list stays whole. */
 export const SENT_BACK_DIFF_LIMIT = 60_000;
 
-interface RestUser {
-  readonly login: string;
-  readonly type: string;
-}
-
 /**
  * The agent PR a Ticket came back from, for the Design session that follows:
  * what sent it back (every Verdict the Fabrik App gave it, oldest first, or
@@ -267,13 +273,14 @@ export async function readSentBack(github: Reader, repo: Repo, sentBack: SentBac
 
 /** Every Verdict the Fabrik App posted on the PR, oldest first, each with its comment, whole but for its change line. */
 async function verdictsOn(github: Reader, repo: Repo, pullRequest: number): Promise<GivenVerdict[]> {
-  const comments = await allPages<{ body: string; user: RestUser | null }>(
-    github,
-    `/repos/${repo.owner}/${repo.name}/issues/${pullRequest}/comments`,
-  );
+  return verdictsAmong(await allPages<Pick<WrittenComment, "body" | "user">>(github, `/repos/${repo.owner}/${repo.name}/issues/${pullRequest}/comments`));
+}
+
+/** The Verdicts among a PR's conversation, as verdictsOn gives them. */
+function verdictsAmong(conversation: readonly Pick<WrittenComment, "body" | "user">[]): GivenVerdict[] {
   // Only a bot's markers count, as in the core's snapshot, so nobody can plant a Verdict by quoting one.
-  return comments.flatMap(({ body, user }) => {
-    if (user?.type !== "Bot") return [];
+  return conversation.flatMap(({ body, user }) => {
+    if (user?.type !== "Bot" || body === null) return [];
     const [record] = verdictsIn([body]);
     // Without its change line (#643), which is hashes for Kit code and says nothing to an agent.
     return record === undefined ? [] : [{ verdict: record.verdict, source: record.source, headSha: record.headSha, comment: withoutChangeLines(body) }];
@@ -282,7 +289,7 @@ async function verdictsOn(github: Reader, repo: Repo, pullRequest: number): Prom
 
 /** The Operator's submitted reviews on the PR, oldest first, each with its inline comments. */
 async function operatorReviewsOn(github: Reader, path: string, operator: string): Promise<unknown[]> {
-  const reviews = await allPages<{ id: number; user: RestUser | null; state: string; body: string | null; commit_id: string; submitted_at?: string }>(
+  const reviews = await allPages<WrittenReview & { commit_id: string }>(
     github,
     `${path}/reviews`,
   );
@@ -321,7 +328,11 @@ export async function readOperatorComments(
  * gives them, and its Request changes reviews, oldest first, each with its
  * own inline comments (which stay among the comments too) and kept even when
  * its body is empty. Those amend the Ticket for the PR (ADR-0010). Other
- * people's reviews, and the Operator's still pending, are left out.
+ * people's reviews, and the Operator's still pending, are left out. Which
+ * reviews are the Operator's Request changes, and which line comments are in
+ * each, is the one rule a Digest's asks are read by too
+ * (operatorsRequestChangesIn). `written` is everything written on the PR,
+ * when the caller has read it already.
  */
 async function readOperatorFeedback(
   github: Reader,
@@ -329,28 +340,14 @@ async function readOperatorFeedback(
   pullRequest: number,
   operator: string,
   deferred: readonly number[] = [],
+  written?: WrittenOn,
 ): Promise<{ operatorComments: OperatorComment[]; requestedChanges: RequestedChange[] }> {
-  const base = `/repos/${repo.owner}/${repo.name}`;
-  interface Written {
-    readonly id: number;
-    readonly user: RestUser | null;
-    readonly body: string | null;
-    readonly html_url: string;
-  }
-  const [conversation, inline, reviews] = await Promise.all([
-    allPages<Written & { created_at: string }>(github, `${base}/issues/${pullRequest}/comments`),
-    allPages<
-      Written & { created_at: string; path: string; line: number | null; original_line?: number | null; pull_request_review_id?: number | null }
-    >(
-      github,
-      `${base}/pulls/${pullRequest}/comments`,
-    ),
-    allPages<Written & { state: string; submitted_at?: string | null }>(github, `${base}/pulls/${pullRequest}/reviews`),
-  ]);
-  const theirs = (written: Written): boolean => written.user?.login === operator && written.user.type !== "Bot";
+  const all = written ?? (await readWrittenOn(github, repo, pullRequest));
+  const { conversation, lineComments: inline, reviews } = all;
+  const theirs = writtenBy(operator);
   // A review deferred while a Retry was in flight (#427), and its inline comments, aren't this run's to read.
-  const notDeferred = (written: Written & { pull_request_review_id?: number | null }): boolean =>
-    !deferred.includes(written.id) && (written.pull_request_review_id == null || !deferred.includes(written.pull_request_review_id));
+  const notDeferred = (one: Written & { pull_request_review_id?: number | null }): boolean =>
+    !deferred.includes(one.id) && (one.pull_request_review_id == null || !deferred.includes(one.pull_request_review_id));
   const comments: OperatorComment[] = [
     ...conversation.filter(theirs).map((c) => ({
       id: operatorCommentId("conversation", c.id),
@@ -362,7 +359,7 @@ async function readOperatorFeedback(
     ...inline.filter((c) => theirs(c) && notDeferred(c)).map((c) => ({
       id: operatorCommentId("inline", c.id),
       url: c.html_url,
-      where: { kind: "inline" as const, path: c.path, line: c.line ?? c.original_line ?? null },
+      where: { kind: "inline" as const, path: c.path, line: lineOf(c) },
       createdAt: c.created_at,
       body: c.body ?? "",
     })),
@@ -376,33 +373,23 @@ async function readOperatorFeedback(
         body: r.body ?? "",
       })),
   ];
-  const requestedChanges: RequestedChange[] = reviews
-    .filter((r) => theirs(r) && notDeferred(r) && r.state === "CHANGES_REQUESTED")
-    .map((r) => ({
+  // One dismissed since no longer says what it asked, so no run is given it.
+  const requestedChanges: RequestedChange[] = operatorsRequestChangesIn(all, operator)
+    .filter(({ review, dismissed }) => !dismissed && notDeferred(review))
+    .map(({ review: r, lineComments }) => ({
       id: operatorCommentId("review", r.id),
       url: r.html_url,
       submittedAt: r.submitted_at ?? "",
       body: r.body ?? "",
-      comments: inline
-        .filter((c) => theirs(c) && c.pull_request_review_id === r.id)
-        .sort(byTime((c) => c.created_at))
-        .map((c) => ({
-          id: operatorCommentId("inline", c.id),
-          url: c.html_url,
-          path: c.path,
-          line: c.line ?? c.original_line ?? null,
-          body: c.body ?? "",
-        })),
+      comments: lineComments.map((c) => ({
+        id: operatorCommentId("inline", c.id),
+        url: c.html_url,
+        path: c.path,
+        line: lineOf(c),
+        body: c.body ?? "",
+      })),
     }));
-  return {
-    operatorComments: comments.sort(byTime((c) => c.createdAt)),
-    requestedChanges: requestedChanges.sort(byTime((r) => r.submittedAt)),
-  };
-}
-
-/** Oldest first, by the time `at` reads off each item. */
-function byTime<T>(at: (item: T) => string): (a: T, b: T) => number {
-  return (a, b) => (at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0);
+  return { operatorComments: comments.sort(byTime((c) => c.createdAt)), requestedChanges };
 }
 
 const PULL_REQUEST_QUERY = `
@@ -444,17 +431,23 @@ interface PullRequestQueryResult {
  * in `requestedChanges`, which amend the Ticket (ADR-0010). Those `deferred`
  * while a Retry was in flight (#427) are left out, with their inline comments:
  * the Verdict that ends the Retry gives way to them, so its Review never
- * judges against them, nor does a Retry build them.
+ * judges against them, nor does a Retry build them. `written` is everything
+ * written on the PR, when the caller has read it already (readWrittenOn).
  */
 export async function readPullRequest(
   github: Reader,
   repo: Repo,
   number: number,
-  { withComments, operator, deferred = [] }: { readonly withComments: boolean; readonly operator: string; readonly deferred?: readonly number[] },
+  {
+    withComments,
+    operator,
+    deferred = [],
+    written,
+  }: { readonly withComments: boolean; readonly operator: string; readonly deferred?: readonly number[]; readonly written?: WrittenOn },
 ): Promise<unknown> {
   const [data, { operatorComments, requestedChanges }] = await Promise.all([
     github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number }),
-    readOperatorFeedback(github, repo, number, operator, deferred),
+    readOperatorFeedback(github, repo, number, operator, deferred, written),
   ]);
   const pullRequest = data.repository.pullRequest;
   if (pullRequest === null) throw new Error(`Pull request #${number} not found`);
@@ -519,6 +512,11 @@ export interface DigestPullRequest {
  * worked out from the thread as the push job reads it again to render the
  * Digest (readDigestThread): they are counts and names of Kit code's own,
  * so a Verdict's fingerprint is behind them and its hidden line is not in them.
+ *
+ * What was written on the PR is read once (readWrittenOn), and the
+ * Operator's words, the Verdicts and the facts are all worked out from that
+ * one read: the asks among the facts are then the very Request changes and
+ * line comments the writer's input heads, id for id.
  */
 export async function readDigestPullRequest(
   github: Reader,
@@ -526,12 +524,13 @@ export async function readDigestPullRequest(
   number: number,
   { operator, deferred = [] }: { readonly operator: string; readonly deferred?: readonly number[] },
 ): Promise<DigestPullRequest> {
-  const [read, verdicts, rest, thread] = await Promise.all([
-    readPullRequest(github, repo, number, { withComments: true, operator, deferred }),
-    verdictsOn(github, repo, number),
+  const written = await readWrittenOn(github, repo, number);
+  const [read, rest, thread] = await Promise.all([
+    readPullRequest(github, repo, number, { withComments: true, operator, deferred, written }),
     github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`),
-    readDigestThread(github, repo, number, operator, deferred),
+    readDigestThread(github, repo, number, operator, deferred, written),
   ]);
+  const verdicts = verdictsAmong(written.conversation);
   const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges"> & {
     comments: { body: string; author: { __typename: string } | null }[];
   };
@@ -877,12 +876,9 @@ async function operatorCommentsOnIssue(
   issue: number,
   operator: string,
 ): Promise<ClosedAudit["operatorComments"]> {
-  const comments = await allPages<{ user: RestUser | null; body: string | null; created_at: string; html_url: string }>(
-    github,
-    `/repos/${repo.owner}/${repo.name}/issues/${issue}/comments`,
-  );
+  const comments = await allPages<WrittenComment>(github, `/repos/${repo.owner}/${repo.name}/issues/${issue}/comments`);
   return comments
-    .filter((comment) => comment.user?.login === operator && comment.user.type !== "Bot")
+    .filter(writtenBy(operator))
     .map((comment) => ({ url: comment.html_url, createdAt: comment.created_at, body: comment.body ?? "" }));
 }
 

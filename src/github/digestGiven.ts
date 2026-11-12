@@ -3,18 +3,19 @@
 // agent wrote. src/main.ts reads it once the Digest job has succeeded, and
 // the event that lands the Digest carries it, so the rules core renders the
 // comment with no I/O of its own. The read of the pull request's thread is
-// here too (readDigestThread): the agent job's inputs step makes the same
-// read for the facts it hands the writer (src/agent/inputs.ts), and the
-// Digest's rounds table is rendered from the push job's own, never from what
-// the agent job passed out.
+// here too (readDigestThread): the agent job's inputs step calls it for the
+// facts it hands the writer (src/agent/inputs.ts), and the Digest's rounds
+// table is rendered from the push job's own call, never from what the agent
+// job passed out.
 import { capturedRoutesOf } from "../evidence/uiEvidence.ts";
 import { ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { type DigestGiven, parseDigestReply } from "../loop/digestContract.ts";
 import { type DigestThread, digestFactsOf } from "../loop/digestFacts.ts";
-import { allPages, type ReadClient, type Repo } from "./client.ts";
+import type { ReadClient, Repo } from "./client.ts";
 import { readDigestHead } from "./digestHead.ts";
 import { digestSnapshotOn } from "./snapshot.ts";
 import { countLandedNothing } from "./threads.ts";
+import { lineOf, operatorsRequestChangesIn, readWrittenOn, type WrittenOn } from "./writtenOn.ts";
 
 /** What the push job already knows of a Digest when its run ends: where it goes, the head it is written as of, its run, and who the Operator is. */
 export interface DigestWritten {
@@ -86,41 +87,14 @@ interface OpeningQueryResult {
   };
 }
 
-/** A user as GitHub's REST API names one. */
-interface RestUser {
-  readonly login: string;
-  readonly type: string;
-}
-
-/** A line comment on the pull request's diff, as GitHub's REST API gives it. */
-interface RestLineComment {
-  readonly id: number;
-  readonly user: RestUser | null;
-  readonly html_url: string;
-  readonly created_at: string;
-  readonly path: string;
-  readonly line: number | null;
-  readonly original_line?: number | null;
-  readonly pull_request_review_id?: number | null;
-}
-
-/** A review of the pull request, as GitHub's REST API gives it. */
-interface RestReview {
-  readonly id: number;
-  readonly user: RestUser | null;
-  readonly state: string;
-  readonly body: string | null;
-  readonly html_url: string;
-  readonly submitted_at?: string | null;
-}
-
 /**
  * A pull request's thread, as much of it as Kit code's facts are worked out
  * from (digestFactsOf): when it opened; every comment a bot wrote on it,
  * oldest first, since only a bot's markers count, as in the Loop's snapshot;
  * the Operator's reviews that requested changes, each with its own text, its
- * place and the Operator's line comments in it, oldest first, as a Review's
- * input reads them (readOperatorFeedback, src/agent/inputs.ts), one since
+ * place and the Operator's line comments in it, oldest first, by the rule a
+ * Review's input reads them by (operatorsRequestChangesIn,
+ * src/github/writtenOn.ts), one since
  * dismissed marked so, since GitHub no longer says what a dismissed review
  * asked, and one among `deferred` marked so; and how many runs the Ticket
  * its branch names landed nothing on before it opened, counted from the
@@ -130,6 +104,10 @@ interface RestReview {
  * `deferred` is the Operator's Request changes deferred while a Retry was in
  * flight (#427), as the Loop's snapshot reads them
  * (deferredChangesRequestsOn): no Review was given one, so it is no ask.
+ *
+ * `written` is everything written on the pull request, when the caller has
+ * read it already, as the agent job's inputs step has: what it hands the
+ * writer and these facts are then of one read.
  */
 export async function readDigestThread(
   github: Pick<ReadClient, "rest" | "graphql">,
@@ -137,36 +115,30 @@ export async function readDigestThread(
   pullRequest: number,
   operator: string,
   deferred: readonly number[],
+  written?: WrittenOn,
 ): Promise<DigestThread> {
-  const base = `/repos/${repo.owner}/${repo.name}`;
-  const [opening, comments, lineComments, reviews] = await Promise.all([
+  const [opening, all] = await Promise.all([
     github.graphql<OpeningQueryResult>(OPENING_QUERY, { owner: repo.owner, name: repo.name, number: pullRequest }),
-    allPages<{ body: string | null; created_at: string; user: RestUser | null }>(github, `${base}/issues/${pullRequest}/comments`),
-    allPages<RestLineComment>(github, `${base}/pulls/${pullRequest}/comments`),
-    allPages<RestReview>(github, `${base}/pulls/${pullRequest}/reviews`),
+    written ?? readWrittenOn(github, repo, pullRequest),
   ]);
   const opened = opening.repository.pullRequest;
   if (opened === null) throw new Error(`Pull request #${pullRequest} not found in ${repo.owner}/${repo.name}`);
   const ticket = ticketOfAgentBranch(opened.headRefName);
   const onTicket = opened.closingIssuesReferences.nodes.find((issue) => issue.number === ticket)?.comments.nodes ?? [];
-  const theirs = (user: RestUser | null): boolean => user?.login === operator && user.type !== "Bot";
   return {
     openedAt: opened.createdAt,
-    kitComments: comments.filter(({ user }) => user?.type === "Bot").map(({ body, created_at }) => ({ at: created_at, body: body ?? "" })),
-    requestChanges: reviews.flatMap(({ id, state, submitted_at, user, body, html_url }) =>
-      theirs(user) && (state === "CHANGES_REQUESTED" || state === "DISMISSED") && typeof submitted_at === "string"
+    kitComments: all.conversation.filter(({ user }) => user?.type === "Bot").map(({ body, created_at }) => ({ at: created_at, body: body ?? "" })),
+    requestChanges: operatorsRequestChangesIn(all, operator).flatMap(({ review, dismissed, lineComments }) =>
+      typeof review.submitted_at === "string"
         ? [
             {
-              review: id,
-              at: submitted_at,
-              dismissed: state === "DISMISSED",
-              deferred: deferred.includes(id),
-              body: body ?? "",
-              url: html_url,
-              lineComments: lineComments
-                .filter((comment) => theirs(comment.user) && comment.pull_request_review_id === id)
-                .toSorted((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
-                .map((comment) => ({ comment: comment.id, url: comment.html_url, path: comment.path, line: comment.line ?? comment.original_line ?? null })),
+              review: review.id,
+              at: review.submitted_at,
+              dismissed,
+              deferred: deferred.includes(review.id),
+              body: review.body ?? "",
+              url: review.html_url,
+              lineComments: lineComments.map((comment) => ({ comment: comment.id, url: comment.html_url, path: comment.path, line: lineOf(comment) })),
             },
           ]
         : [],

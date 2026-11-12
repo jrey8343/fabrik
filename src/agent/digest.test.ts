@@ -59,7 +59,12 @@ describe("What the Digest writer is given of the pull request", () => {
   const conversation = (id: number, user: unknown, body: string, day: number) => ({ id, user, body, created_at: at(day), html_url: `https://github.com/acme/shop/pull/50#issuecomment-${id}` });
 
   /** #50 over GraphQL and REST: an Execution flaw, the Retry's note, the pass, a comment of the Operator's and a stranger's, and one Request changes with a line comment. */
-  function thread(body = "Saves the cart.\n\nCloses #7", verdicts: { readonly flaw: string; readonly pass: string } = { flaw: FLAW, pass: PASS }): Reader {
+  function thread(
+    body = "Saves the cart.\n\nCloses #7",
+    verdicts: { readonly flaw: string; readonly pass: string } = { flaw: FLAW, pass: PASS },
+    /** Every REST route the read asked for, in order. */
+    asked: string[] = [],
+  ): Reader {
     const comments = [
       conversation(1, BOT, verdicts.flaw, 1),
       conversation(2, BOT, RETRY_NOTE, 2),
@@ -85,7 +90,8 @@ describe("What the Digest writer is given of the pull request", () => {
           },
         }) as T,
       rest: async (_method: string, path: string) => {
-        const [route, query] = path.split("?");
+        const [route = "", query] = path.split("?");
+        asked.push(route);
         if (route === "/repos/acme/shop/pulls/50") return { base: { ref: "main" } };
         if (!/(^|&)page=1(&|$)/.test(query ?? "")) return [];
         switch (route) {
@@ -132,6 +138,19 @@ describe("What the Digest writer is given of the pull request", () => {
       capturedRoutes: [],
       facts: FACTS,
     });
+  });
+
+  it("reads the thread's comments, line comments and reviews once each, so the asks, the Operator's words and the Verdicts all come from one read", async () => {
+    const asked: string[] = [];
+
+    await readDigestPullRequest(thread(undefined, undefined, asked), repo, 50, { operator: "operator" });
+
+    expect(asked.toSorted()).toEqual([
+      "/repos/acme/shop/issues/50/comments",
+      "/repos/acme/shop/pulls/50",
+      "/repos/acme/shop/pulls/50/comments",
+      "/repos/acme/shop/pulls/50/reviews",
+    ]);
   });
 
   it("carries Kit code's facts, worked out from the same thread: the rounds, the counts, the Retries left, the Follow-ups and the product code since the first Verdict", async () => {
