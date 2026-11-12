@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient, type Repo } from "../github/client.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
+import { aDigestComment } from "./builders.ts";
 import { type Facts, gatherRepo } from "./gather.ts";
 import { threeDeepConnectionsIn } from "./queryShape.ts";
 import { rowsOf } from "./rows.ts";
@@ -396,6 +397,57 @@ describe("a gather shaped for Home", () => {
         { id: 2, at: "2026-11-09T10:00:00Z" },
       ]);
       expect(facts.github.openPullRequests[0]?.comments.map(({ id }) => id)).toEqual([5]);
+    });
+
+    describe("GitHub's record of an edit to a comment's body, by which a Digest a person edited is told (#655)", () => {
+      const PULL_REQUEST_HEAD = "b".repeat(40);
+      /** The Fabrik App's Digest of pull request 50's head, as a query reads its comment, with what GitHub says of its edits and its updates. */
+      const aRawDigest = (said: Record<string, unknown>) => ({
+        databaseId: 9,
+        url: "https://github.com/jrey8343/shop/pull/50#issuecomment-9",
+        body: aDigestComment(PULL_REQUEST_HEAD, "2026-06-22T22:15:06Z").body,
+        createdAt: "2026-06-22T22:15:06Z",
+        author: APP,
+        ...said,
+      });
+      /** The Digest on pull request 50's row, from a gather of the repo with these comments on it. */
+      const digestOn = async (...nodes: Record<string, unknown>[]) => {
+        const facts = await factsOf({ openPullRequests: [aRawOpenPullRequest({ comments: { nodes } })] }, "fabrik-app[bot]");
+        return { comments: facts.github.openPullRequests[0]?.comments ?? [], digest: rowsOf(facts, null, null, null, NOW).find(({ standing }) => standing.pullRequest === 50)?.digest };
+      };
+
+      it("is asked for with each comment of an open pull request, in the one query that reads them, and when a comment was last updated never is", async () => {
+        const { client, calls } = repoWith({ files: { [CALLER_PATH]: CALLER }, issues: [aRawIssue()], openPullRequests: [aRawOpenPullRequest()] });
+        await gatherRepo(client, "jrey8343/shop", NOW);
+
+        expect(calls.queries.filter((query) => query.includes("pullRequests(states: OPEN, first: 25"))).toEqual([
+          expect.stringMatching(/comments\(last: 100\) \{ nodes \{[^{}]*\blastEditedAt\b/),
+        ]);
+        for (const query of calls.queries) expect(query).not.toContain("updatedAt");
+      });
+
+      it("is held on a comment GitHub records an edit of, and on no other", async () => {
+        const { comments } = await digestOn(aRawDigest({ databaseId: 8, lastEditedAt: null }), aRawDigest({ databaseId: 9, lastEditedAt: "2026-06-23T08:00:00Z" }));
+
+        expect(comments.map(({ id, bodyEditedAt }) => ({ id, bodyEditedAt }))).toEqual([
+          { id: 8, bodyEditedAt: undefined },
+          { id: 9, bodyEditedAt: "2026-06-23T08:00:00Z" },
+        ]);
+        expect(JSON.parse(JSON.stringify(comments))).toStrictEqual(comments);
+      });
+
+      it("reads a collapsed Digest that nobody edited as readable: its later update time alone never makes it edited", async () => {
+        // As GitHub answered for a real comment collapsed as outdated seventeen days after it was posted: updated the second it was hidden, with no edit recorded.
+        const collapsed = aRawDigest({ lastEditedAt: null, updatedAt: "2026-07-09T00:04:19Z", isMinimized: true, minimizedReason: "outdated", includesCreatedEdit: false });
+
+        expect((await digestOn(collapsed)).digest).toMatchObject({ is: "readable", head: PULL_REQUEST_HEAD, at: "2026-06-22T22:15:06Z" });
+      });
+
+      it("reads a Digest GitHub records an edit of as edited, collapsed or not", async () => {
+        const edited = aRawDigest({ lastEditedAt: "2026-06-23T08:00:00Z", updatedAt: "2026-07-09T00:04:19Z", isMinimized: true, minimizedReason: "outdated", includesCreatedEdit: true });
+
+        expect((await digestOn(edited)).digest).toMatchObject({ is: "unreadable", why: "edited" });
+      });
     });
 
     it("hold no line of the Weekly summary's history", async () => {

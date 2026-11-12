@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DigestData } from "../loop/digestContract.ts";
-import { aDigestComment, aNoDigestLine, anOpenPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import { aDigestComment, aNoDigestLine, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { DigestRead } from "./digestRead.ts";
 import type { Facts } from "./gather.ts";
 import { rowsOf } from "./rows.ts";
@@ -94,5 +94,90 @@ describe("The Digest on an open agent pull request's row", () => {
 
     expect(digestOf(atTheMergeGate(aNoDigestLine(EARLIER_HEAD, "failed", "2026-11-08T17:00:00Z"), first, second))).toMatchObject({ is: "readable", url: "https://github.com/owner/product/pull/50#issuecomment-9", data: DATA });
     expect(digestOf(atTheMergeGate(aNoDigestLine(EARLIER_HEAD, "failed", "2026-11-08T17:00:00Z")))).toEqual({ is: "none" });
+  });
+
+  it("is read only from a comment the Fabrik App wrote, any bot's when the gather was given no App login: a person quoting one fakes nothing", () => {
+    const quoted = aDigestComment(HEAD, "2026-11-08T18:05:00Z", { data: DATA }, { author: "someone", byBot: false });
+    const anotherBots = aDigestComment(HEAD, "2026-11-08T18:05:00Z", { data: DATA }, { author: "some-app[bot]" });
+    const withNoAppLogin = (...comments: ReturnType<typeof aDigestComment>[]): Facts => ({ ...atTheMergeGate(...comments), appLogin: null });
+
+    expect(digestOf(atTheMergeGate(quoted))).toEqual({ is: "none" });
+    expect(digestOf(atTheMergeGate(anotherBots))).toEqual({ is: "none" });
+    expect(digestOf(withNoAppLogin(anotherBots))).toMatchObject({ is: "readable", data: DATA });
+    expect(digestOf(withNoAppLogin(quoted))).toEqual({ is: "none" });
+  });
+
+  it("is null on every other row: an issue's, and a Plain pull request's", () => {
+    const ticket = anOpenIssue({ number: 7, title: "Build the thing", labels: ["ready-for-agent"] });
+    const facts = homeFactsOf({ github: factsOf({ openIssues: [ticket], plainPullRequests: [aPlainPullRequest({ number: 70 })] }) });
+
+    const rows = rowsOf(facts, null, null, null, NOW);
+
+    expect(rows.map(({ standing, digest }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, digest }))).toEqual(
+      expect.arrayContaining([
+        { issue: 7, pullRequest: null, digest: null },
+        { issue: null, pullRequest: 70, digest: null },
+      ]),
+    );
+    expect(rows).toHaveLength(2);
+  });
+});
+
+describe("A Digest no reader can draw", () => {
+  const URL = "https://github.com/owner/product/pull/50#issuecomment-9";
+  /** The Digest of the head as the builder writes it, with nothing for the Operator's eyes, as GitHub renders it: its hidden lines left out. */
+  const RENDERED = [
+    `**Digest** of #50, written as of [\`hhhhhhh\`](https://github.com/owner/product/pull/50/commits/${HEAD}).`,
+    "",
+    "### Needs your eyes",
+    "",
+    "Nothing.",
+    "",
+    "### What it does",
+    "",
+    "A shopper can now save their basket.",
+    "",
+    "### How it got here",
+    "",
+    "One Review passed it at the first head.",
+    "",
+    "### Follow-ups",
+    "",
+    "None named.",
+    "",
+    "[The run](https://github.com/owner/product/actions/runs/42/attempts/1)",
+  ].join("\n");
+  const written = aDigestComment(HEAD, "2026-11-08T18:05:00Z", {}, { url: URL });
+  /** That Digest with its data line, the comment's second, rewritten. */
+  const withDataLine = (rewrite: (line: string) => string) => ({ ...written, body: written.body.split("\n").map((line, at) => (at === 1 ? rewrite(line) : line)).join("\n") });
+
+  it("is unreadable, with its Markdown, when its data line is at a version this release does not know", () => {
+    const later = withDataLine((line) => line.replace('{"v":1,', '{"v":2,'));
+
+    expect(later.body).not.toBe(written.body);
+    expect(digestOf(atTheMergeGate(later))).toEqual({ is: "unreadable", why: "unknown-version", url: URL, markdown: RENDERED });
+  });
+
+  it.each([
+    ["does not parse", (line: string) => line.replace('{"v":1,', '{"v":1,,')],
+    ["lacks a field its version names", (line: string) => line.replace('"whatItDoes"', '"whatItDid"')],
+    ["is not there", () => "A line a person might write."],
+  ])("is unreadable as malformed, with where it is, when its data line %s", (_how, rewrite) => {
+    const broken = withDataLine(rewrite);
+
+    expect(broken.body).not.toBe(written.body);
+    expect(digestOf(atTheMergeGate(broken))).toMatchObject({ is: "unreadable", why: "malformed", url: URL });
+  });
+
+  it("is unreadable as edited when GitHub records an edit of its body, though its data line still reads: the Kit never edits a Digest, so the edit is a person's", () => {
+    const edited = { ...written, bodyEditedAt: "2026-11-08T18:30:00Z" };
+
+    expect(digestOf(atTheMergeGate(edited))).toEqual({ is: "unreadable", why: "edited", url: URL, markdown: RENDERED });
+  });
+
+  it("gives an edited Digest's Markdown as the person left it, with every hidden line left out", () => {
+    const edited = { ...written, body: `${written.body.replace("Nothing.", "Nothing, they say.")}\n<!-- fabrik:verdict {"verdict":"pass"} -->`, bodyEditedAt: "2026-11-08T18:30:00Z" };
+
+    expect(digestOf(atTheMergeGate(edited))).toEqual({ is: "unreadable", why: "edited", url: URL, markdown: RENDERED.replace("Nothing.", "Nothing, they say.") });
   });
 });

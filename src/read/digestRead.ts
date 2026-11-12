@@ -16,6 +16,17 @@ export type DigestRead =
    * comment's Markdown from the folds line down, which a reader renders.
    */
   | { readonly is: "readable"; readonly head: string; readonly carriedFrom: string | null; readonly at: string; readonly url: string; readonly data: DigestData; readonly folds: string }
+  /**
+   * A Digest of the head no reader can draw, and why: `edited`, GitHub
+   * records an edit of its body after it was posted, and the Kit never
+   * edits a Digest, so the edit is a person's; `unknown-version`, its data
+   * is at a version this release does not know; `malformed`, its data line
+   * does not parse, is not the shape its version names, or is not there.
+   * `markdown` is the comment as GitHub would render it, its hidden lines
+   * left out, for a reader to show as it is: nothing is ever worked out
+   * from it.
+   */
+  | { readonly is: "unreadable"; readonly why: "edited" | "unknown-version" | "malformed"; readonly url: string; readonly markdown: string }
   /** No Digest could be written for the head, and how the attempt ended, from the Kit's no-Digest line: `failed`, `timed-out`, `refused`, `no-subscription` or `never-started`. */
   | { readonly is: "not-written"; readonly how: string; readonly url: string }
   /** A head nothing names: a draft still in the Loop, a pull request with the Digest off, one from before the release. */
@@ -45,7 +56,25 @@ export function digestReadOf({ headSha, comments }: Pick<OpenPullRequestFacts, "
   if (spoken === null) return { is: "none" };
   const { comment, how } = spoken;
   if (how !== null) return { is: "not-written", how, url: comment.url };
+  const unreadable = (why: "edited" | "unknown-version" | "malformed"): DigestRead => ({ is: "unreadable", why, url: comment.url, markdown: renderedOf(comment.body) });
+  // An edit comes first: once a person has changed the comment, its data line is no longer Kit code's word.
+  if (comment.bodyEditedAt !== undefined) return unreadable("edited");
   const read = readDigestComment(comment.body);
-  if (!read.ok) return { is: "none" };
+  if (!read.ok) return unreadable(read.why === "unknown-version" ? "unknown-version" : "malformed");
   return { is: "readable", head: read.head, carriedFrom: read.carriedFrom, at: comment.at, url: comment.url, data: read.data, folds: read.folds };
+}
+
+/**
+ * A comment as GitHub would render it: its text with every hidden line left
+ * out, a hidden line being one that is a single HTML comment and nothing
+ * else, as each of the Kit's is.
+ */
+function renderedOf(body: string): string {
+  return body
+    .split("\n")
+    .filter((line) => {
+      const text = line.trim();
+      return !(text.startsWith("<!--") && text.indexOf("-->") === text.length - "-->".length);
+    })
+    .join("\n");
 }

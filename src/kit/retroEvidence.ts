@@ -112,6 +112,14 @@ export interface CommentFacts {
   readonly body: string;
   /** ISO 8601. */
   readonly at: string;
+  /**
+   * When GitHub records the last edit of its body, ISO 8601, on a pull
+   * request's comment where the read library's gather keeps it (#655);
+   * absent when GitHub records none, and from the Weekly summary's facts.
+   * It is GitHub's own record of an edit, never when the comment was last
+   * updated, which collapsing a comment moves too.
+   */
+  readonly bodyEditedAt?: string;
 }
 
 /** An agent PR merged or closed in the last 97 days. */

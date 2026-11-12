@@ -9,7 +9,8 @@
 // adds the bodies of the Operator's open issues, the agent pull requests
 // merged in the last 24 hours, each open agent pull request's
 // cross-references, the evidence marker of each agent pull request, open or
-// merged in the last 24 hours, and each comment's id (#639). The rows are
+// merged in the last 24 hours, each comment's id (#639), and GitHub's record
+// of an edit to each of an open pull request's comments (#655). The rows are
 // worked out from its facts by ./rows.ts.
 import { gatherWeeklyRunIssues, isAgent, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
@@ -284,11 +285,15 @@ async function gatherFacts(
   };
 }
 
-/** The comments as the Weekly summary's mapping gives them, each with its id from the same nodes, in the same order. */
+/**
+ * The comments as the Weekly summary's mapping gives them, each with its id
+ * and, when GitHub records one, the last edit of its body (#655), from the
+ * same nodes, in the same order.
+ */
 function withIds(comments: readonly CommentFacts[], nodes: readonly RawHomeComment[]): CommentFacts[] {
   return comments.map((comment, at) => {
-    const id = nodes[at]?.databaseId;
-    return typeof id === "number" ? { ...comment, id } : comment;
+    const { databaseId: id, lastEditedAt } = nodes[at] ?? {};
+    return { ...comment, ...(typeof id === "number" ? { id } : {}), ...(typeof lastEditedAt === "string" ? { bodyEditedAt: lastEditedAt } : {}) };
   });
 }
 

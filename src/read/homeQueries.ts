@@ -6,18 +6,31 @@
 // (./queryShape.ts): the Weekly summary's open pull requests ask for review
 // line comments, and its open issues for blockers' labels; these ask for
 // neither. Beyond the Weekly summary's, they ask for each comment's id and the
-// body of each pull request, open or merged, for its evidence marker (#639).
+// body of each pull request, open or merged, for its evidence marker (#639),
+// and for GitHub's record of an edit to each of a pull request's comments (#655).
 import { ACTOR, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
 
-/** An issue's or a pull request's last 100 comments, as the Weekly summary reads them, with each one's id: a Prototype's round is known by its comment. */
+/** An issue's last 100 comments, as the Weekly summary reads them, with each one's id: a Prototype's round is known by its comment. */
 export const COMMENTS_WITH_IDS = `comments(last: 100) { nodes { databaseId url body createdAt author ${ACTOR} } }`;
 
-/** A comment as COMMENTS_WITH_IDS reads it. */
+/**
+ * A pull request's last 100 comments, as COMMENTS_WITH_IDS reads an issue's,
+ * with when GitHub records the last edit of each one's body, by which a
+ * Digest a person edited is told (#655). That is `lastEditedAt`, a field of
+ * the comment's own, and never `updatedAt`, which collapsing a comment
+ * moves: a real comment collapsed as outdated was seen to read updated the
+ * second it was hidden, with no edit recorded.
+ */
+export const COMMENTS_WITH_EDITS = `comments(last: 100) { nodes { databaseId url body createdAt lastEditedAt author ${ACTOR} } }`;
+
+/** A comment as COMMENTS_WITH_IDS reads it, or COMMENTS_WITH_EDITS. */
 export interface RawHomeComment {
   databaseId: number;
   url: string;
   body: string;
   createdAt: string;
+  /** Where COMMENTS_WITH_EDITS asked: when its body was last edited, or null when GitHub records no edit of it. */
+  lastEditedAt?: string | null;
   author: { login: string; __typename: string } | null;
 }
 
@@ -61,7 +74,7 @@ export const OPEN_PULL_REQUESTS_QUERY = `
           closingIssuesReferences(first: 10) { nodes { number state } }
           commits(last: 100) { nodes { ${COMMIT} } }
           ${REVIEWS}
-          ${COMMENTS_WITH_IDS}
+          ${COMMENTS_WITH_EDITS}
           ${LABEL_EVENTS}
           ${DRAFT_EVENTS}
           ${CROSS_REFERENCES}
