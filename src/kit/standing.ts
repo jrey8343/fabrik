@@ -166,9 +166,18 @@ interface PairingDetail {
   readonly pullRequest?: StandingName;
 }
 
+/**
+ * The head commit of the work's open pull request, a full sha, on every
+ * Standing that has one: which head a reader reads the Required checks of
+ * (#618). A Standing with no open pull request has no such key.
+ */
+interface HeadDetail {
+  readonly head?: string;
+}
+
 /** Where one piece of work stands and whose move is next: `name` and `detail` are one union, so each name fixes what its wording may read. */
 export type Standing = {
-  readonly [N in StandingName]: StandingFields & { readonly name: N; readonly detail: StandingDetails[N] & PairingDetail };
+  readonly [N in StandingName]: StandingFields & { readonly name: N; readonly detail: StandingDetails[N] & PairingDetail & HeadDetail };
 }[StandingName];
 
 /** The Standing of one name. */
@@ -246,6 +255,7 @@ export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: stri
     ...plainStandingsOf(facts, now),
   ];
   return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github)
+    .map((standing) => withHead(standing, facts.github))
     .map((standing) => standingAt(standing, now))
     .toSorted(
     (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
@@ -294,4 +304,11 @@ function withItsPullRequest(standing: Standing, { openPullRequests }: GitHubFact
   if (standing.issue === null || standing.pullRequest !== null) return standing;
   const closing = openPullRequests.filter(({ ticket }) => ticket === standing.issue).map(({ number }) => number).toSorted((a, b) => a - b)[0];
   return closing === undefined ? standing : { ...standing, pullRequest: closing };
+}
+
+/** A Standing carrying its open pull request's head commit in `detail.head`, an agent PR's or a Plain one's; one with none is returned as it is. */
+function withHead(standing: Standing, { openPullRequests, plainPullRequests }: GitHubFacts): Standing {
+  if (standing.pullRequest === null) return standing;
+  const head = [...openPullRequests, ...plainPullRequests].find(({ number }) => number === standing.pullRequest)?.headSha;
+  return head === undefined ? standing : ({ ...standing, detail: { ...standing.detail, head } } as Standing);
 }

@@ -72,7 +72,7 @@ describe("work that goes on without the Operator", () => {
         aKit([aRunInFlight({ issue: 7, retry: 1, kind: "retry" })]),
       );
       expect(runningIn(standings)).toEqual([
-        { issue: 7, pullRequest: 50, name: "running", place: "implement", awaits: { role: "implement", on: "pullRequest" }, detail: { run: "retry", retry: 1 } },
+        { issue: 7, pullRequest: 50, name: "running", place: "implement", awaits: { role: "implement", on: "pullRequest" }, detail: { run: "retry", retry: 1, head: HEAD } },
       ]);
     });
 
@@ -89,8 +89,8 @@ describe("work that goes on without the Operator", () => {
         aKit([aRunInFlight({ issue: 7 }), aRunInFlight({ issue: 8 })]),
       );
       expect(runningIn(standings).map(({ issue, pullRequest, detail }) => ({ issue, pullRequest, detail }))).toEqual([
-        { issue: 7, pullRequest: 50, detail: { run: "request-changes", retry: null } },
-        { issue: 8, pullRequest: 51, detail: { run: "conflict-only", retry: null } },
+        { issue: 7, pullRequest: 50, detail: { run: "request-changes", retry: null, head: HEAD } },
+        { issue: 8, pullRequest: 51, detail: { run: "conflict-only", retry: null, head: HEAD } },
       ]);
     });
 
@@ -151,7 +151,7 @@ describe("work that goes on without the Operator", () => {
         aKit([aRunInFlight({ role: "review", pullRequest: 50 }), aRunInFlight({ role: "design", issue: 20 }), aRunInFlight({ role: "design", issue: 21, kind: "prototype" })]),
       );
       expect(runningIn(standings)).toEqual([
-        { issue: 7, pullRequest: 50, name: "running", place: "review", awaits: { role: "review", on: "pullRequest" }, detail: { run: "review", retry: null } },
+        { issue: 7, pullRequest: 50, name: "running", place: "review", awaits: { role: "review", on: "pullRequest" }, detail: { run: "review", retry: null, head: "h".repeat(40) } },
         { issue: 20, pullRequest: null, name: "running", place: "design", awaits: { role: "design", on: "issue" }, detail: { run: "design", retry: null } },
         { issue: 21, pullRequest: null, name: "running", place: "design", awaits: { role: "design", on: "issue" }, detail: { run: "prototype", retry: null } },
       ]);
@@ -178,7 +178,7 @@ describe("work that goes on without the Operator", () => {
             stuckAt: null,
             awaits: { role: "review", on: "pullRequest" },
             subscription: null,
-            detail: { plain: null, check: null, checksUnread: false },
+            detail: { plain: null, check: null, checksUnread: false, head: "h".repeat(40) },
           },
         ]);
       });
@@ -241,7 +241,7 @@ describe("work that goes on without the Operator", () => {
           null,
         );
         expect(standings.map(({ issue, pullRequest, name, place, awaits, detail }) => ({ issue, pullRequest, name, place, awaits, detail }))).toEqual([
-          { issue: 8, pullRequest: 51, name: "held", place: "review", awaits: { role: "review", on: "pullRequest" }, detail: { carrier: 20, role: "review" } },
+          { issue: 8, pullRequest: 51, name: "held", place: "review", awaits: { role: "review", on: "pullRequest" }, detail: { carrier: 20, role: "review", head: "h".repeat(40) } },
         ]);
       });
 

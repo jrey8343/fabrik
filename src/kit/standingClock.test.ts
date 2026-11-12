@@ -180,7 +180,7 @@ describe("a run that was asked for and never began", () => {
         openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, labelEvents: [aLabelAdded("agent:review", AT)] })],
       });
       expect(whatIn(standings)).toEqual([
-        { issue: 7, pullRequest: 50, work: "ticket", place: "review", name: "not-started", awaits: { role: "review", on: "pullRequest" }, detail: { silence: "trigger-label", label: "agent:review" } },
+        { issue: 7, pullRequest: 50, work: "ticket", place: "review", name: "not-started", awaits: { role: "review", on: "pullRequest" }, detail: { silence: "trigger-label", label: "agent:review", head: "h".repeat(40) } },
         { issue: 20, pullRequest: null, work: "design-session", place: "design", name: "not-started", awaits: { role: "design", on: "issue" }, detail: { silence: "trigger-label", label: "agent:design" } },
         { issue: 21, pullRequest: null, work: "research-decision", place: null, name: "not-started", awaits: { role: "research", on: "issue" }, detail: { silence: "trigger-label", label: "agent:research" } },
         { issue: 22, pullRequest: null, work: "replay", place: null, name: "not-started", awaits: { role: "replay", on: "issue" }, detail: { silence: "trigger-label", label: "agent:replay" } },
@@ -263,7 +263,7 @@ describe("a run that was asked for and never began", () => {
           stuckAt: "2026-11-08T22:30:00.000Z",
           awaits: { role: "implement", on: "pullRequest" },
           subscription: null,
-          detail: { silence: "retry", label: null },
+          detail: { silence: "retry", label: null, head: HEAD },
         },
       ]);
     });

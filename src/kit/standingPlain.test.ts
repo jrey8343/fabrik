@@ -46,7 +46,7 @@ describe("a Plain pull request's Standing", () => {
         stuckAt: null,
         awaits: null,
         subscription: null,
-        detail: { plain: "kit-bump" },
+        detail: { plain: "kit-bump", head: HEAD },
       },
     ]);
   });
@@ -58,11 +58,11 @@ describe("a Plain pull request's Standing", () => {
       standing === undefined ? undefined : { name: standing.name, move: standing.move, yours: standing.yours, stopsWork: standing.stopsWork, detail: standing.detail };
 
     it("is a draft, nobody's move, for a draft", () => {
-      expect(named(standingOf({ draft: true }))).toEqual({ name: "draft", move: "nobody", yours: false, stopsWork: false, detail: { plain: "kit-bump" } });
+      expect(named(standingOf({ draft: true }))).toEqual({ name: "draft", move: "nobody", yours: false, stopsWork: false, detail: { plain: "kit-bump", head: HEAD } });
     });
 
     it("conflicts, the Operator's, for one that cannot merge cleanly, and reads one GitHub hasn't worked out yet as merging cleanly", () => {
-      expect(named(standingOf({ mergeable: false }))).toEqual({ name: "conflicts", move: "operator", yours: true, stopsWork: false, detail: { plain: "kit-bump" } });
+      expect(named(standingOf({ mergeable: false }))).toEqual({ name: "conflicts", move: "operator", yours: true, stopsWork: false, detail: { plain: "kit-bump", head: HEAD } });
       expect(standingOf({ mergeable: null })?.name).toBe("yours-to-merge");
     });
 
@@ -77,7 +77,7 @@ describe("a Plain pull request's Standing", () => {
         move: "operator",
         yours: true,
         stopsWork: false,
-        detail: { plain: "kit-bump", check: "lint", checkIs: "failing" },
+        detail: { plain: "kit-bump", check: "lint", checkIs: "failing", head: HEAD },
       });
     });
 
@@ -91,7 +91,7 @@ describe("a Plain pull request's Standing", () => {
         move: "kit",
         yours: false,
         stopsWork: false,
-        detail: { plain: "kit-bump", check: "test", checksUnread: false },
+        detail: { plain: "kit-bump", check: "test", checksUnread: false, head: HEAD },
       });
     });
 
@@ -105,7 +105,7 @@ describe("a Plain pull request's Standing", () => {
         move: "operator",
         yours: true,
         stopsWork: false,
-        detail: { plain: "kit-bump", check: "lint", checkIs: "never-reported" },
+        detail: { plain: "kit-bump", check: "lint", checkIs: "never-reported", head: HEAD },
       });
     });
 
@@ -120,7 +120,7 @@ describe("a Plain pull request's Standing", () => {
     });
 
     it("is waiting on checks it could not read when the head's checks are unread, the repo's Kit wasn't read, or no check is listed", () => {
-      const unread = { name: "waiting-on-checks", move: "kit", yours: false, stopsWork: false, detail: { plain: "kit-bump", check: null, checksUnread: true } };
+      const unread = { name: "waiting-on-checks", move: "kit", yours: false, stopsWork: false, detail: { plain: "kit-bump", check: null, checksUnread: true, head: HEAD } };
       expect(named(standingOf({}, "unread"))).toEqual(unread);
       expect(named(standingsIn({ plainPullRequests: [aPlainPullRequest()] }, kitWith({}))[0])).toEqual(unread);
       expect(named(standingsIn({ plainPullRequests: [aPlainPullRequest()] }, null)[0])).toEqual(unread);
@@ -168,7 +168,7 @@ describe("a Plain pull request's Standing", () => {
           stuckAt: null,
           awaits: null,
           subscription: null,
-          detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft" },
+          detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft", head: HEAD },
         },
       ]);
     });
@@ -190,34 +190,34 @@ describe("a Plain pull request's Standing", () => {
           stuckAt: null,
           awaits: null,
           subscription: null,
-          detail: { plain: "pairing", pullRequest: "yours-to-merge" },
+          detail: { plain: "pairing", pullRequest: "yours-to-merge", head: HEAD },
         },
       ]);
     });
 
     it("is the pull request's own Standing, carrying the issue's number, when issue 12 is open with no Standing of its own", () => {
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 12, labels: [] })], plainPullRequests: [pairing({ mergeable: false })] })).toEqual([
-        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", stopsWork: false, detail: { plain: "pairing" } }),
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", stopsWork: false, detail: { plain: "pairing", head: HEAD } }),
       ]);
     });
 
     it("is the issue's own Standing, carrying the pull request's number, when that Standing already carries the issue's open agent PR", () => {
       const standings = standingsIn({ openIssues: [handedOver], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 12, draft: false })], plainPullRequests: [pairing({ draft: true })] });
       expect(standings.filter(({ issue, pullRequest }) => issue === 12 || pullRequest === 80)).toEqual([
-        expect.objectContaining({ issue: 12, pullRequest: 80, work: "ready-for-human", name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft" } }),
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "ready-for-human", name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft", head: HEAD } }),
       ]);
     });
 
     it("joins issue 12 when its body closes another issue first", () => {
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 12, labels: [] })], plainPullRequests: [pairing({ closes: [5, 12], mergeable: false })] })).toEqual([
-        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", detail: { plain: "pairing" } }),
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "plain", name: "conflicts", detail: { plain: "pairing", head: HEAD } }),
       ]);
     });
 
     it("stands by itself when issue 12 is closed or missing", () => {
       expect(standingsIn({ openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"] })], plainPullRequests: [pairing()] })).toEqual([
         expect.objectContaining({ issue: 13, pullRequest: null, name: "yours-to-do" }),
-        expect.objectContaining({ issue: null, pullRequest: 80, work: "plain", name: "yours-to-merge", detail: { plain: "pairing" } }),
+        expect.objectContaining({ issue: null, pullRequest: 80, work: "plain", name: "yours-to-merge", detail: { plain: "pairing", head: HEAD } }),
       ]);
     });
   });
