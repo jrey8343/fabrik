@@ -39,7 +39,7 @@ const ANSWERS = [
 
 const judged: ScoringOutcome = {
   kind: "judged",
-  judge: { model: "claude-sonnet-5-5", record: JUDGE_RECORD, digestTrimmed: false },
+  judge: { model: "claude-sonnet-5-5", record: JUDGE_RECORD, transcriptTrimmed: false },
   output: { answers: ANSWERS },
 };
 
@@ -127,7 +127,7 @@ describe("Writing a judge run's files to the store", () => {
   });
 
   it("a judge re-run that fails again leaves the skip score file as it was, beside a Run record of its own", async () => {
-    const failed = files({ kind: "judge-failed", judge: { ...judged.judge, digestTrimmed: null } }, null, "failure");
+    const failed = files({ kind: "judge-failed", judge: { ...judged.judge, transcriptTrimmed: null } }, null, "failure");
     const first = storeWith();
     await writeScoreRecord(first, failed, noWait);
     const store = storeWith({ contents: Object.fromEntries(first.held) });
@@ -175,7 +175,7 @@ describe("Writing a judge run's files to the store", () => {
   });
 
   it("writes the record and score file of a judge whose transcript didn't survive", async () => {
-    const run = files({ kind: "judge-failed", judge: { model: "claude-sonnet-5-5", record: JUDGE_RECORD, digestTrimmed: null } }, null);
+    const run = files({ kind: "judge-failed", judge: { model: "claude-sonnet-5-5", record: JUDGE_RECORD, transcriptTrimmed: null } }, null);
     const store = storeWith();
 
     const write = await writeScoreRecord(store, run, noWait);
@@ -216,13 +216,13 @@ describe("The score-record job's step-summary line", () => {
   });
 
   it("says when the judge read a trimmed transcript", () => {
-    const run = files({ ...judged, judge: { ...judged.judge, digestTrimmed: true } } as ScoringOutcome);
+    const run = files({ ...judged, judge: { ...judged.judge, transcriptTrimmed: true } } as ScoringOutcome);
 
     expect(scoreRecordSummary(written(run))).toMatch(/^Scored run 1007-1 on #7 from a trimmed transcript: efficiency@1 0\.80/);
   });
 
   it("says why a judge that failed scored nothing, naming its failure", () => {
-    const run = files({ kind: "judge-failed", judge: { ...judged.judge, digestTrimmed: null } }, null, "cancelled");
+    const run = files({ kind: "judge-failed", judge: { ...judged.judge, transcriptTrimmed: null } }, null, "cancelled");
 
     expect(scoreRecordSummary(written(run))).toBe(
       "Not scored: the judge failed (timeout), so run 1007-1 on #7 gets a judge-failed score file. " +
@@ -259,7 +259,7 @@ describe("The score-record job's step-summary line", () => {
   });
 
   it("says why a judge re-run scored nothing, and which skip score file the store keeps", () => {
-    const stored = files({ kind: "judge-failed", judge: { ...judged.judge, digestTrimmed: null } }, null, "cancelled");
+    const stored = files({ kind: "judge-failed", judge: { ...judged.judge, transcriptTrimmed: null } }, null, "cancelled");
     const run = files({ ...judged, output: { answers: [] } }, JUDGE_LINES, "success", "2");
 
     expect(scoreRecordSummary(kept(run, stored.score.file))).toBe(

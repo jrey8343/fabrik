@@ -191,8 +191,8 @@ export interface JudgeRun {
   readonly model: string;
   /** The judge's Run record's store path, where what scoring cost lives. */
   readonly record: string;
-  /** Whether the transcript's digest was trimmed to fit the judge's budget; null when the judge failed before it built its prompt. */
-  readonly digestTrimmed: boolean | null;
+  /** Whether the transcript was trimmed to fit the judge's budget; null when the judge failed before it built its prompt. */
+  readonly transcriptTrimmed: boolean | null;
 }
 
 /**
@@ -257,7 +257,16 @@ export interface ScoreFile {
   readonly rubrics: readonly string[];
   /** The judge's model and Run record path, or null for a skip decided before any judge ran. */
   readonly judge: { readonly model: string; readonly record: string } | null;
-  /** Whether the judge read a trimmed digest; null when no judge ran, or it failed before it built its prompt. */
+  /**
+   * Whether the judge read a trimmed transcript; null when no judge ran, or it
+   * failed before it built its prompt. `digestTrimmed` is the stored name for
+   * that, from when the trimmed transcript was called a digest (#642). It keeps
+   * the name because score files are kept in the store and read by a store
+   * whose caller may pin an earlier release: a new name would need a new
+   * score-file schema, a reader for the old one, and a store that leaves the
+   * new files out until its caller is bumped. Everywhere else it is
+   * `transcriptTrimmed`.
+   */
   readonly digestTrimmed: boolean | null;
   readonly skip: ScoreSkip | null;
   /** One per rubric, in the rubrics' order. */
@@ -309,8 +318,8 @@ export function scoreFileFor(input: ScoreFileInput): ScoreFileWithPath {
 /** The judge a score file names, if one ran. */
 function judgeOf(outcome: ScoringOutcome): Pick<ScoreFile, "judge" | "digestTrimmed"> {
   if (outcome.kind === "skip") return { judge: null, digestTrimmed: null };
-  const { model, record, digestTrimmed } = outcome.judge;
-  return { judge: { model, record }, digestTrimmed };
+  const { model, record, transcriptTrimmed } = outcome.judge;
+  return { judge: { model, record }, digestTrimmed: transcriptTrimmed };
 }
 
 /** A score file's result: its entries, or why it has none. */

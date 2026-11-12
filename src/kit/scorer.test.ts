@@ -222,8 +222,8 @@ const SCORED_PATH = "runs/owner/product/2026-11/1007-1-implement.json";
 const JUDGE_RECORD = "runs/owner/product/2026-11/1007-1-score.json";
 const SCORED_AT = "2026-11-04T12:05:00Z";
 
-/** The judge's run: the Kit's judge model, its own record, and a digest it read whole. */
-const judge: JudgeRun = { model: "claude-sonnet-5", record: JUDGE_RECORD, digestTrimmed: false };
+/** The judge's run: the Kit's judge model, its own record, and a transcript it read whole. */
+const judge: JudgeRun = { model: "claude-sonnet-5", record: JUDGE_RECORD, transcriptTrimmed: false };
 
 /** The judge's structured output: one answer per rubric, with whatever the case changes. */
 function judgeOutput(answers: Record<string, Partial<{ score: unknown; label: unknown; rationale: unknown }>> = {}) {
@@ -326,8 +326,8 @@ describe("The score file", () => {
       expect(file).toMatchObject({ judge: null, digestTrimmed: null, skip: { reason }, entries: null });
     });
 
-    it.each(["judge-failed", "judge-output-invalid"] as const)("a skip for %s names the judge that ran and whether its digest was trimmed", (kind) => {
-      const trimmedJudge = { ...judge, digestTrimmed: true };
+    it.each(["judge-failed", "judge-output-invalid"] as const)("a skip for %s names the judge that ran and whether its transcript was trimmed", (kind) => {
+      const trimmedJudge = { ...judge, transcriptTrimmed: true };
       const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind, judge: trimmedJudge } });
 
       expect(file).toMatchObject({
@@ -339,8 +339,8 @@ describe("The score file", () => {
       });
     });
 
-    it("a judge that failed before it built its prompt leaves whether its digest was trimmed unknown", () => {
-      const early = { ...judge, digestTrimmed: null };
+    it("a judge that failed before it built its prompt leaves whether its transcript was trimmed unknown", () => {
+      const early = { ...judge, transcriptTrimmed: null };
       const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judge-failed", judge: early } });
 
       expect(file).toMatchObject({ judge: { model: "claude-sonnet-5", record: JUDGE_RECORD }, digestTrimmed: null, skip: { reason: "judge-failed" } });

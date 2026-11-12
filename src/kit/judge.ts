@@ -19,17 +19,17 @@ export const JUDGE_JOB = "score";
 /** The judge's answer, in the judge job's `fabrik-judge-result` artifact. */
 export const JUDGE_RESULT_FILE = "judge-result.json";
 
-/** The judge's failure report, in the judge job's `fabrik-judge-failure` artifact: an agent failure report, for its Run record, plus whether its digest was trimmed. */
+/** The judge's failure report, in the judge job's `fabrik-judge-failure` artifact: an agent failure report, for its Run record, plus whether its transcript was trimmed. */
 export const JUDGE_FAILURE_FILE = "judge-failure.json";
 
-/** The judge's result file: its structured output, as the runner parsed it, and whether the transcript's digest was trimmed. */
-export function judgeResultText(output: unknown, digestTrimmed: boolean): string {
-  return `${JSON.stringify({ digestTrimmed, output }, null, 2)}\n`;
+/** The judge's result file: its structured output, as the runner parsed it, and whether the transcript was trimmed. */
+export function judgeResultText(output: unknown, transcriptTrimmed: boolean): string {
+  return `${JSON.stringify({ transcriptTrimmed, output }, null, 2)}\n`;
 }
 
-/** The judge's failure file: how it failed, and whether its digest was trimmed, or null if it failed before it built its prompt. */
-export function judgeFailureText(report: FailureReport, digestTrimmed: boolean | null): string {
-  return `${JSON.stringify({ ...report, digestTrimmed }, null, 2)}\n`;
+/** The judge's failure file: how it failed, and whether its transcript was trimmed, or null if it failed before it built its prompt. */
+export function judgeFailureText(report: FailureReport, transcriptTrimmed: boolean | null): string {
+  return `${JSON.stringify({ ...report, transcriptTrimmed }, null, 2)}\n`;
 }
 
 /** What the judge job left: each file's text, or null if it left none. */
@@ -45,16 +45,16 @@ export interface JudgeArtifacts {
  * failure, or when it left nothing at all (cancelled by its timeout, or its
  * Claude token never loaded).
  */
-export function judgeOutcome(artifacts: JudgeArtifacts, judge: Omit<JudgeRun, "digestTrimmed">): ScoringOutcome {
+export function judgeOutcome(artifacts: JudgeArtifacts, judge: Omit<JudgeRun, "transcriptTrimmed">): ScoringOutcome {
   if (artifacts.result !== null) {
     const result = jsonObjectOf(artifacts.result);
-    if (result === null) return { kind: "judge-output-invalid", judge: { ...judge, digestTrimmed: null } };
-    return { kind: "judged", judge: { ...judge, digestTrimmed: trimmedOf(result["digestTrimmed"]) }, output: result["output"] };
+    if (result === null) return { kind: "judge-output-invalid", judge: { ...judge, transcriptTrimmed: null } };
+    return { kind: "judged", judge: { ...judge, transcriptTrimmed: trimmedOf(result["transcriptTrimmed"]) }, output: result["output"] };
   }
-  if (artifacts.failure === null) return { kind: "judge-failed", judge: { ...judge, digestTrimmed: null } };
-  const digestTrimmed = trimmedOf(jsonObjectOf(artifacts.failure)?.["digestTrimmed"]);
+  if (artifacts.failure === null) return { kind: "judge-failed", judge: { ...judge, transcriptTrimmed: null } };
+  const transcriptTrimmed = trimmedOf(jsonObjectOf(artifacts.failure)?.["transcriptTrimmed"]);
   const kind = readFailureReport(artifacts.failure).failure === "missing-output" ? "judge-output-invalid" : "judge-failed";
-  return { kind, judge: { ...judge, digestTrimmed } };
+  return { kind, judge: { ...judge, transcriptTrimmed } };
 }
 
 /** A judge file's text as the JSON object it holds, or null if it holds anything else or isn't JSON. */

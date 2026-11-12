@@ -60,7 +60,7 @@ function armRan(arm: ReplayArm, overrides: Partial<ArmArtifacts> = {}): ArmArtif
     gates: line({ ticket: 12, arm, run: 9001, gates: "passed", hiddenTests: "passed" }),
     judge: {
       ...ran(),
-      result: line({ output: { answers: [{ scorer: "efficiency", score: 0.8, label: "clean", rationale: "Direct." }] }, digestTrimmed: false }),
+      result: line({ output: { answers: [{ scorer: "efficiency", score: 0.8, label: "clean", rationale: "Direct." }] }, transcriptTrimmed: false }),
       failure: null,
     },
     ...overrides,
