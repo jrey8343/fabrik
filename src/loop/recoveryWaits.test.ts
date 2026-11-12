@@ -1,8 +1,9 @@
 // The record of the recovery waits and the Stuck bar built from it (#603).
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import type { KitConfig } from "./types.ts";
-import { recoveryWaits, stuckBarMinutes } from "./recoveryWaits.ts";
+import { recoveryWaits, stuckBarMinutes, TICK_MINUTES } from "./recoveryWaits.ts";
 
 /** A Kit config with one role's timeout changed. */
 function withTimeout(role: "implement" | "review", timeoutMinutes: number): KitConfig {
@@ -33,6 +34,24 @@ describe("the record of recovery waits", () => {
       undeliveredRequestChanges: 90,
       unreviewedDraft: 240,
     });
+  });
+});
+
+/**
+ * Minutes between the runs a cron expression schedules, for one that runs at
+ * one minute past every hour of every day, or null for any other.
+ */
+function hourlyIntervalOf(cron: string): number | null {
+  return /^\d{1,2} \* \* \* \*$/.test(cron) && Number(cron.split(" ")[0]) < 60 ? 60 : null;
+}
+
+describe("the Tick", () => {
+  it("is as long as the caller template's schedule, which runs once an hour", () => {
+    const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
+    const crons = [...template.matchAll(/^\s+- cron: "([^"]*)"$/gm)].map(([, cron]) => cron as string);
+
+    expect(crons).toHaveLength(1);
+    expect(hourlyIntervalOf(crons[0] as string)).toBe(TICK_MINUTES);
   });
 });
 
