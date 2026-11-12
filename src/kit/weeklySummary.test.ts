@@ -1286,54 +1286,6 @@ describe("the Weekly summary", () => {
         expect(stuckIn(facts)).toEqual([]);
       });
     });
-
-    // Two failed runs in a week hold the next Audit or Retro back until the next week (#443).
-    describe("an Audit or a Retro that failed twice in a week", () => {
-      const APP = "fabrik-app[bot]";
-      const issue = (number: number, name: "Audit" | "Retro", createdAt: string, body: string, author = APP) => ({
-        number,
-        title: `${name}: week of 2026-11-02`,
-        author,
-        createdAt,
-        body,
-      });
-      const failedAudit = (number: number, createdAt: string, author = APP) => issue(number, "Audit", createdAt, auditBody(AUDITED_SHA, "failed"), author);
-      const failedRetro = (number: number, createdAt: string) => issue(number, "Retro", createdAt, retroBody(RETRO_WINDOW_END, "failed"));
-      const url = (number: number) => `https://github.com/owner/product/issues/${number}`;
-      const bodyOf = (facts: GitHubFacts) => {
-        const result = weeklySummary(input({ facts: [facts] }));
-        if (result.kind !== "summary") throw new Error("expected a summary");
-        return result.body;
-      };
-
-      it("lists it under Stuck, linking both, the second failing this week, however recently", () => {
-        const body = bodyOf(
-          factsOf({
-            audits: [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z"), issue(90, "Audit", "2026-11-01T00:05:00Z", auditBody(AUDITED_SHA))],
-            retros: [failedRetro(121, "2026-11-07T01:05:00Z"), failedRetro(120, "2026-11-07T00:05:00Z")],
-          }),
-        );
-
-        expect(body).toContain(
-          [
-            "### Stuck",
-            "",
-            `- Retro failed twice this week ([#120](${url(120)}), [#121](${url(121)}))`,
-            `- Audit failed twice this week ([#95](${url(95)}), [#96](${url(96)}))`,
-            "",
-          ].join("\n"),
-        );
-      });
-
-      it.each([
-        ["only once", [failedAudit(96, "2026-11-08T02:05:00Z"), issue(95, "Audit", "2026-11-03T00:05:00Z", auditBody(AUDITED_SHA))]],
-        ["twice, but last week", [failedAudit(86, "2026-10-25T02:05:00Z"), failedAudit(85, "2026-10-25T00:05:00Z")]],
-        ["twice, but in two weeks", [failedAudit(96, "2026-11-02T00:05:00Z"), failedAudit(95, "2026-11-01T12:05:00Z")]],
-        ["twice, one of them a person's issue", [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z", "someone")]],
-      ])("lists nothing for an Audit that failed %s", (_, audits) => {
-        expect(stuckIn({ audits })).toEqual([]);
-      });
-    });
   });
 
   describe("Human touches per merged PR", () => {
@@ -2628,7 +2580,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
       expect(result.body).toContain(["## Held", "", "- owner/product: 2 needs-design issues waiting for a Design session slot, the oldest for 3 days", ""].join("\n"));
     });
 
@@ -2647,7 +2599,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
       expect(result.body).toContain("- owner/product: 1 needs-design issue waiting for a Design session slot, for 5 hours");
     });
 
@@ -2673,7 +2625,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null }],
+        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, givenUpWeeks: null }],
       ]);
       expect(result.body).toContain(["## Held", "", "- owner/busy: 1 needs-design issue waiting for a Design session slot, for 30 hours", ""].join("\n"));
       expect(result.body).not.toContain("- owner/quiet:");
@@ -2699,7 +2651,7 @@ describe("the Weekly summary", () => {
 
     it("counts the error groups the Monitor holds from the held line in its newest open error issue's stats block, linking that issue", () => {
       const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) })] }));
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
       expect(result.body).toContain(
         ["## Held", "", "- owner/product: 3 error groups waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)", ""].join("\n"),
       );
@@ -2715,7 +2667,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null }],
+        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, givenUpWeeks: null }],
       ]);
       expect(result.body).not.toContain("- owner/quiet:");
     });
@@ -2729,6 +2681,7 @@ describe("the Weekly summary", () => {
         maps: null,
         runs: null,
         dispatch: null,
+        givenUpWeeks: null,
       });
     });
 
@@ -2741,14 +2694,14 @@ describe("the Weekly summary", () => {
           ],
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 }, maps: null, runs: null, dispatch: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 }, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
       expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), anOpenMonitorIssue({ number: 45 })] })).summary.repos[0]?.held).toBeNull();
     });
 
     it("passes over an open issue with no stats block, such as a Spec that kept its marker, as the Monitor does", () => {
       const spec = anOpenMonitorIssue({ number: 60, body: "<!-- fabrik:monitor sentry:4504 -->\n## Problem Statement\n\nBookings fail." });
       const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), spec] }));
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
     });
 
     it("never reads red main's issue, which takes no slot under the cap", () => {
@@ -2790,6 +2743,69 @@ describe("the Weekly summary", () => {
       expect(result.kind).toBe("summary");
     });
 
+    // Two failed runs in a week hold the next Audit or Retro back until the weekly gate's next week (#443, #610).
+    describe("an Audit or a Retro that failed twice in a week", () => {
+      const APP = "fabrik-app[bot]";
+      const issue = (number: number, name: "Audit" | "Retro", createdAt: string, body: string, author = APP) => ({
+        number,
+        title: `${name}: week of 2026-11-02`,
+        author,
+        createdAt,
+        body,
+      });
+      const failedAudit = (number: number, createdAt: string, author = APP) => issue(number, "Audit", createdAt, auditBody(AUDITED_SHA, "failed"), author);
+      const failedRetro = (number: number, createdAt: string) => issue(number, "Retro", createdAt, retroBody(RETRO_WINDOW_END, "failed"));
+      const url = (number: number) => `https://github.com/owner/product/issues/${number}`;
+      const givenUp = factsOf({
+        audits: [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z"), issue(90, "Audit", "2026-11-01T00:05:00Z", auditBody(AUDITED_SHA))],
+        retros: [failedRetro(121, "2026-11-07T01:05:00Z"), failedRetro(120, "2026-11-07T00:05:00Z")],
+      });
+      const filedAt = (now: string, facts: GitHubFacts) => {
+        const result = weeklySummary(input({ now, facts: [facts] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result;
+      };
+
+      it("lists each under Held, linking both runs, the second failing this week, however recently, and none under Stuck", () => {
+        const result = filedAt(NOW, givenUp);
+
+        expect(result.body).toContain(
+          [
+            "## Held",
+            "",
+            `- owner/product: the next Retro is held until next week: two runs failed ([#120](${url(120)}), [#121](${url(121)}))`,
+            `- owner/product: the next Audit is held until next week: two runs failed ([#95](${url(95)}), [#96](${url(96)}))`,
+            "",
+          ].join("\n"),
+        );
+        expect(result.summary.repos[0]?.stuck).toEqual([]);
+        expect(result.body).not.toContain("### Stuck");
+      });
+
+      it("says it was held until this week when the summary files after the weekly gate's week has turned", () => {
+        // Monday 9 November, 12:00 in Sydney: the gate's UTC week turned an hour ago, and the summary's week is still the one that held them.
+        const result = filedAt("2026-11-09T01:00:00Z", givenUp);
+
+        expect(result.body).toContain(`- owner/product: the next Audit was held until this week: two runs failed ([#95](${url(95)}), [#96](${url(96)}))`);
+        expect(result.body).toContain(`- owner/product: the next Retro was held until this week: two runs failed ([#120](${url(120)}), [#121](${url(121)}))`);
+      });
+
+      it("keeps a week with no records from being skipped", () => {
+        expect(weeklySummary(input({ facts: [givenUp] })).kind).toBe("summary");
+      });
+
+      it.each([
+        ["only once", [failedAudit(96, "2026-11-08T02:05:00Z"), issue(95, "Audit", "2026-11-03T00:05:00Z", auditBody(AUDITED_SHA))]],
+        ["twice, but last week", [failedAudit(86, "2026-10-25T02:05:00Z"), failedAudit(85, "2026-10-25T00:05:00Z")]],
+        ["twice, but in two weeks", [failedAudit(96, "2026-11-02T00:05:00Z"), failedAudit(95, "2026-11-01T12:05:00Z")]],
+        ["twice, one of them a person's issue", [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z", "someone")]],
+      ])("lists nothing for an Audit that failed %s", (_, audits) => {
+        const result = summaryOf(factsOf({ audits }));
+        expect(result.summary.repos[0]?.held).toBeNull();
+        expect(result.summary.repos[0]?.stuck).toEqual([]);
+      });
+    });
+
     describe("held runs", () => {
       const implement = { role: "implement", issue: 7, label: "agent:implement" } as const;
       const review = { role: "review", issue: 51, label: "agent:review" } as const;
@@ -2816,6 +2832,7 @@ describe("the Weekly summary", () => {
             ],
           },
           dispatch: null,
+          givenUpWeeks: null,
         });
         expect(result.body).toContain(
           [
@@ -2859,7 +2876,7 @@ describe("the Weekly summary", () => {
 
       it("names the open Map when open Maps fill caps.maps, so the Operator knows why no Map was offered", () => {
         const result = summaryOf(factsOf({ openMaps: [30] }));
-        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null });
+        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null, givenUpWeeks: null });
         expect(result.body).toContain(
           ["## Held", "", "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) open, so Design sessions offer no new Map", ""].join(
             "\n",
@@ -2869,7 +2886,7 @@ describe("the Weekly summary", () => {
 
       it("names every open Map, lowest number first, one charted by hand beyond the cap among them", () => {
         const result = summaryOf(factsOf({ openMaps: [40, 30] }));
-        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30, 40] }, runs: null, dispatch: null });
+        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30, 40] }, runs: null, dispatch: null, givenUpWeeks: null });
         expect(result.body).toContain(
           "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) and [#40](https://github.com/owner/product/issues/40) open, so Design sessions offer no new Map",
         );
@@ -2882,7 +2899,7 @@ describe("the Weekly summary", () => {
         );
         expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
           ["owner/quiet", null],
-          ["owner/busy", { designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null }],
+          ["owner/busy", { designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null, givenUpWeeks: null }],
         ]);
         expect(result.body).not.toContain("- owner/quiet:");
       });

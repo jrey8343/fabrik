@@ -16,10 +16,9 @@ import {
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { auditMarksIn, DESIGN_TURN_FAILED_MARKER, flakyCheckMarksIn, RESEARCH_RUN_FAILED_MARKER, retroMarksIn } from "../loop/markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, flakyCheckMarksIn, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, type InfrastructureFailure, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
-import { FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "./config.ts";
@@ -43,7 +42,7 @@ import {
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type PlainKind, type Standing, type StandingName, standingsOf, type StandingNamed } from "./standing.ts";
-import { maxInFlightHoldOf } from "./standingInFlight.ts";
+import { givenUpWeeksOf, maxInFlightHoldOf } from "./standingInFlight.ts";
 import { answerOf, lastAdded, passedMoveOf, readyForHumanStandingOf } from "./standingOperator.ts";
 import {
   firstRunOf,
@@ -505,6 +504,22 @@ export interface Held {
   readonly runs: HeldRuns | null;
   /** The Tickets and research Decisions Dispatch would release but max_in_flight holds (#476). */
   readonly dispatch: HeldDispatch | null;
+  /** The Audit and Retro weeks given up on, the last failed run opened in the summary's week, oldest first (#443, #610). */
+  readonly givenUpWeeks: readonly GivenUpWeekItem[] | null;
+}
+
+/**
+ * The Fabrik App's Audits or Retros whose runs failed in one week, enough of
+ * them that the weekly gate holds the next until its next week
+ * (src/loop/weeklyGate.ts): read by the count the Standing reads
+ * (givenUpWeeksOf), not off a Standing, which is often gone by the Monday filing.
+ */
+export interface GivenUpWeekItem {
+  readonly issueName: "Audit" | "Retro";
+  /** The failed runs that gave the week up, oldest first. */
+  readonly failed: readonly ItemBase[];
+  /** Whether the gate's next week had begun at the filing, so the next run is held no longer. */
+  readonly turned: boolean;
 }
 
 /**
@@ -648,13 +663,7 @@ export type StuckItem =
    * that used no retry (#434): a Request-changes or conflict-only run's, which
    * waits for the Operator. One the Kit counted and re-runs itself isn't listed.
    */
-  | (ItemBase & { readonly kind: "broken-run"; readonly brokenRun: BrokenRun })
-  /**
-   * The Fabrik App's Audits or Retros whose runs failed in one week, enough
-   * of them that the next waits for next week (src/loop/weeklyGate.ts), the
-   * last opened in the summary's week, and is this item, at `since`.
-   */
-  | (ItemBase & { readonly kind: "weekly-runs-failed"; readonly issueName: "Audit" | "Retro"; readonly failed: readonly ItemBase[] });
+  | (ItemBase & { readonly kind: "broken-run"; readonly brokenRun: BrokenRun });
 
 export interface RevertRate {
   readonly reverted: number;
@@ -1200,59 +1209,60 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
     invalidKitConfig: invalid,
     // Every Standing whose move is the Operator's: an open Audit, Retro, finished Replay or Map among them also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst(standings.filter(listedInWaitingOnYou).flatMap((standing) => waitingItemOf(standing, facts, operator, appLogin, items) ?? [])),
-    // A week given up on is Stuck however recently its last run failed: nothing moves it until the next week.
-    stuck: oldestFirst([
-      ...stuck(facts, records, operator, items, now),
-      ...weekGivenUp("Audit", facts.audits, (body) => auditMarksIn(body).failed, appLogin, thisWeek, items),
-      ...weekGivenUp("Retro", facts.retros, (body) => retroMarksIn(body).failed, appLogin, thisWeek, items),
-    ]),
-    // The Loop does nothing in a repo whose Kit config is invalid, so no cap holds anything there.
-    held: invalid === null ? heldIn(facts, kit, standings, appLogin, now) : null,
+    stuck: stuck(facts, records, operator, items, now),
+    held: heldIn(facts, kit, invalid === null, standings, appLogin, now, thisWeek, items),
     unread: null,
   };
 }
 
 /**
- * The Fabrik App's Audits or Retros, by `issueName`, whose runs failed in one
- * week, UTC Monday to Monday as the gate counts it, enough of them that the
- * next waits for next week, when the last was opened in the summary's `week`.
+ * The Audit and Retro weeks given up on (givenUpWeeksOf) whose last failed run
+ * was opened in the summary's `week`, however recently, oldest first: by the
+ * gate's own count, as the Standing counts them, since by the Monday filing
+ * the gate's next week has often begun and the Standing is gone.
  */
-function weekGivenUp(
-  issueName: "Audit" | "Retro",
-  issues: readonly WeeklyRunIssueFacts[],
-  failed: (body: string) => boolean,
-  appLogin: string,
-  week: Week,
-  items: Items,
-): StuckItem[] {
-  const runs = issues.filter((issue) => issue.author === appLogin).map((issue) => ({ ...issue, failed: failed(issue.body) }));
-  const weeks = new Set(runs.filter(({ createdAt }) => within(week, createdAt)).map(({ createdAt }) => weekStart(createdAt)));
-  return [...weeks].flatMap((start) => {
-    const inWeek = failedInWeek(runs, start);
-    const last = inWeek[FAILED_RUNS_A_WEEK - 1];
+function givenUpWeeksIn(facts: GitHubFacts, appLogin: string, week: Week, items: Items, now: number): GivenUpWeekItem[] | null {
+  const weeks = givenUpWeeksOf(facts, appLogin).flatMap(({ role, until, failed }) => {
+    const last = failed.at(-1);
     if (last === undefined || !within(week, last.createdAt)) return [];
-    const givenUp = inWeek.slice(0, FAILED_RUNS_A_WEEK);
-    return [{ kind: "weekly-runs-failed", issueName, ...items.issue(last, last.createdAt), failed: givenUp.map((run) => items.issue(run, run.createdAt)) }];
+    const item: GivenUpWeekItem = { issueName: role === "audit" ? "Audit" : "Retro", failed: failed.map((run) => items.issue(run, run.createdAt)), turned: now >= Date.parse(until) };
+    return [{ item, since: last.createdAt }];
   });
+  return weeks.length === 0 ? null : weeks.toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since)).map(({ item }) => item);
 }
 
 /**
  * What a cap holds in the repo, by its own Kit config, or the Kit's default
- * caps without one; null when nothing is held. Its lines about work, the
- * `needs-design` issues waiting for a slot, the Held runs and what
- * max_in_flight holds, are the repo's Standings (src/kit/standing.ts), so
- * Held and the Standing can't disagree; the Map cap and the Monitor's held
- * count have no piece of work behind them and are read as they always were.
+ * caps without one, and the Audit and Retro weeks given up on; null when
+ * nothing is held. Its lines about work, the `needs-design` issues waiting for
+ * a slot, the Held runs and what max_in_flight holds, are the repo's Standings
+ * (src/kit/standing.ts), so Held and the Standing can't disagree; the Map cap
+ * and the Monitor's held count have no piece of work behind them and are read
+ * as they always were. The Loop does nothing in a repo whose Kit config is
+ * invalid, so no cap holds anything there.
  */
-function heldIn(facts: GitHubFacts, kit: RepoKitFacts | null, standings: readonly Standing[], appLogin: string, now: number): Held | null {
+function heldIn(
+  facts: GitHubFacts,
+  kit: RepoKitFacts | null,
+  valid: boolean,
+  standings: readonly Standing[],
+  appLogin: string,
+  now: number,
+  week: Week,
+  items: Items,
+): Held | null {
   const { monitorIssues, openMaps } = facts;
   const config = kit?.config.ok === true ? kit.config.config : DEFAULT_KIT_CONFIG;
-  const designSessions = heldDesignSessionsOf(standings, now);
-  const monitor = heldMonitorOf(monitorIssues, appLogin);
-  const mapCap = heldMapsOf(openMaps, config);
-  const runs = heldRunsOf(facts.kitIssues, standings);
-  const dispatch = heldDispatchOf(facts, kit, standings, now);
-  const held = { designSessions, monitor, maps: mapCap, runs, dispatch };
+  const caps = valid
+    ? {
+        designSessions: heldDesignSessionsOf(standings, now),
+        monitor: heldMonitorOf(monitorIssues, appLogin),
+        maps: heldMapsOf(openMaps, config),
+        runs: heldRunsOf(facts.kitIssues, standings),
+        dispatch: heldDispatchOf(facts, kit, standings, now),
+      }
+    : { designSessions: null, monitor: null, maps: null, runs: null, dispatch: null };
+  const held = { ...caps, givenUpWeeks: givenUpWeeksIn(facts, appLogin, week, items, now) };
   return Object.values(held).every((source) => source === null) ? null : held;
 }
 
@@ -1743,6 +1753,10 @@ function heldLines(repos: readonly RepoSection[], timeZone: string): string[] {
     if (runs !== null) shown.push(...heldRunsLines(repo, runs, timeZone));
     const dispatch = held?.dispatch ?? null;
     if (dispatch !== null) shown.push(heldDispatchLine(repo, dispatch));
+    for (const { issueName, failed, turned } of held?.givenUpWeeks ?? []) {
+      const held = turned ? "was held until this week" : "is held until next week";
+      shown.push(`- ${repo}: the next ${issueName} ${held}: two runs failed (${failed.map(({ number, url }) => `[#${number}](${url})`).join(", ")})`);
+    }
     return shown;
   });
   return lines.length === 0 ? [] : ["## Held", "", ...lines, ""];
@@ -1888,8 +1902,6 @@ function stuckLine(item: StuckItem): string {
       return itemLine(item, `last run ended in an Infrastructure failure (${item.failure}) ${duration(item.age)} ago`);
     case "broken-run":
       return itemLine(item, `last run was a Broken run (${item.brokenRun}) ${duration(item.age)} ago, which uses no retry; re-add \`agent:implement\` to run it again`);
-    case "weekly-runs-failed":
-      return `- ${item.issueName} failed ${item.failed.length === 2 ? "twice" : `${item.failed.length} times`} this week (${item.failed.map(({ number, url }) => `[#${number}](${url})`).join(", ")})`;
   }
 }
 
