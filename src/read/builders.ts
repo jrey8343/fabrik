@@ -375,7 +375,7 @@ export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> 
  * What a gather shaped for Home reads of `owner/product` (./gather.ts): its
  * Kit config the default at `main`, nothing for Dispatch to weigh, the
  * Operator `operator`, the Fabrik App `fabrik-app[bot]`, and no GitHub facts,
- * issue bodies, merges, cross-references or Tickets' states unless a test
+ * issue bodies, merges, cross-references, Tickets' states or evidence markers unless a test
  * says so.
  */
 export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts {
@@ -389,6 +389,7 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
     mergedLastDay: [],
     crossReferences: [],
     ticketStates: [],
+    evidenceMarkers: [],
     ...overrides,
   };
 }

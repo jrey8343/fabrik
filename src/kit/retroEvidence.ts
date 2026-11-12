@@ -103,6 +103,8 @@ export interface InlineCommentFacts {
 export interface CommentFacts {
   /** Where it's shown on its issue or PR. */
   readonly url: string;
+  /** GitHub's id of the comment, where the read library's gather keeps it (#639); absent from the Weekly summary's facts. */
+  readonly id?: number;
   readonly author: string;
   /** Whether a bot, such as the Fabrik App, wrote it: only a bot's markers count, so quoting one fakes nothing. */
   readonly byBot: boolean;
