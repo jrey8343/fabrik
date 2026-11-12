@@ -65,8 +65,45 @@ export function roundLineIn(body: string): RoundLine | null {
   if (at === null) return null;
   const json = ROUND_LINE.exec(lines[at] ?? "")?.[1];
   if (json === undefined) return null;
-  const value = JSON.parse(json) as RoundLine;
-  return value;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  return roundLineFrom(value);
+}
+
+/** The fields a parsed line holds, keys this reader doesn't know left out, or null when its version or its shape isn't one this reader takes. */
+function roundLineFrom(value: unknown): RoundLine | null {
+  if (!isObject(value) || value.v !== ROUND_LINE_VERSION || value.kind !== "round") return null;
+  const { round, intro, questions, sentBack, asksMap } = value;
+  if (!isWholeAboveZero(round) || typeof intro !== "string" || !Array.isArray(questions)) return null;
+  const read = questions.map((question: unknown) =>
+    isObject(question) && typeof question.question === "string" && typeof question.recommendation === "string"
+      ? { question: question.question, recommendation: question.recommendation }
+      : null,
+  );
+  if (read.some((question) => question === null)) return null;
+  if (sentBack !== undefined && !(isObject(sentBack) && isWholeAboveZero(sentBack.pullRequest) && (typeof sentBack.verdict === "string" || sentBack.verdict === null))) return null;
+  if (asksMap !== undefined && asksMap !== true) return null;
+  return {
+    v: ROUND_LINE_VERSION,
+    kind: "round",
+    round,
+    intro,
+    questions: read.filter((question) => question !== null),
+    ...(isObject(sentBack) ? { sentBack: { pullRequest: sentBack.pullRequest as number, verdict: sentBack.verdict as string | null } } : {}),
+    ...(asksMap === true ? { asksMap } : {}),
+  };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isWholeAboveZero(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) > 0;
 }
 
 /**
