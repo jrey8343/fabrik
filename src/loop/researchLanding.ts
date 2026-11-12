@@ -5,7 +5,7 @@
 // It never touches the rest of the Map, or any other Decision.
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { RESEARCH_LABEL } from "./labels.ts";
-import { RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
+import { handBackMarker, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import { whyNotResearchable } from "./research.ts";
 import { parseResearchOutput, type ResearchOutput } from "./researchOutput.ts";
@@ -93,6 +93,7 @@ function refuse({ issue, runUrl }: ResearchRunFinished, operator: string, why: s
     `The Decision stays open. Re-add \`${RESEARCH_LABEL}\` on this Decision to run it again.`,
     "",
     `[The run](${runUrl})`,
+    handBackMarker({ kind: "research-branch-refused", role: "research" }),
   ].join("\n");
   return {
     kind: "act",

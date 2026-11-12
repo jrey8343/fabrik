@@ -16,7 +16,7 @@ import {
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { auditMarksIn, flakyCheckMarksIn, retroMarksIn } from "../loop/markers.ts";
+import { auditMarksIn, DESIGN_TURN_FAILED_MARKER, flakyCheckMarksIn, RESEARCH_RUN_FAILED_MARKER, retroMarksIn } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, type InfrastructureFailure, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
@@ -44,7 +44,7 @@ import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type R
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type PlainKind, type Standing, type StandingName, standingsOf, type StandingNamed } from "./standing.ts";
 import { maxInFlightHoldOf } from "./standingInFlight.ts";
-import { answerOf, lastAdded, passedMoveOf } from "./standingOperator.ts";
+import { answerOf, lastAdded, passedMoveOf, readyForHumanStandingOf } from "./standingOperator.ts";
 import {
   firstRunOf,
   isLive,
@@ -1199,7 +1199,7 @@ function repoSectionOf(facts: GitHubFacts, { records, operator, appLogin, now: f
     repo: facts.repo,
     invalidKitConfig: invalid,
     // Every Standing whose move is the Operator's: an open Audit, Retro, finished Replay or Map among them also keeps a quiet week from being skipped.
-    waitingOnYou: oldestFirst(standings.filter(listedInWaitingOnYou).flatMap((standing) => waitingItemOf(standing, facts, appLogin, items) ?? [])),
+    waitingOnYou: oldestFirst(standings.filter(listedInWaitingOnYou).flatMap((standing) => waitingItemOf(standing, facts, operator, appLogin, items) ?? [])),
     // A week given up on is Stuck however recently its last run failed: nothing moves it until the next week.
     stuck: oldestFirst([
       ...stuck(facts, records, operator, items, now),
@@ -1359,9 +1359,8 @@ function oldestFirst<T extends ItemBase>(items: readonly T[]): T[] {
   return items.toSorted((a, b) => Date.parse(a.since) - Date.parse(b.since));
 }
 
-/** The names whose Standings Waiting on you lists, and the hand-backs among `yours-to-do`: a name or hand-back a later rule adds waits for its own line. */
+/** The names whose Standings Waiting on you lists: a name a later rule adds waits for its own line. Which work handed back it lists, waitingItemOf says. */
 const LISTED_IN_WAITING_ON_YOU: ReadonlySet<StandingName> = new Set(["yours-to-merge", "design-round", "needs-your-answer", "yours-to-do", "token-refused", "yours-to-read"]);
-const LISTED_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-failed", "design-turn-failed", "map-cap-refused"]);
 
 /**
  * Whether Waiting on you lists a Standing: every one whose move is the
@@ -1373,8 +1372,47 @@ function listedInWaitingOnYou(standing: Standing): boolean {
   if (standing.work === "plain") return standing.name === "yours-to-merge";
   if (standing.move !== "operator" || !LISTED_IN_WAITING_ON_YOU.has(standing.name) || standing.work === "weekly-limit") return false;
   if (standing.name === "yours-to-read") return standing.detail.map === null;
-  if (standing.name === "yours-to-do") return standing.detail.handBack === null || LISTED_HAND_BACKS.has(standing.detail.handBack);
   return true;
+}
+
+/** What a research Decision's notice can hand back by, which Waiting on you lists as its failed run. */
+const RESEARCH_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-failed", "research-branch-refused", "trigger-swept", "landing-failed"]);
+
+/**
+ * The Waiting on you line of work the Kit handed back, as the Monday issue
+ * has always listed it, which a hand-back without a line of its own leaves
+ * unchanged until the Stuck section moves to the Standings: a research
+ * Decision whose latest Kit word is its failure notice, as its failed run; a
+ * Design session whose last word is the Kit's failed turn or Map cap refusal,
+ * as that; `ready-for-human` work, as such; an agent PR handed back at the
+ * Merge gate after its pass, as handed back; and nothing else.
+ */
+function handedBackItemOf(
+  standing: StandingNamed<"yours-to-do">,
+  issue: OpenIssueFacts | null,
+  pullRequest: OpenPullRequestFacts | undefined,
+  { repo, operator, appLogin }: { readonly repo: string; readonly operator: string; readonly appLogin: string },
+  items: Items,
+): WaitingItem | null {
+  const { handBack } = standing.detail;
+  const onIssue = issue === null ? null : items.issue(issue, standing.since);
+  if (handBack === null) {
+    if (standing.work === "ticket") return pullRequest === undefined ? null : { kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) };
+    // ready-for-human work, and a usage-credits issue, which the Kit opens with the label.
+    return onIssue === null ? null : { kind: "ready-for-human", ...onIssue };
+  }
+  const lastKitWord = issue?.comments.filter(({ author }) => author === appLogin).at(-1)?.body ?? "";
+  if (standing.work === "research-decision") {
+    return onIssue !== null && RESEARCH_HAND_BACKS.has(handBack) && lastKitWord.startsWith(RESEARCH_RUN_FAILED_MARKER) ? { kind: "research-failed", ...onIssue } : null;
+  }
+  if (standing.work === "design-session") {
+    const last = issue?.comments.at(-1);
+    if (onIssue === null || last?.author !== appLogin || !last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) return null;
+    return { kind: handBack === "map-cap-refused" ? "design-map-cap" : "design-turn-failed", ...onIssue };
+  }
+  if (issue !== null && issue.labels.includes(READY_FOR_HUMAN)) return { kind: "ready-for-human", ...items.issue(issue, readyForHumanStandingOf(issue, repo, standing.since).since) };
+  const move = pullRequest === undefined ? null : passedMoveOf(pullRequest, operator);
+  return pullRequest !== undefined && move?.kind === "handed-back" ? { kind: "handed-back", ...items.pullRequest(pullRequest, move.since) } : null;
 }
 
 /**
@@ -1382,7 +1420,7 @@ function listedInWaitingOnYou(standing: Standing): boolean {
  * worded its kind. Titles come from the facts beside it, as a Standing holds
  * none: null when the facts hold no title for it.
  */
-function waitingItemOf(standing: Standing, facts: GitHubFacts, appLogin: string, items: Items): WaitingItem | null {
+function waitingItemOf(standing: Standing, facts: GitHubFacts, operator: string, appLogin: string, items: Items): WaitingItem | null {
   const pullRequest = facts.openPullRequests.find(({ number }) => number === standing.pullRequest);
   const issue =
     [...facts.openIssues, ...facts.openAudits, ...facts.openRetros, ...facts.openReplays].find(({ number }) => number === standing.issue) ?? null;
@@ -1402,19 +1440,7 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, appLogin: string,
     case "needs-your-answer":
       return onIssue === null ? null : { kind: standing.detail.author === appLogin ? "monitor-needs-info" : "needs-info", ...onIssue };
     case "yours-to-do":
-      if (standing.work === "ticket") return pullRequest === undefined ? null : { kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) };
-      if (onIssue === null) return null;
-      switch (standing.detail.handBack) {
-        case "research-failed":
-          return { kind: "research-failed", ...onIssue };
-        case "design-turn-failed":
-          return { kind: "design-turn-failed", ...onIssue };
-        case "map-cap-refused":
-          return { kind: "design-map-cap", ...onIssue };
-        default:
-          // ready-for-human work, and a usage-credits issue, which the Kit opens with the label.
-          return { kind: "ready-for-human", ...onIssue };
-      }
+      return handedBackItemOf(standing, facts.openIssues.find(({ number }) => number === standing.issue) ?? null, pullRequest, { repo: facts.repo, operator, appLogin }, items);
     // A token-rotation issue, which the Kit opens with ready-for-human.
     case "token-refused":
       return onIssue === null ? null : { kind: "ready-for-human", ...onIssue };

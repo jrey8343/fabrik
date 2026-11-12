@@ -4,6 +4,7 @@
 // silently starting it again.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
+import { handBackMarker } from "./markers.ts";
 import type { Action, IssueSnapshot, LoopEvent, PullRequestSnapshot } from "./types.ts";
 
 type PullRequestClosed = Extract<LoopEvent, { kind: "pull-request-closed" }>;
@@ -45,7 +46,7 @@ export function stopTicketOf(
     {
       kind: "comment",
       issue: ticket,
-      body: `#${pullRequest.number} was closed unmerged by hand, so the Kit won't start another Implement run on this Ticket by itself, and its branch \`${agentBranchFor(ticket)}\` stays. To have an Implementer try again, mark it \`${READY_FOR_AGENT}\`: the new run starts from \`main\` and replaces that branch.`,
+      body: `#${pullRequest.number} was closed unmerged by hand, so the Kit won't start another Implement run on this Ticket by itself, and its branch \`${agentBranchFor(ticket)}\` stays. To have an Implementer try again, mark it \`${READY_FOR_AGENT}\`: the new run starts from \`main\` and replaces that branch.\n${handBackMarker({ kind: "closed-by-hand", role: "implement" })}`,
     },
     { kind: "remove-label", issue: ticket, label: READY_FOR_AGENT },
     { kind: "add-labels", issue: ticket, labels: [READY_FOR_HUMAN] },

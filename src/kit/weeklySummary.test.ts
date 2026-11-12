@@ -611,6 +611,34 @@ describe("the Weekly summary", () => {
       ]);
     });
 
+    it("lists work the Kit handed back by a notice it now reads just as it listed it before the notice was read (#609)", () => {
+      const handBack = (kind: string, role: string, at: string, opening: readonly string[] = []) =>
+        aComment([...opening, "The Kit's notice.", `<!-- fabrik:hand-back {"kind":"${kind}","role":"${role}"} -->`].join("\n"), at);
+      const labelled = aLabelAdded("ready-for-human", "2026-11-06T20:00:00Z");
+      const waiting = waitingIn({
+        openIssues: [
+          // A Ticket whose agent PR was closed by hand: today's ready-for-human line, since the label.
+          anOpenIssue({ number: 7, labels: ["ready-for-human"], comments: [handBack("closed-by-hand", "implement", "2026-11-06T20:00:00Z")], labelEvents: [labelled] }),
+          // A Ticket whose run ended in an Infrastructure failure: no line under Waiting on you yet.
+          anOpenIssue({ number: 8, labels: ["ready-for-agent"], comments: [handBack("infrastructure-failure", "implement", "2026-11-06T20:00:00Z", ["<!-- fabrik:implement-run-failed -->"])] }),
+          anOpenIssue({ number: 9, labels: ["ready-for-agent"] }),
+          // A Design session whose agent:design the sweep took off: today's failed-turn line.
+          anOpenIssue({ number: 12, labels: ["needs-design"], comments: [handBack("trigger-swept", "design", "2026-11-07T20:00:00Z", ["<!-- fabrik:design-turn-failed -->"])] }),
+          // A Design session whose turn's landing failed: no line yet.
+          anOpenIssue({ number: 13, labels: ["needs-design"], comments: [handBack("landing-failed", "design", "2026-11-07T20:00:00Z")] }),
+        ],
+        openPullRequests: [
+          // A failed conflict-only run, handed back at the Merge gate: today's handed-back line.
+          anOpenPullRequest({ number: 61, ticket: 9, draft: false, comments: [aVerdictComment("pass", head, "2026-11-05T20:00:00Z"), handBack("conflict-run-unlanded", "implement", "2026-11-06T20:00:00Z", ["<!-- fabrik:conflict-run-ended -->"])], labelEvents: [labelled] }),
+        ],
+      });
+      expect(waiting).toEqual([
+        { kind: "ready-for-human", number: 7, title: "An open issue", url: "https://github.com/owner/product/issues/7", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR },
+        { kind: "handed-back", number: 61, title: "Build the thing", url: "https://github.com/owner/product/pull/61", since: "2026-11-06T20:00:00Z", age: 2 * 24 * HOUR },
+        { kind: "design-turn-failed", number: 12, title: "An open issue", url: "https://github.com/owner/product/issues/12", since: "2026-11-07T20:00:00Z", age: 24 * HOUR },
+      ]);
+    });
+
     it("lists the App's needs-info issue nobody answered as the Operator's, waiting since it got needs-info (#425)", () => {
       const asked = (overrides: Parameters<typeof anOpenIssue>[0]) =>
         anOpenIssue({

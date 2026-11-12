@@ -43,7 +43,7 @@ describe("Closing an agent PR by hand (#428)", () => {
       {
         kind: "comment",
         issue: 7,
-        body: "#50 was closed unmerged by hand, so the Kit won't start another Implement run on this Ticket by itself, and its branch `fabrik/ticket-7` stays. To have an Implementer try again, mark it `ready-for-agent`: the new run starts from `main` and replaces that branch.",
+        body: "#50 was closed unmerged by hand, so the Kit won't start another Implement run on this Ticket by itself, and its branch `fabrik/ticket-7` stays. To have an Implementer try again, mark it `ready-for-agent`: the new run starts from `main` and replaces that branch.\n<!-- fabrik:hand-back {\"kind\":\"closed-by-hand\",\"role\":\"implement\"} -->",
       },
       { kind: "remove-label", issue: 7, label: "ready-for-agent" },
       { kind: "add-labels", issue: 7, labels: ["ready-for-human"] },

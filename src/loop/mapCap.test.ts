@@ -34,6 +34,7 @@ describe("The Map cap holding a Design session's Map", () => {
           body: [
             "<!-- fabrik:design-turn-failed -->",
             "This turn ended in a Map, but the Map cap is full: #12 is the open Map, and `caps.maps` is 1. The Kit left #7 as it is, and the Design session carries on: reply to finish it another way, or close #12 first and ask for the Map again.",
+            '<!-- fabrik:hand-back {"kind":"map-cap-refused","role":"design"} -->',
           ].join("\n"),
         },
       ],
@@ -72,6 +73,7 @@ describe("The Map cap holding a Design session's Map", () => {
           body: [
             "<!-- fabrik:design-turn-failed -->",
             "This turn ended in a Map, but `caps.maps` is 0, so the Kit charts no new Map in this repo. The Kit left #7 as it is, and the Design session carries on: reply to finish it another way.",
+            '<!-- fabrik:hand-back {"kind":"map-cap-refused","role":"design"} -->',
           ].join("\n"),
         },
       ],

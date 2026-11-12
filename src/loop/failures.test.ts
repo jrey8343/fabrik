@@ -38,6 +38,7 @@ describe("Failure notices", () => {
             "This is an Infrastructure failure, so the Loop won't retry it. Re-add `needs-triage` on this issue to run it again.",
             "",
             `[The run](${RUN})`,
+            '<!-- fabrik:hand-back {"kind":"infrastructure-failure","role":"triage","failure":"timeout"} -->',
           ].join("\n"),
         },
       ],
@@ -295,6 +296,7 @@ describe("Failure notices", () => {
           "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-adding the `agent:review` label won't change this. After fixing the workflow or `sandbox.checks`, re-add `agent:review` on this PR to run it again.",
           "",
           `[The run](${RUN})`,
+          '<!-- fabrik:hand-back {"kind":"infrastructure-failure","role":"review","failure":"unreported-checks"} -->',
         ].join("\n"),
       );
     });
@@ -373,6 +375,7 @@ describe("Failure notices", () => {
           "This is an Infrastructure failure, so the Loop won't retry it. GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, reply on this issue to run the turn again.",
           "",
           `[The run](${RUN})`,
+          '<!-- fabrik:hand-back {"kind":"design-turn-failed","role":"design","failure":"unread-inputs"} -->',
         ].join("\n"),
       );
     });

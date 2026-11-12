@@ -4,6 +4,7 @@
 // set by a Design session or by hand, and every Back to design takes it off.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { KEPT_BRANCH_LABEL, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
+import { handBackMarker } from "./markers.ts";
 import type { Action, KeptBranch, KeptBranchStart } from "./types.ts";
 
 /** The Kept-branch start a run on this Ticket makes, or null when it isn't marked or its Kept branch is gone. */
@@ -29,7 +30,7 @@ export function stopForGoneKeptBranch(ticket: number, operator: string): Action[
     {
       kind: "comment",
       issue: ticket,
-      body: `This Ticket is marked \`${KEPT_BRANCH_LABEL}\`, but its Kept branch \`${branch}\` is gone, so the Kit started no Implement run on it. Take \`${KEPT_BRANCH_LABEL}\` off and mark it \`${READY_FOR_AGENT}\` again to start it from \`main\`, or push \`${branch}\` back first to carry on from it.`,
+      body: `This Ticket is marked \`${KEPT_BRANCH_LABEL}\`, but its Kept branch \`${branch}\` is gone, so the Kit started no Implement run on it. Take \`${KEPT_BRANCH_LABEL}\` off and mark it \`${READY_FOR_AGENT}\` again to start it from \`main\`, or push \`${branch}\` back first to carry on from it.\n${handBackMarker({ kind: "kept-branch-gone", role: "implement" })}`,
     },
     { kind: "remove-label", issue: ticket, label: READY_FOR_AGENT },
     { kind: "add-labels", issue: ticket, labels: [READY_FOR_HUMAN] },

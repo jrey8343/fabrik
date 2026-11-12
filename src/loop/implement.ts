@@ -16,6 +16,7 @@ import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./con
 import {
   CONFLICT_RUN_MARKER,
   EMPTY_DIFF_MARKER,
+  handBackMarker,
   pushedHeadMarker,
   requestChangesAnswersMarker,
   REQUEST_CHANGES_RUN_EMPTY_MARKER,
@@ -380,6 +381,8 @@ function requestChangesRunEmpty(
     ...(recorded === null ? [] : [...recorded.lines, ""]),
     // Why it built nothing, if it said, so an Operator handed the PR back knows (#429).
     ...implementerSaidAndRun(summary, fixes.runUrl).slice(1),
+    // Handed back only when the head didn't move: its last line, hidden, says so.
+    ...(moved ? [] : [handBackMarker({ kind: "request-changes-empty", role: "implement" })]),
   ].join("\n");
   const comment: Action = { kind: "comment", issue: number, body };
   return moved
