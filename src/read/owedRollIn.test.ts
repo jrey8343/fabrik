@@ -5,7 +5,8 @@ import type { CommentFacts, OpenIssueFacts, OpenPullRequestFacts, ReviewFacts } 
 import { followUpsSection } from "../loop/followUps.ts";
 import { planFor } from "../loop/rules.ts";
 import type { RollInsSnapshot } from "../loop/types.ts";
-import { aComment, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aReview, aRollInComment, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
+import { aComment, aMergedLastDay, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aReview, aRollInComment, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import { EXPORT_CALLS, EXPORT_SHAPES } from "./exports.fixture.ts";
 import type { ClosedIssueCommentsFacts, CrossReferenceFacts, Facts } from "./gather.ts";
 import { owedRollInsOf } from "./owedRollIn.ts";
@@ -187,6 +188,18 @@ describe("nothing is owed", () => {
 
     expect(pullRequestRow(withPlain, 70)?.related).toEqual([]);
     nothingOwed(withPlain);
+  });
+
+  it("once the pull request has merged, though the gather still holds its row at Production and the cross-reference", () => {
+    const merged = homeFactsOf({
+      kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } }, dispatch: null },
+      mergedLastDay: [aMergedLastDay("2026-11-12T19:00:00Z")],
+      crossReferences: [crossReference()],
+      closedIssueComments: [{ issue: 30, comments: [SETTLED] }],
+    });
+
+    expect(pullRequestRow(merged)).toMatchObject({ standing: { name: "merged" }, related: [] });
+    expect(owedRollInsOf(rowsIn(merged))).toEqual([]);
   });
 
   it("on a pull request other than the one the closing comment's mark names, though GitHub cross-references the issue to both", () => {
