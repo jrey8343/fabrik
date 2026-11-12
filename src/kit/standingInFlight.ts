@@ -298,7 +298,8 @@ function waitsOnReview(pullRequest: OpenPullRequestFacts, appLogin: string): boo
   return pullRequest.draft && !hasVerdictOnHead(pullRequest);
 }
 
-function hasVerdictOnHead(pullRequest: OpenPullRequestFacts): boolean {
+/** Whether a pull request's head has a Verdict. */
+export function hasVerdictOnHead(pullRequest: OpenPullRequestFacts): boolean {
   return verdictsOn(pullRequest.comments).some(({ record }) => record.headSha === pullRequest.headSha);
 }
 
@@ -313,8 +314,8 @@ function byApp(comments: readonly CommentFacts[], appLogin: string): CommentFact
   return comments.filter(({ author }) => author === appLogin);
 }
 
-/** The kind of work a role's run is for. */
-function workOf(role: AgentRole): StandingWork {
+/** The kind of work a role's run is for: a Review's is its Ticket's. */
+export function workOf(role: AgentRole): StandingWork {
   const works: Readonly<Record<AgentRole, StandingWork>> = {
     triage: "issue",
     design: "design-session",

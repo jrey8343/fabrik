@@ -10,10 +10,9 @@ import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT } from "../loop
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
-import { verdictsOn } from "./retroEvidence.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { barOf, clockOf, stuckAtOf } from "./standingClock.ts";
-import { designSessionsStartingOf, isSpec, maxInFlightHoldOf, readySince } from "./standingInFlight.ts";
+import { designSessionsStartingOf, hasVerdictOnHead, isSpec, maxInFlightHoldOf, readySince } from "./standingInFlight.ts";
 import { answerOf, lastAdded, passAtHeadOf } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
@@ -276,9 +275,4 @@ function waitingOnKit(
     subscription: null,
     detail,
   };
-}
-
-/** Whether a pull request's head has a Verdict. */
-function hasVerdictOnHead(pullRequest: OpenPullRequestFacts): boolean {
-  return verdictsOn(pullRequest.comments).some(({ record }) => record.headSha === pullRequest.headSha);
 }

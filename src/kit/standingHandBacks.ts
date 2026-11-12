@@ -22,7 +22,8 @@ import {
 import { TRIGGER_ROLES } from "../loop/triggerSweep.ts";
 import type { AgentRole } from "../loop/types.ts";
 import type { CommentFacts } from "./retroEvidence.ts";
-import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
+import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace } from "./standing.ts";
+import { workOf } from "./standingInFlight.ts";
 import { addedAndStillOn, lastAdded } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
@@ -76,17 +77,6 @@ export function handBackOfNotice(body: string): HandBackMark | null {
 
 /** The hand-backs that put `ready-for-human` on the work: each stands while that label is on, whatever the Kit says after. */
 const READY_FOR_HUMAN_HAND_BACKS: ReadonlySet<HandBack> = new Set(["request-changes-empty", "conflict-run-unlanded", "request-changes-unlanded", "closed-by-hand", "kept-branch-gone"]);
-
-/** The work a hand-back's role works on; a Ticket's where it names no role. */
-const WORK_OF_ROLE: Readonly<Record<AgentRole, StandingWork>> = {
-  triage: "issue",
-  design: "design-session",
-  implement: "ticket",
-  review: "ticket",
-  audit: "audit",
-  retro: "retro",
-  research: "research-decision",
-};
 
 /** One piece of work, its issue and its open agent PR, as the Kit's notices on either speak of it. */
 interface HandedWork {
@@ -153,7 +143,7 @@ function handedBackIn({ issue, pullRequest, said }: HandedWork, repo: string): S
     repo,
     issue: issue?.number ?? pullRequest?.ticket ?? null,
     pullRequest: pullRequest?.number ?? null,
-    work: mark.role !== undefined ? WORK_OF_ROLE[mark.role] : resume === "agent:replay" ? "replay" : "ticket",
+    work: mark.role !== undefined ? workOf(mark.role) : resume === "agent:replay" ? "replay" : "ticket",
     place: placeOf(issue, pullRequest),
     name: "yours-to-do",
     move: "operator",

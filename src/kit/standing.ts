@@ -79,7 +79,6 @@ export const STANDING_NAMES = [
 
 export type StandingName = (typeof STANDING_NAMES)[number];
 
-/** What a `not-started` Standing's wording is made of. */
 /**
  * What a `not-started` Standing's wording is made of: which run was asked for
  * and how (src/kit/standingClock.ts), and the trigger label that asked, null

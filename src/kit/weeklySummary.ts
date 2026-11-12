@@ -1203,7 +1203,6 @@ function hasUnknownCostBasis(record: RunRecord): boolean {
 
 // Per repo: what waits on the Operator and what is stuck, as of the filing.
 
-/** How long Loop work may sit without moving before it's Stuck: a fixed threshold. */
 /**
  * A repo's three lists, read off its Standings (src/kit/standing.ts), so the
  * Monday issue and the Console can't disagree: no Run record is read for any
