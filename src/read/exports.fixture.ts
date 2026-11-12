@@ -342,6 +342,7 @@ const A_UI_EVIDENCE_MARKER = {
   failure: null,
   routes: ["/book?when=today", "/"],
   preview: { is: "linked", url: "https://fabrik-ticket-7.shop.example.dev/" },
+  missed: [{ route: "/", viewport: "desktop", side: "before" }],
 } as const satisfies EvidenceMarker;
 
 /** The body of a UI pull request the Fabrik App opened, its evidence section closed by its marker. */
@@ -910,6 +911,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
       preview: "linked",
       pages: [{ route: "/book?when=today", preview: "https://fabrik-ticket-7.shop.example.dev/book?when=today" }],
       failureSentence: "Capture failed: it ran out of time.",
+      missed: [{ route: "/book?when=today", viewport: "mobile", side: "before" }],
     },
     production: { site: "https://shop.example", tracked: true, pages: [{ route: "/book?when=today", url: "https://shop.example/book?when=today" }] },
     prototype: { round: 2, comment: 5003, postedAt: "2026-11-08T21:00:00Z", waiting: true, route: "/book", captures: { run: 4420, artifact: 902 } },

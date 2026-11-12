@@ -238,7 +238,7 @@ describe("a Product repo's rows", () => {
     };
 
     it("is on an open UI pull request's row: its run, artifact and failure, what came of the preview, and a page for each captured route, in the marker's order", () => {
-      const marker = { run: 4410, artifact: 901, failure: null, routes: ["/cart?step=2", "/book"], preview: { is: "linked", url: PREVIEW } } as const;
+      const marker = { run: 4410, artifact: 901, failure: null, routes: ["/cart?step=2", "/book"], preview: { is: "linked", url: PREVIEW }, missed: [] } as const;
 
       expect(evidenceOf(marker)).toEqual([
         {
@@ -251,6 +251,7 @@ describe("a Product repo's rows", () => {
             { route: "/book", preview: "https://fabrik-ticket-7.shop.example.dev/book" },
           ],
           failureSentence: null,
+          missed: [],
         },
       ]);
     });
@@ -262,7 +263,7 @@ describe("a Product repo's rows", () => {
     ] as const)("gives no page a preview address when the preview is %s", (is, preview) => {
       const marker = { run: 4410, artifact: 901, failure: null, routes: ["/book"], preview };
 
-      expect(evidenceOf(marker)).toEqual([{ run: 4410, artifact: 901, failure: null, preview: is, pages: [{ route: "/book", preview: null }], failureSentence: null }]);
+      expect(evidenceOf(marker)).toEqual([{ run: 4410, artifact: 901, failure: null, preview: is, pages: [{ route: "/book", preview: null }], failureSentence: null, missed: null }]);
     });
 
     it("gives a failed capture's reason in the Kit's own sentence for it, and no pages when it captured no route", () => {
@@ -276,6 +277,7 @@ describe("a Product repo's rows", () => {
           preview: "pending",
           pages: [],
           failureSentence: "Capture failed: the server wouldn't start: nothing answered at `ui.url` once `ui.serve` ran.",
+          missed: null,
         },
       ]);
     });
@@ -287,11 +289,71 @@ describe("a Product repo's rows", () => {
       expect(evidence?.failureSentence).toBe(captureFailureSentence(failure));
     });
 
+    it("names exactly the one shot a capture missed, by route, size and side, and leaves its pages and the other pull request's evidence as they were", () => {
+      const missedOne = { run: 4410, artifact: 901, failure: null, routes: ["/book", "/"], preview: { is: "linked", url: PREVIEW }, missed: [{ route: "/book", viewport: "mobile", side: "before" }] } as const;
+      const missedNone = { run: 4420, artifact: 902, failure: null, routes: ["/cart"], preview: { is: "none" }, missed: [] } as const;
+      const facts = homeFactsOf({
+        github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 }), anOpenPullRequest({ number: 51, ticket: 8 })] }),
+        evidenceMarkers: [
+          { pullRequest: 50, marker: missedOne },
+          { pullRequest: 51, marker: missedNone },
+        ],
+      });
+
+      const evidence = Object.fromEntries(rowsOf(facts, null, null, null, NOW).flatMap(({ standing, evidence }) => (standing.pullRequest === null ? [] : [[standing.pullRequest, evidence]])));
+
+      expect(evidence[50]).toEqual({
+        run: 4410,
+        artifact: 901,
+        failure: null,
+        preview: "linked",
+        pages: [
+          { route: "/book", preview: "https://fabrik-ticket-7.shop.example.dev/book" },
+          { route: "/", preview: "https://fabrik-ticket-7.shop.example.dev/" },
+        ],
+        failureSentence: null,
+        missed: [{ route: "/book", viewport: "mobile", side: "before" }],
+      });
+      expect(evidence[51]).toEqual({ run: 4420, artifact: 902, failure: null, preview: "none", pages: [{ route: "/cart", preview: null }], failureSentence: null, missed: [] });
+    });
+
+    it("gives a capture that failed outright after taking some pictures its sentence, and still lists what it missed", () => {
+      const marker = {
+        run: 4410,
+        artifact: 901,
+        failure: "timeout",
+        routes: ["/book", "/book/waitlist"],
+        preview: { is: "none" },
+        missed: [
+          { route: "/book/waitlist", viewport: "mobile", side: "after" },
+          { route: "/book/waitlist", viewport: "desktop", side: "after" },
+        ],
+      } as const;
+
+      expect(evidenceOf(marker)).toEqual([
+        {
+          run: 4410,
+          artifact: 901,
+          failure: "timeout",
+          preview: "none",
+          pages: [
+            { route: "/book", preview: null },
+            { route: "/book/waitlist", preview: null },
+          ],
+          failureSentence: "Capture failed: it ran out of time.",
+          missed: [
+            { route: "/book/waitlist", viewport: "mobile", side: "after" },
+            { route: "/book/waitlist", viewport: "desktop", side: "after" },
+          ],
+        },
+      ]);
+    });
+
     it("reads a marker from an earlier release with its run, artifact and failure, its pages null and its preview unknown", () => {
       expect(evidenceOf({ run: 4410, artifact: 901, failure: "timeout" })).toEqual([
-        { run: 4410, artifact: 901, failure: "timeout", preview: "unknown", pages: null, failureSentence: "Capture failed: it ran out of time." },
+        { run: 4410, artifact: 901, failure: "timeout", preview: "unknown", pages: null, failureSentence: "Capture failed: it ran out of time.", missed: null },
       ]);
-      expect(evidenceOf({ run: 4410, artifact: 901 })).toEqual([{ run: 4410, artifact: 901, failure: null, preview: "unknown", pages: null, failureSentence: null }]);
+      expect(evidenceOf({ run: 4410, artifact: 901 })).toEqual([{ run: 4410, artifact: 901, failure: null, preview: "unknown", pages: null, failureSentence: null, missed: null }]);
     });
 
     it("is null on a pull request with no marker, and on a row with no pull request", () => {

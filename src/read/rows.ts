@@ -141,6 +141,14 @@ export interface RowEvidence {
    * reason alone, so it holds nothing an agent wrote; null with no failure.
    */
   readonly failureSentence: string | null;
+  /**
+   * Each shot capture meant to take and missed, going on to the rest, by its
+   * route, size (the viewport's name) and side, in the marker's order, so a
+   * missed shot keeps its place beside the others: empty when it missed none.
+   * Null from a marker an earlier release wrote, and from one the push job
+   * wrote with no capture result to read: what was missed is unknown.
+   */
+  readonly missed: readonly { readonly route: string; readonly viewport: string; readonly side: "before" | "after" }[] | null;
 }
 
 /** The last runs read (./runs.ts), or null when none is held. */
@@ -257,7 +265,7 @@ function productionOf({ kit, evidenceMarkers }: Facts, pullRequest: number): Row
 function evidenceOf({ evidenceMarkers }: Facts, pullRequest: number): RowEvidence | null {
   const marker = evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker;
   if (marker === undefined) return null;
-  const { run, artifact, failure, routes, preview } = marker;
+  const { run, artifact, failure, routes, preview, missed } = marker;
   const linked = preview?.is === "linked" ? preview.url : null;
   return {
     run,
@@ -266,6 +274,7 @@ function evidenceOf({ evidenceMarkers }: Facts, pullRequest: number): RowEvidenc
     preview: preview?.is ?? "unknown",
     pages: routes === undefined ? null : routes.map((route) => ({ route, preview: linked === null ? null : pageOn(linked, route) })),
     failureSentence: failure === undefined || failure === null ? null : captureFailureSentence(failure),
+    missed: missed ?? null,
   };
 }
 
