@@ -101,7 +101,7 @@ describe("the wording of a failed research run", () => {
 
 describe("the wording of a Subscription's issue", () => {
   const listing = (...subscriptions: readonly string[]) =>
-    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, headChecks: {} }) as const;
+    ({ repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, runsInFlight: [], headChecks: {} }) as const;
   const kitIssue = (number: number, labels: readonly string[], subscription: string, resetsAt: string | null = null) => ({
     open: anOpenIssue({ number, labels, createdAt: SINCE }),
     kit: { number, labels, body: [subscriptionMarker(subscription), ...(resetsAt === null ? [] : [resetsAtMarker(resetsAt)])].join("\n"), comments: [] },
@@ -199,7 +199,7 @@ describe("the wording of a Standing in needs-info", () => {
 describe("the wording of a Plain pull request's Standing", () => {
   const HEAD = "p".repeat(40);
   const plain = (overrides: Parameters<typeof aPlainPullRequest>[0], checks: RequiredChecksFact = [{ name: "test", is: "passed" }], github: Partial<GitHubFacts> = {}) => {
-    const kit = { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, headChecks: { [HEAD]: checks } } as const;
+    const kit = { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks: { [HEAD]: checks } } as const;
     const [standing] = standingsOf(standingFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ headSha: HEAD, headCommittedAt: SINCE, createdAt: SINCE, ...overrides })], ...github }), kit }), SINCE);
     if (standing === undefined) throw new Error("expected a Standing");
     return standing;

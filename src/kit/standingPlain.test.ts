@@ -12,7 +12,7 @@ const produced: { readonly facts: StandingFacts; readonly now: string; readonly 
 
 /** `owner/product`'s Kit config, the default, with these Required checks read on these heads. */
 function kitWith(headChecks: Readonly<Record<string, RequiredChecksFact>>): RepoKitFacts {
-  return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, headChecks };
+  return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks };
 }
 
 /** Each listed check passed on the head. */

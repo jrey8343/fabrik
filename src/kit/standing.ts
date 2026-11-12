@@ -9,8 +9,10 @@
 // shown (src/kit/standingWording.ts).
 import type { HandBack } from "../loop/handBacks.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
 import { joinPairing, plainStandingsOf } from "./standingPlain.ts";
+import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 /** Goes up only when a field is removed or changes meaning: a new name or a new `detail` key leaves it. */
@@ -202,10 +204,12 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
 
 /**
  * One Product repo's Standings at `now`, oldest first: one per piece of work,
- * an agent pull request and the Ticket it closes being one.
+ * an agent pull request and the Ticket it closes being one. Given the store's
+ * facts, the store's own Standings (src/kit/standingStore.ts).
  */
-export function standingsOf(facts: StandingFacts, now: string): Standing[] {
-  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...plainStandingsOf(facts, now)];
+export function standingsOf(facts: StandingFacts | StoreStandingFacts, now: string): Standing[] {
+  if (facts.kind === "store") return storeStandingsOf(facts, now);
+  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...inFlightStandingsOf(facts, now), ...plainStandingsOf(facts, now)];
   return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github).toSorted(
     (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
   );

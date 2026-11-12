@@ -3,9 +3,11 @@
 // Standing and a clock, so "40 minutes ago" is true then and the Standing
 // itself holds no relative time. The wording never quotes a repo's text.
 import type { HandBack } from "../loop/handBacks.ts";
+import { runNamed } from "../loop/heldRun.ts";
 import { READY_FOR_HUMAN } from "../loop/labels.ts";
-import { readable } from "../loop/readable.ts";
+import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
+import type { RunningRun } from "./standingInFlight.ts";
 
 /** What a Standing says when shown. */
 export interface StandingWords {
@@ -17,21 +19,55 @@ export interface StandingWords {
   readonly remedy: string | null;
 }
 
+/** How a `running` Standing's sentence names its run, at the start of a sentence; a Retry is named by its number. */
+const RUNNING_RUNS: Readonly<Record<RunningRun, string>> = {
+  implement: "An Implement run",
+  retry: "A Retry",
+  "request-changes": "A Request-changes run",
+  "conflict-only": "A conflict-only run",
+  review: "A Review",
+  triage: "A Triage run",
+  research: "A Research run",
+  design: "A Design-session turn",
+  prototype: "A Prototype turn",
+};
+
 /** The sentence for each hand-back a `yours-to-do` Standing names, in the order of HAND_BACKS; one it lacks reads as `ready-for-human` work. */
 const HAND_BACK_SENTENCES: Partial<Record<HandBack, (standing: StandingNamed<"yours-to-do">, age: string) => string>> = {
   "research-failed": ({ detail }, age) => `The Research run failed ${age} ago. Add \`${detail.label}\` again to run it.`,
   "design-turn-failed": (_, age) => `A Design-session turn failed ${age} ago. Reply on the issue to run it again.`,
   "map-cap-refused": (_, age) => `The Map cap refused this session's Map ${age} ago. Reply on the issue to carry on.`,
+  "weekly-summary-failed": (_, age) => `The Weekly summary run failed ${age} ago, so this week's isn't filed. Open the run and re-run its failed jobs.`,
 };
 
 /** A Standing's pill, sentence and remedy at `now`, ISO 8601; times it names are told in `timeZone`. */
 export function wordStanding(standing: Standing, now: string, timeZone: string): StandingWords {
   const age = ageSince(standing.since, now);
   switch (standing.name) {
+    case "running": {
+      const { run, retry } = standing.detail;
+      const named = run === "retry" && retry !== null ? `Retry ${retry}` : (RUNNING_RUNS[run as RunningRun] ?? "A run");
+      return { pill: "Running", sentence: `${named} has been running for ${age}.`, remedy: null };
+    }
     case "waiting-on-checks": {
-      const { check, checksUnread } = standing.detail;
-      const sentence = checksUnread ? "Waiting on its Required checks, which could not be read." : check === null ? "Waiting on its Required checks." : `Waiting on \`${check}\`.`;
+      const { plain, check, checksUnread } = standing.detail;
+      const sentence =
+        plain === null
+          ? "Its Review is waiting for the Required checks on its head."
+          : checksUnread
+            ? "Waiting on its Required checks, which could not be read."
+            : `Waiting on \`${check}\`.`;
       return { pill: "Waiting on checks", sentence, remedy: null };
+    }
+    case "held": {
+      const { carrier, role } = standing.detail;
+      return { pill: "Held", sentence: `Its ${runNamed(role)} is held${carrier === null ? "" : ` on #${carrier}`} until a Subscription is free.`, remedy: null };
+    }
+    case "waiting-for-slot": {
+      const { slot, maxInFlight } = standing.detail;
+      if (slot === "design-session") return { pill: "Waiting for a slot", sentence: `Waiting for a Design session slot for ${age}.`, remedy: null };
+      const sentence = maxInFlight === 0 ? "Dispatch is paused: `max_in_flight` is 0." : `Waiting for a slot for ${age}: \`max_in_flight\` is ${maxInFlight}.`;
+      return { pill: "Waiting for a slot", sentence, remedy: null };
     }
     case "waiting-for-reset": {
       const { resetsAt } = standing.detail;
@@ -86,6 +122,8 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     }
     case "draft":
       return { pill: "Draft", sentence: "A draft; nothing is owed on it.", remedy: null };
+    case "blocked":
+      return { pill: "Blocked", sentence: `Blocked by ${spelled(standing.detail.blockers.map((blocker) => `#${blocker}`), "and")}.`, remedy: null };
     case "waiting-on-author":
       return { pill: "Waiting on its author", sentence: `Triage asked its author, ${standing.detail.author}, a question ${age} ago.`, remedy: null };
     default:
@@ -105,6 +143,8 @@ function readingSentence({ work, detail }: StandingNamed<"yours-to-read">, age: 
       return `Replay results in for ${age}.`;
     case "map":
       return `Map open for ${age}, ${decisions(detail.decisions.length)} waiting on you.`;
+    case "weekly-summary":
+      return `This week's summary, filed ${age} ago.`;
     default:
       return `Open for ${age}.`;
   }

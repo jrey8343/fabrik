@@ -22,6 +22,7 @@ import {
   aReplayRunRecord,
   aRetroRunRecord,
   aReview,
+  aRunInFlight,
   aRunRecord,
   aScoreEntry,
   aScoreFile,
@@ -70,7 +71,8 @@ function aRepoKit(overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
     repo: "owner/product",
     branch: "main",
     config: { ok: true, config: DEFAULT_KIT_CONFIG },
-    dispatch: { candidates: { tickets: [], researchDecisions: [] }, runs: { implement: 0, research: 0, implementTickets: [] } },
+    dispatch: { candidates: { tickets: [], researchDecisions: [] } },
+    runsInFlight: [],
     headChecks: {},
     ...overrides,
   };
@@ -2872,7 +2874,7 @@ describe("the Weekly summary", () => {
             openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })],
             openIssues: [anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", hoursAgo(80))] })],
           }),
-          aRepoKit({ dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [] }, runs: { implement: 1, research: 0, implementTickets: [12] } } }),
+          aRepoKit({ dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [] } }, runsInFlight: [aRunInFlight({ issue: 12 })] }),
         );
         expect(result.body).toContain(
           `- owner/product: waiting for a slot: \`max_in_flight\` is 2 and ${issue(11)}, ${issue(12)} are in flight · ${issue(14)} (3 days)`,
@@ -2886,7 +2888,7 @@ describe("the Weekly summary", () => {
       it("says Dispatch is paused when max_in_flight is 0, naming what waits", () => {
         const result = summaryWith(
           factsOf({ openIssues: [ready(14, 80), ready(17, 30)] }),
-          aRepoKit({ config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight: 0 } }, dispatch: { candidates: readyTickets(17, 14), runs: { implement: 0, research: 0, implementTickets: [] } } }),
+          aRepoKit({ config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight: 0 } }, dispatch: { candidates: readyTickets(17, 14) } }),
         );
         expect(result.summary.repos[0]?.held?.dispatch?.kind).toBe("paused");
         expect(result.body).toContain(`- owner/product: Dispatch is paused (\`max_in_flight\` is 0): ${issue(14)} (3 days), ${issue(17)} (30 hours) wait`);
@@ -2897,7 +2899,8 @@ describe("the Weekly summary", () => {
           factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })], openIssues: [ready(14, 80)] }),
           aRepoKit({
             config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight: 3 } },
-            dispatch: { candidates: readyTickets(14), runs: { implement: 1, research: 0, implementTickets: [12] } },
+            dispatch: { candidates: readyTickets(14) },
+            runsInFlight: [aRunInFlight({ issue: 12 })],
           }),
         );
         expect(result.summary.repos[0]?.held).toBeNull();
@@ -2907,7 +2910,7 @@ describe("the Weekly summary", () => {
       it("never holds a Ticket Dispatch wouldn't release, as a cap isn't what's in the way", () => {
         const result = summaryWith(
           factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 }), anOpenPullRequest({ number: 51, ticket: 12 })], openIssues: [ready(14, 80)] }),
-          aRepoKit({ dispatch: { candidates: { tickets: [aTicket({ number: 14, openBlockers: [9] })], researchDecisions: [] }, runs: { implement: 0, research: 0, implementTickets: [] } } }),
+          aRepoKit({ dispatch: { candidates: { tickets: [aTicket({ number: 14, openBlockers: [9] })], researchDecisions: [] } } }),
         );
         expect(result.summary.repos[0]?.held).toBeNull();
       });
@@ -2921,7 +2924,6 @@ describe("the Weekly summary", () => {
           aRepoKit({
             dispatch: {
               candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 13, labels: ["ready-for-agent", "agent:implement"] })], researchDecisions: [aResearchDecision({ number: 16 })] },
-              runs: { implement: 0, research: 0, implementTickets: [] },
             },
           }),
         );
@@ -2933,7 +2935,7 @@ describe("the Weekly summary", () => {
       it("counts a run in flight its job doesn't name, naming the rest", () => {
         const result = summaryWith(
           factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })], openIssues: [ready(14, 80)] }),
-          aRepoKit({ dispatch: { candidates: readyTickets(14), runs: { implement: 0, research: 1, implementTickets: [] } } }),
+          aRepoKit({ dispatch: { candidates: readyTickets(14) }, runsInFlight: [aRunInFlight({ role: "research" })] }),
         );
         expect(result.body).toContain(`- owner/product: waiting for a slot: \`max_in_flight\` is 2 and 2 are in flight (${issue(11)} among them) · ${issue(14)} (3 days)`);
       });
@@ -2941,7 +2943,7 @@ describe("the Weekly summary", () => {
       it("still shows the line without the runs in progress, counting what it could read and saying so", () => {
         const result = summaryWith(
           factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 11 })], openIssues: [ready(14, 80)] }),
-          aRepoKit({ dispatch: { candidates: readyTickets(14), runs: null } }),
+          aRepoKit({ dispatch: { candidates: readyTickets(14) }, runsInFlight: "unread" }),
         );
         expect(result.body).toContain(`- owner/product: waiting for a slot: \`max_in_flight\` is 2 and ${issue(11)} is in flight (runs in progress unread) · ${issue(14)} (3 days)`);
       });

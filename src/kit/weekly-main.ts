@@ -21,7 +21,7 @@ import { appendFile } from "node:fs/promises";
 import { gatherEveryRepoFacts, gatherHeadChecks, productReposOf } from "../github/facts.ts";
 import { GitHub, GitHubError, type Repo } from "../github/client.ts";
 import { readCallerRuns } from "../github/loopHealthFacts.ts";
-import { countDispatchedRuns, defaultBranchOf, type DispatchedRuns, gatherDispatchCandidates, readKitConfigSources } from "../github/snapshot.ts";
+import { defaultBranchOf, gatherDispatchCandidates, readKitConfigSources, readRunsInFlight, type RunInFlightFact } from "../github/snapshot.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "./config.ts";
@@ -187,34 +187,35 @@ async function readLoopHealth(repos: readonly Repo[], appLogin: string, now: num
 /**
  * One Product repo's Kit config at its default branch's head, read and
  * resolved as the Loop reads it, and, when it's valid, what a Dispatch check
- * weighs there (#476), with the Required checks it lists on each open Plain
- * pull request's head. Null for a repo with no default branch yet. The runs in
- * progress are null when the Actions token wasn't minted or GitHub wouldn't
- * list them; the checks are unread when the Ticks token, the one holding
- * Checks read, wasn't minted.
+ * weighs there (#476), with the runs in flight, read once whatever the Kit
+ * config (#606), and the Required checks it lists on each open Plain pull
+ * request's head. Null for a repo with no default branch yet. The runs are
+ * unread when the Actions token wasn't minted or GitHub wouldn't list them;
+ * the checks are unread when the Ticks token, the one holding Checks read,
+ * wasn't minted.
  */
 async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo, appLogin: string, checks: GitHub | null, plainHeads: readonly string[]): Promise<RepoKitFacts | null> {
   const branch = await defaultBranchOf(products, repo);
   if (branch === null) return null;
   const config = resolveKitConfig(await readKitConfigSources(products, repo, branch.head));
   const name = `${repo.owner}/${repo.name}`;
-  if (!config.ok) return { repo: name, branch: branch.name, config, dispatch: null, headChecks: {} };
-  const [candidates, runs, headChecks] = await Promise.all([
+  if (!config.ok) return { repo: name, branch: branch.name, config, dispatch: null, runsInFlight: await readRuns(actions, repo), headChecks: {} };
+  const [candidates, runsInFlight, headChecks] = await Promise.all([
     gatherDispatchCandidates(products, repo, appLogin),
-    readDispatchedRuns(actions, repo),
+    readRuns(actions, repo),
     checks === null ? {} : gatherHeadChecks(checks, repo, plainHeads, config.config.sandbox.checks),
   ]);
-  return { repo: name, branch: branch.name, config, dispatch: { candidates, runs }, headChecks };
+  return { repo: name, branch: branch.name, config, dispatch: { candidates }, runsInFlight, headChecks };
 }
 
-/** The Implement and Research runs in progress, as Dispatch counts them, or null when they can't be read. */
-async function readDispatchedRuns(actions: GitHub | null, repo: Repo): Promise<DispatchedRuns | null> {
-  if (actions === null) return null;
+/** The runs in flight, or unread when they can't be read. */
+async function readRuns(actions: GitHub | null, repo: Repo): Promise<readonly RunInFlightFact[] | "unread"> {
+  if (actions === null) return "unread";
   try {
-    return await countDispatchedRuns(actions, repo);
+    return await readRunsInFlight(actions, repo);
   } catch (error) {
-    // The Operator may not have accepted the App's Actions: read yet: Held says the runs are unread.
-    if (error instanceof GitHubError) return null;
+    // The Operator may not have accepted the App's Actions: read yet: Held and the Standings say the runs are unread.
+    if (error instanceof GitHubError) return "unread";
     throw error;
   }
 }

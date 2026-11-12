@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aRunInFlight, aWeeklyLimitIssue } from "../__fixtures__/weeklySummary.ts";
+import { aTicket } from "../__fixtures__/snapshots.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
@@ -271,7 +273,7 @@ describe("the Standing rule", () => {
 
   describe("a Subscription's issue", () => {
     const listing = (...subscriptions: readonly string[]) =>
-      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, headChecks: {} } }) as const;
+      ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, subscriptions } }, dispatch: null, runsInFlight: [], headChecks: {} } }) as const;
     /** Open Kit-owned issue `number`, labelled `labels`, naming `subscription` in its body (none when null), opened at `createdAt`: as the open issues and as the Kit's issues. */
     const kitIssue = (number: number, labels: readonly string[], subscription: string | null, createdAt: string, body = "") => ({
       open: anOpenIssue({ number, labels, createdAt, labelEvents: labels.map((label) => aLabelAdded(label, createdAt)) }),
@@ -589,6 +591,7 @@ describe("the Standing rule", () => {
         branch: "main",
         config: { ok: true, config: DEFAULT_KIT_CONFIG },
         dispatch: null,
+        runsInFlight: [],
         headChecks: { [head("1")]: [{ name: "test", is: "running" }], [head("2")]: [{ name: "test", is: "failing" }] },
       } as const;
       const standings = standingsIn(
@@ -645,6 +648,41 @@ describe("the Standing rule", () => {
         { issue: null, pullRequest: 51 },
       ]);
     });
+  });
+});
+
+describe("work that goes on without the Operator (#606)", () => {
+  it("gives one Standing of each of its names, the Kit's move or nobody's, none of them the Operator's or able to turn Stuck", () => {
+    const readyAt = "2026-11-05T12:00:00Z";
+    const ready = (number: number) => anOpenIssue({ number, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", readyAt)] });
+    const standings = standingsIn(
+      {
+        openIssues: [ready(7), ready(9), ready(14), ready(15)],
+        openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8 })],
+        kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 9, label: "agent:implement" }], { commentedAt: ["2026-11-08T10:00:00Z"] })],
+      },
+      {
+        kit: {
+          repo: "owner/product",
+          branch: "main",
+          config: { ok: true, config: DEFAULT_KIT_CONFIG },
+          dispatch: { candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 15, openBlockers: [3] })], researchDecisions: [] } },
+          headChecks: {},
+          runsInFlight: [
+            aRunInFlight({ issue: 7, createdAt: "2026-11-08T19:20:00Z" }),
+            aRunInFlight({ issue: 12 }),
+            aRunInFlight({ role: "review", job: "waiting-on-checks", createdAt: "2026-11-08T19:40:00Z" }),
+          ],
+        },
+      },
+    );
+    expect(standings.map(({ issue, name, move, yours, stopsWork, stuckAt }) => ({ issue, name, move, yours, stopsWork, stuckAt }))).toEqual([
+      { issue: 14, name: "waiting-for-slot", move: "kit", yours: false, stopsWork: false, stuckAt: null },
+      { issue: 15, name: "blocked", move: "nobody", yours: false, stopsWork: false, stuckAt: null },
+      { issue: 9, name: "held", move: "kit", yours: false, stopsWork: false, stuckAt: null },
+      { issue: 7, name: "running", move: "kit", yours: false, stopsWork: false, stuckAt: null },
+      { issue: 8, name: "waiting-on-checks", move: "kit", yours: false, stopsWork: false, stuckAt: null },
+    ]);
   });
 });
 

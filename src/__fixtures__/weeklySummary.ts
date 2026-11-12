@@ -1,5 +1,6 @@
 // Small builders for the Weekly summary's tests, matching anIssue, aPullRequest
 // and snapshotOf (./snapshots.ts): say only what a test cares about.
+import type { RunInFlightFact } from "../github/snapshot.ts";
 import { type ReplayProgress, replayBody } from "../kit/replay.ts";
 import type { ReplayRun, RunRecord } from "../kit/runRecord.ts";
 import type { StandingFacts } from "../kit/standing.ts";
@@ -366,4 +367,9 @@ export function anOpenMonitorIssue(overrides: Partial<MonitorIssueFacts> = {}): 
 /** What the Standing rule reads of `owner/product`: its GitHub facts, nothing in them unless a test says so, no Kit config read, and the Operator and the Fabrik App by login. */
 export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> = {}): StandingFacts {
   return { kind: "product", github: factsOf(), kit: null, operator: "operator", appLogin: "fabrik-app[bot]", ...overrides };
+}
+
+/** An Implement run in flight on no Ticket the job names, running, its workflow run created an hour before the filing, unless a test says otherwise. */
+export function aRunInFlight(overrides: Partial<RunInFlightFact> = {}): RunInFlightFact {
+  return { role: "implement", issue: null, pullRequest: null, retry: null, kind: null, job: "running", createdAt: "2026-11-08T19:00:00Z", ...overrides };
 }
