@@ -34,9 +34,6 @@ export { CAPTURE_TIMEOUT_MINUTES, implementJobTimeoutMinutes } from "./captureTi
  */
 export const EVIDENCE_DIR = "ui-evidence";
 
-/** The capture result's file, in EVIDENCE_DIR beside the screenshots. */
-export const CAPTURE_RESULT_FILE = "capture-result.json";
-
 /** The Evidence page's file, beside EVIDENCE_DIR; its unzipped artifact is named after it. */
 export const EVIDENCE_PAGE_FILE = "fabrik-ui-evidence-page.html";
 

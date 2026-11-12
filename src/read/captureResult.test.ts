@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { captureStepFiles, prototypeCaptureFiles } from "../evidence/capture.ts";
 import type { Capture, VariantCapture } from "../evidence/uiEvidence.ts";
-import { type CaptureResult, type CaptureResultRead, parseCaptureResult } from "./index.ts";
+import { CAPTURE_RESULT_FILE, type CaptureResult, type CaptureResultRead, parseCaptureResult } from "./index.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -105,5 +105,13 @@ describe("A capture result read through the read library (#670)", () => {
     }).not.toThrow();
     expect(read).toEqual({ ok: false, errors: expect.arrayContaining([expect.any(String)]) });
     expect(roundTripped(read)).toStrictEqual(read);
+  });
+
+  it("names the file a reader looks for in a captures artifact, the one name capture writes it under and the Reviewer reads", async () => {
+    const capture = await import("../evidence/capture.ts");
+
+    expect(CAPTURE_RESULT_FILE).toBe("capture-result.json");
+    // One constant, beside its reader: the capture step and the Reviewer import it from there too.
+    expect(Object.keys(capture)).not.toContain("CAPTURE_RESULT_FILE");
   });
 });

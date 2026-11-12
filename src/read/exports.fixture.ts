@@ -44,6 +44,7 @@ import {
   factsOf,
   standingFactsOf,
   storeFactsOf,
+  CAPTURE_RESULT_FILE,
   checkCallerWorkflow,
   costOf,
   costPerMergedPullRequestOf,
@@ -857,6 +858,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // Capture results and production addresses
 
+  CAPTURE_RESULT_FILE: () => CAPTURE_RESULT_FILE,
   parseCaptureResult: () => [
     parseCaptureResult(
       `${JSON.stringify(A_CAPTURE_RESULT, null, 2)}\n`,

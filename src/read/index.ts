@@ -156,5 +156,5 @@ export type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 
 // Capture results and production addresses
 
-export { parseCaptureResult } from "../evidence/uiEvidence.ts";
+export { CAPTURE_RESULT_FILE, parseCaptureResult } from "../evidence/uiEvidence.ts";
 export type { CaptureResult, CaptureResultRead } from "../evidence/uiEvidence.ts";

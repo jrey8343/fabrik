@@ -190,6 +190,14 @@ export type CaptureResult<C extends Capture | VariantCapture = Capture | Variant
       readonly missed?: readonly MissedShot[];
     };
 
+/**
+ * The capture result's file, beside the screenshots in the folder capture
+ * writes (EVIDENCE_DIR) and in its zipped artifact: the one name the capture
+ * step writes it under and the Reviewer and every reader of the read library
+ * look for, so it sits here beside its reader, which a Worker can load.
+ */
+export const CAPTURE_RESULT_FILE = "capture-result.json";
+
 export type CaptureResultRead =
   | { readonly ok: true; readonly result: CaptureResult }
   | { readonly ok: false; readonly errors: readonly string[] };
