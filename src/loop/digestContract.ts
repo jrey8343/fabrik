@@ -185,6 +185,13 @@ export interface DigestItem {
    */
   readonly places: readonly NamedPlace[];
   /**
+   * The one picture the item points at: a route the pull request's UI
+   * evidence captured, named exactly as captured, or null. The item never
+   * embeds or links an image. Kit code drops one that is no captured route
+   * before the Digest lands.
+   */
+  readonly picture: string | null;
+  /**
    * A request the Operator could send as it stands: an instruction that
    * would get the thing built or shown. Never on a yours-to-judge item. It
    * is not rendered on GitHub.
@@ -288,12 +295,14 @@ function readItem(value: unknown, where: string, errors: string[]): DigestItem |
     return null;
   }
   const errorsBefore = errors.length;
-  const { claim, sentence, asks, suggestedRequest } = value;
+  const { claim, sentence, asks, picture, suggestedRequest } = value;
   const kind = oneOf(value["kind"], ITEM_KINDS, `${where}.kind`, errors);
   if (!isText(claim)) errors.push(`${where}.claim must be non-empty text`);
   if (!isText(sentence)) errors.push(`${where}.sentence must be non-empty text`);
   if (!Array.isArray(asks) || !asks.every(isText)) errors.push(`${where}.asks must be a list of ask ids`);
   const places = readPlaces(value["places"], `${where}.places`, errors);
+  // One route at most: a list of them is no picture.
+  if (picture !== null && typeof picture !== "string") errors.push(`${where}.picture must be a route as text, or null`);
   if (suggestedRequest !== null && typeof suggestedRequest !== "string") errors.push(`${where}.suggestedRequest must be text or null`);
   if (errors.length > errorsBefore || kind === undefined) return null;
   return {
@@ -302,6 +311,7 @@ function readItem(value: unknown, where: string, errors: string[]): DigestItem |
     sentence: sentence as string,
     asks: (asks as string[]).map((id) => id.trim()),
     places,
+    picture: isText(picture) ? picture.trim() : null,
     suggestedRequest: isText(suggestedRequest) ? suggestedRequest : null,
   };
 }

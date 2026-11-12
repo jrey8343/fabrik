@@ -65,7 +65,7 @@ function aPlace(start: number, end: number, rest: Partial<NamedPlace> = {}): Nam
 }
 
 function anItem(kind: DigestItem["kind"], rest: Partial<DigestItem> = {}): DigestItem {
-  return { kind, claim: "Prices hold for 24 hours.", sentence: "The Ticket said for a while, and the Implementer chose a day.", asks: [], places: [], suggestedRequest: null, ...rest };
+  return { kind, claim: "Prices hold for 24 hours.", sentence: "The Ticket said for a while, and the Implementer chose a day.", asks: [], places: [], picture: null, suggestedRequest: null, ...rest };
 }
 
 describe("The places an item of the Digest writer's reply names", () => {

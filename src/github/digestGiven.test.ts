@@ -323,6 +323,7 @@ describe("What the push job hands the Digest's contract", () => {
       sentence: "The Ticket said for a while.",
       asks: [],
       places,
+      picture: null,
       suggestedRequest: null,
     });
     const reply = aDigestReply({

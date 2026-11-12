@@ -161,6 +161,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
         { "path": "src/pages/saved-basket.tsx", "start": 14, "end": 16, "as": "words" },
         { "path": "src/pages/saved-basket.test.tsx", "start": 22, "end": 25, "as": "code" }
       ],
+      "picture": "/basket",
       "suggestedRequest": "Rename the saved-basket page's heading from \"Saved cart\" to \"Saved basket\", and update the test that reads it."
     },
     {
@@ -169,6 +170,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
       "sentence": "The Ticket said \"for a while\" and the Implementer chose a day. How long a shopper's price holds is a pricing call.",
       "asks": [],
       "places": [{ "path": "src/basket/saved.ts", "start": 31, "end": 38, "as": "code" }],
+      "picture": null,
       "suggestedRequest": null
     },
     {
@@ -177,6 +179,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
       "sentence": "A unit test moves the clock; nothing drives the page a shopper returns to.",
       "asks": [],
       "places": [{ "path": "src/basket/saved.test.ts", "start": 48, "end": 71, "as": "code" }],
+      "picture": null,
       "suggestedRequest": "Add an end-to-end test that saves a basket, moves the clock a day, returns to /basket and checks the repriced total and the list of what changed."
     }
   ],
