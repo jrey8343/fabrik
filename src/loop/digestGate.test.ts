@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   anIssue,
@@ -329,5 +330,39 @@ describe("The Digest: a pass, its Digest and the gate, on one PR", () => {
 
     thread.plan(written());
     expect(dispatch(thread)).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 12, labels: ["agent:implement"] }] });
+  });
+});
+
+describe("The README on a pass, the Digest and the gate", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const sectionOf = (heading: string): string => readme.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
+  const bulletOf = (section: string, name: string): string => section.split("\n").find((line) => line.startsWith(`- **${name}**`)) ?? "";
+
+  it("Review's section says a pass starts the Digest writer, that the review is requested when its attempt ends, and what a pass does with the Digest off", () => {
+    const pass = bulletOf(sectionOf("Review"), "A pass");
+
+    expect(pass).toContain("starts the Digest writer");
+    expect(pass).toContain("adds `agent:digest` to the PR, which stays in draft with no review requested");
+    expect(pass).toContain("The Operator's review is requested when that attempt ends");
+    expect(pass).toContain("With `digest.enabled` false, the pass itself takes the PR out of draft and requests the Operator's review");
+  });
+
+  it("the Digest's section says the gate never waits on a Digest's success, in a bullet after No Digest's", () => {
+    const digest = sectionOf("Digest");
+    const gate = bulletOf(digest, "The gate");
+
+    expect(digest.indexOf("- **The gate**")).toBeGreaterThan(digest.indexOf("- **No Digest**"));
+    expect(gate).toContain("waits for the Digest writer's attempt, never for its success");
+    expect(gate).toContain("`agent:digest` comes off, the pull request leaves draft and the Operator's review is requested, in that order");
+    expect(gate).toContain("A dropped attempt opens no gate");
+    expect(gate).toContain("no second review request");
+    expect(gate).toContain("keeps its `max_in_flight` slot until the gate opens");
+  });
+
+  it("How loud each kind is has a row for the Digest and the no-Digest line, straight under the Merge gate's: silent, the review request being the notification", () => {
+    const rows = sectionOf("How loud each kind is").split("\n");
+    const row = rows[rows.findIndex((line) => line.startsWith("| Merge gate |")) + 1];
+
+    expect(row).toBe("| Digest, no-Digest line | Silent | Both mention nobody. The review request that follows, when the Merge gate opens, is the notification. |");
   });
 });
