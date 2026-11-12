@@ -141,6 +141,57 @@ describe("the issues that can be rolled in by hand", () => {
     });
   });
 
+  it("put the issues that mention the pull request first, marked, newest first, then the rest newest first", async () => {
+    const { client } = repoWith({ issues: [31, 32, 33, 34, 35].map((number) => aRawIssue(number)), pullRequests: [aRawPullRequest()] });
+    const row = aRow({ mentions: [{ issue: 31, title: "Issue 31" }, { issue: 33, title: "Issue 33" }] });
+
+    const read = await readIssuesToRollIn(client, "jrey8343/shop", row);
+
+    expect(read !== "unread" && read.issues).toEqual([
+      { issue: 33, title: "Issue 33", mentions: true },
+      { issue: 31, title: "Issue 31", mentions: true },
+      { issue: 35, title: "Issue 35", mentions: false },
+      { issue: 34, title: "Issue 34", mentions: false },
+      { issue: 32, title: "Issue 32", mentions: false },
+    ]);
+  });
+
+  it("leave out an issue that mentions the pull request but is of a kind never related", async () => {
+    const { client } = repoWith({ issues: [aRawIssue(31), aRawIssue(32, { labels: { nodes: [{ name: "wayfinder:map" }] } })], pullRequests: [aRawPullRequest()] });
+
+    const read = await readIssuesToRollIn(client, "jrey8343/shop", aRow({ mentions: [{ issue: 32, title: "Issue 32" }] }));
+
+    expect(numbersOf(read)).toEqual([31]);
+  });
+
+  describe("come a page of 20 at a time", () => {
+    // 45 issues, three of them mentioning the pull request, over GitHub pages of 10.
+    const { client } = repoWith({ issues: Array.from({ length: 45 }, (_, i) => aRawIssue(101 + i)), pullRequests: [aRawPullRequest()], pageSize: 10 });
+    const row = aRow({ mentions: [{ issue: 101, title: "Issue 101" }, { issue: 102, title: "Issue 102" }, { issue: 103, title: "Issue 103" }] });
+    const newestFirst = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, i) => from - i);
+
+    it("the first with the mentions, then the newest of the rest, saying there are more", async () => {
+      const read = await readIssuesToRollIn(client, "jrey8343/shop", row);
+
+      expect(read).toMatchObject({ page: 1, more: true });
+      expect(numbersOf(read)).toEqual([103, 102, 101, ...newestFirst(145, 129)]);
+    });
+
+    it("the second continuing where the first stopped", async () => {
+      const read = await readIssuesToRollIn(client, "jrey8343/shop", row, 2);
+
+      expect(read).toMatchObject({ page: 2, more: true });
+      expect(numbersOf(read)).toEqual(newestFirst(128, 109));
+    });
+
+    it("the last holding what is left, saying there are no more", async () => {
+      const read = await readIssuesToRollIn(client, "jrey8343/shop", row, 3);
+
+      expect(read).toMatchObject({ page: 3, more: false });
+      expect(numbersOf(read)).toEqual(newestFirst(108, 104));
+    });
+  });
+
   it("list a Ticket still waiting for Dispatch, and an issue someone else opened", async () => {
     const waiting = aRawIssue(31, { labels: { nodes: [{ name: "ready-for-agent" }] } });
     const { client } = repoWith({ issues: [waiting, aRawIssue(32, { author: { __typename: "User", login: "kate" } })], pullRequests: [aRawPullRequest()] });

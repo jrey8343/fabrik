@@ -89,8 +89,11 @@ const PAGE_SIZE = 20;
  * is not given), a Map, a Decision and a Spec; and the pull request's own
  * Ticket, an issue with an open pull request of its own, and an issue already
  * under `related` on the row, which has a card of its own. A Ticket still
- * waiting for Dispatch is listed. "unread" when GitHub refuses or fails any
- * query.
+ * waiting for Dispatch is listed. Those the row says mention the pull request
+ * come first, marked, then the rest; each newest first, 20 to a page. Each
+ * entry is the issue's number and title, with no body and no comments: a
+ * reader fetches those for the one picked. "unread" when GitHub refuses or
+ * fails any query.
  */
 export async function readIssuesToRollIn(
   client: Pick<ReadClient, "graphql">,
@@ -106,10 +109,12 @@ export async function readIssuesToRollIn(
     pagesOf<RawPullRequest>(client, OPEN_PULL_REQUESTS_QUERY, { owner, name }, {}, (data) => data.repository.pullRequests),
   ]);
   const leftOut = new Set([...row.related.map(({ issue }) => issue), ...withPullRequestsOf(pullRequests)]);
+  const mentioning = new Set(row.mentions.map(({ issue }) => issue));
   const listed = issues
     .filter((issue) => !leftOut.has(issue.number) && neverRelatedKindOf(issueFactsOf(issue), appLogin) === null)
-    .toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.number - a.number)
-    .map(({ number, title }) => ({ issue: number, title, mentions: false }));
+    .map(({ number, title, createdAt }) => ({ issue: number, title, mentions: mentioning.has(number), createdAt }))
+    .toSorted((a, b) => Number(b.mentions) - Number(a.mentions) || Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.issue - a.issue)
+    .map(({ issue, title, mentions }) => ({ issue, title, mentions }));
   const start = (page - 1) * PAGE_SIZE;
   return { pullRequest, page, issues: listed.slice(start, start + PAGE_SIZE), more: listed.length > start + PAGE_SIZE };
 }
