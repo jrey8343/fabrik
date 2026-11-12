@@ -9,6 +9,7 @@
 // shown (src/kit/standingWording.ts).
 import type { HandBack } from "../loop/handBacks.ts";
 import type { AgentRole } from "../loop/types.ts";
+import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
@@ -204,7 +205,7 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
  * an agent pull request and the Ticket it closes being one.
  */
 export function standingsOf(facts: StandingFacts, now: string): Standing[] {
-  const candidates: Standing[] = [...operatorStandingsOf(facts, now)];
+  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...inFlightStandingsOf(facts, now)];
   return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))).toSorted(
     (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
   );
