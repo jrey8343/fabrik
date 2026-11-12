@@ -1225,7 +1225,7 @@ export interface Snapshot {
   /**
    * Gathered for an agent pull request closing, merged or not, only: what
    * tells which Roll-ins were left unsent on it, so their issues are
-   * reopened for Triage (src/loop/handClosing.ts, #663). Null for any other
+   * reopened for Triage (src/loop/rollInReopening.ts, #663). Null for any other
    * event, and for a Plain pull request closing.
    */
   readonly rollIns: RollInsSnapshot | null;
