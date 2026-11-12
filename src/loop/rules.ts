@@ -143,7 +143,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     case "pull-request-labeled":
       return withPullRequest(snapshot, (pullRequest) => {
         if (event.label === REVIEW_LABEL) return startReviewOnLabel(pullRequest, config);
-        if (event.label === DIGEST_LABEL) return startDigestOnLabel(pullRequest, config);
+        if (event.label === DIGEST_LABEL) return startDigestOnLabel(pullRequest, snapshot, config);
         if (event.label === NEEDS_DESIGN) return sendBackToDesign(pullRequest);
         const misplaced = issueLabelOnPullRequest(event.label, pullRequest);
         return misplaced === null

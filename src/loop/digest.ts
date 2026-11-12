@@ -3,6 +3,7 @@
 // lands, and when the Merge gate opens. Pure, no I/O.
 import { declineTrigger } from "./declineTrigger.ts";
 import { digestCommentOf, noDigestLine, parseDigestReply } from "./digestContract.ts";
+import { runsDueAreHeld } from "./hold.ts";
 import { DIGEST_LABEL } from "./labels.ts";
 import { runInFlight, runName } from "./retry.ts";
 import type { Action, InfrastructureFailure, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
@@ -15,10 +16,16 @@ import type { Action, InfrastructureFailure, KitConfig, LoopEvent, Plan, PullReq
  * saying why, as a declined `agent:review` does. In draft or at the Merge
  * gate alike: a pass adds the label to its draft, and the Operator may add it
  * to a pull request at the gate, which it never moves (`openGate`).
+ *
+ * A Digest run is never a Held run: when a run started now would be held,
+ * every Subscription being used up with rotation on, the attempt ends here.
+ * The no-Digest line says `no-subscription` and the gate opens, with no run
+ * for the Loop to hold.
  */
-export function startDigestOnLabel(pullRequest: PullRequestSnapshot, config: KitConfig): Plan {
+export function startDigestOnLabel(pullRequest: PullRequestSnapshot, { operator, kitIssues }: Pick<Snapshot, "operator" | "kitIssues">, config: KitConfig): Plan {
   const why = whyNoDigest(pullRequest, config);
   if (why !== null) return { kind: "act", actions: declineTrigger(pullRequest.number, DIGEST_LABEL, why) };
+  if (runsDueAreHeld(kitIssues, config)) return attemptEnded(pullRequest, noDigestLine({ head: pullRequest.headSha, how: "no-subscription" }), operator);
   const { model, effort, timeoutMinutes } = config.roles.digest;
   return {
     kind: "act",
@@ -45,7 +52,11 @@ type Passed = Extract<LoopEvent, { kind: "review-run-finished" }>;
  * What a pass that would open the Merge gate does in its place, after its
  * Verdict: the first of these that holds.
  * 1. The Digest is off in Kit config: the gate opens as it always has.
- * 2. Otherwise the pass adds `agent:digest`, which starts the Digest writer,
+ * 2. A run started now would be held, every Subscription being used up with
+ *    rotation on (`runsDueAreHeld`): the no-Digest line says
+ *    `no-subscription` and the gate opens, in the same step. A Digest run is
+ *    never a Held run, so the pass adds no label for the Loop to hold.
+ * 3. Otherwise the pass adds `agent:digest`, which starts the Digest writer,
  *    and the pull request stays in draft with no review requested: the gate
  *    opens when that attempt ends (`openGate`).
  * A pass that keeps the pull request in draft, an Execution flaw and a
@@ -56,8 +67,11 @@ type Passed = Extract<LoopEvent, { kind: "review-run-finished" }>;
  * before it. The pass is being given now, so its gate cannot have opened: a
  * step here that opens it does so with `gateOpening`.
  */
-export function digestOnPass(_event: Passed, pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator">, config: KitConfig): Action[] {
+export function digestOnPass(event: Passed, pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator" | "kitIssues">, config: KitConfig): Action[] {
   if (!config.digest.enabled) return gateOpening(pullRequest, snapshot.operator);
+  if (runsDueAreHeld(snapshot.kitIssues, config)) {
+    return [{ kind: "comment", issue: pullRequest.number, body: noDigestLine({ head: event.headSha, how: "no-subscription" }) }, ...gateOpening(pullRequest, snapshot.operator)];
+  }
   return [{ kind: "add-labels", issue: pullRequest.number, labels: [DIGEST_LABEL] }];
 }
 

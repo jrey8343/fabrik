@@ -291,27 +291,7 @@ describe("The Digest: agent:digest starting a run", () => {
   });
 });
 
-// Until a Digest run is given its own rule for a Subscription with none free, it is held as any run is.
-describe("The Digest: a run that would start with every Subscription used up", () => {
-  const usedUp = (number: number, subscription: string): KitIssueSnapshot => ({
-    number,
-    labels: ["fabrik:weekly-limit"],
-    body: [`The weekly usage limit of the \`${subscription}\` Subscription is reached.`, "", `<!-- fabrik:subscription ${subscription} -->`, "<!-- fabrik:resets-at 2026-11-09T04:00:00.000Z -->"].join("\n"),
-    comments: [],
-  });
-
-  it("is held through agent:digest on its pull request, as a Review is through agent:review, and starts no agent job", () => {
-    const plan = planFor(
-      { kind: "pull-request-labeled", pullRequest: 50, label: "agent:digest" },
-      snapshotOfPullRequest(aPassedPullRequest(), { kitIssues: [usedUp(40, "Claude token"), usedUp(41, "Claude token 2")] }),
-      kitConfig({ subscriptions: ["Claude token", "Claude token 2"] }),
-    );
-
-    expect(actionsOf(plan)).toContainEqual({ kind: "remove-label", issue: 50, label: "agent:digest" });
-    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "hold-agent-run", role: "digest", issue: 50, label: "agent:digest" }));
-    expect(actionsOf(plan).map(({ kind }) => kind)).not.toContain("start-agent-run");
-  });
-});
+// What the label does with every Subscription used up, where a run started now would be held, is src/loop/digestEdges.test.ts's.
 
 describe("The Digest: agent:digest declined", () => {
   /** The label off, and one line saying why nothing started. */
