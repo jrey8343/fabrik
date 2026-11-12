@@ -409,7 +409,8 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
   "operator": null,
   "subscriptions": ["Claude token"],
   "ui": null,
-  "preview": { "url": null }
+  "preview": { "url": null },
+  "production": null
 }
 ```
 

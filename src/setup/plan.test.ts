@@ -748,6 +748,7 @@ describe("The starters the Product repo then owns", () => {
       subscriptions: ["Claude token"],
       ui: null,
       preview: { url: null },
+      production: null,
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
       ok: true,

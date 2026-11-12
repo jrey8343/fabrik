@@ -275,6 +275,7 @@ describe("Kit config", () => {
       audit: { day: "sunday" },
       retro: { day: "saturday" },
       operator: null,
+      production: null,
     };
 
     expect(resolveKitConfig({ config: JSON.stringify(starter) })).toEqual({ ok: true, config: DEFAULTS });
@@ -767,6 +768,13 @@ describe("The Kit config template", () => {
 
   it("spells out ui and preview at their Kit defaults: Visual evidence off, and no preview linked", () => {
     expect(JSON.parse(template)).toMatchObject({ ui: null, preview: { url: null } });
+  });
+
+  it("spells out production at its Kit default, declaring nothing, as the last member", () => {
+    const starter: unknown = JSON.parse(template);
+
+    expect(starter).toMatchObject({ production: null });
+    expect(Object.keys(starter as object).at(-1)).toBe("production");
   });
 
   it("resolves to every Kit default", () => {
