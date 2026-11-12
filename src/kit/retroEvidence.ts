@@ -13,6 +13,7 @@
 // judge reads them, and the whole held to one budget, cut least
 // important first. Pure, no I/O.
 import { verdictsIn } from "../github/threads.ts";
+import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import type { RequestChangesAnswers } from "../loop/implementOutput.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
 import { followUpsIn } from "../loop/followUps.ts";
@@ -1161,7 +1162,8 @@ function sampleOf(window: Window, metrics: MetricsInput, withTranscript: WithTra
           verdict,
           source,
           at,
-          body: posted[index]!.body,
+          // As posted, but for its change line (#643), which says nothing to the Retro.
+          body: withoutChangeLines(posted[index]!.body),
           ...(flaky === true ? { flaky } : {}),
         })),
         records: metrics.records

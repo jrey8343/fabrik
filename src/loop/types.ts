@@ -6,6 +6,7 @@ import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, Repl
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { SentBack } from "./backToDesign.ts";
+import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
@@ -768,6 +769,14 @@ export interface PullRequestSnapshot {
   readonly labels: readonly string[];
   /** The Verdicts the Fabrik App has posted on it, oldest first, read from their markers (src/loop/verdict.ts). */
   readonly verdicts: readonly VerdictRecord[];
+  /**
+   * The fingerprint of its own change at `headSha` (#643), which a Verdict on
+   * that head records under its marker. No snapshot read from GitHub holds
+   * it: the push job reads it with git once its plan posts a Verdict, and
+   * plans again with it (src/github/changeRead.ts). Absent when it wasn't
+   * read, or couldn't be: the Verdict is posted without it.
+   */
+  readonly change?: ChangeFingerprint;
   /** Whether its latest push came from a Request-changes run, so a Verdict on it is marked as one. */
   readonly requestChangesRun: boolean;
   /** Whether its latest push came from a conflict-only run (#304), so a Verdict on it is marked as one. */
@@ -993,6 +1002,12 @@ export interface VerdictRecord {
    * the Kit's Flaky check line, never from the Verdict's own marker.
    */
   readonly flaky?: true;
+  /**
+   * The fingerprint of the PR's own change at `headSha` (#643), read from the
+   * hidden line under the Verdict's marker, never from the marker itself;
+   * absent on a Verdict with no such line, as every one from before it.
+   */
+  readonly change?: ChangeFingerprint;
   /** The head commit it was given on. */
   readonly headSha: string;
 }

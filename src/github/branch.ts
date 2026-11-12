@@ -30,14 +30,14 @@ export interface AgentBranchGit {
   push(branch: string): Promise<void>;
 }
 
-interface Remote {
+export interface Remote {
   readonly serverUrl: string;
   readonly repo: Repo;
   readonly token: string;
 }
 
 /** Runs git in the empty repository the branch is rebuilt in; `with` runs it with more environment, such as a commit's identity. */
-type Git = Run & {
+export type Git = Run & {
   with(more: Readonly<Record<string, string>>): Run;
 };
 
@@ -45,7 +45,7 @@ type Git = Run & {
 type Run = (...args: string[]) => Promise<string>;
 
 /** Where the remote's default branch (the PR's base, main) is fetched to. */
-const MAIN_REF = "refs/fabrik/main";
+export const MAIN_REF = "refs/fabrik/main";
 
 /** Where the PR's branch, as it is on the remote now, is fetched to. */
 const HEAD_REF = "refs/fabrik/head";
@@ -141,7 +141,7 @@ async function mainNow(git: Git, url: string): Promise<string | null> {
  * Fabrik App: the token goes in an env-only config entry, so it never lands
  * on disk or in argv, and hooks are off.
  */
-async function emptyRepository(remote: Remote): Promise<{ readonly git: Git; readonly url: string }> {
+export async function emptyRepository(remote: Remote): Promise<{ readonly git: Git; readonly url: string }> {
   const dir = await mkdtemp(join(tmpdir(), "fabrik-branch-"));
   const url = `${remote.serverUrl}/${remote.repo.owner}/${remote.repo.name}.git`;
   const env = {

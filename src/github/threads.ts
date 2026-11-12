@@ -4,6 +4,7 @@
 // before they're read. Pure, no I/O. The snapshot passes in only the comments a marker may
 // come from: a bot's, where quoting one mustn't fake it.
 import type { SentBack } from "../loop/backToDesign.ts";
+import { changeIn } from "../loop/changeFingerprint.ts";
 import {
   BACK_TO_DESIGN_MARKER,
   conflictAttemptIn,
@@ -43,7 +44,8 @@ import { VERDICTS } from "../loop/verdict.ts";
 /**
  * The Verdicts recorded in these comments, oldest first. Comments without a
  * valid marker are skipped. One whose head the Kit's Flaky check line marks
- * counted back reads as flaky (#462).
+ * counted back reads as flaky (#462). Each carries the fingerprint its
+ * comment records under the marker, if it records one (#643).
  */
 export function verdictsIn(commentBodies: readonly string[]): VerdictRecord[] {
   const countedBack = new Set(flakyCheckMarksIn(commentBodies).flatMap((mark) => (mark.countedBack === true ? [mark.headSha] : [])));
@@ -75,6 +77,8 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   if (typeof headSha !== "string") return null;
   // Likewise checks (#462), which only a Verdict from red required checks carries.
   const named = Array.isArray(checks) && checks.every((name) => typeof name === "string") ? { checks: checks as string[] } : {};
+  // The fingerprint of the PR's own change (#643), from the line under the marker; a Verdict from before it has none.
+  const change = changeIn(body);
   return {
     verdict: verdict as Verdict,
     source,
@@ -83,6 +87,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     ...(ticketNotReady ? { ticketNotReady: true as const } : {}),
     ...named,
+    ...(change === null ? {} : { change }),
     headSha,
   };
 }
