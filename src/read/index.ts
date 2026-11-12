@@ -33,6 +33,10 @@ export type { StandingWords } from "../kit/standingWording.ts";
 
 // Fact builders and cost functions
 
+export { isLive } from "../kit/runRecord.ts";
+export { costOf, hasUnknownCostBasis, weeksEndingAt } from "../kit/weeklySummary.ts";
+export type { CostFigure, Week } from "../kit/weeklySummary.ts";
+
 // The closing line and the runs read
 
 // The gather and the rows

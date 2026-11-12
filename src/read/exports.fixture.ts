@@ -4,13 +4,16 @@
 // every value as JSON and reads it back, and runs every call with the one
 // thing a Worker can't do made to throw. A Ticket that adds an export adds its
 // entries here, under its own heading, one argument to a line.
-import { aRunRecord, anOpenIssue, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aRunRecord, anOpenIssue, factsOf, standingFactsOf, UNKNOWN_COST_BASIS } from "../__fixtures__/weeklySummary.ts";
 import {
   checkCallerWorkflow,
+  costOf,
   DEFAULT_KIT_CONFIG,
   GitHub,
   GitHubError,
   gitHubMessageOf,
+  hasUnknownCostBasis,
+  isLive,
   newerSchemaOf,
   readKitConfigSources,
   readRunRecord,
@@ -23,10 +26,12 @@ import {
   standingsOf,
   stuckBarMinutes,
   TICK_MINUTES,
+  weeksEndingAt,
   wordStanding,
 } from "./index.ts";
 import type {
   CallerCheck,
+  CostFigure,
   KitConfig,
   KitConfigResult,
   KitConfigSources,
@@ -38,6 +43,7 @@ import type {
   StandingName,
   StandingWords,
   StoreStandingFacts,
+  Week,
 } from "./index.ts";
 
 /** A refusal for want of a permission, as GitHub answers an App that lacks one. */
@@ -178,6 +184,24 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // Fact builders and cost functions
 
+  costOf: () =>
+    costOf(
+      [aRunRecord(), aRunRecord({ runId: 1001, ...UNKNOWN_COST_BASIS })],
+    ),
+  hasUnknownCostBasis: () =>
+    hasUnknownCostBasis(
+      aRunRecord(UNKNOWN_COST_BASIS),
+    ),
+  isLive: () =>
+    isLive(
+      aRunRecord(),
+    ),
+  weeksEndingAt: () =>
+    weeksEndingAt(
+      Date.parse(NOW),
+      "Europe/London",
+    ),
+
   // The closing line and the runs read
 
   // The gather and the rows
@@ -232,6 +256,9 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   StoreStandingFacts: { kind: "store", summaries: [], failedSummaryIssues: [], readyForHuman: [] } satisfies StoreStandingFacts,
 
   // Fact builders and cost functions
+
+  CostFigure: { usd: 1, unknownCost: 1 } satisfies CostFigure,
+  Week: { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z"), monday: "2026-11-02" } satisfies Week,
 
   // The closing line and the runs read
 
