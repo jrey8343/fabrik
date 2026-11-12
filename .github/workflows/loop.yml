@@ -960,8 +960,8 @@ jobs:
   # Red checks the Kit can re-run go to the Re-run red checks job (#462); the
   # rest go straight to the push job as an Execution flaw, and the Reviewer
   # never runs. Giving up, or an error, fails the job with a failure report
-  # naming why: a gating check that never reported, the checks still running,
-  # or the GitHub request that failed (src/review/wait.ts).
+  # naming why: a Required check the Kit config lists that never reported, the
+  # checks still running, or the GitHub request that failed (src/review/wait.ts).
   review-checks:
     name: Review checks
     needs: kit
@@ -996,7 +996,7 @@ jobs:
           path: kit
           persist-credentials: false
 
-      # main's Kit config, read as data for its gating check list.
+      # main's Kit config, read as data for the Required checks it lists.
       - name: Check out the Product's Kit config
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1071,7 +1071,7 @@ jobs:
 
   # The wait on the re-run checks (#462): the Review checks job's wait again, with
   # its own Review timeout, on the head the first wait read. It waits until the
-  # re-run checks have reported again, then for every gating check. Green lets
+  # re-run checks have reported again, then for every check it waits on. Green lets
   # the Reviewer run; red goes to the push job as an Execution flaw. Giving up,
   # or an error, is an Infrastructure failure, as the first wait's is.
   rerun-wait:
@@ -1103,7 +1103,7 @@ jobs:
           path: kit
           persist-credentials: false
 
-      # main's Kit config, read as data for its gating check list.
+      # main's Kit config, read as data for the Required checks it lists.
       - name: Check out the Product's Kit config
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

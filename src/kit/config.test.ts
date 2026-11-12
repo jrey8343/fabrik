@@ -158,7 +158,7 @@ describe("Kit config", () => {
     ]);
   });
 
-  it("reads the Sandbox commands, gating checks, values and test secrets", () => {
+  it("reads the Sandbox commands, Required checks, values and test secrets", () => {
     const result = resolveKitConfig({
       config: JSON.stringify({
         sandbox: {
