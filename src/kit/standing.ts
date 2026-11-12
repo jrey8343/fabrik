@@ -166,7 +166,7 @@ export interface StandingFacts {
   readonly appLogin: string;
 }
 
-/** Which piece of work a Standing is: its issue, or its pull request when it has no issue. One Standing per key. */
+/** Which piece of work a Standing is: its issue, or its pull request when it has no issue. */
 export function workKeyOf({ issue, pullRequest }: Pick<Standing, "issue" | "pullRequest">): string {
   return issue !== null ? `#${issue}` : `pr#${pullRequest}`;
 }
