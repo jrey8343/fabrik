@@ -649,6 +649,19 @@ describe("the Weekly summary", () => {
       ]);
     });
 
+    it("lists handed-back work by its Standing's own hand-back and since, not by the labels and comments read again (#605)", () => {
+      const failed = aComment(
+        ["<!-- fabrik:implement-run-failed -->", "@operator The Implement run on #7 failed: it timed out.", "", `<!-- fabrik:hand-back {"kind":"infrastructure-failure","role":"implement","failure":"timeout"} -->`].join("\n"),
+        "2026-11-07T20:00:00Z",
+      );
+      const waiting = waitingIn({
+        openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-04T20:00:00Z")], comments: [failed] })],
+      });
+      expect(waiting).toEqual([
+        { kind: "infrastructure-failure", number: 7, title: "An open issue", url: "https://github.com/owner/product/issues/7", since: "2026-11-07T20:00:00Z", age: 24 * HOUR, failure: "timeout", label: "agent:implement" },
+      ]);
+    });
+
     // Work the Kit hands back is the Operator's the moment its notice says so, with no clock (#609, #610).
     describe("work the Kit handed back, at once", () => {
       const lineOf = (facts: Parameters<typeof factsOf>[0], number: number) => {

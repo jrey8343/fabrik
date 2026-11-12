@@ -182,7 +182,7 @@ function failedResearchStandingsOf(decision: OpenIssueFacts, openIssues: readonl
   if (notice === undefined || (readded !== null && Date.parse(readded) > Date.parse(notice.at))) return [];
   // Its hidden line tells a refused branch, a label the sweep took off and a failed landing from a failed run.
   const mark = handBackOfNotice(notice.body);
-  const handBack = mark !== null && RESEARCH_HAND_BACKS.has(mark.kind) ? mark.kind : "research-failed";
+  const handBack = mark !== null && RESEARCH_NOTICE_HAND_BACKS.has(mark.kind) ? mark.kind : "research-failed";
   return [
     {
       ...theOperators(repo, decision.number, null, notice.at),
@@ -194,8 +194,8 @@ function failedResearchStandingsOf(decision: OpenIssueFacts, openIssues: readonl
   ];
 }
 
-/** What a research Decision's failure notice can hand back by, besides a failed run. */
-const RESEARCH_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-branch-refused", "trigger-swept", "landing-failed"]);
+/** Every hand-back a research Decision's failure notice can name: a failed run, a branch the Kit refused, a label the sweep took off and a failed landing. */
+export const RESEARCH_NOTICE_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-failed", "research-branch-refused", "trigger-swept", "landing-failed"]);
 
 /**
  * An open `needs-info` issue no person has answered since Triage asked: the

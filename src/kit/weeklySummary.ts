@@ -16,7 +16,7 @@ import {
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { DESIGN_TURN_FAILED_MARKER, flakyCheckMarksIn, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { flakyCheckMarksIn } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
@@ -44,7 +44,8 @@ import { rubricId, SCORERS } from "./rubrics.ts";
 import { type PlainKind, type Standing, standingsOf, type StandingNamed } from "./standing.ts";
 import { givenUpWeeksOf, maxInFlightHoldOf } from "./standingInFlight.ts";
 import { wordStanding } from "./standingWording.ts";
-import { passedMoveOf, readyForHumanStandingOf } from "./standingOperator.ts";
+import { READY_FOR_HUMAN_HAND_BACKS } from "./standingHandBacks.ts";
+import { RESEARCH_NOTICE_HAND_BACKS } from "./standingOperator.ts";
 import {
   firstRunOf,
   isLive,
@@ -1414,9 +1415,6 @@ function listedInWaitingOnYou(standing: Standing): boolean {
   return true;
 }
 
-/** What a research Decision's notice can hand back by, which Waiting on you lists as its failed run. */
-const RESEARCH_HAND_BACKS: ReadonlySet<HandBack> = new Set(["research-failed", "research-branch-refused", "trigger-swept", "landing-failed"]);
-
 /** What a Waiting on you line is read with, beside the Standing. */
 interface ListedWith {
   readonly repo: string;
@@ -1428,41 +1426,40 @@ interface ListedWith {
 }
 
 /**
- * The Waiting on you line of work the Kit handed back. As the Monday issue
- * has always listed it: a research Decision whose latest Kit word is its
- * failure notice, as its failed run; a Design session whose last word is the
- * Kit's failed turn or Map cap refusal, as that; `ready-for-human` work, as
- * such; an agent PR handed back at the Merge gate after its pass, as handed
- * back. Else, at once, with no clock (#610): an Infrastructure failure and a
- * Broken run that used no retry each by its own line, and any other hand-back
- * by its Standing's sentence.
+ * The Waiting on you line of work the Kit handed back, read off its Standing
+ * alone, its hand-back and since, worded as the Monday issue has always
+ * worded each: `ready-for-human` work, and a Ticket's agent PR handed back at
+ * the Merge gate, as such; a research Decision's failure notice as its failed
+ * run; a Design session's failed turn or Map cap refusal as that; a hand-back
+ * that put `ready-for-human` on an agent PR as handed back, and on an issue as
+ * `ready-for-human`. Else, at once, with no clock (#610): an Infrastructure
+ * failure and a Broken run that used no retry each by its own line, and any
+ * other hand-back by its Standing's sentence.
  */
 function handedBackItemOf(
   standing: StandingNamed<"yours-to-do">,
   issue: OpenIssueFacts | null,
   pullRequest: OpenPullRequestFacts | undefined,
-  { repo, operator, appLogin, filedAt, timeZone }: ListedWith,
+  { filedAt, timeZone }: ListedWith,
   items: Items,
 ): WaitingItem | null {
   const { handBack, failure, label } = standing.detail;
   const onIssue = issue === null ? null : items.issue(issue, standing.since);
+  const onPullRequest = pullRequest === undefined ? null : items.pullRequest(pullRequest, standing.since);
   if (handBack === null) {
-    if (standing.work === "ticket") return pullRequest === undefined ? null : { kind: "handed-back", ...items.pullRequest(pullRequest, standing.since) };
+    if (standing.work === "ticket") return onPullRequest === null ? null : { kind: "handed-back", ...onPullRequest };
     // ready-for-human work, and a usage-credits issue, which the Kit opens with the label.
     return onIssue === null ? null : { kind: "ready-for-human", ...onIssue };
   }
-  const lastKitWord = issue?.comments.filter(({ author }) => author === appLogin).at(-1)?.body ?? "";
-  if (onIssue !== null && standing.work === "research-decision" && RESEARCH_HAND_BACKS.has(handBack) && lastKitWord.startsWith(RESEARCH_RUN_FAILED_MARKER)) {
-    return { kind: "research-failed", ...onIssue };
+  if (standing.work === "research-decision" && RESEARCH_NOTICE_HAND_BACKS.has(handBack)) return onIssue === null ? null : { kind: "research-failed", ...onIssue };
+  if (standing.work === "design-session" && DESIGN_NOTICE_HAND_BACKS.has(handBack)) {
+    return onIssue === null ? null : { kind: handBack === "map-cap-refused" ? "design-map-cap" : "design-turn-failed", ...onIssue };
   }
-  const last = issue?.comments.at(-1);
-  if (onIssue !== null && standing.work === "design-session" && last?.author === appLogin && last.body.startsWith(DESIGN_TURN_FAILED_MARKER)) {
-    return { kind: handBack === "map-cap-refused" ? "design-map-cap" : "design-turn-failed", ...onIssue };
+  if (READY_FOR_HUMAN_HAND_BACKS.has(handBack)) {
+    if (onPullRequest !== null) return { kind: "handed-back", ...onPullRequest };
+    return onIssue === null ? null : { kind: "ready-for-human", ...onIssue };
   }
-  if (issue !== null && issue.labels.includes(READY_FOR_HUMAN)) return { kind: "ready-for-human", ...items.issue(issue, readyForHumanStandingOf(issue, repo, standing.since).since) };
-  const move = pullRequest === undefined ? null : passedMoveOf(pullRequest, operator);
-  if (pullRequest !== undefined && move?.kind === "handed-back") return { kind: "handed-back", ...items.pullRequest(pullRequest, move.since) };
-  const item = onIssue ?? (pullRequest === undefined ? null : items.pullRequest(pullRequest, standing.since));
+  const item = onIssue ?? onPullRequest;
   if (item === null) return null;
   switch (handBack) {
     case "infrastructure-failure":
@@ -1473,6 +1470,9 @@ function handedBackItemOf(
       return { kind: "hand-back", ...item, sentence: wordStanding(standing, filedAt, timeZone).sentence };
   }
 }
+
+/** Every hand-back a Design session's own notice names, a label the sweep took off among them, which Waiting on you lists as its failed turn or Map cap refusal. */
+const DESIGN_NOTICE_HAND_BACKS: ReadonlySet<HandBack> = new Set(["design-turn-failed", "map-cap-refused", "trigger-swept"]);
 
 /**
  * A Standing's Waiting on you line, worded as the Monday issue has always

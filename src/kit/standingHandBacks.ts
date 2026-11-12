@@ -76,7 +76,7 @@ export function handBackOfNotice(body: string): HandBackMark | null {
 }
 
 /** The hand-backs that put `ready-for-human` on the work: each stands while that label is on, whatever the Kit says after. */
-const READY_FOR_HUMAN_HAND_BACKS: ReadonlySet<HandBack> = new Set(["request-changes-empty", "conflict-run-unlanded", "request-changes-unlanded", "closed-by-hand", "kept-branch-gone"]);
+export const READY_FOR_HUMAN_HAND_BACKS: ReadonlySet<HandBack> = new Set(["request-changes-empty", "conflict-run-unlanded", "request-changes-unlanded", "closed-by-hand", "kept-branch-gone"]);
 
 /** One piece of work, its issue and its open agent PR, as the Kit's notices on either speak of it. */
 interface HandedWork {
