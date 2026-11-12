@@ -10,6 +10,7 @@
 import type { HandBack } from "../loop/handBacks.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
+import { joinPairing, plainStandingsOf } from "./standingPlain.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 /** Goes up only when a field is removed or changes meaning: a new name or a new `detail` key leaves it. */
@@ -204,8 +205,8 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
  * an agent pull request and the Ticket it closes being one.
  */
 export function standingsOf(facts: StandingFacts, now: string): Standing[] {
-  const candidates: Standing[] = [...operatorStandingsOf(facts, now)];
-  return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))).toSorted(
+  const candidates: Standing[] = [...operatorStandingsOf(facts, now), ...plainStandingsOf(facts, now)];
+  return joinPairing(oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github))), facts.github).toSorted(
     (a, b) => Date.parse(a.since) - Date.parse(b.since) || (a.issue ?? 0) - (b.issue ?? 0) || (a.pullRequest ?? 0) - (b.pullRequest ?? 0),
   );
 }

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
+import { aComment, aDesignRound, aDesignTurnFailedNotice, aLabelAdded, aMapCapRefusal, aPlainPullRequest, aReplayBody, aReview, aVerdictComment, anOpenAudit, anOpenIssue, anOpenPullRequest, anOpenReplay, anOpenRetro, factsOf, standingFactsOf } from "../__fixtures__/weeklySummary.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
@@ -577,6 +577,36 @@ describe("the Standing rule", () => {
       expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([
         { issue: 20, name: "needs-your-answer" },
         { issue: 21, name: "needs-your-answer" },
+      ]);
+    });
+  });
+
+  describe("a Plain pull request", () => {
+    it("is named by its draft, its merge and its Required checks, each with its kind and no place (src/kit/standingPlain.test.ts)", () => {
+      const head = (digit: string) => digit.repeat(40);
+      const kit = {
+        repo: "owner/product",
+        branch: "main",
+        config: { ok: true, config: DEFAULT_KIT_CONFIG },
+        dispatch: null,
+        headChecks: { [head("1")]: [{ name: "test", is: "running" }], [head("2")]: [{ name: "test", is: "failing" }] },
+      } as const;
+      const standings = standingsIn(
+        {
+          plainPullRequests: [
+            aPlainPullRequest({ number: 70, headSha: head("1") }),
+            aPlainPullRequest({ number: 71, headSha: head("2"), author: "operator", headRef: "fabrik/setup-v3.1.0" }),
+            aPlainPullRequest({ number: 72, mergeable: false }),
+            aPlainPullRequest({ number: 73, draft: true, author: "operator", headRef: "fix-typo" }),
+          ],
+        },
+        { kit },
+      );
+      expect(standings.map(({ pullRequest, name, detail }) => ({ pullRequest, name, detail }))).toEqual([
+        { pullRequest: 70, name: "waiting-on-checks", detail: { plain: "kit-bump", check: "test", checksUnread: false } },
+        { pullRequest: 71, name: "check-failing", detail: { plain: "setup", check: "test", checkIs: "failing" } },
+        { pullRequest: 72, name: "conflicts", detail: { plain: "kit-bump" } },
+        { pullRequest: 73, name: "draft", detail: { plain: "other" } },
       ]);
     });
   });
