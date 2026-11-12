@@ -49,8 +49,10 @@ import {
   GitHubError,
   gitHubMessageOf,
   hasUnknownCostBasis,
+  headsToCheck,
   homeFactsOf,
   isLive,
+  joinChecks,
   joinRuns,
   KIT_SAID_VERSION,
   kitSaidIn,
@@ -58,9 +60,11 @@ import {
   readCaller,
   readKitConfigSources,
   readRunRecord,
+  readRequiredChecks,
   readRuns,
   readSpend,
   refusalOf,
+  requiredChecksFactOf,
   resolveKitConfig,
   rowsOf,
   RUN_RECORD_SCHEMA,
@@ -84,6 +88,7 @@ import type {
   CallerRead,
   CostFigure,
   Facts,
+  HeadCheck,
   KitConfig,
   KitConfigResult,
   KitConfigSources,
@@ -91,6 +96,7 @@ import type {
   ReadClient,
   RepoRead,
   Repo,
+  RequiredChecksRead,
   Row,
   RunInFlight,
   RunKind,
@@ -196,6 +202,16 @@ const A_RUNS_READ = {
   runs: [A_RUN_IN_FLIGHT],
   tick: { lastStartedAt: "2026-11-09T11:55:00Z" },
 } as const satisfies RunsRead;
+
+/** `owner/product`'s Required checks read at NOW: `main` holds admins to its rules and requires `test`, which passed on Plain pull request 70's head. */
+const A_CHECKS_READ = {
+  repo: "owner/product",
+  branch: "main",
+  readAt: NOW,
+  required: ["test"],
+  holdsAdmins: "yes",
+  heads: { ["p".repeat(40)]: [{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-09T11:30:00Z" }] },
+} as const satisfies RequiredChecksRead;
 
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
@@ -453,7 +469,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     rowsOf(
       homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
       A_RUNS_READ,
-      {},
+      A_CHECKS_READ,
       NOW,
     ),
 
@@ -467,6 +483,29 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     ),
 
   // The Required checks
+
+  headsToCheck: () =>
+    headsToCheck(
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, NOW),
+    ),
+  joinChecks: () =>
+    joinChecks(
+      rowsOf(homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest()] }) }), null, null, NOW),
+      A_CHECKS_READ,
+      NOW,
+    ),
+  readRequiredChecks: () =>
+    readRequiredChecks(
+      REFUSING_CLIENT,
+      "owner/product",
+      ["p".repeat(40)],
+      NOW,
+    ),
+  requiredChecksFactOf: () =>
+    requiredChecksFactOf(
+      A_CHECKS_READ,
+      "p".repeat(40),
+    ),
 
   // The caller read
 
@@ -626,6 +665,9 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The join with runs
 
   // The Required checks
+
+  HeadCheck: { name: "test", is: "never-reported", url: null, at: null } satisfies HeadCheck,
+  RequiredChecksRead: A_CHECKS_READ satisfies RequiredChecksRead,
 
   // The caller read
 

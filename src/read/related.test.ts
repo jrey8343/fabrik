@@ -38,7 +38,7 @@ function repoWith({
   });
 }
 
-const rowsIn = (facts: Facts): Row[] => rowsOf(facts, null, {}, NOW);
+const rowsIn = (facts: Facts): Row[] => rowsOf(facts, null, null, NOW);
 /** The row of pull request `number`. */
 const pullRequestRow = (facts: Facts, number = 50): Row | undefined => rowsIn(facts).find(({ standing }) => standing.pullRequest === number);
 /** The row of issue `number`, which has no pull request of its own. */

@@ -98,6 +98,10 @@ export { joinRuns } from "./joinRuns.ts";
 
 // The Required checks
 
+export { joinChecks } from "./joinChecks.ts";
+export { headsToCheck, readRequiredChecks, requiredChecksFactOf } from "./requiredChecks.ts";
+export type { HeadCheck, RequiredChecksRead } from "./requiredChecks.ts";
+
 // The caller read
 
 export { readCaller } from "./caller.ts";

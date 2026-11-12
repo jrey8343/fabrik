@@ -38,7 +38,8 @@ export function plainStandingsOf({ github, kit, operator, appLogin }: StandingFa
       awaits: null,
       subscription: null,
     } as const;
-    return { ...base, ...plainNameOf(pullRequest, plainKindOf(pullRequest, operator, appLogin), kit?.headChecks[pullRequest.headSha] ?? "unread") };
+    const { decidedAt, ...name } = plainNameOf(pullRequest, plainKindOf(pullRequest, operator, appLogin), kit?.headChecks[pullRequest.headSha] ?? "unread");
+    return { ...base, since: decidedAt ?? base.since, ...name };
   });
 }
 
@@ -76,7 +77,7 @@ export function joinPairing(standings: readonly Standing[], { plainPullRequests,
 }
 
 /** An issue's own Standing joined with its Pairing session's pull request's. */
-function joined(own: Standing, pairing: Standing): Standing {
+export function joined(own: Standing, pairing: Standing): Standing {
   if (pairing.name === "yours-to-merge") {
     return { ...own, pullRequest: pairing.pullRequest, name: "yours-to-merge", move: "operator", yours: true, stopsWork: false, since: pairing.since, stuckAt: null, awaits: null, detail: { plain: "pairing", pullRequest: "yours-to-merge" } };
   }
@@ -93,30 +94,53 @@ function sinceOf({ createdAt, headCommittedAt, draftChangedAt }: PlainPullReques
 }
 
 /** What a Plain pull request's Standing is named, with its move and detail. */
-type PlainName = { [N in PlainNames]: Pick<StandingNamed<N>, "name" | "move" | "yours" | "detail"> }[PlainNames];
+export type PlainName = { [N in PlainNames]: Pick<StandingNamed<N>, "name" | "move" | "yours" | "detail"> }[PlainNames];
 type PlainNames = "draft" | "conflicts" | "check-failing" | "waiting-on-checks" | "yours-to-merge";
+
+/** A Plain pull request's name for its Required checks alone: never a draft, nor one in conflict. */
+export type PlainChecksName = Exclude<PlainName, { readonly name: "draft" | "conflicts" }>;
 
 /**
  * Its name, the first that holds: a draft; one that cannot merge cleanly (one
- * GitHub hasn't worked out merges cleanly); a Required check failing; one
- * running; one never reported on its head; else ready, every one passed. A
- * running check comes before one not yet reported, so a fresh push is not the
- * Operator's before its checks start. With the checks unread, as when the Kit
- * config lists none, it waits on checks it could not read: never ready.
+ * GitHub hasn't worked out merges cleanly); else its name for its Required
+ * checks (plainNameForChecks), with when the report that decided it was made.
  */
-function plainNameOf({ draft, mergeable }: PlainPullRequestFacts, plain: PlainKind, checks: RequiredChecksFact): PlainName {
+function plainNameOf({ draft, mergeable }: PlainPullRequestFacts, plain: PlainKind, checks: RequiredChecksFact): PlainName & { readonly decidedAt: string | null } {
+  if (draft) return { name: "draft", move: "nobody", yours: false, detail: { plain }, decidedAt: null };
+  if (mergeable === false) return { name: "conflicts", move: "operator", yours: true, detail: { plain }, decidedAt: null };
+  const { name, decidedAt } = plainNameForChecks(plain, checks);
+  return { ...name, decidedAt };
+}
+
+/**
+ * The name of a Plain pull request out of draft and merging cleanly, for the
+ * Required checks on its head, the first that holds: a Required check
+ * failing; one running; one never reported on its head; else ready, every one
+ * passed, an empty list (none required) included. A running check comes
+ * before one not yet reported, so a fresh push is not the Operator's before
+ * its checks start. With the checks unread, as when the Kit config lists
+ * none, it waits on checks it could not read: never ready. `decidedAt` is
+ * when the report that decided it was made, where the fact gives it: the
+ * check it names, or the last to pass; null when no report decided it.
+ */
+export function plainNameForChecks(plain: PlainKind, checks: RequiredChecksFact): { readonly name: PlainChecksName; readonly decidedAt: string | null } {
   const operators = { move: "operator", yours: true } as const;
-  if (draft) return { name: "draft", move: "nobody", yours: false, detail: { plain } };
-  if (mergeable === false) return { name: "conflicts", ...operators, detail: { plain } };
-  if (checks === "unread" || checks.length === 0) return { name: "waiting-on-checks", move: "kit", yours: false, detail: { plain, check: null, checksUnread: true } };
-  const first = (is: RequiredCheckFact["is"]) => checks.find((check) => check.is === is)?.name;
+  if (checks === "unread") return { name: { name: "waiting-on-checks", move: "kit", yours: false, detail: { plain, check: null, checksUnread: true } }, decidedAt: null };
+  const first = (is: RequiredCheckFact["is"]) => checks.find((check) => check.is === is);
   const failing = first("failing");
-  if (failing !== undefined) return { name: "check-failing", ...operators, detail: { plain, check: failing, checkIs: "failing" } };
+  if (failing !== undefined) return { name: { name: "check-failing", ...operators, detail: { plain, check: failing.name, checkIs: "failing" } }, decidedAt: failing.at ?? null };
   const running = first("running");
-  if (running !== undefined) return { name: "waiting-on-checks", move: "kit", yours: false, detail: { plain, check: running, checksUnread: false } };
+  if (running !== undefined) return { name: { name: "waiting-on-checks", move: "kit", yours: false, detail: { plain, check: running.name, checksUnread: false } }, decidedAt: running.at ?? null };
   const unreported = first("never-reported");
-  if (unreported !== undefined) return { name: "check-failing", ...operators, detail: { plain, check: unreported, checkIs: "never-reported" } };
-  return { name: "yours-to-merge", ...operators, detail: { plain } };
+  if (unreported !== undefined) return { name: { name: "check-failing", ...operators, detail: { plain, check: unreported.name, checkIs: "never-reported" } }, decidedAt: null };
+  return { name: { name: "yours-to-merge", ...operators, detail: { plain } }, decidedAt: lastPassedAt(checks) };
+}
+
+/** When the last of these passed checks passed, or null when there are none or one gives no time. */
+function lastPassedAt(checks: readonly RequiredCheckFact[]): string | null {
+  const times = checks.map(({ at }) => at ?? null);
+  if (times.length === 0 || times.includes(null)) return null;
+  return times.reduce<string | null>((latest, at) => (latest === null || (at !== null && Date.parse(at) > Date.parse(latest)) ? at : latest), null);
 }
 
 /**
