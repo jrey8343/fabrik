@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
-import type { Week } from "../kit/weeklySummary.ts";
+import { costPerMergedPullRequestOf } from "../kit/mergedCost.ts";
+import { type Week, weeklySummary, weeksEndingAt } from "../kit/weeklySummary.ts";
+import { aMergedPullRequest, aReplayRunRecord, aRunRecord, factsOf } from "./builders.ts";
 import { readOutcomes } from "./outcomes.ts";
 import { threeDeepConnectionsIn } from "./queryShape.ts";
 
@@ -94,15 +96,27 @@ interface Calls {
 }
 
 /**
- * A client over `owner/product` holding these issues and pull requests. It
- * answers a query for issues by number as GitHub's GraphQL does, a missing
- * one failing the whole answer as the Kit's client does, and a search for
- * merged pull requests with every merged one it holds, whatever its dates.
+ * A client over `repo`, `owner/product` unless a test says so, holding these
+ * issues and pull requests. It answers a query for issues by number as
+ * GitHub's GraphQL does, a missing one failing the whole answer as the Kit's
+ * client does, and a search for merged pull requests with every merged one it
+ * holds, whatever its dates.
  */
-function gitHubWith({ issues = [], pullRequests = [], failing }: { issues?: RawIssue[]; pullRequests?: RawPullRequest[]; failing?: GitHubError }): {
+function gitHubWith({
+  repo = "owner/product",
+  issues = [],
+  pullRequests = [],
+  failing,
+}: {
+  repo?: string;
+  issues?: RawIssue[];
+  pullRequests?: RawPullRequest[];
+  failing?: GitHubError;
+}): {
   client: ReadClient;
   calls: Calls;
 } {
+  const [owner, name] = repo.split("/");
   const calls: Calls = { queries: [] };
   const naming = (issue: number) => pullRequests.filter((pullRequest) => pullRequest.closingIssuesReferences.nodes.some((named) => named.number === issue));
   const client: ReadClient = {
@@ -113,13 +127,13 @@ function gitHubWith({ issues = [], pullRequests = [], failing }: { issues?: RawI
       if (failing !== undefined) throw failing;
       if (query.includes("search(")) {
         const q = String(variables["q"]);
-        expect(q).toContain("repo:owner/product");
+        expect(q).toContain(`repo:${repo} `);
         expect(q).toContain("is:pr");
         expect(q).toContain("is:merged");
         const nodes = pullRequests.filter((pullRequest) => pullRequest.mergedAt !== null);
         return { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } as T;
       }
-      expect(variables).toMatchObject({ owner: "owner", name: "product" });
+      expect(variables).toMatchObject({ owner, name });
       const asked = [...query.matchAll(/(\w+): issue\(number: (\d+)\)/g)].map(([, alias = "", number = ""]) => ({ alias, number: Number(number) }));
       const missing = asked.filter(({ number }) => !issues.some((issue) => issue.number === number));
       if (missing.length > 0) {
@@ -409,5 +423,68 @@ describe("the outcomes read", () => {
 
       expect(read).toMatchObject({ work: "unread", merged: "unread", unread: "A read of the outcomes failed with 404: Could not resolve to a Repository." });
     });
+  });
+});
+
+describe("what a merged pull request cost, from the outcomes reads", () => {
+  it("is the Weekly summary's figure for the same week and Run records across two repos, a pull request naming no Ticket among them", async () => {
+    // Filed Monday 9 November 2026, 07:00 in Sydney: the week is 2026-11-01T13:00Z to 2026-11-08T13:00Z.
+    const filedAt = "2026-11-08T20:00:00Z";
+    const timeZone = "Australia/Sydney";
+    const { thisWeek } = weeksEndingAt(Date.parse(filedAt), timeZone);
+    const records = [
+      aRunRecord({ runId: 1, repo: "owner/product", issue: 7, endedAt: "2026-10-28T00:00:00Z", totalCostUsd: 2 }),
+      aRunRecord({ runId: 2, repo: "owner/product", issue: 7, role: "review", endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 0.5 }),
+      aRunRecord({ runId: 3, repo: "owner/product", issue: 7, endedAt: "2026-11-09T00:00:00Z", totalCostUsd: 50 }),
+      aReplayRunRecord({ runId: 4, repo: "owner/product", issue: 7, endedAt: "2026-11-03T00:00:00Z", totalCostUsd: 40 }),
+      aRunRecord({ runId: 5, repo: "owner/other", issue: 7, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 3 }),
+      aRunRecord({ runId: 6, repo: "owner/other", issue: 8, role: "triage", endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 9 }),
+      aRunRecord({ runId: 7, repo: "owner/other", issue: 9, endedAt: "2026-11-04T00:00:00Z", totalCostUsd: 9 }),
+    ];
+    const github = {
+      "owner/product": {
+        issues: [aTicket(7, { state: "CLOSED", closedAt: "2026-11-05T00:00:00Z" })],
+        pullRequests: [merged(aPullRequest(50, 7), "2026-11-05T00:00:00Z"), merged(aPullRequest(51, null, { headRefName: "fabrik/ticket-51" }), "2026-11-06T00:00:00Z")],
+      },
+      "owner/other": {
+        issues: [aTicket(7, { state: "CLOSED", closedAt: "2026-11-04T06:00:00Z" }), aTicket(8, { state: "CLOSED", closedAt: "2026-11-04T07:00:00Z" }), aTicket(9)],
+        pullRequests: [merged(aPullRequest(60, 7), "2026-11-04T06:00:00Z"), merged(aPullRequest(61, 8), "2026-11-04T07:00:00Z"), merged(aPullRequest(62, 9), "2026-11-08T14:00:00Z")],
+      },
+    };
+    const summary = weeklySummary({
+      records,
+      unreadableRecords: { count: 0, newestSchema: null },
+      scoreFiles: [],
+      facts: Object.entries(github).map(([repo, { pullRequests }]) =>
+        factsOf({
+          repo,
+          pullRequests: pullRequests.map(({ number, mergedAt, closingIssuesReferences }) =>
+            aMergedPullRequest(mergedAt ?? "", { number, ticket: closingIssuesReferences.nodes[0]?.number ?? null }),
+          ),
+        }),
+      ),
+      unread: [],
+      health: [],
+      kits: [],
+      operator: "jrey8343",
+      appLogin: "fabrik-app[bot]",
+      timeZone,
+      now: filedAt,
+    });
+
+    const reads = await Promise.all(
+      Object.entries(github).map(([repo, held]) => {
+        const named = [...new Set(records.filter((record) => record.repo === repo).map(({ issue }) => issue))];
+        return readOutcomes(gitHubWith({ repo, ...held }).client, repo, thisWeek, named, filedAt);
+      }),
+    );
+    const pullRequests = reads.flatMap(({ repo, merged: read }) => (read === "unread" ? [] : read.map(({ ticket }) => ({ repo, ticket }))));
+    const figure = costPerMergedPullRequestOf(thisWeek, records, pullRequests);
+
+    expect(summary.kind).toBe("summary");
+    const weekly = summary.kind === "summary" ? summary.summary.costPerMergedPullRequest.thisWeek : null;
+    // owner/product: Ticket 7 $2.50, PR 51 nothing; owner/other: Ticket 7 $3, Ticket 8 nothing (only Triage).
+    expect(figure).toEqual({ usd: 5.5 / 4, unknownCost: 0, merged: 4 });
+    expect({ usd: figure.usd, unknownCost: figure.unknownCost }).toEqual(weekly);
   });
 });
