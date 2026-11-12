@@ -472,6 +472,18 @@ describe("The prototype turn's prompt", () => {
     const example: unknown = JSON.parse(/<prototype>\n([\s\S]*?)\n<\/prototype>/.exec(text)?.[1] ?? "null");
     expect(readPrototypeTurnOutput(example)).toMatchObject({ ok: true, output: { kind: "prototype-round" } });
   });
+
+  it("asks for recommended, the letter of the variant its recommendation builds on, beside the recommendation, and its example carries one the Kit keeps", async () => {
+    const text = await prompt("prototype");
+    const output = section(text, "Your output");
+    const example: unknown = JSON.parse(/<prototype>\n([\s\S]*?)\n<\/prototype>/.exec(text)?.[1] ?? "null");
+    const read = readPrototypeTurnOutput(example);
+    expect(read).toMatchObject({ ok: true, output: { kind: "prototype-round", recommended: "B" } });
+    expect(read.ok && read.output).not.toHaveProperty("refusedRecommended");
+    const fields = Object.keys(example as object);
+    expect(fields.indexOf("recommended")).toBe(fields.indexOf("recommendation") + 1);
+    expect(lineStarting(output, "- `recommended`")).toContain("capital letter");
+  });
 });
 
 describe("Questions for the Operator", () => {

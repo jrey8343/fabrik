@@ -52,7 +52,8 @@ When you have committed the variants, end your reply with exactly one `<prototyp
     { "summary": "A list of the next open times, soonest first.", "component": "src/components/prototype/BookVariantB.astro" },
     { "summary": "One large button for the next free slot, with the others folded away.", "component": "src/components/prototype/BookVariantC.astro" }
   ],
-  "recommendation": "B, with the next free slot as large as C's button: it shows most of what a patient needs at a glance."
+  "recommendation": "B, with the next free slot as large as C's button: it shows most of what a patient needs at a glance.",
+  "recommended": "B"
 }
 </prototype>
 
@@ -60,4 +61,5 @@ When you have committed the variants, end your reply with exactly one `<prototyp
 - `intro` is non-empty Markdown leading into the round: what the variants try, and anything the Operator should know when looking at them. Don't @-mention anyone.
 - `variants` holds one entry for each variant you built, in letter order, so the first is A: a one-line `summary` of what it is, and `component`, the repo path, from the root, of the component that renders it.
 - `recommendation` is the variant you recommend and any tweak you suggest, so the Operator can reply in a word.
+- `recommended` is the letter of the variant your `recommendation` builds on: one capital letter, one of your variants', such as `"B"` when you recommend B with parts of the others. The words alone don't say which variant to open on. A letter that isn't one of your variants' is left out of the round.
 - Write no question. The Kit asks "Which variant?" itself, under the captures and the links to the branch and each component.
