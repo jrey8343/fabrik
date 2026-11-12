@@ -11,6 +11,8 @@ import {
   anOpenPullRequest,
   aPlainPullRequest,
   aRunInFlight,
+  aRunRead,
+  aRunsRead,
   aVerdictComment,
   aWeeklyLimitIssue,
   factsOf,
@@ -51,19 +53,31 @@ describe("a Product repo's rows", () => {
         kitIssues: [aWeeklyLimitIssue("2026-11-10T00:00:00Z")],
       }),
     });
-    const runs = [aRunInFlight({ issue: 7 })];
+    const runs = aRunsRead([aRunRead({ issue: 7 })]);
     const checks = { ["p".repeat(40)]: [{ name: "test", is: "passed" }] } as const;
 
     const rows = rowsOf(facts, runs, checks, NOW);
 
-    expect(rows.map(({ standing }) => standing)).toEqual(ruleOf(facts, runs, checks));
+    expect(rows.map(({ standing }) => standing)).toEqual(ruleOf(facts, [aRunInFlight({ issue: 7 })], checks));
     expect(rows.length).toBeGreaterThan(4);
+  });
+
+  it("take a runs read, the rule reading it as its runs-in-flight fact, and carry the Actions run on a running Standing (#621)", () => {
+    const facts = homeFactsOf({ github: factsOf({ openIssues: [anOpenIssue({ number: 12, title: "Add the cart", labels: ["ready-for-agent", "agent:implement"] })] }) });
+    const runs = aRunsRead([aRunRead({ issue: 12, exact: true, kind: "first", run: 4410, createdAt: "2026-11-08T19:20:00Z", startedAt: "2026-11-08T19:25:00Z" })]);
+
+    const rows = rowsOf(facts, runs, {}, NOW);
+
+    expect(rows.map(({ standing }) => ({ name: standing.name, since: standing.since, detail: standing.detail }))).toEqual([
+      { name: "running", since: "2026-11-08T19:25:00Z", detail: { run: "implement", retry: null, actionsRun: 4410 } },
+    ]);
+    expect(rowsOf(facts, aRunsRead("unread"), {}, NOW)).toEqual(rowsOf(facts, null, {}, NOW));
   });
 
   it("are the rule's Standings with the runs and the checks unread", () => {
     const facts = homeFactsOf({ github: factsOf({ openIssues: [TICKET], plainPullRequests: [aPlainPullRequest()] }) });
 
-    expect(rowsOf(facts, "unread", {}, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
+    expect(rowsOf(facts, null, {}, NOW).map(({ standing }) => standing)).toEqual(ruleOf(facts, "unread", {}));
   });
 
   it("give each Standing its title, the issue's, or the pull request's for a Plain one with no issue, and nothing related yet", () => {
@@ -75,7 +89,7 @@ describe("a Product repo's rows", () => {
       }),
     });
 
-    const rows = rowsOf(facts, "unread", {}, NOW);
+    const rows = rowsOf(facts, null, {}, NOW);
 
     expect(rows.map(({ standing, title, related, mentions, relatedTo, followUps }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, title, related, mentions, relatedTo, followUps }))).toEqual(
       expect.arrayContaining([
@@ -88,7 +102,7 @@ describe("a Product repo's rows", () => {
   });
 
   describe("the last word", () => {
-    const lastWordOf = (facts: Facts) => rowsOf(facts, "unread", {}, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
+    const lastWordOf = (facts: Facts) => rowsOf(facts, null, {}, NOW).find(({ standing }) => standing.issue === 7)?.lastWord;
 
     it("is the Fabrik App's latest comment on the issue or its pull request, with when and where it was said", () => {
       const onIssue = aComment("The Kit opened #50 for this Ticket.", "2026-11-08T18:00:00Z", { url: "https://github.com/owner/product/issues/7#issuecomment-1" });
@@ -126,7 +140,7 @@ describe("a Product repo's rows", () => {
     const notice = handedBack("2026-11-08T19:30:00Z", { author: "some-app[bot]" });
     const issues = [{ ...TICKET, comments: [notice] }];
 
-    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), "unread", {}, NOW).map(({ standing }) => standing.name);
+    const named = (appLogin: string | null) => rowsOf(homeFactsOf({ appLogin, github: factsOf({ openIssues: issues }) }), null, {}, NOW).map(({ standing }) => standing.name);
 
     expect(named(null)).toEqual(["yours-to-do"]);
     expect(named("fabrik-app[bot]")).not.toEqual(["yours-to-do"]);
@@ -141,7 +155,7 @@ describe("a Product repo's rows", () => {
       }),
     });
 
-    const rows: Row[] = rowsOf(facts, [aRunInFlight({ issue: 7 })], {}, NOW);
+    const rows: Row[] = rowsOf(facts, aRunsRead([aRunRead({ issue: 7 })]), {}, NOW);
 
     expect(rows.length).toBeGreaterThan(0);
     expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);

@@ -450,7 +450,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   rowsOf: () =>
     rowsOf(
       homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
-      "unread",
+      A_RUNS_READ,
       {},
       NOW,
     ),

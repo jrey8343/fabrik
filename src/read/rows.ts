@@ -1,6 +1,7 @@
 // The rows (#618): one Product repo's Standings, each with what a reader shows
 // beside it, worked out from a gather's facts (./gather.ts), the runs in
-// flight and the Required checks, either of which may be unread, at a time.
+// flight from the last runs read and the Required checks, either of which may
+// be unread, at a time.
 // Every row's Standing is the Standing rule's own (src/kit/standing.ts) for
 // those facts, so a reader holds no rule of its own. Pure, no I/O, and plain
 // data: written as JSON and read back a row is equal.
@@ -9,6 +10,7 @@ import { type Standing, type StandingFacts, standingsOf } from "../kit/standing.
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
 import type { Facts } from "./gather.ts";
+import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 
 /** One Standing, with what a reader shows beside it. */
 export interface Row {
@@ -27,8 +29,8 @@ export interface Row {
   readonly followUps: readonly { readonly title: string; readonly body: string; readonly filedAs: number | null }[];
 }
 
-/** The runs in flight, as the Standing rule reads them (Spec: Standing), or unread. */
-type RowsRuns = readonly RunInFlightFact[] | "unread";
+/** The last runs read (./runs.ts), or null when none is held. */
+type RowsRuns = RunsRead | null;
 /** The Required checks on each head, by its sha, as the Standing rule reads them: a head missing is unread. */
 type RowsChecks = Readonly<Record<string, RequiredChecksFact>>;
 
@@ -47,9 +49,9 @@ export function rowsOf(
   return standings.map((standing) => rowOf(standing, facts));
 }
 
-/** The runs-in-flight fact the rule reads. */
+/** The runs-in-flight fact the rule reads, through the runs read's one converter: unread with no read held. */
 function runsFactOf(runs: RowsRuns): readonly RunInFlightFact[] | "unread" {
-  return runs;
+  return runs === null ? "unread" : runsInFlightFactOf(runs);
 }
 
 /** The Required checks fact the rule reads, by head. */
