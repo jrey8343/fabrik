@@ -40,6 +40,23 @@ export function weeklyFilingOf(
 /** The title of the issue a failed run files when no Weekly summary was ever filed to comment on. */
 export const WEEKLY_SUMMARY_FAILED_TITLE = "Weekly summary failed";
 
+/**
+ * The hidden last line of a failed run's notice, on the comment and on the
+ * issue it files alike, by which the store's Standing knows the notice for
+ * what it is (src/kit/standingStore.ts). Its visible text is unchanged.
+ */
+export const WEEKLY_SUMMARY_FAILED_MARKER = "<!-- fabrik:weekly-summary-failed -->";
+
+/** How a failed run's notice opens, after its @-mention: an earlier release's notice, with no marker, is known by it. */
+const FAILED_OPENING = "**The Weekly summary failed**";
+
+/** Whether `body` is a failed Weekly summary run's notice: it carries the marker, or, from an earlier release, opens with an @-mention and the notice's words. */
+export function isWeeklyFailureNotice(body: string): boolean {
+  if (body.split("\n").some((line) => line.trim() === WEEKLY_SUMMARY_FAILED_MARKER)) return true;
+  const mention = /^@\S+ /.exec(body)?.[0];
+  return mention !== undefined && body.slice(mention.length).startsWith(FAILED_OPENING);
+}
+
 /** What a failed run files in the store: a comment on the newest summary, or an issue of its own when there's none. */
 export type WeeklyFailureFiling =
   | { readonly kind: "comment"; readonly issue: number; readonly body: string }
@@ -59,7 +76,7 @@ export function weeklyFailureOf(
 ): { readonly summary: string; readonly error: string; readonly filing: WeeklyFailureFiling } {
   const what = whatFailed(error);
   const rest = [`**What failed:** ${what}`, "**To recover:** Open the run and choose **Re-run jobs → Re-run failed jobs**, which files this week's summary."];
-  const body = [`@${operator} **The Weekly summary failed**, so this week's summary isn't filed. The [run](${runUrl}) failed.`, ...rest].join("\n\n");
+  const body = [`@${operator} ${FAILED_OPENING}, so this week's summary isn't filed. The [run](${runUrl}) failed.`, ...rest, WEEKLY_SUMMARY_FAILED_MARKER].join("\n\n");
   const [newest] = existing;
   return {
     summary: ["The Weekly summary failed, so this week's summary isn't filed.", ...rest].join("\n\n"),
