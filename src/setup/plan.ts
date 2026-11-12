@@ -573,6 +573,7 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
   const { bypass_pull_request_allowances: _, ...reviews } = found.required_pull_request_reviews ?? NEW_PULL_REQUEST_RULE;
   const wanted: BranchProtection = {
     ...found,
+    enforce_admins: true,
     required_status_checks:
       required.length === 0
         ? null

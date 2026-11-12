@@ -118,6 +118,8 @@ function protectionChanges(found: BranchProtection, protection: BranchProtection
   if (reviewsBefore !== reviewsAfter) changes.push(`approving reviews: ${reviewsBefore} → ${reviewsAfter}`);
   const [bypassBefore, bypassAfter] = [bypassAllowances(found), bypassAllowances(protection)];
   if (list(bypassBefore) !== list(bypassAfter)) changes.push(`bypass allowances: ${list(bypassBefore)} → ${list(bypassAfter)}`);
+  const held = (on: boolean) => (on ? "yes" : "no");
+  if (found.enforce_admins !== protection.enforce_admins) changes.push(`admins held to the rules: ${held(found.enforce_admins)} → ${held(protection.enforce_admins)}`);
   return changes;
 }
 

@@ -480,7 +480,7 @@ describe("Branch protection", () => {
     ".fabrik/config.json": JSON.stringify({ sandbox: { checks } }),
   });
 
-  it("requires a PR and the Required checks the Kit config lists on the default branch, with no bypass and no approving review", () => {
+  it("requires a PR and the Required checks the Kit config lists on the default branch, with no bypass and no approving review, and holds admins to those rules", () => {
     const state = aCleanProduct({ files: withChecks(["build", "test"]) });
 
     expect(protects(state)).toEqual([
@@ -490,7 +490,7 @@ describe("Branch protection", () => {
         found: null,
         protection: {
           required_status_checks: { strict: false, checks: [{ context: "build" }, { context: "test" }] },
-          enforce_admins: false,
+          enforce_admins: true,
           required_pull_request_reviews: {
             required_approving_review_count: 0,
             dismiss_stale_reviews: true,
@@ -509,7 +509,7 @@ describe("Branch protection", () => {
       },
     ]);
     expect(describeAction(protects(state)[0]!)).toBe(
-      "protect main: a pull request: not required → required; required checks: none → build, test; every other setting stays as it is",
+      "protect main: a pull request: not required → required; required checks: none → build, test; admins held to the rules: no → yes; every other setting stays as it is",
     );
   });
 
@@ -563,24 +563,32 @@ describe("Branch protection", () => {
 
   it("takes away a bypass that would let the Fabrik App merge without the Operator, keeping an organization repo's push and dismissal restrictions", () => {
     const team = { users: [], teams: ["maintainers"], apps: [] };
+    const found = aProtectedBranch(["build"], {
+      required_pull_request_reviews: {
+        required_approving_review_count: 0,
+        dismiss_stale_reviews: true,
+        require_code_owner_reviews: false,
+        require_last_push_approval: false,
+        dismissal_restrictions: team,
+        bypass_pull_request_allowances: { users: ["octocat"], teams: [], apps: ["fabrik"] },
+      },
+      restrictions: team,
+      required_linear_history: true,
+      allow_deletions: true,
+    });
     const state = aCleanProduct({
       repo: { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: true },
       files: withChecks(["build"]),
-      protection: aProtectedBranch(["build"], {
-        required_pull_request_reviews: {
-          required_approving_review_count: 0,
-          dismiss_stale_reviews: true,
-          require_code_owner_reviews: false,
-          require_last_push_approval: false,
-          dismissal_restrictions: team,
-          bypass_pull_request_allowances: { users: ["octocat"], teams: [], apps: ["fabrik"] },
-        },
-        restrictions: team,
-      }),
+      protection: found,
     });
 
     const [action] = protects(state);
 
+    expect(action?.protection).toEqual({
+      ...found,
+      enforce_admins: true,
+      required_pull_request_reviews: { ...found.required_pull_request_reviews, bypass_pull_request_allowances: { users: [], teams: [], apps: [] } },
+    });
     expect(action?.protection.required_pull_request_reviews).toEqual({
       required_approving_review_count: 0,
       dismiss_stale_reviews: true,
@@ -590,7 +598,7 @@ describe("Branch protection", () => {
       bypass_pull_request_allowances: { users: [], teams: [], apps: [] },
     });
     expect(action?.protection.restrictions).toEqual(team);
-    expect(describeAction(action!)).toBe("protect main: bypass allowances: app:fabrik, user:octocat → none; every other setting stays as it is");
+    expect(describeAction(action!)).toBe("protect main: bypass allowances: app:fabrik, user:octocat → none; admins held to the rules: no → yes; every other setting stays as it is");
   });
 
   it("tells the Operator when the branch has no Required check yet", () => {
