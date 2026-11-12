@@ -102,6 +102,7 @@ import type {
   StandingFacts,
   StandingName,
   StandingWords,
+  StoreFacts,
   StoreStandingFacts,
   SubscriptionReading,
   Week,
@@ -598,6 +599,21 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     relatedTo: null,
     followUps: [],
   } satisfies Row,
+  StoreFacts: {
+    kind: "store",
+    appLogin: "fabrik-app[bot]",
+    summaries: [
+      {
+        number: 9,
+        title: "Weekly summary: 2 to 9 November",
+        open: true,
+        bodyWrittenAt: "2026-11-09T07:00:00Z",
+        appComments: [{ body: "Re-ran.", at: "2026-11-09T08:00:00Z", url: "https://github.com/jrey8343/fabrik-runs/issues/9#issuecomment-1" }],
+      },
+    ],
+    failedSummaryIssues: [{ number: 11, title: "Weekly summary failed", createdAt: "2026-11-02T07:00:00Z", appComments: [] }],
+    readyForHuman: [anOpenIssue({ number: 12, labels: ["ready-for-human"] })],
+  } satisfies StoreFacts,
 
   // The join with runs
 
