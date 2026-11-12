@@ -51,6 +51,15 @@ export interface ProductState {
   readonly readyForAgent: number;
 }
 
+/**
+ * What setup read of a repo's Deployments, to offer production's environment
+ * and address: each environment its Deployments carry, newest first, with the
+ * http(s) address on its newest successful Deployment, or why it couldn't read.
+ */
+export type DeploymentsSeen =
+  | { readonly read: true; readonly environments: readonly { readonly name: string; readonly url: string | null }[] }
+  | { readonly read: false; readonly why: string };
+
 /** What setup reads about the fabrik-runs store (ADR-0009). */
 export interface RunStoreState {
   readonly exists: boolean;
