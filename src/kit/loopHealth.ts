@@ -8,7 +8,7 @@ import { DEAD_TICK_MARKER } from "../loop/kitIssueMarks.ts";
 import { readable } from "../loop/readable.ts";
 import { CALLER_FILE } from "../setup/shims.ts";
 import { KIT_REPO } from "./caller.ts";
-import { type ProductTickRead, type StartedTick, tickIsDead } from "./deadTick.ts";
+import { NEVER_STARTED, type ProductTickRead, type StartedTick, tickIsDead } from "./deadTick.ts";
 
 /** One of the caller workflow's runs, as the Actions API lists it. */
 export interface WorkflowRunFacts {
@@ -16,6 +16,8 @@ export interface WorkflowRunFacts {
   readonly conclusion: string | null;
   /** ISO 8601. */
   readonly createdAt: string;
+  /** What triggered it, such as `schedule`, `issues` or `push`. */
+  readonly event: string;
 }
 
 /** The repo's last started Tick, as the daily Tick check reads it, or why it couldn't be read. */
@@ -65,8 +67,6 @@ export interface LoopHealth {
   readonly runs: RunCounts;
 }
 
-/** A run that GitHub refused at startup: it never ran a job. */
-const NEVER_STARTED = "startup_failure";
 /** Runs that started and failed. A `cancelled` run isn't one: concurrency groups cancel runs routinely. */
 const FAILED = new Set(["failure", "timed_out"]);
 

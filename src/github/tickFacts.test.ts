@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { tickIsDead } from "../kit/deadTick.ts";
+import { type ProductTickRead, type TickFacts, tickIsDead } from "../kit/deadTick.ts";
 import { GitHubError, type Repo } from "./client.ts";
-import { readProductTicks } from "./tickFacts.ts";
+import { readProductTicks, withCallerRuns } from "./tickFacts.ts";
 
 const REPO = { owner: "acme", name: "shop" };
 const APP = "fabrik-app[bot]";
@@ -147,5 +147,73 @@ describe("Reading a Product repo's last started Tick", () => {
     };
 
     expect(await readProductTicks(github, REPO, APP)).toEqual({ repo: "acme/shop", kind: "failed", error: "Bad Gateway" });
+  });
+});
+
+// #554: the caller's runs are read only for a repo about to get its Dead-tick issue.
+describe("Reading the caller's runs for the Dead-tick issue", () => {
+  const dead: TickFacts = {
+    callerSince: hoursAgo(24 * 5),
+    lastTick: { at: hoursAgo(26), url: "https://github.com/acme/shop/actions/runs/7", release: "v1.0.0" },
+    release: "v1.0.0",
+    issues: [],
+  };
+  const readOf = (facts: TickFacts): ProductTickRead => ({ repo: "acme/shop", kind: "read", facts });
+
+  function actionsApi(runs: readonly unknown[]) {
+    const calls: string[] = [];
+    return {
+      calls,
+      async rest(method: string, path: string): Promise<unknown> {
+        expect(method).toBe("GET");
+        calls.push(path);
+        return { total_count: runs.length, workflow_runs: runs };
+      },
+    };
+  }
+
+  it("lists fabrik.yml's runs since the last started Tick for a dead Tick with no issue open", async () => {
+    const actions = actionsApi([{ conclusion: "startup_failure", created_at: hoursAgo(1), event: "issues" }]);
+
+    const read = await withCallerRuns(actions, REPO, readOf(dead), NOW);
+
+    expect(actions.calls).toHaveLength(1);
+    expect(actions.calls[0]).toContain(`/repos/acme/shop/actions/workflows/fabrik.yml/runs?created=${encodeURIComponent(`>=${hoursAgo(26)}`)}`);
+    expect(read.kind === "read" && read.facts.runs).toEqual({ kind: "read", runs: [{ conclusion: "startup_failure", createdAt: hoursAgo(1), event: "issues" }] });
+  });
+
+  it("reads nothing for a repo whose Tick is alive", async () => {
+    const actions = actionsApi([]);
+
+    const read = await withCallerRuns(actions, REPO, readOf({ ...dead, lastTick: { ...dead.lastTick!, at: hoursAgo(2) } }), NOW);
+
+    expect(actions.calls).toEqual([]);
+    expect(read.kind === "read" && read.facts.runs).toBeUndefined();
+  });
+
+  it("reads nothing for a repo whose Dead-tick issue is open already", async () => {
+    const actions = actionsApi([]);
+
+    await withCallerRuns(actions, REPO, readOf({ ...dead, issues: [{ number: 12, body: "<!-- fabrik:dead-tick -->", byApp: true }] }), NOW);
+
+    expect(actions.calls).toEqual([]);
+  });
+
+  it("reads a 404, fabrik.yml gone from main, as runs GitHub won't list, not as a workflow that created none", async () => {
+    const actions = {
+      async rest(): Promise<unknown> {
+        throw new GitHubError("Not Found", 404, { body: '{"message":"Not Found"}' });
+      },
+    };
+
+    const read = await withCallerRuns(actions, REPO, readOf(dead), NOW);
+
+    expect(read.kind === "read" && read.facts.runs).toEqual({ kind: "unread", why: expect.stringContaining("Not Found") });
+  });
+
+  it("says the App lacks Actions: read when there's no Actions token", async () => {
+    const read = await withCallerRuns(null, REPO, readOf(dead), NOW);
+
+    expect(read.kind === "read" && read.facts.runs).toEqual({ kind: "no-permission" });
   });
 });

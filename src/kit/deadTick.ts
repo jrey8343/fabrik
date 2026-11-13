@@ -1,7 +1,9 @@
 // The daily Tick check (#461), from the fabrik-runs store: which Product
 // repos' hourly Tick is dead, the Dead-tick issue each one gets, and which open
 // ones close because a Tick started again; and for a repo the Fabrik App can no
-// longer reach, the issue the store gets instead. A Tick can't be watched from
+// longer reach, the issue the store gets instead. A Dead-tick issue counts the
+// caller's runs since the Tick died that never started (#554), when the App's
+// Actions: read let the check read them. A Tick can't be watched from
 // the repo where it died, so the check runs on the store's caller. Pure, no
 // I/O: src/kit/dead-tick-main.ts reads the facts (src/github/tickFacts.ts) and
 // applies the plan.
@@ -11,6 +13,7 @@ import { DEAD_TICK_LABEL, READY_FOR_HUMAN } from "../loop/labels.ts";
 import { readable } from "../loop/readable.ts";
 import { CALLER_FILE, CALLER_PATH } from "../setup/shims.ts";
 import { KIT_REPO } from "./caller.ts";
+import type { RunsHealthRead, WorkflowRunFacts } from "./loopHealth.ts";
 import { RUN_STORE_REPO } from "./runStore.ts";
 
 /**
@@ -21,6 +24,9 @@ import { RUN_STORE_REPO } from "./runStore.ts";
 export const DEAD_TICK_HOURS = 25;
 const HOUR_MS = 3_600_000;
 const WINDOW_MS = DEAD_TICK_HOURS * HOUR_MS;
+
+/** The conclusion of a run GitHub refused at startup: a Never-started run. */
+export const NEVER_STARTED = "startup_failure";
 
 /** How far back the store's Run records name the repos the check expects to reach. */
 export const RECENT_RUN_DAYS = 30;
@@ -53,6 +59,12 @@ export interface TickFacts {
   readonly release: string | null;
   /** The repo's open fabrik:dead-tick issues. */
   readonly issues: readonly DeadTickIssue[];
+  /**
+   * `fabrik.yml`'s runs created since the Tick died (#554), read with the
+   * App's Actions: read only for a repo about to get its Dead-tick issue
+   * (awaitsDeadTickIssue); absent for every other repo.
+   */
+  readonly runs?: RunsHealthRead;
 }
 
 /** One Product repo, by `owner/name`, and what reading it gave. */
@@ -112,6 +124,21 @@ export function tickIsDead({ callerSince, lastTick }: Pick<TickFacts, "callerSin
   const since = Date.parse(now) - WINDOW_MS;
   if (lastTick !== null && Date.parse(lastTick.at) > since) return false;
   return callerSince !== null && Date.parse(callerSince) <= since;
+}
+
+/** Since when the Tick is dead: the last started Tick, or, when none ever started, when `fabrik.yml` came to main. */
+export function deadSince({ callerSince, lastTick }: Pick<TickFacts, "callerSince" | "lastTick">): string {
+  return lastTick?.at ?? callerSince ?? "";
+}
+
+/** The Fabrik App's open Dead-tick issues among a repo's. */
+function filedIn(facts: TickFacts): DeadTickIssue[] {
+  return facts.issues.filter((issue) => issue.byApp && issue.body.includes(DEAD_TICK_MARKER));
+}
+
+/** Whether the check is about to open a repo's Dead-tick issue: its Tick is dead and the App has none open for it. */
+export function awaitsDeadTickIssue(facts: TickFacts, now: string): boolean {
+  return tickIsDead(facts, now) && filedIn(facts).length === 0;
 }
 
 export function deadTickPlan(input: DeadTickInput): DeadTickPlan {
@@ -195,7 +222,7 @@ function unreachablePlan({ products, recentRepos, storeIssues, operator }: DeadT
 }
 
 function productPlan(repo: string, facts: TickFacts, { now, operator, timeZone }: DeadTickInput): DeadTickPlan {
-  const filed = facts.issues.filter((issue) => issue.byApp && issue.body.includes(DEAD_TICK_MARKER));
+  const filed = filedIn(facts);
   if (!tickIsDead(facts, now)) {
     const { lastTick } = facts;
     if (lastTick === null) {
@@ -209,11 +236,50 @@ function productPlan(repo: string, facts: TickFacts, { now, operator, timeZone }
     };
   }
   if (filed.length > 0) return { open: [], close: [], summary: [`${repo}: the Tick is dead, and #${filed[0]?.number} is open for it already.`] };
-  return { open: [deadTickIssue(repo, facts, operator, timeZone)], close: [], summary: [`${repo}: the Tick is dead, so a Dead-tick issue is opened.`] };
+  const unread = facts.runs === undefined || facts.runs.kind === "read" ? [] : [`${repo}: run counts unread: ${facts.runs.kind === "no-permission" ? "the Fabrik App lacks Actions: read." : facts.runs.why}`];
+  return { open: [deadTickIssue(repo, facts, operator, timeZone)], close: [], summary: [`${repo}: the Tick is dead, so a Dead-tick issue is opened.`, ...unread] };
 }
 
-function deadTickIssue(repo: string, { callerSince, lastTick, release }: TickFacts, operator: string, timeZone: string | null): IssueToFile {
-  const since = lastTick?.at ?? callerSince ?? "";
+/** What the caller's runs since the Tick died say: how many never started, and whether GitHub created any scheduled one. */
+interface RunsSinceDeath {
+  readonly neverStarted: number;
+  /** Of those, the ones on an event other than `schedule`. */
+  readonly onEvents: number;
+  readonly scheduled: boolean;
+}
+
+function countRuns(runs: readonly WorkflowRunFacts[], since: string): RunsSinceDeath {
+  const after = runs.filter((run) => Date.parse(run.createdAt) > Date.parse(since));
+  const neverStarted = after.filter((run) => run.conclusion === NEVER_STARTED);
+  return {
+    neverStarted: neverStarted.length,
+    onEvents: neverStarted.filter((run) => run.event !== "schedule").length,
+    scheduled: after.some((run) => run.event === "schedule"),
+  };
+}
+
+/** The paragraph saying what the runs since the Tick died show, or null when they say nothing worth it. */
+function runsParagraph({ neverStarted, onEvents, scheduled }: RunsSinceDeath): string | null {
+  const disabled = scheduled ? [] : [`GitHub hasn't created a scheduled run of \`${CALLER_FILE}\` since then, so the workflow is most likely disabled.`];
+  if (neverStarted === 0) return disabled.length === 0 ? null : disabled.join(" ");
+  const what = "so nothing the Loop does on an event has run either: no Triage, Design, Implement or Review.";
+  const events =
+    onEvents === 0
+      ? "."
+      : neverStarted === 1
+        ? `, on an issue, comment, pull request or push event, ${what}`
+        : `, ${onEvents === neverStarted ? "all" : onEvents} of them on issue, comment, pull request or push events, ${what}`;
+  const runs = neverStarted === 1 ? "1 run" : `${neverStarted} runs`;
+  return [...disabled, `**${runs} of \`${CALLER_FILE}\` since then never started**${events}`].join(" ");
+}
+
+function deadTickIssue(repo: string, facts: TickFacts, operator: string, timeZone: string | null): IssueToFile {
+  const { lastTick, release } = facts;
+  const since = deadSince(facts);
+  const count = facts.runs?.kind === "read" ? countRuns(facts.runs.runs, since) : null;
+  const runs = count === null ? null : runsParagraph(count);
+  const errorStep = `- [ ] Open [the Actions tab for \`${CALLER_PATH}\`](https://github.com/${repo}/actions/workflows/${CALLER_FILE}) and read the newest run's error.`;
+  const enabledStep = "- [ ] Check that the workflow is enabled: GitHub disables a scheduled workflow after 60 days without activity in the repo.";
   const bumped = lastTick !== null && lastTick.release !== null && release !== null && lastTick.release !== release;
   const last =
     lastTick === null
@@ -226,11 +292,11 @@ function deadTickIssue(repo: string, { callerSince, lastTick, release }: TickFac
     body: [
       ...(bumped ? [`The Tick stopped after the bump from ${lastTick.release} to ${release}.`, ""] : []),
       `No hourly Tick has started in this repo for more than ${DEAD_TICK_HOURS} hours, so nothing time-based runs here: no Dispatch check, Monitor, Audit or Retro, and no weekly-limit issue closes. ${last}`,
+      ...(runs === null ? [] : ["", runs]),
       "",
       "## Steps",
       "",
-      `- [ ] Open [the Actions tab for \`${CALLER_PATH}\`](https://github.com/${repo}/actions/workflows/${CALLER_FILE}) and read the newest run's error.`,
-      "- [ ] Check that the workflow is enabled: GitHub disables a scheduled workflow after 60 days without activity in the repo.",
+      ...(count !== null && !count.scheduled ? [enabledStep, errorStep] : [errorStep, enabledStep]),
       `- [ ] Compare the caller's job permissions with ${notes}, or re-run Setup.`,
       "",
       "The Tick closes this issue itself on its first run once it starts again. Closing it while the Tick is still dead has the next daily check open a fresh one.",

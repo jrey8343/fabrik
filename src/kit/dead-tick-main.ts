@@ -6,14 +6,18 @@
 // (src/kit/deadTick.ts) and applies it, writing the step summary's lines.
 //   node src/kit/dead-tick-main.ts
 // Reads one Fabrik App token, FABRIK_TICK_CHECK_TOKEN, on every installed
-// repo with Checks read, Contents read and Issues write. FABRIK_STORE_DIR is
+// repo with Checks read, Contents read and Issues write, and a second,
+// optional one, FABRIK_ACTIONS_TOKEN, with only Actions read: empty or unset
+// when its mint failed, as it does until the Operator accepts Actions: read.
+// With it, a repo about to get its Dead-tick issue has its caller's runs read
+// to count those that never started (#554). FABRIK_STORE_DIR is
 // the store's checkout, and FABRIK_APP_SLUG the Fabrik App's slug, which
 // tells its own issues from anyone else's. It writes its times in the
 // Operator's time zone, as the store's caller names it (ADR-0023).
 import { appendFile } from "node:fs/promises";
 import { GitHub, GitHubError } from "../github/client.ts";
 import { productReposOf } from "../github/facts.ts";
-import { openDeadTickIssues, readProductTicks } from "../github/tickFacts.ts";
+import { openDeadTickIssues, readProductTicks, withCallerRuns } from "../github/tickFacts.ts";
 import { DEAD_TICK_LABEL, LOOP_LABELS } from "../loop/labels.ts";
 import { knownTimeZone } from "../loop/readable.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
@@ -26,6 +30,11 @@ function required(name: string): string {
   const value = process.env[name];
   if (value === undefined || value === "") throw new Error(`${name} is not set`);
   return value;
+}
+
+function optionalGitHub(name: string, apiUrl: string | undefined): GitHub | null {
+  const token = process.env[name];
+  return token === undefined || token === "" ? null : new GitHub(token, apiUrl);
 }
 
 async function report(lines: readonly string[]): Promise<void> {
@@ -66,6 +75,7 @@ async function apply(github: GitHub, plan: DeadTickPlan): Promise<string[]> {
 
 async function main(): Promise<string[]> {
   const github = new GitHub(required("FABRIK_TICK_CHECK_TOKEN"), process.env["GITHUB_API_URL"]);
+  const actions = optionalGitHub("FABRIK_ACTIONS_TOKEN", process.env["GITHUB_API_URL"]);
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
   const now = new Date().toISOString();
   // The run is on the store, so GITHUB_SHA is the store's commit, whose caller started it.
@@ -73,7 +83,7 @@ async function main(): Promise<string[]> {
   // The records only name the repos the store has heard from, so any Subscription list reads them.
   const { records } = await readStoreRunRecords(required("FABRIK_STORE_DIR"), DEFAULT_KIT_CONFIG.subscriptions);
   const products = [];
-  for (const repo of await productReposOf(github)) products.push(await readProductTicks(github, repo, appLogin));
+  for (const repo of await productReposOf(github)) products.push(await withCallerRuns(actions, repo, await readProductTicks(github, repo, appLogin), now));
   const plan = deadTickPlan({
     now,
     operator: RUN_STORE.owner,

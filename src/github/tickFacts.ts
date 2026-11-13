@@ -2,12 +2,15 @@
 // src/kit/deadTick.ts: the newest Tick that started its jobs on the default
 // branch, when `fabrik.yml` came to it, the release it pins now and pinned at
 // that Tick's commit, and the repo's open Dead-tick issues. A refusal is
-// read as the Fabrik App no longer reaching the repo.
+// read as the Fabrik App no longer reaching the repo. For a repo about to get
+// its Dead-tick issue, and only that, it also reads its caller workflow's runs
+// since the Tick died, with the optional Actions token (#554).
 import { checkCallerWorkflow } from "../kit/caller.ts";
-import type { DeadTickIssue, ProductTickRead, StartedTick } from "../kit/deadTick.ts";
+import { awaitsDeadTickIssue, type DeadTickIssue, deadSince, type ProductTickRead, type StartedTick } from "../kit/deadTick.ts";
 import { DEAD_TICK_LABEL } from "../loop/labels.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { type GitHub, GitHubError, gitHubMessageOf, type Repo, refusalOf } from "./client.ts";
+import { readCallerRuns } from "./loopHealthFacts.ts";
 
 /**
  * The most main commits the walk back reads the check runs of. A scheduled
@@ -68,6 +71,18 @@ export async function readProductTicks(
     const refused = refusalOf(error) !== "rate-limited" && [401, 403, 404].includes(error.status);
     return { repo: name, kind: refused ? "refused" : "failed", error: gitHubMessageOf(error) };
   }
+}
+
+/**
+ * A repo's read with its caller's runs since the Tick died, when the check is
+ * about to open its Dead-tick issue; any other read as it was, with no request
+ * made. A null `actions`, the Actions token whose mint failed, reads as the App
+ * lacking Actions: read.
+ */
+export async function withCallerRuns(actions: Pick<GitHub, "rest"> | null, repo: Repo, read: ProductTickRead, now: string): Promise<ProductTickRead> {
+  if (read.kind !== "read" || !awaitsDeadTickIssue(read.facts, now)) return read;
+  const runs = actions === null ? { kind: "no-permission" as const } : await readCallerRuns(actions, repo, deadSince(read.facts), "unread");
+  return { ...read, facts: { ...read.facts, runs } };
 }
 
 /** A repo's open Dead-tick issues, pull requests left out, each saying whether the Fabrik App opened it. */

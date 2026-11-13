@@ -222,3 +222,92 @@ describe("The Dead-tick issue's body", () => {
     expect(body.endsWith("<!-- fabrik:dead-tick -->")).toBe(true);
   });
 });
+
+// #554: the caller's runs since the Tick died, read with the App's Actions: read only for a repo about to get its issue.
+describe("The Dead-tick issue's count of never-started runs", () => {
+  const run = (event: string, hours: number, conclusion: string | null = "startup_failure") => ({ conclusion, createdAt: hoursAgo(hours), event });
+  const withRuns = (runs: TickFacts["runs"], overrides: Partial<TickFacts> = {}) => deadTickPlan(input([read("acme/shop", facts({ runs, ...overrides }))]));
+  const bodyOf = (plan: ReturnType<typeof deadTickPlan>) => plan.open[0]?.body ?? "";
+  const ON_EVENTS = "on issue, comment, pull request or push events, so nothing the Loop does on an event has run either: no Triage, Design, Implement or Review.";
+
+  it("says 14 runs never started, 9 of them on events, naming the roles that haven't run", () => {
+    const runs = [
+      ...[1, 2, 3, 4, 5].map((h) => run("schedule", h)),
+      ...[1, 2, 3].map((h) => run("issues", h)),
+      ...[4, 5, 6].map((h) => run("pull_request_target", h)),
+      ...[7, 8, 9].map((h) => run("push", h)),
+    ];
+
+    const body = bodyOf(withRuns({ kind: "read", runs }));
+
+    expect(body).toContain(`**14 runs of \`fabrik.yml\` since then never started**, 9 of them ${ON_EVENTS}`);
+  });
+
+  it("says 3 never started, with no events clause, when all three are scheduled", () => {
+    const body = bodyOf(withRuns({ kind: "read", runs: [run("schedule", 1), run("schedule", 2), run("schedule", 3)] }));
+
+    expect(body).toContain("**3 runs of `fabrik.yml` since then never started**.");
+    expect(body).not.toContain("of them");
+  });
+
+  it("says it in the singular for one never-started run", () => {
+    const body = bodyOf(withRuns({ kind: "read", runs: [run("schedule", 1), run("schedule", 2, "success")] }));
+
+    expect(body).toContain("**1 run of `fabrik.yml` since then never started**.");
+  });
+
+  it("says it in the singular for one never-started run on an event", () => {
+    const body = bodyOf(withRuns({ kind: "read", runs: [run("schedule", 2, "success"), run("issue_comment", 1)] }));
+
+    expect(body).toContain("**1 run of `fabrik.yml` since then never started**, on an issue, comment, pull request or push event, so nothing the Loop does");
+  });
+
+  it("counts no run created before the last started Tick", () => {
+    const body = bodyOf(withRuns({ kind: "read", runs: [run("schedule", 27), run("issues", 30), run("schedule", 1, "success")] }));
+
+    expect(body).not.toContain("never started");
+  });
+
+  it("counts from when fabrik.yml came to main when no Tick ever started", () => {
+    const runs = [run("schedule", 30), run("schedule", 27), run("schedule", 1)];
+
+    const body = bodyOf(withRuns({ kind: "read", runs }, { lastTick: null, callerSince: hoursAgo(28) }));
+
+    expect(body).toContain("**2 runs of `fabrik.yml` since then never started**.");
+  });
+
+  it("says the workflow is most likely disabled, and leads the Steps with checking it's enabled, when GitHub created no scheduled run since", () => {
+    const body = bodyOf(withRuns({ kind: "read", runs: [run("schedule", 30, "success"), run("issues", 3), run("push", 2)] }));
+
+    expect(body).toContain("GitHub hasn't created a scheduled run of `fabrik.yml` since then, so the workflow is most likely disabled.");
+    expect(body).toContain(`**2 runs of \`fabrik.yml\` since then never started**, all of them ${ON_EVENTS}`);
+    const steps = body.split("## Steps\n\n")[1]?.split("\n") ?? [];
+    expect(steps[0]).toMatch(/^- \[ \] Check that the workflow is enabled/);
+    expect(steps[1]).toMatch(/read the newest run's error\.$/);
+  });
+
+  it("keeps the Steps' order when scheduled runs were created but never started", () => {
+    const body = bodyOf(withRuns({ kind: "read", runs: [run("schedule", 1)] }));
+
+    expect(body).not.toContain("disabled");
+    expect(body.split("## Steps\n\n")[1]).toMatch(/^- \[ \] Open \[the Actions tab/);
+  });
+
+  it("is today's body when there's no Actions token, the summary saying why the count is unread", () => {
+    const today = deadTickPlan(input([read("acme/shop", facts())]));
+
+    const plan = withRuns({ kind: "no-permission" });
+
+    expect(plan.open).toEqual(today.open);
+    expect(plan.summary).toContain("acme/shop: run counts unread: the Fabrik App lacks Actions: read.");
+  });
+
+  it("is today's body when GitHub won't list the runs, the summary giving GitHub's message", () => {
+    const today = deadTickPlan(input([read("acme/shop", facts())]));
+
+    const plan = withRuns({ kind: "unread", why: "Resource not accessible by integration" });
+
+    expect(plan.open).toEqual(today.open);
+    expect(plan.summary).toContain("acme/shop: run counts unread: Resource not accessible by integration");
+  });
+});

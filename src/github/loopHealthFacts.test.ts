@@ -6,12 +6,12 @@ import { readCallerRuns } from "./loopHealthFacts.ts";
 const REPO = { owner: "acme", name: "shop" };
 const SINCE = "2026-10-31T00:00:00Z";
 
-const aRun = (i: number, conclusion: string | null = "success") => ({ id: i, conclusion, created_at: "2026-11-05T03:00:00Z" });
+const aRun = (i: number, conclusion: string | null = "success", event = "schedule") => ({ id: i, conclusion, created_at: "2026-11-05T03:00:00Z", event });
 
 describe("Reading a Product repo's caller runs for the Weekly summary", () => {
   it("lists every page of fabrik.yml's runs created since the window opened", async () => {
     const calls: string[] = [];
-    const pages = [Array.from({ length: 100 }, (_, i) => aRun(i)), [aRun(100, "startup_failure"), aRun(101, null)]];
+    const pages = [Array.from({ length: 100 }, (_, i) => aRun(i)), [aRun(100, "startup_failure", "issues"), aRun(101, null)]];
     const github = {
       async rest(method: string, path: string): Promise<unknown> {
         expect(method).toBe("GET");
@@ -25,7 +25,7 @@ describe("Reading a Product repo's caller runs for the Weekly summary", () => {
 
     expect(calls[0]).toBe(`/repos/acme/shop/actions/workflows/fabrik.yml/runs?created=${encodeURIComponent(">=2026-10-31T00:00:00Z")}&exclude_pull_requests=true&per_page=100&page=1`);
     expect(read.kind === "read" && read.runs.length).toBe(102);
-    expect(read.kind === "read" && read.runs.at(-2)).toEqual({ conclusion: "startup_failure", createdAt: "2026-11-05T03:00:00Z" });
+    expect(read.kind === "read" && read.runs.at(-2)).toEqual({ conclusion: "startup_failure", createdAt: "2026-11-05T03:00:00Z", event: "issues" });
   });
 
   it("says why when GitHub refuses the read, so the summary still files", async () => {
