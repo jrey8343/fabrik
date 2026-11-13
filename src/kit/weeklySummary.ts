@@ -571,7 +571,9 @@ export interface HeldMergeGate {
   readonly atGate: readonly number[];
   /** The Ticket work on its way to the gate, as Dispatch counts it (mergeGateOf), or as much of it as could be read. */
   readonly onItsWay: number;
-  /** The Tickets on their way the facts name, lowest first. */
+  /** The agent draft PRs on their way, lowest first. */
+  readonly onItsWayPullRequests: readonly number[];
+  /** The Tickets on their way with no PR yet the facts name, lowest first. */
   readonly onItsWayIssues: readonly number[];
   /** Whether the runs in progress couldn't be read, so `onItsWay` leaves them out. */
   readonly runsUnread: boolean;
@@ -1331,8 +1333,8 @@ function heldMergeGateOf(facts: GitHubFacts, kit: RepoKitFacts | null, standings
     return since === undefined ? [] : [{ number, since, age: now - Date.parse(since) }];
   });
   if (hold === null || waiting.length === 0) return null;
-  const { mergeGate, atGate, onItsWay, onItsWayIssues, runsUnread } = hold;
-  return { mergeGate, atGate, onItsWay, onItsWayIssues, runsUnread, waiting };
+  const { mergeGate, atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread } = hold;
+  return { mergeGate, atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread, waiting };
 }
 
 /**
@@ -1791,10 +1793,12 @@ function heldMergeGateLine(repo: string, held: HeldMergeGate): string {
   if (held.mergeGate === 0) {
     return `- ${repo}: waiting for the Merge gate: Dispatch holds Tickets while any agent PR is at or on its way to it (\`caps.merge_gate\` is 0) · ${waiting}`;
   }
-  const { atGate, onItsWay, onItsWayIssues, runsUnread } = held;
-  const at = atGate.length === 0 ? null : `${atGate.map((number) => `[#${number}](https://github.com/${repo}/pull/${number})`).join(", ")} ${atGate.length === 1 ? "is" : "are"} at it`;
-  const names = onItsWayIssues.map(link).join(", ");
-  const counted = onItsWayIssues.length === onItsWay ? names : `${onItsWay}${onItsWayIssues.length === 0 ? "" : ` (${names} among them)`}`;
+  const { atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread } = held;
+  const pull = (number: number) => `[#${number}](https://github.com/${repo}/pull/${number})`;
+  const at = atGate.length === 0 ? null : `${atGate.map(pull).join(", ")} ${atGate.length === 1 ? "is" : "are"} at it`;
+  const named = onItsWayPullRequests.length + onItsWayIssues.length;
+  const names = [...onItsWayPullRequests.map(pull), ...onItsWayIssues.map(link)].join(", ");
+  const counted = named === onItsWay ? names : `${onItsWay}${named === 0 ? "" : ` (${names} among them)`}`;
   const way =
     onItsWay === 0 ? null : at === null ? `${counted} ${onItsWay === 1 ? "is on its way to it" : "are on their way to it"}` : `${counted} ${onItsWay === 1 ? "on its way" : "on their way"}`;
   const unread = runsUnread ? " (runs in progress unread)" : "";

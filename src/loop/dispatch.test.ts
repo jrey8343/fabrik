@@ -175,7 +175,7 @@ describe("The caps.merge_gate cap on PRs waiting on the Operator (#459)", () => 
 
     const plan = planFor(
       check,
-      dispatchSnapshotOf([waiting, ...three], { openAgentPullRequestsAtMergeGate: [21], implementRunsInProgress: 1 }),
+      dispatchSnapshotOf([waiting, ...three], { openAgentPullRequestsAtMergeGate: [21], implementRunsInProgress: 1, implementRunsWithoutPullRequest: 1 }),
       kitConfig(),
     );
 
@@ -185,6 +185,13 @@ describe("The caps.merge_gate cap on PRs waiting on the Operator (#459)", () => 
         "max_in_flight is 2 and 2 are in flight (0 open agent draft PRs, 1 Implement run in progress, 1 dispatched and waiting); " +
         "caps.merge_gate is 3 and #21 is at the Merge gate and #9 and 1 Implement run in progress are on their way, so #14, #15 and #16 wait",
     });
+  });
+
+  it("counts a Retry or Request-changes run once, by its PR, not again as a run on its way", () => {
+    // #21 at the gate and #23's Retry running on it: a load of 2, not 3.
+    const snapshot = dispatchSnapshotOf(three, { openAgentPullRequestsAtMergeGate: [21], openAgentDraftPullRequests: [23], implementRunsInProgress: 1, implementRunsWithoutPullRequest: 0 });
+
+    expect(dispatched(planFor(check, snapshot, kitConfig({ maxInFlight: 3 })))).toEqual([14]);
   });
 
   it("names only caps.merge_gate when no PR is at the gate yet but work on its way fills it", () => {

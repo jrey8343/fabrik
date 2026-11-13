@@ -4,10 +4,10 @@
 // (`waiting-for-slot`), and a Ticket or research Decision its blockers hold
 // (`blocked`). Each is read by the Loop's own rule for it, so the Standing and
 // the Loop can't disagree, and none can turn Stuck.
-import { dispatchedRunsOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
+import { dispatchedRunsOf, implementRunsWithoutPullRequestOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
 import { conflictRunInFlightIn } from "../github/threads.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
-import { inFlightOf, mergeGateOf, waitingForDispatch } from "../loop/dispatch.ts";
+import { agentPullRequestsByGate, inFlightOf, mergeGateLoadOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
 import {
   DIGEST_LABEL,
@@ -74,28 +74,24 @@ export type MaxInFlightHold =
       readonly waiting: readonly number[];
     };
 
-export function maxInFlightHoldOf({ github, kit }: Pick<StandingFacts, "github" | "kit">): MaxInFlightHold | null {
-  if (kit === null || kit.dispatch === null) return null;
-  const { candidates } = kit.dispatch;
-  const { maxInFlight } = kit.config.ok ? kit.config.config : DEFAULT_KIT_CONFIG;
-  const heldRuns = { implement: heldOf("implement", github.kitIssues), research: heldOf("research", github.kitIssues) };
+export function maxInFlightHoldOf(facts: Pick<StandingFacts, "github" | "kit">): MaxInFlightHold | null {
+  const dispatch = dispatchFactsOf(facts);
+  if (dispatch === null) return null;
+  const { config, candidates, heldRuns, runs, snapshot } = dispatch;
   const waiting = waitingForDispatch(candidates, heldRuns);
   if (waiting.length === 0) return null;
-  if (maxInFlight === 0) return { kind: "paused", maxInFlight, waiting };
-  const runs = kit.runsInFlight === "unread" ? null : dispatchedRunsOf(kit.runsInFlight);
-  // The Weekly summary's facts hold only agent PRs, so their open drafts are Dispatch's open agent draft PRs.
-  const drafts = github.openPullRequests.filter(({ draft }) => draft);
-  const inFlight = inFlightOf(dispatchSnapshotOf(github, candidates, runs), heldRuns);
-  if (runs !== null && inFlight.total < maxInFlight) return null;
-  const named = [...drafts.flatMap(({ ticket }) => (ticket === null ? [] : [ticket])), ...(runs?.implementTickets ?? []), ...inFlight.waiting, ...inFlight.held];
-  return { kind: "full", maxInFlight, inFlight: inFlight.total, inFlightIssues: [...new Set(named)].sort((a, b) => a - b), runsUnread: runs === null, waiting };
+  if (config.maxInFlight === 0) return { kind: "paused", maxInFlight: 0, waiting };
+  const inFlight = inFlightOf(snapshot, heldRuns);
+  if (runs !== null && inFlight.total < config.maxInFlight) return null;
+  const named = [...draftTicketsOf(facts.github), ...(runs?.implementTickets ?? []), ...inFlight.waiting, ...inFlight.held];
+  return { kind: "full", maxInFlight: config.maxInFlight, inFlight: inFlight.total, inFlightIssues: [...new Set(named)].sort((a, b) => a - b), runsUnread: runs === null, waiting };
 }
 
 /**
  * The Tickets Dispatch would release while caps.merge_gate holds them (#459),
- * by Dispatch's own rules (mergeGateOf): the agent PRs at the Merge gate and
- * the Ticket work on its way there leave no room. Null when none waits, the
- * gate has room, Dispatch is paused at max_in_flight 0, or its candidates
+ * by Dispatch's own rules (mergeGateLoadOf): the agent PRs at the Merge gate
+ * and the Ticket work on its way there leave no room. Null when none waits,
+ * the gate has room, Dispatch is paused at max_in_flight 0, or its candidates
  * weren't read. With the runs in flight unread, it holds only if what was
  * read already fills the gate, marked.
  */
@@ -105,54 +101,64 @@ export interface MergeGateHold {
   readonly atGate: readonly number[];
   /** The Ticket work on its way to the gate, as Dispatch counts it, or as much of it as could be read. */
   readonly onItsWay: number;
-  /** The Tickets on their way the facts name, lowest first: a draft PR's Ticket, a running one, a dispatched one, a held one. */
+  /** The agent draft PRs on their way, lowest first. */
+  readonly onItsWayPullRequests: readonly number[];
+  /** The Tickets on their way with no PR yet the facts name, lowest first: a running one, a dispatched one, a held one. */
   readonly onItsWayIssues: readonly number[];
   readonly runsUnread: boolean;
   /** The Tickets it holds, lowest first. */
   readonly waiting: readonly number[];
 }
 
-export function mergeGateHoldOf({ github, kit }: Pick<StandingFacts, "github" | "kit">): MergeGateHold | null {
-  if (kit === null || kit.dispatch === null) return null;
-  const { candidates } = kit.dispatch;
-  const { maxInFlight, caps } = kit.config.ok ? kit.config.config : DEFAULT_KIT_CONFIG;
-  if (maxInFlight === 0) return null;
-  const heldRuns = { implement: heldOf("implement", github.kitIssues), research: heldOf("research", github.kitIssues) };
+export function mergeGateHoldOf(facts: Pick<StandingFacts, "github" | "kit">): MergeGateHold | null {
+  const dispatch = dispatchFactsOf(facts);
+  if (dispatch === null || dispatch.config.maxInFlight === 0) return null;
+  const { config, candidates, heldRuns, runs, runsInFlight, snapshot } = dispatch;
   const tickets = new Set(candidates.tickets.map(({ number }) => number));
   const waiting = waitingForDispatch(candidates, heldRuns).filter((number) => tickets.has(number));
   if (waiting.length === 0) return null;
-  const runs = kit.runsInFlight === "unread" ? null : dispatchedRunsOf(kit.runsInFlight);
-  const gate = mergeGateOf(dispatchSnapshotOf(github, candidates, runs), heldRuns, caps.mergeGate);
+  const gate = mergeGateLoadOf(snapshot, heldRuns, config.caps.mergeGate);
   if (gate.free > 0) return null;
-  const named = [...github.openPullRequests.flatMap(({ draft, ticket }) => (draft && ticket !== null ? [ticket] : [])), ...(runs?.implementTickets ?? []), ...gate.tickets];
+  const running = runsInFlight === null ? [] : implementRunsWithoutPullRequestOf(runsInFlight, facts.github.openPullRequests).tickets;
   return {
-    mergeGate: caps.mergeGate,
+    mergeGate: config.caps.mergeGate,
     atGate: gate.atGate,
     onItsWay: gate.load - gate.atGate.length,
-    onItsWayIssues: [...new Set(named)].sort((a, b) => a - b),
+    onItsWayPullRequests: gate.drafts,
+    onItsWayIssues: [...new Set([...running, ...gate.tickets])].sort((a, b) => a - b),
     runsUnread: runs === null,
     waiting,
   };
 }
 
 /**
- * A Dispatch check's snapshot from the Weekly summary's facts, which hold only
- * agent PRs: their drafts are Dispatch's open agent draft PRs, the rest at the
- * Merge gate. Runs unread count as none.
+ * What a Dispatch check would weigh, read from the Weekly summary's facts:
+ * the repo's Kit config (its defaults when invalid), the candidates, the held
+ * runs, the runs in flight (null when unread, counted as none) and the
+ * Dispatch snapshot. The facts hold only agent PRs, so their drafts are
+ * Dispatch's open agent draft PRs and the rest are at the Merge gate. Null
+ * when Dispatch's candidates weren't read.
  */
-function dispatchSnapshotOf(
-  github: Pick<GitHubFacts, "openPullRequests">,
-  candidates: Pick<DispatchSnapshot, "tickets" | "researchDecisions">,
-  runs: ReturnType<typeof dispatchedRunsOf> | null,
-): DispatchSnapshot {
-  const numbers = (draft: boolean) => github.openPullRequests.flatMap((pullRequest) => (pullRequest.draft === draft ? [pullRequest.number] : []));
-  return {
+function dispatchFactsOf({ github, kit }: Pick<StandingFacts, "github" | "kit">) {
+  if (kit === null || kit.dispatch === null) return null;
+  const { candidates } = kit.dispatch;
+  const config = kit.config.ok ? kit.config.config : DEFAULT_KIT_CONFIG;
+  const heldRuns = { implement: heldOf("implement", github.kitIssues), research: heldOf("research", github.kitIssues) };
+  const runsInFlight = kit.runsInFlight === "unread" ? null : kit.runsInFlight;
+  const runs = runsInFlight === null ? null : dispatchedRunsOf(runsInFlight);
+  const snapshot: DispatchSnapshot = {
     ...candidates,
-    openAgentDraftPullRequests: numbers(true),
-    openAgentPullRequestsAtMergeGate: numbers(false),
+    ...agentPullRequestsByGate(github.openPullRequests),
     implementRunsInProgress: runs?.implement ?? 0,
+    implementRunsWithoutPullRequest: runsInFlight === null ? 0 : implementRunsWithoutPullRequestOf(runsInFlight, github.openPullRequests).count,
     researchRunsInProgress: runs?.research ?? 0,
   };
+  return { config, candidates, heldRuns, runs, runsInFlight, snapshot };
+}
+
+/** The Tickets of the open agent draft PRs. */
+function draftTicketsOf(github: Pick<GitHubFacts, "openPullRequests">): number[] {
+  return github.openPullRequests.flatMap(({ draft, ticket }) => (draft && ticket !== null ? [ticket] : []));
 }
 
 /**

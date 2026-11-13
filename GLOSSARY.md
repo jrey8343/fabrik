@@ -290,6 +290,14 @@ _Avoid_: style guide, conventions, review instructions
 The rule that only the Operator merges a pull request into a Product repo's main branch, and only at a head whose Required checks have passed. Nothing reaches that branch any other way: neither agents nor the Operator push to it.
 _Avoid_: approval, sign-off
 
+**On its way to the Merge gate**:
+Ticket work that will reach the Merge gate unless it fails: an open agent draft PR, an Implement run for a Ticket with no open agent PR, and a Ticket dispatched and waiting for its run, or held. A Retry or Request-changes run is its PR's work, counted by its PR. Research never reaches the gate.
+_Avoid_: pending, in the pipeline
+
+**Gate load**:
+What `caps.merge_gate` weighs: the open agent PRs out of draft, at the Merge gate, plus the work on its way to it. Dispatch releases a Ticket only while the Gate load is under the cap (ADR-0023).
+_Avoid_: review queue, backlog
+
 **Required check**:
 A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any the main branch already required.
 _Avoid_: gating check, status check

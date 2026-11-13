@@ -3079,7 +3079,7 @@ describe("the Weekly summary", () => {
             aRepoKit({ dispatch: { candidates: readyTickets(14) } }),
           );
           expect(result.body).toContain(
-            `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)}, ${pull(22)} are at it, ${issue(11)} on its way · ${issue(14)} (3 days)`,
+            `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)}, ${pull(22)} are at it, ${pull(23)} on its way · ${issue(14)} (3 days)`,
           );
           expect(result.body).not.toContain("waiting for a slot");
         });
@@ -3094,7 +3094,17 @@ describe("the Weekly summary", () => {
           );
           expect(result.body).toContain(`- owner/product: waiting for a slot: \`max_in_flight\` is 2 and ${issue(11)}, ${issue(12)} are in flight · ${issue(16)} (5 hours)`);
           expect(result.body).toContain(
-            `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)} is at it, ${issue(11)}, ${issue(12)} on their way · ${issue(14)} (3 days)`,
+            `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)} is at it, ${pull(50)}, ${pull(51)} on their way · ${issue(14)} (3 days)`,
+          );
+        });
+
+        it("names a Ticket's run on its way once, by its draft PR when it has one, and by the Ticket when it has none yet", () => {
+          const result = summaryWith(
+            factsOf({ openPullRequests: [atGate(21, 1), anOpenPullRequest({ number: 23, ticket: 11 })], openIssues: [ready(14, 80)] }),
+            aRepoKit({ dispatch: { candidates: readyTickets(14) }, runsInFlight: [aRunInFlight({ issue: 11, retry: 1, kind: "retry" }), aRunInFlight({ issue: 12 })] }),
+          );
+          expect(result.body).toContain(
+            `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)} is at it, ${pull(23)}, ${issue(12)} on their way · ${issue(14)} (3 days)`,
           );
         });
 

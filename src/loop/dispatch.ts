@@ -63,7 +63,7 @@ function releasing(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDisp
   }
 
   const inFlight = inFlightOf(snapshot, held);
-  const gate = mergeGateOf(snapshot, held, config.caps.mergeGate);
+  const gate = mergeGateLoadOf(snapshot, held, config.caps.mergeGate);
   // Lowest issue number first: a research Decision takes a max_in_flight slot, a Ticket one under each cap.
   let free = Math.max(0, config.maxInFlight - inFlight.total);
   let gateFree = gate.free;
@@ -97,7 +97,7 @@ function maxInFlightReason(maxInFlight: number, inFlight: InFlight): string {
 }
 
 /** What a full caps.merge_gate says: the cap, the PRs at the gate, and the Ticket work on its way there. */
-function mergeGateReason(gate: MergeGate): string {
+function mergeGateReason(gate: MergeGateLoad): string {
   if (gate.cap === 0) return "Dispatch holds Tickets while any agent PR is at or on its way to the Merge gate (caps.merge_gate is 0)";
   const at = gate.atGate.length === 0 ? null : `${list(gate.atGate)} ${gate.atGate.length === 1 ? "is" : "are"} at the Merge gate`;
   const runs = gate.implementRuns === 0 ? null : count(gate.implementRuns, "Implement run in progress", "Implement runs in progress");
@@ -110,12 +110,12 @@ function mergeGateReason(gate: MergeGate): string {
 }
 
 /**
- * The Merge gate's load under caps.merge_gate, as a Dispatch check counts it
+ * The Gate load under caps.merge_gate, as a Dispatch check counts it
  * (#459, ADR-0023): the agent PRs out of draft, at the gate, and the Ticket
  * work on its way there, so a released Ticket's PR always has room. Research
  * runs and Decisions never reach the gate, so they count for neither.
  */
-export interface MergeGate {
+export interface MergeGateLoad {
   readonly cap: number;
   /** The open agent PRs out of draft, lowest number first. */
   readonly atGate: readonly number[];
@@ -123,7 +123,7 @@ export interface MergeGate {
   readonly drafts: readonly number[];
   /** The Tickets dispatched and waiting for their Implement run, or held, lowest number first. */
   readonly tickets: readonly number[];
-  /** Implement runs in progress, which the snapshot counts but doesn't name. */
+  /** Implement runs in progress with no open agent PR for their Ticket, which the snapshot counts but doesn't name. */
   readonly implementRuns: number;
   /** Everything at or on its way to the gate. */
   readonly load: number;
@@ -131,15 +131,26 @@ export interface MergeGate {
   readonly free: number;
 }
 
-export function mergeGateOf(snapshot: DispatchSnapshot, held: HeldDispatched, cap: number): MergeGate {
+export function mergeGateLoadOf(snapshot: DispatchSnapshot, held: HeldDispatched, cap: number): MergeGateLoad {
   const tickets = [...snapshot.tickets].sort((a, b) => a.number - b.number);
   const atGate = [...snapshot.openAgentPullRequestsAtMergeGate].sort((a, b) => a - b);
   const drafts = [...snapshot.openAgentDraftPullRequests].sort((a, b) => a - b);
   const onItsWay = [...waitingTicketsOf(tickets), ...heldTicketsOf(tickets, held)].sort((a, b) => a - b);
-  const implementRuns = snapshot.implementRunsInProgress;
+  const implementRuns = snapshot.implementRunsWithoutPullRequest;
   const load = atGate.length + drafts.length + onItsWay.length + implementRuns;
   const free = cap === 0 ? (load === 0 ? 1 : 0) : Math.max(0, cap - load);
   return { cap, atGate, drafts, tickets: onItsWay, implementRuns, load, free };
+}
+
+/**
+ * The open agent PRs split by where they stand: drafts, Ticket work on its way
+ * to the Merge gate, and those out of draft, at it, lowest number first in each.
+ */
+export function agentPullRequestsByGate(
+  pullRequests: readonly { readonly number: number; readonly draft: boolean }[],
+): Pick<DispatchSnapshot, "openAgentDraftPullRequests" | "openAgentPullRequestsAtMergeGate"> {
+  const numbers = (draft: boolean) => pullRequests.flatMap((pullRequest) => (pullRequest.draft === draft ? [pullRequest.number] : [])).sort((a, b) => a - b);
+  return { openAgentDraftPullRequests: numbers(true), openAgentPullRequestsAtMergeGate: numbers(false) };
 }
 
 /** A Ticket given the label waits for its Implement run to start; one with an open PR resumes that PR's run, whose draft PR holds its slot. */

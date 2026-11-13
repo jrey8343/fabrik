@@ -4,7 +4,7 @@ A pass takes an agent pull request out of draft to the Merge gate, where it wait
 
 `caps.merge_gate` (default 3, a cap like the others, so it can only be lowered) is a **hard bound** on the agent PRs waiting on the Operator. Dispatch releases a Ticket only if its PR could fit at the gate:
 
-- **Gate load** is the open agent PRs out of draft (at the gate) plus the Ticket work on its way there: open agent draft PRs, Implement runs in progress, and Tickets dispatched and waiting or held. A passed draft waiting on its Digest counts once, as a draft.
+- **Gate load** is the open agent PRs out of draft (at the gate) plus the Ticket work on its way there: open agent draft PRs, Implement runs for a Ticket with no open agent PR, and Tickets dispatched and waiting or held. A passed draft waiting on its Digest counts once, as a draft, and so does a draft with a Retry or Request-changes run under way: the run is its PR's work. An Implement run whose job names no Ticket counts, as nothing shows it has a PR.
 - **Free Ticket slots** are the lesser of `max_in_flight` minus what's in flight and `caps.merge_gate` minus the gate load.
 - **Research runs and Decisions count for neither**, as they never reach the gate, and still release while it holds Tickets.
 - **`0` holds Tickets while any agent PR is at or on its way to the gate.** With nothing there a Ticket still goes, one at a time, so `0` holds as `1` does and only words its hold differently; it is no pause, unlike `max_in_flight: 0`.
@@ -21,6 +21,7 @@ A pass takes an agent pull request out of draft to the Merge gate, where it wait
 
 - At the default 3, the Kit releases fewer Tickets once two or three PRs are waiting on the Operator, while research goes on.
 - Dispatch's nothing reason, the Weekly summary's Held line and the `waiting-for-slot` Standing (`slot: "merge-gate"`) name the PRs at the gate and the work on its way.
-- A Dispatch snapshot now names its open agent PRs by number, draft and out of draft.
+- A Dispatch snapshot now names its open agent PRs by number, draft and out of draft, and counts the Implement runs with no PR apart from the rest. Dispatch's reason and the Weekly summary both name a draft by its PR and other work on its way by its Ticket.
+- `max_in_flight` still counts a Retry or Request-changes run beside its draft, as it did before; only the gate leaves it out.
 
 Decided in [The Merge-gate queue is uncounted and uncapped](https://github.com/jrey8343/fabrik/issues/459).

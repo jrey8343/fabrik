@@ -15,6 +15,7 @@ import { isOperatorsReplay } from "../kit/replay.ts";
 import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
+import { agentPullRequestsByGate } from "../loop/dispatch.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { parseDesignTurnOutput } from "../loop/designOutput.ts";
 import { digestMarkIn } from "../loop/digestContract.ts";
@@ -2074,23 +2075,23 @@ async function gatherDispatch(
   operator: string | null,
   appLogin: string | null,
 ): Promise<EventPart> {
-  const [{ tickets, page }, runs, researchDecisions] = await Promise.all([
+  const [{ tickets, page }, runsInFlight, researchDecisions] = await Promise.all([
     gatherDispatchTickets(github, repo, appLogin),
-    countDispatchedRuns(actions, repo),
+    readRunsInFlight(actions, repo),
     gatherResearchDecisions(github, repo, appLogin),
   ]);
-  const agentPullRequests = page.repository.pullRequests.nodes.filter((pr) =>
-    isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
-  );
-  const numbers = (draft: boolean) => agentPullRequests.filter((pr) => pr.isDraft === draft).map(({ number }) => number).sort((a, b) => a - b);
+  const agentPullRequests = page.repository.pullRequests.nodes
+    .filter((pr) => isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }))
+    .map((pr) => ({ number: pr.number, draft: pr.isDraft, ticket: ticketOfAgentBranch(pr.headRefName) }));
+  const runs = dispatchedRunsOf(runsInFlight);
   return {
     issue: null,
     pullRequest: null,
     dispatch: {
       tickets,
-      openAgentDraftPullRequests: numbers(true),
-      openAgentPullRequestsAtMergeGate: numbers(false),
+      ...agentPullRequestsByGate(agentPullRequests),
       implementRunsInProgress: runs.implement,
+      implementRunsWithoutPullRequest: implementRunsWithoutPullRequestOf(runsInFlight, agentPullRequests).count,
       researchDecisions,
       researchRunsInProgress: runs.research,
     },
@@ -2348,6 +2349,23 @@ export function dispatchedRunsOf(runs: readonly RunInFlightFact[]): DispatchedRu
   const research = runs.filter(({ role, job }) => role === "research" && job !== "landing").length;
   const named = implement.flatMap(({ issue }) => (issue === null ? [] : [issue]));
   return { implement: implement.length, research, implementTickets: [...new Set(named)].sort((a, b) => a - b) };
+}
+
+/**
+ * The Implement runs in flight on their way to the Merge gate (#459): those
+ * whose Ticket has no open agent PR, and those naming no Ticket, counted as
+ * such since nothing shows they aren't. A run for a Ticket with an open agent
+ * PR, a Retry, a Request-changes or a conflict run, is that PR's work, which
+ * the PR already counts. `tickets` names those that name one, lowest first.
+ */
+export function implementRunsWithoutPullRequestOf(
+  runs: readonly RunInFlightFact[],
+  pullRequests: readonly { readonly ticket: number | null }[],
+): { readonly count: number; readonly tickets: readonly number[] } {
+  const withPullRequest = new Set(pullRequests.flatMap(({ ticket }) => (ticket === null ? [] : [ticket])));
+  const onItsWay = runs.filter(({ role, issue }) => role === "implement" && (issue === null || !withPullRequest.has(issue)));
+  const tickets = onItsWay.flatMap(({ issue }) => (issue === null ? [] : [issue]));
+  return { count: onItsWay.length, tickets: [...new Set(tickets)].sort((a, b) => a - b) };
 }
 
 /** The kind of run a job's name says it is, where it says: a Retry, or a Design session's prototype turn. */

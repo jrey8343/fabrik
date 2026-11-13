@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { aRunInFlight } from "../read/builders.ts";
 import type { GitHub } from "./client.ts";
 import {
   anIssue,
@@ -33,6 +34,7 @@ import {
   countDispatchedRuns,
   DESIGN_JOB_NAME,
   dispatchedRunsOf,
+  implementRunsWithoutPullRequestOf,
   designTurnsInProgress,
   gatherSnapshot as gatherFrom,
   IMPLEMENT_JOB_NAME,
@@ -99,6 +101,16 @@ function actionsWith(runs: { id: number; status: string; createdAt?: string; job
     },
   };
 }
+
+describe("The Implement runs on their way to the Merge gate (#459)", () => {
+  const run = (issue: number | null, role: RunInFlightFact["role"] = "implement") => aRunInFlight({ role, issue });
+
+  it("counts a run whose Ticket has no open agent PR, and one naming no Ticket, but not one on a Ticket whose PR already counts", () => {
+    const runs = [run(12), run(14), run(null), run(30, "review")];
+
+    expect(implementRunsWithoutPullRequestOf(runs, [{ ticket: 14 }, { ticket: null }])).toEqual({ count: 2, tickets: [12] });
+  });
+});
 
 describe("Counting the Implement runs a Dispatch check sees in flight", () => {
   it("counts a running Implement job, called from a Product repo's caller workflow", async () => {

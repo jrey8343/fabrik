@@ -167,6 +167,7 @@ export function dispatchSnapshotOf(
       openAgentDraftPullRequests: [],
       openAgentPullRequestsAtMergeGate: [],
       implementRunsInProgress: 0,
+      implementRunsWithoutPullRequest: 0,
       researchDecisions: [],
       researchRunsInProgress: 0,
       ...inFlight,
