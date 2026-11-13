@@ -1132,10 +1132,10 @@ export interface DispatchSnapshot {
   readonly openAgentPullRequestsAtMergeGate: readonly number[];
   readonly implementRunsInProgress: number;
   /**
-   * The Tickets the Implement runs in progress name, lowest first: from its
+   * The Tickets the Implement runs under way name, lowest first: from its
    * claim taking agent:implement off until its push job opens the draft PR,
    * a run is the only sign its Ticket is taken (#578). A run of an earlier
-   * Kit release names none, so it holds a slot but no Ticket.
+   * Kit release names none, so it takes a slot but no Ticket.
    */
   readonly implementRunTickets: readonly number[];
   /**

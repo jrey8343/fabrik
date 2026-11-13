@@ -1977,7 +1977,7 @@ describe("Gathering a Dispatch check's research Decisions", () => {
     expect(snapshot.dispatch).toMatchObject({ implementRunsInProgress: 1, researchRunsInProgress: 2 });
   });
 
-  it("names the Tickets the Implement runs under way name, so Dispatch holds them off (#578)", async () => {
+  it("names the Tickets the Implement runs under way name, so Dispatch passes over them (#578)", async () => {
     const actions = actionsWith([
       { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement #12", status: "in_progress" }] },
       { id: 2, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }] },

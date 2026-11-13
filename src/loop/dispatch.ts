@@ -238,7 +238,7 @@ export function waitingForDispatch(
   return candidatesOf(snapshot, held).flatMap(({ number, why }) => (why === null ? [number] : []));
 }
 
-/** What Dispatch weighs releasing, slots aside: the candidates, and the Tickets an Implement run under way already holds (#578). */
+/** What Dispatch weighs releasing, slots aside: the candidates, and the Tickets an Implement run under way has already taken (#578). */
 export type DispatchCandidates = Pick<DispatchSnapshot, "tickets" | "researchDecisions" | "implementRunTickets">;
 
 /** Every issue Dispatch weighs, lowest issue number first, with why it can't be released, or null. */
@@ -289,7 +289,7 @@ function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot, runTickets: rea
     return `${name} already has the open PR ${list(ticket.openLinkedPullRequests)}`;
   }
   if (ticket.labels.includes(DISPATCH_LABEL)) return `${name} already has ${DISPATCH_LABEL}`;
-  // Between its claim taking the label off and its push job opening the draft PR, only the run holds it (#578).
+  // Between its claim taking the label off and its push job opening the draft PR, only the run shows it is taken (#578).
   if (runTickets.includes(ticket.number)) return `${name} has an Implement run under way`;
   // A broken Ticket mustn't burn runs on every check, the hourly tick's included (#418):
   // its failure notice tells the Operator to re-add agent:implement, its only resume.
