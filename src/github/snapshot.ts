@@ -2195,6 +2195,7 @@ async function gatherDispatch(
       tickets,
       ...agentPullRequestsByGate(agentPullRequests),
       implementRunsInProgress: runs.implement,
+      implementRunTickets: runs.implementTickets,
       implementRunsWithoutPullRequest: implementRunsWithoutPullRequestOf(runsInFlight, agentPullRequests).count,
       researchDecisions,
       researchRunsInProgress: runs.research,

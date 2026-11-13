@@ -1977,6 +1977,17 @@ describe("Gathering a Dispatch check's research Decisions", () => {
     expect(snapshot.dispatch).toMatchObject({ implementRunsInProgress: 1, researchRunsInProgress: 2 });
   });
 
+  it("names the Tickets the Implement runs under way name, so Dispatch holds them off (#578)", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement #12", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(researchGitHub([]), repo, { kind: "dispatch-check" }, null, null, actions as unknown as GitHub);
+
+    expect(snapshot.dispatch).toMatchObject({ implementRunsInProgress: 2, implementRunTickets: [12] });
+  });
+
   const PERSON = { login: "operator", __typename: "User" };
   const OTHER_BOT = { login: "dependabot", __typename: "Bot" };
   const NOTICE = `${RESEARCH_RUN_FAILED_MARKER}\n@operator The Research run on #12 failed: it crashed.`;

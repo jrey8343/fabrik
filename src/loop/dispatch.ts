@@ -29,7 +29,7 @@ interface Candidate {
 export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched, operator: string): Plan {
   // A Ticket marked to carry on a Kept branch that's gone is never released: it goes to the Operator (#536).
   const stops = snapshot.tickets
-    .filter((ticket) => stopsForGoneKeptBranch(ticket) && !(held.implement.includes(ticket.number) && ticket.open))
+    .filter((ticket) => stopsForGoneKeptBranch(ticket, snapshot.implementRunTickets) && !(held.implement.includes(ticket.number) && ticket.open))
     .flatMap((ticket) => stopForGoneKeptBranch(ticket.number, operator));
   const plan = releasing(snapshot, config, held);
   if (stops.length === 0) return plan;
@@ -41,8 +41,8 @@ export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: He
  * marked for a Kept-branch start whose Kept branch is gone, and nothing else
  * holds it back.
  */
-function stopsForGoneKeptBranch(ticket: TicketSnapshot): boolean {
-  return keptBranchGone(ticket.labels, ticket.keptBranch) && whyNotEligibleBesidesKeptBranch(ticket) === null;
+function stopsForGoneKeptBranch(ticket: TicketSnapshot, runTickets: readonly number[]): boolean {
+  return keptBranchGone(ticket.labels, ticket.keptBranch) && whyNotEligibleBesidesKeptBranch(ticket, runTickets) === null;
 }
 
 /** The Dispatch check's releases, with no stopped Ticket. */
@@ -232,19 +232,22 @@ export function inFlightOf(snapshot: DispatchSnapshot, held: HeldDispatched): In
  * step lets go first (src/loop/replayGate.ts).
  */
 export function waitingForDispatch(
-  snapshot: Pick<DispatchSnapshot, "tickets" | "researchDecisions">,
+  snapshot: DispatchCandidates,
   held: HeldDispatched,
 ): number[] {
   return candidatesOf(snapshot, held).flatMap(({ number, why }) => (why === null ? [number] : []));
 }
 
+/** What Dispatch weighs releasing, slots aside: the candidates, and the Tickets an Implement run under way already holds (#578). */
+export type DispatchCandidates = Pick<DispatchSnapshot, "tickets" | "researchDecisions" | "implementRunTickets">;
+
 /** Every issue Dispatch weighs, lowest issue number first, with why it can't be released, or null. */
-function candidatesOf(snapshot: Pick<DispatchSnapshot, "tickets" | "researchDecisions">, held: HeldDispatched): Candidate[] {
+function candidatesOf(snapshot: DispatchCandidates, held: HeldDispatched): Candidate[] {
   return [
     ...snapshot.tickets.map((ticket): Candidate => ({
       number: ticket.number,
       label: DISPATCH_LABEL,
-      why: held.implement.includes(ticket.number) && ticket.open ? `#${ticket.number} is held` : whyNotEligible(ticket),
+      why: held.implement.includes(ticket.number) && ticket.open ? `#${ticket.number} is held` : whyNotEligible(ticket, snapshot.implementRunTickets),
     })),
     ...snapshot.researchDecisions.map((decision): Candidate => ({
       number: decision.number,
@@ -263,14 +266,14 @@ function count(n: number, one: string, many: string): string {
  * open, ready, buildable Ticket that nothing is already working on, no PR of
  * which has merged, and whose last Implement run didn't fail.
  */
-function whyNotEligible(ticket: TicketSnapshot): string | null {
-  const why = whyNotEligibleBesidesKeptBranch(ticket);
+function whyNotEligible(ticket: TicketSnapshot, runTickets: readonly number[]): string | null {
+  const why = whyNotEligibleBesidesKeptBranch(ticket, runTickets);
   if (why !== null) return why;
   return keptBranchGone(ticket.labels, ticket.keptBranch) ? `#${ticket.number}'s Kept branch is gone` : null;
 }
 
 /** whyNotEligible, leaving out a gone Kept branch, which Dispatch weighs last (#536). */
-function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot): string | null {
+function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot, runTickets: readonly number[]): string | null {
   const name = `#${ticket.number}`;
   if (!ticket.open) return `${name} is closed`;
   // Its work landed though GitHub left it open: only the scheduled tick closes it, never a run (#543).
@@ -286,6 +289,8 @@ function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot): string | null 
     return `${name} already has the open PR ${list(ticket.openLinkedPullRequests)}`;
   }
   if (ticket.labels.includes(DISPATCH_LABEL)) return `${name} already has ${DISPATCH_LABEL}`;
+  // Between its claim taking the label off and its push job opening the draft PR, only the run holds it (#578).
+  if (runTickets.includes(ticket.number)) return `${name} has an Implement run under way`;
   // A broken Ticket mustn't burn runs on every check, the hourly tick's included (#418):
   // its failure notice tells the Operator to re-add agent:implement, its only resume.
   if (ticket.lastRunFailed) return `${name}'s last Implement run failed, so only adding ${DISPATCH_LABEL} again runs it`;

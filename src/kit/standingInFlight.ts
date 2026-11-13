@@ -77,8 +77,8 @@ export type MaxInFlightHold =
 export function maxInFlightHoldOf(facts: Pick<StandingFacts, "github" | "kit">): MaxInFlightHold | null {
   const dispatch = dispatchFactsOf(facts);
   if (dispatch === null) return null;
-  const { config, candidates, heldRuns, runs, snapshot } = dispatch;
-  const waiting = waitingForDispatch(candidates, heldRuns);
+  const { config, heldRuns, runs, snapshot } = dispatch;
+  const waiting = waitingForDispatch(snapshot, heldRuns);
   if (waiting.length === 0) return null;
   if (config.maxInFlight === 0) return { kind: "paused", maxInFlight: 0, waiting };
   const inFlight = inFlightOf(snapshot, heldRuns);
@@ -115,7 +115,7 @@ export function mergeGateHoldOf(facts: Pick<StandingFacts, "github" | "kit">): M
   if (dispatch === null || dispatch.config.maxInFlight === 0) return null;
   const { config, candidates, heldRuns, runs, runsInFlight, snapshot } = dispatch;
   const tickets = new Set(candidates.tickets.map(({ number }) => number));
-  const waiting = waitingForDispatch(candidates, heldRuns).filter((number) => tickets.has(number));
+  const waiting = waitingForDispatch(snapshot, heldRuns).filter((number) => tickets.has(number));
   if (waiting.length === 0) return null;
   const gate = mergeGateLoadOf(snapshot, heldRuns, config.caps.mergeGate);
   if (gate.free > 0) return null;
@@ -129,6 +129,16 @@ export function mergeGateHoldOf(facts: Pick<StandingFacts, "github" | "kit">): M
     runsUnread: runs === null,
     waiting,
   };
+}
+
+/**
+ * The Tickets and research Decisions a Dispatch check would release, slots
+ * aside, read from the Weekly summary's facts (waitingForDispatch): none when
+ * Dispatch's candidates weren't read.
+ */
+export function waitingForDispatchOf(facts: Pick<StandingFacts, "github" | "kit">): number[] {
+  const dispatch = dispatchFactsOf(facts);
+  return dispatch === null ? [] : waitingForDispatch(dispatch.snapshot, dispatch.heldRuns);
 }
 
 /**
@@ -150,6 +160,7 @@ function dispatchFactsOf({ github, kit }: Pick<StandingFacts, "github" | "kit">)
     ...candidates,
     ...agentPullRequestsByGate(github.openPullRequests),
     implementRunsInProgress: runs?.implement ?? 0,
+    implementRunTickets: runs?.implementTickets ?? [],
     implementRunsWithoutPullRequest: runsInFlight === null ? 0 : implementRunsWithoutPullRequestOf(runsInFlight, github.openPullRequests).count,
     researchRunsInProgress: runs?.research ?? 0,
   };
