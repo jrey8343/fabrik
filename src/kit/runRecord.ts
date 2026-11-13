@@ -84,10 +84,14 @@ export interface RateLimitReading {
 
 /**
  * What a failed landing failed on, told apart as the failure comment tells it
- * (src/kit/landingFailure.ts): GitHub refusing the call (`refused`), GitHub's
- * own failure, a 5xx or a call it never answered (`github`), a file the job
- * reads that wasn't there (`missing-file`), or anything else, the Kit's own
- * failure (`kit`), a plan the Loop wouldn't land among them.
+ * (src/kit/landingFailure.ts): GitHub refusing the call for a rate limit or a
+ * missing permission (`refused`), GitHub's own failure, a 5xx or a call it
+ * never answered (`github`), a file the job reads that wasn't there
+ * (`missing-file`), or anything else, the Kit's own failure (`kit`). That
+ * last takes in a plan the Loop wouldn't land, any other 4xx GitHub answered
+ * the Kit's call with, which is the Kit's call to get right even when a race
+ * caused it (its `status` says which), and a landing cut off before it could
+ * say why (its `loopOutcome` says whether it failed or was cancelled).
  */
 export type LandingFailureClass = "refused" | "github" | "missing-file" | "kit";
 
@@ -96,8 +100,13 @@ export type LandingRefusal = NonNullable<ReturnType<typeof refusalOf>>;
 
 /** How the push job's landing of a run failed (#487), as its Run record keeps it. */
 export interface LandingFailed {
-  /** How the push job's Loop step ended. */
-  readonly jobResult: "failure" | "cancelled";
+  /**
+   * How the push job's Run the Loop step ended: `failure`, or `cancelled`,
+   * which tells a landing cut off, by a timeout or someone cancelling the
+   * run, from one that failed. Not the record's own `jobResult`, which is
+   * the agent job's.
+   */
+  readonly loopOutcome: "failure" | "cancelled";
   /** The plan's action that failed, or null when no action did. */
   readonly action: { readonly kind: string; readonly description: string } | null;
   /** The GitHub call that failed, such as `PATCH /repos/o/r/pulls/36`, or null when none did or the thrower didn't say. */
@@ -523,8 +532,8 @@ function landingOf(loopOutcome: string, landingFailed: string | null): LandingFa
  * A landing that failed, or was cancelled, before the Loop could say why:
  * the Kit's own failure, with nothing else known of it.
  */
-export function unexplainedLanding(jobResult: LandingFailed["jobResult"]): LandingFailed {
-  return { jobResult, action: null, request: null, status: null, requestId: null, class: "kit", refusal: null, reason: null };
+export function unexplainedLanding(loopOutcome: LandingFailed["loopOutcome"]): LandingFailed {
+  return { loopOutcome, action: null, request: null, status: null, requestId: null, class: "kit", refusal: null, reason: null };
 }
 
 const LANDING_FAILURE_CLASSES: readonly unknown[] = ["refused", "github", "missing-file", "kit"] satisfies LandingFailureClass[];
@@ -534,13 +543,13 @@ function readLandingFailed(text: string): LandingFailed | null {
   try {
     const failed = JSON.parse(text) as Partial<Record<keyof LandingFailed, unknown>> | null;
     if (typeof failed !== "object" || failed === null) return null;
-    const { jobResult, action, request, status, requestId, class: kind, refusal, reason } = failed;
+    const { loopOutcome, action, request, status, requestId, class: kind, refusal, reason } = failed;
     const nullOr = (value: unknown, type: string) => value === null || typeof value === type;
     const actionOk =
       action === null ||
       (typeof action === "object" && action !== null && typeof (action as Record<string, unknown>)["kind"] === "string" && typeof (action as Record<string, unknown>)["description"] === "string");
     const ok =
-      (jobResult === "failure" || jobResult === "cancelled") &&
+      (loopOutcome === "failure" || loopOutcome === "cancelled") &&
       actionOk &&
       nullOr(request, "string") &&
       nullOr(status, "number") &&

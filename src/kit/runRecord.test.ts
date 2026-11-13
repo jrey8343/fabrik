@@ -1579,7 +1579,7 @@ describe("A judge run's record", () => {
 // #487: a run whose agent succeeded and whose landing then failed no longer reads as a success.
 describe("How the push job's landing of the run ended, on its Run record", () => {
   const failed: LandingFailed = {
-    jobResult: "failure",
+    loopOutcome: "failure",
     action: { kind: "mark-ready-for-review", description: "take #36 out of draft" },
     request: "PATCH /repos/acme/widgets/pulls/36",
     status: 502,
@@ -1602,7 +1602,7 @@ describe("How the push job's landing of the run ended, on its Run record", () =>
 
   it.each(["failure", "cancelled"] as const)("is the Kit's own failure when the Loop step's outcome was %s and it left nothing to say why", (outcome) => {
     expect(runRecordFor(runEnd({ loopOutcome: outcome, landingFailed: null }))?.record.landing).toEqual({
-      jobResult: outcome,
+      loopOutcome: outcome,
       action: null,
       request: null,
       status: null,
@@ -1614,6 +1614,6 @@ describe("How the push job's landing of the run ended, on its Run record", () =>
   });
 
   it("is the Kit's own failure when what the Loop step left doesn't read as a landing failure", () => {
-    expect(runRecordFor(runEnd({ loopOutcome: "failure", landingFailed: "{ not json" }))?.record.landing).toMatchObject({ jobResult: "failure", class: "kit" });
+    expect(runRecordFor(runEnd({ loopOutcome: "failure", landingFailed: "{ not json" }))?.record.landing).toMatchObject({ loopOutcome: "failure", class: "kit" });
   });
 });

@@ -250,7 +250,7 @@ describe("A failed landing as its Run record keeps it", () => {
     const error = new PlanNotApplied(ready, [comment], [], cause);
 
     expect(landingFailedOf({ kind: "error", error })).toEqual({
-      jobResult: "failure",
+      loopOutcome: "failure",
       action: { kind: "mark-ready-for-review", description: "take #36 out of draft" },
       request: "PATCH /repos/o/r/pulls/36",
       status: 502,
@@ -277,12 +277,12 @@ describe("A failed landing as its Run record keeps it", () => {
     ],
     ["anything else as the Kit's", new Error("The agent's result is for #13"), { class: "kit", refusal: null, request: null, status: null, action: null }],
   ])("keeps %s", (_case, error, kept) => {
-    expect(landingFailedOf({ kind: "error", error })).toMatchObject({ jobResult: "failure", ...kept });
+    expect(landingFailedOf({ kind: "error", error })).toMatchObject({ loopOutcome: "failure", ...kept });
   });
 
   it("keeps the Loop refusing to land a plan as the Kit's, with the Loop's reason", () => {
     expect(landingFailedOf({ kind: "fail", failure: "infrastructure", reason: "The Review of #51 gave no valid Verdict" })).toEqual({
-      jobResult: "failure",
+      loopOutcome: "failure",
       action: null,
       request: null,
       status: null,

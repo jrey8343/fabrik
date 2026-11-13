@@ -402,7 +402,7 @@ describe("the Weekly summary", () => {
   // #487
   it("counts the week's runs whose landing failed, against last week's, apart from any run whose agent failed", () => {
     const landing = {
-      jobResult: "failure",
+      loopOutcome: "failure",
       action: { kind: "mark-ready-for-review", description: "take #50 out of draft" },
       request: "PATCH /repos/owner/product/pulls/50",
       status: 502,
