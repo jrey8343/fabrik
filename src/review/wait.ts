@@ -34,7 +34,7 @@ import { GitHub } from "../github/client.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { checkCode } from "../loop/flakyChecks.ts";
 import type { FailureReport } from "../loop/types.ts";
-import { readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
+import { type BranchRequiredChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type ChecksOutcome, checksFromGh, requiredChecksOutcome } from "./checks.ts";
 import { type CheckDetail, type RerunnableCheck, redChecksOf, rerunOutcome, settledChecksOutcome } from "./rerun.ts";
 
@@ -81,9 +81,6 @@ async function pullRequestState(repo: string, number: string): Promise<PullReque
 async function checksOf(repo: string, number: string): Promise<CheckDetail[]> {
   return checksFromGh(await gh("pr", "checks", number, "--repo", repo, "--json", "name,bucket,link,workflow,startedAt")) as CheckDetail[];
 }
-
-/** The default branch's own Required checks, as the Required checks read reads them; or why they could not be read. */
-export type BranchRequiredChecks = { readonly kind: "read"; readonly required: readonly string[] } | { readonly kind: "unread"; readonly why: string };
 
 /**
  * The Required checks a wait waits on, resolved before it starts: the default
@@ -137,7 +134,7 @@ function waitingOn(unreported: readonly string[], running: readonly string[]): s
     .join(", ");
 }
 
-/** Thrown when a GitHub request fails while it waits, as opposed to before it started, so its report says it was waiting. */
+/** Thrown when a GitHub request fails as it reads the Required checks or waits on them, as opposed to any other error before it starts, so its report says so. */
 export class WaitError extends Error {
   override name = "WaitError";
 }
@@ -227,7 +224,7 @@ async function main(productDir: string): Promise<void> {
     },
     {
       requiredChecks,
-      ...(rerun === null ? {} : { headSha: required("FABRIK_HEAD_SHA"), outcome: (checks, gate) => settledChecksOutcome(checks, gate, { rerun: rerun.map(({ name }) => name), rerunAt }) }),
+      ...(rerun === null ? {} : { headSha: required("FABRIK_HEAD_SHA"), outcome: (checks, requiredChecks) => settledChecksOutcome(checks, requiredChecks, { rerun: rerun.map(({ name }) => name), rerunAt }) }),
       deadlineMs: Math.max(timeoutMinutes * 60_000 - TIMEOUT_MARGIN_MS, SETTLE_MS),
       now: Date.now,
       sleep: (ms) => sleep(ms),

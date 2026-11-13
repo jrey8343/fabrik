@@ -69,6 +69,7 @@ describe("The checks after the Kit re-ran the red ones", () => {
     const checks = [outside("Vercel", "fail"), actions("loop / Kit", "pending", 9), actions("unit", "pass", 7, "2026-11-11T11:01:00Z")];
     expect(settledChecksOutcome(checks, ["Vercel", "unit"], { rerun: ["unit"], rerunAt })).toEqual({ kind: "red", failed: ["Vercel"] });
   });
+
   it("are green with no Required checks, whatever ran on the head", () => {
     const checks = [outside("Vercel", "fail"), actions("unit", "pending", 7, "2026-11-11T11:01:00Z")];
     expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "green", ranNothing: [] });

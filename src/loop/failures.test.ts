@@ -329,7 +329,7 @@ describe("Failure notices", () => {
     it("says it was still waiting when a GitHub request failed, quoting the error, rather than that the Reviewer crashed", () => {
       const body = commentOf(review({ failure: "unread-checks", detail: "gh pr checks failed: HTTP 502: Bad Gateway" }));
 
-      expect(body).toContain("The Review run on #7 failed: it was still waiting for its required checks when a GitHub request failed.");
+      expect(body).toContain("The Review run on #7 failed: a GitHub request failed while it read or waited for its Required checks.");
       expect(body).toContain("> gh pr checks failed: HTTP 502: Bad Gateway");
       expect(body).toContain("Re-add `agent:review` on this PR to run it again.");
     });

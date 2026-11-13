@@ -58,16 +58,16 @@ export async function readRequiredChecks(client: Pick<ReadClient, "rest">, repo:
   return { repo, branch: branch.name, readAt: now, required: branch.required, holdsAdmins: branch.holdsAdmins, heads: Object.fromEntries(read) };
 }
 
+/** The default branch's own list of Required checks; or why it could not be read. */
+export type BranchRequiredChecks = { readonly kind: "read"; readonly required: readonly string[] } | { readonly kind: "unread"; readonly why: string };
+
 /**
  * The default branch's own list of Required checks, read from the branch
  * itself as readRequiredChecks reads it, so the Review's wait and a reader
  * never disagree about what the branch requires (#565); or why it could not
  * be read. Two REST requests.
  */
-export async function readDefaultBranchRequiredChecks(
-  client: Pick<ReadClient, "rest">,
-  repo: string,
-): Promise<{ readonly kind: "read"; readonly required: readonly string[] } | { readonly kind: "unread"; readonly why: string }> {
+export async function readDefaultBranchRequiredChecks(client: Pick<ReadClient, "rest">, repo: string): Promise<BranchRequiredChecks> {
   const branch = await readBranch(client, repoOf(repo));
   return branch.kind === "read" ? { kind: "read", required: branch.required } : { kind: "unread", why: branch.why };
 }

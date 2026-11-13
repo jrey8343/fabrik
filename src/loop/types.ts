@@ -43,7 +43,7 @@ export type ReportedFailure =
   | "usage-credits"
   /** The Kit's input step couldn't read the agent's inputs from GitHub, so the agent never started (#328). */
   | "unread-inputs"
-  /** A GitHub request failed while the Review waited for its required checks. */
+  /** A GitHub request failed while the Review read or waited for its Required checks, those the Kit config lists plus any the default branch requires. */
   | "unread-checks"
   /** The Review gave up waiting on Required checks (those the Kit config lists plus any the default branch requires) that never reported on the PR's head, which no re-run fixes. */
   | "unreported-checks"
