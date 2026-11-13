@@ -365,6 +365,17 @@ describe("silences the rule cannot date", () => {
     expect(standingsIn({ openIssues: [decision] }, { kit: dispatching([], [{ number: 21 }], 0) })).toMatchObject([{ name: "waiting-for-slot" }]);
   });
 
+  it("gives a Ticket caps.merge_gate holds no releasable silence while max_in_flight has room, and the research Decision it lets go one (#459)", () => {
+    const ticket = anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", READY)] });
+    const decision = anOpenIssue({ number: 21, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", READY)] });
+    const atGate = [21, 22, 23].map((number) => anOpenPullRequest({ number, ticket: number - 20, draft: false }));
+    const standings = standingsIn({ openIssues: [ticket, decision], openPullRequests: atGate }, { kit: dispatching([{ number: 14 }], [{ number: 21 }]) });
+    expect(standings.filter(({ issue }) => issue === 14 || issue === 21).map(({ issue, name }) => ({ issue, name }))).toEqual([
+      { issue: 14, name: "waiting-for-slot" },
+      { issue: 21, name: "waiting-on-kit" },
+    ]);
+  });
+
   it("gives a needs-design issue the Design queue check would start a session on, a slot being free, waiting on the Kit at Design, since it got needs-design; with every slot held it waits for one", () => {
     const waiting = aDesignQueueIssue({ number: 21, neededDesignAt: READY });
     const holding = (number: number) => aDesignQueueIssue({ number, designRounds: 1 });

@@ -44,7 +44,7 @@ import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type R
 import { averageCostOf, BUILD_ROLES, costOf, costPerMergedPullRequestOf, endedBy } from "./mergedCost.ts";
 import { rubricId, SCORERS } from "./rubrics.ts";
 import { type PlainKind, type Standing, standingsOf, type StandingNamed } from "./standing.ts";
-import { givenUpWeeksOf, maxInFlightHoldOf } from "./standingInFlight.ts";
+import { givenUpWeeksOf, maxInFlightHoldOf, mergeGateHoldOf } from "./standingInFlight.ts";
 import { wordStanding } from "./standingWording.ts";
 import { READY_FOR_HUMAN_HAND_BACKS } from "./standingHandBacks.ts";
 import { RESEARCH_NOTICE_HAND_BACKS } from "./standingOperator.ts";
@@ -545,6 +545,8 @@ export interface Held {
   readonly runs: HeldRuns | null;
   /** The Tickets and research Decisions Dispatch would release but max_in_flight holds (#476). */
   readonly dispatch: HeldDispatch | null;
+  /** The Tickets Dispatch would release but caps.merge_gate holds, while PRs wait on the Operator at the Merge gate (#459). */
+  readonly mergeGate: HeldMergeGate | null;
   /** The Audit and Retro weeks given up on, the last failed run opened in the summary's week, oldest first (#443, #610). */
   readonly givenUpWeeks: readonly GivenUpWeekItem[] | null;
 }
@@ -580,6 +582,26 @@ export type HeldDispatch =
       readonly runsUnread: boolean;
       readonly waiting: readonly WaitingForSlot[];
     };
+
+/**
+ * The Tickets Dispatch would release, held by caps.merge_gate: the agent PRs
+ * at the Merge gate and the Ticket work on its way there leave no room. The
+ * PRs at the gate stay under Waiting on you, named here, not listed as held.
+ */
+export interface HeldMergeGate {
+  readonly mergeGate: number;
+  /** The agent PRs at the Merge gate, lowest first. */
+  readonly atGate: readonly number[];
+  /** The Ticket work on its way to the gate, as Dispatch counts it (mergeGateOf), or as much of it as could be read. */
+  readonly onItsWay: number;
+  /** The agent draft PRs on their way, lowest first. */
+  readonly onItsWayPullRequests: readonly number[];
+  /** The Tickets on their way with no PR yet the facts name, lowest first. */
+  readonly onItsWayIssues: readonly number[];
+  /** Whether the runs in progress couldn't be read, so `onItsWay` leaves them out. */
+  readonly runsUnread: boolean;
+  readonly waiting: readonly WaitingForSlot[];
+}
 
 /** A Ticket or research Decision waiting for Dispatch. */
 export interface WaitingForSlot {
@@ -1347,8 +1369,9 @@ function heldIn(
         maps: heldMapsOf(openMaps, config),
         runs: heldRunsOf(facts.kitIssues, standings),
         dispatch: heldDispatchOf(facts, kit, standings, now),
+        mergeGate: heldMergeGateOf(facts, kit, standings, now),
       }
-    : { designSessions: null, monitor: null, maps: null, runs: null, dispatch: null };
+    : { designSessions: null, monitor: null, maps: null, runs: null, dispatch: null, mergeGate: null };
   const held = { ...caps, givenUpWeeks: givenUpWeeksIn(facts, appLogin, week, items, now) };
   return Object.values(held).every((source) => source === null) ? null : held;
 }
@@ -1369,6 +1392,23 @@ function heldDispatchOf(facts: GitHubFacts, kit: RepoKitFacts | null, standings:
   if (hold.kind === "paused") return { kind: "paused", waiting };
   const { maxInFlight, inFlight, inFlightIssues, runsUnread } = hold;
   return { kind: "full", maxInFlight, inFlight, inFlightIssues, runsUnread, waiting };
+}
+
+/**
+ * The Tickets waiting for room at the Merge gate while caps.merge_gate holds
+ * them, counted by Dispatch's own rules (mergeGateHoldOf), each with how long
+ * it has waited, as its Standing has it.
+ */
+function heldMergeGateOf(facts: GitHubFacts, kit: RepoKitFacts | null, standings: readonly Standing[], now: number): HeldMergeGate | null {
+  const hold = mergeGateHoldOf({ github: facts, kit });
+  const slots = new Map(standings.flatMap((standing) => (standing.name === "waiting-for-slot" && standing.detail.slot === "merge-gate" ? [[standing.issue, standing.since] as const] : [])));
+  const waiting = (hold?.waiting ?? []).flatMap((number): WaitingForSlot[] => {
+    const since = slots.get(number);
+    return since === undefined ? [] : [{ number, since, age: now - Date.parse(since) }];
+  });
+  if (hold === null || waiting.length === 0) return null;
+  const { mergeGate, atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread } = hold;
+  return { mergeGate, atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread, waiting };
 }
 
 /**
@@ -1788,6 +1828,8 @@ function heldLines(repos: readonly RepoSection[], timeZone: string): string[] {
     if (runs !== null) shown.push(...heldRunsLines(repo, runs, timeZone));
     const dispatch = held?.dispatch ?? null;
     if (dispatch !== null) shown.push(heldDispatchLine(repo, dispatch));
+    const mergeGate = held?.mergeGate ?? null;
+    if (mergeGate !== null) shown.push(heldMergeGateLine(repo, mergeGate));
     for (const { issueName, failed, turned } of held?.givenUpWeeks ?? []) {
       const held = turned ? "was held until this week" : "is held until next week";
       shown.push(`- ${repo}: the next ${issueName} ${held}: two runs failed (${failed.map(({ number, url }) => `[#${number}](${url})`).join(", ")})`);
@@ -1813,6 +1855,28 @@ function heldDispatchLine(repo: string, held: HeldDispatch): string {
       : `${inFlight} ${inFlight === 1 ? "is" : "are"} in flight${inFlightIssues.length === 0 ? "" : ` (${names} among them)`}`;
   const unread = runsUnread ? " (runs in progress unread)" : "";
   return `- ${repo}: waiting for a slot: \`max_in_flight\` is ${maxInFlight} and ${taken}${unread} · ${waiting}`;
+}
+
+/**
+ * What caps.merge_gate holds: the PRs at the gate and the Ticket work on its
+ * way there; then each waiting Ticket with how long it has waited.
+ */
+function heldMergeGateLine(repo: string, held: HeldMergeGate): string {
+  const link = (number: number) => `[#${number}](https://github.com/${repo}/issues/${number})`;
+  const waiting = held.waiting.map(({ number, age }) => (age === null ? link(number) : `${link(number)} (${duration(age)})`)).join(", ");
+  if (held.mergeGate === 0) {
+    return `- ${repo}: waiting for the Merge gate: Dispatch holds Tickets while any agent PR is at or on its way to it (\`caps.merge_gate\` is 0) · ${waiting}`;
+  }
+  const { atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread } = held;
+  const pull = (number: number) => `[#${number}](https://github.com/${repo}/pull/${number})`;
+  const at = atGate.length === 0 ? null : `${atGate.map(pull).join(", ")} ${atGate.length === 1 ? "is" : "are"} at it`;
+  const named = onItsWayPullRequests.length + onItsWayIssues.length;
+  const names = [...onItsWayPullRequests.map(pull), ...onItsWayIssues.map(link)].join(", ");
+  const counted = named === onItsWay ? names : `${onItsWay}${named === 0 ? "" : ` (${names} among them)`}`;
+  const way =
+    onItsWay === 0 ? null : at === null ? `${counted} ${onItsWay === 1 ? "is on its way to it" : "are on their way to it"}` : `${counted} ${onItsWay === 1 ? "on its way" : "on their way"}`;
+  const unread = runsUnread ? " (runs in progress unread)" : "";
+  return `- ${repo}: waiting for the Merge gate: \`caps.merge_gate\` is ${held.mergeGate} and ${[at, way].filter((part) => part !== null).join(", ")}${unread} · ${waiting}`;
 }
 
 /** The Held runs, each with its role and the weekly-limit issues holding it, then each open weekly-limit issue with its reset. */

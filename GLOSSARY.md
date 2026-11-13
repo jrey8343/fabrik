@@ -290,6 +290,14 @@ _Avoid_: style guide, conventions, review instructions
 The rule that only the Operator merges a pull request into a Product repo's main branch, and only at a head whose Required checks have passed. Nothing reaches that branch any other way: neither agents nor the Operator push to it.
 _Avoid_: approval, sign-off
 
+**On its way to the Merge gate**:
+Ticket work that will reach the Merge gate unless it fails: an open agent draft PR, an Implement run for a Ticket with no open agent PR, and a Ticket dispatched and waiting for its run, or held. A Retry or Request-changes run is its PR's work, counted by its PR. Research never reaches the gate.
+_Avoid_: pending, in the pipeline
+
+**Gate load**:
+What `caps.merge_gate` weighs: the open agent PRs out of draft, at the Merge gate, plus the work on its way to it. Dispatch releases a Ticket only while the Gate load is under the cap (ADR-0023).
+_Avoid_: review queue, backlog
+
 **Required check**:
 A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any the main branch already required. It has passed when it succeeded, was skipped or reported neutral, as GitHub judges a merge; cancelled or any other result is failing.
 _Avoid_: gating check, status check
@@ -385,5 +393,5 @@ A Fabrik commit not yet released, such as a Retro proposal's, whose prompts and 
 _Avoid_: candidate Kit, Kit variant, prompt branch
 
 **Weekly summary**:
-The one issue filed each week across all of the Operator's Product repos: the factory's metrics, everything waiting on the Operator, held by a cap, or stuck, and whether each repo's Loop is running. Held by a cap takes in `max_in_flight`, Dispatch paused at 0 included, judged by each repo's own Kit config.
+The one issue filed each week across all of the Operator's Product repos: the factory's metrics, everything waiting on the Operator, held by a cap, or stuck, and whether each repo's Loop is running. Held by a cap takes in `max_in_flight`, Dispatch paused at 0 included, and `caps.merge_gate`, judged by each repo's own Kit config.
 _Avoid_: inbox, Operator inbox, dashboard, report

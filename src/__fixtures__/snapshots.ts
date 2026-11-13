@@ -164,8 +164,10 @@ export function dispatchSnapshotOf(
     pullRequest: null,
     dispatch: {
       tickets,
-      openAgentDraftPullRequests: 0,
+      openAgentDraftPullRequests: [],
+      openAgentPullRequestsAtMergeGate: [],
       implementRunsInProgress: 0,
+      implementRunsWithoutPullRequest: 0,
       researchDecisions: [],
       researchRunsInProgress: 0,
       ...inFlight,

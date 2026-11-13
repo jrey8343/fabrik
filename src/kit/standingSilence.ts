@@ -12,7 +12,7 @@ import type { AgentRole } from "../loop/types.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { barOf, clockOf, stuckAtOf } from "./standingClock.ts";
-import { designSessionsStartingOf, hasVerdictOnHead, isSpec, maxInFlightHoldOf, readySince } from "./standingInFlight.ts";
+import { designSessionsStartingOf, hasVerdictOnHead, isSpec, maxInFlightHoldOf, mergeGateHoldOf, readySince } from "./standingInFlight.ts";
 import { answerOf, lastAdded, passAtHeadOf } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
@@ -104,7 +104,8 @@ function designSlotFreeSilencesOf(facts: StandingFacts): StandingNamed<"waiting-
 /**
  * Each Ticket and research Decision Dispatch would release, by its own rule
  * (waitingForDispatch), while max_in_flight leaves a slot free
- * (maxInFlightHoldOf): the next Dispatch check releases it. The facts don't
+ * (maxInFlightHoldOf) and, for a Ticket, caps.merge_gate leaves room
+ * (mergeGateHoldOf): the next Dispatch check releases it. The facts don't
  * say when it became releasable, so it never turns Stuck; the trigger label
  * Dispatch adds starts a clock. Since it got its state label.
  */
@@ -114,7 +115,8 @@ function releasableSilencesOf(facts: StandingFacts): StandingNamed<"waiting-on-k
   const { candidates } = kit.dispatch;
   const decisions = new Set(candidates.researchDecisions.map(({ number }) => number));
   const held = { implement: heldOf("implement", github.kitIssues), research: heldOf("research", github.kitIssues) };
-  return waitingForDispatch(candidates, held).flatMap((number) => {
+  const gateHeld = new Set(mergeGateHoldOf(facts)?.waiting ?? []);
+  return waitingForDispatch(candidates, held).filter((number) => !gateHeld.has(number)).flatMap((number) => {
     const decision = decisions.has(number);
     const since = readySince(github.openIssues, number, decision);
     if (since === null) return [];
