@@ -36,7 +36,7 @@ describe("The slot of a passed draft waiting on its Digest", () => {
     expect(await agentPullRequestsRead([{ ...anAgents, isDraft: true }])).toEqual({ drafts: [50], atGate: [] });
   });
 
-  it("it moves to the Merge gate once it is out of draft, as it is when the gate opens, holding a caps.merge_gate slot instead (#459)", async () => {
+  it("moves to the Merge gate once it is out of draft, as it is when the gate opens, holding a caps.merge_gate slot instead (#459)", async () => {
     expect(await agentPullRequestsRead([{ ...anAgents, isDraft: false }])).toEqual({ drafts: [], atGate: [50] });
   });
 

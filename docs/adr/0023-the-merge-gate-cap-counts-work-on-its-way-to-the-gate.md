@@ -7,7 +7,7 @@ A pass takes an agent pull request out of draft to the Merge gate, where it wait
 - **Gate load** is the open agent PRs out of draft (at the gate) plus the Ticket work on its way there: open agent draft PRs, Implement runs in progress, and Tickets dispatched and waiting or held. A passed draft waiting on its Digest counts once, as a draft.
 - **Free Ticket slots** are the lesser of `max_in_flight` minus what's in flight and `caps.merge_gate` minus the gate load.
 - **Research runs and Decisions count for neither**, as they never reach the gate, and still release while it holds Tickets.
-- **`0` holds Tickets while any agent PR is at or on its way to the gate.**
+- **`0` holds Tickets while any agent PR is at or on its way to the gate.** With nothing there a Ticket still goes, one at a time, so `0` holds as `1` does and only words its hold differently; it is no pause, unlike `max_in_flight: 0`.
 - **A Request changes frees nothing**: the PR moves from the gate back to work on its way there. A merge or a close frees a slot, and `pull-request-closed` already runs a Dispatch check.
 - **It is its own cap, apart from `max_in_flight`**: `max_in_flight` stays agent work in flight, and `caps.merge_gate` is the attention budget. When both hold a Ticket, its Standing and the Weekly summary name the Merge gate, since that is the cap the Operator can clear.
 
