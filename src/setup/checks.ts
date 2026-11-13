@@ -10,7 +10,7 @@ import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSk
 import type { Env, Run } from "./exec.ts";
 import type { ProductState } from "./plan.ts";
 import { isYes, type Prompt } from "./prompt.ts";
-import { mergedSetupTip, setupBranch, uncommittedPaths } from "./setupBranch.ts";
+import { blockingUncommittedPaths, mergedSetupTip, setupBranch } from "./setupBranch.ts";
 
 export interface CheckInputs {
   readonly run: Run;
@@ -177,7 +177,7 @@ async function checkBranch(
     return `${where}. Switch to ${defaultBranch} with git switch ${defaultBranch}, then run setup again.`;
   }
 
-  const changed = await uncommittedPaths(run, cwd);
+  const changed = await blockingUncommittedPaths(run, cwd);
   if (current === defaultBranch && changed.length > 0) {
     return `This clone has uncommitted changes (${changed.join(", ")}). Commit or stash them, then run setup again.`;
   }

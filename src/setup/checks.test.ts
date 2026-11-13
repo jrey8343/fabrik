@@ -16,6 +16,8 @@ import {
 } from "../__fixtures__/setupCommands.ts";
 import { checkSetup } from "./checks.ts";
 
+const onSetupBranch = { "git branch --show-current": { stdout: "fabrik/setup-v1.4.2\n" } };
+
 const EARLIER_WRITES = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
 
 let productDir: string;
@@ -152,6 +154,49 @@ describe("The checks before setup plans anything", () => {
     );
   });
 
+  describe("with skills the SessionStart hook installed left untracked in .claude/skills/, as after a setup PR was closed", () => {
+    const skills = "?? .claude/skills/tdd/SKILL.md\0?? .claude/skills/.fabrik-install.json\0";
+
+    it("pass as if the clone were clean", async () => {
+      expect((await check({ [STATUS]: { stdout: skills } }).result).ok).toBe(true);
+    });
+
+    it("pass on the setup branch, alongside files an earlier run wrote", async () => {
+      const status = { stdout: `${skills}?? .github/workflows/fabrik.yml\0` };
+
+      expect((await check({ ...onSetupBranch, [STATUS]: status }).result).ok).toBe(true);
+    });
+
+    it("stop on any other uncommitted change, naming only it", async () => {
+      expect(await problem({ [STATUS]: { stdout: `${skills} M README.md\0` } })).toBe(
+        "This clone has uncommitted changes (README.md). Commit or stash them, then run setup again.",
+      );
+    });
+
+    it.each([".claude/skillsets/x.md", ".claude/settings.json", ".claude/skills"])("stop on an untracked %s, which isn't in the folder", async (path) => {
+      expect(await problem({ [STATUS]: { stdout: `${skills}?? ${path}\0` } })).toBe(
+        `This clone has uncommitted changes (${path}). Commit or stash them, then run setup again.`,
+      );
+    });
+
+    it.each([" M", "M ", " D", "A "])("stop on a tracked file in the folder with status %j, on either branch", async (code) => {
+      const status = { stdout: `${skills}${code} .claude/skills/mine/SKILL.md\0` };
+
+      expect(await problem({ [STATUS]: status })).toBe(
+        "This clone has uncommitted changes (.claude/skills/mine/SKILL.md). Commit or stash them, then run setup again.",
+      );
+      expect(await problem({ ...onSetupBranch, [STATUS]: status })).toBe(
+        "fabrik/setup-v1.4.2 has uncommitted changes setup didn't make (.claude/skills/mine/SKILL.md). Commit or stash them, then run setup again.",
+      );
+    });
+
+    it("stop on a tracked file renamed out of the folder, naming both its paths", async () => {
+      expect(await problem({ [STATUS]: { stdout: `${skills}R  notes/SKILL.md\0.claude/skills/mine/SKILL.md\0` } })).toBe(
+        "This clone has uncommitted changes (notes/SKILL.md, .claude/skills/mine/SKILL.md). Commit or stash them, then run setup again.",
+      );
+    });
+  });
+
   it("stop when the default branch here isn't the one on origin", async () => {
     expect(await problem({ [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` } })).toBe(
       "main here isn't the same as on origin (4ae2317 here, 9f86d08 on origin). Pull, or take the commits made here to origin through a pull request, then run setup again.",
@@ -169,8 +214,6 @@ describe("The checks before setup plans anything", () => {
   });
 
   describe("on the setup branch, where a run applies its plan and a later run picks up", () => {
-    const onSetupBranch = { "git branch --show-current": { stdout: "fabrik/setup-v1.4.2\n" } };
-
     it("pass when it holds origin's default branch", async () => {
       expect((await check(onSetupBranch).result).ok).toBe(true);
     });
@@ -210,6 +253,21 @@ describe("The checks before setup plans anything", () => {
           "gh pr list --head fabrik/setup-v1.4.2 --state open": { stdout: "[]" },
           "gh api graphql": noForcePush,
           [`gh api repos/acme/clinic/compare/${HEAD_SHA}...${movedHead}`]: { stdout: "ahead\n" },
+        }),
+      ).toBe("fabrik/setup-v1.4.2's setup PR is merged. Switch to main with git switch main && git pull, then run setup again.");
+    });
+
+    it("stop, saying to go back to the default branch, when its setup PR is merged and only skills the hook installed are untracked", async () => {
+      const merged = { stdout: JSON.stringify([{ number: 1, headRefOid: HEAD_SHA, isCrossRepository: false }]) };
+
+      expect(
+        await problem({
+          ...onSetupBranch,
+          [STATUS]: { stdout: "?? .claude/skills/tdd/SKILL.md\0" },
+          [lsRemote("v1.4.2")]: { stdout: `${OTHER_SHA}\trefs/heads/main\n` },
+          "gh pr list --head fabrik/setup-v1.4.2 --state merged": merged,
+          "gh pr list --head fabrik/setup-v1.4.2 --state open": { stdout: "[]" },
+          "gh api graphql": { stdout: JSON.stringify({ data: { repository: { pullRequest: { timelineItems: { nodes: [] } } } } }) },
         }),
       ).toBe("fabrik/setup-v1.4.2's setup PR is merged. Switch to main with git switch main && git pull, then run setup again.");
     });
