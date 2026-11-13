@@ -562,8 +562,8 @@ describe("A Retro run refused on its weekly limit, with rotation on", () => {
   });
 });
 
-// Like the Retro's (src/loop/retroGate.test.ts): the scheduled tick can't start
-// an Auditor run at a reset, so any open weekly-limit issue holds the Audit back.
+// Like the Retro's (src/loop/retroGate.test.ts): the Audit is held back only
+// while no Subscription is free, rotation on or off (#442).
 describe("The Audit due while a Subscription's weekly-limit issue is open, with rotation on", () => {
   const SUNDAY = "2026-11-08T04:00:00.000Z";
   const HEAD = "c0ffee5".padEnd(40, "0");
@@ -571,18 +571,28 @@ describe("The Audit due while a Subscription's weekly-limit issue is open, with 
   const opened = (kitIssues: KitIssueSnapshot[], config = TWO_SUBSCRIPTIONS) =>
     actionsOf(planFor({ kind: "scheduled-tick", now: SUNDAY }, snapshotWith(kitIssues), config)).filter((action) => action.kind === "open-issue");
 
-  it("opens nothing while another Subscription is free, waiting for the reset", () => {
-    expect(opened([weeklyLimitIssue(41, "Claude token", LATER, false)])).toEqual([]);
+  it("opens the pending Audit while another Subscription is free", () => {
+    expect(opened([weeklyLimitIssue(41, "Claude token", LATER, false)])).toEqual([expect.objectContaining({ labels: ["fabrik:audit"] })]);
   });
 
   it("opens nothing while every Subscription is used up", () => {
     expect(opened(BOTH_USED_UP)).toEqual([]);
   });
 
-  it("gives the weekly limit as its reason", () => {
-    const plan = auditGate(SUNDAY, snapshotWith([weeklyLimitIssue(41, "Claude token", LATER, false)]), TWO_SUBSCRIPTIONS);
+  it("gives no free Subscription as its reason while every one is used up, noting the wait on the Carrier", () => {
+    const plan = auditGate(SUNDAY, snapshotWith(BOTH_USED_UP), TWO_SUBSCRIPTIONS);
 
-    expect(plan).toEqual({ kind: "nothing", reason: "The weekly usage limit is reached, as #41 says" });
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        {
+          kind: "comment",
+          issue: 41,
+          body: "This week's Audit waits for a free Subscription.\n\n<!-- fabrik:weekly-run-waiting audit 2026-11-02 -->",
+        },
+      ],
+      notes: ["No Subscription is free, so the Audit waits for one"],
+    });
   });
 
   it("opens on the tick that closes the last weekly-limit issue at its reset", () => {

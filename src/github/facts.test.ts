@@ -97,6 +97,8 @@ interface RawRepo {
   openReplays?: unknown[];
   /** The open issues with a Kit-owned label. */
   kitIssues?: unknown[];
+  /** The weekly-limit, usage-credits and token-rotation issues, open or closed, updated since the `since` the read asks for. */
+  weekCarriers?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -125,6 +127,11 @@ function repoWith(raw: RawRepo) {
         expect(variables["replay"]).toBe("fabrik:replay");
         expect(query).toContain("issues(states: OPEN, labels: [$replay]");
         return answer({ repository: { issues: page(raw.openReplays) } });
+      }
+      if (query.includes("issues(states: [OPEN, CLOSED], labels: $labels, filterBy: { since: $since }")) {
+        expect(variables["labels"]).toEqual(["fabrik:weekly-limit", "fabrik:usage-credits", "fabrik:token-rotation"]);
+        expect(variables["since"]).toBe("2026-10-25T20:00:00.000Z");
+        return answer({ repository: { issues: page(raw.weekCarriers) } });
       }
       if (query.includes("labels: $labels")) {
         expect(variables["labels"]).toContain("fabrik:weekly-limit");
@@ -629,6 +636,25 @@ describe("Gathering a Product repo's GitHub facts", () => {
       { number: 20, labels: ["fabrik:weekly-limit"], body: "The weekly usage limit is reached.\n<!-- fabrik:resets-at 2026-11-10T22:00:00Z -->", comments: [held] },
       { number: 21, labels: ["fabrik:weekly-limit"], body: "", comments: [] },
     ]);
+  });
+
+  it("holds the Carriers updated in the last two weeks, closed ones included, a bot's text alone, for the skipped-week line (#442)", async () => {
+    const waiting = "This week's Audit waits for a free Subscription.\n\n<!-- fabrik:weekly-run-waiting audit 2026-11-02 -->";
+    const github = repoWith({
+      weekCarriers: [
+        {
+          number: 41,
+          body: "The weekly usage limit is reached.",
+          author: APP,
+          labels: { nodes: [{ name: "fabrik:weekly-limit" }] },
+          comments: { nodes: [{ body: waiting, author: APP }, { body: waiting, author: OPERATOR }] },
+        },
+      ],
+    });
+
+    const { weekCarriers } = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(weekCarriers).toEqual([{ number: 41, labels: ["fabrik:weekly-limit"], body: "The weekly usage limit is reached.", comments: [waiting] }]);
   });
 
   it("holds the open needs-design issues as the Design queue check reads them, so Held tells waiting from slot-holding", async () => {

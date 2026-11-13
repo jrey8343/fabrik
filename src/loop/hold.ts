@@ -165,6 +165,15 @@ function holdingOn(kitIssues: readonly KitIssueSnapshot[]): Carrier | null {
   return on === undefined ? null : { on, until: null, reset: false };
 }
 
+/**
+ * The carrier a run due now would be held on, by the same rule (holdingOn),
+ * or null with none open: where the tick notes the week's Audit or Retro
+ * waiting on a free Subscription too (src/loop/weeklyGate.ts, #442).
+ */
+export function carrierOf(kitIssues: readonly KitIssueSnapshot[]): KitIssueSnapshot | null {
+  return holdingOn(kitIssues)?.on ?? null;
+}
+
 /** The comment naming a run held on this carrier, with its held marker. */
 function lineOn({ until, reset }: Carrier, held: HoldableRun): string {
   return reset ? heldMarkerComment(held, until) : heldUntilFreeLine(held);

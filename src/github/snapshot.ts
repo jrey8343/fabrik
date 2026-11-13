@@ -33,10 +33,14 @@ import {
   REPLAY_TRIGGER_LABEL,
   RESEARCH_DECISION_LABEL,
   RETRO_LABEL,
+  TOKEN_ROTATION_LABEL,
   TRIGGER_LABELS,
+  USAGE_CREDITS_LABEL,
+  WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
+import { weekStart } from "../loop/weeklyGate.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   AgentRole,
@@ -564,13 +568,15 @@ export async function gatherSnapshot(
 ): Promise<Snapshot> {
   // A held line is never read as activity or a reply (#471).
   const github = leavingOutHeldLines(client);
-  const [{ owner, kitIssues }, part, startingComment, reviewHasInlineComments, audit, namedPullRequests] = await Promise.all([
+  const [{ owner, kitIssues }, part, startingComment, reviewHasInlineComments, audit, namedPullRequests, weekCarriers] = await Promise.all([
     gatherKitIssues(github, repo, appLogin),
     gatherEventPart(github, repo, event, operator, appLogin, actions),
     gatherStartingComment(github, repo, event),
     gatherReviewInlineComments(github, repo, event),
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
     gatherNamedPullRequests(github, repo, event),
+    // The week's Carriers, closed ones included, so the gates note a waiting week once (#442).
+    event.kind === "scheduled-tick" ? gatherWeekCarriers(github, repo, appLogin, new Date(weekStart(event.now)).toISOString()) : null,
   ]);
   // A Design turn's Map is weighed against the Map cap, which counts every open Map.
   const openMaps =
@@ -626,8 +632,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -1243,6 +1249,7 @@ type EventPart = Omit<
   | "rollIns"
   | "held"
   | "closedKitIssue"
+  | "weekCarriers"
   | "openMaps"
   | "conflicts"
   | "mergeable"
@@ -1365,6 +1372,50 @@ export async function gatherKitIssues(
   const kitIssues = await Promise.all(nodes.map((issue) => kitIssueOf(github, repo, issue, appLogin)));
   return { owner, kitIssues };
 }
+
+const WEEK_CARRIERS_QUERY = `
+  query ($owner: String!, $name: String!, $labels: [String!]!, $since: DateTime!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      issues(states: [OPEN, CLOSED], labels: $labels, filterBy: { since: $since }, first: ${KIT_ISSUES_PAGE}, after: $after, orderBy: { field: CREATED_AT, direction: ASC }) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          number
+          createdAt
+          body
+          author { login __typename }
+          labels(first: 100) { nodes { name } }
+          comments(last: 100) { ${KIT_ISSUE_COMMENTS} }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * The weekly-limit, usage-credits and token-rotation issues updated since
+ * `since`, open or closed, as kitIssues holds them: only the text of the
+ * Fabrik App, whose bot login is `appLogin`, or of any bot when null (see
+ * byAppOf). The gates and the Weekly summary read the waiting markers the
+ * tick noted on them, on a Carrier closed since included (#442).
+ */
+export async function gatherWeekCarriers(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string | null, since: string): Promise<KitIssueSnapshot[]> {
+  const nodes: KitIssueNode[] = [];
+  let after: string | null = null;
+  for (;;) {
+    const data: { repository: { issues: { pageInfo: { hasNextPage: boolean; endCursor: string | null } | null; nodes: KitIssueNode[] } } } = await github.graphql(
+      WEEK_CARRIERS_QUERY,
+      { owner: repo.owner, name: repo.name, labels: CARRIER_LABELS, since, after },
+    );
+    const { pageInfo, nodes: onPage } = data.repository.issues;
+    nodes.push(...onPage);
+    if (pageInfo?.hasNextPage !== true || pageInfo.endCursor === null) break;
+    after = pageInfo.endCursor;
+  }
+  return Promise.all(nodes.map((issue) => kitIssueOf(github, repo, issue, appLogin)));
+}
+
+/** The labels of the issues that make a Subscription unusable, which Carriers are. */
+const CARRIER_LABELS = [WEEKLY_LIMIT_LABEL, USAGE_CREDITS_LABEL, TOKEN_ROTATION_LABEL];
 
 /** A Kit-owned issue as kitIssues holds it: only the App's own text, every comment of it. */
 async function kitIssueOf(github: Pick<ReadClient, "graphql">, repo: Repo, issue: KitIssueNode, appLogin: string | null): Promise<KitIssueSnapshot> {

@@ -5,7 +5,7 @@ import { RETRO_PENDING_MARKER, retroMarker } from "./markers.ts";
 import { readable } from "./readable.ts";
 import { retrosIn, retroWindowStart } from "./retro.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
-import { dateOf, heldBack, weekStart } from "./weeklyGate.ts";
+import { dateOf, heldBack, waitingForSubscription, weekStart } from "./weeklyGate.ts";
 
 /**
  * The retro gate: a pending Retro to open, or why there's none this tick. The
@@ -19,9 +19,7 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the retro slice the retro gate weighs" };
   }
-  // Any open weekly-limit issue holds it back, rotation on or off, so that a
-  // Retro never competes with Tickets for what's left of the weekly limits.
-  const held = heldBack("Retro", day, retrosIn(slice.issues), now, snapshot.kitIssues);
+  const held = heldBack("Retro", day, retrosIn(slice.issues), now);
   if (held !== null) return { kind: "nothing", reason: held };
   // The store's opt-in step isn't done: a Retro would have nothing to read, and isn't worth a notice (#139).
   if (!slice.storeReady) return { kind: "nothing", reason: "The fabrik-runs store isn't ready: the Fabrik App isn't on it, or it isn't private" };
@@ -31,6 +29,9 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (!slice.agentPullRequestClosed && !slice.escapeFiled) {
     return { kind: "nothing", reason: `Nothing is new since ${readable(Date.parse(since))}: no agent PR merged or closed, and no escape was filed` };
   }
+  // Last of all, so it's named only when it alone holds the week's Retro back (#442).
+  const waiting = waitingForSubscription("retro", now, snapshot, config);
+  if (waiting !== null) return waiting;
   return { kind: "act", actions: [pendingRetro(now, since)] };
 }
 

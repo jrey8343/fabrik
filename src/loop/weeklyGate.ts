@@ -3,9 +3,11 @@
 // Retro, whose opening starts its run. Each is due from 00:00 UTC on its day
 // of the ISO week, which runs from Monday 00:00 to Monday 00:00 in UTC.
 import { WEEK_DAYS, type WeekDay } from "../kit/config.ts";
-import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { carrierOf } from "./hold.ts";
+import { weeklyRunName, weeklyRunWaitingMarker, weeklyRunWaitingNoted, type WeeklyRunKind } from "./markers.ts";
 import { readable } from "./readable.ts";
-import type { KitIssueSnapshot, WeeklyIssueSnapshot } from "./types.ts";
+import { freeSubscriptions } from "./subscriptions.ts";
+import type { KitConfig, Plan, Snapshot, WeeklyIssueSnapshot } from "./types.ts";
 
 export const DAY = 24 * 60 * 60 * 1000;
 
@@ -36,17 +38,12 @@ export interface WeeklyIssue {
  * Why a gate due from `day` opens nothing on the tick at `now`, or null when
  * nothing here holds it back. It waits for the day's 00:00 UTC, and then
  * opens nothing once one of its issues this week didn't fail, while one is
- * open (pending, filled, or not yet closed by the Operator), while a
- * weekly-limit issue is open, or after two failed this week. `issues` are the
- * gate's own, newest first, and `name` is what it opens, such as "Audit".
+ * open (pending, filled, or not yet closed by the Operator), or after two
+ * failed this week. Whether a Subscription is free is weighed last, after
+ * each gate's own reasons (waitingForSubscription). `issues` are the gate's
+ * own, newest first, and `name` is what it opens, such as "Audit".
  */
-export function heldBack(
-  name: string,
-  day: WeekDay,
-  issues: readonly WeeklyIssue[],
-  now: string,
-  kitIssues: readonly KitIssueSnapshot[],
-): string | null {
+export function heldBack(name: string, day: WeekDay, issues: readonly WeeklyIssue[], now: string): string | null {
   const week = weekStart(now);
   const due = week + WEEK_DAYS.indexOf(day) * DAY;
   if (Date.parse(now) < due) return `The ${name} is due from ${readable(due)}`;
@@ -56,14 +53,40 @@ export function heldBack(
   if (done !== undefined) return `#${done.number} is this week's ${name}`;
   const open = issues.find((issue) => issue.open);
   if (open !== undefined) return `${name} #${open.number} is still open`;
-  const limit = kitIssues.find((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
-  if (limit !== undefined) return `The weekly usage limit is reached, as #${limit.number} says`;
   const failed = failedInWeek(issues, week);
   if (failed.length >= FAILED_RUNS_A_WEEK) {
     const which = failed.map((issue) => `#${issue.number}`).join(" and ");
     return `${which} failed this week, so the next ${name} waits for next week`;
   }
   return null;
+}
+
+/**
+ * Why a gate that nothing else holds back opens nothing on the tick at `now`:
+ * no listed Subscription is free, through any mix of weekly-limit,
+ * usage-credits and token-rotation issues, rotation on or off (#442). Null
+ * while one is free, and the run its opening starts is given it as any run
+ * is. Each gate weighs this last, so it is named only when it alone keeps the
+ * week's Audit or Retro from opening. The first tick that finds it so notes
+ * the wait on the Carrier, with one quiet line and the week's waiting marker,
+ * which the Weekly summary reads; the week's later ticks note nothing more,
+ * though the Carrier that holds the note has since closed (weekCarriers).
+ */
+export function waitingForSubscription(
+  kind: WeeklyRunKind,
+  now: string,
+  { kitIssues, weekCarriers }: Pick<Snapshot, "kitIssues" | "weekCarriers">,
+  config: Pick<KitConfig, "subscriptions">,
+): Plan | null {
+  if (freeSubscriptions(kitIssues, config).length > 0) return null;
+  const name = weeklyRunName(kind);
+  const reason = `No Subscription is free, so the ${name} waits for one`;
+  const monday = dateOf(weekStart(now));
+  const noted = [...kitIssues, ...(weekCarriers ?? [])].some((issue) => weeklyRunWaitingNoted([issue.body, ...issue.comments], kind, monday));
+  const carrier = carrierOf(kitIssues);
+  if (noted || carrier === null) return { kind: "nothing", reason };
+  const body = [`This week's ${name} waits for a free Subscription.`, "", weeklyRunWaitingMarker(kind, monday)].join("\n");
+  return { kind: "act", actions: [{ kind: "comment", issue: carrier.number, body }], notes: [reason] };
 }
 
 /**

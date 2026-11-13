@@ -278,6 +278,8 @@ async function gatherFacts(
         .toSorted((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.number - b.number)
         .map(({ number }) => number),
       kitIssues,
+      // Only the Weekly summary reads the Carriers closed since (#442): no Standing does.
+      weekCarriers: [],
     },
     kit: { ...kit, dispatch: candidates === null ? null : { candidates } },
     operator,

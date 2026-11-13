@@ -2381,6 +2381,42 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
     return { github, asked };
   }
 
+  it("reads the week's Carriers, closed ones included, updated since its Monday 00:00 UTC, with the App's own text (#442)", async () => {
+    const { github } = githubWith([], {});
+    const waiting = "This week's Audit waits for a free Subscription.\n\n<!-- fabrik:weekly-run-waiting audit 2026-11-02 -->";
+    const asked: Record<string, unknown>[] = [];
+    const reading = {
+      ...github,
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (!query.includes("filterBy: { since: $since }") || !query.includes("states: [OPEN, CLOSED]")) return github.graphql(query, variables);
+        asked.push(variables);
+        const comments = [
+          { body: waiting, author: APP },
+          { body: "<!-- fabrik:weekly-run-waiting audit 2026-11-09 -->", author: { login: "mallory", __typename: "Bot" } },
+        ];
+        return {
+          repository: {
+            issues: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ number: 40, body: "<!-- fabrik:notified -->", author: APP, labels: { nodes: [{ name: "fabrik:weekly-limit" }] }, comments: { nodes: comments } }],
+            },
+          },
+        };
+      },
+    } as unknown as GitHub;
+
+    const snapshot = await gatherSnapshot(reading, repo, tick, null, "fabrik-app[bot]");
+
+    expect(asked).toEqual([expect.objectContaining({ labels: ["fabrik:weekly-limit", "fabrik:usage-credits", "fabrik:token-rotation"], since: "2026-11-02T00:00:00.000Z" })]);
+    expect(snapshot.weekCarriers).toEqual([{ number: 40, labels: ["fabrik:weekly-limit"], body: "<!-- fabrik:notified -->", comments: [waiting] }]);
+  });
+
+  it("reads no week's Carriers for any other event", async () => {
+    const { github } = githubWith([], {}, ["ready-for-agent"]);
+
+    expect((await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]")).weekCarriers).toBeNull();
+  });
+
   it("holds each issue or PR a held marker names, once, with its state, labels and whether it's a draft", async () => {
     const { github } = githubWith(
       [heldMarker(7, "triage", "needs-triage"), `${heldMarker(50, "review", "agent:review")}\n${heldMarker(7, "triage", "needs-triage")}`, heldMarker(9, "implement", "agent:implement")],
