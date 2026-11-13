@@ -1014,9 +1014,9 @@ describe("Applying an open-issue a held line links (#471)", () => {
 });
 
 describe("Requesting a review GitHub refuses with a 422 (#551)", () => {
-  const pulls = "/repos/acme/shop/pulls/51";
+  const pullRequest = "/repos/acme/shop/pulls/51";
   const refused = new GitHubError("GitHub POST failed: 422", 422, {
-    request: `POST ${pulls}/requested_reviewers`,
+    request: `POST ${pullRequest}/requested_reviewers`,
     body: JSON.stringify({ message: "Validation Failed", errors: [{ resource: "PullRequest", field: "reviewers", code: "invalid" }] }),
   });
   const review = { kind: "request-review", pullRequest: 51, reviewer: "operator" } as const;
@@ -1029,10 +1029,10 @@ describe("Requesting a review GitHub refuses with a 422 (#551)", () => {
       calls,
       async rest(method: string, path: string): Promise<unknown> {
         calls.push({ method, path });
-        if (method === "POST" && path === `${pulls}/requested_reviewers`) throw refusal;
+        if (method === "POST" && path === `${pullRequest}/requested_reviewers`) throw refusal;
         if (method === "GET" && pr.unread !== undefined) throw pr.unread;
-        if (method === "GET" && path === pulls) return { number: 51, requested_reviewers: (pr.requested ?? []).map((login) => ({ login })) };
-        if (method === "GET" && path.startsWith(`${pulls}/reviews?`)) return path.endsWith("page=1") ? (pr.reviewed ?? []).map((login) => ({ user: { login } })) : [];
+        if (method === "GET" && path === pullRequest) return { number: 51, requested_reviewers: (pr.requested ?? []).map((login) => ({ login })) };
+        if (method === "GET" && path.startsWith(`${pullRequest}/reviews?`)) return path.endsWith("page=1") ? (pr.reviewed ?? []).map((login) => ({ user: { login } })) : [];
         if (method === "POST" && path.endsWith("/comments")) return { id: 9300, html_url: "https://github.com/acme/shop/pull/51#issuecomment-9300" };
         return null;
       },
@@ -1044,6 +1044,17 @@ describe("Requesting a review GitHub refuses with a 422 (#551)", () => {
 
   it("counts the request applied when GitHub recorded the reviewer anyway, and the plan goes on", async () => {
     const github = refusingGitHub(refused, { requested: ["someone", "operator"] });
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.calls).toContainEqual({ method: "POST", path: `${issues}/51/comments` });
+  });
+
+  it.each([
+    ["requested", { requested: ["Operator"] }],
+    ["has reviewed", { reviewed: ["OPERATOR"] }],
+  ])("counts the request applied when the reviewer %s under a login cased otherwise, as GitHub logins aren't case-sensitive", async (_case, pr) => {
+    const github = refusingGitHub(refused, pr);
 
     await applyPlan(github, repo, plan);
 
@@ -1072,7 +1083,7 @@ describe("Requesting a review GitHub refuses with a 422 (#551)", () => {
   });
 
   it("fails with the 422, not the read's error, when reading the PR fresh fails", async () => {
-    const github = refusingGitHub(refused, { unread: new GitHubError("GitHub GET failed: 502", 502, { request: `GET ${pulls}` }) });
+    const github = refusingGitHub(refused, { unread: new GitHubError("GitHub GET failed: 502", 502, { request: `GET ${pullRequest}` }) });
 
     const error = await applyPlan(github, repo, plan).catch((e: unknown) => e);
 
@@ -1080,7 +1091,7 @@ describe("Requesting a review GitHub refuses with a 422 (#551)", () => {
   });
 
   it.each([403, 404, 502])("fails a %i at once, without reading the PR", async (status) => {
-    const failed = new GitHubError(`GitHub POST failed: ${status}`, status, { request: `POST ${pulls}/requested_reviewers` });
+    const failed = new GitHubError(`GitHub POST failed: ${status}`, status, { request: `POST ${pullRequest}/requested_reviewers` });
     const github = refusingGitHub(failed, { requested: ["operator"] });
 
     const error = await applyPlan(github, repo, plan).catch((e: unknown) => e);
