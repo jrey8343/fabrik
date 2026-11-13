@@ -223,7 +223,7 @@ A Verdict that the Ticket itself, as any Request changes amended it, is wrong, s
 _Avoid_: bad spec, rejection
 
 **Back to design**:
-Sending a Ticket that can't be built as designed to a new Design session: after a Design flaw, a third Execution flaw, or the Operator's `needs-design` on its pull request, the Kit closes that pull request unmerged, keeping its branch as the Kept branch, and moves the Ticket to `needs-design`. It takes the Ticket's Kept-branch start mark off, so the Design session decides afresh where the next run starts.
+Sending a Ticket that can't be built as designed to a new Design session: after a Design flaw, a third Execution flaw, or the Operator's `needs-design` on its pull request, the Kit closes that pull request unmerged, keeping its branch as the Kept branch, and moves the Ticket to `needs-design`. It takes the Ticket's Kept-branch start mark off, so the Design session decides afresh where the next run starts. While GitHub reports the Ticket closed, none of this happens, as no Design session could start: the pull request stays open and the Ticket is left as it is.
 _Avoid_: rejection, bounce
 
 **Follow-up**:
@@ -331,7 +331,7 @@ An Implementer run, on the Step-up model, that brings an agent pull request up t
 _Avoid_: rebase run, conflict retry
 
 **Send it back**:
-The Operator's move at the Merge gate that closes an agent pull request unmerged and sends its Ticket to a Design session, for a change too large or too foggy to build as a Request changes.
+The Operator's move at the Merge gate that closes an agent pull request unmerged and sends its Ticket to a Design session, for a change too large or too foggy to build as a Request changes. While the Ticket is closed it's declined, and the pull request stays open.
 _Avoid_: reject, redesign
 
 **Operator comment**:

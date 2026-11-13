@@ -67,8 +67,11 @@ describe("Closing an agent PR by hand (#428)", () => {
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }] });
   });
 
-  it("only frees its slot when its Ticket has closed, so there's nothing left to stop", () => {
-    const plan = planFor(closedByHand, snapshotOfPullRequest({ ...readyTicket, ticketOpen: false }), kitConfig());
+  it.each([
+    ["has closed, so there's nothing left to stop", "closed"],
+    ["isn't linked from the PR, so its state wasn't read", "unknown"],
+  ] as const)("only frees its slot when its Ticket %s", (_, ticketState) => {
+    const plan = planFor(closedByHand, snapshotOfPullRequest({ ...readyTicket, ticketState }), kitConfig());
 
     expect(plan).toEqual({ kind: "act", actions: [{ kind: "check-dispatch" }] });
   });

@@ -114,6 +114,43 @@ describe("A third Execution flaw counts as a Design flaw", () => {
   });
 });
 
+describe("A Verdict that would go back to design while the Ticket is closed (#585)", () => {
+  const ticketClosed = { ticketState: "closed" } as const;
+
+  it.each([
+    ["A Design flaw", designFlaw, aPullRequest(ticketClosed), "The Ticket #7 is closed, so this PR stays open and no Design session starts."],
+    [
+      "A third Execution flaw from the Reviewer",
+      reviewed("verdict: execution-flaw\n\nStill throws on the empty cart."),
+      aPullRequest({ ...usedUp, ...ticketClosed }),
+      "This is the Ticket's third Execution flaw, which counts as a Design flaw. The Ticket #7 is closed, so this PR stays open and no Design session starts.",
+    ],
+    [
+      "A third Execution flaw from red CI",
+      redChecks(),
+      aPullRequest({ ...usedUp, ...ticketClosed }),
+      "This is the Ticket's third Execution flaw, which counts as a Design flaw. The Ticket #7 is closed, so this PR stays open and no Design session starts.",
+    ],
+  ])("%s posts its Verdict, ending with why, and closes nothing and leaves the Ticket alone", (_, event, pullRequest, line) => {
+    const actions = actionsOf(planFor(event, snapshotOfPullRequest(pullRequest), kitConfig()));
+
+    expect(actions).toHaveLength(1);
+    const [verdict] = actions;
+    expect(verdict).toMatchObject({ kind: "comment", issue: 50, key: "verdict" });
+    const body = verdict?.kind === "comment" ? withoutRoundLines(verdict.body) : "";
+    expect(body).toContain(`\n\n${line}\n\n[The run](${RUN})`);
+    expect(body).not.toContain("closes unmerged");
+    expect(body).not.toContain("A Design session on this Ticket starts now");
+  });
+
+  it("goes back to design as ever when the PR doesn't link its Ticket, as its state wasn't read", () => {
+    const actions = actionsOf(planFor(designFlaw, snapshotOfPullRequest(aPullRequest({ ticketState: "unknown" })), kitConfig()));
+
+    expect(actions).toContainEqual({ kind: "close-pull-request", pullRequest: 50 });
+    expect(actions.at(-1)).toEqual({ kind: "add-labels", issue: 7, labels: ["needs-design"] });
+  });
+});
+
 describe("Going back to design notifies nobody", () => {
   it.each([
     ["a Design flaw", reviewed("verdict: design-flaw\n\nWrong approach, @someone."), aPullRequest()],

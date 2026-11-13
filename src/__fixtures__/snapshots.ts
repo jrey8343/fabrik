@@ -82,7 +82,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     isAgent: true,
     ticket: 7,
     ticketLabels: [],
-    ticketOpen: true,
+    ticketState: "open",
     ticketLandedNothing: 0,
     open: true,
     draft: true,

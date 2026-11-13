@@ -1320,9 +1320,13 @@ describe("Gathering the labels of the Ticket a pull request was cut for", () => 
   });
 
   it("reads whether that Ticket is open, so closing the PR by hand never stops a closed one (#428)", async () => {
-    expect(await gathered([{ number: 7, labels: ["ready-for-agent"] }])).toMatchObject({ ticketOpen: true });
-    expect(await gathered([{ number: 7, labels: ["ready-for-agent"], state: "CLOSED" }])).toMatchObject({ ticketOpen: false });
-    expect(await gathered([{ number: 3, labels: [] }])).toMatchObject({ ticketOpen: false });
+    expect(await gathered([{ number: 7, labels: ["ready-for-agent"] }])).toMatchObject({ ticketState: "open" });
+    expect(await gathered([{ number: 7, labels: ["ready-for-agent"], state: "CLOSED" }])).toMatchObject({ ticketState: "closed" });
+  });
+
+  it("reads the Ticket's state as unknown when the PR doesn't link it, never as closed (#585)", async () => {
+    expect(await gathered([{ number: 3, labels: [] }])).toMatchObject({ ticketState: "unknown" });
+    expect(await gathered([])).toMatchObject({ ticketState: "unknown" });
   });
 });
 
