@@ -100,7 +100,7 @@ function dateOf(commit: ListedCommit): string {
 }
 
 /** The release a caller workflow pins, or null when it's missing or pins none exactly. */
-function releaseIn(caller: string | null): string | null {
+export function releaseIn(caller: string | null): string | null {
   if (caller === null) return null;
   const check = checkCallerWorkflow(caller);
   return check.ok ? check.release : null;

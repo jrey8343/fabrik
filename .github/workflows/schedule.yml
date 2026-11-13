@@ -7,7 +7,9 @@
 # queue check)
 # through the Loop rules core, which src/main.ts runs as a `scheduled-tick`
 # event, once a week the Product repo's skills bumps for its own Skills
-# sources, and every hour the Monitor, in a job of its own. The Fabrik App
+# sources, every hour the Monitor, in a job of its own, and, once per
+# release, the word on the pull request that moved the pin that the new
+# release is running (#548). The Fabrik App
 # opening the pending Audit or Retro starts the Loop workflow, whose Audit job
 # runs the Auditor and whose Retro evidence and Retro jobs run the Retro, and
 # its adding agent:replay to a replay issue starts that workflow's replay jobs
@@ -277,6 +279,70 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: node kit/src/skills/source-bumps-main.ts
+
+  # The word that a newly pinned release is running (#548): the first started
+  # Tick on a release says "Fabrik vX is running here" on the pull request that
+  # moved fabrik.yml's pin to it, once, with the Fabrik App token, so it asks
+  # for no GITHUB_TOKEN permission. Like the Skills bump, it waits for the
+  # Tick job only for the Operator's time zone, and runs whether or not the
+  # Tick did. It can't fail the run: its program writes any failure as its
+  # step summary's line, and continue-on-error covers the steps before it.
+  release-running:
+    name: Release running
+    needs: [kit, tick]
+    if: ${{ !cancelled() && needs.kit.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    # One at a time per repo, so two Ticks can't both find no comment and both post one.
+    concurrency:
+      group: fabrik-release-running
+      cancel-in-progress: false
+    permissions: {}
+    steps:
+      - name: Check out the Kit (never the Product repo)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jrey8343/fabrik
+          ref: ${{ needs.kit.outputs.sha }}
+          path: kit
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Load the Fabrik App key
+        id: op
+        uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}
+          FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+          FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+      - name: Mint a Fabrik App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+
+      - name: Say on the pin move's pull request that its release is running
+        env:
+          FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
+          FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          FABRIK_KIT_REF: ${{ needs.kit.outputs.ref }}
+          FABRIK_TICK_STARTED_AT: ${{ needs.kit.outputs.started-at }}
+          FABRIK_TIME_ZONE: ${{ needs.tick.outputs.time-zone }}
+        run: node kit/src/kit/release-running-main.ts
+
+      # The program writes its own line; this one covers the steps before it, such as the mint.
+      - name: Say why nothing was said
+        if: failure()
+        run: echo "### Release running"$'\n\n'"- Couldn't mint the Fabrik App token, so no pull request is told which release is running here. The next Tick tries again." >>"$GITHUB_STEP_SUMMARY"
 
   # The Monitor (src/monitor/main.ts, #148): files an issue for Triage for each
   # production error Sentry reports, once monitor.errors is set, and one while
