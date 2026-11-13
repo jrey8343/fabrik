@@ -13,7 +13,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
-import { KIT_CONFIG_PATH } from "../kit/config.ts";
+import { KIT_CONFIG_PATH, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
 import { checkOp, chooseAccount } from "./account.ts";
 import { apply, describeAction, writtenPaths } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
@@ -22,7 +22,7 @@ import { type Env, ok, type Run } from "./exec.ts";
 import { appliedLines, closingLines, setupCommand } from "./finish.ts";
 import { gatherDeployments, gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
-import { type OneRunSteps, readinessOf, runOnce, wizardGaps } from "./oneRun.ts";
+import { type DoneSources, type OneRunSteps, readinessOf, runOnce, stepsDone, wizardGaps } from "./oneRun.ts";
 import {
   FABRIK_APP_VAULT,
   listedSubscriptions,
@@ -221,6 +221,8 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
   let wizardReport = "";
   // What 1Password still lacks once the wizard has run.
   let gapsAfter: readonly string[] = [];
+  // The branch protection and "Fabrik App" vault items read after the wizard.
+  let readAfter: Pick<DoneSources, "protection" | "appItems"> = { protection: null, appItems: [] };
   // Whether the default branch the run left the setup branch for is origin's.
   let upToDate = true;
   const steps: OneRunSteps = {
@@ -268,6 +270,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       const appItems = await appVaultItems(run, cwd, now);
       const earlierPr = (await openSetupPr(run, cwd, branch))?.body ?? null;
       gapsAfter = wizardGaps(now, answers, appItems);
+      readAfter = { protection: now.protection, appItems };
       return {
         plan: planSetup(now, kit, answers, { wroteStarter }),
         readiness: readinessOf({
@@ -297,8 +300,17 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     push: () => pushSetupBranch(run, cwd, branch, origin.setupBranch),
     publish: async (summary) => {
       // What the PR merges is the setup branch's Kit config, whatever this run's answer was.
-      const config = await run("git", ["show", `HEAD:${KIT_CONFIG_PATH}`], { cwd });
-      const merged = { ...summary, pausesDispatch: config.code === 0 && pausesDispatch(config.stdout) };
+      const onBranch = async (path: string) => {
+        const shown = await run("git", ["show", `HEAD:${path}`], { cwd });
+        return shown.code === 0 ? shown.stdout : null;
+      };
+      const [kitConfig, skillsLock] = await Promise.all([onBranch(KIT_CONFIG_PATH), onBranch(SKILLS_SOURCES_LOCK_PATH)]);
+      const merged = {
+        ...summary,
+        pausesDispatch: kitConfig !== null && pausesDispatch(kitConfig),
+        // So the closing lines leave out the notes for steps the setup branch's Kit config and the Product repo already show done.
+        alreadyDone: stepsDone({ kitConfig, skillsLock, ...readAfter }),
+      };
       const published = await publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary: merged });
       await record.clear();
       return published;
