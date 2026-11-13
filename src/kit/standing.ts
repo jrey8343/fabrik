@@ -113,9 +113,11 @@ export interface StandingDetails {
   /**
    * `plain` is null for an agent pull request: an agent draft whose Review
    * waits on its checks, or one at the Merge gate whose Required check is
-   * running (#564), which alone carries `passedAt`, when the Reviewer passed its head.
+   * running (#564), which alone carries `passedAt`, when the Reviewer passed,
+   * and `passedHead`, the head it passed: `head`, or an older one when the
+   * head moved since (#692).
    */
-  readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean; readonly passedAt?: string };
+  readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean; readonly passedAt?: string; readonly passedHead?: string };
   /**
    * A Held run's role and the Carrier its newest held marker is on; or, for an
    * Audit or Retro week given up, its failed runs, oldest first, and when the
@@ -133,8 +135,12 @@ export interface StandingDetails {
   readonly "waiting-on-kit": WaitingOnKitDetail;
   /** The name it had before its `stuckAt` passed, with that name's detail. */
   readonly stuck: ({ readonly was: "not-started" } & NotStartedDetail) | ({ readonly was: "waiting-on-kit" } & WaitingOnKitDetail);
-  /** `plain` is null for an agent pull request. */
-  readonly "yours-to-merge": { readonly plain: PlainKind | null };
+  /**
+   * `plain` is null for an agent pull request, which alone carries
+   * `passedHead`, the head the Reviewer passed: `head`, or an older one when
+   * the head moved since (#692).
+   */
+  readonly "yours-to-merge": { readonly plain: PlainKind | null; readonly passedHead?: string };
   /** `prototype` says whether the Round is a prototype round (`ready`) or a prototype's failure round (`failed`). */
   readonly "design-round": { readonly round: number; readonly prototype: "ready" | "failed" | null };
   /** `author` is a login, with no `@`. */
@@ -149,10 +155,11 @@ export interface StandingDetails {
   readonly parked: Readonly<Record<never, never>>;
   /**
    * `plain` is null for an agent pull request at the Merge gate (#564), which
-   * alone carries `passedAt`, when the Reviewer passed its head: the time it
-   * goes back to once its checks pass again.
+   * alone carries `passedAt`, when the Reviewer passed: the time it goes back
+   * to once its checks pass again; and `passedHead`, the head it passed:
+   * `head`, or an older one when the head moved since (#692).
    */
-  readonly "check-failing": { readonly plain: PlainKind | null; readonly check: string; readonly checkIs: "failing" | "never-reported"; readonly passedAt?: string };
+  readonly "check-failing": { readonly plain: PlainKind | null; readonly check: string; readonly checkIs: "failing" | "never-reported"; readonly passedAt?: string; readonly passedHead?: string };
   readonly conflicts: { readonly plain: PlainKind };
   readonly draft: { readonly plain: PlainKind };
   readonly blocked: { readonly blockers: readonly number[] };

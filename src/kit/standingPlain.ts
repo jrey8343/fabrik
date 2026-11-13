@@ -175,19 +175,21 @@ export type MergeGateChecksName = ChecksName & { readonly stopsWork: boolean; re
  * merge it. A failing check stands since its report, else since the pass;
  * all passed, none required, or the checks unread, it is yours to merge,
  * since the pass, as before its checks were read. A red or running name
- * keeps `passedAt`, the time it goes back to once they pass again.
+ * keeps `passedAt`, the time it goes back to once they pass again. Every name
+ * carries `passedHead`, the head the Reviewer passed, which the head whose
+ * checks these are may have moved from since (#692).
  */
-export function mergeGateNameForChecks(checks: RequiredChecksFact, passedAt: string): MergeGateChecksName {
-  const ready = { name: "yours-to-merge", move: "operator", yours: true, stopsWork: true, since: passedAt, detail: { plain: null } } as const;
+export function mergeGateNameForChecks(checks: RequiredChecksFact, passedAt: string, passedHead: string): MergeGateChecksName {
+  const ready = { name: "yours-to-merge", move: "operator", yours: true, stopsWork: true, since: passedAt, detail: { plain: null, passedHead } } as const;
   if (checks === "unread") return ready;
   const { name, decidedAt } = nameForChecks(null, checks);
   switch (name.name) {
     case "yours-to-merge":
       return ready;
     case "check-failing":
-      return { ...name, stopsWork: true, since: name.detail.checkIs === "failing" ? (decidedAt ?? passedAt) : passedAt, detail: { ...name.detail, passedAt } };
+      return { ...name, stopsWork: true, since: name.detail.checkIs === "failing" ? (decidedAt ?? passedAt) : passedAt, detail: { ...name.detail, passedAt, passedHead } };
     case "waiting-on-checks":
-      return { ...name, stopsWork: false, since: passedAt, detail: { ...name.detail, passedAt } };
+      return { ...name, stopsWork: false, since: passedAt, detail: { ...name.detail, passedAt, passedHead } };
   }
 }
 

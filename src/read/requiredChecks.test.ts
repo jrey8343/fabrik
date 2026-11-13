@@ -399,6 +399,17 @@ describe("the heads a checks read is asked about", () => {
     expect(headsToCheck(rows)).toEqual([head("6")]);
   });
 
+  it("are the head of an agent pull request at the Merge gate whose head moved since its pass (#692)", () => {
+    const facts = homeFactsOf({
+      github: factsOf({
+        openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })],
+        openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: head("1"), comments: passed(head("9")) })],
+      }),
+    });
+
+    expect(headsToCheck(rowsOf(facts, null, null, null, NOW))).toEqual([head("1")]);
+  });
+
   it("name each head once", () => {
     const facts = homeFactsOf({ github: factsOf({ plainPullRequests: [aPlainPullRequest({ number: 70 }), aPlainPullRequest({ number: 71 })] }) });
 

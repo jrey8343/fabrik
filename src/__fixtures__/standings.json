@@ -150,7 +150,7 @@
     "stuckAt": null,
     "awaits": null,
     "subscription": null,
-    "detail": { "plain": null, "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
+    "detail": { "plain": null, "passedHead": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh", "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" }
   },
   "design-round": {
     "schema": 1,

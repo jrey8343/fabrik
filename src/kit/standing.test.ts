@@ -38,6 +38,7 @@ import type { CommentFacts, GitHubFacts, RepoKitFacts } from "./weeklySummary.ts
 
 const NOW = "2026-11-08T20:00:00Z";
 const HEAD = "h".repeat(40);
+const OLD_HEAD = "o".repeat(40);
 
 /** Every read a test in this file made, with the Standings it gave, for the plain-data checks at the end. */
 const produced: { readonly facts: StandingFacts; readonly now: string; readonly standings: readonly Standing[] }[] = [];
@@ -71,7 +72,7 @@ describe("the Standing rule", () => {
           stuckAt: null,
           awaits: null,
           subscription: null,
-          detail: { plain: null, head: HEAD },
+          detail: { plain: null, passedHead: HEAD, head: HEAD },
         },
       ]);
     });
@@ -102,7 +103,7 @@ describe("the Standing rule", () => {
             yours: true,
             stopsWork: true,
             since: "2026-11-06T08:00:00Z",
-            detail: { plain: null, check: "ci", checkIs: "failing", passedAt: "2026-11-05T20:00:00Z", head: HEAD },
+            detail: { plain: null, check: "ci", checkIs: "failing", passedAt: "2026-11-05T20:00:00Z", passedHead: HEAD, head: HEAD },
           },
         ]);
       });
@@ -114,7 +115,7 @@ describe("the Standing rule", () => {
             move: "operator",
             stopsWork: true,
             since: "2026-11-05T20:00:00Z",
-            detail: { plain: null, check: "ci", checkIs: "never-reported", passedAt: "2026-11-05T20:00:00Z", head: HEAD },
+            detail: { plain: null, check: "ci", checkIs: "never-reported", passedAt: "2026-11-05T20:00:00Z", passedHead: HEAD, head: HEAD },
           }),
         ]);
       });
@@ -131,7 +132,7 @@ describe("the Standing rule", () => {
             since: "2026-11-05T20:00:00Z",
             awaits: null,
             stuckAt: null,
-            detail: { plain: null, check: "ci", checksUnread: false, passedAt: "2026-11-05T20:00:00Z", head: HEAD },
+            detail: { plain: null, check: "ci", checksUnread: false, passedAt: "2026-11-05T20:00:00Z", passedHead: HEAD, head: HEAD },
           }),
         );
       });
@@ -153,7 +154,7 @@ describe("the Standing rule", () => {
       });
 
       it("stays yours to merge, since the pass, with every check passed, none required, or its checks unread", () => {
-        const yoursToMerge = expect.objectContaining({ name: "yours-to-merge", stopsWork: true, since: "2026-11-05T20:00:00Z", detail: { plain: null, head: HEAD } });
+        const yoursToMerge = expect.objectContaining({ name: "yours-to-merge", stopsWork: true, since: "2026-11-05T20:00:00Z", detail: { plain: null, passedHead: HEAD, head: HEAD } });
         expect(atTheGateWith([{ name: "ci", is: "passed", at: "2026-11-07T08:00:00Z" }])).toEqual([yoursToMerge]);
         expect(atTheGateWith([])).toEqual([yoursToMerge]);
         expect(standingsIn({ openPullRequests: [atTheGate(60)] }, withChecks({}))).toEqual([yoursToMerge]);
@@ -205,15 +206,83 @@ describe("the Standing rule", () => {
       ]);
     });
 
-    it("gives no Standing of the Operator's to a draft, or to a PR whose latest Verdict on its head is no pass", () => {
+    it("gives no Standing of the Operator's to a draft, or to a PR whose latest Verdict is no pass", () => {
       const standings = standingsIn({
         openPullRequests: [
           atTheGate(60, { draft: true }),
-          atTheGate(61, { comments: [aVerdictComment("pass", "o".repeat(40), "2026-11-05T20:00:00Z")] }),
           atTheGate(62, { comments: [passed, aVerdictComment("execution-flaw", HEAD, "2026-11-06T20:00:00Z")] }),
+          atTheGate(63, { comments: [passed, aVerdictComment("design-flaw", OLD_HEAD, "2026-11-06T20:00:00Z")] }),
         ],
       });
       expect(standings.filter(({ move }) => move === "operator")).toEqual([]);
+      expect(standings.map(({ pullRequest, name, detail }) => ({ pullRequest, name, silence: "silence" in detail ? detail.silence : null }))).toEqual(
+        expect.arrayContaining([
+          { pullRequest: 62, name: "waiting-on-kit", silence: "left-over" },
+          { pullRequest: 63, name: "waiting-on-kit", silence: "left-over" },
+        ]),
+      );
+    });
+
+    describe("with its head moved since the pass (#692)", () => {
+      const passedOld = aVerdictComment("pass", OLD_HEAD, "2026-11-05T20:00:00Z");
+      const moved = (number: number, overrides: Parameters<typeof anOpenPullRequest>[0] = {}) => atTheGate(number, { headSha: HEAD, comments: [passedOld], ...overrides });
+
+      it("stands as yours to merge, stopping work, since the pass, naming the head it passed and the head it has", () => {
+        expect(standingsIn({ openPullRequests: [moved(60)] })).toEqual([
+          {
+            schema: 1,
+            repo: "owner/product",
+            issue: 10,
+            pullRequest: 60,
+            work: "ticket",
+            place: "merge-gate",
+            name: "yours-to-merge",
+            move: "operator",
+            yours: true,
+            stopsWork: true,
+            since: "2026-11-05T20:00:00Z",
+            stuckAt: null,
+            awaits: null,
+            subscription: null,
+            detail: { plain: null, passedHead: OLD_HEAD, head: HEAD },
+          },
+        ]);
+      });
+
+      it("stands by the Required checks on its own head, as #564 reads them, each name carrying the head it passed", () => {
+        const kit = (checks: RepoKitFacts["headChecks"][string]) =>
+          ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks: { [HEAD]: checks, [OLD_HEAD]: [] } } }) as const;
+        const at = (checks: RepoKitFacts["headChecks"][string]) => standingsIn({ openPullRequests: [moved(60)] }, kit(checks)).map(({ name, since, detail }) => ({ name, since, detail }));
+        expect([
+          ...at([{ name: "ci", is: "failing", at: "2026-11-06T08:00:00Z" }]),
+          ...at([{ name: "ci", is: "running", at: "2026-11-07T08:00:00Z" }]),
+          ...at([{ name: "ci", is: "never-reported" }]),
+        ]).toEqual([
+          { name: "check-failing", since: "2026-11-06T08:00:00Z", detail: { plain: null, check: "ci", checkIs: "failing", passedAt: "2026-11-05T20:00:00Z", passedHead: OLD_HEAD, head: HEAD } },
+          { name: "waiting-on-checks", since: "2026-11-05T20:00:00Z", detail: { plain: null, check: "ci", checksUnread: false, passedAt: "2026-11-05T20:00:00Z", passedHead: OLD_HEAD, head: HEAD } },
+          { name: "check-failing", since: "2026-11-05T20:00:00Z", detail: { plain: null, check: "ci", checkIs: "never-reported", passedAt: "2026-11-05T20:00:00Z", passedHead: OLD_HEAD, head: HEAD } },
+        ]);
+      });
+
+      it("reads the latest Verdict on any head: a pass on an older head after a flaw on it counts", () => {
+        const flawThenPass = moved(60, { comments: [aVerdictComment("execution-flaw", OLD_HEAD, "2026-11-04T20:00:00Z"), passedOld] });
+        expect(namesIn(standingsIn({ openPullRequests: [flawThenPass] }))).toEqual([{ pullRequest: 60, name: "yours-to-merge" }]);
+      });
+
+      it("reads a Request changes or a hand-back since the pass as it does on the passed head, never as left over", () => {
+        const standings = standingsIn({
+          openPullRequests: [moved(60, { reviews: [aReview("2026-11-08T19:00:00Z")] }), moved(61, { labelEvents: [aLabelAdded(READY_FOR_HUMAN, "2026-11-06T20:00:00Z")] })],
+        });
+        expect(standings.map(({ pullRequest, name, place, detail }) => ({ pullRequest, name, place, silence: "silence" in detail ? detail.silence : null }))).toEqual([
+          { pullRequest: 61, name: "yours-to-do", place: "merge-gate", silence: null },
+          { pullRequest: 60, name: "waiting-on-kit", place: "implement", silence: "request-changes" },
+        ]);
+      });
+
+      it("leaves a draft whose pass is on an older head as any quiet draft", () => {
+        const [standing] = standingsIn({ openPullRequests: [moved(60, { draft: true })] });
+        expect(standing).toEqual(expect.objectContaining({ place: "review", move: "kit", detail: expect.objectContaining({ silence: "quiet-draft" }) }));
+      });
     });
   });
 

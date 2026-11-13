@@ -559,8 +559,8 @@ describe("the Weekly summary", () => {
         ],
         openPullRequests: [
           anOpenPullRequest({ number: 50, title: "Build the thing", draft: false, comments: [aVerdictComment("pass", head, "2026-11-07T20:00:00Z")] }),
-          // Passed on an older head: the Operator pushed since, so it waits for its Review.
-          anOpenPullRequest({ number: 51, draft: false, comments: [aVerdictComment("pass", "o".repeat(40), "2026-11-07T20:00:00Z")] }),
+          // Passed on an older head: pushed to since, out of draft, which starts no Review, so it is still the Operator's to merge (#692).
+          anOpenPullRequest({ number: 51, draft: false, comments: [aVerdictComment("pass", "o".repeat(40), "2026-11-06T20:00:00Z")] }),
           // Still a draft: the Loop has it.
           anOpenPullRequest({ number: 52, comments: [aVerdictComment("pass", head, "2026-11-07T20:00:00Z")] }),
           // Its latest Verdict on its head is a flaw.
@@ -587,6 +587,15 @@ describe("the Weekly summary", () => {
           url: "https://github.com/owner/product/issues/12",
           since: "2026-11-05T20:00:00Z",
           age: 3 * 24 * HOUR,
+        },
+        {
+          kind: "merge-gate",
+          number: 51,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/pull/51",
+          since: "2026-11-06T20:00:00Z",
+          age: 2 * 24 * HOUR,
+          operatorWait: 2 * 24 * HOUR,
         },
         {
           kind: "merge-gate",
@@ -1254,6 +1263,19 @@ describe("the Weekly summary", () => {
     it("gives no line to one whose Required check is running, the Kit's move, and lists one all passed at the Merge gate as before", () => {
       expect(summaryWith([{ name: "ci", is: "running", at: ago(HOUR) }]).waiting).toEqual([]);
       expect(summaryWith([{ name: "ci", is: "passed", at: ago(HOUR) }]).body).toContain("- [#50](https://github.com/owner/product/pull/50) Build the thing: at the Merge gate, Operator wait 5 hours\n");
+    });
+
+    it("reads one whose head moved since its pass by the checks on its own head, and says the check is on a head pushed since (#692)", () => {
+      const github = factsOf({ openPullRequests: [anOpenPullRequest({ draft: false, headSha: HEAD, comments: [aVerdictComment("pass", "o".repeat(40), ago(5 * HOUR))] })] });
+      const bodyWith = (checks: RepoKitFacts["headChecks"][string]) => {
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [github], kits: [aRepoKit({ headChecks: { [HEAD]: checks } })] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.body;
+      };
+      expect(bodyWith([{ name: "ci", is: "failing", at: ago(2 * HOUR) }])).toContain(
+        "- [#50](https://github.com/owner/product/pull/50) Build the thing: `ci` is failing on #50's head, pushed since the Reviewer passed it 5 hours ago.\n",
+      );
+      expect(bodyWith([{ name: "ci", is: "passed", at: ago(HOUR) }])).toContain("- [#50](https://github.com/owner/product/pull/50) Build the thing: at the Merge gate, Operator wait 5 hours\n");
     });
   });
 

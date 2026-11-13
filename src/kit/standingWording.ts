@@ -62,6 +62,19 @@ function handedBackRun(role: AgentRole | null): string {
   return role === null ? "run" : runNamed(role);
 }
 
+/** Whether an agent PR at the Merge gate has a head other than the one the Reviewer passed (#692). A Standing that names no passed head has not. */
+function headMoved({ detail }: Standing): boolean {
+  const { head } = detail;
+  const passedHead = "passedHead" in detail ? detail.passedHead : undefined;
+  return passedHead !== undefined && head !== undefined && passedHead !== head;
+}
+
+/** The head an agent PR at the Merge gate has its Required checks read on, as a sentence names it: the one the Reviewer passed, or one pushed since (#692). */
+function checkedHead(standing: Standing, passedAt: string | undefined, now: string): string {
+  const age = ageSince(passedAt ?? standing.since, now);
+  return headMoved(standing) ? `#${standing.pullRequest}'s head, pushed since the Reviewer passed it ${age} ago` : `the head the Reviewer passed ${age} ago`;
+}
+
 /** A Standing's pill, sentence and remedy at `now`, ISO 8601; times it names are told in `timeZone`. */
 export function wordStanding(standing: Standing, now: string, timeZone: string): StandingWords {
   const age = ageSince(standing.since, now);
@@ -81,7 +94,7 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       const sentence =
         // An agent PR at the Merge gate (#564), whose Review is done: not an agent draft's, whose Review waits.
         standing.place === "merge-gate"
-          ? `Waiting on \`${check}\`, running on the head the Reviewer passed ${ageSince(passedAt ?? standing.since, now)} ago.`
+          ? `Waiting on \`${check}\`, running on ${checkedHead(standing, passedAt, now)}.`
           : plain === null
             ? "Its Review is waiting for the Required checks on its head."
             : checksUnread
@@ -129,7 +142,9 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       const passed = `with its Required checks passed, since ${age} ago.`;
       const sentence =
         standing.detail.plain === null
-          ? `Passed Review ${age} ago and is waiting for your merge.`
+          ? headMoved(standing)
+            ? `#${standing.pullRequest}'s head moved since the Reviewer passed it ${age} ago; its Digest describes the head it passed.`
+            : `Passed Review ${age} ago and is waiting for your merge.`
           : standing.work === "plain"
             ? `Ready, ${passed}`
             : `Its Pairing session's pull request, #${standing.pullRequest}, is ready, ${passed}`;
@@ -167,9 +182,9 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       return { pill: "Parked by you", sentence: `You put #${standing.pullRequest} back in draft ${age} ago, after its pass.`, remedy: null };
     case "check-failing": {
       const { check, checkIs, passedAt } = standing.detail;
-      // An agent PR at the Merge gate (#564): its head is the one the Reviewer passed.
+      // An agent PR at the Merge gate (#564): its head is the one the Reviewer passed, or one pushed since (#692).
       if (standing.place === "merge-gate") {
-        const passed = `the head the Reviewer passed ${ageSince(passedAt ?? standing.since, now)} ago`;
+        const passed = checkedHead(standing, passedAt, now);
         return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing on ${passed}.` : `\`${check}\` has not reported on ${passed}.`, remedy: null };
       }
       return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing.` : `\`${check}\` has not reported on its head.`, remedy: null };

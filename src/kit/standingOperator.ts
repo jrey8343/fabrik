@@ -255,14 +255,15 @@ export function readyForHumanStandingOf(issue: OpenIssueFacts, repo: string, _no
  * An agent PR at the Merge gate, or handed back there, as one Standing with
  * the Ticket it closes. At the Merge gate it is named by the Required checks
  * on its head (mergeGateNameForChecks, #564), unread when the repo's Kit
- * facts hold none for it.
+ * facts hold none for it, carrying the head the Reviewer passed, which its
+ * head may have moved from since (#692).
  */
 function pullRequestStandingsOf(pullRequest: OpenPullRequestFacts, repo: string, operator: string, kit: RepoKitFacts | null): Standing[] {
   const move = passedMoveOf(pullRequest, operator);
   const base = { ...theOperators(repo, pullRequest.ticket, pullRequest.number, move?.since ?? pullRequest.createdAt), work: "ticket", place: "merge-gate" } as const;
   switch (move?.kind) {
     case "merge-gate":
-      return [{ ...base, ...mergeGateNameForChecks(kit?.headChecks[pullRequest.headSha] ?? "unread", move.since) }];
+      return [{ ...base, ...mergeGateNameForChecks(kit?.headChecks[pullRequest.headSha] ?? "unread", move.since, move.passedHead) }];
     case "handed-back":
       return [{ ...base, name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null } }];
     default:
@@ -288,36 +289,45 @@ function theOperators(repo: string, issue: number | null, pullRequest: number | 
 }
 
 /**
- * Who moves next on an agent PR out of draft with a passing Verdict at its
- * head, and since when. After the pass, the Kit's `ready-for-human`, still on
- * it, hands it to the Operator (`handed-back`); else the Operator's Request
+ * Who moves next on an agent PR out of draft whose latest Verdict is a pass,
+ * and since when. After the pass, the Kit's `ready-for-human`, still on it,
+ * hands it to the Operator (`handed-back`); else the Operator's Request
  * changes since the pass, not dismissed, leaves the next move to the Kit
  * (`changes-requested`); else it is at the Merge gate, waiting on the Operator
  * since the pass (`merge-gate`). A comment or an approving review is an
  * Operator comment (ADR-0007): the Kit never acts on one, so it moves nothing.
  * A dismissed review's state is `dismissed`, so it is no Request changes.
+ * `passedHead` is the head the pass was given on: the PR's own, or an older
+ * one when its head moved since (#692).
  */
 export interface PassedPullRequestMove {
   readonly kind: "merge-gate" | "handed-back" | "changes-requested";
   readonly since: string;
+  readonly passedHead: string;
 }
 
-/** Who moves next on an agent PR with a passing Verdict at its head, or null for a draft or one without. */
+/**
+ * Who moves next on an agent PR out of draft whose latest Verdict is a pass,
+ * on whatever head it was given (#692), or null for a draft or one without.
+ * Out of draft, a PR gets no later Verdict, so that pass is the one that
+ * opened the Merge gate, however its head moved since.
+ */
 export function passedMoveOf(pullRequest: OpenPullRequestFacts, operator: string): PassedPullRequestMove | null {
-  const passed = passAtHeadOf(pullRequest);
-  if (pullRequest.draft || passed === null) return null;
+  const latest = verdictsOn(pullRequest.comments).at(-1);
+  if (pullRequest.draft || latest?.record.verdict !== "pass") return null;
+  const { at: passed, record: { headSha: passedHead } } = latest;
   const requested = pullRequest.reviews
     .filter((review) => review.author === operator && review.state === "changes-requested" && Date.parse(review.at) > Date.parse(passed))
     .map(({ at }) => at)
     .toSorted((a, b) => Date.parse(a) - Date.parse(b))
     .at(-1);
   const handedBack = addedAndStillOn(pullRequest.labelEvents, READY_FOR_HUMAN);
-  if (handedBack !== null && Date.parse(handedBack) > Date.parse(requested ?? passed)) return { kind: "handed-back", since: handedBack };
-  if (requested !== undefined) return { kind: "changes-requested", since: requested };
-  return { kind: "merge-gate", since: passed };
+  if (handedBack !== null && Date.parse(handedBack) > Date.parse(requested ?? passed)) return { kind: "handed-back", since: handedBack, passedHead };
+  if (requested !== undefined) return { kind: "changes-requested", since: requested, passedHead };
+  return { kind: "merge-gate", since: passed, passedHead };
 }
 
-/** When a PR's latest Verdict on its head was posted, if that Verdict is a pass; otherwise null. */
+/** When a PR's latest Verdict on its head was posted, if that Verdict is a pass; otherwise null. The draft rules' reading: a draft's pass counts only on its head. */
 export function passAtHeadOf(pullRequest: OpenPullRequestFacts): string | null {
   const latest = verdictsOn(pullRequest.comments).filter(({ record }) => record.headSha === pullRequest.headSha).at(-1);
   return latest?.record.verdict === "pass" ? latest.at : null;

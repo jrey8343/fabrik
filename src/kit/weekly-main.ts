@@ -254,8 +254,9 @@ async function readRepoKits(
  * The heads whose Required checks the Standings read: each open Plain pull
  * request's, and each agent pull request's at the Merge gate (#564), by the
  * rule's own reading of the gate (passedMoveOf), so a red check there names
- * its check. A handed-back agent pull request, and one with a Request changes
- * since its pass, read none, as the rule reads none for them.
+ * its check: its head's, pushed since its pass or not (#692). A handed-back
+ * agent pull request, and one with a Request changes since its pass, read
+ * none, as the rule reads none for them.
  */
 function headsToCheckOf({ plainPullRequests, openPullRequests }: GitHubFacts): string[] {
   const atTheGate = openPullRequests.filter((pullRequest) => passedMoveOf(pullRequest, RUN_STORE.owner)?.kind === "merge-gate");
