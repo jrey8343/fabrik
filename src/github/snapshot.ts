@@ -71,6 +71,7 @@ import type {
   SpecSnapshot,
   StartingComment,
   TicketSnapshot,
+  TicketState,
   TriggerSweepSnapshot,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
@@ -1931,7 +1932,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     isAgent,
     ticket,
     ticketLabels: ticketLabelsOf(pullRequest, ticket),
-    ticketOpen: closedTicketOf(pullRequest, ticket)?.state === "OPEN",
+    ticketState: ticketStateOf(pullRequest, ticket),
     ticketLandedNothing: ticketLandedNothingOf(pullRequest, ticket, appLogin),
     open: pullRequest.state === "OPEN",
     draft: pullRequest.isDraft,
@@ -2031,6 +2032,13 @@ function ticketLabelsOf(pullRequest: PullRequestNode, ticket: number | null): st
 function ticketLandedNothingOf(pullRequest: PullRequestNode, ticket: number | null, appLogin: string | null): number {
   const comments = closedTicketOf(pullRequest, ticket)?.comments.nodes ?? [];
   return countLandedNothing(comments.map((comment) => ({ body: comment.body, byApp: byAppOf(comment.author, appLogin) })));
+}
+
+/** Whether that Ticket is open or closed, or "unknown" when the PR doesn't link it (#585). */
+function ticketStateOf(pullRequest: PullRequestNode, ticket: number | null): TicketState {
+  const state = closedTicketOf(pullRequest, ticket)?.state;
+  if (state === undefined) return "unknown";
+  return state === "OPEN" ? "open" : "closed";
 }
 
 /** The issue among those a PR closes that is the Ticket its agent branch names, or undefined. */

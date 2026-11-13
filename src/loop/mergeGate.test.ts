@@ -226,6 +226,35 @@ describe("needs-design on an agent PR sends its Ticket back to design", () => {
   });
 });
 
+describe("needs-design on an agent PR whose Ticket is closed (#585)", () => {
+  const ticketClosed = aPullRequest({ ...atMergeGate, ticketState: "closed" });
+
+  it("leaves the PR open and the Ticket untouched: it takes needs-design off the PR and says why there", () => {
+    const actions = actionsOf(planFor(needsDesignOnPullRequest, snapshotOfPullRequest(ticketClosed), kitConfig()));
+
+    expect(actions).toEqual([
+      { kind: "remove-label", issue: 50, label: "needs-design" },
+      {
+        kind: "comment",
+        issue: 50,
+        body: "needs-design came off and nothing started: the Ticket #7 is closed, so no Design session can start on it, and #50 stays open. To Send it back, reopen #7 and add `needs-design` to #50 again.",
+      },
+    ]);
+  });
+
+  it("notifies nobody", () => {
+    expect(notificationsOf(planFor(needsDesignOnPullRequest, snapshotOfPullRequest(ticketClosed), kitConfig()))).toEqual([]);
+  });
+
+  it("sends back a PR that doesn't link its Ticket, as its state wasn't read", () => {
+    const unlinked = aPullRequest({ ...atMergeGate, ticketState: "unknown" });
+
+    const actions = actionsOf(planFor(needsDesignOnPullRequest, snapshotOfPullRequest(unlinked), kitConfig()));
+
+    expect(actions.map((action) => action.kind)).toEqual(["close-pull-request", "comment", "remove-label", "remove-label", "add-labels"]);
+  });
+});
+
 describe("The Design session after the Operator sent a Ticket back", () => {
   it("opens round 1 by saying the Operator sent it back from the closed PR", () => {
     const ticket = anIssue({ number: 7, labels: ["needs-design"], sentBack: { pullRequest: 50, verdictUrl: null } });

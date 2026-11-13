@@ -754,6 +754,9 @@ export function isStepUpReason(value: unknown): value is StepUpReason {
   return (STEP_UP_REASONS as readonly unknown[]).includes(value);
 }
 
+/** Whether a PR's Ticket is open or closed, or "unknown" when the PR doesn't link it. */
+export type TicketState = "open" | "closed" | "unknown";
+
 /** A pull request as the core sees it. */
 export interface PullRequestSnapshot {
   readonly number: number;
@@ -767,8 +770,12 @@ export interface PullRequestSnapshot {
    * Verdict reads them to say whether the Retry it starts Steps up (ADR-0014).
    */
   readonly ticketLabels: readonly string[];
-  /** Whether that Ticket is open, read the same way; false when there's no Ticket or the PR doesn't link it. */
-  readonly ticketOpen: boolean;
+  /**
+   * That Ticket's state, read the same way: "unknown" when there's no Ticket
+   * or the PR doesn't link it, so an unlinked Ticket is never taken for a
+   * closed one (#585).
+   */
+  readonly ticketState: TicketState;
   /**
    * How many Implement runs on that Ticket landed nothing before this PR
    * opened, since its last Design session, read like IssueSnapshot.landedNothing from the Ticket's

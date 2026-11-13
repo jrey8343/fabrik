@@ -40,7 +40,7 @@ export function stopTicketOf(
   operator: string,
 ): Action[] {
   const ticket = pullRequest.ticket;
-  if (merged || closedByBot || ticket === null || !pullRequest.ticketOpen) return [];
+  if (merged || closedByBot || ticket === null || pullRequest.ticketState !== "open") return [];
   if (!pullRequest.ticketLabels.includes(READY_FOR_AGENT)) return [];
   return [
     {
