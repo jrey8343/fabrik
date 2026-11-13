@@ -385,5 +385,5 @@ A Fabrik commit not yet released, such as a Retro proposal's, whose prompts and 
 _Avoid_: candidate Kit, Kit variant, prompt branch
 
 **Weekly summary**:
-The one issue filed each week across all of the Operator's Product repos: the factory's metrics, everything waiting on the Operator, held by a cap, or stuck, and whether each repo's Loop is running. Held by a cap takes in `max_in_flight`, Dispatch paused at 0 included, judged by each repo's own Kit config.
+The one issue filed each week across all of the Operator's Product repos: the factory's metrics, everything waiting on the Operator, held by a cap, or stuck, and whether each repo's Loop is running. Held by a cap takes in `max_in_flight`, Dispatch paused at 0 included, and `caps.merge_gate`, judged by each repo's own Kit config.
 _Avoid_: inbox, Operator inbox, dashboard, report

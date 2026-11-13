@@ -474,6 +474,44 @@ describe("work that goes on without the Operator", () => {
       expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([{ issue: 14, name: "waiting-for-slot" }]);
     });
 
+    const atGate = (number: number, ticket: number) => anOpenPullRequest({ number, ticket, draft: false });
+
+    it("gives a Ticket that caps.merge_gate holds one Standing waiting for the Merge gate, with the cap (#459)", () => {
+      const standings = standingsIn({ openIssues: [ready(14)], openPullRequests: [atGate(21, 1), atGate(22, 2), atGate(23, 3)] }, dispatching([{ number: 14 }]));
+      expect(standings.filter(({ issue }) => issue === 14).map(({ name, place, since, detail }) => ({ name, place, since, detail }))).toEqual([
+        { name: "waiting-for-slot", place: "implement", since: readyAt, detail: { slot: "merge-gate", mergeGate: 3 } },
+      ]);
+    });
+
+    it("gives the Merge gate the Ticket when both caps hold it, as the Operator can clear it, and max_in_flight the research Decision the gate doesn't hold", () => {
+      const decision = anOpenIssue({ number: 16, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", readyAt)] });
+      const standings = standingsIn(
+        { openIssues: [ready(14), decision], openPullRequests: [atGate(21, 1), anOpenPullRequest({ number: 50, ticket: 11 }), anOpenPullRequest({ number: 51, ticket: 12 })] },
+        aKit([], { dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [aResearchDecision({ number: 16 })] } } }),
+      );
+      expect(standings.filter(({ name }) => name === "waiting-for-slot").map(({ issue, detail }) => ({ issue, detail }))).toEqual([
+        { issue: 14, detail: { slot: "merge-gate", mergeGate: 3 } },
+        { issue: 16, detail: { slot: "max-in-flight", maxInFlight: 2 } },
+      ]);
+    });
+
+    it("holds a Ticket at a caps.merge_gate of 0 while any agent PR is at the gate, and none while nothing is at or on its way", () => {
+      const zero = { config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, caps: { ...DEFAULT_KIT_CONFIG.caps, mergeGate: 0 } } } } as const;
+      const slots = (standings: readonly Standing[]) => standings.filter(({ name }) => name === "waiting-for-slot").map(({ issue, detail }) => ({ issue, detail }));
+      expect(slots(standingsIn({ openIssues: [ready(14)], openPullRequests: [atGate(21, 1)] }, dispatching([{ number: 14 }], zero)))).toEqual([
+        { issue: 14, detail: { slot: "merge-gate", mergeGate: 0 } },
+      ]);
+      expect(slots(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], zero)))).toEqual([]);
+    });
+
+    it("words a Ticket waiting for the Merge gate with its cap", () => {
+      const [standing] = standingsIn({ openIssues: [ready(14)], openPullRequests: [atGate(21, 1), atGate(22, 2), atGate(23, 3)] }, dispatching([{ number: 14 }])).filter(({ issue }) => issue === 14);
+      expect(standing === undefined ? null : wordStanding(standing, "2026-11-08T12:00:00Z", "UTC")).toMatchObject({
+        pill: "Waiting for a slot",
+        sentence: "Waiting for room at the Merge gate for 3 days: `caps.merge_gate` is 3.",
+      });
+    });
+
     it("gives a needs-design issue with no Design session slot free one waiting for a slot at Design, since it got needs-design, and none to one holding a slot", () => {
       const standings = standingsIn(
         {

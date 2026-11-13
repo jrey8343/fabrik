@@ -2654,7 +2654,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 2, oldestSince: hoursAgo(80), oldestAge: 80 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null });
       expect(result.body).toContain(["## Held", "", "- owner/product: 2 needs-design issues waiting for a Design session slot, the oldest for 3 days", ""].join("\n"));
     });
 
@@ -2673,7 +2673,7 @@ describe("the Weekly summary", () => {
           },
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: { waiting: 1, oldestSince: hoursAgo(5), oldestAge: 5 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null });
       expect(result.body).toContain("- owner/product: 1 needs-design issue waiting for a Design session slot, for 5 hours");
     });
 
@@ -2699,7 +2699,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, givenUpWeeks: null }],
+        ["owner/busy", { designSessions: { waiting: 1, oldestSince: hoursAgo(30), oldestAge: 30 * HOUR }, monitor: null, maps: null, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null }],
       ]);
       expect(result.body).toContain(["## Held", "", "- owner/busy: 1 needs-design issue waiting for a Design session slot, for 30 hours", ""].join("\n"));
       expect(result.body).not.toContain("- owner/quiet:");
@@ -2725,7 +2725,7 @@ describe("the Weekly summary", () => {
 
     it("counts the error groups the Monitor holds from the held line in its newest open error issue's stats block, linking that issue", () => {
       const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) })] }));
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null });
       expect(result.body).toContain(
         ["## Held", "", "- owner/product: 3 error groups waiting for a Monitor issue slot, counted in [#41](https://github.com/owner/product/issues/41)", ""].join("\n"),
       );
@@ -2741,7 +2741,7 @@ describe("the Weekly summary", () => {
       );
       expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
         ["owner/quiet", null],
-        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, givenUpWeeks: null }],
+        ["owner/busy", { designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null }],
       ]);
       expect(result.body).not.toContain("- owner/quiet:");
     });
@@ -2755,6 +2755,7 @@ describe("the Weekly summary", () => {
         maps: null,
         runs: null,
         dispatch: null,
+        mergeGate: null,
         givenUpWeeks: null,
       });
     });
@@ -2768,14 +2769,14 @@ describe("the Weekly summary", () => {
           ],
         }),
       );
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 }, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 2, issue: 45 }, maps: null, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null });
       expect(summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), anOpenMonitorIssue({ number: 45 })] })).summary.repos[0]?.held).toBeNull();
     });
 
     it("passes over an open issue with no stats block, such as a Spec that kept its marker, as the Monitor does", () => {
       const spec = anOpenMonitorIssue({ number: 60, body: "<!-- fabrik:monitor sentry:4504 -->\n## Problem Statement\n\nBookings fail." });
       const result = summaryOf(factsOf({ monitorIssues: [anOpenMonitorIssue({ number: 41, body: heldBody(HELD_3) }), spec] }));
-      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, givenUpWeeks: null });
+      expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: { groups: 3, issue: 41 }, maps: null, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null });
     });
 
     it("never reads red main's issue, which takes no slot under the cap", () => {
@@ -2906,6 +2907,7 @@ describe("the Weekly summary", () => {
             ],
           },
           dispatch: null,
+          mergeGate: null,
           givenUpWeeks: null,
         });
         expect(result.body).toContain(
@@ -2950,7 +2952,7 @@ describe("the Weekly summary", () => {
 
       it("names the open Map when open Maps fill caps.maps, so the Operator knows why no Map was offered", () => {
         const result = summaryOf(factsOf({ openMaps: [30] }));
-        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null, givenUpWeeks: null });
+        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null });
         expect(result.body).toContain(
           ["## Held", "", "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) open, so Design sessions offer no new Map", ""].join(
             "\n",
@@ -2960,7 +2962,7 @@ describe("the Weekly summary", () => {
 
       it("names every open Map, lowest number first, one charted by hand beyond the cap among them", () => {
         const result = summaryOf(factsOf({ openMaps: [40, 30] }));
-        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30, 40] }, runs: null, dispatch: null, givenUpWeeks: null });
+        expect(result.summary.repos[0]?.held).toEqual({ designSessions: null, monitor: null, maps: { open: [30, 40] }, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null });
         expect(result.body).toContain(
           "- owner/product: the Map cap is full with [#30](https://github.com/owner/product/issues/30) and [#40](https://github.com/owner/product/issues/40) open, so Design sessions offer no new Map",
         );
@@ -2973,7 +2975,7 @@ describe("the Weekly summary", () => {
         );
         expect(result.summary.repos.map(({ repo, held }) => [repo, held])).toEqual([
           ["owner/quiet", null],
-          ["owner/busy", { designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null, givenUpWeeks: null }],
+          ["owner/busy", { designSessions: null, monitor: null, maps: { open: [30] }, runs: null, dispatch: null, mergeGate: null, givenUpWeeks: null }],
         ]);
         expect(result.body).not.toContain("- owner/quiet:");
       });
@@ -3065,6 +3067,46 @@ describe("the Weekly summary", () => {
           aRepoKit({ dispatch: { candidates: readyTickets(14) }, runsInFlight: "unread" }),
         );
         expect(result.body).toContain(`- owner/product: waiting for a slot: \`max_in_flight\` is 2 and ${issue(11)} is in flight (runs in progress unread) · ${issue(14)} (3 days)`);
+      });
+
+      describe("caps.merge_gate (#459)", () => {
+        const pull = (n: number) => `[#${n}](https://github.com/owner/product/pull/${n})`;
+        const atGate = (number: number, ticket: number) => anOpenPullRequest({ number, ticket, draft: false });
+
+        it("names a ready Ticket the Merge gate holds, with the PRs at it, the Ticket work on its way, and how long it has waited", () => {
+          const result = summaryWith(
+            factsOf({ openPullRequests: [atGate(21, 1), atGate(22, 2), anOpenPullRequest({ number: 23, ticket: 11 })], openIssues: [ready(14, 80)] }),
+            aRepoKit({ dispatch: { candidates: readyTickets(14) } }),
+          );
+          expect(result.body).toContain(
+            `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)}, ${pull(22)} are at it, ${issue(11)} on its way · ${issue(14)} (3 days)`,
+          );
+          expect(result.body).not.toContain("waiting for a slot");
+        });
+
+        it("keeps a research Decision max_in_flight holds on its own line, the Ticket under the Merge gate, when both caps hold", () => {
+          const result = summaryWith(
+            factsOf({
+              openPullRequests: [atGate(21, 1), anOpenPullRequest({ number: 50, ticket: 11 }), anOpenPullRequest({ number: 51, ticket: 12 })],
+              openIssues: [ready(14, 80), anOpenIssue({ number: 16, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", hoursAgo(5))] })],
+            }),
+            aRepoKit({ dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [aResearchDecision({ number: 16 })] } } }),
+          );
+          expect(result.body).toContain(`- owner/product: waiting for a slot: \`max_in_flight\` is 2 and ${issue(11)}, ${issue(12)} are in flight · ${issue(16)} (5 hours)`);
+          expect(result.body).toContain(
+            `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)} is at it, ${issue(11)}, ${issue(12)} on their way · ${issue(14)} (3 days)`,
+          );
+        });
+
+        it("says what a caps.merge_gate of 0 holds", () => {
+          const result = summaryWith(
+            factsOf({ openPullRequests: [atGate(21, 1)], openIssues: [ready(14, 80)] }),
+            aRepoKit({ config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, caps: { ...DEFAULT_KIT_CONFIG.caps, mergeGate: 0 } } }, dispatch: { candidates: readyTickets(14) } }),
+          );
+          expect(result.body).toContain(
+            `- owner/product: waiting for the Merge gate: Dispatch holds Tickets while any agent PR is at or on its way to it (\`caps.merge_gate\` is 0) · ${issue(14)} (3 days)`,
+          );
+        });
       });
 
       it("puts an invalid Kit config under Waiting on you, with its first error, and holds nothing, as the Loop does nothing there", () => {

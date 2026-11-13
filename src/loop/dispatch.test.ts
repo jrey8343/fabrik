@@ -92,7 +92,7 @@ describe("The max_in_flight cap", () => {
   });
 
   it("counts an open agent draft PR against the cap", () => {
-    const plan = planFor(check, dispatchSnapshotOf(three, { openAgentDraftPullRequests: 1 }), kitConfig());
+    const plan = planFor(check, dispatchSnapshotOf(three, { openAgentDraftPullRequests: [40] }), kitConfig());
 
     expect(dispatched(plan)).toEqual([4]);
   });
@@ -114,7 +114,7 @@ describe("The max_in_flight cap", () => {
   it("counts a Ticket resuming its agent PR's run once, by its draft PR, not again by its label", () => {
     const resuming = aTicket({ number: 2, labels: ["ready-for-agent", "agent:implement"], openLinkedPullRequests: [50] });
 
-    const plan = planFor(check, dispatchSnapshotOf([resuming, ...three], { openAgentDraftPullRequests: 1 }), kitConfig());
+    const plan = planFor(check, dispatchSnapshotOf([resuming, ...three], { openAgentDraftPullRequests: [50] }), kitConfig());
 
     expect(dispatched(plan)).toEqual([4]);
   });
@@ -122,7 +122,7 @@ describe("The max_in_flight cap", () => {
   it("dispatches nothing when draft PRs plus runs in progress fill the cap, saying why", () => {
     const plan = planFor(
       check,
-      dispatchSnapshotOf(three, { openAgentDraftPullRequests: 1, implementRunsInProgress: 1 }),
+      dispatchSnapshotOf(three, { openAgentDraftPullRequests: [40], implementRunsInProgress: 1 }),
       kitConfig(),
     );
 
@@ -134,17 +134,126 @@ describe("The max_in_flight cap", () => {
   });
 
   it("dispatches nothing when more than the cap is in flight, as after lowering max_in_flight", () => {
-    const plan = planFor(check, dispatchSnapshotOf(three, { openAgentDraftPullRequests: 3 }), kitConfig());
+    const plan = planFor(check, dispatchSnapshotOf(three, { openAgentDraftPullRequests: [40, 41, 42] }), kitConfig());
 
     expect(plan.kind).toBe("nothing");
   });
 
   it("uses the Kit config's max_in_flight", () => {
-    const four = [...three, aTicket({ number: 7 })];
+    const plan = planFor(check, dispatchSnapshotOf(three), kitConfig({ maxInFlight: 1 }));
 
-    const plan = planFor(check, dispatchSnapshotOf(four, { implementRunsInProgress: 1 }), kitConfig({ maxInFlight: 4 }));
+    expect(dispatched(plan)).toEqual([4]);
+  });
+});
 
-    expect(dispatched(plan)).toEqual([4, 5, 6]);
+describe("The caps.merge_gate cap on PRs waiting on the Operator (#459)", () => {
+  const three = [aTicket({ number: 14 }), aTicket({ number: 15 }), aTicket({ number: 16 })];
+  const dispatched = (plan: ReturnType<typeof planFor>) =>
+    plan.kind === "act" ? plan.actions.map((action) => ("issue" in action ? action.issue : null)) : [];
+
+  it("counts an agent PR at the Merge gate against caps.merge_gate but not max_in_flight", () => {
+    const plan = planFor(check, dispatchSnapshotOf(three, { openAgentPullRequestsAtMergeGate: [21, 22] }), kitConfig());
+
+    expect(dispatched(plan)).toEqual([14]);
+  });
+
+  it("releases no Ticket while PRs at the gate and Ticket work on its way to it fill caps.merge_gate, naming each", () => {
+    const plan = planFor(
+      check,
+      dispatchSnapshotOf(three, { openAgentPullRequestsAtMergeGate: [21, 22], openAgentDraftPullRequests: [23] }),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "caps.merge_gate is 3 and #21, #22 are at the Merge gate and #23 is on its way, so #14, #15 and #16 wait",
+    });
+  });
+
+  it("counts Implement runs and dispatched Tickets as on their way to the gate, naming both caps when both hold", () => {
+    const waiting = aTicket({ number: 9, labels: ["ready-for-agent", "agent:implement"] });
+
+    const plan = planFor(
+      check,
+      dispatchSnapshotOf([waiting, ...three], { openAgentPullRequestsAtMergeGate: [21], implementRunsInProgress: 1 }),
+      kitConfig(),
+    );
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason:
+        "max_in_flight is 2 and 2 are in flight (0 open agent draft PRs, 1 Implement run in progress, 1 dispatched and waiting); " +
+        "caps.merge_gate is 3 and #21 is at the Merge gate and #9 and 1 Implement run in progress are on their way, so #14, #15 and #16 wait",
+    });
+  });
+
+  it("names only caps.merge_gate when no PR is at the gate yet but work on its way fills it", () => {
+    const plan = planFor(
+      check,
+      dispatchSnapshotOf(three, { openAgentDraftPullRequests: [23, 24] }),
+      kitConfig({ maxInFlight: 3, caps: { ...kitConfig().caps, mergeGate: 2 } }),
+    );
+
+    expect(plan).toEqual({ kind: "nothing", reason: "caps.merge_gate is 2 and #23, #24 are on their way to the Merge gate, so #14, #15 and #16 wait" });
+  });
+
+  it("frees nothing on a Request changes, which moves a PR from the gate back to its way there", () => {
+    const atGate = dispatchSnapshotOf(three, { openAgentPullRequestsAtMergeGate: [21, 22, 23] });
+    const backInDraft = dispatchSnapshotOf(three, { openAgentPullRequestsAtMergeGate: [21, 22], openAgentDraftPullRequests: [23] });
+
+    expect(planFor(check, atGate, kitConfig()).kind).toBe("nothing");
+    expect(planFor(check, backInDraft, kitConfig()).kind).toBe("nothing");
+  });
+
+  it("still releases research Decisions, which never reach the gate, while it holds Tickets", () => {
+    const snapshot = dispatchSnapshotOf([aTicket({ number: 14 })], {
+      openAgentPullRequestsAtMergeGate: [21, 22, 23],
+      researchDecisions: [aResearchDecision({ number: 17 })],
+    });
+
+    expect(dispatched(planFor(check, snapshot, kitConfig()))).toEqual([17]);
+  });
+
+  it("leaves Research runs out of the gate's count", () => {
+    const plan = planFor(
+      check,
+      dispatchSnapshotOf(three, { openAgentPullRequestsAtMergeGate: [21, 22], researchRunsInProgress: 1 }),
+      kitConfig({ maxInFlight: 3 }),
+    );
+
+    expect(dispatched(plan)).toEqual([14]);
+  });
+
+  it("gives a free max_in_flight slot to a newer research Decision when the gate holds the older Ticket", () => {
+    const snapshot = dispatchSnapshotOf([aTicket({ number: 14 }), aTicket({ number: 16 })], {
+      openAgentPullRequestsAtMergeGate: [21, 22],
+      researchDecisions: [aResearchDecision({ number: 15 })],
+    });
+
+    expect(dispatched(planFor(check, snapshot, kitConfig()))).toEqual([14, 15]);
+  });
+});
+
+describe("A caps.merge_gate of 0", () => {
+  const zero = kitConfig({ caps: { ...kitConfig().caps, mergeGate: 0 } });
+  const three = [aTicket({ number: 14 }), aTicket({ number: 15 }), aTicket({ number: 16 })];
+
+  it("releases one Ticket while no agent PR is at or on its way to the Merge gate", () => {
+    const plan = planFor(check, dispatchSnapshotOf(three), zero);
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 14, labels: ["agent:implement"] }] });
+  });
+
+  it.each([
+    ["at the gate", { openAgentPullRequestsAtMergeGate: [21] }],
+    ["on its way", { openAgentDraftPullRequests: [23] }],
+  ])("holds Tickets while an agent PR is %s, saying so", (_, inFlight) => {
+    const plan = planFor(check, dispatchSnapshotOf(three, inFlight), zero);
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "Dispatch holds Tickets while any agent PR is at or on its way to the Merge gate (caps.merge_gate is 0), so #14, #15 and #16 wait",
+    });
   });
 });
 
@@ -250,7 +359,7 @@ describe("Dispatch order", () => {
   it("releases the oldest Ticket (lowest issue number) first", () => {
     const tickets = [aTicket({ number: 31 }), aTicket({ number: 8 }), aTicket({ number: 17 })];
 
-    const plan = planFor(check, dispatchSnapshotOf(tickets, { openAgentDraftPullRequests: 1 }), kitConfig());
+    const plan = planFor(check, dispatchSnapshotOf(tickets, { openAgentDraftPullRequests: [40] }), kitConfig());
 
     expect(plan).toEqual({
       kind: "act",
@@ -394,7 +503,7 @@ describe("Dispatch order across Tickets and research Decisions", () => {
 
   it("releases a research Decision ahead of a newer Ticket when one slot is free", () => {
     const snapshot = dispatchSnapshotOf([aTicket({ number: 9 })], {
-      openAgentDraftPullRequests: 1,
+      openAgentDraftPullRequests: [40],
       researchDecisions: [aResearchDecision({ number: 5 })],
     });
 

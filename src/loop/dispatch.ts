@@ -63,24 +63,103 @@ function releasing(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDisp
   }
 
   const inFlight = inFlightOf(snapshot, held);
-  const free = Math.max(0, config.maxInFlight - inFlight.total);
-  if (free === 0) {
-    const counts = [
-      count(snapshot.openAgentDraftPullRequests, "open agent draft PR", "open agent draft PRs"),
-      count(snapshot.implementRunsInProgress, "Implement run in progress", "Implement runs in progress"),
-      ...(inFlight.researchRuns === 0 ? [] : [count(inFlight.researchRuns, "Research run in progress", "Research runs in progress")]),
-      `${inFlight.waiting.length} dispatched and waiting`,
-      ...(inFlight.held.length === 0 ? [] : [`${inFlight.held.length} held`]),
-    ].join(", ");
-    return {
-      kind: "nothing",
-      reason: `max_in_flight is ${config.maxInFlight} and ${inFlight.total} are in flight (${counts}), so ${list(waitingNumbers, "and")} wait`,
-    };
+  const gate = mergeGateOf(snapshot, held, config.caps.mergeGate);
+  // Lowest issue number first: a research Decision takes a max_in_flight slot, a Ticket one under each cap.
+  let free = Math.max(0, config.maxInFlight - inFlight.total);
+  let gateFree = gate.free;
+  const released = eligible.filter(({ label }) => {
+    const ticket = label === DISPATCH_LABEL;
+    if (free === 0 || (ticket && gateFree === 0)) return false;
+    free -= 1;
+    if (ticket) gateFree -= 1;
+    return true;
+  });
+  if (released.length > 0) {
+    return { kind: "act", actions: released.map(({ number, label }) => ({ kind: "add-labels", issue: number, labels: [label] })) };
   }
-  return {
-    kind: "act",
-    actions: eligible.slice(0, free).map(({ number, label }) => ({ kind: "add-labels", issue: number, labels: [label] })),
-  };
+  const reasons = [
+    ...(config.maxInFlight - inFlight.total > 0 ? [] : [maxInFlightReason(config.maxInFlight, inFlight)]),
+    ...(gate.free > 0 || !eligible.some(({ label }) => label === DISPATCH_LABEL) ? [] : [mergeGateReason(gate)]),
+  ];
+  return { kind: "nothing", reason: `${reasons.join("; ")}, so ${list(waitingNumbers, "and")} wait` };
+}
+
+/** What a full max_in_flight says: the cap and what fills it. */
+function maxInFlightReason(maxInFlight: number, inFlight: InFlight): string {
+  const counts = [
+    count(inFlight.openAgentDraftPullRequests, "open agent draft PR", "open agent draft PRs"),
+    count(inFlight.implementRuns, "Implement run in progress", "Implement runs in progress"),
+    ...(inFlight.researchRuns === 0 ? [] : [count(inFlight.researchRuns, "Research run in progress", "Research runs in progress")]),
+    `${inFlight.waiting.length} dispatched and waiting`,
+    ...(inFlight.held.length === 0 ? [] : [`${inFlight.held.length} held`]),
+  ].join(", ");
+  return `max_in_flight is ${maxInFlight} and ${inFlight.total} are in flight (${counts})`;
+}
+
+/** What a full caps.merge_gate says: the cap, the PRs at the gate, and the Ticket work on its way there. */
+function mergeGateReason(gate: MergeGate): string {
+  if (gate.cap === 0) return "Dispatch holds Tickets while any agent PR is at or on its way to the Merge gate (caps.merge_gate is 0)";
+  const at = gate.atGate.length === 0 ? null : `${list(gate.atGate)} ${gate.atGate.length === 1 ? "is" : "are"} at the Merge gate`;
+  const runs = gate.implementRuns === 0 ? null : count(gate.implementRuns, "Implement run in progress", "Implement runs in progress");
+  const numbers = [...gate.drafts, ...gate.tickets];
+  const named = numbers.length === 0 ? null : list(numbers);
+  const onItsWay = named === null || runs === null ? (named ?? runs) : `${named} and ${runs}`;
+  const one = numbers.length + gate.implementRuns === 1;
+  const way = onItsWay === null ? null : `${onItsWay} ${one ? "is on its way" : "are on their way"}${at === null ? " to the Merge gate" : ""}`;
+  return `caps.merge_gate is ${gate.cap} and ${[at, way].filter((part) => part !== null).join(" and ")}`;
+}
+
+/**
+ * The Merge gate's load under caps.merge_gate, as a Dispatch check counts it
+ * (#459, ADR-0023): the agent PRs out of draft, at the gate, and the Ticket
+ * work on its way there, so a released Ticket's PR always has room. Research
+ * runs and Decisions never reach the gate, so they count for neither.
+ */
+export interface MergeGate {
+  readonly cap: number;
+  /** The open agent PRs out of draft, lowest number first. */
+  readonly atGate: readonly number[];
+  /** The open agent draft PRs, lowest number first: Ticket work on its way to the gate. */
+  readonly drafts: readonly number[];
+  /** The Tickets dispatched and waiting for their Implement run, or held, lowest number first. */
+  readonly tickets: readonly number[];
+  /** Implement runs in progress, which the snapshot counts but doesn't name. */
+  readonly implementRuns: number;
+  /** Everything at or on its way to the gate. */
+  readonly load: number;
+  /** How many more Tickets it lets go: a cap of 0 lets one go while nothing is at or on its way to the gate. */
+  readonly free: number;
+}
+
+export function mergeGateOf(snapshot: DispatchSnapshot, held: HeldDispatched, cap: number): MergeGate {
+  const tickets = [...snapshot.tickets].sort((a, b) => a.number - b.number);
+  const atGate = [...snapshot.openAgentPullRequestsAtMergeGate].sort((a, b) => a - b);
+  const drafts = [...snapshot.openAgentDraftPullRequests].sort((a, b) => a - b);
+  const onItsWay = [...waitingTicketsOf(tickets), ...heldTicketsOf(tickets, held)].sort((a, b) => a - b);
+  const implementRuns = snapshot.implementRunsInProgress;
+  const load = atGate.length + drafts.length + onItsWay.length + implementRuns;
+  const free = cap === 0 ? (load === 0 ? 1 : 0) : Math.max(0, cap - load);
+  return { cap, atGate, drafts, tickets: onItsWay, implementRuns, load, free };
+}
+
+/** A Ticket given the label waits for its Implement run to start; one with an open PR resumes that PR's run, whose draft PR holds its slot. */
+function waitingTicketsOf(tickets: readonly TicketSnapshot[]): number[] {
+  return tickets
+    .filter((ticket) => ticket.open && ticket.labels.includes(DISPATCH_LABEL) && ticket.openLinkedPullRequests.length === 0)
+    .map(({ number }) => number);
+}
+
+/** A held run's Ticket has had its trigger label taken off; one with an open PR is a held retry, whose draft PR holds its slot. */
+function heldTicketsOf(tickets: readonly TicketSnapshot[], held: HeldDispatched): number[] {
+  return tickets
+    .filter(
+      (ticket) =>
+        held.implement.includes(ticket.number) &&
+        ticket.open &&
+        !ticket.labels.includes(DISPATCH_LABEL) &&
+        ticket.openLinkedPullRequests.length === 0,
+    )
+    .map(({ number }) => number);
 }
 
 /** What holds a slot under max_in_flight, as a Dispatch check counts it, and the issues it can name. */
@@ -111,9 +190,7 @@ export function inFlightOf(snapshot: DispatchSnapshot, held: HeldDispatched): In
   // research Decision given agent:research on a live Map, its Research run
   // still to start; under a closed Map, none ever will.
   const waiting = [
-    ...tickets
-      .filter((ticket) => ticket.open && ticket.labels.includes(DISPATCH_LABEL) && ticket.openLinkedPullRequests.length === 0)
-      .map(({ number }) => number),
+    ...waitingTicketsOf(tickets),
     ...decisions
       .filter((decision) => decision.labels.includes(RESEARCH_LABEL) && whyNotResearchable(decision) === null)
       .map(({ number }) => number),
@@ -121,20 +198,13 @@ export function inFlightOf(snapshot: DispatchSnapshot, held: HeldDispatched): In
   // A held run's Ticket or Decision has had its trigger label taken off, and has no run in progress.
   // A Ticket with an open PR is a held retry, whose draft PR already holds its slot.
   const heldRuns = [
-    ...tickets
-      .filter(
-        (ticket) =>
-          held.implement.includes(ticket.number) &&
-          ticket.open &&
-          !ticket.labels.includes(DISPATCH_LABEL) &&
-          ticket.openLinkedPullRequests.length === 0,
-      )
-      .map(({ number }) => number),
+    ...heldTicketsOf(tickets, held),
     ...decisions
       .filter((decision) => held.research.includes(decision.number) && decision.open && !decision.labels.includes(RESEARCH_LABEL))
       .map(({ number }) => number),
   ].sort((a, b) => a - b);
-  const { openAgentDraftPullRequests, implementRunsInProgress: implementRuns, researchRunsInProgress: researchRuns } = snapshot;
+  const { implementRunsInProgress: implementRuns, researchRunsInProgress: researchRuns } = snapshot;
+  const openAgentDraftPullRequests = snapshot.openAgentDraftPullRequests.length;
   return {
     openAgentDraftPullRequests,
     implementRuns,

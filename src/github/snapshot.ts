@@ -332,7 +332,7 @@ const DISPATCH_QUERY = `
         }
       }
       pullRequests(states: OPEN, first: 100) {
-        nodes { isDraft headRefName author { __typename } }
+        nodes { number isDraft headRefName author { __typename } }
       }
     }
   }
@@ -353,7 +353,7 @@ interface DispatchQueryResult {
         comments: { nodes: { body: string; author: { login: string; __typename: string } | null }[] };
       }[];
     };
-    pullRequests: { nodes: { isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
+    pullRequests: { nodes: { number: number; isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
   };
 }
 
@@ -2079,15 +2079,17 @@ async function gatherDispatch(
     countDispatchedRuns(actions, repo),
     gatherResearchDecisions(github, repo, appLogin),
   ]);
-  const openAgentDraftPullRequests = page.repository.pullRequests.nodes.filter(
-    (pr) => pr.isDraft && isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
-  ).length;
+  const agentPullRequests = page.repository.pullRequests.nodes.filter((pr) =>
+    isAgentPullRequest({ headRef: pr.headRefName, authorIsBot: pr.author?.__typename === "Bot" }),
+  );
+  const numbers = (draft: boolean) => agentPullRequests.filter((pr) => pr.isDraft === draft).map(({ number }) => number).sort((a, b) => a - b);
   return {
     issue: null,
     pullRequest: null,
     dispatch: {
       tickets,
-      openAgentDraftPullRequests,
+      openAgentDraftPullRequests: numbers(true),
+      openAgentPullRequestsAtMergeGate: numbers(false),
       implementRunsInProgress: runs.implement,
       researchDecisions,
       researchRunsInProgress: runs.research,

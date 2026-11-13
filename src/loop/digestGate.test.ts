@@ -320,7 +320,7 @@ describe("The Digest: a pass, its Digest and the gate, on one PR", () => {
     const oneAtATime = kitConfig({ maxInFlight: 1 });
     /** A Dispatch check with Ticket #12 ready, counting #50 while it is a draft. */
     const dispatch = (thread: Thread): Plan =>
-      planFor({ kind: "dispatch-check" }, dispatchSnapshotOf([aTicket({ number: 12 })], { openAgentDraftPullRequests: thread.draft ? 1 : 0 }), oneAtATime);
+      planFor({ kind: "dispatch-check" }, dispatchSnapshotOf([aTicket({ number: 12 })], { openAgentDraftPullRequests: thread.draft ? [50] : [], openAgentPullRequestsAtMergeGate: thread.draft ? [] : [50] }), oneAtATime);
     const thread = new Thread();
 
     thread.plan(reviewed("verdict: pass\n\nLooks good."));

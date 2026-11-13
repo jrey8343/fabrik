@@ -39,7 +39,7 @@ export interface KitConfig {
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
-  /** How many Tickets may be in flight at once; 0 pauses Dispatch. */
+  /** How many Tickets and research Decisions may be in flight at once; 0 pauses Dispatch. PRs at the Merge gate fall under caps.mergeGate. */
   readonly maxInFlight: number;
   /** Attention caps the Operator can only lower below the Kit defaults (#147). */
   readonly caps: {
@@ -49,6 +49,12 @@ export interface KitConfig {
     readonly monitorIssues: number;
     /** How many open Maps the repo may have at once, whoever charted them; 0 stops new Maps (#154). */
     readonly maps: number;
+    /**
+     * How many agent PRs may wait on the Operator at the Merge gate, those on
+     * their way to it counted (#459, ADR-0023): Dispatch releases a Ticket only
+     * if its PR could fit. 0 holds Tickets while any is at or on its way.
+     */
+    readonly mergeGate: number;
   };
   /** What the Monitor watches in this Product repo (#148). */
   readonly monitor: {
@@ -419,7 +425,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     stepUp: { model: OPUS, effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2, monitorIssues: 5, maps: 1 },
+  caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
   monitor: { errors: null, redMain: true },
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
@@ -687,6 +693,7 @@ function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] 
     designSessions: caps.cap("design_sessions", defaults.designSessions) ?? defaults.designSessions,
     monitorIssues: caps.cap("monitor_issues", defaults.monitorIssues) ?? defaults.monitorIssues,
     maps: caps.cap("maps", defaults.maps) ?? defaults.maps,
+    mergeGate: caps.cap("merge_gate", defaults.mergeGate) ?? defaults.mergeGate,
   };
 }
 

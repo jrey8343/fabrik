@@ -21,7 +21,7 @@ const DEFAULTS = {
     stepUp: { model: "claude-opus-5-5", effort: null },
   },
   maxInFlight: 2,
-  caps: { designSessions: 2, monitorIssues: 5, maps: 1 },
+  caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
   monitor: { errors: null, redMain: true },
   audit: { day: "sunday" },
   retro: { day: "saturday" },
@@ -274,7 +274,7 @@ describe("Kit config", () => {
         step_up: { model: "claude-opus-5-5", effort: null },
       },
       max_in_flight: 2,
-      caps: { design_sessions: 2, monitor_issues: 5, maps: 1 },
+      caps: { design_sessions: 2, monitor_issues: 5, maps: 1, merge_gate: 3 },
       monitor: { errors: null, red_main: true },
       audit: { day: "sunday" },
       retro: { day: "saturday" },
@@ -314,7 +314,7 @@ describe("Kit config", () => {
   it("gives a Product repo whose config never sets caps the Kit defaults: 2 Design sessions, 5 open Monitor error issues and 1 open Map", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
 
-    expect(result.ok && result.config.caps).toEqual({ designSessions: 2, monitorIssues: 5, maps: 1 });
+    expect(result.ok && result.config.caps).toEqual({ designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 });
   });
 
   it.each([1, 0])("honours lowering caps.design_sessions to %i", (cap) => {
@@ -351,6 +351,27 @@ describe("Kit config", () => {
       ok: false,
       errors: [`caps.monitor_issues is ${cap}, but a cap can only be lowered: the Kit default is 5`],
     });
+  });
+
+  it.each([2, 0])("honours lowering caps.merge_gate to %i, 0 holding Tickets while any agent PR is at or on its way to the Merge gate", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "merge_gate": ${cap} } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { ...DEFAULTS.caps, mergeGate: cap } } });
+  });
+
+  it.each([4, 10])("refuses raising caps.merge_gate to %i, naming the field, the value and the Kit default", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "merge_gate": ${cap} } }` });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`caps.merge_gate is ${cap}, but a cap can only be lowered: the Kit default is 3`],
+    });
+  });
+
+  it.each([-1, "3", null])("refuses caps.merge_gate of %j, which isn't a whole number", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "merge_gate": ${JSON.stringify(cap)} } }` });
+
+    expect(result).toEqual({ ok: false, errors: ["caps.merge_gate must be a whole number of at least 0"] });
   });
 
   it("honours lowering caps.maps to 0, which stops new Maps", () => {

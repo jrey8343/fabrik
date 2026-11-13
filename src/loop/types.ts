@@ -1120,7 +1120,10 @@ export interface ResearchDecisionSnapshot {
 export interface DispatchSnapshot {
   /** Every open `ready-for-agent` issue, in any order. */
   readonly tickets: readonly TicketSnapshot[];
-  readonly openAgentDraftPullRequests: number;
+  /** The open agent PRs in draft, by number: Ticket work in flight, each holding a max_in_flight slot. */
+  readonly openAgentDraftPullRequests: readonly number[];
+  /** The open agent PRs out of draft, by number: at the Merge gate, each holding a caps.merge_gate slot (#459). */
+  readonly openAgentPullRequestsAtMergeGate: readonly number[];
   readonly implementRunsInProgress: number;
   /** Every open `wayfinder:research` issue, in any order: the core weighs which are research Decisions on an open Map. */
   readonly researchDecisions: readonly ResearchDecisionSnapshot[];

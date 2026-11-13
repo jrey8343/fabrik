@@ -7,7 +7,7 @@
 import { dispatchedRunsOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
 import { conflictRunInFlightIn } from "../github/threads.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
-import { inFlightOf, waitingForDispatch } from "../loop/dispatch.ts";
+import { inFlightOf, mergeGateOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
 import {
   DIGEST_LABEL,
@@ -22,7 +22,7 @@ import {
 } from "../loop/labels.ts";
 import { auditMarksIn, retroMarksIn } from "../loop/markers.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import { type AgentRole, isOfPullRequest } from "../loop/types.ts";
+import { type AgentRole, type DispatchSnapshot, isOfPullRequest } from "../loop/types.ts";
 import { DAY, FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
@@ -85,13 +85,74 @@ export function maxInFlightHoldOf({ github, kit }: Pick<StandingFacts, "github" 
   const runs = kit.runsInFlight === "unread" ? null : dispatchedRunsOf(kit.runsInFlight);
   // The Weekly summary's facts hold only agent PRs, so their open drafts are Dispatch's open agent draft PRs.
   const drafts = github.openPullRequests.filter(({ draft }) => draft);
-  const inFlight = inFlightOf(
-    { ...candidates, openAgentDraftPullRequests: drafts.length, implementRunsInProgress: runs?.implement ?? 0, researchRunsInProgress: runs?.research ?? 0 },
-    heldRuns,
-  );
+  const inFlight = inFlightOf(dispatchSnapshotOf(github, candidates, runs), heldRuns);
   if (runs !== null && inFlight.total < maxInFlight) return null;
   const named = [...drafts.flatMap(({ ticket }) => (ticket === null ? [] : [ticket])), ...(runs?.implementTickets ?? []), ...inFlight.waiting, ...inFlight.held];
   return { kind: "full", maxInFlight, inFlight: inFlight.total, inFlightIssues: [...new Set(named)].sort((a, b) => a - b), runsUnread: runs === null, waiting };
+}
+
+/**
+ * The Tickets Dispatch would release while caps.merge_gate holds them (#459),
+ * by Dispatch's own rules (mergeGateOf): the agent PRs at the Merge gate and
+ * the Ticket work on its way there leave no room. Null when none waits, the
+ * gate has room, Dispatch is paused at max_in_flight 0, or its candidates
+ * weren't read. With the runs in flight unread, it holds only if what was
+ * read already fills the gate, marked.
+ */
+export interface MergeGateHold {
+  readonly mergeGate: number;
+  /** The agent PRs out of draft, at the gate, lowest first. */
+  readonly atGate: readonly number[];
+  /** The Ticket work on its way to the gate, as Dispatch counts it, or as much of it as could be read. */
+  readonly onItsWay: number;
+  /** The Tickets on their way the facts name, lowest first: a draft PR's Ticket, a running one, a dispatched one, a held one. */
+  readonly onItsWayIssues: readonly number[];
+  readonly runsUnread: boolean;
+  /** The Tickets it holds, lowest first. */
+  readonly waiting: readonly number[];
+}
+
+export function mergeGateHoldOf({ github, kit }: Pick<StandingFacts, "github" | "kit">): MergeGateHold | null {
+  if (kit === null || kit.dispatch === null) return null;
+  const { candidates } = kit.dispatch;
+  const { maxInFlight, caps } = kit.config.ok ? kit.config.config : DEFAULT_KIT_CONFIG;
+  if (maxInFlight === 0) return null;
+  const heldRuns = { implement: heldOf("implement", github.kitIssues), research: heldOf("research", github.kitIssues) };
+  const tickets = new Set(candidates.tickets.map(({ number }) => number));
+  const waiting = waitingForDispatch(candidates, heldRuns).filter((number) => tickets.has(number));
+  if (waiting.length === 0) return null;
+  const runs = kit.runsInFlight === "unread" ? null : dispatchedRunsOf(kit.runsInFlight);
+  const gate = mergeGateOf(dispatchSnapshotOf(github, candidates, runs), heldRuns, caps.mergeGate);
+  if (gate.free > 0) return null;
+  const named = [...github.openPullRequests.flatMap(({ draft, ticket }) => (draft && ticket !== null ? [ticket] : [])), ...(runs?.implementTickets ?? []), ...gate.tickets];
+  return {
+    mergeGate: caps.mergeGate,
+    atGate: gate.atGate,
+    onItsWay: gate.load - gate.atGate.length,
+    onItsWayIssues: [...new Set(named)].sort((a, b) => a - b),
+    runsUnread: runs === null,
+    waiting,
+  };
+}
+
+/**
+ * A Dispatch check's snapshot from the Weekly summary's facts, which hold only
+ * agent PRs: their drafts are Dispatch's open agent draft PRs, the rest at the
+ * Merge gate. Runs unread count as none.
+ */
+function dispatchSnapshotOf(
+  github: Pick<GitHubFacts, "openPullRequests">,
+  candidates: Pick<DispatchSnapshot, "tickets" | "researchDecisions">,
+  runs: ReturnType<typeof dispatchedRunsOf> | null,
+): DispatchSnapshot {
+  const numbers = (draft: boolean) => github.openPullRequests.flatMap((pullRequest) => (pullRequest.draft === draft ? [pullRequest.number] : []));
+  return {
+    ...candidates,
+    openAgentDraftPullRequests: numbers(true),
+    openAgentPullRequestsAtMergeGate: numbers(false),
+    implementRunsInProgress: runs?.implement ?? 0,
+    researchRunsInProgress: runs?.research ?? 0,
+  };
 }
 
 /**
@@ -107,23 +168,32 @@ export function designSessionsStartingOf({ github, kit }: Pick<StandingFacts, "g
 
 /**
  * Work a slot holds: each Ticket or research Decision max_in_flight holds
- * (maxInFlightHoldOf), since it got its trigger state label, and each
+ * (maxInFlightHoldOf), or a Ticket caps.merge_gate holds (mergeGateHoldOf), since it got its trigger state label, and each
  * `needs-design` issue waiting for a Design session slot, by the Design queue
  * check's own rule (waitingIssues), since it got `needs-design`, but those it
  * would start a session on now.
  */
 function slotStandingsOf({ github, kit }: StandingFacts): StandingNamed<"waiting-for-slot">[] {
   const hold = maxInFlightHoldOf({ github, kit });
+  const gate = mergeGateHoldOf({ github, kit });
   const decisions = new Set(kit?.dispatch?.candidates.researchDecisions.map(({ number }) => number) ?? []);
-  const dispatch = (hold?.waiting ?? []).flatMap((number): StandingNamed<"waiting-for-slot">[] => {
+  const waiting = [...new Set([...(hold?.waiting ?? []), ...(gate?.waiting ?? [])])].sort((a, b) => a - b);
+  const dispatch = waiting.flatMap((number): StandingNamed<"waiting-for-slot">[] => {
     const decision = decisions.has(number);
     const since = readySince(github.openIssues, number, decision);
-    if (since === null || hold === null) return [];
+    // The Merge gate wins when both caps hold a Ticket, as it's the one the Operator can clear.
+    const detail =
+      gate !== null && gate.waiting.includes(number)
+        ? ({ slot: "merge-gate", mergeGate: gate.mergeGate } as const)
+        : hold === null
+          ? null
+          : ({ slot: "max-in-flight", maxInFlight: hold.maxInFlight } as const);
+    if (since === null || detail === null) return [];
     return [
       {
         ...inFlight(github.repo, number, null, since, decision ? "research-decision" : "ticket", decision ? null : "implement", { role: decision ? "research" : "implement", on: "issue" }),
         name: "waiting-for-slot",
-        detail: { slot: "max-in-flight", maxInFlight: hold.maxInFlight },
+        detail,
       },
     ];
   });

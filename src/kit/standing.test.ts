@@ -34,7 +34,7 @@ import { subscriptionMarker } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "./config.ts";
 import { type Standing, standingAt, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import { isSpec } from "./standingInFlight.ts";
-import type { CommentFacts, GitHubFacts } from "./weeklySummary.ts";
+import type { CommentFacts, GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
 const HEAD = "h".repeat(40);
@@ -782,6 +782,26 @@ describe("work that goes on without the Operator (#606)", () => {
   });
 });
 
+describe("work a cap holds (#459)", () => {
+  const readyAt = "2026-11-05T12:00:00Z";
+  const ready = anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", readyAt)] });
+  const kit = (runsInFlight: RepoKitFacts["runsInFlight"]): RepoKitFacts => ({
+    repo: "owner/product",
+    branch: "main",
+    config: { ok: true, config: DEFAULT_KIT_CONFIG },
+    dispatch: { candidates: { tickets: [aTicket({ number: 14 })], researchDecisions: [] } },
+    headChecks: {},
+    runsInFlight,
+  });
+
+  it("names max_in_flight for a Ticket only it holds, as Research runs fill it and never reach the Merge gate", () => {
+    const standings = standingsIn({ openIssues: [ready] }, { kit: kit([aRunInFlight({ role: "research", issue: 30 }), aRunInFlight({ role: "research", issue: 31 })]) });
+    expect(standings.filter(({ issue }) => issue === 14).map(({ name, detail }) => ({ name, detail }))).toEqual([
+      { name: "waiting-for-slot", detail: { slot: "max-in-flight", maxInFlight: 2 } },
+    ]);
+  });
+});
+
 describe("a run that was asked for and never began (#607)", () => {
   const LABELLED = "2026-11-08T19:20:00Z";
   const STUCK_AT = "2026-11-08T22:50:00.000Z";
@@ -1202,12 +1222,14 @@ describe("a Standing, as plain data", () => {
       const was = (kept.detail as { was?: string }).was;
       // `detail.head` is on a Standing with an open pull request only: the fixture's is matched by whether it has one.
       // `detail.passed` is on a passed draft waiting on its Digest only: the fixture's is matched by whether it has it.
+      // `detail.mergeGate` is on a Ticket caps.merge_gate holds only (#459): the fixture's is matched by whether it has it.
       const standing = all().find(
         (read) =>
           read.name === name &&
           (was === undefined || ("was" in read.detail && read.detail.was === was)) &&
           (read.pullRequest === null) === (kept["pullRequest"] === null) &&
-          "passed" in read.detail === "passed" in (kept.detail as object),
+          "passed" in read.detail === "passed" in (kept.detail as object) &&
+          "mergeGate" in read.detail === "mergeGate" in (kept.detail as object),
       );
       if (standing === undefined) throw new Error(`no test above produces a ${name} Standing`);
       expect(Object.keys(kept).toSorted()).toEqual(Object.keys(standing).toSorted());

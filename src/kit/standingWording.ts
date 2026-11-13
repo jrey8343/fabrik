@@ -92,7 +92,15 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       return { pill: "Held", sentence: `Its ${runNamed(role)} is held${carrier === null ? "" : ` on #${carrier}`} until a Subscription is free.`, remedy: null };
     }
     case "waiting-for-slot": {
-      const { slot, maxInFlight } = standing.detail;
+      const { detail } = standing;
+      if (detail.slot === "merge-gate") {
+        const sentence =
+          detail.mergeGate === 0
+            ? `Waiting for ${age} while an agent PR is at or on its way to the Merge gate: \`caps.merge_gate\` is 0.`
+            : `Waiting for room at the Merge gate for ${age}: \`caps.merge_gate\` is ${detail.mergeGate}.`;
+        return { pill: "Waiting for a slot", sentence, remedy: null };
+      }
+      const { slot, maxInFlight } = detail;
       if (slot === "design-session") return { pill: "Waiting for a slot", sentence: `Waiting for a Design session slot for ${age}.`, remedy: null };
       const sentence = maxInFlight === 0 ? "Dispatch is paused: `max_in_flight` is 0." : `Waiting for a slot for ${age}: \`max_in_flight\` is ${maxInFlight}.`;
       return { pill: "Waiting for a slot", sentence, remedy: null };
