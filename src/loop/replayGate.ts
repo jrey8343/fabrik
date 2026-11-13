@@ -83,8 +83,7 @@ export const REPLAY_UTILIZATION_LIMIT = 0.5;
 function capacityOf(now: string, { capacity }: ReplaySnapshot, { kitIssues }: Snapshot, config: KitConfig): ReplayCapacity {
   if (capacity === null) return { spare: false, why: "No open replay issue is the Operator's" };
   const held = { implement: heldOf("implement", kitIssues), research: heldOf("research", kitIssues) };
-  // The tick reads no workflow runs, so a Ticket only its Implement run holds (#578) counts as waiting: live work still goes first.
-  const waiting = waitingForDispatch({ ...capacity, implementRunTickets: [] }, held);
+  const waiting = waitingForDispatch(capacity, held);
   if (waiting.length > 0) {
     return { spare: false, why: `${spelled(waiting.map((number) => `#${number}`), "and")} ${waiting.length === 1 ? "waits" : "wait"} for Dispatch, and live work goes first` };
   }

@@ -1530,6 +1530,8 @@ export interface ReplayCapacitySnapshot {
   readonly tickets: readonly TicketSnapshot[];
   /** And every open `wayfinder:research` issue, in any order. */
   readonly researchDecisions: readonly ResearchDecisionSnapshot[];
+  /** The Tickets the Implement runs under way name, as Dispatch reads them (#578); none when the Actions API couldn't be read. */
+  readonly implementRunTickets: readonly number[];
   /**
    * The newest weekly-limit reading on each Subscription, from the store's
    * Run records of the last two months, every Product repo's and Replay
