@@ -110,8 +110,10 @@ export function heldRunOf(start: Extract<Action, { kind: "start-agent-run" }>): 
 }
 
 /**
- * A carrier: an open Kit-owned issue that makes a Subscription unusable, a
- * weekly-limit, usage-credits or token-rotation issue, which held markers go on (#470).
+ * A carrier: a Kit-owned issue that makes a Subscription unusable, a
+ * weekly-limit, usage-credits or token-rotation issue, which held markers go
+ * on while it's open (#470). Closed, it is still read for the runs waiting on
+ * it (src/loop/resume.ts, #533).
  */
 export function isCarrier(issue: KitIssueSnapshot): boolean {
   return makesUnusable(issue.labels);
@@ -182,7 +184,7 @@ function orderOf(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) ? value : null;
 }
 
-/** A held run still waiting, and how many held markers for it each open carrier carries. */
+/** A held run still waiting, and how many held markers for it each carrier read, open or closed, carries. */
 export interface Waiting {
   readonly run: HeldRun;
   readonly markers: ReadonlyMap<number, number>;
@@ -193,7 +195,7 @@ export interface Waiting {
 }
 
 /**
- * The held runs still waiting on the open carriers, in the order
+ * The held runs still waiting on these carriers, open or closed, in the order
  * they resume: by their place, the first time each was held, and a run left
  * unnumbered after every numbered one. An issue's held markers for a run past
  * the count its last resumed marker covers still hold it. Issues are read

@@ -595,8 +595,10 @@ export async function gatherSnapshot(
     event.kind === "issue-closed" && makesUnusable(part?.issue?.labels ?? [])
       ? await gatherKitIssue(github, repo, event.issue, appLogin)
       : null;
+  // The Carriers closed this past week, so the runs an issue-closed event failed to deal with aren't lost (#533).
+  const closedCarriers = event.kind === "scheduled-tick" ? await gatherClosedCarriers(github, repo, appLogin, event.now) : null;
   const held = freesASubscription
-    ? await gatherHeld(github, repo, closedKitIssue === null ? kitIssues : [...kitIssues, closedKitIssue], appLogin)
+    ? await gatherHeld(github, repo, [...kitIssues, ...(closedKitIssue === null ? [] : [closedKitIssue]), ...(closedCarriers ?? [])], appLogin)
     : null;
   const triggers = event.kind === "scheduled-tick" ? await gatherTriggerSweep(github, actions, repo, appLogin) : null;
   // The tick closes each ready-for-agent Ticket GitHub left open after a PR of it merged (#543).
@@ -633,8 +635,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -1250,6 +1252,7 @@ type EventPart = Omit<
   | "rollIns"
   | "held"
   | "closedKitIssue"
+  | "closedCarriers"
   | "weekCarriers"
   | "openMaps"
   | "conflicts"
@@ -1413,6 +1416,55 @@ export async function gatherWeekCarriers(github: Pick<ReadClient, "graphql">, re
     after = pageInfo.endCursor;
   }
   return Promise.all(nodes.map((issue) => kitIssueOf(github, repo, issue, appLogin)));
+}
+
+/** How far back the tick reads closed Carriers, and how many it reads at most: one page. */
+const CLOSED_CARRIERS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const CLOSED_CARRIERS_PAGE = 50;
+
+const CLOSED_CARRIERS_QUERY = `
+  query ($owner: String!, $name: String!, $labels: [String!]!, $since: DateTime!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: CLOSED, labels: $labels, filterBy: { since: $since }, first: ${CLOSED_CARRIERS_PAGE}, orderBy: { field: UPDATED_AT, direction: DESC }) {
+        pageInfo { hasNextPage }
+        nodes {
+          number
+          createdAt
+          closedAt
+          body
+          author { login __typename }
+          labels(first: 100) { nodes { name } }
+          comments(last: 100) { ${KIT_ISSUE_COMMENTS} }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * The weekly-limit, usage-credits and token-rotation issues closed in the 7
+ * days before `now`, newest close first, as kitIssues holds an open one: only
+ * the App's own text. The tick deals with the Held runs still waiting on
+ * them, should the issue-closed event have failed to (#533). GitHub can't
+ * filter by close, so it reads those updated in the window, which every one
+ * closed in it is, a page at most: with more, it fails, as gatherKitIssues
+ * does, rather than act without seeing them all.
+ */
+async function gatherClosedCarriers(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string | null, now: string): Promise<KitIssueSnapshot[]> {
+  const since = new Date(Date.parse(now) - CLOSED_CARRIERS_WINDOW_MS).toISOString();
+  const data: { repository: { issues: { pageInfo: { hasNextPage: boolean } | null; nodes: (KitIssueNode & { closedAt?: string | null })[] } } } =
+    await github.graphql(CLOSED_CARRIERS_QUERY, { owner: repo.owner, name: repo.name, labels: CARRIER_LABELS, since });
+  const { pageInfo, nodes } = data.repository.issues;
+  if (pageInfo?.hasNextPage === true) {
+    throw new Error(
+      `More than ${CLOSED_CARRIERS_PAGE} weekly-limit, usage-credits or token-rotation issues were closed in the last 7 days, or updated since, ` +
+        "more than the Kit reads, so it stops rather than act without seeing them all.",
+    );
+  }
+  const closed = nodes
+    .flatMap((node) => (typeof node.closedAt === "string" && Date.parse(node.closedAt) >= Date.parse(since) ? [{ node, closedAt: Date.parse(node.closedAt) }] : []))
+    .sort((a, b) => b.closedAt - a.closedAt);
+  return Promise.all(closed.map(({ node }) => kitIssueOf(github, repo, node, appLogin)));
 }
 
 /** The labels of the issues that make a Subscription unusable, which Carriers are. */
@@ -1608,8 +1660,9 @@ const HELD_TARGET_FIELDS =
 /**
  * Each issue or PR a held marker on these carriers names, once,
  * to tell a held run still in the state it was held in from one that has
- * moved on as it resumes (src/loop/resume.ts): the open ones, and one closed
- * by hand (#440). A number naming nothing GitHub has is left out.
+ * moved on as it resumes (src/loop/resume.ts): the open ones, one closed
+ * by hand (#440), and those closed in the last 7 days (#533). A number naming
+ * nothing GitHub has is left out.
  */
 async function gatherHeld(
   github: ReadClient,

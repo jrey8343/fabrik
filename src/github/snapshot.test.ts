@@ -2451,6 +2451,79 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
     expect((await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]")).weekCarriers).toBeNull();
   });
 
+  describe("the Carriers closed in the last 7 days, for the scheduled tick (#533)", () => {
+    const closedNode = (number: number, closedAt: string, comments: { body: string; author: unknown }[]) => ({
+      number,
+      closedAt,
+      body: "<!-- fabrik:notified -->",
+      author: APP,
+      labels: { nodes: [{ name: "fabrik:usage-credits" }] },
+      comments: { nodes: comments },
+    });
+    const isClosedCarriersQuery = (query: string) => query.includes("states: CLOSED") && query.includes("filterBy: { since: $since }");
+
+    /** The read-only API, answering the closed-Carrier read with these nodes, the rest as githubWith does. */
+    function closedCarriersGitHub(nodes: unknown[], hasNextPage = false, targets: Record<number, unknown> = {}) {
+      const { github, asked: heldAsked } = githubWith([], targets);
+      const asked: Record<string, unknown>[] = [];
+      const reading = {
+        ...github,
+        async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+          if (!isClosedCarriersQuery(query)) return github.graphql(query, variables);
+          asked.push(variables);
+          return { repository: { issues: { pageInfo: { hasNextPage, endCursor: hasNextPage ? "c1" : null }, nodes } } };
+        },
+      } as unknown as GitHub;
+      return { github: reading, asked, heldAsked };
+    }
+
+    it("reads them, newest close first, with only the App's own text, leaving out any closed more than 7 days ago", async () => {
+      const mallory = { login: "mallory", __typename: "User" };
+      const { github, asked } = closedCarriersGitHub([
+        closedNode(51, "2026-11-03T09:00:00Z", [{ body: heldMarker(8, "triage", "needs-triage"), author: APP }]),
+        closedNode(52, "2026-11-07T09:00:00Z", [{ body: heldMarker(9, "triage", "needs-triage"), author: APP }, { body: heldMarker(11, "triage", "needs-triage"), author: mallory }]),
+        // Closed 8 days ago, though commented on since.
+        closedNode(53, "2026-10-31T09:00:00Z", [{ body: heldMarker(10, "triage", "needs-triage"), author: APP }]),
+      ]);
+
+      const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+      expect(asked).toEqual([expect.objectContaining({ labels: ["fabrik:weekly-limit", "fabrik:usage-credits", "fabrik:token-rotation"], since: "2026-11-01T04:00:00.000Z" })]);
+      expect(snapshot.closedCarriers).toEqual([
+        { number: 52, labels: ["fabrik:usage-credits"], body: "<!-- fabrik:notified -->", comments: [heldMarker(9, "triage", "needs-triage")] },
+        { number: 51, labels: ["fabrik:usage-credits"], body: "<!-- fabrik:notified -->", comments: [heldMarker(8, "triage", "needs-triage")] },
+      ]);
+    });
+
+    it("gathers the issues and PRs their held markers name, alongside the open Carriers'", async () => {
+      const { github, heldAsked } = closedCarriersGitHub(
+        [closedNode(52, "2026-11-07T09:00:00Z", [{ body: heldMarker(8, "triage", "needs-triage"), author: APP }])],
+        false,
+        { 8: { ...issue7, number: 8 } },
+      );
+
+      const snapshot = await gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]");
+
+      expect(heldAsked).toEqual([[8]]);
+      expect(snapshot.held).toEqual([{ ...heldOn7[0], number: 8 }]);
+    });
+
+    it("fails, rather than act on part of them, when more than one page of them was closed in the window", async () => {
+      const { github } = closedCarriersGitHub([closedNode(52, "2026-11-07T09:00:00Z", [])], true);
+
+      await expect(gatherSnapshot(github, repo, tick, null, "fabrik-app[bot]")).rejects.toThrow(/closed in the last 7 days.*stops rather than act without seeing them all/);
+    });
+
+    it("aren't read for any other event, an issue-closed event on a Carrier among them", async () => {
+      const { github, asked } = closedCarriersGitHub([]);
+
+      const closed = await gatherSnapshot(github, repo, { kind: "issue-closed", issue: 60 }, null, "fabrik-app[bot]");
+
+      expect(closed.closedCarriers).toBeNull();
+      expect(asked).toEqual([]);
+    });
+  });
+
   it("holds each issue or PR a held marker names, once, with its state, labels and whether it's a draft", async () => {
     const { github } = githubWith(
       [heldMarker(7, "triage", "needs-triage"), `${heldMarker(50, "review", "agent:review")}\n${heldMarker(7, "triage", "needs-triage")}`, heldMarker(9, "implement", "agent:implement")],

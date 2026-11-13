@@ -1248,7 +1248,7 @@ export interface Snapshot {
    * Gathered for a scheduled tick, and for whatever may free a Subscription
    * (#439): each issue or PR a held marker on an open carrier (a
    * weekly-limit, usage-credits or token-rotation issue), or on
-   * closedKitIssue, names, that GitHub has, in any order, so that only
+   * closedKitIssue or closedCarriers, names, that GitHub has, in any order, so that only
    * held runs still in the state they were held in resume
    * (src/loop/resume.ts). A number naming nothing GitHub has isn't here.
    */
@@ -1257,9 +1257,19 @@ export interface Snapshot {
    * Gathered for an issue-closed event on a weekly-limit, usage-credits or
    * token-rotation issue only: that issue, as kitIssues holds an open one,
    * since it has left kitIssues, so that the runs held on it resume as it
-   * closes (#440, #470). Null for any other event.
+   * closes (#440, #470). Should that event fail, the tick's closedCarriers
+   * read it again (#533). Null for any other event.
    */
   readonly closedKitIssue: KitIssueSnapshot | null;
+  /**
+   * Gathered for a scheduled tick only: the weekly-limit, usage-credits and
+   * token-rotation issues closed in the last 7 days, newest close first, as
+   * kitIssues holds an open one. A Carrier's Held runs still waiting once it
+   * has closed are dealt with by the tick, should the issue-closed event have
+   * failed to (src/loop/resume.ts, #533). Kept apart from kitIssues, which
+   * alone say whether a Subscription is free and where a run is held.
+   */
+  readonly closedCarriers: readonly KitIssueSnapshot[] | null;
   /**
    * Gathered for a scheduled tick only: the weekly-limit, usage-credits and
    * token-rotation issues updated since this week's Monday 00:00 UTC, open or
