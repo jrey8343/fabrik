@@ -996,4 +996,31 @@ describe("An issue-closed event on a Carrier failing partway, then the scheduled
       { kind: "comment", issue: 53, body: expect.stringMatching(/"issue":7[\s\S]*"issue":60[\s\S]*"issue":8/) },
     ]);
   });
+
+  it("a hand-closed weekly-limit issue whose event resumed a run, then failed, isn't held again by a tick with nothing free, so it resumes once", () => {
+    const HELD_AT = "2026-11-08T09:00:00.000Z";
+    const RESUMED_AT = "2026-11-09T10:00:05.000Z";
+    const limitA: KitIssueSnapshot = {
+      number: 50,
+      labels: ["fabrik:weekly-limit"],
+      body: "Every listed Subscription has now hit its limit.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token -->",
+      comments: runs,
+      commentedAt: runs.map(() => HELD_AT),
+    };
+    const usageCreditsA: KitIssueSnapshot = {
+      number: 52,
+      labels: ["ready-for-human", "fabrik:usage-credits"],
+      body: "Turn off usage credits.\n\n<!-- fabrik:subscription Claude token -->",
+      comments: [],
+    };
+    const kitIssues = [weeklyLimitIssue(51, "Claude token 2", IN_DAYS), usageCreditsA];
+    // The event (#440) gave #7 its label back, then failed; the run started and took it off.
+    const started = heldOn.map((on) => (on.number === 7 ? { ...on, labeledAt: { "needs-triage": RESUMED_AT } } : on));
+
+    const plan = planFor(NEXT_TICK, tickSnapshot({ kitIssues, closedCarriers: [limitA], held: started }), TWO_SUBSCRIPTIONS);
+
+    const again = actionsOf(plan).filter((action) => action.kind === "comment" && action.issue === 51);
+    expect(again).toEqual([{ kind: "comment", issue: 51, body: expect.not.stringContaining('fabrik:held {"issue":7,') }]);
+    expect(again[0]).toEqual(expect.objectContaining({ body: expect.stringContaining('fabrik:held {"issue":60,') }));
+  });
 });

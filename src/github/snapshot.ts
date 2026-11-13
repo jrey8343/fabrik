@@ -1426,7 +1426,7 @@ const CLOSED_CARRIERS_QUERY = `
   query ($owner: String!, $name: String!, $labels: [String!]!, $since: DateTime!) {
     repository(owner: $owner, name: $name) {
       issues(states: CLOSED, labels: $labels, filterBy: { since: $since }, first: ${CLOSED_CARRIERS_PAGE}, orderBy: { field: UPDATED_AT, direction: DESC }) {
-        pageInfo { hasNextPage endCursor }
+        pageInfo { hasNextPage }
         nodes {
           number
           createdAt

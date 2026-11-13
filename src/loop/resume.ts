@@ -74,14 +74,15 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   const handClosed = closedCarrier?.labels.includes(WEEKLY_LIMIT_LABEL) === true ? closedCarrier : null;
   const open = snapshot.kitIssues.filter((issue) => issue.number !== closed);
   // The tick reads the Carriers closed in the last 7 days too, should the event have failed to deal with their runs (#533).
-  const closedCarriers = [...(closedCarrier === null ? [] : [closedCarrier]), ...(snapshot.closedCarriers ?? [])].filter(
-    (issue, at, all) => !open.some(({ number }) => number === issue.number) && all.findIndex(({ number }) => number === issue.number) === at,
-  );
-  const limits = [...open, ...closedCarriers].filter(isCarrier).sort((a, b) => a.number - b.number);
+  const byNumber = new Map<number, KitIssueSnapshot>();
+  for (const issue of [...open, ...(closedCarrier === null ? [] : [closedCarrier]), ...(snapshot.closedCarriers ?? [])]) {
+    if (!byNumber.has(issue.number)) byNumber.set(issue.number, issue);
+  }
+  const limits = [...byNumber.values()].filter(isCarrier).sort((a, b) => a.number - b.number);
   const closing = new Set(planned.flatMap((action) => (action.kind === "close" ? [action.issue] : [])));
   const stillOpen = snapshot.kitIssues.filter((issue) => issue.number !== closed && !closing.has(issue.number));
   // The Operator closing a weekly-limit issue says its Subscription works again, whatever else is open (#440).
-  if (handClosed === null && freeSubscriptions(stillOpen, config).length === 0) return strandedHeldAgain(plan, limits, stillOpen, config.timeZone);
+  if (handClosed === null && freeSubscriptions(stillOpen, config).length === 0) return strandedHeldAgain(plan, limits, stillOpen, snapshot.held, config.timeZone);
   const waiting = waitingHeldRuns(limits);
   if (waiting.length === 0) return plan;
   if (snapshot.held === null) {
@@ -92,11 +93,7 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   for (const entry of waiting) {
     const { run } = entry;
     const on = snapshot.held.find((target) => target.number === run.issue);
-    // A hold takes the trigger label off, so one back on means the run was given it already. One the App
-    // added since the run was held means so too, even once the run has started and taken it off, or has
-    // closed its issue or PR since (#438).
-    const backOn = on?.open === true && run.label !== null && on.labels.includes(run.label);
-    if (on !== undefined && (backOn || givenBackSince(entry, on))) {
+    if (on !== undefined && givenBack(entry, on)) {
       // Its held line too, in case the edit was what failed: one already edited is left as it is.
       if (run.label !== null) resumes.push(heldLineEnded(entry, { kind: "resumed" }, config.timeZone));
       dealtWith.push(entry);
@@ -147,18 +144,42 @@ function heldLineEnded({ run, newest }: Waiting, ended: HoldEnded, timeZone: str
  * open, in their places: the tick reads a closed one only for 7 days, so past
  * that nothing would resume them (#470, #533).
  */
-function strandedHeldAgain(plan: Plan, carriers: readonly KitIssueSnapshot[], stillOpen: readonly KitIssueSnapshot[], timeZone: string | null): Plan {
+function strandedHeldAgain(
+  plan: Plan,
+  carriers: readonly KitIssueSnapshot[],
+  stillOpen: readonly KitIssueSnapshot[],
+  held: readonly HeldTargetSnapshot[] | null,
+  timeZone: string | null,
+): Plan {
   const open = new Set(stillOpen.map((issue) => issue.number));
   const stillHeld = new Set(waitingHeldRuns(carriers.filter((issue) => open.has(issue.number))).map(({ run }) => `${run.role}:${run.issue}`));
-  const stranded = waitingHeldRuns(carriers).flatMap(({ run }): HoldableRun[] =>
-    run.label === null || stillHeld.has(`${run.role}:${run.issue}`) ? [] : [{ ...run, label: run.label }],
-  );
+  // One the event already gave back, as a hand-closed weekly-limit issue's (#440), before failing, isn't held again (#533).
+  const wasGivenBack = (entry: Waiting) => {
+    const on = held?.find((target) => target.number === entry.run.issue);
+    return on !== undefined && givenBack(entry, on);
+  };
+  const stranded = waitingHeldRuns(carriers).flatMap((entry): HoldableRun[] => {
+    const { run } = entry;
+    return run.label === null || stillHeld.has(`${run.role}:${run.issue}`) || wasGivenBack(entry) ? [] : [{ ...run, label: run.label }];
+  });
   const again = heldAgain(stranded, stillOpen, timeZone);
   if (again.length === 0) return plan;
   // Before the Plan's own actions, a close among them, as for a resume (#438).
   const planned = plan.kind === "act" ? plan.actions : [];
   const notes = plan.kind === "act" ? plan.notes : undefined;
   return { kind: "act", actions: [...again, ...planned], ...(notes === undefined ? {} : { notes }) };
+}
+
+/**
+ * Whether a held run was given its trigger label back already. A hold takes
+ * it off, so one back on means so. One the App added since the run was held
+ * means so too, even once the run has started and taken it off, or has
+ * closed its issue or PR since (#438).
+ */
+function givenBack(entry: Waiting, on: HeldTargetSnapshot): boolean {
+  const { run } = entry;
+  const backOn = on.open && run.label !== null && on.labels.includes(run.label);
+  return backOn || givenBackSince(entry, on);
 }
 
 /**
