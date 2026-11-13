@@ -4,10 +4,10 @@
 // of the ISO week, which runs from Monday 00:00 to Monday 00:00 in UTC.
 import { WEEK_DAYS, type WeekDay } from "../kit/config.ts";
 import { carrierOf } from "./hold.ts";
-import { weeklyRunWaitingMarker, type WeeklyRunKind } from "./markers.ts";
+import { weeklyRunName, weeklyRunWaitingMarker, weeklyRunWaitingNoted, type WeeklyRunKind } from "./markers.ts";
 import { readable } from "./readable.ts";
 import { freeSubscriptions } from "./subscriptions.ts";
-import type { KitConfig, KitIssueSnapshot, Plan, WeeklyIssueSnapshot } from "./types.ts";
+import type { KitConfig, Plan, Snapshot, WeeklyIssueSnapshot } from "./types.ts";
 
 export const DAY = 24 * 60 * 60 * 1000;
 
@@ -69,22 +69,23 @@ export function heldBack(name: string, day: WeekDay, issues: readonly WeeklyIssu
  * is. Each gate weighs this last, so it is named only when it alone keeps the
  * week's Audit or Retro from opening. The first tick that finds it so notes
  * the wait on the Carrier, with one quiet line and the week's waiting marker,
- * which the Weekly summary reads; the week's later ticks note nothing more.
+ * which the Weekly summary reads; the week's later ticks note nothing more,
+ * though the Carrier that holds the note has since closed (weekCarriers).
  */
 export function waitingForSubscription(
   kind: WeeklyRunKind,
   now: string,
-  kitIssues: readonly KitIssueSnapshot[],
+  { kitIssues, weekCarriers }: Pick<Snapshot, "kitIssues" | "weekCarriers">,
   config: Pick<KitConfig, "subscriptions">,
 ): Plan | null {
   if (freeSubscriptions(kitIssues, config).length > 0) return null;
-  const name = kind === "audit" ? "Audit" : "Retro";
+  const name = weeklyRunName(kind);
   const reason = `No Subscription is free, so the ${name} waits for one`;
-  const marker = weeklyRunWaitingMarker(kind, dateOf(weekStart(now)));
-  const noted = kitIssues.some((issue) => [issue.body, ...issue.comments].some((text) => text.includes(marker)));
+  const monday = dateOf(weekStart(now));
+  const noted = [...kitIssues, ...(weekCarriers ?? [])].some((issue) => weeklyRunWaitingNoted([issue.body, ...issue.comments], kind, monday));
   const carrier = carrierOf(kitIssues);
   if (noted || carrier === null) return { kind: "nothing", reason };
-  const body = [`This week's ${name} waits for a free Subscription.`, "", marker].join("\n");
+  const body = [`This week's ${name} waits for a free Subscription.`, "", weeklyRunWaitingMarker(kind, monday)].join("\n");
   return { kind: "act", actions: [{ kind: "comment", issue: carrier.number, body }], notes: [reason] };
 }
 

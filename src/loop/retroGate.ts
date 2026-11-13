@@ -30,7 +30,7 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
     return { kind: "nothing", reason: `Nothing is new since ${readable(Date.parse(since))}: no agent PR merged or closed, and no escape was filed` };
   }
   // Last of all, so it's named only when it alone holds the week's Retro back (#442).
-  const waiting = waitingForSubscription("retro", now, snapshot.kitIssues, config);
+  const waiting = waitingForSubscription("retro", now, snapshot, config);
   if (waiting !== null) return waiting;
   return { kind: "act", actions: [pendingRetro(now, since)] };
 }

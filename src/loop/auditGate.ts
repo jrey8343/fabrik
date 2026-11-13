@@ -31,7 +31,7 @@ export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): P
   }
   // Last of all, so it's named only when it alone holds the week's Audit back (#442):
   // the tick can't start an Auditor run at a reset, so none is ever held.
-  const waiting = waitingForSubscription("audit", now, snapshot.kitIssues, config);
+  const waiting = waitingForSubscription("audit", now, snapshot, config);
   if (waiting !== null) return waiting;
   return { kind: "act", actions: [pendingAudit(weekStart(now), head)] };
 }

@@ -144,7 +144,12 @@ describe("The audit gate opens nothing", () => {
   });
 
   it("while the one Subscription's weekly-limit issue is open, since the Auditor's run would stall on the limit, noting the wait on it", () => {
-    expect(opened(tick(SUNDAY, { kitIssues: [weeklyLimitIssue("2026-11-09T04:00:00.000Z")] }))).toEqual([]);
+    const plan = tick(SUNDAY, { kitIssues: [weeklyLimitIssue("2026-11-09T04:00:00.000Z")] });
+
+    expect(opened(plan)).toEqual([]);
+    expect(plan.kind === "act" ? plan.actions.filter((action) => action.kind === "comment") : []).toEqual([
+      { kind: "comment", issue: 41, body: "This week's Audit waits for a free Subscription.\n\n<!-- fabrik:weekly-run-waiting audit 2026-11-02 -->" },
+    ]);
   });
 
   it("when two Audits have already failed this week, until next week", () => {

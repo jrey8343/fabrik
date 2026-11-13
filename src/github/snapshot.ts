@@ -40,6 +40,7 @@ import {
 } from "../loop/labels.ts";
 import { escapeMarkerIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
+import { weekStart } from "../loop/weeklyGate.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   AgentRole,
@@ -567,13 +568,15 @@ export async function gatherSnapshot(
 ): Promise<Snapshot> {
   // A held line is never read as activity or a reply (#471).
   const github = leavingOutHeldLines(client);
-  const [{ owner, kitIssues }, part, startingComment, reviewHasInlineComments, audit, namedPullRequests] = await Promise.all([
+  const [{ owner, kitIssues }, part, startingComment, reviewHasInlineComments, audit, namedPullRequests, weekCarriers] = await Promise.all([
     gatherKitIssues(github, repo, appLogin),
     gatherEventPart(github, repo, event, operator, appLogin, actions),
     gatherStartingComment(github, repo, event),
     gatherReviewInlineComments(github, repo, event),
     event.kind === "scheduled-tick" ? gatherAuditSlice(github, repo, appLogin) : null,
     gatherNamedPullRequests(github, repo, event),
+    // The week's Carriers, closed ones included, so the gates note a waiting week once (#442).
+    event.kind === "scheduled-tick" ? gatherWeekCarriers(github, repo, appLogin, new Date(weekStart(event.now)).toISOString()) : null,
   ]);
   // A Design turn's Map is weighed against the Map cap, which counts every open Map.
   const openMaps =
@@ -629,8 +632,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -1246,6 +1249,7 @@ type EventPart = Omit<
   | "rollIns"
   | "held"
   | "closedKitIssue"
+  | "weekCarriers"
   | "openMaps"
   | "conflicts"
   | "mergeable"
@@ -1389,9 +1393,10 @@ const WEEK_CARRIERS_QUERY = `
 
 /**
  * The weekly-limit, usage-credits and token-rotation issues updated since
- * `since`, open or closed, as kitIssues holds them: only the App's own text.
- * The Weekly summary reads the waiting markers the tick noted on them, on a
- * Carrier closed since included (#442).
+ * `since`, open or closed, as kitIssues holds them: only the text of the
+ * Fabrik App, whose bot login is `appLogin`, or of any bot when null (see
+ * byAppOf). The gates and the Weekly summary read the waiting markers the
+ * tick noted on them, on a Carrier closed since included (#442).
  */
 export async function gatherWeekCarriers(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string | null, since: string): Promise<KitIssueSnapshot[]> {
   const nodes: KitIssueNode[] = [];

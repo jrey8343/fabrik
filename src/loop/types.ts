@@ -1246,6 +1246,14 @@ export interface Snapshot {
    */
   readonly closedKitIssue: KitIssueSnapshot | null;
   /**
+   * Gathered for a scheduled tick only: the weekly-limit, usage-credits and
+   * token-rotation issues updated since this week's Monday 00:00 UTC, open or
+   * closed, as kitIssues holds them. A Carrier closed this week has left
+   * kitIssues, yet the waiting marker it holds still notes the week's Audit
+   * or Retro waiting, so no later Carrier notes it again (#442).
+   */
+  readonly weekCarriers: readonly KitIssueSnapshot[] | null;
+  /**
    * Gathered for a Design-session turn finishing only: the open `wayfinder:map`
    * issues, by number, oldest first, whoever made them, the Kit or the
    * Operator by hand. What the Map cap counts (src/loop/mapCap.ts).

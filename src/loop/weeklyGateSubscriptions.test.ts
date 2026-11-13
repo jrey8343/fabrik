@@ -53,9 +53,13 @@ function tick(
   now: string,
   kitIssues: readonly KitIssueSnapshot[],
   config: KitConfig,
-  { audit = UNMOVED, retro = NOTHING_NEW }: { audit?: AuditSnapshot; retro?: RetroSnapshot } = {},
+  {
+    audit = UNMOVED,
+    retro = NOTHING_NEW,
+    weekCarriers = [],
+  }: { audit?: AuditSnapshot; retro?: RetroSnapshot; weekCarriers?: readonly KitIssueSnapshot[] } = {},
 ): Plan {
-  return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ kitIssues, audit, retro }), config);
+  return planFor({ kind: "scheduled-tick", now }, tickSnapshot({ kitIssues, audit, retro, weekCarriers }), config);
 }
 
 function actions(plan: Plan): Action[] {
@@ -131,6 +135,16 @@ describe("With no Subscription free", () => {
     const plan = tick(SUNDAY, [noted], ONE, { audit: MOVED });
 
     expect(openedLabels(plan)).toEqual([]);
+    expect(comments(plan)).toEqual([]);
+  });
+
+  it("notes the waiting week once, though the Carrier that holds the note has since closed", () => {
+    const closed = {
+      ...weeklyLimit(40, "Claude token"),
+      comments: ["This week's Audit waits for a free Subscription.\n\n<!-- fabrik:weekly-run-waiting audit 2026-11-02 -->"],
+    };
+    const plan = tick(SUNDAY, [weeklyLimit(41, "Claude token")], ONE, { audit: MOVED, weekCarriers: [closed] });
+
     expect(comments(plan)).toEqual([]);
   });
 

@@ -892,6 +892,11 @@ function closesFence(fence: string, line: string): boolean {
 /** Which weekly run a waiting marker is about: the Audit or the Retro. */
 export type WeeklyRunKind = "audit" | "retro";
 
+/** What a weekly run is called in a line the Operator reads, "Audit" or "Retro". */
+export function weeklyRunName(kind: WeeklyRunKind): "Audit" | "Retro" {
+  return kind === "audit" ? "Audit" : "Retro";
+}
+
 /** Where a Carrier notes the week's Audit or Retro waiting on a free Subscription (#442). */
 export const WEEKLY_RUN_WAITING_MARKER = "<!-- fabrik:weekly-run-waiting";
 
@@ -900,12 +905,22 @@ export function weeklyRunWaitingMarker(kind: WeeklyRunKind, monday: string): str
   return `${WEEKLY_RUN_WAITING_MARKER} ${kind} ${monday} -->`;
 }
 
+const WEEKLY_RUN_WAITING_MARKS = new RegExp(`${WEEKLY_RUN_WAITING_MARKER} (audit|retro) (\\d{4}-\\d{2}-\\d{2}) -->`, "g");
+
 /** Each waiting marker a body or comment holds: its kind and the Monday of its week, as `yyyy-mm-dd`. */
 export function weeklyRunWaitingMarksIn(text: string): { readonly kind: WeeklyRunKind; readonly monday: string }[] {
-  return [...text.matchAll(/<!-- fabrik:weekly-run-waiting (audit|retro) (\d{4}-\d{2}-\d{2}) -->/g)].map(([, kind, monday]) => ({
+  return [...text.matchAll(WEEKLY_RUN_WAITING_MARKS)].map(([, kind, monday]) => ({
     kind: kind as WeeklyRunKind,
     monday: monday ?? "",
   }));
+}
+
+/**
+ * Whether any of `texts`, a Carrier's body and comments, notes `kind` waiting
+ * in the week from `monday`: what the gate writes once and the Weekly summary reads.
+ */
+export function weeklyRunWaitingNoted(texts: readonly string[], kind: WeeklyRunKind, monday: string): boolean {
+  return texts.some((text) => weeklyRunWaitingMarksIn(text).some((mark) => mark.kind === kind && mark.monday === monday));
 }
 
 /**

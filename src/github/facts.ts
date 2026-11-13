@@ -203,6 +203,7 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
     // the App's login, so it takes any bot's text for the App's, as the Design queue slice does.
     gatherKitIssues(github, repo, null),
     // The Carriers, closed ones included, whose waiting markers name an Audit or Retro week skipped for want of a free Subscription (#442).
+    // It doesn't know the App's login either, so it takes any bot's text for the App's, as gatherKitIssues does here.
     gatherWeekCarriers(github, repo, null, new Date(now - CARRIERS_REACH_MS).toISOString()),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
