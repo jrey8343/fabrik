@@ -8,7 +8,7 @@
 // summary keeps its own narrower read
 // (gatherHeadChecks, src/github/facts.ts). It never throws: a head GitHub
 // refuses or fails is "unread", and the others are still given.
-import { allPages, type ReadClient, type Repo } from "../github/client.ts";
+import { allPages, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
 import type { Row } from "./rows.ts";
 
@@ -58,6 +58,20 @@ export async function readRequiredChecks(client: Pick<ReadClient, "rest">, repo:
   return { repo, branch: branch.name, readAt: now, required: branch.required, holdsAdmins: branch.holdsAdmins, heads: Object.fromEntries(read) };
 }
 
+/** The default branch's own list of Required checks; or why it could not be read. */
+export type BranchRequiredChecks = { readonly kind: "read"; readonly required: readonly string[] } | { readonly kind: "unread"; readonly why: string };
+
+/**
+ * The default branch's own list of Required checks, read from the branch
+ * itself as readRequiredChecks reads it, so the Review's wait and a reader
+ * never disagree about what the branch requires (#565); or why it could not
+ * be read. Two REST requests.
+ */
+export async function readDefaultBranchRequiredChecks(client: Pick<ReadClient, "rest">, repo: string): Promise<BranchRequiredChecks> {
+  const branch = await readBranch(client, repoOf(repo));
+  return branch.kind === "read" ? { kind: "read", required: branch.required } : { kind: "unread", why: branch.why };
+}
+
 /**
  * The heads a checks read is asked about, from rows, each once, from its
  * `detail.head`: each agent pull request's at the Merge gate, and each open
@@ -92,10 +106,10 @@ function repoOf(repo: string): Repo {
   return { owner, name };
 }
 
-/** The default branch, its Required checks and whether it holds admins to its rules; or unread, with its name when that much was read. */
+/** The default branch, its Required checks and whether it holds admins to its rules; or unread, with its name when that much was read, and why. */
 type BranchRead =
   | { readonly kind: "read"; readonly name: string; readonly required: readonly string[]; readonly holdsAdmins: RequiredChecksRead["holdsAdmins"] }
-  | { readonly kind: "unread"; readonly name: string | null };
+  | { readonly kind: "unread"; readonly name: string | null; readonly why: string };
 
 interface RawBranch {
   readonly protected?: boolean;
@@ -115,17 +129,19 @@ interface RawBranch {
  * checks reads `off` whatever it does about admins, so that is unknown.
  */
 async function readBranch(client: Pick<ReadClient, "rest">, repo: Repo): Promise<BranchRead> {
+  const repoPath = `/repos/${repo.owner}/${repo.name}`;
   let name: string;
   try {
-    name = ((await client.rest("GET", `/repos/${repo.owner}/${repo.name}`)) as { default_branch: string }).default_branch;
-  } catch {
-    return { kind: "unread", name: null };
+    name = ((await client.rest("GET", repoPath)) as { default_branch: string }).default_branch;
+  } catch (error) {
+    return { kind: "unread", name: null, why: whyUnread(error, `GET ${repoPath}`) };
   }
+  const branchPath = `${repoPath}/branches/${encodeURIComponent(name)}`;
   let branch: RawBranch;
   try {
-    branch = (await client.rest("GET", `/repos/${repo.owner}/${repo.name}/branches/${encodeURIComponent(name)}`)) as RawBranch;
-  } catch {
-    return { kind: "unread", name };
+    branch = (await client.rest("GET", branchPath)) as RawBranch;
+  } catch (error) {
+    return { kind: "unread", name, why: whyUnread(error, `GET ${branchPath}`) };
   }
   if (branch.protected !== true) return { kind: "read", name, required: [], holdsAdmins: "no" };
   const checks = branch.protection?.required_status_checks ?? null;

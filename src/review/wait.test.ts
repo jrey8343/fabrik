@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CheckDetail } from "./rerun.ts";
-import { type ChecksWaitGitHub, errorReport, gaveUpReport, type PullRequestState, ranNothingLine, waitForRequiredChecks } from "./wait.ts";
+import { type ChecksWaitGitHub, errorReport, gaveUpReport, type PullRequestState, ranNothingLine, requiredChecksToWaitOn, waitForRequiredChecks } from "./wait.ts";
 
 const HEAD = "a".repeat(40);
 const MINUTE = 60_000;
@@ -23,8 +23,8 @@ function fakes(rounds: readonly (readonly CheckDetail[])[], states: readonly Pul
   return {
     github,
     logged,
-    options: (listedChecks: readonly string[], deadlineMs = 27 * MINUTE) => ({
-      listedChecks,
+    options: (requiredChecks: readonly string[], deadlineMs = 27 * MINUTE) => ({
+      requiredChecks,
       deadlineMs,
       now: () => now,
       sleep: async (ms: number) => {
@@ -40,7 +40,7 @@ function fakes(rounds: readonly (readonly CheckDetail[])[], states: readonly Pul
 const check = (name: string, bucket: CheckDetail["bucket"]): CheckDetail => ({ name, bucket, link: "", workflow: "" });
 
 describe("Waiting for an agent PR's required checks", () => {
-  it("ends green once every Required check the Kit config lists passed", async () => {
+  it("ends green once every Required check passed", async () => {
     const { github, options } = fakes([[check("build", "pending")], [check("build", "pass")]]);
 
     expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "green", headSha: HEAD, ranNothing: [] });
@@ -55,7 +55,7 @@ describe("Waiting for an agent PR's required checks", () => {
   it("ends red, naming the checks that didn't pass", async () => {
     const { github, options } = fakes([[check("build", "fail"), check("lint", "pass")]]);
 
-    expect(await waitForRequiredChecks(github, options([]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"] });
+    expect(await waitForRequiredChecks(github, options(["build", "lint"]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"] });
   });
 
   it("ends stale when the PR has moved off the head an earlier job named", async () => {
@@ -71,7 +71,7 @@ describe("Waiting for an agent PR's required checks", () => {
     expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "stale", headSha: HEAD });
   });
 
-  it("gives up at its own deadline on a Required check the Kit config lists that never reported, naming it", async () => {
+  it("gives up at its own deadline on a Required check that never reported, naming it", async () => {
     const { github, options } = fakes([[check("build", "pass")]]);
 
     expect(await waitForRequiredChecks(github, options(["build", "e2e"]))).toEqual({
@@ -145,8 +145,62 @@ describe("Waiting for an agent PR's required checks", () => {
   });
 });
 
+describe("The Required checks a Review waits on: those the Kit config lists plus any the default branch requires (#565)", () => {
+  /** The checks it waits on, given the branch's own list and `sandbox.checks`, through a wait whose PR's head reads as `rounds` give it. */
+  async function waitOn(branch: readonly string[], listed: readonly string[], rounds: readonly (readonly CheckDetail[])[]) {
+    const { github, options } = fakes(rounds);
+    const requiredChecks = await requiredChecksToWaitOn(async () => ({ kind: "read", required: branch }), listed);
+    return waitForRequiredChecks(github, options(requiredChecks));
+  }
+
+  it("are the branch's own list, then any the Kit config lists beyond it, each once", async () => {
+    expect(await requiredChecksToWaitOn(async () => ({ kind: "read", required: ["b", "a"] }), ["a", "c"])).toEqual(["b", "a", "c"]);
+  });
+
+  it("end red on a check only the branch requires failing, naming it", async () => {
+    expect(await waitOn(["a", "b"], ["a"], [[check("a", "pass"), check("b", "fail")]])).toEqual({ checks: "red", headSha: HEAD, failed: ["b"] });
+  });
+
+  it("wait on a check only the branch requires while it runs, and end green once it passes", async () => {
+    const { github, logged, options } = fakes([[check("a", "pass"), check("b", "pending")], [check("a", "pass"), check("b", "pass")]]);
+    const requiredChecks = await requiredChecksToWaitOn(async () => ({ kind: "read", required: ["a", "b"] }), ["a"]);
+
+    expect(await waitForRequiredChecks(github, options(requiredChecks))).toEqual({ checks: "green", headSha: HEAD, ranNothing: [] });
+    expect(logged).toEqual(["Waiting on b (running)"]);
+  });
+
+  it("give up naming a check only the branch requires that never reported", async () => {
+    expect(await waitOn(["a", "b"], ["a"], [[check("a", "pass")]])).toEqual({ checks: "gave-up", headSha: HEAD, unreported: ["b"], running: [] });
+  });
+
+  it("still include a check the Kit config lists that the branch doesn't require", async () => {
+    expect(await waitOn(["a"], ["a", "c"], [[check("a", "pass"), check("c", "fail")]])).toEqual({ checks: "red", headSha: HEAD, failed: ["c"] });
+  });
+
+  it("give up naming a check the branch requires that never registered on the head, with nothing listed in the Kit config", async () => {
+    expect(await waitOn(["b"], [], [[]])).toEqual({ checks: "gave-up", headSha: HEAD, unreported: ["b"], running: [] });
+  });
+
+  it("never include a check on the head in neither list, such as `loop / Kit`", async () => {
+    expect(await waitOn(["a"], ["a"], [[check("a", "pass"), check("loop / Kit", "fail")]])).toEqual({ checks: "green", headSha: HEAD, ranNothing: [] });
+  });
+
+  it("are none when neither lists any, so the checks are green after the settle window", async () => {
+    expect(await waitOn([], [], [[check("loop / Kit", "pending")]])).toEqual({ checks: "green", headSha: HEAD, ranNothing: [] });
+  });
+
+  it("fail as unread checks, quoting why, when the branch can't be read, never falling back to the Kit config's list", async () => {
+    const unread = requiredChecksToWaitOn(async () => ({ kind: "unread", why: "GET /repos/o/p/branches/main failed with 403: Resource not accessible by integration" }), ["a"]);
+
+    expect(await unread.then(() => undefined, errorReport)).toEqual({
+      failure: "unread-checks",
+      detail: "Couldn't read the default branch's Required checks: GET /repos/o/p/branches/main failed with 403: Resource not accessible by integration",
+    });
+  });
+});
+
 describe("What a wait that gave up reports", () => {
-  it("names the Required checks the Kit config lists that never reported, even with others still running", () => {
+  it("names the Required checks that never reported, even with others still running", () => {
     expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: ["e2e"], running: ["build"] })).toEqual({
       failure: "unreported-checks",
       detail: "",
@@ -154,7 +208,7 @@ describe("What a wait that gave up reports", () => {
     });
   });
 
-  it("is a timeout naming the checks still running when every Required check the Kit config lists reported", () => {
+  it("is a timeout naming the checks still running when every Required check reported", () => {
     expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: [], running: ["build", "lint"] })).toEqual({
       failure: "timeout",
       detail: "",
