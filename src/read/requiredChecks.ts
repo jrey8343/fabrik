@@ -1,13 +1,14 @@
 // The Required checks read (#622): how each Required check stands on the heads
 // a reader asks about, and whether the default branch holds admins to its
 // rules, judged as GitHub judges a merge (#540). The Required checks are the
-// branch's own list, read from the branch itself, which a credential with no
-// Administration permission can do: never GitHub's rollup of every check on
-// the head, and never the Kit config's list alone. Passed here is what GitHub
-// accepts for a merge, as the Review's wait judges it too (#456). The Weekly
-// summary keeps its own narrower read
-// (gatherHeadChecks, src/github/facts.ts). It never throws: a head GitHub
-// refuses or fails is "unread", and the others are still given.
+// branch's own list: its protection's, plus those its active rulesets
+// require (#694), read from the branch and its rules, which a credential
+// with no Administration permission can do: never GitHub's rollup of every
+// check on the head, and never the Kit config's list alone. Passed here is
+// what GitHub accepts for a merge, as the Review's wait judges it too (#456).
+// The Weekly summary keeps its own narrower read (gatherHeadChecks,
+// src/github/facts.ts). It never throws: a head GitHub refuses or fails is
+// "unread", and the others are still given.
 import { allPages, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
 import type { Row } from "./rows.ts";
@@ -20,7 +21,7 @@ export interface RequiredChecksRead {
   readonly branch: string;
   /** When it was read, ISO 8601. */
   readonly readAt: string;
-  /** The branch's own list of Required checks, in its order. */
+  /** The branch's own list of Required checks: its protection's in its order, then those its active rulesets add. */
   readonly required: readonly string[];
   /** Whether the branch holds admins to its rules: `unknown` when it requires no checks, or when it could not be read. */
   readonly holdsAdmins: "yes" | "no" | "unknown";
@@ -41,8 +42,9 @@ export interface HeadCheck {
 /**
  * How each Required check of `owner/name`'s default branch stands on each of
  * `heads`, and whether the branch holds admins to its rules, read at `now`.
- * Two REST requests for the branch, and two for each head while each list
- * fits a page: its check runs and its commit statuses. With none required,
+ * Three REST requests for the branch while its rules fit a page: the repo,
+ * the branch and its rules; and two for each head while each list fits a
+ * page: its check runs and its commit statuses. With none required,
  * each head has an empty list, which a reader takes as all passed, and its
  * reports are not read. A branch that could not be read leaves every head
  * unread.
@@ -63,9 +65,10 @@ export type BranchRequiredChecks = { readonly kind: "read"; readonly required: r
 
 /**
  * The default branch's own list of Required checks, read from the branch
- * itself as readRequiredChecks reads it, so the Review's wait and a reader
- * never disagree about what the branch requires (#565); or why it could not
- * be read. Two REST requests.
+ * and its active rules as readRequiredChecks reads them, so the Review's
+ * wait and a reader never disagree about what the branch requires (#565,
+ * #694); or why it could not be read. Three REST requests while the
+ * branch's rules fit a page.
  */
 export async function readDefaultBranchRequiredChecks(client: Pick<ReadClient, "rest">, repo: string): Promise<BranchRequiredChecks> {
   const branch = await readBranch(client, repoOf(repo));
@@ -122,11 +125,26 @@ interface RawBranch {
   } | null;
 }
 
+/** One active rule on a branch, as `GET /repos/{o}/{r}/rules/branches/{b}` lists it. */
+interface RawRule {
+  readonly type: string;
+  readonly parameters?: { readonly required_status_checks?: readonly { readonly context: string }[] } | null;
+}
+
 /**
- * The default branch as the branch itself gives it. Its enforcement level
- * says whether it holds admins to its rules: `everyone` yes, `non_admins` no,
- * and a branch with no protection no. A protected branch that requires no
- * checks reads `off` whatever it does about admins, so that is unknown.
+ * The default branch as the branch itself and its active rules give it: its
+ * Required checks are its protection's list, then each check a
+ * `required_status_checks` rule adds, each once. The rules endpoint lists
+ * only active rules, from repository and organization rulesets alike, so a
+ * ruleset in `evaluate` or `disabled`, which GitHub doesn't enforce, adds
+ * none. A check is matched by name alone: a rule's `integration_id` is not
+ * read. Rules that could not be read leave the branch unread, never its
+ * protection's list alone, which would let a check GitHub enforces through.
+ * Its protection's enforcement level alone says whether it holds admins to
+ * its rules, as the rules endpoint doesn't say who may bypass a rule:
+ * `everyone` yes, `non_admins` no, and a branch with no protection no. A
+ * protected branch whose protection requires no checks reads `off` whatever
+ * it does about admins, so that is unknown, whatever a ruleset requires.
  */
 async function readBranch(client: Pick<ReadClient, "rest">, repo: Repo): Promise<BranchRead> {
   const repoPath = `/repos/${repo.owner}/${repo.name}`;
@@ -143,12 +161,22 @@ async function readBranch(client: Pick<ReadClient, "rest">, repo: Repo): Promise
   } catch (error) {
     return { kind: "unread", name, why: whyUnread(error, `GET ${branchPath}`) };
   }
-  if (branch.protected !== true) return { kind: "read", name, required: [], holdsAdmins: "no" };
-  const checks = branch.protection?.required_status_checks ?? null;
-  const required = [...new Set(checks?.checks?.map(({ context }) => context) ?? checks?.contexts ?? [])];
+  const rulesPath = `${repoPath}/rules/branches/${encodeURIComponent(name)}`;
+  let rules: RawRule[];
+  try {
+    rules = await allPages<RawRule>(client, rulesPath);
+  } catch (error) {
+    return { kind: "unread", name, why: whyUnread(error, `GET ${rulesPath}`) };
+  }
+  const rulesetChecks = rules
+    .filter((rule) => rule.type === "required_status_checks")
+    .flatMap((rule) => rule.parameters?.required_status_checks ?? [])
+    .map(({ context }) => context);
+  const checks = branch.protected === true ? (branch.protection?.required_status_checks ?? null) : null;
+  const protectionChecks = checks?.checks?.map(({ context }) => context) ?? checks?.contexts ?? [];
   const level = checks?.enforcement_level;
-  const holdsAdmins = required.length === 0 ? "unknown" : level === "everyone" ? "yes" : level === "non_admins" ? "no" : "unknown";
-  return { kind: "read", name, required, holdsAdmins };
+  const holdsAdmins = branch.protected !== true ? "no" : protectionChecks.length === 0 ? "unknown" : level === "everyone" ? "yes" : level === "non_admins" ? "no" : "unknown";
+  return { kind: "read", name, required: [...new Set([...protectionChecks, ...rulesetChecks])], holdsAdmins };
 }
 
 interface RawCheckRun {
