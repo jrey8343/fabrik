@@ -2,7 +2,7 @@
 // replay's replay-record job:
 // event + snapshot + config -> plan -> applied.
 // Run with `node src/main.ts` (Node 24 strips the types).
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { AGENT_FAILURE_FILE, readFailureReport } from "./agent/failure.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agent/result.ts";
@@ -30,7 +30,7 @@ import { readDigestGiven } from "./github/digestGiven.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
-import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
+import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailedOf, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { replayResultsIn, resultsReady, withLandingFailed } from "./kit/replay.ts";
@@ -369,6 +369,7 @@ async function reportLandingFailure(landing: Landing, failure: LandingFailure): 
   // Once only: a fail plan's report that itself throws reaches main's catch too.
   if (failureReported) return;
   failureReported = true;
+  if (landing.job === "push") await leaveLandingFailed(failure);
   const { summary, comment } = landingFailureReport(landing, failure, operator);
   await report(summary);
   console.log(`::error title=The ${landing.job} job failed::${summary.split("\n")[0]}`);
@@ -379,6 +380,23 @@ async function reportLandingFailure(landing: Landing, failure: LandingFailure): 
     await github.rest("POST", `/repos/${repo}/issues/${comment.issue}/comments`, { body: comment.body });
   } catch (error) {
     console.log(`::warning title=Failure not commented::#${comment.issue}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Leaves how the push job's landing failed for its Run record step (#487),
+ * at the path the push job sets in FABRIK_LANDING_FAILED, so the run's
+ * record says its landing failed though its agent's job succeeded. A file
+ * that can't be written is only warned of: the record step then counts the
+ * failed Loop step as the Kit's own failure, and the job fails as it would.
+ */
+async function leaveLandingFailed(failure: LandingFailure): Promise<void> {
+  const path = process.env["FABRIK_LANDING_FAILED"];
+  if (path === undefined || path === "") return;
+  try {
+    await writeFile(path, JSON.stringify(landingFailedOf(failure)));
+  } catch (error) {
+    console.log(`::warning title=Landing failure not left for the Run record::${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

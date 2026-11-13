@@ -85,6 +85,28 @@ describe("What a failed call throws", () => {
     expect(error).toMatchObject({ status: 403, request: "GET .fabrik/config.json@main" });
   });
 
+  // #487: the Run record of a failed landing keeps the id GitHub's support can look a failed call up by.
+  it("keeps GitHub's request id from a failing response, or null when it gave none", async () => {
+    vi.stubGlobal("fetch", async () => new Response("Bad Gateway", { status: 502, headers: { "x-github-request-id": "C0DE:1234:ABCD" } }));
+    const withId = await caught(new GitHub("token", undefined, { retryDelaysMs: [] }).rest("PATCH", "/repos/acme/shop/pulls/36", {}));
+    answering(422, { message: "Validation Failed" });
+    const withoutId = await caught(new GitHub("token", undefined, { retryDelaysMs: [] }).rest("GET", "/repos/acme/shop/pulls/36"));
+
+    expect(withId).toMatchObject({ status: 502, requestId: "C0DE:1234:ABCD" });
+    expect(withoutId).toMatchObject({ status: 422, requestId: null });
+  });
+
+  it("keeps GitHub's request id from a GraphQL query it answered with errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () => new Response(JSON.stringify({ data: null, errors: [{ message: "No." }] }), { status: 200, headers: { "x-github-request-id": "BEEF:42" } }),
+    );
+
+    const error = await caught(new GitHub("token").graphql("query { viewer { login } }", {}));
+
+    expect(error).toMatchObject({ request: "POST /graphql", requestId: "BEEF:42" });
+  });
+
   it("a call GitHub never answered: a GitHubError with status 0, naming the request and why", async () => {
     vi.stubGlobal("fetch", async () => {
       throw new TypeError("fetch failed");

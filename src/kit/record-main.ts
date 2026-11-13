@@ -12,6 +12,9 @@
 // FABRIK_PRODUCT_TOKEN, to read the Product's Kit config, and FABRIK_STORE_TOKEN,
 // scoped to the store, empty when it couldn't be minted. FABRIK_EMPTY_DIFF is
 // "true" when the Loop found the Implement run's branch changed nothing.
+// FABRIK_LOOP_OUTCOME is how the push job's Loop step ended, and
+// FABRIK_LANDING_FAILED the path of the file it leaves when it says its
+// landing failed (#487); a file that can't be read is none, never a failure.
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -93,10 +96,18 @@ async function recordRun(): Promise<Recorded> {
     failureReport: await readIfPresent(join(agentDir, AGENT_FAILURE_FILE)),
     transcript: transcript?.lines ?? null,
     emptyDiff: process.env["FABRIK_EMPTY_DIFF"] === "true",
+    loopOutcome: process.env["FABRIK_LOOP_OUTCOME"] ?? "",
+    landingFailed: await landingFailedText(),
   });
   const store = new GitHub(storeToken, apiUrl);
   const write = await writeRunRecord(store, files, transcript?.gzip ?? null, (ms) => sleep(ms));
   return { outcome: write, written: { store, files, write, kitSha } };
+}
+
+/** The landing-failure file the Loop step left (#487), or null when it left none or it can't be read. */
+async function landingFailedText(): Promise<string | null> {
+  const path = process.env["FABRIK_LANDING_FAILED"] ?? "";
+  return path === "" ? null : readIfPresent(path).catch(() => null);
 }
 
 async function main(): Promise<void> {

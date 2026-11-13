@@ -357,7 +357,7 @@ _Avoid_: evidence page (the Kit's own page), album, roll
 ## Measuring the factory
 
 **Run record**:
-The durable account of one AFK agent run in one role: its model, cost, outcome and transcript, written once when the run ends and never changed.
+The durable account of one AFK agent run in one role: its model, cost, outcome and transcript, and whether the push job landed it, written once when the run ends and never changed.
 _Avoid_: run log, telemetry, step summary
 
 **Scorer**:

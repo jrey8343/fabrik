@@ -290,7 +290,7 @@ const A_DEPLOYMENTS_READ = aDeploymentsRead({ ["m".repeat(40)]: aDeployOf({ is: 
 
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
-  const { brokenRun: _left, ...fields } = aRunRecord();
+  const { brokenRun: _left, landing: _landing, ...fields } = aRunRecord();
   return { ...fields, schema: 7 };
 }
 

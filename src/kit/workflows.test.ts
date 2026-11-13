@@ -263,6 +263,16 @@ describe("The Kit's workflows", () => {
     expect(record).toContain("role: ${{ needs.kit.outputs.route }}");
   });
 
+  // #487: the record says how the landing ended, from the Loop step's outcome and the file it leaves when it says its landing failed.
+  it("loop.yml's push job hands its record step the Loop step's outcome and the landing-failure file the Loop writes", () => {
+    const push = jobIn(loop, "push");
+    const record = stepsOf(push).find((step) => step.includes("uses: ./kit/.github/actions/write-run-record"));
+
+    expect(push).toContain("FABRIK_LANDING_FAILED: ${{ github.workspace }}/fabrik-landing-failed.json");
+    expect(record).toContain("loop-outcome: ${{ steps.loop.outcome }}");
+    expect(record).toContain("landing-failed: ${{ env.FABRIK_LANDING_FAILED }}");
+  });
+
   // Scoring (#149) is planned inside that same step, so it can't fail or stall the push job either.
   it("loop.yml's push job passes out its record step's ask for a score, and the scored record's path", () => {
     const push = jobIn(loop, "push");
@@ -1702,6 +1712,13 @@ describe("The write the Run record action", () => {
     expect(write).toContain("FABRIK_PRODUCT_TOKEN: ${{ steps.tokens.outputs.kit-config-token }}");
     expect(write).toContain("FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}");
     expect(steps.indexOf(tokens!)).toBeLessThan(steps.indexOf(write!));
+  });
+
+  it("hands the record program the Loop step's outcome and the landing-failure file's path (#487)", () => {
+    const write = steps.find((step) => step.includes("run: node src/kit/record-main.ts"));
+
+    expect(write).toContain("FABRIK_LOOP_OUTCOME: ${{ inputs.loop-outcome }}");
+    expect(write).toContain("FABRIK_LANDING_FAILED: ${{ inputs.landing-failed }}");
   });
 
   it("takes the role's transcript, and a missing one is fine", () => {
