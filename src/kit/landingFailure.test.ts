@@ -5,7 +5,7 @@ import { GitHubError } from "../github/client.ts";
 import { implementRunFailedIn, researchRunFailedIn } from "../github/threads.ts";
 import { aTicket, dispatchSnapshotOf, kitConfig } from "../__fixtures__/snapshots.ts";
 import { planFor } from "../loop/rules.ts";
-import { claimLanding, jobFailureReport, landingFailedOf, landingFailureReport, pushLanding } from "./landingFailure.ts";
+import { claimLanding, jobFailureReport, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./landingFailure.ts";
 import type { PushJobInput } from "./pushJob.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/9001/attempts/1";
@@ -291,5 +291,29 @@ describe("A failed landing as its Run record keeps it", () => {
       refusal: null,
       reason: "The Review of #51 gave no valid Verdict",
     });
+  });
+});
+
+describe("Whom a push job's or claim job's landing failure @-mentions (#531)", () => {
+  it("the repo's owner, once a Kit config that leaves the Operator unset has loaded", () => {
+    expect(landingFailureMention({ operator: null }, "acme/shop")).toBe("acme");
+  });
+
+  it("the Operator the Kit config names, once it has loaded", () => {
+    expect(landingFailureMention({ operator: "someone" }, "acme/shop")).toBe("someone");
+  });
+
+  it("the repo's owner when the job fails before the Kit config loads", () => {
+    expect(landingFailureMention(null, "acme/shop")).toBe("acme");
+  });
+
+  it("nobody when not even the repo is known", () => {
+    expect(landingFailureMention(null, undefined)).toBeNull();
+    expect(landingFailureMention(null, "")).toBeNull();
+  });
+
+  it("so a config leaving the Operator unset still has the comment begin with the owner's mention", () => {
+    const comment = landingFailureReport(pushLanding(triage, RUN)!, { kind: "error", error: new Error("boom") }, landingFailureMention({ operator: null }, "acme/shop"));
+    expect(comment.comment?.body).toMatch(/^@acme /);
   });
 });

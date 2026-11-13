@@ -30,7 +30,7 @@ import { readDigestGiven } from "./github/digestGiven.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig } from "./kit/config.ts";
-import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailedOf, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
+import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { replayResultsIn, resultsReady, withLandingFailed } from "./kit/replay.ts";
@@ -319,8 +319,8 @@ function storeCheckoutAt(dir: string | undefined, config: KitConfig): ReplayStor
 let reported = false;
 /** Whether this job has said its landing failed, which it says once. */
 let failureReported = false;
-/** The Operator, once the Kit config naming them has loaded, whom a landing failure's comment @-mentions. */
-let operator: string | null = null;
+/** The Kit config, once it has loaded: a landing failure's comment mentions the Operator it names, or else the repo's owner (#531). */
+let loadedConfig: Pick<KitConfig, "operator"> | null = null;
 
 /** Writes `text` to the log and the step summary, under one heading however many times a job reports. */
 async function report(text: string): Promise<void> {
@@ -370,7 +370,11 @@ async function reportLandingFailure(landing: Landing, failure: LandingFailure): 
   if (failureReported) return;
   failureReported = true;
   if (landing.job === "push") await leaveLandingFailed(failure);
-  const { summary, comment } = landingFailureReport(landing, failure, operator);
+  const { summary, comment } = landingFailureReport(
+    landing,
+    failure,
+    landingFailureMention(loadedConfig, process.env["GITHUB_REPOSITORY"]),
+  );
   await report(summary);
   console.log(`::error title=The ${landing.job} job failed::${summary.split("\n")[0]}`);
   if (comment === null) return;
@@ -425,6 +429,7 @@ async function releaseUnlandedReplay(error: unknown): Promise<void> {
     await github.rest("PATCH", issue, { body: released });
     await report(`Released #${ended.ticket} on replay #${ended.issue}, whose run's landing failed, so the next tick runs it again.`);
     // The landing that failed would have said the results are in; with the Operator unknown, the body shows them.
+    const operator = loadedConfig?.operator ?? null;
     if (operator !== null && replayResultsIn(released) && !replayResultsIn(before)) {
       await github.rest("POST", `${issue}/comments`, { body: resultsReady(operator) });
     }
@@ -465,7 +470,7 @@ async function main(landing: Landing | null): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  operator = config.operator;
+  loadedConfig = config;
 
   const { event, source, branch, why } = await loopEvent(repo, config, github);
   if (event === null) {

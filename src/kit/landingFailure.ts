@@ -18,6 +18,7 @@ import { handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER
 import type { Action, AgentRole } from "../loop/types.ts";
 import type { PushJobInput } from "./pushJob.ts";
 import { type LandingFailed, type LandingFailureClass, type LandingRefusal, unexplainedLanding } from "./runRecord.ts";
+import type { KitConfig } from "./config.ts";
 
 /** What a push job or claim job was landing, and where its failure is said. */
 export interface Landing {
@@ -146,6 +147,19 @@ export function claimLanding(issue: number | null, runUrl: string): Landing {
     agentWork: false,
     runUrl,
   };
+}
+
+/**
+ * Whom a push job's or claim job's landing failure @-mentions (#531): the
+ * Operator, resolved as the rest of the Kit resolves them, the Kit config's
+ * or else the repo's owner. `config` is null when the job failed before the
+ * Kit config loaded, and then the owner is mentioned, though the config may
+ * name someone else. `repository` is GITHUB_REPOSITORY, owner/name; with it
+ * unset or empty, nobody is mentioned.
+ */
+export function landingFailureMention(config: Pick<KitConfig, "operator"> | null, repository: string | undefined): string | null {
+  const owner = repository?.split("/")[0];
+  return config?.operator ?? (owner === undefined || owner === "" ? null : owner);
 }
 
 /** The comment a failed landing posts: on the run's issue or PR, this body. */
