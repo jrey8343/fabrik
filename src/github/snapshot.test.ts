@@ -1981,6 +1981,17 @@ describe("Gathering a Dispatch check's research Decisions", () => {
     expect(snapshot.dispatch).toMatchObject({ implementRunsInProgress: 1, researchRunsInProgress: 2 });
   });
 
+  it("names the Tickets the Implement runs under way name, so Dispatch passes over them (#578)", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement #12", status: "in_progress" }] },
+      { id: 2, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(researchGitHub([]), repo, { kind: "dispatch-check" }, null, null, actions as unknown as GitHub);
+
+    expect(snapshot.dispatch).toMatchObject({ implementRunsInProgress: 2, implementRunTickets: [12] });
+  });
+
   const PERSON = { login: "operator", __typename: "User" };
   const OTHER_BOT = { login: "dependabot", __typename: "Bot" };
   const NOTICE = `${RESEARCH_RUN_FAILED_MARKER}\n@operator The Research run on #12 failed: it crashed.`;
@@ -3196,6 +3207,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
         if (query.includes("$research")) return { repository: { issues: none } };
         if (query.includes("issueOrPullRequest")) return { repository: {} };
         if (query.includes("labels: [$label]")) return { repository: { defaultBranchRef: null, issues: { nodes: [] } } };
+        if (query.includes("$triggers")) return { repository: { issues: none, pullRequests: none } };
         const retro = nothingNewForTheRetro(query);
         if (retro !== undefined) return retro;
         if (query.includes("$labels")) return { repository: { owner: { login: "acme" }, issues: { nodes: kitIssues } } };
@@ -3291,9 +3303,21 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       expect(snapshot.replay?.capacity).toEqual({
         tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [], mergedLinkedPullRequests: [], lastRunFailed: false }],
         researchDecisions: [],
+        implementRunTickets: [],
         weeklyLimits: { "Claude token": aReading(0.3) },
       });
       expect(snapshot.replay?.acceptance).toBeNull();
+    });
+
+    it("holds the Tickets the Implement runs under way name, read through the Actions token, so a run under way doesn't count as waiting for Dispatch (#578)", async () => {
+      const actions = actionsWith([
+        { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Implement #31", status: "in_progress" }] },
+        { id: 2, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }] },
+      ]);
+
+      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", actions as unknown as GitHub, null, storeHolding([]));
+
+      expect(snapshot.replay?.capacity?.implementRunTickets).toEqual([31]);
     });
 
     it("holds no reading when the store can't be read", async () => {

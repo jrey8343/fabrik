@@ -16,6 +16,7 @@ import {
 import type { HeldRun } from "../loop/heldRun.ts";
 import { conflictAttemptMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { maxInFlightHoldOf } from "./standingInFlight.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { wordStanding } from "./standingWording.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
@@ -467,6 +468,11 @@ describe("work that goes on without the Operator", () => {
       const slots = (standings: readonly Standing[]) => standings.filter(({ name }) => name === "waiting-for-slot");
       expect(slots(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], withMaxInFlight(3), [aRunInFlight({ issue: 12 })])))).toEqual([]);
       expect(slots(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14, lastRunFailed: true }], withMaxInFlight(0))))).toEqual([]);
+    });
+
+    it("holds no Ticket for a slot when the run filling max_in_flight is that Ticket's own, which Dispatch won't release again (#578)", () => {
+      const facts = { github: factsOf({ openIssues: [ready(14)] }), kit: dispatching([{ number: 14 }], withMaxInFlight(1), [aRunInFlight({ issue: 14 })]) };
+      expect(maxInFlightHoldOf(facts)).toBeNull();
     });
 
     it("counts max_in_flight full with the runs unread, as Held does", () => {

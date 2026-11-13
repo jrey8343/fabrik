@@ -4,15 +4,13 @@
 // where the facts can't date it. With them, the one look-alike that is the
 // Operator's: a passed draft they put back in draft, `parked`.
 import { notDismissedIn, type PullRequestHistoryItem, requestChangesSinceRunIn } from "../github/threads.ts";
-import { waitingForDispatch } from "../loop/dispatch.ts";
-import { heldOf } from "../loop/heldRun.ts";
 import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT } from "../loop/labels.ts";
 import { DESIGN_ROUND_MARKER } from "../loop/markers.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed, type StandingPlace, type StandingWork } from "./standing.ts";
 import { barOf, clockOf, stuckAtOf } from "./standingClock.ts";
-import { designSessionsStartingOf, hasVerdictOnHead, isSpec, maxInFlightHoldOf, mergeGateHoldOf, readySince } from "./standingInFlight.ts";
+import { designSessionsStartingOf, hasVerdictOnHead, isSpec, maxInFlightHoldOf, mergeGateHoldOf, readySince, waitingForDispatchOf } from "./standingInFlight.ts";
 import { answerOf, lastAdded, passAtHeadOf } from "./standingOperator.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "./weeklySummary.ts";
 
@@ -114,9 +112,8 @@ function releasableSilencesOf(facts: StandingFacts): StandingNamed<"waiting-on-k
   if (kit === null || kit.dispatch === null || maxInFlightHoldOf(facts) !== null) return [];
   const { candidates } = kit.dispatch;
   const decisions = new Set(candidates.researchDecisions.map(({ number }) => number));
-  const held = { implement: heldOf("implement", github.kitIssues), research: heldOf("research", github.kitIssues) };
   const gateHeld = new Set(mergeGateHoldOf(facts)?.waiting ?? []);
-  return waitingForDispatch(candidates, held).filter((number) => !gateHeld.has(number)).flatMap((number) => {
+  return waitingForDispatchOf(facts).filter((number) => !gateHeld.has(number)).flatMap((number) => {
     const decision = decisions.has(number);
     const since = readySince(github.openIssues, number, decision);
     if (since === null) return [];
