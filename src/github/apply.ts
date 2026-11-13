@@ -449,10 +449,7 @@ async function apply(
       return;
     }
     case "request-review":
-      await github.rest("POST", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}/requested_reviewers`, {
-        reviewers: [action.reviewer],
-      });
-      return;
+      return requestReview(github, repo, action);
     case "react":
       return react(github, repo, action);
     case "end-held-line":
@@ -475,6 +472,35 @@ async function apply(
     default:
       return applyToIssue(github, `${issues}/${action.issue}`, action, made);
   }
+}
+
+/**
+ * Requests the reviewer's review on the PR. GitHub can record a request it
+ * answers with a 422 (#551), so on a 422 the PR is read fresh: with the
+ * reviewer among its requested reviewers, or with their review already on
+ * it, the request counts as applied.
+ * Otherwise, or when that read fails, the 422 is what fails.
+ */
+async function requestReview(github: GitHubApi, repo: Repo, action: Extract<Action, { kind: "request-review" }>): Promise<void> {
+  const pulls = `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`;
+  try {
+    await github.rest("POST", `${pulls}/requested_reviewers`, { reviewers: [action.reviewer] });
+  } catch (error) {
+    if (!(error instanceof GitHubError) || error.status !== 422) throw error;
+    const recorded = await hasReviewer(github, pulls, action.reviewer).catch(() => false);
+    if (!recorded) throw error;
+  }
+}
+
+/**
+ * Whether the PR at `pulls` has `reviewer` among its requested reviewers, or
+ * has a review they already submitted, which takes them off that list.
+ */
+async function hasReviewer(github: GitHubApi, pulls: string, reviewer: string): Promise<boolean> {
+  const pullRequest = (await github.rest("GET", pulls)) as { requested_reviewers: readonly { login: string }[] };
+  if (pullRequest.requested_reviewers.some(({ login }) => login === reviewer)) return true;
+  const reviews = await allPages<{ user: { login: string } | null }>(github, `${pulls}/reviews`);
+  return reviews.some(({ user }) => user?.login === reviewer);
 }
 
 /**

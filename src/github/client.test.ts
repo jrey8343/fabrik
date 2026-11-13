@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GitHub, GitHubError, refusalOf } from "./client.ts";
+import { GitHub, GitHubError, gitHubMessageOf, refusalOf } from "./client.ts";
 
 /** GitHub's JSON body for a refused call, with this message. */
 const refused = (message: string) => JSON.stringify({ message, documentation_url: "https://docs.github.com/rest", status: "403" });
@@ -44,6 +44,30 @@ describe("Telling why GitHub refused a call", () => {
 
 // #328: the input step tells a refusal from GitHub's own failure, whichever call it made.
 const caught = (call: Promise<unknown>) => call.then(() => null, (error: unknown) => error);
+
+describe("What GitHub said of a failed call (#551)", () => {
+  const refused = (body: unknown) => new GitHubError("x", 422, { body: JSON.stringify(body) });
+
+  it("adds each of a REST body's errors after its message", () => {
+    const body = {
+      message: "Validation Failed",
+      errors: [{ message: "Review cannot be requested from pull request author.", code: "custom" }, { resource: "PullRequest", field: "reviewers", code: "invalid" }],
+    };
+
+    expect(gitHubMessageOf(refused(body))).toBe("Validation Failed: Review cannot be requested from pull request author.; PullRequest reviewers invalid");
+  });
+
+  it.each([
+    ["no errors", { message: "Validation Failed" }],
+    ["empty errors", { message: "Validation Failed", errors: [] }],
+  ])("says only the message for a body with %s", (_case, body) => {
+    expect(gitHubMessageOf(refused(body))).toBe("Validation Failed");
+  });
+
+  it("says a GraphQL body's errors' messages, as before", () => {
+    expect(gitHubMessageOf(refused({ errors: [{ message: "Could not resolve" }, { message: "Bad id" }] }))).toBe("Could not resolve; Bad id");
+  });
+});
 
 describe("What a failed call throws", () => {
   afterEach(() => {
