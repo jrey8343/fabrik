@@ -177,9 +177,10 @@ describe("Counting the Research runs a Dispatch check sees in flight", () => {
   it("counts a Research job that's done while its run's push job is still to land it", async () => {
     const actions = actionsWith([
       { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "Research", status: "completed", conclusion: "failure" }, { name: "Push", status: "queued" }] },
     ]);
 
-    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 1, implementTickets: [] });
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 2, implementTickets: [] });
   });
 
   it("doesn't count a Research job once its run's push job has completed, one its run skipped, or any other job", async () => {

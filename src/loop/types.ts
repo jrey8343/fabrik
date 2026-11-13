@@ -1124,7 +1124,7 @@ export interface DispatchSnapshot {
   readonly implementRunsInProgress: number;
   /** Every open `wayfinder:research` issue, in any order: the core weighs which are research Decisions on an open Map. */
   readonly researchDecisions: readonly ResearchDecisionSnapshot[];
-  /** Research jobs not yet finished: they hold slots under max_in_flight with the Implement runs. */
+  /** Research jobs under way, each until its run's push job has landed it: they hold slots under max_in_flight with the Implement runs. */
   readonly researchRunsInProgress: number;
 }
 

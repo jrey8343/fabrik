@@ -2547,7 +2547,7 @@ const DIGEST_JOB = new RegExp(`^(?:.+ / )?${DIGEST_JOB_NAME} PR #([1-9][0-9]*)$`
 
 /**
  * Whether an Implement job is under way anywhere in the repo (#387), as
- * Dispatch reads it (agentJobsUnderWay). Null when the Actions API
+ * Dispatch reads it (implementJobsUnderWay). Null when the Actions API
  * couldn't be read, so a failed read only leaves a stalled run alone, never
  * the rest of the conflict check.
  */
