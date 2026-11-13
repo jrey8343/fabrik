@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CheckDetail } from "./rerun.ts";
-import { type ChecksWaitGitHub, errorReport, gaveUpReport, type PullRequestState, waitForRequiredChecks } from "./wait.ts";
+import { type ChecksWaitGitHub, errorReport, gaveUpReport, type PullRequestState, ranNothingLine, waitForRequiredChecks } from "./wait.ts";
 
 const HEAD = "a".repeat(40);
 const MINUTE = 60_000;
@@ -43,13 +43,19 @@ describe("Waiting for an agent PR's required checks", () => {
   it("ends green once every Required check the Kit config lists passed", async () => {
     const { github, options } = fakes([[check("build", "pending")], [check("build", "pass")]]);
 
-    expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "green", headSha: HEAD });
+    expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "green", headSha: HEAD, ranNothing: [] });
+  });
+
+  it("ends green past a skipped or neutral check, naming it as having run nothing", async () => {
+    const { github, options } = fakes([[check("build", "pass"), check("e2e", "skipping")]]);
+
+    expect(await waitForRequiredChecks(github, options(["build", "e2e"]))).toEqual({ checks: "green", headSha: HEAD, ranNothing: ["e2e"] });
   });
 
   it("ends red, naming the checks that didn't pass", async () => {
     const { github, options } = fakes([[check("build", "fail"), check("lint", "pass")]]);
 
-    expect(await waitForRequiredChecks(github, options([]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"], skipped: [] });
+    expect(await waitForRequiredChecks(github, options([]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"] });
   });
 
   it("ends stale when the PR has moved off the head an earlier job named", async () => {
@@ -154,5 +160,17 @@ describe("What a wait that gave up reports", () => {
       detail: "",
       checks: ["build", "lint"],
     });
+  });
+});
+
+describe("The Review's step summary line on checks that ran nothing", () => {
+  it("names each Required check that passed by being skipped or reporting neutral", () => {
+    expect(ranNothingLine(["e2e", "visual"])).toBe(
+      "These Required checks were skipped or reported neutral, so they passed but ran nothing on this head: `e2e`, `visual`",
+    );
+  });
+
+  it("is left out when every check ran", () => {
+    expect(ranNothingLine([])).toBeNull();
   });
 });

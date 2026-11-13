@@ -12,7 +12,7 @@ import { verdictMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import { readPullRequest, type Reader } from "./inputs.ts";
 import { readAgentRunResult } from "./result.ts";
-import { reviewContext } from "./review.ts";
+import { ranNothingOf, reviewContext } from "./review.ts";
 
 async function inputs(pullRequest: unknown): Promise<{ productDir: string; pullRequestFile: string; specFile: string }> {
   const dir = await mkdtemp(join(tmpdir(), "fabrik-review-"));
@@ -92,6 +92,24 @@ describe("A Review's context", () => {
     const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
 
     expect(text).not.toContain("Request changes");
+  });
+
+  it("tells the Reviewer, as Kit code's fact, which Required checks ran nothing on this head", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile, null, null, ["e2e", "visual"])).parts.join("\n");
+
+    expect(text).toContain(
+      "## Required checks that ran nothing\nKit code read these from GitHub: these Required checks were skipped or reported neutral on this head, so they passed as GitHub's merge passes them but ran nothing. They vouch for nothing here.\n- `e2e`\n- `visual`",
+    );
+  });
+
+  it("says nothing of Required checks that ran nothing when every one ran", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+
+    const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
+
+    expect(text).not.toContain("ran nothing");
   });
 
   it("carries the repo's CODING_STANDARDS.md when it has one at its root", async () => {
@@ -182,7 +200,7 @@ describe("A Review's context", () => {
       runUrl: "https://github.com/jrey8343/penrith/actions/runs/7",
       repoUrl: "https://github.com/jrey8343/penrith",
       failedChecks: [],
-      skippedChecks: [],
+      ranNothing: [],
       rerun: null,
       result: readAgentRunResult(artifact),
     });
@@ -472,5 +490,17 @@ describe("A Review of a PR whose Implement runs changed existing tests (#463)", 
     const text = (await reviewContext(productDir, pullRequestFile, specFile)).parts.join("\n");
 
     expect(text).not.toContain("Changed existing tests");
+  });
+});
+
+describe("The Required checks that ran nothing, as the Review job passes them in", () => {
+  it("reads the checks job's JSON list, and none when it passed out nothing", () => {
+    expect(ranNothingOf('["e2e"]')).toEqual(["e2e"]);
+    expect(ranNothingOf("")).toEqual([]);
+    expect(ranNothingOf(undefined)).toEqual([]);
+  });
+
+  it("fails loudly on anything but a list of names", () => {
+    expect(() => ranNothingOf('{"e2e":true}')).toThrow(/FABRIK_RAN_NOTHING/);
   });
 });

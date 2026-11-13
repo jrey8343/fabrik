@@ -275,7 +275,7 @@ async function finishedReviewEvent(
     runUrl: thisRunUrl(),
     repoUrl: thisRepoUrl(),
     failedChecks: input.failedChecks,
-    skippedChecks: input.skippedChecks,
+    ranNothing: input.ranNothing,
     result,
     rerun: input.rerun ?? null,
   });

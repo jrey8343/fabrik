@@ -3,9 +3,9 @@
 // rules, judged as GitHub judges a merge (#540). The Required checks are the
 // branch's own list, read from the branch itself, which a credential with no
 // Administration permission can do: never GitHub's rollup of every check on
-// the head, and never the Kit config's list alone. This is not the Review's
-// wait, which counts a skipped check as red: passed here is what GitHub
-// accepts for a merge. The Weekly summary keeps its own narrower read
+// the head, and never the Kit config's list alone. Passed here is what GitHub
+// accepts for a merge, as the Review's wait judges it too (#456). The Weekly
+// summary keeps its own narrower read
 // (gatherHeadChecks, src/github/facts.ts). It never throws: a head GitHub
 // refuses or fails is "unread", and the others are still given.
 import { allPages, type ReadClient, type Repo } from "../github/client.ts";

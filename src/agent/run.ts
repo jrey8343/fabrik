@@ -42,7 +42,9 @@
 // PR, and its result is the Reviewer's reply, a Verdict line first. A UI PR's
 // Review also takes FABRIK_UI_EVIDENCE_DIR, the folder its UI evidence was
 // downloaded into, if it was, and FABRIK_UI_EVIDENCE_FAILURE, why its capture
-// failed, when the PR's marker records that (src/agent/review.ts).
+// failed, when the PR's marker records that (src/agent/review.ts). Every
+// Review takes FABRIK_RAN_NOTHING, the Required checks that passed on its head
+// only by being skipped or reporting neutral, as a JSON list (#456).
 // An Auditor run is in a checkout of the default branch at its pending Audit's
 // marked commit: FABRIK_ISSUE_FILE is the Audit and FABRIK_AUDIT_FILE what the
 // agent-inputs step gathered for it (src/agent/inputs.ts), and its result
@@ -113,7 +115,7 @@ import {
   settleReply,
   streamWatch,
 } from "./launch.ts";
-import { reviewContext } from "./review.ts";
+import { ranNothingOf, reviewContext } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
 import { missingSkills, runSummary } from "./summary.ts";
@@ -483,6 +485,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       required("FABRIK_SPEC_FILE"),
       evidenceDir === "" ? null : evidenceDir,
       captureFailureOf(process.env["FABRIK_UI_EVIDENCE_FAILURE"]),
+      // The Required checks that passed on this head only by being skipped or reporting neutral (#456).
+      ranNothingOf(process.env["FABRIK_RAN_NOTHING"]),
     );
     subject = review.pullRequest;
     extra.push(...review.parts);

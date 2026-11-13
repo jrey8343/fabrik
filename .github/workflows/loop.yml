@@ -1037,8 +1037,8 @@ jobs:
       checks: ${{ steps.wait.outputs.checks }}
       head-sha: ${{ steps.wait.outputs.head-sha }}
       failed: ${{ steps.wait.outputs.failed }}
-      # The ones among them skipped or reported neutral, which the Verdict says no Retry changes.
-      skipped: ${{ steps.wait.outputs.skipped }}
+      # On green, the checks that passed only by being skipped or reporting neutral, which the Reviewer and the Digest are told ran nothing (#456).
+      ran-nothing: ${{ steps.wait.outputs.ran-nothing }}
       # On red, as JSON: the GitHub Actions checks the Kit can re-run, with their workflow runs, and the outside ones (#462).
       red: ${{ steps.wait.outputs.red }}
     steps:
@@ -1144,7 +1144,7 @@ jobs:
       checks: ${{ steps.wait.outputs.checks }}
       head-sha: ${{ steps.wait.outputs.head-sha }}
       failed: ${{ steps.wait.outputs.failed }}
-      skipped: ${{ steps.wait.outputs.skipped }}
+      ran-nothing: ${{ steps.wait.outputs.ran-nothing }}
       # The re-run checks that failed again, and the flaky ones with their red and green runs, as JSON.
       failed-again: ${{ steps.wait.outputs.failed-again }}
       flaky: ${{ steps.wait.outputs.flaky }}
@@ -1297,6 +1297,8 @@ jobs:
           # and why its capture failed, for when the download holds no capture result to read.
           FABRIK_UI_EVIDENCE_DIR: ${{ needs.kit.outputs.ui-evidence-run != '' && format('{0}/fabrik-ui-evidence', runner.temp) || '' }}
           FABRIK_UI_EVIDENCE_FAILURE: ${{ needs.kit.outputs.ui-evidence-failure }}
+          # The Required checks that passed on this head only by being skipped or reporting neutral (#456), from the wait that went green.
+          FABRIK_RAN_NOTHING: ${{ needs.rerun-wait.outputs.checks == 'green' && needs.rerun-wait.outputs.ran-nothing || needs.review-checks.outputs.ran-nothing }}
         run: node ../kit/src/agent/run.ts review
 
       - name: Pass the Verdict to the push job

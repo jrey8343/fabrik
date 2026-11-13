@@ -11,29 +11,29 @@ export interface CheckState {
 export type ChecksOutcome =
   /** Still waiting: on Required checks the Kit config lists that haven't reported on the PR's head, and on checks still running. */
   | { readonly kind: "pending"; readonly unreported: readonly string[]; readonly running: readonly string[] }
-  | { readonly kind: "green" }
-  /** `failed` names every check it waits on that didn't pass; `skipped`, those among them only ever skipped or neutral, which no re-run changes. */
-  | { readonly kind: "red"; readonly failed: readonly string[]; readonly skipped: readonly string[] };
+  /** `ranNothing` names the checks it waits on that were only ever skipped or neutral: passed, though they checked nothing on this head. */
+  | { readonly kind: "green"; readonly ranNothing: readonly string[] }
+  /** `failed` names every check it waits on that failed or was cancelled. */
+  | { readonly kind: "red"; readonly failed: readonly string[] };
 
 /**
  * The outcome of the checks the Review waits on: the Required checks the Kit
  * config lists, when it lists any, else every check given (the branch
- * protection's required ones). A skipped or cancelled check never counts as a
- * pass, and a listed check that hasn't reported yet is still pending. With
+ * protection's required ones). As GitHub judges a merge, a check that
+ * succeeded, was skipped or reported neutral has passed, and a cancelled one
+ * is failing; a listed check that hasn't reported yet is still pending. With
  * nothing to wait on, the checks are green.
  */
 export function requiredChecksOutcome(checks: readonly CheckState[], listedChecks: readonly string[]): ChecksOutcome {
   const gate = listedChecks.length === 0 ? checks : checks.filter((check) => listedChecks.includes(check.name));
-  const failed = gate.filter((check) => check.bucket === "fail" || check.bucket === "cancel" || check.bucket === "skipping");
-  if (failed.length > 0) {
-    const names = [...new Set(failed.map((check) => check.name))];
-    const skipped = names.filter((name) => failed.every((check) => check.name !== name || check.bucket === "skipping"));
-    return { kind: "red", failed: names, skipped };
-  }
+  const failed = gate.filter((check) => check.bucket === "fail" || check.bucket === "cancel");
+  if (failed.length > 0) return { kind: "red", failed: [...new Set(failed.map((check) => check.name))] };
   const unreported = listedChecks.filter((name) => !checks.some((check) => check.name === name));
   const running = [...new Set(gate.filter((check) => check.bucket === "pending").map((check) => check.name))];
   if (unreported.length > 0 || running.length > 0) return { kind: "pending", unreported, running };
-  return { kind: "green" };
+  const names = [...new Set(gate.map((check) => check.name))];
+  const ranNothing = names.filter((name) => gate.every((check) => check.name !== name || check.bucket === "skipping"));
+  return { kind: "green", ranNothing };
 }
 
 /** What a `gh pr checks --json name,bucket` run left behind. */

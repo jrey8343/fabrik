@@ -158,6 +158,13 @@ export interface DigestFacts {
    * it is no pass, or either records no fingerprint, it is not established.
    */
   readonly productCode: ProductChange;
+  /**
+   * The Required checks that passed on the head only by being skipped or
+   * reporting neutral, so ran nothing there (#456), as the pass on that head
+   * records them: no item may be checked by Required checks through one of
+   * them. None while the latest Verdict is no pass.
+   */
+  readonly requiredChecksRanNothing: readonly string[];
 }
 
 /** One thing on the thread, at its time. */
@@ -213,6 +220,7 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
     // The next flaw would call for Retry `retryNumber`, so the ones before it are used.
     retriesLeft: Math.max(0, MAX_RETRIES + 1 - retryNumber(verdicts, thread.landedNothing)),
     productCode: latest?.verdict === "pass" ? productChangeBetween(first?.change, latest.change) : { kind: "not-established" },
+    requiredChecksRanNothing: latest?.verdict === "pass" ? (latest.ranNothing ?? []) : [],
     counts: {
       passes: count("pass"),
       executionFlaws: count("execution-flaw"),

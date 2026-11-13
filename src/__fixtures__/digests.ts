@@ -23,6 +23,7 @@ export function aDigestFacts(overrides: Partial<DigestFacts> = {}): DigestFacts 
     followUps: [],
     asks: [],
     productCode: { kind: "unchanged" },
+    requiredChecksRanNothing: [],
     ...overrides,
   };
 }
