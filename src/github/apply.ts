@@ -14,6 +14,7 @@ import { isEmptyDiffComment, withPrototypeStarted } from "../loop/markers.ts";
 import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
 import { allPages, type GitHub, GitHubError, gitHubMessageOf, type Repo } from "./client.ts";
+import type { WrittenReview } from "./writtenOn.ts";
 
 /** The agent run a plan starts, which the workflow carries out by routing to that role's agent job. */
 export function agentRunIn(plan: Plan): Extract<Action, { kind: "start-agent-run" }> | null {
@@ -449,10 +450,7 @@ async function apply(
       return;
     }
     case "request-review":
-      await github.rest("POST", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}/requested_reviewers`, {
-        reviewers: [action.reviewer],
-      });
-      return;
+      return requestReview(github, repo, action);
     case "react":
       return react(github, repo, action);
     case "end-held-line":
@@ -475,6 +473,37 @@ async function apply(
     default:
       return applyToIssue(github, `${issues}/${action.issue}`, action, made);
   }
+}
+
+/**
+ * Requests the login's review on the PR. GitHub can record a request it
+ * answers with a 422 (#551), so on a 422 the PR is read fresh: with the login
+ * among its requested reviewers, or with their review already on it, the
+ * request counts as applied. Otherwise, or when that read fails, the 422 is
+ * what fails.
+ */
+async function requestReview(github: GitHubApi, repo: Repo, action: Extract<Action, { kind: "request-review" }>): Promise<void> {
+  const path = `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`;
+  try {
+    await github.rest("POST", `${path}/requested_reviewers`, { reviewers: [action.reviewer] });
+  } catch (error) {
+    if (!(error instanceof GitHubError) || error.status !== 422) throw error;
+    const recorded = await reviewRequestRecorded(github, path, action.reviewer).catch(() => false);
+    if (!recorded) throw error;
+  }
+}
+
+/**
+ * Whether the PR at `path` has `login` among its requested reviewers, or has
+ * a review they already submitted, which takes them off that list. GitHub
+ * logins aren't case-sensitive, so neither is the match.
+ */
+async function reviewRequestRecorded(github: GitHubApi, path: string, login: string): Promise<boolean> {
+  const same = (other: string | undefined): boolean => other?.toLowerCase() === login.toLowerCase();
+  const pullRequest = (await github.rest("GET", path)) as { requested_reviewers: readonly { login: string }[] };
+  if (pullRequest.requested_reviewers.some((requested) => same(requested.login))) return true;
+  const reviews = await allPages<WrittenReview>(github, `${path}/reviews`);
+  return reviews.some((review) => same(review.user?.login));
 }
 
 /**

@@ -64,8 +64,9 @@ export class GitHubError extends Error {
 }
 
 /**
- * What GitHub said of a failed call: the `message` of its JSON body, or for
- * a GraphQL query its errors' messages, or else the body itself; for a call
+ * What GitHub said of a failed call: the `message` of its JSON body, followed
+ * by each of its `errors[]` a REST 422 details it with (#551), or for a
+ * GraphQL query its errors' messages, or else the body itself; for a call
  * GitHub never answered, why.
  */
 export function gitHubMessageOf(error: GitHubError): string {
@@ -73,7 +74,10 @@ export function gitHubMessageOf(error: GitHubError): string {
     const body: unknown = JSON.parse(error.body);
     if (typeof body === "object" && body !== null) {
       const { message, errors } = body as { message?: unknown; errors?: unknown };
-      if (typeof message === "string") return message;
+      if (typeof message === "string") {
+        const details = Array.isArray(errors) ? errors.map(restErrorDetail).filter((detail) => detail !== "") : [];
+        return details.length === 0 ? message : `${message}: ${details.join("; ")}`;
+      }
       if (Array.isArray(errors)) {
         const messages = errors.map((e) => (typeof e === "object" && e !== null ? (e as { message?: unknown }).message : undefined));
         if (messages.every((m) => typeof m === "string") && messages.length > 0) return messages.join("; ");
@@ -83,6 +87,18 @@ export function gitHubMessageOf(error: GitHubError): string {
     // Not JSON: the body as GitHub sent it.
   }
   return error.body.trim() === "" ? error.message : error.body.trim();
+}
+
+/**
+ * One of a REST body's `errors[]`: its `message`, or else its `resource`,
+ * `field` and `code`, such as "PullRequest reviewers invalid".
+ */
+function restErrorDetail(entry: unknown): string {
+  if (typeof entry === "string") return entry;
+  if (typeof entry !== "object" || entry === null) return "";
+  const { message, resource, field, code } = entry as Record<string, unknown>;
+  if (typeof message === "string" && message !== "") return message;
+  return [resource, field, code].filter((part): part is string => typeof part === "string" && part !== "").join(" ");
 }
 
 /**

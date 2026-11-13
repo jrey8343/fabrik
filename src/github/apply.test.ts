@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { acceptedBody } from "../__fixtures__/replay.ts";
 import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
+import { landingFailureReport, pushLanding } from "../kit/landingFailure.ts";
 import { replayMarksIn } from "../kit/replay.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Plan } from "../loop/types.ts";
@@ -1009,5 +1010,93 @@ describe("Applying an open-issue a held line links (#471)", () => {
     });
 
     expect(github.calls.at(-1)).toEqual({ method: "POST", path: `${issues}/7/comments`, body: { body: "Held on #100." } });
+  });
+});
+
+describe("Requesting a review GitHub refuses with a 422 (#551)", () => {
+  const pullRequest = "/repos/acme/shop/pulls/51";
+  const refused = new GitHubError("GitHub POST failed: 422", 422, {
+    request: `POST ${pullRequest}/requested_reviewers`,
+    body: JSON.stringify({ message: "Validation Failed", errors: [{ resource: "PullRequest", field: "reviewers", code: "invalid" }] }),
+  });
+  const review = { kind: "request-review", pullRequest: 51, reviewer: "operator" } as const;
+  const plan: Plan = { kind: "act", actions: [review, { kind: "comment", issue: 51, body: "Verdict" }] };
+
+  /** A GitHub that refuses the review request with `refusal`, then reads the PR with these reviewers requested and these reviews on it, or fails the read with `unread`. */
+  function refusingGitHub(refusal: GitHubError, pr: { requested?: readonly string[]; reviewed?: readonly string[]; unread?: GitHubError } = {}) {
+    const calls: { method: string; path: string }[] = [];
+    return {
+      calls,
+      async rest(method: string, path: string): Promise<unknown> {
+        calls.push({ method, path });
+        if (method === "POST" && path === `${pullRequest}/requested_reviewers`) throw refusal;
+        if (method === "GET" && pr.unread !== undefined) throw pr.unread;
+        if (method === "GET" && path === pullRequest) return { number: 51, requested_reviewers: (pr.requested ?? []).map((login) => ({ login })) };
+        if (method === "GET" && path.startsWith(`${pullRequest}/reviews?`)) return path.endsWith("page=1") ? (pr.reviewed ?? []).map((login) => ({ user: { login } })) : [];
+        if (method === "POST" && path.endsWith("/comments")) return { id: 9300, html_url: "https://github.com/acme/shop/pull/51#issuecomment-9300" };
+        return null;
+      },
+      async graphql(): Promise<never> {
+        throw new Error("no GraphQL expected");
+      },
+    };
+  }
+
+  it("counts the request applied when GitHub recorded the reviewer anyway, and the plan goes on", async () => {
+    const github = refusingGitHub(refused, { requested: ["someone", "operator"] });
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.calls).toContainEqual({ method: "POST", path: `${issues}/51/comments` });
+  });
+
+  it.each([
+    ["requested", { requested: ["Operator"] }],
+    ["has reviewed", { reviewed: ["OPERATOR"] }],
+  ])("counts the request applied when the reviewer %s under a login cased otherwise, as GitHub logins aren't case-sensitive", async (_case, pr) => {
+    const github = refusingGitHub(refused, pr);
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.calls).toContainEqual({ method: "POST", path: `${issues}/51/comments` });
+  });
+
+  it("counts the request applied when the reviewer has already reviewed the PR, so is no longer requested", async () => {
+    const github = refusingGitHub(refused, { reviewed: ["operator"] });
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.calls).toContainEqual({ method: "POST", path: `${issues}/51/comments` });
+  });
+
+  it("fails with the 422 when the reviewer is neither requested nor has reviewed, and the failure comment says GitHub's detail", async () => {
+    const github = refusingGitHub(refused, { requested: ["someone"], reviewed: ["someone"] });
+
+    const error = await applyPlan(github, repo, plan).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(PlanNotApplied);
+    expect((error as PlanNotApplied).cause).toBe(refused);
+    expect(github.calls).not.toContainEqual({ method: "POST", path: `${issues}/51/comments` });
+    const verdict = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], ranNothing: [], withResult: true } as const;
+    const { comment } = landingFailureReport(pushLanding(verdict, "https://github.com/acme/shop/actions/runs/9001/attempts/1")!, { kind: "error", error });
+    expect(comment?.body).toContain("with a 422: Validation Failed: PullRequest reviewers invalid");
+  });
+
+  it("fails with the 422, not the read's error, when reading the PR fresh fails", async () => {
+    const github = refusingGitHub(refused, { unread: new GitHubError("GitHub GET failed: 502", 502, { request: `GET ${pullRequest}` }) });
+
+    const error = await applyPlan(github, repo, plan).catch((e: unknown) => e);
+
+    expect((error as PlanNotApplied).cause).toBe(refused);
+  });
+
+  it.each([403, 404, 502])("fails a %i at once, without reading the PR", async (status) => {
+    const failed = new GitHubError(`GitHub POST failed: ${status}`, status, { request: `POST ${pullRequest}/requested_reviewers` });
+    const github = refusingGitHub(failed, { requested: ["operator"] });
+
+    const error = await applyPlan(github, repo, plan).catch((e: unknown) => e);
+
+    expect((error as PlanNotApplied).cause).toBe(failed);
+    expect(github.calls.filter(({ method }) => method === "GET")).toEqual([]);
   });
 });
