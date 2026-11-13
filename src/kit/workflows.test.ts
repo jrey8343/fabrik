@@ -1870,11 +1870,25 @@ describe("The Tick check workflow", () => {
     expect(existsSync(new URL(program!, root))).toBe(true);
   });
 
-  it("holds one Fabrik App token, on every installed repo, with Checks read, Contents read and Issues write", () => {
-    expect(tokens).toHaveLength(1);
+  it("holds its main Fabrik App token, on every installed repo, with Checks read, Contents read and Issues write", () => {
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0]).toContain("id: app");
     expect(tokens[0]).toMatch(/owner: jrey8343\n/);
     expect(tokens[0]).not.toContain("repositories:");
+    expect(tokens[0]).not.toContain("continue-on-error");
     expect(permissionsOf(tokens[0])).toEqual(["checks: read", "contents: read", "issues: write"]);
+  });
+
+  // #554: an App the Operator hasn't yet given Actions: read still runs the check, its Dead-tick issues saying no run count.
+  it("mints a second, Actions-read-only token on every installed repo, allowed to fail, and hands it to the program", () => {
+    const actions = tokens.find((step) => step.includes("id: actions"));
+    const run = action.steps.find((step) => step.includes("run: node src/kit/dead-tick-main.ts"));
+
+    expect(permissionsOf(actions)).toEqual(["actions: read"]);
+    expect(actions).toMatch(/owner: jrey8343\n/);
+    expect(actions).not.toContain("repositories:");
+    expect(actions).toContain("continue-on-error: true");
+    expect(run).toContain("FABRIK_ACTIONS_TOKEN: ${{ steps.actions.outputs.token }}");
   });
 
   it("hands the program that token and the Fabrik App's slug, from the token it minted", () => {

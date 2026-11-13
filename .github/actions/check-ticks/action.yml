@@ -1,7 +1,9 @@
 # The daily Tick check (#461): loads the Fabrik App key through the store's
 # push service account, mints one App token on every installed repo with
-# Checks read, Contents read and Issues write, checks out only the store's
-# runs/ (its Run records, never the transcripts), and runs
+# Checks read, Contents read and Issues write, and a second, optional one with
+# only Actions read, to count a dead Tick's never-started caller runs (#554),
+# whose mint may fail until the Operator accepts Actions: read; checks out
+# only the store's runs/ (its Run records, never the transcripts), and runs
 # src/kit/dead-tick-main.ts, which reads each Product repo's last started Tick
 # and opens or closes its Dead-tick issue (src/kit/deadTick.ts).
 #
@@ -47,6 +49,19 @@ runs:
         permission-contents: read
         permission-issues: write
 
+    # The Dead-tick issue's count of never-started runs (#554). It fails until
+    # the Operator accepts the App's Actions: read, and the check then opens
+    # and closes its issues as before, with no count.
+    - name: Mint a Fabrik App token for the Product repos' Actions runs
+      id: actions
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        owner: jrey8343
+        permission-actions: read
+
     - name: Check out the store's Run records
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -63,6 +78,7 @@ runs:
       working-directory: ${{ github.action_path }}/../../..
       env:
         FABRIK_TICK_CHECK_TOKEN: ${{ steps.app.outputs.token }}
+        FABRIK_ACTIONS_TOKEN: ${{ steps.actions.outputs.token }}
         FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}
         FABRIK_STORE_DIR: ${{ github.workspace }}/store
       run: node src/kit/dead-tick-main.ts

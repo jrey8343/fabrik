@@ -254,6 +254,10 @@ _Avoid_: rate-limit issue, quota issue
 A Kit-owned `ready-for-human` issue saying a Product repo's Tick hasn't started for more than a day, open until a Tick starts again. A Product repo the Fabrik App can no longer reach gets one beside the Run records instead, where the Weekly summary is filed, open until the App reaches it again.
 _Avoid_: stale-schedule issue
 
+**Never-started run**:
+A run of a Product repo's caller workflow that GitHub refused at startup, so it ran no job and left no Run record, check run or comment.
+_Avoid_: start-failed run, startup failure
+
 **Usage-credits issue**:
 A Kit-owned issue telling the Operator to turn usage credits off on a Subscription caught spending them, which stays unusable until the Operator closes it.
 _Avoid_: overage issue, billing issue

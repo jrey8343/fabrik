@@ -3684,7 +3684,7 @@ describe("the Weekly summary's Loop health line", () => {
     ...overrides,
   });
   // Inside the week, Monday 2 November to Monday 9 November Sydney time.
-  const run = (conclusion: string, createdAt = "2026-11-05T03:00:00Z") => ({ conclusion, createdAt });
+  const run = (conclusion: string, createdAt = "2026-11-05T03:00:00Z", event = "schedule") => ({ conclusion, createdAt, event });
   const summaryOf = (overrides: Partial<WeeklySummaryInput>) => {
     const result = weeklySummary(input(overrides));
     if (result.kind !== "summary") throw new Error("skipped");
