@@ -282,6 +282,19 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said).toContain("The setup PR: https://github.com/acme/clinic/pull/1");
   });
 
+  it("with skills the SessionStart hook installed left untracked, as after a setup PR was closed, runs and commits none of them", async () => {
+    await mkdir(join(checkout, ".claude/skills/tdd"), { recursive: true });
+    await writeFile(join(checkout, ".claude/skills/tdd/SKILL.md"), "# tdd\n");
+    const world = aWorld();
+
+    const { code, said, complaints } = await setupOnce(world);
+
+    expect(complaints).toEqual([]);
+    expect(code).toBe(0);
+    expect(filesOnOrigin().sort()).toEqual(["README.md", ...new Set(writtenIn(said))].sort());
+    expect(git("status", "--porcelain")).toBe("");
+  });
+
   it("on a protected default branch, changes only the protection settings setup owns, names each change, and keeps the rest as GitHub has them", async () => {
     const world = aWorld();
     world.protection = {

@@ -9,6 +9,7 @@ import { ok, type Run } from "./exec.ts";
 import { prBody, withEarlierDone } from "./finish.ts";
 import type { Published, RunSummary } from "./oneRun.ts";
 import { setupBranch } from "./setupBranchName.ts";
+import { SKILLS_IGNORE } from "./shims.ts";
 
 export { setupBranch } from "./setupBranchName.ts";
 
@@ -17,18 +18,31 @@ export { setupBranch } from "./setupBranchName.ts";
  * and the setup commit both read it, so they agree on what's uncommitted.
  */
 export async function uncommittedPaths(run: Run, cwd: string): Promise<string[]> {
-  return changedPaths(await ok(run, "git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd }));
+  return changedPaths(await gitStatus(run, cwd));
 }
 
-/** Every path `git status --porcelain=v1 -z` names, a rename's old path included. */
-function changedPaths(status: string): string[] {
+/**
+ * The uncommitted paths that keep setup from running: every one but the
+ * untracked files in .claude/skills/, the skills the SessionStart hook
+ * installed, which the .gitignore entry setup adds hides.
+ */
+export async function blockingUncommittedPaths(run: Run, cwd: string): Promise<string[]> {
+  return changedPaths(await gitStatus(run, cwd), (entry) => !(entry.startsWith("?? ") && entry.slice(3).startsWith(SKILLS_IGNORE)));
+}
+
+function gitStatus(run: Run, cwd: string): Promise<string> {
+  return ok(run, "git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd });
+}
+
+/** Every path `git status --porcelain=v1 -z` names, a rename's old path included, of the entries kept. */
+function changedPaths(status: string, keep: (entry: string) => boolean = () => true): string[] {
   const entries = status.split("\0").filter((entry) => entry !== "");
   const paths: string[] = [];
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!;
-    paths.push(entry.slice(3));
     // A rename or copy is followed by the path it came from.
-    if (/[RC]/.test(entry.slice(0, 2))) paths.push(entries[++i] ?? "");
+    const from = /[RC]/.test(entry.slice(0, 2)) ? [entries[++i] ?? ""] : [];
+    if (keep(entry)) paths.push(entry.slice(3), ...from);
   }
   return paths.filter((path) => path !== "");
 }

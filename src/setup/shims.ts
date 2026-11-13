@@ -152,7 +152,8 @@ function isObject(value: unknown): value is Json {
 // --- .gitignore --------------------------------------------------------------
 
 export const GITIGNORE_PATH = ".gitignore";
-const SKILLS_IGNORE = ".claude/skills/";
+/** The folder the SessionStart hook and Kit steps install skills into, as setup ignores it in .gitignore. */
+export const SKILLS_IGNORE = ".claude/skills/";
 const GITIGNORE_BLOCK = `# Fabrik: the skills its SessionStart hook and Kit steps install\n${SKILLS_IGNORE}\n`;
 
 export function gitignoreUpdate(existing: string | null): FileUpdate {
