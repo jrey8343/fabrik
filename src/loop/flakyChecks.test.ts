@@ -177,11 +177,11 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
   const swept = (plan: Plan) => (plan.kind === "act" ? plan.actions : []).filter((action) => action.kind !== "check-dispatch" && action.kind !== "check-design-queue");
   const lines = (plan: Plan) => swept(plan).map(textOf).filter((text) => text.includes("<!-- fabrik:flaky-check "));
 
-  it("reports a Required check that passed then failed on the passed head: one line on the PR and a filed issue", () => {
+  it("reports a Required check that succeeded then failed on the passed head: one line on the PR and a filed issue", () => {
     const plan = read([head(greenThenRed)]);
 
     expect(lines(plan)).toEqual([
-      `<!-- fabrik:flaky-check {"headSha":"${PASSED}","checks":["ci"]} -->\n\`ci\` has both failed and passed on ${short}, the head the Reviewer passed: a Flaky check (#new).`,
+      `<!-- fabrik:flaky-check {"headSha":"${PASSED}","checks":["ci"]} -->\n\`ci\` has both failed and succeeded on ${short}, the head the Reviewer passed: a Flaky check (#new).`,
     ]);
     expect(swept(plan)).toContainEqual(
       expect.objectContaining({
@@ -195,10 +195,10 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
     expect(notificationsOf(plan)).toEqual([]);
   });
 
-  it("reports one whose failure came before its pass, the same way", () => {
+  it("reports one whose failure came before its success, the same way", () => {
     const redThenGreen = [run("ci", "failure", "2026-11-11T09:00:00Z", 70), run("ci", "success", "2026-11-11T11:00:00Z", 99)];
 
-    expect(lines(read([head(redThenGreen)]))).toEqual([expect.stringContaining(`\`ci\` has both failed and passed on ${short}, the head the Reviewer passed`)]);
+    expect(lines(read([head(redThenGreen)]))).toEqual([expect.stringContaining(`\`ci\` has both failed and succeeded on ${short}, the head the Reviewer passed`)]);
   });
 
   it("comments on the check's open Flaky check issue rather than filing another", () => {
@@ -222,7 +222,7 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
     expect(lines(read([head(greenThenRed, { marks: [{ headSha: "d".repeat(40), checks: ["ci"] }] })]))).toHaveLength(1);
   });
 
-  it("says nothing of a check that went green only by being skipped or neutral", () => {
+  it("says nothing of a check that passed only by being skipped or neutral", () => {
     const skipped = [run("ci", "skipped", "2026-11-11T09:00:00Z", 70), run("ci", "failure", "2026-11-11T11:00:00Z", 99)];
     const neutral = [run("ci", "neutral", "2026-11-11T09:00:00Z", 70), run("ci", "failure", "2026-11-11T11:00:00Z", 99)];
 
@@ -253,6 +253,14 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
     const kinds = swept(read([head(greenThenRed)])).map((action) => action.kind);
 
     expect(new Set(kinds)).toEqual(new Set(["create-issue", "comment-linking"]));
+  });
+
+  it("files a separate issue for each check when the count-back sweep and this read each find one on the same head", () => {
+    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["e2e"], checkRuns: [run("e2e", "failure", "2026-11-11T09:00:00Z", 60), run("e2e", "success", "2026-11-11T10:00:00Z", 61)] };
+    const created = swept(read([head(greenThenRed)], [flaw])).flatMap((action) => (action.kind === "create-issue" ? [action.key] : []));
+
+    expect(created).toHaveLength(2);
+    expect(new Set(created).size).toBe(2);
   });
 
   it("leaves the count-back sweep as it was, and says a check it counts back on that head once", () => {

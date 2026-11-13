@@ -621,7 +621,7 @@ export async function gatherSnapshot(
         : null;
   // The tick counts back an Execution flaw whose checks have since passed on its head (#462).
   const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests) : null;
-  // And reports a Required check that has both failed and passed on a head the Reviewer passed, at the Merge gate (#693).
+  // And reports a Required check that has both failed and succeeded on a head the Reviewer passed, at the Merge gate (#693).
   const passedHeads = event.kind === "scheduled-tick" && conflicts !== null ? await gatherPassedHeads(github, repo, conflicts.pullRequests) : null;
   // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480).
   const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;

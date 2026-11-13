@@ -3764,8 +3764,14 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
     expect(paths()).toEqual([`/repos/acme/shop/commits/${HEAD_SHA}/check-runs?filter=all&per_page=100&page=1`]);
   });
 
-  it("reads no draft, no PR whose head moved after its pass, and none without a pass", async () => {
-    const { github, paths } = githubHolding([node(50, [pass(HEAD_SHA)], { isDraft: true }), node(51, [pass(OLDER)]), node(52, [])]);
+  it("reads no draft, no closed or merged PR, no PR whose head moved after its pass, and none without a pass", async () => {
+    const { github, paths } = githubHolding([
+      node(50, [pass(HEAD_SHA)], { isDraft: true }),
+      node(51, [pass(OLDER)]),
+      node(52, []),
+      node(53, [pass(HEAD_SHA)], { state: "CLOSED" }),
+      node(54, [pass(HEAD_SHA)], { state: "MERGED" }),
+    ]);
 
     const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
 
