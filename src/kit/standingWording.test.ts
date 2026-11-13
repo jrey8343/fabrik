@@ -55,6 +55,41 @@ describe("the wording of a Standing", () => {
     expect(wordStanding(atTheGate, minutesAfter(3 * 60), ZONE).sentence).toBe("Passed Review 3 hours ago and is waiting for your merge.");
   });
 
+  describe("an agent PR at the Merge gate by the Required checks on its head (#564)", () => {
+    const head = "h".repeat(40);
+    const atTheGateWith = (checks: RequiredChecksFact): Standing => {
+      const kit = { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks: { [head]: checks } } as const;
+      const github = factsOf({ openPullRequests: [anOpenPullRequest({ draft: false, headSha: head, comments: [aVerdictComment("pass", head, SINCE)] })] });
+      const [standing] = standingsOf(standingFactsOf({ github, kit }), minutesAfter(60));
+      if (standing === undefined) throw new Error("expected a Standing");
+      return standing;
+    };
+
+    it("says a failing check is failing on the head the Reviewer passed, aged from the pass", () => {
+      expect(wordStanding(atTheGateWith([{ name: "ci", is: "failing", at: minutesAfter(60) }]), minutesAfter(3 * 60), ZONE)).toEqual({
+        pill: "ci",
+        sentence: "`ci` is failing on the head the Reviewer passed 3 hours ago.",
+        remedy: null,
+      });
+    });
+
+    it("says a check never reported has not reported on the head the Reviewer passed", () => {
+      expect(wordStanding(atTheGateWith([{ name: "ci", is: "never-reported" }]), minutesAfter(40), ZONE)).toEqual({
+        pill: "ci",
+        sentence: "`ci` has not reported on the head the Reviewer passed 40 minutes ago.",
+        remedy: null,
+      });
+    });
+
+    it("says it waits on a running check on the head the Reviewer passed, not that its Review waits", () => {
+      expect(wordStanding(atTheGateWith([{ name: "ci", is: "running", at: minutesAfter(30) }]), minutesAfter(40), ZONE)).toEqual({
+        pill: "Waiting on checks",
+        sentence: "Waiting on `ci`, running on the head the Reviewer passed 40 minutes ago.",
+        remedy: null,
+      });
+    });
+  });
+
   it("says work handed back with ready-for-human, a PR or an issue, is yours to do", () => {
     const handedBack = theStandingIn({
       openPullRequests: [

@@ -102,8 +102,8 @@ export async function gatherEveryRepoFacts(
 }
 
 /**
- * The Required checks on each of these heads, its open Plain pull requests',
- * by sha: each check the Kit config lists (`listedChecks`, its
+ * The Required checks on each of these heads, its open Plain pull requests'
+ * and its agent pull requests' at the Merge gate (#564), by sha: each check the Kit config lists (`listedChecks`, its
  * `sandbox.checks`), in its order, judged from the check runs on the head as
  * the Review's wait judges them (requiredChecksOutcome). Read with a token
  * holding Checks read. With no checks listed it reads nothing, every head left

@@ -81,6 +81,93 @@ describe("the Standing rule", () => {
       anOpenPullRequest({ number, ticket: number - 50, draft: false, comments: [passed], ...overrides });
     const namesIn = (standings: readonly Standing[]) => standings.map(({ pullRequest, name }) => ({ pullRequest, name }));
 
+    describe("by the Required checks on its head (#564)", () => {
+      const withChecks = (headChecks: RepoKitFacts["headChecks"]) =>
+        ({ kit: { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks } }) as const;
+      const atTheGateWith = (checks: RepoKitFacts["headChecks"][string]) => standingsIn({ openPullRequests: [atTheGate(60)] }, withChecks({ [HEAD]: checks }));
+      const fieldsOf = ({ pullRequest, issue, place, name, move, yours, stopsWork, since, detail }: Standing) => ({ pullRequest, issue, place, name, move, yours, stopsWork, since, detail });
+
+      it("stands as check-failing, stopping work, since the failing report, naming the check and keeping the pass", () => {
+        const standings = atTheGateWith([
+          { name: "lint", is: "passed", at: "2026-11-05T19:00:00Z" },
+          { name: "ci", is: "failing", at: "2026-11-06T08:00:00Z" },
+        ]);
+        expect(standings.map(fieldsOf)).toEqual([
+          {
+            pullRequest: 60,
+            issue: 10,
+            place: "merge-gate",
+            name: "check-failing",
+            move: "operator",
+            yours: true,
+            stopsWork: true,
+            since: "2026-11-06T08:00:00Z",
+            detail: { plain: null, check: "ci", checkIs: "failing", passedAt: "2026-11-05T20:00:00Z", head: HEAD },
+          },
+        ]);
+      });
+
+      it("stands as check-failing, stopping work, since the pass, for a Required check never reported on its head", () => {
+        expect(atTheGateWith([{ name: "ci", is: "never-reported" }]).map(fieldsOf)).toEqual([
+          expect.objectContaining({
+            name: "check-failing",
+            move: "operator",
+            stopsWork: true,
+            since: "2026-11-05T20:00:00Z",
+            detail: { plain: null, check: "ci", checkIs: "never-reported", passedAt: "2026-11-05T20:00:00Z", head: HEAD },
+          }),
+        ]);
+      });
+
+      it("waits on a running Required check, the Kit's move and stopping nothing, since the pass, with no run awaited", () => {
+        const [standing] = atTheGateWith([{ name: "ci", is: "running", at: "2026-11-07T08:00:00Z" }]);
+        expect(standing).toEqual(
+          expect.objectContaining({
+            place: "merge-gate",
+            name: "waiting-on-checks",
+            move: "kit",
+            yours: false,
+            stopsWork: false,
+            since: "2026-11-05T20:00:00Z",
+            awaits: null,
+            stuckAt: null,
+            detail: { plain: null, check: "ci", checksUnread: false, passedAt: "2026-11-05T20:00:00Z", head: HEAD },
+          }),
+        );
+      });
+
+      it("reads a failing check before a running one, and a running one before one never reported", () => {
+        const failing = atTheGateWith([
+          { name: "a", is: "never-reported" },
+          { name: "b", is: "running" },
+          { name: "c", is: "failing", at: "2026-11-06T08:00:00Z" },
+        ]);
+        const running = atTheGateWith([
+          { name: "a", is: "never-reported" },
+          { name: "b", is: "running" },
+        ]);
+        expect([...failing, ...running].map(({ name, detail }) => ({ name, check: "check" in detail ? detail.check : null }))).toEqual([
+          { name: "check-failing", check: "c" },
+          { name: "waiting-on-checks", check: "b" },
+        ]);
+      });
+
+      it("stays yours to merge, since the pass, with every check passed, none required, or its checks unread", () => {
+        const yoursToMerge = expect.objectContaining({ name: "yours-to-merge", stopsWork: true, since: "2026-11-05T20:00:00Z", detail: { plain: null, head: HEAD } });
+        expect(atTheGateWith([{ name: "ci", is: "passed", at: "2026-11-07T08:00:00Z" }])).toEqual([yoursToMerge]);
+        expect(atTheGateWith([])).toEqual([yoursToMerge]);
+        expect(standingsIn({ openPullRequests: [atTheGate(60)] }, withChecks({}))).toEqual([yoursToMerge]);
+        expect(standingsIn({ openPullRequests: [atTheGate(60)] }, withChecks({ [HEAD]: "unread" }))).toEqual([yoursToMerge]);
+      });
+
+      it("leaves an agent draft waiting on its Review's checks as it was, whatever its head's checks", () => {
+        const draft = anOpenPullRequest({ number: 60, ticket: 10, draft: true, headSha: HEAD });
+        const runsInFlight = [aRunInFlight({ role: "review", job: "waiting-on-checks", createdAt: "2026-11-08T19:00:00Z" })];
+        const [standing] = standingsIn({ openPullRequests: [draft] }, { kit: { ...withChecks({ [HEAD]: [{ name: "ci", is: "failing", at: "2026-11-08T19:30:00Z" }] }).kit, runsInFlight } });
+        expect(standing).toEqual(expect.objectContaining({ place: "review", name: "waiting-on-checks", detail: { plain: null, check: null, checksUnread: false, head: HEAD } }));
+      });
+    });
+
     it("leaves an agent PR yours to merge after the Operator's comment or approving review, which the Kit never acts on (ADR-0007)", () => {
       const standings = standingsIn({
         openPullRequests: [
@@ -1223,13 +1310,15 @@ describe("a Standing, as plain data", () => {
       // `detail.head` is on a Standing with an open pull request only: the fixture's is matched by whether it has one.
       // `detail.passed` is on a passed draft waiting on its Digest only: the fixture's is matched by whether it has it.
       // `detail.mergeGate` is on a Ticket caps.merge_gate holds only (#459): the fixture's is matched by whether it has it.
+      // `detail.passedAt` is on an agent pull request at the Merge gate whose checks aren't all passed only (#564): likewise.
       const standing = all().find(
         (read) =>
           read.name === name &&
           (was === undefined || ("was" in read.detail && read.detail.was === was)) &&
           (read.pullRequest === null) === (kept["pullRequest"] === null) &&
           "passed" in read.detail === "passed" in (kept.detail as object) &&
-          "mergeGate" in read.detail === "mergeGate" in (kept.detail as object),
+          "mergeGate" in read.detail === "mergeGate" in (kept.detail as object) &&
+          "passedAt" in read.detail === "passedAt" in (kept.detail as object),
       );
       if (standing === undefined) throw new Error(`no test above produces a ${name} Standing`);
       expect(Object.keys(kept).toSorted()).toEqual(Object.keys(standing).toSorted());

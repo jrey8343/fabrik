@@ -91,19 +91,58 @@ describe("the join of kept rows with a Required checks read", () => {
     }
   });
 
-  it("leaves an agent row as it was: a red check at the Merge gate changes no Standing", () => {
-    const facts = homeFactsOf({
-      github: factsOf({
-        openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })],
-        openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: head("1"), comments: [aVerdictComment("pass", head("1"), "2026-11-11T20:00:00Z")] })],
-      }),
+  describe("an agent row at the Merge gate takes the name the rule gives for the fresh checks on its head (#564)", () => {
+    const PASSED_AT = "2026-11-11T20:00:00Z";
+    const agentFacts = (overrides: Parameters<typeof anOpenPullRequest>[0] = {}) =>
+      homeFactsOf({
+        github: factsOf({
+          openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })],
+          openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: head("1"), comments: [aVerdictComment("pass", head("1"), PASSED_AT)], ...overrides })],
+        }),
+      });
+    const named = (rows: readonly Row[]) => rows.map(({ standing }) => [standing.pullRequest, standing.place, standing.name, standing.stopsWork, standing.since]);
+
+    it("yours to merge, comes back named for the failing check, stopping work, since it failed", () => {
+      const { kept, joined, rule } = joinedAndRule(agentFacts(), ALL_PASSED, LINT_FAILED);
+
+      expect(named(kept)).toEqual([[50, "merge-gate", "yours-to-merge", true, PASSED_AT]]);
+      expect(named(joined)).toEqual([[50, "merge-gate", "check-failing", true, "2026-11-12T09:42:00Z"]]);
+      expect(joined[0]?.standing.detail).toEqual({ plain: null, check: "lint", checkIs: "failing", passedAt: PASSED_AT, head: head("1") });
+      expect(joined).toEqual(rule);
     });
 
-    const { kept, joined, rule } = joinedAndRule(facts, ALL_PASSED, LINT_FAILED);
+    it("check failing, comes back yours to merge once every check has passed again, since the pass, not the re-run", () => {
+      const { kept, joined, rule } = joinedAndRule(agentFacts(), LINT_FAILED, ALL_PASSED);
 
-    expect(kept.map(({ standing }) => [standing.pullRequest, standing.place, standing.name])).toEqual([[50, "merge-gate", "yours-to-merge"]]);
-    expect(joined).toEqual(kept);
-    expect(joined).toEqual(rule);
+      expect(named(kept)).toEqual([[50, "merge-gate", "check-failing", true, "2026-11-12T09:42:00Z"]]);
+      expect(named(joined)).toEqual([[50, "merge-gate", "yours-to-merge", true, PASSED_AT]]);
+      expect(joined[0]?.standing.detail).toEqual({ plain: null, head: head("1") });
+      expect(joined).toEqual(rule);
+    });
+
+    it("check failing, comes back waiting on a re-run check, the Kit's and stopping nothing, since the pass", () => {
+      const rerunning = aChecksRead({ [head("1")]: [check("test", "passed", "2026-11-12T09:00:00Z"), check("lint", "running", "2026-11-12T09:50:00Z")] });
+
+      const { joined, rule } = joinedAndRule(agentFacts(), LINT_FAILED, rerunning);
+
+      expect(named(joined)).toEqual([[50, "merge-gate", "waiting-on-checks", false, PASSED_AT]]);
+      expect(joined[0]?.standing).toMatchObject({ move: "kit", yours: false, awaits: null });
+      expect(joined).toEqual(rule);
+    });
+
+    it("leaves an agent draft and one handed back at the Merge gate as they were", () => {
+      const cases = [
+        { facts: agentFacts({ draft: true }), place: "review" },
+        { facts: agentFacts({ labelEvents: [aLabelAdded("ready-for-human", "2026-11-12T08:00:00Z")] }), place: "merge-gate", name: "yours-to-do" },
+      ];
+      for (const { facts, ...was } of cases) {
+        const { kept, joined, rule } = joinedAndRule(facts, ALL_PASSED, LINT_FAILED);
+
+        expect(kept[0]?.standing).toMatchObject(was);
+        expect(joined).toEqual(kept);
+        expect(joined).toEqual(rule);
+      }
+    });
   });
 
   it("leaves a row whose head the read does not hold, or holds as unread, as it was", () => {

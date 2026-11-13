@@ -123,23 +123,20 @@ export function plainSinceOf({ createdAt, headCommittedAt, draftChangedAt }: Pla
 export type PlainName = { [N in PlainNames]: Pick<StandingNamed<N>, "name" | "move" | "yours" | "detail"> }[PlainNames];
 type PlainNames = "draft" | "conflicts" | "check-failing" | "waiting-on-checks" | "yours-to-merge";
 
-/** A Plain pull request's name for its Required checks alone: never a draft, nor one in conflict. */
-export type PlainChecksName = Exclude<PlainName, { readonly name: "draft" | "conflicts" }>;
-
 /**
  * Its name, the first that holds: a draft; one that cannot merge cleanly (one
  * GitHub hasn't worked out merges cleanly); else its name for its Required
- * checks (plainNameForChecks), with when the report that decided it was made.
+ * checks (nameForChecks), with when the report that decided it was made.
  */
 function plainNameOf({ draft, mergeable }: PlainPullRequestFacts, plain: PlainKind, checks: RequiredChecksFact): PlainName & { readonly decidedAt: string | null } {
   if (draft) return { name: "draft", move: "nobody", yours: false, detail: { plain }, decidedAt: null };
   if (mergeable === false) return { name: "conflicts", move: "operator", yours: true, detail: { plain }, decidedAt: null };
-  const { name, decidedAt } = plainNameForChecks(plain, checks);
+  const { name, decidedAt } = nameForChecks(plain, checks);
   return { ...name, decidedAt };
 }
 
 /**
- * The name of a Plain pull request out of draft and merging cleanly, for the
+ * The name of a pull request out of draft and merging cleanly, for the
  * Required checks on its head, the first that holds: a Required check
  * failing; one running; one never reported on its head; else ready, every one
  * passed, an empty list (none required) included. A running check comes
@@ -148,8 +145,10 @@ function plainNameOf({ draft, mergeable }: PlainPullRequestFacts, plain: PlainKi
  * none, it waits on checks it could not read: never ready. `decidedAt` is
  * when the report that decided it was made, where the fact gives it: the
  * check it names, or the last to pass; null when no report decided it.
+ * `plain` is the Plain pull request's kind, or null for an agent pull
+ * request, which mergeGateNameForChecks reads it for.
  */
-export function plainNameForChecks(plain: PlainKind, checks: RequiredChecksFact): { readonly name: PlainChecksName; readonly decidedAt: string | null } {
+export function nameForChecks(plain: PlainKind | null, checks: RequiredChecksFact): { readonly name: ChecksName; readonly decidedAt: string | null } {
   const operators = { move: "operator", yours: true } as const;
   if (checks === "unread") return { name: { name: "waiting-on-checks", move: "kit", yours: false, detail: { plain, check: null, checksUnread: true } }, decidedAt: null };
   const first = (is: RequiredCheckFact["is"]) => checks.find((check) => check.is === is);
@@ -160,6 +159,37 @@ export function plainNameForChecks(plain: PlainKind, checks: RequiredChecksFact)
   const unreported = first("never-reported");
   if (unreported !== undefined) return { name: { name: "check-failing", ...operators, detail: { plain, check: unreported.name, checkIs: "never-reported" } }, decidedAt: null };
   return { name: { name: "yours-to-merge", ...operators, detail: { plain } }, decidedAt: lastPassedAt(checks) };
+}
+
+/** A pull request's name for its Required checks alone, a Plain one's or an agent one's: never a draft, nor one in conflict. */
+export type ChecksName = { [N in ChecksNames]: Pick<StandingNamed<N>, "name" | "move" | "yours" | "detail"> }[ChecksNames];
+type ChecksNames = "check-failing" | "waiting-on-checks" | "yours-to-merge";
+
+/** An agent pull request's Merge-gate name for its checks, with the fields that go with it. */
+export type MergeGateChecksName = ChecksName & { readonly stopsWork: boolean; readonly since: string };
+
+/**
+ * The name of an agent pull request at the Merge gate, passed at `passedAt`,
+ * for the Required checks on its head (#564), by the order a Plain one's are
+ * read in (nameForChecks). Unlike a Plain one's, a failing or unreported
+ * check stops work: it is out of draft, counted at the gate, and GitHub won't
+ * merge it. A failing check stands since its report, else since the pass;
+ * all passed, none required, or the checks unread, it is yours to merge,
+ * since the pass, as before its checks were read. A red or running name
+ * keeps `passedAt`, the time it goes back to once they pass again.
+ */
+export function mergeGateNameForChecks(checks: RequiredChecksFact, passedAt: string): MergeGateChecksName {
+  const ready = { name: "yours-to-merge", move: "operator", yours: true, stopsWork: true, since: passedAt, detail: { plain: null } } as const;
+  if (checks === "unread") return ready;
+  const { name, decidedAt } = nameForChecks(null, checks);
+  switch (name.name) {
+    case "yours-to-merge":
+      return ready;
+    case "check-failing":
+      return { ...name, stopsWork: true, since: name.detail.checkIs === "failing" ? (decidedAt ?? passedAt) : passedAt, detail: { ...name.detail, passedAt } };
+    case "waiting-on-checks":
+      return { ...name, stopsWork: false, since: passedAt, detail: { ...name.detail, passedAt } };
+  }
 }
 
 /** When the last of these passed checks passed, or null when there are none or one gives no time. */

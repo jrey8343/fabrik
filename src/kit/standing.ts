@@ -110,7 +110,12 @@ export interface StandingDetails {
    * the Reviewer's pass is given, and the run is what the Merge gate waits on.
    */
   readonly running: { readonly run: string; readonly retry: number | null; readonly actionsRun: number; readonly passed?: true };
-  readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean };
+  /**
+   * `plain` is null for an agent pull request: an agent draft whose Review
+   * waits on its checks, or one at the Merge gate whose Required check is
+   * running (#564), which alone carries `passedAt`, when the Reviewer passed its head.
+   */
+  readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean; readonly passedAt?: string };
   /**
    * A Held run's role and the Carrier its newest held marker is on; or, for an
    * Audit or Retro week given up, its failed runs, oldest first, and when the
@@ -142,7 +147,12 @@ export interface StandingDetails {
   readonly "yours-to-read": { readonly map: number | null; readonly decisions: readonly number[] };
   /** Nothing yet, until the rule builds one. */
   readonly parked: Readonly<Record<never, never>>;
-  readonly "check-failing": { readonly plain: PlainKind; readonly check: string; readonly checkIs: "failing" | "never-reported" };
+  /**
+   * `plain` is null for an agent pull request at the Merge gate (#564), which
+   * alone carries `passedAt`, when the Reviewer passed its head: the time it
+   * goes back to once its checks pass again.
+   */
+  readonly "check-failing": { readonly plain: PlainKind | null; readonly check: string; readonly checkIs: "failing" | "never-reported"; readonly passedAt?: string };
   readonly conflicts: { readonly plain: PlainKind };
   readonly draft: { readonly plain: PlainKind };
   readonly blocked: { readonly blockers: readonly number[] };
