@@ -80,8 +80,8 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       const { plain, check, checksUnread, passedAt } = standing.detail;
       const sentence =
         // An agent PR at the Merge gate (#564), whose Review is done: not an agent draft's, whose Review waits.
-        passedAt !== undefined
-          ? `Waiting on \`${check}\`, running on the head the Reviewer passed ${ageSince(passedAt, now)} ago.`
+        standing.place === "merge-gate"
+          ? `Waiting on \`${check}\`, running on the head the Reviewer passed ${ageSince(passedAt ?? standing.since, now)} ago.`
           : plain === null
             ? "Its Review is waiting for the Required checks on its head."
             : checksUnread
@@ -168,8 +168,8 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     case "check-failing": {
       const { check, checkIs, passedAt } = standing.detail;
       // An agent PR at the Merge gate (#564): its head is the one the Reviewer passed.
-      if (passedAt !== undefined) {
-        const passed = `the head the Reviewer passed ${ageSince(passedAt, now)} ago`;
+      if (standing.place === "merge-gate") {
+        const passed = `the head the Reviewer passed ${ageSince(passedAt ?? standing.since, now)} ago`;
         return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing on ${passed}.` : `\`${check}\` has not reported on ${passed}.`, remedy: null };
       }
       return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing.` : `\`${check}\` has not reported on its head.`, remedy: null };

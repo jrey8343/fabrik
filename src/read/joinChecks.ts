@@ -1,10 +1,10 @@
 // The join with checks (#622): a repo's kept rows settled against a fresh
-// Required checks read, with no gather. A check finishing prompts only a
-// checks read, and a Plain row's name hangs on its checks, so a Plain row
-// moves to the Operator's when its last check passes; so does an agent row's
-// at the Merge gate (#564), which turns red when a check fails there. Pure, no I/O. It agrees
-// with the rule: for the same facts, the rows the rule gives with a later
-// checks read (rowsOf) equal the kept rows joined with that read.
+// Required checks read, with no gather. A check finishing prompts only a checks
+// read, and a Plain row's name hangs on its checks, so a Plain row moves to the
+// Operator's when its last check passes; so does an agent row's at the Merge
+// gate (#564), which turns red when a check fails there. Pure, no I/O. It
+// agrees with the rule: for the same facts, the rows the rule gives with a
+// later checks read (rowsOf) equal the kept rows joined with that read.
 import { type Standing, standingAt } from "../kit/standing.ts";
 import { joined, mergeGateNameForChecks, nameForChecks } from "../kit/standingPlain.ts";
 import { requiredChecksFactOf, type RequiredChecksRead } from "./requiredChecks.ts";
@@ -16,14 +16,14 @@ import { type Row, withOwnSettled } from "./rows.ts";
  * in conflict takes the name the rule gives for the fresh checks on its head,
  * since the report that decided it; when no report did, as for a check never
  * reported or a branch requiring none, since the pull request's own time the
- * row carries (Row's `plainPullRequest`). A Pairing session's pull request joined to its
- * issue's row is settled the same way inside that row. An agent row at the
- * Merge gate, yours to merge or named for its checks, takes the name the rule
- * gives it for them (mergeGateNameForChecks, #564), going back to the pass
- * time it keeps once they pass again; an agent draft, and one handed back at
- * the Merge gate, are left as they were. A head the read does not hold, or
- * holds as unread, leaves its row as it was. Every row is read at `now` as
- * the rule reads a kept Standing (standingAt).
+ * row carries (Row's `plainPullRequest`). A Pairing session's pull request
+ * joined to its issue's row is settled the same way inside that row. An agent
+ * row at the Merge gate, yours to merge or named for its checks, takes the name
+ * the rule gives it for them (mergeGateNameForChecks, #564), going back to the
+ * pass time it keeps once they pass again; an agent draft, and one handed back
+ * at the Merge gate, are left as they were. A head the read does not hold, or
+ * holds as unread, leaves its row as it was. Every row is read at `now` as the
+ * rule reads a kept Standing (standingAt).
  */
 export function joinChecks(rows: readonly Row[], read: RequiredChecksRead, now: string): Row[] {
   return rows.map((row) => {

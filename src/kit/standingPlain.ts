@@ -162,8 +162,7 @@ export function nameForChecks(plain: PlainKind | null, checks: RequiredChecksFac
 }
 
 /** A pull request's name for its Required checks alone, a Plain one's or an agent one's: never a draft, nor one in conflict. */
-export type ChecksName = { [N in ChecksNames]: Pick<StandingNamed<N>, "name" | "move" | "yours" | "detail"> }[ChecksNames];
-type ChecksNames = "check-failing" | "waiting-on-checks" | "yours-to-merge";
+export type ChecksName = Exclude<PlainName, { readonly name: "draft" | "conflicts" }>;
 
 /** An agent pull request's Merge-gate name for its checks, with the fields that go with it. */
 export type MergeGateChecksName = ChecksName & { readonly stopsWork: boolean; readonly since: string };

@@ -187,14 +187,14 @@ async function readLoopHealth(repos: readonly Repo[], appLogin: string, now: num
 }
 
 /**
- * One Product repo's Kit config at its default branch's head, read and
- * resolved as the Loop reads it, and, when it's valid, what a Dispatch check
- * weighs there (#476), with the runs in flight, read once whatever the Kit
- * config (#606), and the Required checks it lists on each of `heads`: the
- * open Plain pull requests' and the agent pull requests' at the Merge gate (#564). Null for a repo with no default branch yet. The runs are
- * unread when the Actions token wasn't minted or GitHub wouldn't list them;
- * the checks are unread when the Ticks token, the one holding Checks read,
- * wasn't minted.
+ * One Product repo's Kit config at its default branch's head, read and resolved
+ * as the Loop reads it, and, when it's valid, what a Dispatch check weighs
+ * there (#476), with the runs in flight, read once whatever the Kit config
+ * (#606), and the Required checks it lists on each of `heads`: the open Plain
+ * pull requests' and the agent pull requests' at the Merge gate (#564). Null
+ * for a repo with no default branch yet. The runs are unread when the Actions
+ * token wasn't minted or GitHub wouldn't list them; the checks are unread when
+ * the Ticks token, the one holding Checks read, wasn't minted.
  */
 async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo, appLogin: string, checks: GitHub | null, heads: readonly string[]): Promise<RepoKitFacts | null> {
   const branch = await defaultBranchOf(products, repo);
