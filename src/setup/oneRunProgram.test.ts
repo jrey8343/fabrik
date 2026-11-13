@@ -643,6 +643,53 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     });
   });
 
+  describe("the closing lines' Then list, with the Product's own Kit config", () => {
+    const THEN = {
+      checks: "- List the CI checks",
+      extraSkills: "- To give roles Extra skills",
+      monitor: "- The Monitor files an issue",
+      visualEvidence: "- With Visual evidence on",
+    };
+    const thenOf = (said: string[]) => said.slice(said.indexOf("Then:") + 1);
+    const ownKitConfig = async (config: object) => {
+      await mkdir(join(checkout, ".fabrik"));
+      await writeFile(join(checkout, ".fabrik", "config.json"), `${JSON.stringify(config, null, 2)}\n`);
+      git("add", ".fabrik/config.json");
+      git("commit", "-q", "-m", "Our Kit config");
+      git("push", "-q", "origin", "main");
+    };
+    const storesTheSentryToken: Wizard = async (world, wizardEnv) => {
+      await walksEveryStage(world, wizardEnv);
+      store(world, "Fabrik App", "Sentry token");
+    };
+
+    it("leaves out the notes for the checks branch protection now requires, the Sentry token stored and ui set, from the setup branch's Kit config", async () => {
+      await ownKitConfig({
+        sandbox: { checks: ["gate"] },
+        monitor: { errors: { provider: "sentry", org: "acme", project: "clinic" } },
+        ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" },
+      });
+      const world = aWorld();
+
+      const { code, said } = await setupOnce(world, { wizard: storesTheSentryToken });
+
+      expect(code).toBe(0);
+      const then = thenOf(said);
+      expect(then.some((line) => line.startsWith(THEN.checks))).toBe(false);
+      expect(then.some((line) => line.startsWith(THEN.monitor))).toBe(false);
+      expect(then.some((line) => line.startsWith(THEN.visualEvidence))).toBe(false);
+      expect(then.some((line) => line.startsWith(THEN.extraSkills))).toBe(true);
+      expect(then.some((line) => line.startsWith("- Running setup again repairs the install"))).toBe(true);
+    });
+
+    it("gives every note on a fresh repo, whose starter Kit config lists no checks, no Sentry project and no ui", async () => {
+      const { code, said } = await setupOnce(aWorld());
+
+      expect(code).toBe(0);
+      for (const start of Object.values(THEN)) expect(thenOf(said).some((line) => line.startsWith(start))).toBe(true);
+    });
+  });
+
   it("a second run after the wizard stopped partway reuses the branch and PR, applies nothing again, and then asks for the merge", async () => {
     const world = aWorld();
     await setupOnce(world, { wizard: skipsTheClaudeToken });

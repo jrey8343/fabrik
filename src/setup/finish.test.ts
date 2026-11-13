@@ -3,7 +3,8 @@
 // holds it back.
 import { describe, expect, it } from "vitest";
 import { closingLines, prBody, setupCommand, withEarlierDone } from "./finish.ts";
-import type { RunSummary } from "./oneRun.ts";
+import { type BranchProtection, UNPROTECTED } from "./plan.ts";
+import { type RunSummary, stepsDone } from "./oneRun.ts";
 
 const SUMMARY: RunSummary = {
   done: ["write .github/workflows/fabrik.yml (the caller workflow)", "create the label needs-triage"],
@@ -132,6 +133,89 @@ describe("The closing lines", () => {
     const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: PAUSED }).join("\n");
 
     expect(text).toContain("- Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.");
+  });
+});
+
+describe("The closing lines' Then list, leaving out each step the Kit config and repo show done", () => {
+  const then = (summary: RunSummary) => {
+    const lines = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary });
+    return lines.slice(lines.indexOf("Then:") + 1);
+  };
+  const has = (summary: RunSummary, start: string) => then(summary).some((line) => line.startsWith(`- ${start}`));
+  const NOTES = {
+    checks: "List the CI checks",
+    extraSkills: "To give roles Extra skills",
+    monitor: "The Monitor files an issue",
+    visualEvidence: "With Visual evidence on",
+  } as const;
+
+  it.each(Object.entries(NOTES))("leaves out the %s note when that step is done, and gives it when it isn't", (step, start) => {
+    expect(has({ ...SUMMARY, alreadyDone: { [step]: true } }, start)).toBe(false);
+    expect(has({ ...SUMMARY, alreadyDone: { [step]: false } }, start)).toBe(true);
+    expect(has(SUMMARY, start)).toBe(true);
+  });
+
+  it("always gives the Weekly summary and repair notes, and the paused-Dispatch note as before", () => {
+    const allDone = { checks: true, extraSkills: true, monitor: true, visualEvidence: true };
+    const lines = then({ ...PAUSED, alreadyDone: allDone });
+
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^- Once the Fabrik App is on fabrik-runs/);
+    expect(lines[1]).toMatch(/^- Dispatch is paused/);
+    expect(lines[2]).toMatch(/^- Running setup again repairs the install/);
+    expect(then({ ...SUMMARY, alreadyDone: allDone })).toHaveLength(2);
+  });
+});
+
+describe("The steps the setup branch's Kit config and the repo show done", () => {
+  const SHA = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d";
+  const LOCK = JSON.stringify([{ repository: "acme/skills", sha: SHA }]);
+  const requiring = (...contexts: string[]): BranchProtection => ({
+    ...UNPROTECTED,
+    required_status_checks: { strict: true, checks: contexts.map((context) => ({ context })) },
+  });
+  const facts = (config: object | string | null, { skillsLock = null as string | null, protection = null as BranchProtection | null, appItems = [] as string[] } = {}) =>
+    stepsDone({ kitConfig: typeof config === "object" && config !== null ? JSON.stringify(config) : config, skillsLock, protection, appItems });
+
+  it("has the checks done once sandbox.checks lists checks the default branch requires, every one", () => {
+    const config = { sandbox: { checks: ["gate"] } };
+    expect(facts(config, { protection: requiring("gate", "lint") }).checks).toBe(true);
+    expect(facts(config, { protection: requiring("lint") }).checks).toBe(false);
+    expect(facts(config, { protection: null }).checks).toBe(false);
+    expect(facts({ sandbox: { checks: [] } }, { protection: requiring("gate") }).checks).toBe(false);
+  });
+
+  it("has the Extra skills done once the lockfile pins a source and some role picks skills", () => {
+    const picks = { roles: { design: { skills: ["acme/skills/event-storming"] } } };
+    expect(facts(picks, { skillsLock: LOCK }).extraSkills).toBe(true);
+    expect(facts({}, { skillsLock: LOCK }).extraSkills).toBe(false);
+    expect(facts({}, { skillsLock: "[]" }).extraSkills).toBe(false);
+    expect(facts({}).extraSkills).toBe(false);
+  });
+
+  it("has the Monitor done once monitor.errors names a provider and the Fabrik App vault holds the Sentry token", () => {
+    const sentry = { monitor: { errors: { provider: "sentry", org: "acme", project: "clinic" } } };
+    expect(facts(sentry, { appItems: ["Fabrik App", "Sentry token"] }).monitor).toBe(true);
+    expect(facts(sentry, { appItems: ["Fabrik App"] }).monitor).toBe(false);
+    expect(facts({ monitor: { errors: null } }, { appItems: ["Sentry token"] }).monitor).toBe(false);
+  });
+
+  it("has Visual evidence done once ui is set", () => {
+    expect(facts({ ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321" } }).visualEvidence).toBe(true);
+    expect(facts({ ui: null }).visualEvidence).toBe(false);
+  });
+
+  it.each([
+    ["invalid", '{ "sandbox": { "checks": ["gate"] }, "ui": false }'],
+    ["unreadable", "{ not json"],
+    ["missing", null],
+  ])("with a Kit config that's %s, has nothing done", (_, config) => {
+    expect(facts(config, { skillsLock: LOCK, protection: requiring("gate"), appItems: ["Sentry token"] })).toEqual({
+      checks: false,
+      extraSkills: false,
+      monitor: false,
+      visualEvidence: false,
+    });
   });
 });
 

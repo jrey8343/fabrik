@@ -2,7 +2,7 @@
 // lines in the Operator's terminal. Both ask for the merge only when nothing
 // holds it back, and the closing lines give the finishing guidance the
 // Operator needs once setup has run.
-import type { RunSummary } from "./oneRun.ts";
+import type { RunSummary, StepsDone } from "./oneRun.ts";
 
 /** The command that runs setup, at this release. */
 export function setupCommand(release: string): string {
@@ -133,7 +133,7 @@ export function closingLines({ release, defaultBranch, url, summary }: ClosingIn
         ]),
     "",
     "Then:",
-    ...bullets(guidance(release, summary.pausesDispatch === true)),
+    ...bullets(guidance(release, summary.pausesDispatch === true, summary.alreadyDone ?? {})),
   ];
 }
 
@@ -162,23 +162,36 @@ function mergeAsk(who: string, defaultBranch: string): string {
   );
 }
 
-/** What the Operator does once setup has run. */
-function guidance(release: string, paused: boolean): string[] {
+/** What the Operator does once setup has run, leaving out each step the Kit config and the repo already show done. */
+function guidance(release: string, paused: boolean, done: StepsDone): string[] {
   const command = setupCommand(release);
+  const unless = (step: keyof StepsDone, note: string) => (done[step] === true ? [] : [note]);
   return [
-    "List the CI checks that must pass in sandbox.checks in .fabrik/config.json, and the Sandbox's setup, build and test commands. " +
-      `Then run setup again, so branch protection requires those checks: ${command}`,
+    ...unless(
+      "checks",
+      "List the CI checks that must pass in sandbox.checks in .fabrik/config.json, and the Sandbox's setup, build and test commands. " +
+        `Then run setup again, so branch protection requires those checks: ${command}`,
+    ),
     "Once the Fabrik App is on fabrik-runs, each agent run's push job writes its Run record there. " +
       "You can run the Weekly summary by hand from the Actions tab of fabrik-runs (Fabrik weekly summary, Run workflow) instead of waiting for Monday.",
-    'To give roles Extra skills from your own Skills sources, pin each source by hand in .fabrik/skills.lock.json ([{ "repository": "owner/name", "sha": "<full commit SHA>" }]). ' +
-      'Pick skills under roles.<role>.skills in .fabrik/config.json ("owner/name/skill", for triage, design, implement or review), and say when to use each in that phase\'s .fabrik/<phase>.md. ' +
-      "The README's Extra skills section has the details.",
-    "The Monitor files an issue for Triage when the default branch goes red, once the Fabrik App's Checks: read is accepted. " +
-      'It files one for each production error Sentry reports, once monitor.errors in .fabrik/config.json names the provider, org and project ({ "provider": "sentry", "org": "<org slug>", "project": "<project slug>" }) and 1Password holds the Sentry token. ' +
-      "Until then each source stays dormant, with a quiet note in the hourly tick's step summary. " +
-      `Once monitor.errors names it, running setup again walks the wizard's Sentry stage to store the token: ${command}`,
-    "With Visual evidence on, each PR whose diff touches ui.paths gets an evidence section linking an Evidence page of its screenshots, and the Reviewer sees them. " +
-      "Once the setup PR is merged, turn it on, or change its answers, by running /fabrik-visual-evidence in a Claude session in this repo.",
+    ...unless(
+      "extraSkills",
+      'To give roles Extra skills from your own Skills sources, pin each source by hand in .fabrik/skills.lock.json ([{ "repository": "owner/name", "sha": "<full commit SHA>" }]). ' +
+        'Pick skills under roles.<role>.skills in .fabrik/config.json ("owner/name/skill", for triage, design, implement or review), and say when to use each in that phase\'s .fabrik/<phase>.md. ' +
+        "The README's Extra skills section has the details.",
+    ),
+    ...unless(
+      "monitor",
+      "The Monitor files an issue for Triage when the default branch goes red, once the Fabrik App's Checks: read is accepted. " +
+        'It files one for each production error Sentry reports, once monitor.errors in .fabrik/config.json names the provider, org and project ({ "provider": "sentry", "org": "<org slug>", "project": "<project slug>" }) and 1Password holds the Sentry token. ' +
+        "Until then each source stays dormant, with a quiet note in the hourly tick's step summary. " +
+        `Once monitor.errors names it, running setup again walks the wizard's Sentry stage to store the token: ${command}`,
+    ),
+    ...unless(
+      "visualEvidence",
+      "With Visual evidence on, each PR whose diff touches ui.paths gets an evidence section linking an Evidence page of its screenshots, and the Reviewer sees them. " +
+        "Once the setup PR is merged, turn it on, or change its answers, by running /fabrik-visual-evidence in a Claude session in this repo.",
+    ),
     ...(paused
       ? [
           `${PAUSED} ` +

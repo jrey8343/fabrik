@@ -9,10 +9,12 @@ import { KIT_CONFIG_PATH, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../
 import { describeAction, writtenPaths } from "./apply.ts";
 import { appConfirmedIn, lastOfEach } from "./finish.ts";
 import {
+  type BranchProtection,
   CLAUDE_TOKEN_ITEM,
   FABRIK_APP_VAULT,
   FABRIK_VAULT,
   type ProductState,
+  requiredChecks,
   SECOND_SUBSCRIPTION,
   type SetupAction,
   type SetupAnswers,
@@ -74,6 +76,32 @@ export function wizardGaps(state: ProductState, answers: SetupAnswers, appItems:
   ];
 }
 
+/** What the setup PR merges and the repo hold, which the closing lines read to leave out the notes for steps already done. */
+export interface DoneSources {
+  /** The setup branch's Kit config, null when it has none. */
+  readonly kitConfig: string | null;
+  /** The setup branch's Skills sources lockfile, null when it has none. */
+  readonly skillsLock: string | null;
+  /** The default branch's protection, null when it has none. */
+  readonly protection: BranchProtection | null;
+  /** The "Fabrik App" vault's item titles. */
+  readonly appItems: readonly string[];
+}
+
+/** Which finishing steps are done. A Kit config that's invalid or unreadable shows none done. */
+export function stepsDone({ kitConfig, skillsLock, protection, appItems }: DoneSources): Required<StepsDone> {
+  const read = resolveKitConfig({ config: kitConfig, skillsLock });
+  if (!read.ok) return { checks: false, extraSkills: false, monitor: false, visualEvidence: false };
+  const { sandbox, skillsSources, extraSkills, monitor, ui } = read.config;
+  const required = protection === null ? [] : requiredChecks(protection);
+  return {
+    checks: sandbox.checks.length > 0 && sandbox.checks.every((check) => required.includes(check)),
+    extraSkills: skillsSources.length > 0 && Object.values(extraSkills).some((picked) => picked.length > 0),
+    monitor: monitor.errors !== null && appItems.includes(SENTRY_TOKEN_ITEM),
+    visualEvidence: ui !== null,
+  };
+}
+
 export interface AfterWizard {
   /** The Product repo, as owner/name. */
   readonly repo: string;
@@ -115,6 +143,20 @@ export interface RunSummary {
   readonly appInstalledOn?: string;
   /** Whether the Kit config the setup PR merges, the setup branch's, pauses Dispatch. */
   readonly pausesDispatch?: boolean;
+  /** Which finishing steps the Kit config the setup PR merges, and the repo, already show done, so the closing lines leave out their notes. Absent counts as not done. */
+  readonly alreadyDone?: StepsDone;
+}
+
+/** The finishing steps the closing lines give a note for, each true once the Kit config and the repo show it done. */
+export interface StepsDone {
+  /** sandbox.checks lists at least one check, and the default branch requires every one. */
+  readonly checks?: boolean;
+  /** The Skills sources lockfile pins a source, and some role has skills picked. */
+  readonly extraSkills?: boolean;
+  /** monitor.errors names a provider, and the "Fabrik App" vault holds the Sentry token. */
+  readonly monitor?: boolean;
+  /** The Kit config sets ui. */
+  readonly visualEvidence?: boolean;
 }
 
 export interface Published {
