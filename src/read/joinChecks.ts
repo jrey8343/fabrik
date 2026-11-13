@@ -20,7 +20,8 @@ import { type Row, withOwnSettled } from "./rows.ts";
  * joined to its issue's row is settled the same way inside that row. An agent
  * row at the Merge gate, yours to merge or named for its checks, takes the name
  * the rule gives it for them (mergeGateNameForChecks, #564), going back to the
- * pass time it keeps once they pass again; an agent draft, and one handed back
+ * pass time it keeps once they pass again, and keeping the head the Reviewer
+ * passed (#692); an agent draft, and one handed back
  * at the Merge gate, are left as they were. A head the read does not hold, or
  * holds as unread, leaves its row as it was. Every row is read at `now` as the
  * rule reads a kept Standing (standingAt).
@@ -40,9 +41,10 @@ function settledWith({ standing, plainPullRequest }: Row, read: RequiredChecksRe
   const checks = requiredChecksFactOf(read, head);
   if (checks === "unread") return standing;
   if (standing.detail.pullRequest !== undefined) return pairingSettled(standing, checks, head, plainPullRequest);
-  const passedAt = mergeGatePassOf(standing);
-  if (passedAt !== null) {
-    const name = mergeGateNameForChecks(checks, passedAt);
+  const pass = mergeGatePassOf(standing);
+  if (pass !== null) {
+    // A row kept before #692 carries no passedHead: the rule then counted a pass on its head alone.
+    const name = mergeGateNameForChecks(checks, pass.passedAt, pass.passedHead ?? head);
     return { ...standing, ...name, detail: { ...name.detail, head } } as Standing;
   }
   if (standing.work !== "plain" || standing.name === "draft" || standing.name === "conflicts" || !("plain" in standing.detail) || standing.detail.plain === null) return standing;
@@ -51,18 +53,18 @@ function settledWith({ standing, plainPullRequest }: Row, read: RequiredChecksRe
 }
 
 /**
- * When the Reviewer passed the head of a kept agent row at the Merge gate
- * that is named by its checks: its own time when yours to merge, else the
- * pass it carries. Null for any other row.
+ * When the Reviewer passed a kept agent row at the Merge gate that is named
+ * by its checks, and the head it passed where the row carries it: its own
+ * time when yours to merge, else the pass it carries. Null for any other row.
  */
-function mergeGatePassOf(standing: Standing): string | null {
+function mergeGatePassOf(standing: Standing): { readonly passedAt: string; readonly passedHead: string | undefined } | null {
   if (standing.work !== "ticket" || standing.place !== "merge-gate") return null;
   switch (standing.name) {
     case "yours-to-merge":
-      return standing.detail.plain === null ? standing.since : null;
+      return standing.detail.plain === null ? { passedAt: standing.since, passedHead: standing.detail.passedHead } : null;
     case "check-failing":
     case "waiting-on-checks":
-      return standing.detail.passedAt ?? null;
+      return standing.detail.passedAt === undefined ? null : { passedAt: standing.detail.passedAt, passedHead: standing.detail.passedHead };
     default:
       return null;
   }

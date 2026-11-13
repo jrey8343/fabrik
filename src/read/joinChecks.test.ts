@@ -107,7 +107,7 @@ describe("the join of kept rows with a Required checks read", () => {
 
       expect(named(kept)).toEqual([[50, "merge-gate", "yours-to-merge", true, PASSED_AT]]);
       expect(named(joined)).toEqual([[50, "merge-gate", "check-failing", true, "2026-11-12T09:42:00Z"]]);
-      expect(joined[0]?.standing.detail).toEqual({ plain: null, check: "lint", checkIs: "failing", passedAt: PASSED_AT, head: head("1") });
+      expect(joined[0]?.standing.detail).toEqual({ plain: null, check: "lint", checkIs: "failing", passedAt: PASSED_AT, passedHead: head("1"), head: head("1") });
       expect(joined).toEqual(rule);
     });
 
@@ -116,8 +116,31 @@ describe("the join of kept rows with a Required checks read", () => {
 
       expect(named(kept)).toEqual([[50, "merge-gate", "check-failing", true, "2026-11-12T09:42:00Z"]]);
       expect(named(joined)).toEqual([[50, "merge-gate", "yours-to-merge", true, PASSED_AT]]);
-      expect(joined[0]?.standing.detail).toEqual({ plain: null, head: head("1") });
+      expect(joined[0]?.standing.detail).toEqual({ plain: null, passedHead: head("1"), head: head("1") });
       expect(joined).toEqual(rule);
+    });
+
+    describe("with its head moved since the pass (#692)", () => {
+      const moved = () => agentFacts({ comments: [aVerdictComment("pass", head("9"), PASSED_AT)] });
+
+      it("yours to merge, comes back named for the failing check on its own head, and back again once it passes, keeping the head it passed", () => {
+        const failing = joinedAndRule(moved(), ALL_PASSED, LINT_FAILED);
+        expect(named(failing.kept)).toEqual([[50, "merge-gate", "yours-to-merge", true, PASSED_AT]]);
+        expect(failing.joined[0]?.standing.detail).toEqual({ plain: null, check: "lint", checkIs: "failing", passedAt: PASSED_AT, passedHead: head("9"), head: head("1") });
+        expect(failing.joined).toEqual(failing.rule);
+
+        const passing = joinedAndRule(moved(), LINT_FAILED, ALL_PASSED);
+        expect(passing.joined[0]?.standing.detail).toEqual({ plain: null, passedHead: head("9"), head: head("1") });
+        expect(passing.joined).toEqual(passing.rule);
+      });
+    });
+
+    it("kept before #692 with no head it passed, takes its own head as the one passed, as the rule then read it", () => {
+      const { kept, rule } = joinedAndRule(agentFacts(), ALL_PASSED, LINT_FAILED);
+      const { passedHead: _, ...detail } = kept[0]?.standing.detail as { passedHead?: string };
+      const older = kept.map((row) => ({ ...row, standing: { ...row.standing, detail } }) as Row);
+
+      expect(joinChecks(older, LINT_FAILED, NOW)).toEqual(rule);
     });
 
     it("check failing, comes back waiting on a re-run check, the Kit's and stopping nothing, since the pass", () => {

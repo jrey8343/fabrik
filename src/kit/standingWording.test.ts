@@ -90,6 +90,39 @@ describe("the wording of a Standing", () => {
     });
   });
 
+  describe("an agent PR at the Merge gate whose head moved since the pass (#692)", () => {
+    const head = "h".repeat(40);
+    const passedHead = "o".repeat(40);
+    const movedWith = (checks: RequiredChecksFact): Standing => {
+      const kit = { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks: { [head]: checks } } as const;
+      const github = factsOf({ openPullRequests: [anOpenPullRequest({ number: 123, draft: false, headSha: head, comments: [aVerdictComment("pass", passedHead, SINCE)] })] });
+      const [standing] = standingsOf(standingFactsOf({ github, kit }), minutesAfter(60));
+      if (standing === undefined) throw new Error("expected a Standing");
+      return standing;
+    };
+
+    it("says its head moved since the Reviewer passed it, and that its Digest describes the head it passed", () => {
+      expect(wordStanding(movedWith([]), minutesAfter(3 * 60), ZONE)).toEqual({
+        pill: "Yours to merge",
+        sentence: "#123's head moved since the Reviewer passed it 3 hours ago; its Digest describes the head it passed.",
+        remedy: null,
+      });
+    });
+
+    it("says a red or running check is on its head, pushed since the pass, never on the head the Reviewer passed", () => {
+      const sentenceFor = (checks: RequiredChecksFact) => wordStanding(movedWith(checks), minutesAfter(3 * 60), ZONE).sentence;
+      expect([
+        sentenceFor([{ name: "ci", is: "failing", at: minutesAfter(60) }]),
+        sentenceFor([{ name: "ci", is: "never-reported" }]),
+        sentenceFor([{ name: "ci", is: "running", at: minutesAfter(60) }]),
+      ]).toEqual([
+        "`ci` is failing on #123's head, pushed since the Reviewer passed it 3 hours ago.",
+        "`ci` has not reported on #123's head, pushed since the Reviewer passed it 3 hours ago.",
+        "Waiting on `ci`, running on #123's head, pushed since the Reviewer passed it 3 hours ago.",
+      ]);
+    });
+  });
+
   it("says work handed back with ready-for-human, a PR or an issue, is yours to do", () => {
     const handedBack = theStandingIn({
       openPullRequests: [
