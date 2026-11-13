@@ -3,13 +3,15 @@
 // re-run of the red checks passes (src/review/rerun.ts), or when the checks a
 // ci-sourced Execution flaw named have since passed on its head, which the
 // hourly tick reads; that Verdict then no longer counts toward the Ticket's
-// Retries. Either way the Operator hears of it twice over, quietly: one line
+// Retries. The tick also reads the head the Reviewer passed at the Merge gate,
+// where a Required check that has both failed and passed is reported, with
+// nothing counted back (#693). Each way the Operator hears of it twice over, quietly: one line
 // on the PR, mentioning nobody, and the check's own Flaky check issue for
 // Triage, filed once and commented on each time the check proves flaky again, so the Product's
 // suite gets fixed. Pure.
 import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker } from "./markers.ts";
-import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
+import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 /** A check's name as Markdown code: a backtick in it can't end the span. */
 export function checkCode(name: string): string {
@@ -78,12 +80,28 @@ export function flakyCheckActions(
   flaky: readonly FlakyCheck[],
   issues: readonly KitIssueSnapshot[],
 ): Action[] {
+  return flakyLineActions(pullRequest, headSha, flaky, issues, new Map(), (name, short) => `${name} failed on ${short} and passed when the Kit re-ran it on the same head`);
+}
+
+/**
+ * Each Flaky check's issue, then one line on the PR, mentioning nobody, with
+ * its marker, which says of each check `said` and links its issue. Nothing
+ * when none is flaky.
+ */
+function flakyLineActions(
+  pullRequest: number,
+  headSha: string,
+  flaky: readonly FlakyCheck[],
+  issues: readonly KitIssueSnapshot[],
+  filed: Map<string, CreatedIssue>,
+  said: (name: string, short: string) => string,
+): Action[] {
   if (flaky.length === 0) return [];
-  const { actions, refs } = issueActions(pullRequest, headSha, flaky, issues);
+  const { actions, refs } = issueActions(pullRequest, headSha, flaky, issues, filed);
   const short = headSha.slice(0, 7);
   const body: (string | CreatedIssue)[] = [flakyCheckMarker({ headSha, checks: flaky.map(({ name }) => name) }), "\n"];
   flaky.forEach(({ name }, at) => {
-    body.push(`${at === 0 ? "" : " "}${checkCode(name)} failed on ${short} and passed when the Kit re-ran it on the same head: a Flaky check (`);
+    body.push(`${at === 0 ? "" : " "}${said(checkCode(name), short)}: a Flaky check (`);
     body.push(issueRef(refs[at]!), ").");
   });
   return [...actions, { kind: "comment-linking", issue: pullRequest, body }];
@@ -130,6 +148,17 @@ export function uncountedFlaws(pullRequest: PullRequestSnapshot): VerdictRecord[
   );
 }
 
+/**
+ * The head the Reviewer passed, when this is an open agent PR out of draft
+ * whose head is still the one its latest pass was given on (#693); null
+ * otherwise, as when its head moved after the pass (#692).
+ */
+export function passedHeadAtGate(pullRequest: PullRequestSnapshot): string | null {
+  if (!pullRequest.isAgent || !pullRequest.open || pullRequest.draft) return null;
+  const passed = pullRequest.verdicts.findLast((record) => record.verdict === "pass");
+  return passed?.headSha === pullRequest.headSha ? passed.headSha : null;
+}
+
 const RED = ["failure", "timed_out", "cancelled", "action_required", "startup_failure"];
 
 /**
@@ -153,22 +182,54 @@ function flippedOn({ checks, checkRuns }: FlawHeadChecks): FlakyCheck[] | null {
 }
 
 /**
- * The tick's Flaky check sweep (#462): every ci-sourced Execution flaw on an
- * open agent PR whose checks all read green now on the head it was given on
- * is counted back. Its line marks it, so the sweep never counts it twice.
+ * The Required checks with both a red run and a `success` run on this passed
+ * head, in either order and whatever the latest says (#693), each with a link
+ * to one of each; less any a Flaky check line on the PR already names on this
+ * head. A check that was only skipped or neutral never passed.
+ */
+function flakyOnPassedHead({ headSha, required, checkRuns, marks }: PassedHeadChecks): FlakyCheck[] {
+  const named = new Set(marks.filter((mark) => mark.headSha === headSha).flatMap((mark) => mark.checks));
+  return required.flatMap((name) => {
+    if (named.has(name)) return [];
+    const runs = checkRuns.filter((run) => run.name === name);
+    const green = runs.find((run) => run.conclusion === "success");
+    const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
+    return green === undefined || red === undefined ? [] : [{ name, red: red.url, green: green.url }];
+  });
+}
+
+/**
+ * The tick's Flaky check sweep. Every ci-sourced Execution flaw on an open
+ * agent PR whose checks all read green now on the head it was given on is
+ * counted back (#462). And each Required check that has both failed and
+ * passed on the head the Reviewer passed, at the Merge gate, is reported, as
+ * no Retry was spent there to count back (#693). A line marks each, so the
+ * sweep never says one twice.
  */
 export function flakyCheckGate(_now: string, snapshot: Snapshot): Plan {
-  const { flakySweep } = snapshot;
-  if (flakySweep === null) return { kind: "nothing", reason: "The snapshot holds no Flaky check sweep" };
-  if (flakySweep === "no-permission") {
-    return { kind: "nothing", reason: "The Fabrik App can't read check runs without Checks: read, so no Execution flaw is counted back for a Flaky check" };
-  }
+  const { flakySweep, passedHeads } = snapshot;
+  if (flakySweep === null && passedHeads === null) return { kind: "nothing", reason: "The snapshot holds no Flaky check sweep" };
   // A check flaking on two PRs in one tick files one issue, which both lines link.
   const filed = new Map<string, CreatedIssue>();
+  // A check this tick counts back on a head isn't reported again on that head.
+  const said = new Set<string>();
+  const key = (pullRequest: number, headSha: string, name: string) => `${pullRequest} ${headSha} ${name}`;
   const actions: Action[] = [];
-  for (const head of flakySweep) {
+  for (const head of flakySweep === null || flakySweep === "no-permission" ? [] : flakySweep) {
     const flaky = flippedOn(head);
-    if (flaky !== null) actions.push(...countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed));
+    if (flaky === null) continue;
+    actions.push(...countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed));
+    for (const { name } of flaky) said.add(key(head.pullRequest, head.headSha, name));
   }
-  return actions.length === 0 ? { kind: "nothing", reason: "No Execution flaw on an open agent PR has had its checks pass since on the same head" } : { kind: "act", actions };
+  for (const head of passedHeads === null || typeof passedHeads === "string" ? [] : passedHeads) {
+    const flaky = flakyOnPassedHead(head).filter(({ name }) => !said.has(key(head.pullRequest, head.headSha, name)));
+    actions.push(
+      ...flakyLineActions(head.pullRequest, head.headSha, flaky, snapshot.flakyCheckIssues, filed, (name, short) => `${name} has both failed and passed on ${short}, the head the Reviewer passed`),
+    );
+  }
+  if (actions.length > 0) return { kind: "act", actions };
+  if (flakySweep === "no-permission" || passedHeads === "no-permission") {
+    return { kind: "nothing", reason: "The Fabrik App can't read check runs without Checks: read, so no Flaky check is found on an agent PR's head" };
+  }
+  return { kind: "nothing", reason: "No Execution flaw on an open agent PR has had its checks pass since on the same head, and no Required check has both failed and passed on a head at the Merge gate" };
 }

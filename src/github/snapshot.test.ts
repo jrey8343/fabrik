@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { aRunInFlight } from "../read/builders.ts";
-import type { GitHub } from "./client.ts";
+import { type GitHub, GitHubError } from "./client.ts";
 import {
   anIssue,
   aPullRequest,
@@ -26,7 +26,7 @@ import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { changedTestsSection } from "../loop/changedTests.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, flakyCheckMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER, verdictMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import {
@@ -3686,6 +3686,111 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
       requestChangesRunInFlight: 101,
       requestChangesRunReviews: [101],
     });
+  });
+});
+
+describe("Gathering the passed heads at the Merge gate a scheduled tick reads for Flaky checks (#693)", () => {
+  const TICK = { kind: "scheduled-tick", now: "2026-11-11T12:17:00Z" } as const;
+  const OLDER = "e".repeat(40);
+  const bot = (body: string) => ({ body, createdAt: "2026-11-10T00:00:00Z", author: { __typename: "Bot" } });
+  const pass = (headSha: string) => bot(`${verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, headSha })}\nPassed.`);
+  const node = (number: number, comments: unknown[], overrides: Record<string, unknown> = {}) => ({
+    number,
+    state: "OPEN",
+    isDraft: false,
+    headRefName: `fabrik/ticket-${number - 43}`,
+    headRefOid: HEAD_SHA,
+    author: APP_BOT,
+    body: "",
+    labels: { nodes: [] },
+    url: `https://github.com/acme/shop/pull/${number}`,
+    comments: { pageInfo: { hasPreviousPage: false }, nodes: comments },
+    changesRequests: { nodes: [] },
+    draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+    createdAt: "2025-12-01T00:00:00Z",
+    forcePushes: { nodes: [] },
+    commits: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+    closingIssuesReferences: { nodes: [] },
+    mergeable: "MERGEABLE",
+    ...overrides,
+  });
+  const RUNS = [
+    { name: "ci", status: "completed", conclusion: "success", started_at: "2026-11-11T09:00:00Z", html_url: "https://github.com/acme/shop/actions/runs/7/job/70" },
+    { name: "ci", status: "completed", conclusion: "failure", started_at: "2026-11-11T11:00:00Z", html_url: "https://github.com/acme/shop/actions/runs/8/job/99" },
+  ];
+
+  /** A GitHub holding these open PRs, whose default branch `main` requires `ci`, answering REST calls with `rest` where it gives an answer; it records each REST path. */
+  function githubHolding(nodes: unknown[], rest: (path: string) => unknown = () => undefined) {
+    const paths: string[] = [];
+    const github = {
+      [ANSWERS_CONFLICTS]: true,
+      async graphql(query: string) {
+        if (isConflictsQuery(query)) return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } };
+        const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+        return { repository: { owner: { login: "acme" }, defaultBranchRef: null, issues: none, pullRequests: none } };
+      },
+      async rest(_method: string, path: string) {
+        paths.push(path);
+        const answer = rest(path);
+        if (answer !== undefined) return answer instanceof Error ? Promise.reject(answer) : answer;
+        if (path === "/repos/acme/shop") return { default_branch: "main" };
+        if (path === "/repos/acme/shop/branches/main") return { protected: true, protection: { required_status_checks: { enforcement_level: "everyone", contexts: ["ci"] } } };
+        if (path.includes("/check-runs?")) return { check_runs: RUNS };
+        return [];
+      },
+    } as unknown as GitHub;
+    return { github, paths: () => paths.filter((path) => path.includes("/check-runs?")) };
+  }
+
+  it("reads every check run on the head of an agent PR out of draft at its latest pass's head, with the branch's Required checks and the PR's Flaky check lines", async () => {
+    const mark = bot(`${flakyCheckMarker({ headSha: HEAD_SHA, checks: ["e2e"] })}\nFlaky.`);
+    const { github, paths } = githubHolding([node(50, [pass(OLDER), pass(HEAD_SHA), mark])]);
+
+    const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+
+    expect(snapshot.passedHeads).toEqual([
+      {
+        pullRequest: 50,
+        ticket: 7,
+        headSha: HEAD_SHA,
+        required: ["ci"],
+        checkRuns: [
+          { name: "ci", status: "completed", conclusion: "success", startedAt: "2026-11-11T09:00:00Z", url: "https://github.com/acme/shop/actions/runs/7/job/70" },
+          { name: "ci", status: "completed", conclusion: "failure", startedAt: "2026-11-11T11:00:00Z", url: "https://github.com/acme/shop/actions/runs/8/job/99" },
+        ],
+        marks: [{ headSha: HEAD_SHA, checks: ["e2e"] }],
+      },
+    ]);
+    expect(paths()).toEqual([`/repos/acme/shop/commits/${HEAD_SHA}/check-runs?filter=all&per_page=100&page=1`]);
+  });
+
+  it("reads no draft, no PR whose head moved after its pass, and none without a pass", async () => {
+    const { github, paths } = githubHolding([node(50, [pass(HEAD_SHA)], { isDraft: true }), node(51, [pass(OLDER)]), node(52, [])]);
+
+    const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+
+    expect(snapshot.passedHeads).toEqual([]);
+    expect(paths()).toEqual([]);
+  });
+
+  it("is no-permission when the Fabrik App lacks Checks: read", async () => {
+    const refused = new GitHubError("GET check-runs failed: 403", 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }) });
+    const { github } = githubHolding([node(50, [pass(HEAD_SHA)])], (path) => (path.includes("/check-runs?") ? refused : undefined));
+
+    expect((await gatherSnapshot(github, repo, TICK, null, APP_LOGIN)).passedHeads).toBe("no-permission");
+  });
+
+  it("is branch-unread when the default branch's Required checks can't be read, and reads no head", async () => {
+    const { github, paths } = githubHolding([node(50, [pass(HEAD_SHA)])], (path) => (path === "/repos/acme/shop/branches/main" ? new Error("GitHub GET branch failed: 500") : undefined));
+
+    expect((await gatherSnapshot(github, repo, TICK, null, APP_LOGIN)).passedHeads).toBe("branch-unread");
+    expect(paths()).toEqual([]);
+  });
+
+  it("reads nothing for any other event", async () => {
+    const { github } = githubHolding([node(50, [pass(HEAD_SHA)])]);
+
+    expect((await gatherSnapshot(github, repo, { kind: "main-pushed", head: "9".repeat(40) }, null, APP_LOGIN)).passedHeads).toBeNull();
   });
 });
 
