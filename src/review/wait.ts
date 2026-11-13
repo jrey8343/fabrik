@@ -2,12 +2,13 @@
 // on its head, and tells the workflow how they ended. It holds only a
 // read-only token and runs none of the PR's code. It logs what it waits on
 // whenever that changes, and every few minutes while it doesn't, and gives up
-// a few minutes short of its job's timeout (the Review timeout). Giving up, or
+// a few minutes short of its job's timeout (the Review timeout). It waits on
+// the Required checks: those the Kit config lists plus any the default branch
+// requires, the branch's list read once before it starts (#565). Giving up, or
 // any error, fails the job and leaves a failure report for the push job's
-// notice: a Required check the Kit config lists that never reported is named,
-// as no re-run fixes it.
+// notice: a Required check that never reported is named, as no re-run fixes it.
 //   node src/review/wait.ts <product checkout>
-// Env: GH_TOKEN (read-only), GITHUB_REPOSITORY, FABRIK_PULL_REQUEST, GITHUB_OUTPUT,
+// Env: GH_TOKEN (read-only, `contents: read` enough for the branch), GITHUB_REPOSITORY, FABRIK_PULL_REQUEST, GITHUB_OUTPUT,
 //   FABRIK_REVIEW_TIMEOUT_MINUTES (the job's timeout), FABRIK_OUT_DIR (where the failure report goes).
 // Writes step outputs:
 //   checks   "green", "red", or "stale" when the PR moved on, closed or left draft while waiting
@@ -29,9 +30,11 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
+import { GitHub } from "../github/client.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { checkCode } from "../loop/flakyChecks.ts";
 import type { FailureReport } from "../loop/types.ts";
+import { readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type ChecksOutcome, checksFromGh, requiredChecksOutcome } from "./checks.ts";
 import { type CheckDetail, type RerunnableCheck, redChecksOf, rerunOutcome, settledChecksOutcome } from "./rerun.ts";
 
@@ -74,10 +77,24 @@ async function pullRequestState(repo: string, number: string): Promise<PullReque
   return JSON.parse(stdout) as PullRequestState;
 }
 
-/** The PR head's checks: every one when the Kit config lists Required checks, else only the required ones. */
-async function checksOf(repo: string, number: string, listedChecks: readonly string[]): Promise<CheckDetail[]> {
-  const args = ["pr", "checks", number, "--repo", repo, "--json", "name,bucket,link,workflow,startedAt"];
-  return checksFromGh(await gh(...args, ...(listedChecks.length === 0 ? ["--required"] : []))) as CheckDetail[];
+/** Every check on the PR's head; which of them gate it is the Required checks' to say. */
+async function checksOf(repo: string, number: string): Promise<CheckDetail[]> {
+  return checksFromGh(await gh("pr", "checks", number, "--repo", repo, "--json", "name,bucket,link,workflow,startedAt")) as CheckDetail[];
+}
+
+/** The default branch's own Required checks, as the Required checks read reads them; or why they could not be read. */
+export type BranchRequiredChecks = { readonly kind: "read"; readonly required: readonly string[] } | { readonly kind: "unread"; readonly why: string };
+
+/**
+ * The Required checks a wait waits on, resolved before it starts: the default
+ * branch's own list, then any the Kit config lists beyond it. GitHub holds
+ * the merge to the branch's list, so a branch that can't be read fails as
+ * unread checks, never falling back to the Kit config's list alone.
+ */
+export async function requiredChecksToWaitOn(readBranch: () => Promise<BranchRequiredChecks>, listedChecks: readonly string[]): Promise<string[]> {
+  const branch = await whileWaiting(readBranch);
+  if (branch.kind === "unread") throw new WaitError(`Couldn't read the default branch's Required checks: ${branch.why}`);
+  return [...new Set([...branch.required, ...listedChecks])];
 }
 
 /** What the wait reads from GitHub: the PR's state, and its head's checks. */
@@ -87,8 +104,8 @@ export interface ChecksWaitGitHub {
 }
 
 export interface ChecksWaitOptions {
-  /** The Required checks the Kit config lists; empty for the branch protection's required ones. */
-  readonly listedChecks: readonly string[];
+  /** The Required checks, as requiredChecksToWaitOn resolves them: those the Kit config lists plus any the default branch requires. Empty, nothing gates the PR. */
+  readonly requiredChecks: readonly string[];
   /** How long it waits, from its start, before it gives up. */
   readonly deadlineMs: number;
   readonly now: () => number;
@@ -97,10 +114,10 @@ export interface ChecksWaitOptions {
   /** The head it waits on, when an earlier job named it: the PR having moved off it makes the wait stale. */
   readonly headSha?: string;
   /** How the checks it reads have ended; requiredChecksOutcome when not given. */
-  readonly outcome?: (checks: readonly CheckDetail[], listedChecks: readonly string[]) => ChecksOutcome;
+  readonly outcome?: (checks: readonly CheckDetail[], requiredChecks: readonly string[]) => ChecksOutcome;
 }
 
-/** How the wait ended. It gives up at its deadline, naming the listed checks that never reported and those still running. */
+/** How the wait ended. It gives up at its deadline, naming the Required checks that never reported and those still running. */
 export type ChecksWaitOutcome =
   | { readonly checks: "stale"; readonly headSha: string }
   /** `ranNothing`: the checks that passed only by being skipped or reporting neutral. */
@@ -135,12 +152,12 @@ async function whileWaiting<T>(read: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Waits for the PR's checks on the head it started at, the Required checks
- * the Kit config lists or else the branch's required ones: polls until they
- * all passed or one didn't, the PR moves on, or its deadline passes.
+ * Waits for the PR's Required checks on the head it started at: polls until
+ * they all passed or one didn't, the PR moves on, or its deadline passes. A
+ * check on the head that isn't Required never gates it.
  */
 export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: ChecksWaitOptions): Promise<ChecksWaitOutcome> {
-  const { listedChecks, deadlineMs, now, sleep, log, outcome = requiredChecksOutcome } = options;
+  const { requiredChecks, deadlineMs, now, sleep, log, outcome = requiredChecksOutcome } = options;
   const started = now();
   const headSha = options.headSha ?? (await whileWaiting(() => github.pullRequestState())).headRefOid;
   await sleep(SETTLE_MS);
@@ -149,7 +166,7 @@ export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: C
   for (;;) {
     const state = await whileWaiting(() => github.pullRequestState());
     if (state.headRefOid !== headSha || state.state !== "OPEN" || !state.isDraft) return { checks: "stale", headSha };
-    const result = outcome(await whileWaiting(() => github.checks()), listedChecks);
+    const result = outcome(await whileWaiting(() => github.checks()), requiredChecks);
     if (result.kind === "green") return { checks: "green", headSha, ranNothing: result.ranNothing };
     if (result.kind === "red") return { checks: "red", headSha, failed: result.failed };
     const line = waitingOn(result.unreported, result.running);
@@ -168,7 +185,7 @@ export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: C
 
 /**
  * The failure report a wait that gave up leaves for the push job's notice: the
- * listed checks that never reported, if any did not, as no re-run fixes those;
+ * Required checks that never reported, if any did not, as no re-run fixes those;
  * else a timeout naming the checks still running.
  */
 export function gaveUpReport(outcome: Extract<ChecksWaitOutcome, { checks: "gave-up" }>): FailureReport {
@@ -192,23 +209,25 @@ export function errorReport(error: unknown): FailureReport {
 async function main(productDir: string): Promise<void> {
   const resolved = await readKitConfigFromCheckout(productDir);
   if (!resolved.ok) throw new Error(`The Kit config is invalid:\n${resolved.errors.map((e) => `- ${e}`).join("\n")}`);
-  const listedChecks = resolved.config.sandbox.checks;
   const repo = required("GITHUB_REPOSITORY");
   const number = required("FABRIK_PULL_REQUEST");
+  const client = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
   const timeoutMinutes = Number(required("FABRIK_REVIEW_TIMEOUT_MINUTES"));
   if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1) throw new Error("FABRIK_REVIEW_TIMEOUT_MINUTES is not a whole number of minutes");
 
   const rerun = rerunOf(process.env["FABRIK_RERUN"]);
   const rerunAt = process.env["FABRIK_RERUN_AT"] ?? "";
   let last: CheckDetail[] = [];
+  const requiredChecks = await requiredChecksToWaitOn(() => readDefaultBranchRequiredChecks(client, repo), resolved.config.sandbox.checks);
+  console.log(`Waits on the Required checks ${requiredChecks.length === 0 ? "(none)" : requiredChecks.join(", ")}`);
   const outcome = await waitForRequiredChecks(
     {
       pullRequestState: () => pullRequestState(repo, number),
-      checks: async () => (last = await checksOf(repo, number, listedChecks)),
+      checks: async () => (last = await checksOf(repo, number)),
     },
     {
-      listedChecks,
-      ...(rerun === null ? {} : { headSha: required("FABRIK_HEAD_SHA"), outcome: (checks, listed) => settledChecksOutcome(checks, listed, { rerun: rerun.map(({ name }) => name), rerunAt }) }),
+      requiredChecks,
+      ...(rerun === null ? {} : { headSha: required("FABRIK_HEAD_SHA"), outcome: (checks, gate) => settledChecksOutcome(checks, gate, { rerun: rerun.map(({ name }) => name), rerunAt }) }),
       deadlineMs: Math.max(timeoutMinutes * 60_000 - TIMEOUT_MARGIN_MS, SETTLE_MS),
       now: Date.now,
       sleep: (ms) => sleep(ms),

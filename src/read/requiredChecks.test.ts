@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
-import { type HeadCheck, headsToCheck, readRequiredChecks, type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
+import { type HeadCheck, headsToCheck, readDefaultBranchRequiredChecks, readRequiredChecks, type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
 import { rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-12T10:00:00Z";
@@ -305,6 +305,25 @@ describe("the Required checks read", () => {
     const read = await readRequiredChecks(client, "owner/product", [head("1"), head("2")], NOW);
 
     expect(JSON.parse(JSON.stringify(read))).toStrictEqual(read);
+  });
+});
+
+describe("the default branch's own Required checks, as the Review's wait reads them", () => {
+  it("are the branch's own list, in its order, read from the branch alone", async () => {
+    const client = repoWith(requiring("b", "a"));
+
+    expect(await readDefaultBranchRequiredChecks(client, "owner/product")).toEqual({ kind: "read", required: ["b", "a"] });
+    expect(client.calls).toEqual(["/repos/owner/product", "/repos/owner/product/branches/main"]);
+  });
+
+  it("are none for a branch with no protection", async () => {
+    expect(await readDefaultBranchRequiredChecks(repoWith({ protected: false }), "owner/product")).toEqual({ kind: "read", required: [] });
+  });
+
+  it("are unread when GitHub refuses the branch, saying which request it refused and why", async () => {
+    const read = await readDefaultBranchRequiredChecks(repoWith(refusal("/repos/owner/product/branches/main")), "owner/product");
+
+    expect(read).toEqual({ kind: "unread", why: "GET /repos/owner/product/branches/main failed with 403: Resource not accessible by integration" });
   });
 });
 

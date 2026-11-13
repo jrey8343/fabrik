@@ -47,21 +47,30 @@ describe("The checks after the Kit re-ran the red ones", () => {
 
   it("are still pending while a re-run check reads as it did before the re-run", () => {
     const checks = [actions("unit", "fail", 7, "2026-11-11T10:00:00Z"), actions("build", "pass", 9)];
-    expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "pending", unreported: [], running: ["unit"] });
+    expect(settledChecksOutcome(checks, ["unit"], { rerun: ["unit"], rerunAt })).toEqual({ kind: "pending", unreported: [], running: ["unit"] });
   });
 
   it("wait for every re-run check, even with an outside check still red", () => {
     const checks = [outside("Vercel", "fail"), actions("unit", "pending", 7, "2026-11-11T11:01:00Z")];
-    expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "pending", unreported: [], running: ["unit"] });
+    expect(settledChecksOutcome(checks, ["Vercel", "unit"], { rerun: ["unit"], rerunAt })).toEqual({ kind: "pending", unreported: [], running: ["unit"] });
   });
 
   it("are red once every one has finished and one didn't pass", () => {
     const checks = [outside("Vercel", "fail"), actions("unit", "pass", 7, "2026-11-11T11:01:00Z")];
-    expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "red", failed: ["Vercel"] });
+    expect(settledChecksOutcome(checks, ["Vercel", "unit"], { rerun: ["unit"], rerunAt })).toEqual({ kind: "red", failed: ["Vercel"] });
   });
 
   it("are green once every re-run check passed", () => {
     const checks = [actions("unit", "pass", 7, "2026-11-11T11:01:00Z"), actions("build", "pass", 9)];
+    expect(settledChecksOutcome(checks, ["unit", "build"], { rerun: ["unit"], rerunAt })).toEqual({ kind: "green", ranNothing: [] });
+  });
+
+  it("wait only on the Required checks: a check that isn't one, running beside a red one, never holds the outcome back", () => {
+    const checks = [outside("Vercel", "fail"), actions("loop / Kit", "pending", 9), actions("unit", "pass", 7, "2026-11-11T11:01:00Z")];
+    expect(settledChecksOutcome(checks, ["Vercel", "unit"], { rerun: ["unit"], rerunAt })).toEqual({ kind: "red", failed: ["Vercel"] });
+  });
+  it("are green with no Required checks, whatever ran on the head", () => {
+    const checks = [outside("Vercel", "fail"), actions("unit", "pending", 7, "2026-11-11T11:01:00Z")];
     expect(settledChecksOutcome(checks, [], { rerun: ["unit"], rerunAt })).toEqual({ kind: "green", ranNothing: [] });
   });
 });

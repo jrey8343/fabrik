@@ -291,9 +291,9 @@ describe("Failure notices", () => {
       });
       expect(commentOf(plan)).toBe(
         [
-          "@operator The Review run on #7 failed: the Required check `e2e` never reported on this PR; check its workflow's name and `paths:` filter, or drop it from `sandbox.checks`.",
+          "@operator The Review run on #7 failed: the Required check `e2e` never reported on this PR; fix its workflow's name or `paths:` filter, or take it off the default branch's required list on github.com, and out of `sandbox.checks` too if it's listed there.",
           "",
-          "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-adding the `agent:review` label won't change this. After fixing the workflow or `sandbox.checks`, re-add `agent:review` on this PR to run it again.",
+          "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-adding the `agent:review` label won't change this. After fixing the workflow or the Required checks, re-add `agent:review` on this PR to run it again.",
           "",
           `[The run](${RUN})`,
           '<!-- fabrik:hand-back {"kind":"infrastructure-failure","role":"review","failure":"unreported-checks"} -->',
@@ -305,7 +305,7 @@ describe("Failure notices", () => {
       const body = commentOf(review({ failure: "unreported-checks", detail: "", checks: ["e2e", "smoke"] }));
 
       expect(body).toContain(
-        "failed: the Required checks `e2e` and `smoke` never reported on this PR; check their workflows' names and `paths:` filters, or drop them from `sandbox.checks`.",
+        "failed: the Required checks `e2e` and `smoke` never reported on this PR; fix their workflows' names or `paths:` filters, or take them off the default branch's required list on github.com, and out of `sandbox.checks` too if they're listed there.",
       );
     });
 
@@ -313,7 +313,7 @@ describe("Failure notices", () => {
       const body = commentOf(review({ failure: "unreported-checks", detail: "" }));
 
       expect(body).toContain(
-        "failed: a Required check never reported on this PR; check the workflow names and `paths:` filters of the Required checks `sandbox.checks` lists.",
+        "failed: a Required check never reported on this PR; check the workflow names and `paths:` filters of the Required checks, those the default branch requires and those `sandbox.checks` lists.",
       );
     });
 
