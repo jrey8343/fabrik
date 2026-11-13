@@ -70,7 +70,7 @@ function headMoved({ detail }: Standing): boolean {
 }
 
 /** The head an agent PR at the Merge gate has its Required checks read on, as a sentence names it: the one the Reviewer passed, or one pushed since (#692). */
-function checkedHead(standing: Standing, passedAt: string | undefined, now: string): string {
+function checkedHeadPhrase(standing: Standing, passedAt: string | undefined, now: string): string {
   const age = ageSince(passedAt ?? standing.since, now);
   return headMoved(standing) ? `#${standing.pullRequest}'s head, pushed since the Reviewer passed it ${age} ago` : `the head the Reviewer passed ${age} ago`;
 }
@@ -94,7 +94,7 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       const sentence =
         // An agent PR at the Merge gate (#564), whose Review is done: not an agent draft's, whose Review waits.
         standing.place === "merge-gate"
-          ? `Waiting on \`${check}\`, running on ${checkedHead(standing, passedAt, now)}.`
+          ? `Waiting on \`${check}\`, running on ${checkedHeadPhrase(standing, passedAt, now)}.`
           : plain === null
             ? "Its Review is waiting for the Required checks on its head."
             : checksUnread
@@ -184,8 +184,8 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       const { check, checkIs, passedAt } = standing.detail;
       // An agent PR at the Merge gate (#564): its head is the one the Reviewer passed, or one pushed since (#692).
       if (standing.place === "merge-gate") {
-        const passed = checkedHead(standing, passedAt, now);
-        return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing on ${passed}.` : `\`${check}\` has not reported on ${passed}.`, remedy: null };
+        const onHead = checkedHeadPhrase(standing, passedAt, now);
+        return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing on ${onHead}.` : `\`${check}\` has not reported on ${onHead}.`, remedy: null };
       }
       return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing.` : `\`${check}\` has not reported on its head.`, remedy: null };
     }
