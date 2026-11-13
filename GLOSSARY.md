@@ -307,7 +307,7 @@ What `caps.merge_gate` weighs: the open agent PRs out of draft, at the Merge gat
 _Avoid_: review queue, backlog
 
 **Required check**:
-A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any the main branch already required. It has passed when it succeeded, was skipped or reported neutral, as GitHub judges a merge; cancelled or any other result is failing.
+A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any GitHub already requires on the main branch, through its protection or a ruleset. It has passed when it succeeded, was skipped or reported neutral, as GitHub judges a merge; cancelled or any other result is failing.
 _Avoid_: gating check, status check
 
 **Plain pull request**:

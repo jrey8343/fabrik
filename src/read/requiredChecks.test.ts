@@ -38,11 +38,17 @@ type CannedBranch =
   | { readonly protected: true; readonly enforcementLevel: string; readonly required: readonly string[] }
   | GitHubError;
 
+/** A rule as `GET /repos/{o}/{r}/rules/branches/{b}` lists it: a `required_status_checks` rule's contexts, or a rule of any other type. */
+type CannedRule = { readonly requires: readonly string[] } | { readonly type: string };
+
+/** The active rules on the default branch, listed a hundred to a page, or a GitHubError failing their read. */
+type CannedRules = readonly CannedRule[] | GitHubError;
+
 const refusal = (path: string) =>
   new GitHubError(`GitHub GET ${path} failed: 403`, 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }), request: `GET ${path}` });
 
-/** A made-up `owner/product`, default branch `main`, with this protection and these heads; every path it was asked is kept. */
-function repoWith(branch: CannedBranch, heads: Readonly<Record<string, CannedHead>> = {}): Pick<ReadClient, "rest"> & { readonly calls: string[] } {
+/** A made-up `owner/product`, default branch `main`, with this protection, these heads and these active rules; every path it was asked is kept. */
+function repoWith(branch: CannedBranch, heads: Readonly<Record<string, CannedHead>> = {}, rules: CannedRules = []): Pick<ReadClient, "rest"> & { readonly calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
@@ -65,6 +71,17 @@ function repoWith(branch: CannedBranch, heads: Readonly<Record<string, CannedHea
             },
           },
         };
+      }
+      const rulesPage = /^\/repos\/owner\/product\/rules\/branches\/main\?per_page=100&page=(\d+)$/.exec(path);
+      if (rulesPage !== null) {
+        if (rules instanceof GitHubError) throw rules;
+        const page = Number(rulesPage[1]);
+        return rules.slice((page - 1) * 100, page * 100).map((rule) => ({
+          type: "requires" in rule ? "required_status_checks" : rule.type,
+          ruleset_source_type: "Repository",
+          ruleset_source: "owner/product",
+          ...("requires" in rule ? { parameters: { strict_required_status_checks_policy: false, required_status_checks: rule.requires.map((context) => ({ context, integration_id: 15368 })) } } : {}),
+        }));
       }
       const runs = /^\/repos\/owner\/product\/commits\/([0-9a-f]{40})\/check-runs\?filter=all&per_page=100&page=1$/.exec(path);
       if (runs !== null) {
@@ -247,7 +264,7 @@ describe("the Required checks read", () => {
       holdsAdmins: "yes",
       heads: {},
     });
-    expect(client.calls).toEqual(["/repos/owner/product", "/repos/owner/product/branches/main"]);
+    expect(client.calls).toEqual(["/repos/owner/product", "/repos/owner/product/branches/main", "/repos/owner/product/rules/branches/main?per_page=100&page=1"]);
   });
 
   describe("whether the branch holds admins to its rules", () => {
@@ -290,13 +307,13 @@ describe("the Required checks read", () => {
     expect(read.heads[head("3")]).toBe("unread");
   });
 
-  it("reads each head once, asked twice, in four REST requests for one head", async () => {
+  it("reads each head once, asked twice, in five REST requests for one head", async () => {
     const client = repoWith(requiring("test"), { [head("1")]: {} });
 
     const read = await readRequiredChecks(client, "owner/product", [head("1"), head("1")], NOW);
 
     expect(Object.keys(read.heads)).toEqual([head("1")]);
-    expect(client.calls).toHaveLength(4);
+    expect(client.calls).toHaveLength(5);
   });
 
   it("comes back equal after being written as JSON and read again", async () => {
@@ -308,12 +325,83 @@ describe("the Required checks read", () => {
   });
 });
 
+describe("the Required checks an active ruleset adds (#694)", () => {
+  const unprotected = { protected: false } as const;
+  const nothingRequired = { protected: true, enforcementLevel: "off", required: [] } as const;
+
+  it("are Required checks to the Review's wait and to the read, judged on each head", async () => {
+    const client = repoWith(nothingRequired, { [head("1")]: {} }, [{ requires: ["probe / ci"] }]);
+
+    expect(await readDefaultBranchRequiredChecks(client, "owner/product")).toEqual({ kind: "read", required: ["probe / ci"] });
+    const read = await readRequiredChecks(client, "owner/product", [head("1")], NOW);
+    expect(read.required).toEqual(["probe / ci"]);
+    expect(read.heads[head("1")]).toEqual([{ name: "probe / ci", is: "never-reported", url: null, at: null }]);
+  });
+
+  it("follow the protection's own list, each name once", async () => {
+    const client = repoWith(requiring("a"), {}, [{ requires: ["b", "a"] }]);
+
+    expect(await readDefaultBranchRequiredChecks(client, "owner/product")).toEqual({ kind: "read", required: ["a", "b"] });
+  });
+
+  it("count on a branch that is not protected", async () => {
+    expect(await readDefaultBranchRequiredChecks(repoWith(unprotected, {}, [{ requires: ["c"] }]), "owner/product")).toEqual({ kind: "read", required: ["c"] });
+  });
+
+  it("come from no rule of any other type", async () => {
+    const client = repoWith(requiring("a"), {}, [{ type: "update" }, { type: "pull_request" }, { type: "deletion" }]);
+
+    expect(await readDefaultBranchRequiredChecks(client, "owner/product")).toEqual({ kind: "read", required: ["a"] });
+  });
+
+  it("are read from every page of the rules", async () => {
+    const rules: CannedRule[] = [...Array.from({ length: 100 }, () => ({ type: "update" })), { requires: ["late"] }];
+    const client = repoWith(unprotected, {}, rules);
+
+    expect(await readDefaultBranchRequiredChecks(client, "owner/product")).toEqual({ kind: "read", required: ["late"] });
+    expect(client.calls).toContain("/repos/owner/product/rules/branches/main?per_page=100&page=2");
+  });
+
+  it("leave the branch unread when GitHub refuses its rules, saying which request it refused, and every head unread", async () => {
+    const client = repoWith(requiring("a"), { [head("1")]: {} }, refusal("/repos/owner/product/rules/branches/main"));
+
+    expect(await readDefaultBranchRequiredChecks(client, "owner/product")).toEqual({
+      kind: "unread",
+      why: "GET /repos/owner/product/rules/branches/main failed with 403: Resource not accessible by integration",
+    });
+    expect(await readRequiredChecks(client, "owner/product", [head("1")], NOW)).toEqual({
+      repo: "owner/product",
+      branch: "main",
+      readAt: NOW,
+      required: [],
+      holdsAdmins: "unknown",
+      heads: { [head("1")]: "unread" },
+    });
+  });
+
+  describe("leave whether the branch holds admins to its rules to its protection alone", () => {
+    const holdsAdmins = async (branch: CannedBranch) => (await readRequiredChecks(repoWith(branch, {}, [{ requires: ["r"] }]), "owner/product", [], NOW)).holdsAdmins;
+
+    it("unknown when its protection requires nothing, at level off", async () => {
+      expect(await holdsAdmins(nothingRequired)).toBe("unknown");
+    });
+
+    it("unknown when its protection requires nothing, whatever level it reads", async () => {
+      expect(await holdsAdmins({ protected: true, enforcementLevel: "everyone", required: [] })).toBe("unknown");
+    });
+
+    it("yes when its protection requires a check, held to everyone", async () => {
+      expect(await holdsAdmins(requiring("a"))).toBe("yes");
+    });
+  });
+});
+
 describe("the default branch's own Required checks, as the Review's wait reads them", () => {
-  it("are the branch's own list, in its order, read from the branch alone", async () => {
+  it("are the branch's own list, in its order, read from the branch and its rules", async () => {
     const client = repoWith(requiring("b", "a"));
 
     expect(await readDefaultBranchRequiredChecks(client, "owner/product")).toEqual({ kind: "read", required: ["b", "a"] });
-    expect(client.calls).toEqual(["/repos/owner/product", "/repos/owner/product/branches/main"]);
+    expect(client.calls).toEqual(["/repos/owner/product", "/repos/owner/product/branches/main", "/repos/owner/product/rules/branches/main?per_page=100&page=1"]);
   });
 
   it("are none for a branch with no protection", async () => {
