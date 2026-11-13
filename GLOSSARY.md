@@ -84,6 +84,10 @@ _Avoid_: user, avatar, persona, customer
 The single human who runs Fabrik across their Product repos: answers HITL sessions and owns every merge.
 _Avoid_: user, admin, developer
 
+**Operator's time zone**:
+The time zone every time the Kit shows the Operator is written in, one for all their Product repos; UTC when they've given none.
+_Avoid_: timezone, local time, clock
+
 **Implementer**:
 An agent that turns one ready ticket into a pull request inside a Sandbox, typically on a lighter model.
 _Avoid_: worker, coder, builder

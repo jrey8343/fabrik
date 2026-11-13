@@ -10,7 +10,11 @@
 // late still counts as the tick it was scheduled for. A run more than an hour
 // late is taken for the next tick; a dropped tick waits a week, and the next
 // tick's summary line says the week's bump was missed if no run took it as due.
+// FABRIK_TIME_ZONE is the Operator's time zone, which the Tick job read from
+// the Kit config (ADR-0023), that the summary line says its times in; unset,
+// empty or no IANA zone, they're in UTC.
 import { appendFile } from "node:fs/promises";
+import { knownTimeZone } from "../loop/readable.ts";
 import { skillsBumpGate } from "./bump.ts";
 
 const output = process.env["GITHUB_OUTPUT"];
@@ -19,7 +23,11 @@ if (output === undefined || output === "") {
   process.exitCode = 2;
 } else {
   const seenAt = new Date(process.env["FABRIK_TICK_SEEN_AT"] || Date.now());
-  const { due, summary } = skillsBumpGate(Number.isNaN(seenAt.getTime()) ? new Date() : seenAt, process.env["FABRIK_TICK_SCHEDULE"]);
+  const { due, summary } = skillsBumpGate(
+    Number.isNaN(seenAt.getTime()) ? new Date() : seenAt,
+    process.env["FABRIK_TICK_SCHEDULE"],
+    knownTimeZone(process.env["FABRIK_TIME_ZONE"]),
+  );
   console.log(summary);
   const stepSummary = process.env["GITHUB_STEP_SUMMARY"];
   if (stepSummary !== undefined && stepSummary !== "") await appendFile(stepSummary, `${summary}\n`);

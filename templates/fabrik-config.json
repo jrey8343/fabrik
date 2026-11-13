@@ -62,5 +62,6 @@
   "subscriptions": ["Claude token"],
   "ui": null,
   "preview": { "url": null },
-  "production": null
+  "production": null,
+  "time_zone": null
 }

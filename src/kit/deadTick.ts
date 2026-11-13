@@ -74,6 +74,8 @@ export interface DeadTickInput {
   readonly recentRepos: readonly string[];
   /** The store's own open fabrik:dead-tick issues, for repos the App couldn't reach. */
   readonly storeIssues: readonly DeadTickIssue[];
+  /** The Operator's time zone, from the store's caller (ADR-0023), every time the check writes is in; null for UTC. */
+  readonly timeZone: string | null;
 }
 
 export interface IssueToFile {
@@ -192,35 +194,35 @@ function unreachablePlan({ products, recentRepos, storeIssues, operator }: DeadT
   return { open, close, summary };
 }
 
-function productPlan(repo: string, facts: TickFacts, { now, operator }: DeadTickInput): DeadTickPlan {
+function productPlan(repo: string, facts: TickFacts, { now, operator, timeZone }: DeadTickInput): DeadTickPlan {
   const filed = facts.issues.filter((issue) => issue.byApp && issue.body.includes(DEAD_TICK_MARKER));
   if (!tickIsDead(facts, now)) {
     const { lastTick } = facts;
     if (lastTick === null) {
-      const why = facts.callerSince === null ? `no commit on main brings \`${CALLER_PATH}\`` : `\`${CALLER_PATH}\` came to main only at ${readable(facts.callerSince)}`;
+      const why = facts.callerSince === null ? `no commit on main brings \`${CALLER_PATH}\`` : `\`${CALLER_PATH}\` came to main only at ${readable(facts.callerSince, timeZone)}`;
       return { ...NOTHING, summary: [`${repo}: no Tick has started yet, but ${why}.`] };
     }
     return {
       open: [],
-      close: filed.map((issue) => ({ repo, issue: issue.number, comment: tickStartedAgain(lastTick.at, lastTick.release) })),
-      summary: [`${repo}: the last Tick started at ${readable(lastTick.at)}.`, ...filed.map((issue) => `${repo}: closed #${issue.number}, as a Tick has started again.`)],
+      close: filed.map((issue) => ({ repo, issue: issue.number, comment: tickStartedAgain(lastTick.at, lastTick.release, timeZone) })),
+      summary: [`${repo}: the last Tick started at ${readable(lastTick.at, timeZone)}.`, ...filed.map((issue) => `${repo}: closed #${issue.number}, as a Tick has started again.`)],
     };
   }
   if (filed.length > 0) return { open: [], close: [], summary: [`${repo}: the Tick is dead, and #${filed[0]?.number} is open for it already.`] };
-  return { open: [deadTickIssue(repo, facts, operator)], close: [], summary: [`${repo}: the Tick is dead, so a Dead-tick issue is opened.`] };
+  return { open: [deadTickIssue(repo, facts, operator, timeZone)], close: [], summary: [`${repo}: the Tick is dead, so a Dead-tick issue is opened.`] };
 }
 
-function deadTickIssue(repo: string, { callerSince, lastTick, release }: TickFacts, operator: string): IssueToFile {
+function deadTickIssue(repo: string, { callerSince, lastTick, release }: TickFacts, operator: string, timeZone: string | null): IssueToFile {
   const since = lastTick?.at ?? callerSince ?? "";
   const bumped = lastTick !== null && lastTick.release !== null && release !== null && lastTick.release !== release;
   const last =
     lastTick === null
-      ? `No Tick has started its jobs on \`main\` since \`${CALLER_PATH}\` came to it at ${readable(since)}.`
-      : `The last Tick started at ${readable(lastTick.at)} ([its run](${lastTick.url}))${lastTick.release === null ? "" : `, on Fabrik ${lastTick.release}`}.`;
+      ? `No Tick has started its jobs on \`main\` since \`${CALLER_PATH}\` came to it at ${readable(since, timeZone)}.`
+      : `The last Tick started at ${readable(lastTick.at, timeZone)} ([its run](${lastTick.url}))${lastTick.release === null ? "" : `, on Fabrik ${lastTick.release}`}.`;
   const notes = release === null ? "the release notes of the release it pins" : `[${release}'s release notes](https://github.com/${KIT_REPO}/releases/tag/${release})`;
   return {
     repo,
-    title: `The hourly Tick hasn't run since ${readable(since)}`,
+    title: `The hourly Tick hasn't run since ${readable(since, timeZone)}`,
     body: [
       ...(bumped ? [`The Tick stopped after the bump from ${lastTick.release} to ${release}.`, ""] : []),
       `No hourly Tick has started in this repo for more than ${DEAD_TICK_HOURS} hours, so nothing time-based runs here: no Dispatch check, Monitor, Audit or Retro, and no weekly-limit issue closes. ${last}`,

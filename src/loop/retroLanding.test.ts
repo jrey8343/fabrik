@@ -639,6 +639,22 @@ describe("Landing a Retro: a loosening's streak", () => {
   });
 });
 
+describe("Landing a Retro in the Operator's time zone", () => {
+  it("says in it the window the Retro read", () => {
+    const plan = planFor(retroFinished({ proposals: [] }), retroRunSnapshotOf(), kitConfig({ timeZone: "Australia/Sydney" }));
+
+    expect(plan).toMatchObject({
+      actions: [
+        {
+          kind: "edit-issue-body",
+          body: expect.stringMatching(/^The Retro read the factory's runs from 2026-10-24 17:00 Australia\/Sydney to 2026-10-31 17:00 Australia\/Sydney and has nothing to propose\./),
+        },
+        { kind: "close" },
+      ],
+    });
+  });
+});
+
 describe("Landing a Retro: a clean one", () => {
   const CLEAN = {
     kind: "act",

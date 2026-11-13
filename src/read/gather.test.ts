@@ -531,7 +531,7 @@ describe("a gather shaped for Home", () => {
 
     it("hold each comment's id on an open issue and an open agent pull request (#639)", async () => {
       const comment = (databaseId: number, at: string) => ({ databaseId, url: `https://github.com/jrey8343/shop/issues/7#issuecomment-${databaseId}`, body: `Said at ${at}.`, createdAt: at, author: APP });
-      const held = { databaseId: 3, url: "https://github.com/jrey8343/shop/issues/7#issuecomment-3", body: endedHeldLine("implement", 7, { kind: "resumed" }, "2026-11-09T09:30:00Z"), createdAt: "2026-11-09T09:30:00Z", author: APP };
+      const held = { databaseId: 3, url: "https://github.com/jrey8343/shop/issues/7#issuecomment-3", body: endedHeldLine("implement", 7, { kind: "resumed" }, "2026-11-09T09:30:00Z", null), createdAt: "2026-11-09T09:30:00Z", author: APP };
       const facts = await factsOf({
         issues: [aRawIssue({ number: 7, comments: { nodes: [comment(1, "2026-11-09T09:00:00Z"), held, comment(2, "2026-11-09T10:00:00Z")] } })],
         openPullRequests: [aRawOpenPullRequest({ comments: { nodes: [comment(5, "2026-11-09T11:00:00Z")] } })],
@@ -602,7 +602,7 @@ describe("a gather shaped for Home", () => {
     });
 
     it("leave out a held line, so it is never the last word", async () => {
-      const held = { url: "https://github.com/jrey8343/shop/issues/7#issuecomment-2", body: endedHeldLine("implement", 7, { kind: "resumed" }, "2026-11-09T11:00:00Z"), createdAt: "2026-11-09T11:00:00Z", author: APP };
+      const held = { url: "https://github.com/jrey8343/shop/issues/7#issuecomment-2", body: endedHeldLine("implement", 7, { kind: "resumed" }, "2026-11-09T11:00:00Z", null), createdAt: "2026-11-09T11:00:00Z", author: APP };
       const said = { url: "https://github.com/jrey8343/shop/issues/7#issuecomment-1", body: "The Implement run opened #50.", createdAt: "2026-11-09T10:00:00Z", author: APP };
       const facts = await factsOf({ issues: [aRawIssue({ number: 7, comments: { nodes: [said, held] } })] });
 

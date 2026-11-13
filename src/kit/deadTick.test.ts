@@ -21,7 +21,7 @@ function read(repo: string, tick: TickFacts): ProductTickRead {
 }
 
 function input(products: readonly ProductTickRead[], overrides: Partial<DeadTickInput> = {}): DeadTickInput {
-  return { now: NOW, operator: "operator", products, recentRepos: [], storeIssues: [], ...overrides };
+  return { now: NOW, operator: "operator", products, recentRepos: [], storeIssues: [], timeZone: null, ...overrides };
 }
 
 /** The issue a plan opened, as the next run reads it back. */
@@ -69,6 +69,35 @@ describe("A new Product repo's grace", () => {
     expect(plan.open).toHaveLength(1);
     expect(plan.open[0]?.title).toBe("The hourly Tick hasn't run since 2026-11-10 05:00 UTC");
     expect(plan.open[0]?.body).toContain("No Tick has started its jobs on `main` since `.github/workflows/fabrik.yml` came to it at 2026-11-10 05:00 UTC.");
+  });
+});
+
+describe("The Tick check in the Operator's time zone, as the store's caller gives it", () => {
+  const sydney = { timeZone: "Australia/Sydney" };
+
+  it("says in it when the dead Tick last started, in the issue's title and body and the summary", () => {
+    const plan = deadTickPlan(input([read("acme/shop", facts())], sydney));
+
+    expect(plan.open[0]?.title).toBe("The hourly Tick hasn't run since 2026-11-10 16:00 Australia/Sydney");
+    expect(plan.open[0]?.body).toContain("The last Tick started at 2026-11-10 16:00 Australia/Sydney ([its run]");
+  });
+
+  it("says in it when the caller came to main, for a repo whose Tick never started", () => {
+    const plan = deadTickPlan(input([read("acme/shop", facts({ callerSince: hoursAgo(26), lastTick: null }))], sydney));
+
+    expect(plan.open[0]?.body).toContain("came to it at 2026-11-10 16:00 Australia/Sydney.");
+  });
+
+  it("says in it when the Tick started again, closing the issue, and in the summary", () => {
+    const issue = { number: 12, body: "Dead.\n\n<!-- fabrik:dead-tick -->", byApp: true };
+    const lastTick = { at: hoursAgo(2), url: RUN_URL, release: null };
+
+    const plan = deadTickPlan(input([read("acme/shop", facts({ lastTick, issues: [issue] }))], sydney));
+
+    expect(plan.close).toEqual([
+      { repo: "acme/shop", issue: 12, comment: "The hourly Tick started again at 2026-11-11 16:00 Australia/Sydney, so the Kit is closing this issue." },
+    ]);
+    expect(plan.summary).toContain("acme/shop: the last Tick started at 2026-11-11 16:00 Australia/Sydney.");
   });
 });
 

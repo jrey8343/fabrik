@@ -2,11 +2,32 @@
 
 /**
  * Such as "2026-11-09 04:00 UTC", from an ISO time or milliseconds: the wall
- * clock in `timeZone`, an IANA zone such as the Operator's, named after it.
+ * clock in `timeZone`, an IANA zone such as the Operator's time zone, named
+ * after it; in UTC when it's null, as when the Operator has given none.
  */
-export function readable(time: string | number, timeZone = "UTC"): string {
-  const at = new Date(wallClock(new Date(time).getTime(), timeZone).asUtc).toISOString();
-  return `${at.slice(0, 10)} ${at.slice(11, 16)} ${timeZone}`;
+export function readable(time: string | number, timeZone: string | null): string {
+  const zone = timeZone ?? "UTC";
+  const at = new Date(wallClock(new Date(time).getTime(), zone).asUtc).toISOString();
+  return `${at.slice(0, 10)} ${at.slice(11, 16)} ${zone}`;
+}
+
+/** Whether it's an IANA time zone the runtime's time zone data knows, such as Europe/London, as GitHub's schedule `timezone:` takes. */
+export function isTimeZone(name: string): boolean {
+  if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(name)) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The Operator's time zone a setting gives, from wherever it's read: a zone
+ * the runtime knows, else null, which writes times in UTC rather than fails.
+ */
+export function knownTimeZone(value: unknown): string | null {
+  return typeof value === "string" && isTimeZone(value) ? value : null;
 }
 
 /** A moment as the wall clock in a time zone reads it. */

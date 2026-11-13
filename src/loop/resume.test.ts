@@ -326,6 +326,15 @@ describe("The reset tick, failing partway through its plan (#438)", () => {
     return { kitIssues: kit, held };
   }
 
+  it("says when each held line's run resumed in the Operator's time zone", () => {
+    const sydney = kitConfig({ ...TWO_SUBSCRIPTIONS, timeZone: "Australia/Sydney" });
+
+    const ends = actionsOf(planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: heldOn }), sydney)).filter((action) => action.kind === "end-held-line");
+
+    expect(ends.length).toBeGreaterThan(0);
+    expect(ends.every((action) => action.timeZone === "Australia/Sydney")).toBe(true);
+  });
+
   it("resumes every held run, then leaves the resumed markers, and only then closes the weekly-limit issue", () => {
     const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues, held: heldOn }), TWO_SUBSCRIPTIONS);
 
@@ -766,7 +775,7 @@ describe("A held run's held line, when its hold ends", () => {
   it("says resumed once the reset tick resumes the run, and nothing new is commented on the Ticket", () => {
     const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: heldTicket([held(12, "implement", "agent:implement")]), held: [anIssueHeld(12, ["enhancement", "ready-for-agent"])] }), TWO_SUBSCRIPTIONS);
 
-    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" } }]);
+    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" }, timeZone: null }]);
     expect(actionsOf(plan).filter((action) => action.kind === "comment" && action.issue === 12)).toEqual([]);
     expect(notificationsOf(plan)).toEqual([]);
   });
@@ -775,7 +784,7 @@ describe("A held run's held line, when its hold ends", () => {
     const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: heldTicket([held(50, "review", "agent:review")]), held: [aDraftHeld(50, { open: false })] }), TWO_SUBSCRIPTIONS);
 
     expect(endedOn(plan)).toEqual([
-      { kind: "end-held-line", role: "review", issue: 50, on: 41, ended: { kind: "dropped", reason: "The Review run's #50 is closed" } },
+      { kind: "end-held-line", role: "review", issue: 50, on: 41, ended: { kind: "dropped", reason: "The Review run's #50 is closed" }, timeZone: null },
     ]);
   });
 
@@ -785,7 +794,7 @@ describe("A held run's held line, when its hold ends", () => {
     const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: heldTicket([retry]), held: [anIssueHeld(7, ["enhancement", "ready-for-agent"])] }), TWO_SUBSCRIPTIONS);
 
     expect(labelsAdded(plan)).toEqual([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]);
-    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 50, on: 41, ended: { kind: "resumed" } }]);
+    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 50, on: 41, ended: { kind: "resumed" }, timeZone: null }]);
   });
 
   it("says resumed when the Operator closes a weekly-limit issue with no reset known (#440)", () => {
@@ -804,7 +813,7 @@ describe("A held run's held line, when its hold ends", () => {
 
     const plan = planFor({ kind: "issue-closed", issue: 41 }, snapshot, TWO_SUBSCRIPTIONS);
 
-    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" } }]);
+    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" }, timeZone: null }]);
   });
 
   it("names the weekly-limit issue the run's newest hold went on, for a run resumed and held again", () => {
@@ -818,6 +827,6 @@ describe("A held run's held line, when its hold ends", () => {
 
     const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: resumedThenHeldAgain, held: [anIssueHeld(12, ["enhancement", "ready-for-agent"])] }), TWO_SUBSCRIPTIONS);
 
-    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" } }]);
+    expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" }, timeZone: null }]);
   });
 });

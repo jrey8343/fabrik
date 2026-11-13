@@ -458,7 +458,7 @@ describe("a Product repo's rows", () => {
 
     it("is never a held line, and a person's later comment does not replace it", () => {
       const said = aComment("The Implement run failed.", "2026-11-08T17:00:00Z");
-      const held = aComment(endedHeldLine("implement", 7, { kind: "resumed" }, "2026-11-08T18:00:00Z"), "2026-11-08T18:00:00Z");
+      const held = aComment(endedHeldLine("implement", 7, { kind: "resumed" }, "2026-11-08T18:00:00Z", null), "2026-11-08T18:00:00Z");
       const person = aComment("Any news?", "2026-11-08T19:00:00Z", { author: "operator", byBot: false });
       const facts = homeFactsOf({ github: factsOf({ openIssues: [{ ...TICKET, comments: [said, held, person] }] }) });
 

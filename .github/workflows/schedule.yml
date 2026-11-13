@@ -106,6 +106,8 @@ jobs:
       dispatch: ${{ steps.loop.outputs.dispatch }}
       # "true" when the plan asked for a Design queue check.
       design-queue: ${{ steps.loop.outputs.design-queue }}
+      # The Operator's time zone from the Kit config (ADR-0023), which the skills bump's summary says its times in.
+      time-zone: ${{ steps.loop.outputs.time-zone }}
     steps:
       - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -214,10 +216,14 @@ jobs:
   # token through the push service account, and reads and writes the Product
   # repo only through the API, never checking out or running its code. It acts
   # on the Monday tick in the 04:00 UTC hour, judged by the tick the run was
-  # scheduled for, not when this job starts; a dropped tick waits a week.
+  # scheduled for, not when this job starts; a dropped tick waits a week. It
+  # waits for the Tick job only for the Operator's time zone, which the Tick
+  # read from the Kit config, and runs whether or not the Tick did: without
+  # one, its summary says its times in UTC.
   skills-bump:
     name: Skills bump
-    needs: kit
+    needs: [kit, tick]
+    if: ${{ !cancelled() && needs.kit.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -243,6 +249,7 @@ jobs:
         env:
           FABRIK_TICK_SCHEDULE: ${{ github.event.schedule }}
           FABRIK_TICK_SEEN_AT: ${{ needs.kit.outputs.started-at }}
+          FABRIK_TIME_ZONE: ${{ needs.tick.outputs.time-zone }}
         run: node kit/src/skills/source-bumps-due.ts
 
       - name: Load the Fabrik App key

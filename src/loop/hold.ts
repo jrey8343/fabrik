@@ -11,7 +11,7 @@
 // issue that frees a Subscription (src/loop/resume.ts). Its own issue or PR
 // gets one quiet held line too, which mentions nobody and is edited when the
 // run resumes or is dropped (src/loop/heldLine.ts, #471). Pure, no I/O.
-import { heldLineOn, heldRunName } from "./heldLine.ts";
+import { type HeldUntil, heldLineOn, heldRunName } from "./heldLine.ts";
 import { carriesHeldMarkers, heldInOrder, heldMarker, heldRunOf, type HoldableRun, holding, isCarrier, runNamed } from "./heldRun.ts";
 import { earliestOf, notified, resetsAtOf } from "./kitIssueMarks.ts";
 import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
@@ -31,14 +31,14 @@ export interface HeldOn {
 }
 
 /** The line naming a held run, with its held marker, for a weekly-limit issue. */
-export function heldMarkerComment(held: HoldableRun, until: string | null): string {
+export function heldMarkerComment(held: HoldableRun, until: string | null, timeZone: string | null): string {
   const run = `The ${runNamed(held.role)} on #${held.issue}`;
   const resume = `re-adds \`${held.label}\` on #${held.issue} then, to run it again.`;
   // With no reset known, only the Operator's close of this issue frees a Subscription for it (#440).
   const line =
     until === null
       ? `${run} is held until a Subscription is free again. The Kit doesn't know when this limit resets. Close this issue once agent runs work again, and the Kit ${resume}`
-      : `${run} is held until ${readable(until)}, when the first Subscription's weekly limit resets. The Kit ${resume}`;
+      : `${run} is held until ${readable(until, timeZone)}, when the first Subscription's weekly limit resets. The Kit ${resume}`;
   return [line, "", heldMarker(held)].join("\n");
 }
 
@@ -61,11 +61,11 @@ export function heldUntilFreeLine(held: HoldableRun): string {
 export function heldWhileUsedUp(
   plan: Plan,
   kitIssues: readonly KitIssueSnapshot[],
-  config: Pick<KitConfig, "subscriptions">,
+  config: Pick<KitConfig, "subscriptions" | "timeZone">,
 ): Plan {
   if (plan.kind !== "act" || !runsDueAreHeld(kitIssues, config)) return plan;
   if (!plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
-  const carrier = holdingOn(kitIssues);
+  const carrier = holdingOn(kitIssues, config.timeZone);
   if (carrier === null) return plan;
   const { until, on } = carrier;
   const { actions: planned } = plan;
@@ -100,7 +100,7 @@ export function heldWhileUsedUp(
  * (src/loop/digest.ts).
  */
 export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {
-  return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && holdingOn(kitIssues) !== null;
+  return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && holdingOn(kitIssues, null) !== null;
 }
 
 /**
@@ -110,7 +110,7 @@ export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: P
  */
 export function heldOn(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): HeldOn | null {
   if (!runsDueAreHeld(kitIssues, config)) return null;
-  const carrier = holdingOn(kitIssues);
+  const carrier = holdingOn(kitIssues, null);
   return carrier === null ? null : { issue: carrier.on.number, reset: carrier.reset };
 }
 
@@ -140,11 +140,9 @@ export function heldUntilThen(held: HeldOn | null): string {
   return held === null ? "" : ` Every Subscription is used up, so it's held on #${held.issue} until then.`;
 }
 
-/** A carrier a run is held on, when it is held until, and whether it has a reset at all. */
-interface Carrier {
+/** A carrier a run is held on, when it is held until, whether it has a reset at all, and the time zone that's said in. */
+interface Carrier extends HeldUntil {
   readonly on: KitIssueSnapshot;
-  readonly until: string | null;
-  readonly reset: boolean;
 }
 
 /**
@@ -153,16 +151,16 @@ interface Carrier {
  * open, held until the earliest reset across them. With no weekly-limit issue
  * open, the usage-credits or token-rotation issue already carrying held
  * markers, else the most recently opened, with no reset (#470). Null with no
- * carrier open.
+ * carrier open. Its lines say when in `timeZone`, the Operator's.
  */
-function holdingOn(kitIssues: readonly KitIssueSnapshot[]): Carrier | null {
+function holdingOn(kitIssues: readonly KitIssueSnapshot[], timeZone: string | null): Carrier | null {
   const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   const until = earliestOf(limits.map(resetsAtOf));
   const limit = limits.find(notified) ?? limits.find((issue) => until !== null && resetsAtOf(issue) === until) ?? limits[0];
-  if (limit !== undefined) return { on: limit, until, reset: true };
+  if (limit !== undefined) return { on: limit, until, reset: true, timeZone };
   const others = kitIssues.filter(isCarrier);
   const on = others.find(carriesHeldMarkers) ?? others.toSorted((a, b) => b.number - a.number)[0];
-  return on === undefined ? null : { on, until: null, reset: false };
+  return on === undefined ? null : { on, until: null, reset: false, timeZone };
 }
 
 /**
@@ -171,12 +169,12 @@ function holdingOn(kitIssues: readonly KitIssueSnapshot[]): Carrier | null {
  * waiting on a free Subscription too (src/loop/weeklyGate.ts, #442).
  */
 export function carrierOf(kitIssues: readonly KitIssueSnapshot[]): KitIssueSnapshot | null {
-  return holdingOn(kitIssues)?.on ?? null;
+  return holdingOn(kitIssues, null)?.on ?? null;
 }
 
 /** The comment naming a run held on this carrier, with its held marker. */
-function lineOn({ until, reset }: Carrier, held: HoldableRun): string {
-  return reset ? heldMarkerComment(held, until) : heldUntilFreeLine(held);
+function lineOn({ until, reset, timeZone }: Carrier, held: HoldableRun): string {
+  return reset ? heldMarkerComment(held, until, timeZone) : heldUntilFreeLine(held);
 }
 
 /**
@@ -185,8 +183,8 @@ function lineOn({ until, reset }: Carrier, held: HoldableRun): string {
  * on the carrier a run due now is held on, so that a later close still
  * resumes them (#470). Nothing with no run to hold or no carrier open.
  */
-export function heldAgain(runs: readonly HoldableRun[], kitIssues: readonly KitIssueSnapshot[]): Action[] {
-  const carrier = holdingOn(kitIssues);
+export function heldAgain(runs: readonly HoldableRun[], kitIssues: readonly KitIssueSnapshot[], timeZone: string | null): Action[] {
+  const carrier = holdingOn(kitIssues, timeZone);
   if (carrier === null || runs.length === 0) return [];
   return [{ kind: "comment", issue: carrier.on.number, body: runs.map((run) => lineOn(carrier, run)).join("\n\n") }];
 }
@@ -201,8 +199,14 @@ export function heldAgain(runs: readonly HoldableRun[], kitIssues: readonly KitI
  * carrier, as the most recently opened, and the line goes in its body, as a
  * weekly-limit refusal's does (#470).
  */
-export function heldAfterKill(held: HoldableRun, kitIssues: readonly KitIssueSnapshot[], notice: readonly Action[], name: string): Action[] {
-  const carrier = holdingOn(kitIssues);
+export function heldAfterKill(
+  held: HoldableRun,
+  kitIssues: readonly KitIssueSnapshot[],
+  notice: readonly Action[],
+  name: string,
+  timeZone: string | null,
+): Action[] {
+  const carrier = holdingOn(kitIssues, timeZone);
   const opens = notice.some((action) => action.kind === "open-issue");
   if (carrier !== null && (carrier.reset || carriesHeldMarkers(carrier.on) || !opens)) {
     return [
@@ -217,7 +221,7 @@ export function heldAfterKill(held: HoldableRun, kitIssues: readonly KitIssueSna
   const opened = notice.map((action): Action =>
     action.kind === "open-issue" ? { ...action, body: [action.body, "", heldUntilFreeLine(held)].join("\n"), key: OPENED_CARRIER } : action,
   );
-  return [...holding(held, null), ...opened, heldLineOn(held, name, { created: OPENED_CARRIER }, { until: null, reset: false })];
+  return [...holding(held, null), ...opened, heldLineOn(held, name, { created: OPENED_CARRIER }, { until: null, reset: false, timeZone })];
 }
 
 /** The key a kill's Plan names the carrier it opens by, for the held line to link it (#471). */

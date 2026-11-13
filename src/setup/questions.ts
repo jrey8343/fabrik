@@ -4,11 +4,11 @@
 // one, a missing answer means no, but for pausing the starter setup wrote on
 // its branch, which keeps what it holds.
 import { KIT_CONFIG_PATH, type ProductionConfig } from "../kit/config.ts";
+import { isTimeZone, knownTimeZone } from "../loop/readable.ts";
 import type { FlagAnswers } from "./args.ts";
 import {
   declaresProduction,
   type DeploymentsSeen,
-  isTimeZone,
   jsonObject,
   pausesDispatch,
   productionRefusal,
@@ -152,11 +152,16 @@ function beforeUrlIn(config: string | null): string | null {
   return typeof before === "string" && productionRefusal({ url: before, environment: null }) === null ? before : null;
 }
 
-/** The time zone for the Weekly summary, offering the one fabrik-runs holds, else this machine's. Null leaves fabrik-runs out. */
+/**
+ * The Operator's time zone, for the Weekly summary and the Kit config's
+ * time_zone, offering the one fabrik-runs holds, else this repo's time_zone,
+ * else this machine's, so a repo that drifted comes back in step with the
+ * store (ADR-0023). Null leaves fabrik-runs out.
+ */
 async function askTimeZone(state: ProductState, machineTimeZone: string, prompt: Prompt | null, say: (line: string) => void): Promise<string | null> {
   if (prompt === null) return null;
   const caller = state.store.files[STORE_CALLER_PATH];
-  const offered = (caller == null ? null : timeZoneIn(caller)) ?? machineTimeZone;
+  const offered = (caller == null ? null : timeZoneIn(caller)) ?? timeZoneInConfig(state.files[KIT_CONFIG_PATH] ?? null) ?? machineTimeZone;
   say("Setup also sets up fabrik-runs, where each Run record goes. The Weekly summary is filed there each Monday at 07:00 your time.");
   for (;;) {
     const answer = await prompt.ask(`Your time zone, or no to leave fabrik-runs out [${offered}]: `);
@@ -165,6 +170,11 @@ async function askTimeZone(state: ProductState, machineTimeZone: string, prompt:
     if (isTimeZone(timeZone)) return timeZone;
     say(`${timeZone} isn't an IANA time zone, such as Europe/London.`);
   }
+}
+
+/** The time_zone a Kit config's text gives, when it's a zone the runtime knows. */
+function timeZoneInConfig(config: string | null): string | null {
+  return knownTimeZone(config === null ? undefined : jsonObject(config)?.["time_zone"]);
 }
 
 /**

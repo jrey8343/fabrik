@@ -174,23 +174,28 @@ export function scheduledTickOf(observedAt: Date, schedule: string | undefined):
  * after the bump tick, the line also says the week's bump was missed if no run
  * took that tick as due: a run GitHub started more than an hour late is read
  * as this tick, and one run can't tell that from the bump tick's own run
- * having been on time, so the Operator checks the run before it.
+ * having been on time, so the Operator checks the run before it. The line
+ * says when in `timeZone`, the Operator's; the bump tick stays in UTC.
  */
-export function skillsBumpGate(seenAt: Date, schedule: string | undefined): { readonly due: boolean; readonly summary: string } {
+export function skillsBumpGate(
+  seenAt: Date,
+  schedule: string | undefined,
+  timeZone: string | null,
+): { readonly due: boolean; readonly summary: string } {
   const tick = scheduledTickOf(seenAt, schedule);
   if (isSkillsBumpTick(tick)) {
-    return { due: true, summary: `Skills bump: due, as the tick scheduled for ${readable(tick.getTime())} is the weekly skills bump tick` };
+    return { due: true, summary: `Skills bump: due, as the tick scheduled for ${readable(tick.getTime(), timeZone)} is the weekly skills bump tick` };
   }
   const next = new Date(tick);
   do next.setUTCHours(next.getUTCHours() + 1);
   while (!isSkillsBumpTick(next));
-  const notDue = `Skills bump: not due (next: ${readable(next.getTime())})`;
+  const notDue = `Skills bump: not due (next: ${readable(next.getTime(), timeZone)})`;
   const previous = new Date(tick);
   previous.setUTCHours(previous.getUTCHours() - 1);
   if (!isSkillsBumpTick(previous)) return { due: false, summary: notDue };
   return {
     due: false,
-    summary: `${notDue}. This week's bump tick was ${readable(previous.getTime())}: if no run took it as due, GitHub started it more than an hour late or dropped it, and this week's bump was missed`,
+    summary: `${notDue}. This week's bump tick was ${readable(previous.getTime(), timeZone)}: if no run took it as due, GitHub started it more than an hour late or dropped it, and this week's bump was missed`,
   };
 }
 

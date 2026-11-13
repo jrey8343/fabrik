@@ -380,14 +380,14 @@ describe("finding the scheduled tick a delayed run belongs to", () => {
 
 describe("what the weekly gate says in the step summary", () => {
   it("says a tick that isn't due isn't, and when the next bump tick is", () => {
-    expect(skillsBumpGate(new Date("2026-11-10T09:20:00Z"), "17 * * * *")).toEqual({
+    expect(skillsBumpGate(new Date("2026-11-10T09:20:00Z"), "17 * * * *", null)).toEqual({
       due: false,
       summary: "Skills bump: not due (next: 2026-11-16 04:17 UTC)",
     });
   });
 
   it("on the Monday tick just past the 04:00 hour, counts the next bump tick from the week after and says this week's may have been missed", () => {
-    expect(skillsBumpGate(new Date("2026-11-09T05:20:00Z"), "17 * * * *")).toEqual({
+    expect(skillsBumpGate(new Date("2026-11-09T05:20:00Z"), "17 * * * *", null)).toEqual({
       due: false,
       summary:
         "Skills bump: not due (next: 2026-11-16 04:17 UTC). This week's bump tick was 2026-11-09 04:17 UTC: if no run took it as due, GitHub started it more than an hour late or dropped it, and this week's bump was missed",
@@ -395,11 +395,21 @@ describe("what the weekly gate says in the step summary", () => {
   });
 
   it("says nothing of a missed week on a later Monday tick", () => {
-    expect(skillsBumpGate(new Date("2026-11-09T06:20:00Z"), "17 * * * *").summary).toBe("Skills bump: not due (next: 2026-11-16 04:17 UTC)");
+    expect(skillsBumpGate(new Date("2026-11-09T06:20:00Z"), "17 * * * *", null).summary).toBe("Skills bump: not due (next: 2026-11-16 04:17 UTC)");
+  });
+
+  it("says when in the Operator's time zone, while the bump tick stays Monday's 04:00 UTC hour", () => {
+    expect(skillsBumpGate(new Date("2026-11-09T05:10:00Z"), "17 * * * *", "Australia/Sydney")).toEqual({
+      due: true,
+      summary: "Skills bump: due, as the tick scheduled for 2026-11-09 15:17 Australia/Sydney is the weekly skills bump tick",
+    });
+    expect(skillsBumpGate(new Date("2026-11-09T05:20:00Z"), "17 * * * *", "Australia/Sydney").summary).toBe(
+      "Skills bump: not due (next: 2026-11-16 15:17 Australia/Sydney). This week's bump tick was 2026-11-09 15:17 Australia/Sydney: if no run took it as due, GitHub started it more than an hour late or dropped it, and this week's bump was missed",
+    );
   });
 
   it("says a due tick is the weekly skills bump tick", () => {
-    expect(skillsBumpGate(new Date("2026-11-09T05:10:00Z"), "17 * * * *")).toEqual({
+    expect(skillsBumpGate(new Date("2026-11-09T05:10:00Z"), "17 * * * *", null)).toEqual({
       due: true,
       summary: "Skills bump: due, as the tick scheduled for 2026-11-09 04:17 UTC is the weekly skills bump tick",
     });

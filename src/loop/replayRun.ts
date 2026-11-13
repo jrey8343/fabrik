@@ -93,6 +93,7 @@ export function landReplayRun(run: Extract<LoopEvent, { kind: "replay-run-finish
           runUrl: run.runUrl,
           resetsAt: run.resetsAt ?? null,
           ...ranOnOf(run, config),
+          timeZone: config.timeZone,
         })
       : null;
   const actions: Action[] = [

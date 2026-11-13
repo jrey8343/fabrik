@@ -439,6 +439,17 @@ describe("Failure notices say what fits the run that failed (#436)", () => {
     expect(body).toContain("Once the weekly limit resets at 2026-11-09 04:00 UTC, re-add `agent:implement` on this Ticket to run it again.");
   });
 
+  it("says when the weekly limit resets once, in the Operator's time zone, never quoting the run's UTC reset too", () => {
+    const event = failed({
+      role: "implement",
+      report: { failure: "weekly-limit", detail: "resets at 2026-11-09T04:00:00.000Z", resetsAt: "2026-11-09T04:00:00.000Z" },
+    });
+    const body = bodyOf(planFor(event, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig({ timeZone: "Australia/Sydney" })));
+
+    expect(body).toContain("Once the weekly limit resets at 2026-11-09 15:00 Australia/Sydney, re-add `agent:implement`");
+    expect(body).not.toContain("2026-11-09T04:00:00.000Z");
+  });
+
   it("says only once the weekly limit resets when it isn't known when", () => {
     const event = failed({ role: "implement", report: { failure: "weekly-limit", detail: "" } });
     const body = bodyOf(planFor(event, snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"] })), kitConfig()));

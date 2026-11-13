@@ -141,6 +141,7 @@ async function main(): Promise<void> {
     cap: config.caps.monitorIssues,
     // By default the Operator owns the Product repos they run Fabrik in, as the Loop has it.
     operator: config.operator ?? owner,
+    timeZone: config.timeZone,
   });
   // Which groups are filed and held never depends on their latest events, so a
   // plan with the groups as listed names the ones whose latest event to read.

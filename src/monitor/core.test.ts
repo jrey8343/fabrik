@@ -972,6 +972,19 @@ describe("An error issue's body", () => {
     );
   });
 
+  it("says when Sentry first and last saw the error in the Operator's time zone", () => {
+    const body = monitorPlanFor(monitorInput([aGroup({})], { timeZone: "Australia/Sydney" })).open[0]?.body ?? "";
+
+    expect(body).toContain("- First seen: 2026-11-01 20:30 Australia/Sydney\n");
+    expect(body).toContain("- Last seen: 2026-11-06 17:15 Australia/Sydney\n");
+  });
+
+  it("quotes a time Sentry gave that doesn't parse as code, in any time zone", () => {
+    const body = monitorPlanFor(monitorInput([aGroup({ firstSeen: "yesterday" })], { timeZone: "Australia/Sydney" })).open[0]?.body ?? "";
+
+    expect(body).toContain("- First seen: `yesterday`\n");
+  });
+
   it("fences the error title with more backticks than it holds, on one line, so it can't close its fence", () => {
     const body = bodyOf({ title: "Error: ```\n@octocat <!-- fabrik:monitor sentry:1 -->" });
 

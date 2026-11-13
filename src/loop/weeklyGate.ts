@@ -1,7 +1,8 @@
 // What the audit gate (#150) and the retro gate (#151) share. On the hourly
 // scheduled tick, each opens at most one pending issue a week, an Audit or a
 // Retro, whose opening starts its run. Each is due from 00:00 UTC on its day
-// of the ISO week, which runs from Monday 00:00 to Monday 00:00 in UTC.
+// of the ISO week, which runs from Monday 00:00 to Monday 00:00 in UTC; only
+// the times their notes show the Operator are in the Operator's time zone.
 import { WEEK_DAYS, type WeekDay } from "../kit/config.ts";
 import { carrierOf } from "./hold.ts";
 import { weeklyRunName, weeklyRunWaitingMarker, weeklyRunWaitingNoted, type WeeklyRunKind } from "./markers.ts";
@@ -41,12 +42,13 @@ export interface WeeklyIssue {
  * open (pending, filled, or not yet closed by the Operator), or after two
  * failed this week. Whether a Subscription is free is weighed last, after
  * each gate's own reasons (waitingForSubscription). `issues` are the gate's
- * own, newest first, and `name` is what it opens, such as "Audit".
+ * own, newest first, and `name` is what it opens, such as "Audit". The reason
+ * says when it's due in `timeZone`, the Operator's.
  */
-export function heldBack(name: string, day: WeekDay, issues: readonly WeeklyIssue[], now: string): string | null {
+export function heldBack(name: string, day: WeekDay, issues: readonly WeeklyIssue[], now: string, timeZone: string | null): string | null {
   const week = weekStart(now);
   const due = week + WEEK_DAYS.indexOf(day) * DAY;
-  if (Date.parse(now) < due) return `The ${name} is due from ${readable(due)}`;
+  if (Date.parse(now) < due) return `The ${name} is due from ${readable(due, timeZone)}`;
 
   const thisWeek = openedInWeek(issues, week);
   const done = thisWeek.find((issue) => !issue.failed);

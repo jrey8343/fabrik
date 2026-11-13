@@ -65,6 +65,38 @@ function opened(plan: Plan): Extract<Action, { kind: "open-issue" }>[] {
   return plan.kind === "act" ? plan.actions.filter((action) => action.kind === "open-issue") : [];
 }
 
+describe("The retro gate in the Operator's time zone", () => {
+  const sydney = kitConfig({ timeZone: "Australia/Sydney" });
+  const notesOf = (plan: Plan): readonly string[] => (plan.kind === "act" ? (plan.notes ?? []) : plan.kind === "nothing" ? [plan.reason] : []);
+  const tickIn = (now: string, retro: { issues?: readonly RetroIssueSnapshot[]; agentPullRequestClosed?: boolean } = {}) =>
+    planFor(
+      { kind: "scheduled-tick", now },
+      tickSnapshot({ audit: AUDITED, retro: { storeReady: true, issues: [], agentPullRequestClosed: true, escapeFiled: false, ...retro } }),
+      sydney,
+    );
+
+  it("says when the Retro is due from in it, while still due from 00:00 UTC on retro.day", () => {
+    // Saturday 10:00 in Sydney, but still Friday in UTC.
+    const plan = tickIn("2026-11-06T23:00:00.000Z");
+
+    expect(notesOf(plan)).toContain("The Retro is due from 2026-11-07 11:00 Australia/Sydney");
+    expect(opened(plan)).toEqual([]);
+    expect(opened(tickIn("2026-11-07T00:00:00.000Z"))).toHaveLength(1);
+  });
+
+  it("says in it since when the pending Retro reads the factory's runs", () => {
+    expect(opened(tickIn(SATURDAY))).toEqual([
+      expect.objectContaining({ body: expect.stringMatching(/^The Retro is reading the factory's runs since 2026-10-31 15:00 Australia\/Sydney,/) }),
+    ]);
+  });
+
+  it("says in it since when nothing is new", () => {
+    expect(notesOf(tickIn(SATURDAY, { agentPullRequestClosed: false }))).toContain(
+      "Nothing is new since 2026-10-31 15:00 Australia/Sydney: no agent PR merged or closed, and no escape was filed",
+    );
+  });
+});
+
 describe("The retro gate opens a pending Retro", () => {
   it("on a repo's first Retro, reading the 7 days before the tick, quietly and with no state label", () => {
     const plan = tick(SATURDAY);

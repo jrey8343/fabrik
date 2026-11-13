@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { captureIdentityOf, previewUrl, productionPageUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, type UiConfig, UI_VIEWPORTS, withRouteOn } from "./config.ts";
+import { captureIdentityOf, previewUrl, productionPageUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, timeZoneNote, type UiConfig, UI_VIEWPORTS, withRouteOn } from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
@@ -34,6 +34,7 @@ const DEFAULTS = {
   ui: null,
   preview: null,
   production: null,
+  timeZone: null,
 };
 
 describe("Kit config", () => {
@@ -284,6 +285,37 @@ describe("Kit config", () => {
     };
 
     expect(resolveKitConfig({ config: JSON.stringify(starter) })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("reads the Operator's time zone from time_zone", () => {
+    const result = resolveKitConfig({ config: `{ "time_zone": "Australia/Sydney" }` });
+
+    expect(result.ok && result.config.timeZone).toBe("Australia/Sydney");
+    expect(timeZoneNote(`{ "time_zone": "Australia/Sydney" }`)).toBeNull();
+  });
+
+  it.each([`{ "time_zone": null }`, "{}", null])("leaves the time zone unset, with no note, for %j", (text) => {
+    const result = resolveKitConfig({ config: text });
+
+    expect(result.ok && result.config.timeZone).toBeNull();
+    expect(timeZoneNote(text)).toBeNull();
+  });
+
+  it.each([
+    [`{ "time_zone": "Mars/Olympus_Mons" }`, `"Mars/Olympus_Mons"`],
+    [`{ "time_zone": "sydney time" }`, `"sydney time"`],
+    [`{ "time_zone": 10 }`, "10"],
+  ])("takes an invalid time_zone, %s, as unset without failing, and the note names it", (text, named) => {
+    const result = resolveKitConfig({ config: text });
+
+    expect(result).toEqual({ ok: true, config: DEFAULTS });
+    expect(timeZoneNote(text)).toBe(
+      `\`time_zone\` in .fabrik/config.json is ${named}, which isn't an IANA time zone, such as Europe/London, so the Kit writes its times in UTC.`,
+    );
+  });
+
+  it("has no time zone note for a Kit config that isn't JSON, whose errors say so", () => {
+    expect(timeZoneNote("{ not json")).toBeNull();
   });
 
   it("lets null reset an effort back to the CLI default", () => {
@@ -863,11 +895,11 @@ describe("The Kit config template", () => {
     expect(JSON.parse(template)).toMatchObject({ ui: null, preview: { url: null } });
   });
 
-  it("spells out production at its Kit default, declaring nothing, as the last member", () => {
+  it("spells out production at its Kit default, declaring nothing, then time_zone unset, as the last members", () => {
     const starter: unknown = JSON.parse(template);
 
-    expect(starter).toMatchObject({ production: null });
-    expect(Object.keys(starter as object).at(-1)).toBe("production");
+    expect(starter).toMatchObject({ production: null, time_zone: null });
+    expect(Object.keys(starter as object).slice(-2)).toEqual(["production", "time_zone"]);
   });
 
   it("resolves to every Kit default", () => {

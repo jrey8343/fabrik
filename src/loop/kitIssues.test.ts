@@ -266,6 +266,54 @@ describe("The weekly-limit issue", () => {
     expect(issue.body).toContain("Run `/fabrik-pair` on this issue to work through these steps with an agent.");
   });
 
+  describe("in the Operator's time zone", () => {
+    const sydney = kitConfig({ timeZone: "Australia/Sydney" });
+
+    it("says when the limit resets in it: the title, the body, the step and the Ticket's failure comment", () => {
+      const plan = planFor(weeklyLimit(), snapshotOf(anIssue({ number: 7 })), sydney);
+      const issue = kitIssueOpenedBy(plan, 41);
+
+      expect(notificationsOf(plan)).toEqual(['mention in new "The weekly usage limit is reached until 2026-11-09 15:00 Australia/Sydney"']);
+      expect(issue.body).toMatch(/^@operator The Implement run on #7 hit the weekly usage limit\. It resets at 2026-11-09 15:00 Australia\/Sydney\./);
+      expect(issue.body).toContain("- [ ] Wait for the limit to reset at 2026-11-09 15:00 Australia/Sydney.");
+      expect(plan).toMatchObject({
+        kind: "act",
+        actions: expect.arrayContaining([
+          { kind: "comment", issue: 7, body: expect.stringContaining("Once the weekly limit resets at 2026-11-09 15:00 Australia/Sydney, re-add") },
+        ]),
+      });
+    });
+
+    it("says when it reset in the note the scheduled tick closes the issue with, and when it resets while it waits", () => {
+      const open = kitIssueOpenedBy(planFor(weeklyLimit(), snapshotOf(anIssue({ number: 7 })), sydney), 41);
+
+      expect(planFor({ kind: "scheduled-tick", now: "2026-11-09T04:05:00.000Z" }, tickSnapshot({ kitIssues: [open] }), sydney)).toMatchObject({
+        actions: expect.arrayContaining([
+          {
+            kind: "comment",
+            issue: 41,
+            body: "The weekly usage limit reset at 2026-11-09 15:00 Australia/Sydney, so the Kit is closing this issue. Stalled Tickets stay stalled until their trigger label is re-added.",
+          },
+        ]),
+      });
+      expect(planFor({ kind: "scheduled-tick", now: "2026-11-09T03:55:00.000Z" }, tickSnapshot({ kitIssues: [open] }), sydney)).toMatchObject({
+        notes: expect.arrayContaining(["The weekly limit in #41 resets at 2026-11-09 15:00 Australia/Sydney"]),
+      });
+    });
+
+    it("comments on an open issue it hadn't @-mentioned on with the reset in it", () => {
+      const open: KitIssueSnapshot = { number: 41, labels: ["fabrik:weekly-limit"], body: "Opened by hand.", comments: [] };
+
+      const plan = planFor(weeklyLimit(8), snapshotOf(anIssue({ number: 8 }), { kitIssues: [open] }), sydney);
+
+      expect(plan).toMatchObject({
+        actions: expect.arrayContaining([
+          { kind: "comment", issue: 41, body: expect.stringContaining("hit the weekly usage limit, which resets at 2026-11-09 15:00 Australia/Sydney.") },
+        ]),
+      });
+    });
+  });
+
   it("a later stall in the same window comments quietly on the open issue", () => {
     const first = planFor(weeklyLimit(7), snapshotOf(anIssue({ number: 7 })), kitConfig());
     const limit = kitIssueOpenedBy(first, 41);
