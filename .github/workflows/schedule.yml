@@ -283,7 +283,7 @@ jobs:
   # The word that a newly pinned release is running (#548): the first started
   # Tick on a release says "Fabrik vX is running here" on the pull request that
   # moved fabrik.yml's pin to it, once, with the Fabrik App token, so it asks
-  # for no GITHUB_TOKEN permission. Like the skills bump, it waits for the
+  # for no GITHUB_TOKEN permission. Like the Skills bump, it waits for the
   # Tick job only for the Operator's time zone, and runs whether or not the
   # Tick did. It can't fail the run: its program writes any failure as its
   # step summary's line, and continue-on-error covers the steps before it.
@@ -338,6 +338,11 @@ jobs:
           FABRIK_TICK_STARTED_AT: ${{ needs.kit.outputs.started-at }}
           FABRIK_TIME_ZONE: ${{ needs.tick.outputs.time-zone }}
         run: node kit/src/kit/release-running-main.ts
+
+      # The program writes its own line; this one covers the steps before it, such as the mint.
+      - name: Say why nothing was said
+        if: failure()
+        run: echo "### Release running"$'\n\n'"- Couldn't mint the Fabrik App token, so no pull request is told which release is running here. The next Tick tries again." >>"$GITHUB_STEP_SUMMARY"
 
   # The Monitor (src/monitor/main.ts, #148): files an issue for Triage for each
   # production error Sentry reports, once monitor.errors is set, and one while

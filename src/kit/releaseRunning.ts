@@ -44,7 +44,7 @@ export interface ReleaseRunningPlan {
 }
 
 /** The hidden line ending the App's comment that says `release` is running. */
-export function releaseRunningMarker(release: string): string {
+function releaseRunningMarker(release: string): string {
   return `<!-- fabrik:release-running ${release} -->`;
 }
 

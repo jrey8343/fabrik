@@ -455,6 +455,13 @@ describe("The Kit's workflows", () => {
       expect(job).toContain("\n    continue-on-error: true\n");
       expect(job).toMatch(/concurrency:\n\s+group: fabrik-release-running\n\s+cancel-in-progress: false\n/);
     });
+
+    it("writes a step-summary line when a step before the program fails, such as the token's mint", () => {
+      const last = steps.at(-1)!;
+
+      expect(last).toContain("if: failure()");
+      expect(last).toContain('>>"$GITHUB_STEP_SUMMARY"');
+    });
   });
 
   // The Monitor (#148): plain Kit code on the hourly tick, reading GitHub and Sentry through their APIs alone.

@@ -6,10 +6,11 @@
 // Fabrik App token. Nothing here fails the Tick: a read or write GitHub
 // refuses comes back as the step summary's line, and the next Tick tries
 // again, which the plan's marker makes safe.
-import { checkCallerWorkflow, splitWorkflowRef } from "../kit/caller.ts";
+import { splitWorkflowRef } from "../kit/caller.ts";
 import { type PinMove, type PullComment, releaseRunningPlan } from "../kit/releaseRunning.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { allPages, type GitHub, type Repo, whyUnread } from "./client.ts";
+import { releaseIn } from "./tickFacts.ts";
 
 export interface ReleaseRunningRun {
   readonly repo: Repo;
@@ -57,7 +58,7 @@ export async function confirmReleaseRunning(github: Pick<GitHub, "rest" | "fileT
  */
 async function newestPinMove(github: Pick<GitHub, "rest" | "fileText">, run: ReleaseRunningRun): Promise<PinMove | null> {
   const path = `/repos/${run.repo.owner}/${run.repo.name}`;
-  const commits = (await github.rest("GET", `${path}/commits?sha=${encodeURIComponent(run.headSha)}&path=${encodeURIComponent(CALLER_PATH)}&per_page=100`)) as { sha: string }[];
+  const commits = await allPages<{ sha: string }>(github, `${path}/commits?sha=${encodeURIComponent(run.headSha)}&path=${encodeURIComponent(CALLER_PATH)}`);
   const [newest] = commits;
   if (newest === undefined) return null;
   const release = await releaseAt(github, run.repo, newest.sha);
@@ -71,10 +72,7 @@ async function newestPinMove(github: Pick<GitHub, "rest" | "fileText">, run: Rel
 
 /** The release `fabrik.yml` pins at a commit, by the Kit's caller check, or null when it pins no exact one. */
 async function releaseAt(github: Pick<GitHub, "fileText">, repo: Repo, sha: string): Promise<string | null> {
-  const caller = await github.fileText(repo, CALLER_PATH, sha);
-  if (caller === null) return null;
-  const check = checkCallerWorkflow(caller);
-  return check.ok ? check.release : null;
+  return releaseIn(await github.fileText(repo, CALLER_PATH, sha));
 }
 
 /** The merged pull request a commit came from, preferring the one it merged as, and its comments; null for a direct push. */
