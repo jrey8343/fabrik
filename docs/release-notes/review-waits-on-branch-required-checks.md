@@ -1,6 +1,6 @@
 # Release notes: a Review waits on every Required check
 
-The notes for the change that has the Review wait on the Required checks as `GLOSSARY.md` defines them, those `sandbox.checks` lists plus any the default branch requires ([#565](https://github.com/jrey8343/fabrik/issues/565)). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
+The notes for the minor release that has the Review wait on the Required checks as `GLOSSARY.md` defines them, those `sandbox.checks` lists plus any the default branch requires ([#565](https://github.com/jrey8343/fabrik/issues/565)). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
 
 ## Release-note line
 
@@ -13,7 +13,7 @@ A Review now also waits on checks the default branch requires beyond `sandbox.ch
 - **The `--required` path is gone.** The wait always reads every check on the head, so a branch-required check that never registered there is now named as never reported, rather than missed.
 - **A branch that can't be read fails the wait** with the unread-checks notice, never falling back to `sandbox.checks` alone. The job's token already has `contents: read`, which is enough.
 - **The never-reported notice gives new advice.** Setup never takes a check off the branch, so dropping one from `sandbox.checks` alone no longer stops the Review waiting on it. The notice now says to fix the check's workflow name or `paths:` filter, or take it off the default branch's required list on github.com, and out of `sandbox.checks` too if it's listed there.
-- **Why a patch:** it fixes the Review to match what the Merge gate already holds. Nothing changes for a Product repo whose branch requires nothing beyond `sandbox.checks`, which at triage was both of them.
+- **Why a minor:** it's new behaviour, as a Review can now fail or wait on a check the Kit config doesn't list, but it needs nothing from a Product repo beyond the bump. Nothing changes for a Product repo whose branch requires nothing beyond `sandbox.checks`, which at triage was both of them.
 
 ## Not covered
 
