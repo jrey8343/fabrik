@@ -1,5 +1,5 @@
 // The Run record (ADR-0009): from what the push job knows when an AFK agent
-// run ends, the one schema 5 record of that run, and the paths it and its
+// run ends, the one record of that run, and the paths it and its
 // transcript take in the store, or no record when no agent run ended. A judge
 // run, scoring a finished run, gets a record too, in role `score`, from what
 // the score-record job knows when it ends, and so does a Replay arm's
@@ -14,9 +14,11 @@
 // schema 1 to 4 record, written before Step-ups had reasons, with a null
 // reason, or `retry` if it Stepped up, and a schema 1 to 5 record, written
 // before empty diffs were recorded, as no empty diff, and a schema 1 to 7
-// record, written before Broken runs were recorded, as no Broken run. Pure,
-// no I/O.
+// record, written before Broken runs were recorded, as no Broken run, and a
+// schema 1 to 8 record, written before landings were recorded, as one the
+// push job landed. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
+import type { refusalOf } from "../github/client.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
 import { brokenRunOf, infrastructureFailureOf } from "../loop/failures.ts";
@@ -52,6 +54,10 @@ export interface RunEnd {
   readonly transcript: readonly string[] | null;
   /** Whether the Loop found the Implement run's branch changed nothing, an empty diff, as its step output says. */
   readonly emptyDiff: boolean;
+  /** How the push job's Loop step ended (`steps.loop.outcome`): `success`, `failure`, `cancelled`, or `skipped` or "" when it never ran. */
+  readonly loopOutcome: string;
+  /** The text of the file the Loop step leaves when it says its landing failed (#487), or null when it left none. */
+  readonly landingFailed: string | null;
 }
 
 /** One model's share of the run, as its result's `modelUsage` reports it. */
@@ -76,15 +82,55 @@ export interface RateLimitReading {
   readonly resetsAt: number | null;
 }
 
+/**
+ * What a failed landing failed on, told apart as the failure comment tells it
+ * (src/kit/landingFailure.ts): GitHub refusing the call for a rate limit or a
+ * missing permission (`refused`), GitHub's own failure, a 5xx or a call it
+ * never answered (`github`), a file the job reads that wasn't there
+ * (`missing-file`), or anything else, the Kit's own failure (`kit`). That
+ * last takes in a plan the Loop wouldn't land, any other 4xx GitHub answered
+ * the Kit's call with, which is the Kit's call to get right even when a race
+ * caused it (its `status` says which), and a landing cut off before it could
+ * say why (its `loopOutcome` says whether it failed or was cancelled).
+ */
+export type LandingFailureClass = "refused" | "github" | "missing-file" | "kit";
+
+/** Why GitHub refused a call, when it's one a caller can act on (refusalOf). */
+export type LandingRefusal = NonNullable<ReturnType<typeof refusalOf>>;
+
+/** How the push job's landing of a run failed (#487), as its Run record keeps it. */
+export interface LandingFailed {
+  /**
+   * How the push job's Run the Loop step ended: `failure`, or `cancelled`,
+   * which tells a landing cut off, by a timeout or someone cancelling the
+   * run, from one that failed. Not the record's own `jobResult`, which is
+   * the agent job's.
+   */
+  readonly loopOutcome: "failure" | "cancelled";
+  /** The plan's action that failed, or null when no action did. */
+  readonly action: { readonly kind: string; readonly description: string } | null;
+  /** The GitHub call that failed, such as `PATCH /repos/o/r/pulls/36`, or null when none did or the thrower didn't say. */
+  readonly request: string | null;
+  /** The status the GitHub call failed with, 0 when GitHub never answered, or null when no call failed. */
+  readonly status: number | null;
+  /** GitHub's `x-github-request-id` for that call, or null when it gave none. */
+  readonly requestId: string | null;
+  readonly class: LandingFailureClass;
+  /** Why GitHub refused, exactly when `class` is `refused`. */
+  readonly refusal: LandingRefusal | null;
+  /** The Loop's reason, for a plan it wouldn't land; null otherwise. */
+  readonly reason: string | null;
+}
+
 /** A record's role: the agent role that ran, or `score` for a judge run scoring a finished run. */
 export type RunRecordRole = AgentRole | "score";
 
 /**
  * The schema a Run record is written at: 2 added `subscription`, 3 added
  * `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`,
- * 7 added `keptBranch`, 8 added `brokenRun`.
+ * 7 added `keptBranch`, 8 added `brokenRun`, 9 added `landing`.
  */
-export const RUN_RECORD_SCHEMA = 8;
+export const RUN_RECORD_SCHEMA = 9;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -148,7 +194,7 @@ export function firstRunOf(implementRuns: readonly RunRecord[]): RunRecord | und
   return first.toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)).at(-1);
 }
 
-/** One AFK agent run, schema 5. */
+/** One AFK agent run, at RUN_RECORD_SCHEMA. */
 export interface RunRecord {
   readonly schema: typeof RUN_RECORD_SCHEMA;
   readonly kitSha: string;
@@ -220,6 +266,14 @@ export interface RunRecord {
    * null, its Broken run left as the Infrastructure failure it was then.
    */
   readonly brokenRun: BrokenRun | null;
+  /**
+   * null when the push job landed the run, else how its landing failed
+   * (#487): the agent's own job may have succeeded, as `jobResult` says, and
+   * its work never landed. A judge run's and a Replay arm's are null: their
+   * jobs land nothing of their own here. A schema 1 to 8 record, written
+   * before landings were recorded, reads as null.
+   */
+  readonly landing: LandingFailed | null;
   /** A Review's Verdict, or null when it gave none (and for every other role). */
   readonly verdict: Verdict | null;
   readonly durationMs: number | null;
@@ -319,6 +373,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
     brokenRun: ran.broken,
+    landing: landingOf(end.loopOutcome, end.landingFailed),
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -384,6 +439,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
     brokenRun: null,
+    landing: null,
     verdict: null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -453,9 +509,58 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     infrastructureFailure: failureOf(job.result, job.outputs["secrets-step"], end.failureReport),
     // A Replay arm uses no Retries, and its Replay ends on any failure it can't land (src/kit/replayRecord.ts), so it's never a Broken run.
     brokenRun: null,
+    landing: null,
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
+}
+
+/**
+ * How the push job's landing ended (#487): the failure its Loop step left,
+ * or, with none left, null for a step that succeeded or never ran, and the
+ * Kit's own failure, unexplained, for one that failed or was cancelled before
+ * it could say why. A file that doesn't read as a landing failure is no file.
+ */
+function landingOf(loopOutcome: string, landingFailed: string | null): LandingFailed | null {
+  const left = landingFailed === null ? null : readLandingFailed(landingFailed);
+  if (left !== null) return left;
+  if (loopOutcome !== "failure" && loopOutcome !== "cancelled") return null;
+  return unexplainedLanding(loopOutcome);
+}
+
+/**
+ * A landing that failed, or was cancelled, before the Loop could say why:
+ * the Kit's own failure, with nothing else known of it.
+ */
+export function unexplainedLanding(loopOutcome: LandingFailed["loopOutcome"]): LandingFailed {
+  return { loopOutcome, action: null, request: null, status: null, requestId: null, class: "kit", refusal: null, reason: null };
+}
+
+const LANDING_FAILURE_CLASSES: readonly unknown[] = ["refused", "github", "missing-file", "kit"] satisfies LandingFailureClass[];
+
+/** The landing failure a Loop step's file holds, or null for text that isn't one. */
+function readLandingFailed(text: string): LandingFailed | null {
+  try {
+    const failed = JSON.parse(text) as Partial<Record<keyof LandingFailed, unknown>> | null;
+    if (typeof failed !== "object" || failed === null) return null;
+    const { loopOutcome, action, request, status, requestId, class: kind, refusal, reason } = failed;
+    const nullOr = (value: unknown, type: string) => value === null || typeof value === type;
+    const actionOk =
+      action === null ||
+      (typeof action === "object" && action !== null && typeof (action as Record<string, unknown>)["kind"] === "string" && typeof (action as Record<string, unknown>)["description"] === "string");
+    const ok =
+      (loopOutcome === "failure" || loopOutcome === "cancelled") &&
+      actionOk &&
+      nullOr(request, "string") &&
+      nullOr(status, "number") &&
+      nullOr(requestId, "string") &&
+      LANDING_FAILURE_CLASSES.includes(kind) &&
+      (refusal === null || refusal === "rate-limited" || refusal === "missing-permission") &&
+      nullOr(reason, "string");
+    return ok ? (failed as LandingFailed) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Whether an Implement run Stepped up, and why, from the Kit job's outputs; never a reason without a Step-up. */
@@ -487,7 +592,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
   const stream = transcript === null ? null : readStream(transcript);
   const last = stream?.result ?? null;
   const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
-  const { infrastructureFailure, brokenRun, verdict, ...ran } = facts;
+  const { infrastructureFailure, brokenRun, landing, verdict, ...ran } = facts;
   return {
     schema: RUN_RECORD_SCHEMA,
     ...ran,
@@ -496,6 +601,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
     terminalReason: stringOr(last?.["terminal_reason"]),
     infrastructureFailure,
     brokenRun,
+    landing,
     verdict,
     durationMs: numberOr(last?.["duration_ms"]),
     apiDurationMs: numberOr(last?.["duration_api_ms"]),
@@ -519,19 +625,23 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * had reasons, with a null reason, or `retry` if it Stepped up: until then
  * only the second Retry recorded a Step-up, and a schema 1 to 5 record,
  * written before empty diffs were recorded, as no empty diff, and a schema 1
- * to 7 record, written before Broken runs were recorded, as no Broken run. Null for
- * anything that isn't a record of a schema the Kit knows.
+ * to 7 record, written before Broken runs were recorded, as no Broken run, and
+ * a schema 1 to 8 record, written before landings were recorded, as a run the
+ * push job landed. Null for anything that isn't a record of a schema the Kit
+ * knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
-  type Schema7 = Omit<RunRecord, "schema" | "brokenRun">;
-  if (schema === 7) return { ...(stored as Schema7), schema: RUN_RECORD_SCHEMA, brokenRun: null };
+  type Schema8 = Omit<RunRecord, "schema" | "landing">;
+  if (schema === 8) return { ...(stored as Schema8), schema: RUN_RECORD_SCHEMA, landing: null };
+  type Schema7 = Omit<Schema8, "brokenRun">;
+  if (schema === 7) return { ...(stored as Schema7), schema: RUN_RECORD_SCHEMA, brokenRun: null, landing: null };
   type Schema6 = Omit<Schema7, "keptBranch">;
-  if (schema === 6) return { ...(stored as Schema6), schema: RUN_RECORD_SCHEMA, keptBranch: false, brokenRun: null };
+  if (schema === 6) return { ...(stored as Schema6), schema: RUN_RECORD_SCHEMA, keptBranch: false, brokenRun: null, landing: null };
   type Schema5 = Omit<Schema6, "emptyDiff">;
-  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false, brokenRun: null };
+  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false, brokenRun: null, landing: null };
   type Schema4 = Omit<Schema5, "stepUpReason">;
   const record = (fields: Schema4): RunRecord => ({
     ...fields,
@@ -540,6 +650,7 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
     emptyDiff: false,
     keptBranch: false,
     brokenRun: null,
+    landing: null,
   });
   if (schema === 4) return record(stored as Schema4);
   if (schema === 3) return record({ ...(stored as Omit<Schema4, "replay">), replay: null });

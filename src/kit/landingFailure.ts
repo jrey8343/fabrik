@@ -17,6 +17,7 @@ import { RESUME_LABELS } from "../loop/heldRun.ts";
 import { handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Action, AgentRole } from "../loop/types.ts";
 import type { PushJobInput } from "./pushJob.ts";
+import { type LandingFailed, type LandingFailureClass, type LandingRefusal, unexplainedLanding } from "./runRecord.ts";
 
 /** What a push job or claim job was landing, and where its failure is said. */
 export interface Landing {
@@ -228,25 +229,64 @@ function actionLists(error: PlanNotApplied): string[] {
   return [...list("It failed to:", [error.failed]), ...list("Already applied:", error.applied), ...list("Never applied:", error.unapplied)];
 }
 
+/** What a failure failed on, sorted: the one classifier the failure's wording and its Run record share (#487). */
+interface Classified {
+  readonly class: LandingFailureClass;
+  readonly refusal: LandingRefusal | null;
+}
+
+/**
+ * Sorts what a failure failed on: GitHub's refusal, GitHub's own failure (a
+ * 5xx, or a call it never answered), a file that wasn't there, or the Kit's
+ * own failure, a call GitHub refused for any other reason among them.
+ */
+function classified(cause: unknown): Classified {
+  if (cause instanceof GitHubError) {
+    const refusal = refusalOf(cause);
+    if (refusal !== null) return { class: "refused", refusal };
+    return { class: cause.status === 0 || cause.status >= 500 ? "github" : "kit", refusal: null };
+  }
+  if (cause instanceof Error && (cause as NodeJS.ErrnoException).code === "ENOENT") return { class: "missing-file", refusal: null };
+  return { class: "kit", refusal: null };
+}
+
 /** What failed, told apart as GitHub's refusal, GitHub's own failure, a file that wasn't there or the Kit's own failure. */
 export function whatFailed(cause: unknown): string {
+  const { class: kind, refusal } = classified(cause);
   if (cause instanceof GitHubError) {
     const request = cause.request === "" ? "a call" : `\`${cause.request}\``;
     const said = gitHubMessageOf(cause);
-    switch (refusalOf(cause)) {
-      case "rate-limited":
-        return `GitHub rate-limited the Fabrik App on ${request}: ${said}`;
-      case "missing-permission":
-        return `The Fabrik App lacks a permission ${request} needs: ${said}`;
-      case null:
-        if (cause.status === 0) return `GitHub never answered ${request}: ${said}`;
-        if (cause.status >= 500) return `GitHub failed ${request} with a ${cause.status}, its own failure rather than the Kit's: ${said}`;
-        return `GitHub refused ${request} with a ${cause.status}: ${said}`;
-    }
+    if (refusal === "rate-limited") return `GitHub rate-limited the Fabrik App on ${request}: ${said}`;
+    if (refusal === "missing-permission") return `The Fabrik App lacks a permission ${request} needs: ${said}`;
+    if (cause.status === 0) return `GitHub never answered ${request}: ${said}`;
+    if (kind === "github") return `GitHub failed ${request} with a ${cause.status}, its own failure rather than the Kit's: ${said}`;
+    return `GitHub refused ${request} with a ${cause.status}: ${said}`;
   }
-  if (cause instanceof Error && (cause as NodeJS.ErrnoException).code === "ENOENT") {
+  if (kind === "missing-file") {
     const path = (cause as NodeJS.ErrnoException).path ?? "A file the job reads";
     return `\`${path}\` wasn't there to read: for the agent's result, the step that downloads its artifact didn't fetch it.`;
   }
   return `The Kit failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+}
+
+/**
+ * How a push job's landing failed, as the run's Run record keeps it (#487):
+ * sorted as the failure comment's wording sorts it, with the plan's action
+ * that failed, and the GitHub call that failed with its status and request
+ * id. A plan the Loop wouldn't land is the Kit's, with the Loop's reason.
+ */
+export function landingFailedOf(failure: LandingFailure): LandingFailed {
+  const unexplained = unexplainedLanding("failure");
+  if (failure.kind === "fail") return { ...unexplained, reason: failure.reason };
+  const { error } = failure;
+  const { cause } = unwrapped(error);
+  const call = cause instanceof GitHubError ? cause : null;
+  return {
+    ...unexplained,
+    ...classified(cause),
+    action: error instanceof PlanNotApplied ? { kind: error.failed.kind, description: actionPhrase(error.failed) } : null,
+    request: call === null || call.request === "" ? null : call.request,
+    status: call?.status ?? null,
+    requestId: call?.requestId ?? null,
+  };
 }

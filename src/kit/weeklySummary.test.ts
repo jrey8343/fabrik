@@ -399,6 +399,41 @@ describe("the Weekly summary", () => {
     expect(result.kind === "summary" ? result.body : "").toContain("| Broken runs | 2 | 1 | +1 |");
   });
 
+  // #487
+  it("counts the week's runs whose landing failed, against last week's, apart from any run whose agent failed", () => {
+    const landing = {
+      loopOutcome: "failure",
+      action: { kind: "mark-ready-for-review", description: "take #50 out of draft" },
+      request: "PATCH /repos/owner/product/pulls/50",
+      status: 502,
+      requestId: "C0DE:50",
+      class: "github",
+      refusal: null,
+      reason: null,
+    } as const;
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ endedAt: "2026-11-03T00:00:00Z", jobResult: "success", landing }),
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", role: "review", jobResult: "success", landing: { ...landing, class: "kit", status: null } }),
+          aRunRecord({ endedAt: "2026-11-05T00:00:00Z", jobResult: "failure", infrastructureFailure: "crash" }),
+          aRunRecord({ endedAt: "2026-10-29T00:00:00Z", jobResult: "success", landing }), // last week
+        ],
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "summary",
+      summary: { counts: { landingsFailed: { thisWeek: 2, lastWeek: 1 }, brokenRuns: { thisWeek: 0, lastWeek: 0 } } },
+    });
+    expect(result.kind === "summary" ? result.body : "").toContain("| Landings failed | 2 | 1 | +1 |");
+  });
+
+  it("shows no landing failed in a week with none, as it shows any other count of none", () => {
+    const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-03T00:00:00Z" })] }));
+
+    expect(result.kind === "summary" ? result.body : "").toMatch(/\| Landings failed \| 0 \| 0 \|/);
+  });
+
   it("counts the week's Flaky checks, found by the Kit's re-run and counted back alike, on open and closed agent PRs (#462)", () => {
     const line = (checks: string[], countedBack = false) =>
       `<!-- fabrik:flaky-check ${JSON.stringify({ headSha: "a".repeat(40), checks, ...(countedBack ? { countedBack } : {}) })} -->\nflaky`;

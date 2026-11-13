@@ -399,6 +399,12 @@ export interface WeeklySummary {
     readonly retries: WeekOverWeek<number>;
     /** Implement records of a Broken run (#434), counted or not. */
     readonly brokenRuns: WeekOverWeek<number>;
+    /**
+     * Records of a run whose landing the push job failed (#487), whatever its
+     * agent's job came to: a run whose agent succeeded counts here, never as
+     * an agent failure.
+     */
+    readonly landingsFailed: WeekOverWeek<number>;
     /** The Flaky checks found on agent PRs: by the Kit's re-run of red checks, and counted back later alike (#462). */
     readonly flakyChecks: WeekOverWeek<number>;
     /** Records of a Step-up. */
@@ -873,6 +879,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       ticketsDispatched: change("ticketsDispatched"),
       retries: change("retries"),
       brokenRuns: change("brokenRuns"),
+      landingsFailed: change("landingsFailed"),
       flakyChecks: change("flakyChecks"),
       stepUps: change("stepUps"),
       stepUpsByReason: change("stepUpsByReason"),
@@ -930,6 +937,7 @@ interface WeekMetrics {
   readonly ticketsDispatched: number;
   readonly retries: number;
   readonly brokenRuns: number;
+  readonly landingsFailed: number;
   readonly flakyChecks: number;
   readonly stepUps: number;
   readonly stepUpsByReason: StepUpCounts;
@@ -973,6 +981,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     }).length,
     retries: records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null).length,
     brokenRuns: records.filter((record) => record.brokenRun !== null).length,
+    landingsFailed: records.filter((record) => record.landing !== null).length,
     flakyChecks: flakyChecksIn(week, input.facts),
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
@@ -1700,6 +1709,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords 
     row("Tickets dispatched", counts.ticketsDispatched, count),
     row("Retries", counts.retries, count),
     row("Broken runs", counts.brokenRuns, count),
+    row("Landings failed", counts.landingsFailed, count),
     row("Flaky checks", counts.flakyChecks, count),
     row("Step-ups", counts.stepUps, count),
     ...stepUpReasonRows(counts.stepUpsByReason),

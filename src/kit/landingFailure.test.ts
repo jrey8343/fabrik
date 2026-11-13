@@ -5,7 +5,7 @@ import { GitHubError } from "../github/client.ts";
 import { implementRunFailedIn, researchRunFailedIn } from "../github/threads.ts";
 import { aTicket, dispatchSnapshotOf, kitConfig } from "../__fixtures__/snapshots.ts";
 import { planFor } from "../loop/rules.ts";
-import { claimLanding, jobFailureReport, landingFailureReport, pushLanding } from "./landingFailure.ts";
+import { claimLanding, jobFailureReport, landingFailedOf, landingFailureReport, pushLanding } from "./landingFailure.ts";
 import type { PushJobInput } from "./pushJob.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/9001/attempts/1";
@@ -237,5 +237,59 @@ describe("The report of a job that lands no run, such as the scheduled tick, fai
 
     expect(summary).toBe("The Loop failed.\n\n**What failed:** The Kit failed: boom");
     expect(annotation).toBe("The Kit failed: boom");
+  });
+});
+
+// #487: the Run record says how the push job's landing failed, sorted as the failure comment sorts it.
+describe("A failed landing as its Run record keeps it", () => {
+  const ready = { kind: "mark-ready-for-review", pullRequest: 36 } as const;
+  const comment = { kind: "comment", issue: 36, body: "Verdict" } as const;
+
+  it("keeps a plan GitHub failed partway through with a 5xx as GitHub's own failure: the action, the request, its status and request id", () => {
+    const cause = new GitHubError("x", 502, { request: "PATCH /repos/o/r/pulls/36", body: "Bad Gateway", requestId: "C0DE:36" });
+    const error = new PlanNotApplied(ready, [comment], [], cause);
+
+    expect(landingFailedOf({ kind: "error", error })).toEqual({
+      loopOutcome: "failure",
+      action: { kind: "mark-ready-for-review", description: "take #36 out of draft" },
+      request: "PATCH /repos/o/r/pulls/36",
+      status: 502,
+      requestId: "C0DE:36",
+      class: "github",
+      refusal: null,
+      reason: null,
+    });
+  });
+
+  it.each([
+    [
+      "a missing permission as refused",
+      new GitHubError("403", 403, { request: "POST /repos/o/r/pulls", body: JSON.stringify({ message: "Resource not accessible by integration" }) }),
+      { class: "refused", refusal: "missing-permission", status: 403, request: "POST /repos/o/r/pulls" },
+    ],
+    ["a rate limit as refused", new GitHubError("429", 429, { request: "GET /repos/o/r" }), { class: "refused", refusal: "rate-limited", status: 429 }],
+    ["a call GitHub never answered as GitHub's", new GitHubError("x", 0, { request: "GET /repos/o/r", body: "fetch failed" }), { class: "github", status: 0 }],
+    ["any other refusal as the Kit's", new GitHubError("x", 422, { request: "POST /repos/o/r/pulls" }), { class: "kit", refusal: null, status: 422 }],
+    [
+      "a file that wasn't there as a missing file",
+      Object.assign(new Error("ENOENT"), { code: "ENOENT", path: "/tmp/agent/result.json" }),
+      { class: "missing-file", request: null, status: null, requestId: null },
+    ],
+    ["anything else as the Kit's", new Error("The agent's result is for #13"), { class: "kit", refusal: null, request: null, status: null, action: null }],
+  ])("keeps %s", (_case, error, kept) => {
+    expect(landingFailedOf({ kind: "error", error })).toMatchObject({ loopOutcome: "failure", ...kept });
+  });
+
+  it("keeps the Loop refusing to land a plan as the Kit's, with the Loop's reason", () => {
+    expect(landingFailedOf({ kind: "fail", failure: "infrastructure", reason: "The Review of #51 gave no valid Verdict" })).toEqual({
+      loopOutcome: "failure",
+      action: null,
+      request: null,
+      status: null,
+      requestId: null,
+      class: "kit",
+      refusal: null,
+      reason: "The Review of #51 gave no valid Verdict",
+    });
   });
 });

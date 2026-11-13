@@ -2041,6 +2041,8 @@ jobs:
     env:
       # How each job ended and what it passed out, none of which the agent can rewrite.
       FABRIK_NEEDS: ${{ toJSON(needs) }}
+      # Where Run the Loop leaves how its landing failed, when it says so, for the Run record (#487).
+      FABRIK_LANDING_FAILED: ${{ github.workspace }}/fabrik-landing-failed.json
     steps:
       - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2117,7 +2119,9 @@ jobs:
       # so a store problem never fails the push job or stalls the Loop. Without
       # fabrik-runs it writes one step-summary line naming the setup step. For a
       # record in the store it then runs the scoring plan (#149): it writes a
-      # skip's score file itself, and asks the judge job for a score.
+      # skip's score file itself, and asks the judge job for a score. The record
+      # says how the landing ended (#487), from the Loop step's outcome and the
+      # file it leaves when it says its landing failed.
       - name: Write the Run record
         id: record
         if: always()
@@ -2127,6 +2131,8 @@ jobs:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
           role: ${{ needs.kit.outputs.route }}
           empty-diff: ${{ steps.loop.outputs.empty-diff }}
+          loop-outcome: ${{ steps.loop.outcome }}
+          landing-failed: ${{ env.FABRIK_LANDING_FAILED }}
 
   # Dispatch (ADR-0001): runs when the push job's plan asked for a check, on a
   # fresh snapshot taken after that plan's labels landed. Like the push job, it

@@ -14,7 +14,9 @@
 # `if: always()` and `continue-on-error: true`, so it never fails the job:
 #   - uses: ./kit/.github/actions/write-run-record
 # The job's env carries FABRIK_NEEDS, and the agent job's artifacts are in
-# $RUNNER_TEMP/agent, as for Run the Loop.
+# $RUNNER_TEMP/agent, as for Run the Loop. The record says how the push job's
+# landing ended (#487), from the Loop step's outcome and the file it leaves
+# when it says its landing failed, which the push job passes in.
 #
 # For a record it wrote, or found already in the store, the program then runs
 # the scoring plan (#149). A skip's score file it writes itself, with the same
@@ -33,6 +35,14 @@ inputs:
     required: true
   empty-diff:
     description: '"true" when the Loop found the Implement run branch changed nothing, an empty diff (the run-loop empty-diff output), which the record says.'
+    required: false
+    default: ""
+  loop-outcome:
+    description: How the push job's Run the Loop step ended (steps.loop.outcome), which the record's landing reads a failure from when the Loop left no file saying why (#487).
+    required: false
+    default: ""
+  landing-failed:
+    description: The path of the file Run the Loop leaves when it says its landing failed (#487), which the record keeps as how the landing failed; a missing file is fine.
     required: false
     default: ""
 
@@ -82,4 +92,6 @@ runs:
         FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}
         FABRIK_TRANSCRIPT_DIR: ${{ runner.temp }}/transcript
         FABRIK_EMPTY_DIFF: ${{ inputs.empty-diff }}
+        FABRIK_LOOP_OUTCOME: ${{ inputs.loop-outcome }}
+        FABRIK_LANDING_FAILED: ${{ inputs.landing-failed }}
       run: node src/kit/record-main.ts

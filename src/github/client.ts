@@ -40,11 +40,18 @@ export class GitHubError extends Error {
   readonly rateLimitRemaining: string | null;
   /** The request that failed, such as `GET /repos/acme/shop/pulls/84`, or "" when the thrower didn't say. */
   readonly request: string;
+  /** GitHub's `x-github-request-id` header, which its support looks a call up by, or null when it gave none (#487). */
+  readonly requestId: string | null;
 
   constructor(
     message: string,
     status: number,
-    answer: { readonly body?: string; readonly rateLimitRemaining?: string | null; readonly request?: string } = {},
+    answer: {
+      readonly body?: string;
+      readonly rateLimitRemaining?: string | null;
+      readonly request?: string;
+      readonly requestId?: string | null;
+    } = {},
   ) {
     super(message);
     this.name = "GitHubError";
@@ -52,6 +59,7 @@ export class GitHubError extends Error {
     this.body = answer.body ?? "";
     this.rateLimitRemaining = answer.rateLimitRemaining ?? null;
     this.request = answer.request ?? "";
+    this.requestId = answer.requestId ?? null;
   }
 }
 
@@ -115,7 +123,13 @@ async function failedResponse(request: string, response: Response): Promise<GitH
     body: text,
     rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
     request,
+    requestId: requestIdOf(response),
   });
+}
+
+/** GitHub's id for the call a response answers, or null when it gave none. */
+function requestIdOf(response: Response): string | null {
+  return response.headers.get("x-github-request-id");
 }
 
 /** A fetch GitHub never answered, such as a network error, as a GitHubError with status 0. */
@@ -202,30 +216,34 @@ export class GitHub implements ReadClient {
 
   /** A REST call; with `allowNotFound`, a 404 (say, removing a label already gone) returns null. */
   async rest(method: string, path: string, body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
-    // A GraphQL query is a read, though it's POSTed; only a mutation changes anything.
-    const write = path === "/graphql" ? isMutation(body) : !["GET", "HEAD"].includes(method.toUpperCase());
-    const response = await this.#answered(`${method} ${path}`, `${this.#apiUrl}${path}`, {
-      write,
-      notFoundIsNull: options.allowNotFound === true,
-      init: { method, headers: this.#headers(), ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
-    });
+    const response = await this.#called(method, path, body, options);
     if (response === null) return null;
     return response.status === 204 ? null : response.json();
   }
 
   async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-    const result = (await this.rest("POST", "/graphql", { query, variables })) as {
-      data?: T;
-      errors?: unknown[];
-    };
+    const response = (await this.#called("POST", "/graphql", { query, variables }))!;
+    const result = (await response.json()) as { data?: T; errors?: unknown[] };
     if (result.errors !== undefined || result.data === undefined) {
       const errors = JSON.stringify(result.errors);
       throw new GitHubError(`GitHub GraphQL query failed: ${errors}`, graphqlStatusOf(result.errors), {
         body: JSON.stringify({ errors: result.errors ?? [] }),
         request: "POST /graphql",
+        requestId: requestIdOf(response),
       });
     }
     return result.data;
+  }
+
+  /** GitHub's answer to a REST call, once it answers with success; null for a 404 with `allowNotFound`. */
+  #called(method: string, path: string, body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<Response | null> {
+    // A GraphQL query is a read, though it's POSTed; only a mutation changes anything.
+    const write = path === "/graphql" ? isMutation(body) : !["GET", "HEAD"].includes(method.toUpperCase());
+    return this.#answered(`${method} ${path}`, `${this.#apiUrl}${path}`, {
+      write,
+      notFoundIsNull: options.allowNotFound === true,
+      init: { method, headers: this.#headers(), ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
+    });
   }
 
   /**
