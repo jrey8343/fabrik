@@ -1218,6 +1218,45 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("Waiting on you, with an agent PR's Required checks at the Merge gate (#564)", () => {
+    const HOUR = 60 * 60 * 1000;
+    const HEAD = "h".repeat(40);
+    const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString();
+    const summaryWith = (checks: RepoKitFacts["headChecks"][string]) => {
+      const github = factsOf({ openPullRequests: [anOpenPullRequest({ draft: false, headSha: HEAD, comments: [aVerdictComment("pass", HEAD, ago(5 * HOUR))] })] });
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [github], kits: [aRepoKit({ headChecks: { [HEAD]: checks } })] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return { waiting: result.summary.repos[0]?.waitingOnYou, body: result.body };
+    };
+
+    it("lists one with a failing Required check as the Operator's, with the agent sentence, not as at the Merge gate waiting for a merge", () => {
+      const { waiting, body } = summaryWith([{ name: "ci", is: "failing", at: ago(2 * HOUR) }]);
+      expect(waiting).toEqual([
+        {
+          kind: "merge-gate-check",
+          number: 50,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/pull/50",
+          since: ago(2 * HOUR),
+          age: 2 * HOUR,
+          sentence: "`ci` is failing on the head the Reviewer passed 5 hours ago.",
+        },
+      ]);
+      expect(body).toContain("- [#50](https://github.com/owner/product/pull/50) Build the thing: `ci` is failing on the head the Reviewer passed 5 hours ago.\n");
+      expect(body).not.toContain("at the Merge gate, Operator wait");
+    });
+
+    it("lists one with a Required check never reported the same way", () => {
+      const { body } = summaryWith([{ name: "ci", is: "never-reported" }]);
+      expect(body).toContain("- [#50](https://github.com/owner/product/pull/50) Build the thing: `ci` has not reported on the head the Reviewer passed 5 hours ago.\n");
+    });
+
+    it("gives no line to one whose Required check is running, the Kit's move, and lists one all passed at the Merge gate as before", () => {
+      expect(summaryWith([{ name: "ci", is: "running", at: ago(HOUR) }]).waiting).toEqual([]);
+      expect(summaryWith([{ name: "ci", is: "passed", at: ago(HOUR) }]).body).toContain("- [#50](https://github.com/owner/product/pull/50) Build the thing: at the Merge gate, Operator wait 5 hours\n");
+    });
+  });
+
   // Stuck is the silences at the repo's bar (#527): 3 hours 30 minutes on default timeouts, from the Kit's last sign (#610).
   describe("Stuck", () => {
     const HOUR = 60 * 60 * 1000;

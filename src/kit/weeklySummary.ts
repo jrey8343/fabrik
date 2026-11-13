@@ -260,7 +260,8 @@ export interface RepoKitFacts {
    */
   readonly runsInFlight: readonly RunInFlightFact[] | "unread";
   /**
-   * The Required checks on each open Plain pull request's head, by its sha. A
+   * The Required checks on each open Plain pull request's head, and on each
+   * agent pull request's head at the Merge gate (#564), by its sha. A
    * head missing is unread: the checks token wasn't minted, the read failed,
    * or the Kit config is invalid or lists no checks.
    */
@@ -731,7 +732,13 @@ export type WaitingItem =
   /** An agent draft with a pass on its head that the Operator put back in draft, since they did. */
   | (ItemBase & { readonly kind: "parked" })
   /** Any other work the Kit handed back that had no line of its own, such as a label the sweep took off: its Standing's sentence. */
-  | (ItemBase & { readonly kind: "hand-back"; readonly sentence: string });
+  | (ItemBase & { readonly kind: "hand-back"; readonly sentence: string })
+  /**
+   * An agent PR at the Merge gate with a Required check failing or never
+   * reported on its head (#564), which GitHub won't merge: its Standing's
+   * sentence, naming the check, since the failing report or the pass.
+   */
+  | (ItemBase & { readonly kind: "merge-gate-check"; readonly sentence: string });
 
 /**
  * Work whose next move is the Kit's, silent since `since` past the repo's bar
@@ -1597,6 +1604,9 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, listedWith: Liste
       const item = items.pullRequest(pullRequest, standing.since);
       return { kind: "merge-gate", ...item, operatorWait: item.age };
     }
+    case "check-failing":
+      // A Plain pull request's is never listed (listedInWaitingOnYou), so this is an agent PR's at the Merge gate.
+      return pullRequest === undefined ? null : { kind: "merge-gate-check", ...items.pullRequest(pullRequest, standing.since), sentence: wordStanding(standing, listedWith.filedAt, listedWith.timeZone).sentence };
     case "design-round":
       return onIssue === null ? null : { kind: "design-round", ...onIssue };
     case "needs-your-answer":
@@ -2005,6 +2015,7 @@ function waitingLine(item: WaitingItem): string {
     case "parked":
       return itemLine(item, `parked by you in draft ${duration(item.age)} ago`);
     case "hand-back":
+    case "merge-gate-check":
       return itemLine(item, item.sentence);
   }
 }

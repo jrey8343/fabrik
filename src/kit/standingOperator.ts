@@ -27,6 +27,7 @@ import { freeSubscriptions, kitIssueSubscriptionOf, makesUnusable } from "../loo
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import { handBackOfNotice } from "./standingHandBacks.ts";
+import { mergeGateNameForChecks } from "./standingPlain.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts, RepoKitFacts } from "./weeklySummary.ts";
@@ -42,7 +43,7 @@ export function operatorStandingsOf({ github, kit, operator, appLogin }: Standin
     ...subscriptionStandingsOf(github, kit),
     // A Subscription's issue carries ready-for-human too, but stands as above.
     ...openIssues.flatMap((issue) => (issue.labels.includes(READY_FOR_HUMAN) && !makesUnusable(issue.labels) ? [readyForHumanStandingOf(issue, repo, now)] : [])),
-    ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, repo, operator)),
+    ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, repo, operator, kit)),
     // Last, so work that stops on the Operator is read so before it is read as reading matter.
     ...readingMatterOf(github, operator, appLogin),
   ];
@@ -250,13 +251,18 @@ export function readyForHumanStandingOf(issue: OpenIssueFacts, repo: string, _no
   };
 }
 
-/** An agent PR at the Merge gate, or handed back there, as one Standing with the Ticket it closes. */
-function pullRequestStandingsOf(pullRequest: OpenPullRequestFacts, repo: string, operator: string): Standing[] {
+/**
+ * An agent PR at the Merge gate, or handed back there, as one Standing with
+ * the Ticket it closes. At the Merge gate it is named by the Required checks
+ * on its head (mergeGateNameForChecks, #564), unread when the repo's Kit
+ * facts hold none for it.
+ */
+function pullRequestStandingsOf(pullRequest: OpenPullRequestFacts, repo: string, operator: string, kit: RepoKitFacts | null): Standing[] {
   const move = passedMoveOf(pullRequest, operator);
   const base = { ...theOperators(repo, pullRequest.ticket, pullRequest.number, move?.since ?? pullRequest.createdAt), work: "ticket", place: "merge-gate" } as const;
   switch (move?.kind) {
     case "merge-gate":
-      return [{ ...base, name: "yours-to-merge", detail: { plain: null } }];
+      return [{ ...base, ...mergeGateNameForChecks(kit?.headChecks[pullRequest.headSha] ?? "unread", move.since) }];
     case "handed-back":
       return [{ ...base, name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null } }];
     default:

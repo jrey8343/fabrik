@@ -26,6 +26,7 @@ import { readRuns, runsInFlightFactOf } from "../read/runs.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "./config.ts";
+import { passedMoveOf } from "./standingOperator.ts";
 import { type RepoHealthFacts, tickHealthOf } from "./loopHealth.ts";
 import { RUN_STORE } from "./runStore.ts";
 import { readStoreRunRecords, readStoreScoreFiles } from "./storeCheckout.ts";
@@ -186,16 +187,16 @@ async function readLoopHealth(repos: readonly Repo[], appLogin: string, now: num
 }
 
 /**
- * One Product repo's Kit config at its default branch's head, read and
- * resolved as the Loop reads it, and, when it's valid, what a Dispatch check
- * weighs there (#476), with the runs in flight, read once whatever the Kit
- * config (#606), and the Required checks it lists on each open Plain pull
- * request's head. Null for a repo with no default branch yet. The runs are
- * unread when the Actions token wasn't minted or GitHub wouldn't list them;
- * the checks are unread when the Ticks token, the one holding Checks read,
- * wasn't minted.
+ * One Product repo's Kit config at its default branch's head, read and resolved
+ * as the Loop reads it, and, when it's valid, what a Dispatch check weighs
+ * there (#476), with the runs in flight, read once whatever the Kit config
+ * (#606), and the Required checks it lists on each of `heads`: the open Plain
+ * pull requests' and the agent pull requests' at the Merge gate (#564). Null
+ * for a repo with no default branch yet. The runs are unread when the Actions
+ * token wasn't minted or GitHub wouldn't list them; the checks are unread when
+ * the Ticks token, the one holding Checks read, wasn't minted.
  */
-async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo, appLogin: string, checks: GitHub | null, plainHeads: readonly string[]): Promise<RepoKitFacts | null> {
+async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo, appLogin: string, checks: GitHub | null, heads: readonly string[]): Promise<RepoKitFacts | null> {
   const branch = await defaultBranchOf(products, repo);
   if (branch === null) return null;
   const config = resolveKitConfig(await readKitConfigSources(products, repo, branch.head));
@@ -204,7 +205,7 @@ async function readRepoKit(products: GitHub, actions: GitHub | null, repo: Repo,
   const [candidates, runsInFlight, headChecks] = await Promise.all([
     gatherDispatchCandidates(products, repo, appLogin),
     readRunsOf(actions, repo),
-    checks === null ? {} : gatherHeadChecks(checks, repo, plainHeads, config.config.sandbox.checks),
+    checks === null ? {} : gatherHeadChecks(checks, repo, heads, config.config.sandbox.checks),
   ]);
   return { repo: name, branch: branch.name, config, dispatch: { candidates }, runsInFlight, headChecks };
 }
@@ -239,8 +240,7 @@ async function readRepoKits(
   for (const repoFacts of gathered.facts) {
     const repo = repos.find(({ owner, name }) => `${owner}/${name}` === repoFacts.repo);
     try {
-      const plainHeads = repoFacts.plainPullRequests.map(({ headSha }) => headSha);
-      const kit = repo === undefined ? null : await readRepoKit(products, actions, repo, appLogin, checks, plainHeads);
+      const kit = repo === undefined ? null : await readRepoKit(products, actions, repo, appLogin, checks, headsToCheckOf(repoFacts));
       if (kit !== null) kits.push(kit);
       facts.push(repoFacts);
     } catch (error) {
@@ -248,6 +248,18 @@ async function readRepoKits(
     }
   }
   return { facts, unread, kits };
+}
+
+/**
+ * The heads whose Required checks the Standings read: each open Plain pull
+ * request's, and each agent pull request's at the Merge gate (#564), by the
+ * rule's own reading of the gate (passedMoveOf), so a red check there names
+ * its check. A handed-back agent pull request, and one with a Request changes
+ * since its pass, read none, as the rule reads none for them.
+ */
+function headsToCheckOf({ plainPullRequests, openPullRequests }: GitHubFacts): string[] {
+  const atTheGate = openPullRequests.filter((pullRequest) => passedMoveOf(pullRequest, RUN_STORE.owner)?.kind === "merge-gate");
+  return [...plainPullRequests, ...atTheGate].map(({ headSha }) => headSha);
 }
 
 async function main(): Promise<string> {
