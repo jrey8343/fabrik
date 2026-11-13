@@ -16,6 +16,8 @@ import {
 } from "../__fixtures__/setupCommands.ts";
 import { checkSetup } from "./checks.ts";
 
+const onSetupBranch = { "git branch --show-current": { stdout: "fabrik/setup-v1.4.2\n" } };
+
 const EARLIER_WRITES = [".github/workflows/fabrik.yml", ".fabrik/config.json", "docs/agents/domain.md", "AGENTS.md"];
 
 let productDir: string;
@@ -162,7 +164,7 @@ describe("The checks before setup plans anything", () => {
     it("pass on the setup branch, alongside files an earlier run wrote", async () => {
       const status = { stdout: `${skills}?? .github/workflows/fabrik.yml\0` };
 
-      expect((await check({ "git branch --show-current": { stdout: "fabrik/setup-v1.4.2\n" }, [STATUS]: status }).result).ok).toBe(true);
+      expect((await check({ ...onSetupBranch, [STATUS]: status }).result).ok).toBe(true);
     });
 
     it("stop on any other uncommitted change, naming only it", async () => {
@@ -183,7 +185,7 @@ describe("The checks before setup plans anything", () => {
       expect(await problem({ [STATUS]: status })).toBe(
         "This clone has uncommitted changes (.claude/skills/mine/SKILL.md). Commit or stash them, then run setup again.",
       );
-      expect(await problem({ "git branch --show-current": { stdout: "fabrik/setup-v1.4.2\n" }, [STATUS]: status })).toBe(
+      expect(await problem({ ...onSetupBranch, [STATUS]: status })).toBe(
         "fabrik/setup-v1.4.2 has uncommitted changes setup didn't make (.claude/skills/mine/SKILL.md). Commit or stash them, then run setup again.",
       );
     });
@@ -212,8 +214,6 @@ describe("The checks before setup plans anything", () => {
   });
 
   describe("on the setup branch, where a run applies its plan and a later run picks up", () => {
-    const onSetupBranch = { "git branch --show-current": { stdout: "fabrik/setup-v1.4.2\n" } };
-
     it("pass when it holds origin's default branch", async () => {
       expect((await check(onSetupBranch).result).ok).toBe(true);
     });

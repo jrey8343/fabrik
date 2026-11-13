@@ -9,40 +9,39 @@ import { ok, type Run } from "./exec.ts";
 import { prBody, withEarlierDone } from "./finish.ts";
 import type { Published, RunSummary } from "./oneRun.ts";
 import { setupBranch } from "./setupBranchName.ts";
-import { SKILLS_IGNORE } from "./shims.ts";
+import { SKILLS_DIR } from "./shims.ts";
 
 export { setupBranch } from "./setupBranchName.ts";
 
-/**
- * Every path the clone has uncommitted, untracked ones included. The checks
- * and the setup commit both read it, so they agree on what's uncommitted.
- */
+/** Every path the clone has uncommitted, untracked ones included. The setup commit picks the files setup wrote from these. */
 export async function uncommittedPaths(run: Run, cwd: string): Promise<string[]> {
   return changedPaths(await gitStatus(run, cwd));
 }
 
 /**
  * The uncommitted paths that keep setup from running: every one but the
- * untracked files in .claude/skills/, the skills the SessionStart hook
- * installed, which the .gitignore entry setup adds hides.
+ * untracked files in .claude/skills/. Those are skills the SessionStart hook
+ * installed, and setup's .gitignore entry hides them.
  */
 export async function blockingUncommittedPaths(run: Run, cwd: string): Promise<string[]> {
-  return changedPaths(await gitStatus(run, cwd), (entry) => !(entry.startsWith("?? ") && entry.slice(3).startsWith(SKILLS_IGNORE)));
+  return changedPaths(await gitStatus(run, cwd), (code, path) => !(code === "??" && path.startsWith(SKILLS_DIR)));
 }
 
 function gitStatus(run: Run, cwd: string): Promise<string> {
   return ok(run, "git", ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd });
 }
 
-/** Every path `git status --porcelain=v1 -z` names, a rename's old path included, of the entries kept. */
-function changedPaths(status: string, keep: (entry: string) => boolean = () => true): string[] {
+/** Every path `git status --porcelain=v1 -z` names, a rename's old path included, of the entries kept by their status code and path. */
+function changedPaths(status: string, keep: (code: string, path: string) => boolean = () => true): string[] {
   const entries = status.split("\0").filter((entry) => entry !== "");
   const paths: string[] = [];
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!;
+    const code = entry.slice(0, 2);
+    const path = entry.slice(3);
     // A rename or copy is followed by the path it came from.
-    const from = /[RC]/.test(entry.slice(0, 2)) ? [entries[++i] ?? ""] : [];
-    if (keep(entry)) paths.push(entry.slice(3), ...from);
+    const from = /[RC]/.test(code) ? [entries[++i] ?? ""] : [];
+    if (keep(code, path)) paths.push(path, ...from);
   }
   return paths.filter((path) => path !== "");
 }
