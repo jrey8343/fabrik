@@ -2380,12 +2380,12 @@ export interface ActionsJob {
 type Job = ActionsJob;
 
 /**
- * The Implement jobs under way and the Research jobs not yet finished, across
- * every workflow run in the repo. Each counts running, and also queued or
- * waiting (behind its concurrency group, say) after its claim took the
- * trigger label off, so no slot goes uncounted between the label coming off
- * and the run starting. An Implement job counts on, once done, until its
- * run's push job has opened the Ticket's draft PR (implementJobsUnderWay).
+ * The Implement and Research jobs under way, across every workflow run in the
+ * repo. Each counts running, and also queued or waiting (behind its
+ * concurrency group, say) after its claim took the trigger label off, so no
+ * slot goes uncounted between the label coming off and the run starting. Each
+ * counts on, once done, until its run's push job has landed it
+ * (agentJobsUnderWay).
  * `implementTickets` names the Tickets their jobs' names name (#477), lowest
  * first, for the Weekly summary's Held (#476): a run of an earlier Kit
  * release names none.
@@ -2394,10 +2394,10 @@ export async function countDispatchedRuns(github: Pick<ReadClient, "rest">, repo
   return dispatchedRunsOf(await readRunsInFlight(github, repo));
 }
 
-/** The Implement and Research runs Dispatch counts in flight, from the runs in flight: an Implement job until its push job lands it, a Research job until it's done. */
+/** The Implement and Research runs Dispatch counts in flight, from the runs in flight: each until its run's push job lands it, which the runs read has already reckoned (agentJobsUnderWay). */
 export function dispatchedRunsOf(runs: readonly RunInFlightFact[]): DispatchedRuns {
   const implement = runs.filter(({ role }) => role === "implement");
-  const research = runs.filter(({ role, job }) => role === "research" && job !== "landing").length;
+  const research = runs.filter(({ role }) => role === "research").length;
   const named = implement.flatMap(({ issue }) => (issue === null ? [] : [issue]));
   return { implement: implement.length, research, implementTickets: [...new Set(named)].sort((a, b) => a - b) };
 }
@@ -2474,14 +2474,15 @@ export async function readRunsInFlight(github: Pick<ReadClient, "rest">, repo: R
 /**
  * The runs in flight these jobs' names tell, none of them exact, one per job
  * the Loop names (#606). A job its run skipped is no run, since its name is
- * never worked out. An Implement job counts until its run's push job has
- * landed it, as Dispatch counts it (implementJobsUnderWay); a Review's wait
+ * never worked out. An Implement or Research job counts until its run's push
+ * job has landed it, as Dispatch counts it (agentJobsUnderWay); a Review's wait
  * for checks only while it is under way, with no start, since its Review job
  * isn't listed yet; any other job while its run is unfinished, as the
  * stuck-trigger sweep counts it.
  */
 export function runsByJobNamesOf(jobs: readonly ActionsJob[]): RunByJobName[] {
   const implement = new Set(implementJobsUnderWay(jobs));
+  const research = new Set(researchJobsUnderWay(jobs));
   return jobs.flatMap((job): RunByJobName[] => {
     if (job.conclusion === "skipped") return [];
     const ran = {
@@ -2517,7 +2518,9 @@ export function runsByJobNamesOf(jobs: readonly ActionsJob[]): RunByJobName[] {
       return fact({ ...ran, role: "design", issue: numberOrNull(designName[1]), kind: prototype ? "prototype" : null });
     }
     const unnumbered = UNNUMBERED_JOBS.find(([name]) => isJobNamed(job.name, name));
-    return unnumbered === undefined ? [] : fact({ ...ran, role: unnumbered[1] });
+    if (unnumbered === undefined) return [];
+    if (unnumbered[1] === "research" && !research.has(job)) return [];
+    return fact({ ...ran, role: unnumbered[1] });
   });
 }
 
@@ -2548,21 +2551,32 @@ export interface DispatchedRuns {
 }
 
 /**
- * The one reading of an Implement job under way, which Dispatch, the stall
- * check and the stuck-trigger sweep share (#432): one in a workflow run not
- * yet finished that its run didn't skip, until that run's push job has
- * landed it, whatever its conclusion. That takes in one waiting, queued or
- * running, and also one that's done while its push job is still to open the
- * Ticket's draft PR or post its failure notice: between the claim taking the
- * label off and the PR opening, the run is all that shows the Ticket taken.
- * Once the push job is done, the draft PR shows it, or nothing will, and the
- * same run's Dispatch job, which follows the push job, doesn't count it twice. GitHub doesn't list a job still
- * waiting on its `needs` until those jobs finish, but an Implement job needs
- * only the Kit job, which its run's claim needs too.
+ * The one reading of an Implement or Research job under way, which Dispatch,
+ * the runs read, the stall check and the stuck-trigger sweep share (#432,
+ * #500): one in a workflow run not yet finished that its run didn't skip,
+ * until that run's push job has landed it, whatever its conclusion. That
+ * takes in one waiting, queued or running, and also one that's done while
+ * its push job is still to land its work or post its failure notice: between
+ * the claim taking the label off and the push job landing, the run is all
+ * that shows the work taken. Once the push job is done, what it landed shows
+ * it, or nothing will, and the same run's Dispatch job, which follows the
+ * push job, doesn't count it twice. GitHub doesn't list a job still waiting
+ * on its `needs` until those jobs finish, but an Implement or Research job
+ * needs only the Kit job, which its run's claim needs too.
  */
-function implementJobsUnderWay(jobs: readonly Job[]): Job[] {
+function agentJobsUnderWay(jobs: readonly Job[], isAgentJob: (name: string) => boolean): Job[] {
   const landed = new Set(jobs.filter(({ name, status }) => status === "completed" && isJobNamed(name, PUSH_JOB_NAME)).map(({ run }) => run));
-  return jobs.filter(({ run, name, conclusion }) => conclusion !== "skipped" && IMPLEMENT_JOB.test(name) && !landed.has(run));
+  return jobs.filter(({ run, name, conclusion }) => conclusion !== "skipped" && isAgentJob(name) && !landed.has(run));
+}
+
+/** The Implement jobs under way (agentJobsUnderWay). */
+function implementJobsUnderWay(jobs: readonly Job[]): Job[] {
+  return agentJobsUnderWay(jobs, (name) => IMPLEMENT_JOB.test(name));
+}
+
+/** The Research jobs under way, as an Implement job is (agentJobsUnderWay). */
+function researchJobsUnderWay(jobs: readonly Job[]): Job[] {
+  return agentJobsUnderWay(jobs, (name) => isJobNamed(name, RESEARCH_JOB_NAME));
 }
 
 /** Whether a job's name is `jobName`, or `<caller job> / <jobName>` when a Product repo's caller workflow ran it. */
@@ -2663,8 +2677,8 @@ async function gatherTriggerSweep(
 
 /**
  * Which roles have a job under way, across every workflow run in the repo
- * not yet finished, a job its run skipped aside, and an Implement job as
- * Dispatch reads it (implementJobsUnderWay); null when the Actions API
+ * not yet finished, a job its run skipped aside, and an Implement or Research
+ * job as Dispatch reads it (agentJobsUnderWay); null when the Actions API
  * couldn't be read.
  */
 async function readRolesUnderWay(github: Pick<ReadClient, "rest">, repo: Repo): Promise<RolesUnderWay | null> {
@@ -2681,7 +2695,7 @@ async function readRolesUnderWay(github: Pick<ReadClient, "rest">, repo: Repo): 
   const digests = new Set(jobs.flatMap((job) => DIGEST_JOB.exec(job.name)?.[1] ?? []).map(Number));
   return {
     implement: implementJobsUnderWay(jobs).length > 0,
-    research: anyJobNamed(RESEARCH_JOB_NAME),
+    research: researchJobsUnderWay(jobs).length > 0,
     review: anyReviewJob || anyJobNamed(REVIEW_CHECKS_JOB_NAME),
     claim: anyJobNamed(CLAIM_JOB_NAME),
     designTurns: [...designTurns].sort((a, b) => a - b),
