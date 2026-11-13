@@ -404,6 +404,15 @@ describe("The Kit's workflows", () => {
       expect(jobIn(schedule, "kit")).toContain("started-at: ${{ steps.kit.outputs.started-at }}");
     });
 
+    it("says its times in the Operator's time zone, which the Tick job read from the Kit config, and runs whether or not the Tick job did", () => {
+      const gate = steps[step("src/skills/source-bumps-due.ts")]!;
+
+      expect(gate).toContain("FABRIK_TIME_ZONE: ${{ needs.tick.outputs.time-zone }}");
+      expect(bump).toMatch(/\n {4}needs: \[kit, tick\]\n/);
+      expect(bump).toContain("\n    if: ${{ !cancelled() && needs.kit.result == 'success' }}\n");
+      expect(jobIn(schedule, "tick")).toContain("      time-zone: ${{ steps.loop.outputs.time-zone }}\n");
+    });
+
     it("mints a Fabrik App token through the push service account, and bumps with it", () => {
       const secrets = steps[step("1password/load-secrets-action")]!;
       const mint = steps[step("actions/create-github-app-token@")]!;

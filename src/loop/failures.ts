@@ -182,11 +182,11 @@ function checkNames(names: readonly string[]): string {
  * weekly-limit issue's Steps say (#436); after any other failure, including an
  * input read GitHub failed or never answered, `resume` runs it again.
  */
-function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: string): string {
+function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: string, timeZone: string | null): string {
   const resumeMidSentence = `${resume.charAt(0).toLowerCase()}${resume.slice(1)}`;
   if (failure === "weekly-limit") {
     const resetsAt = run.report?.resetsAt;
-    return `Once the weekly limit resets${resetsAt === undefined ? "" : ` at ${readable(resetsAt)}`}, ${resumeMidSentence}`;
+    return `Once the weekly limit resets${resetsAt === undefined ? "" : ` at ${readable(resetsAt, timeZone)}`}, ${resumeMidSentence}`;
   }
   // A check that never reported won't on a re-run either, until its workflow or the Kit config changes (#454).
   if (failure === "unreported-checks") return `Re-adding the \`${RESUME_LABELS[run.role]}\` label won't change this. After fixing the workflow or \`sandbox.checks\`, ${resumeMidSentence}`;
@@ -231,7 +231,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again on another Subscription. The gate opens all the same.
     const landed = noDigestAfter(run, failure, pullRequest, operator);
     // One that stalls the whole repo still opens or updates its Kit-owned issue, as any run's does: that is how the Kit learns a Subscription is used up.
-    const repoWide = repoWideNotice(failure, context, { run: failedRun, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null, ...ranOn });
+    const repoWide = repoWideNotice(failure, context, { run: failedRun, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null, ...ranOn, timeZone: config.timeZone });
     return landed.kind !== "act" || repoWide === null ? landed : { ...landed, actions: [...landed.actions, ...repoWide.actions] };
   }
   const refused = heldOnRefusal(run, failure, context, ranOn);
@@ -246,14 +246,15 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       resetsAt: noResetOfItsOwn ? null : (run.report?.resetsAt ?? null),
       ...ranOn,
       ...(noResetOfItsOwn ? {} : { held }),
+      timeZone: config.timeZone,
     });
     const notice = [...waitingAgain(run, issue), ...(repoWide?.actions ?? [])];
     // The run's own issue or PR names it too, in one quiet line (#471).
     const name = heldRunName(run.role, run);
-    if (noResetOfItsOwn) return { kind: "act", actions: heldAfterKill(held, context.kitIssues, notice, name) };
+    if (noResetOfItsOwn) return { kind: "act", actions: heldAfterKill(held, context.kitIssues, notice, name, config.timeZone) };
     const firstReset = repoWide?.firstReset ?? null;
     // After the weekly-limit issue's own actions, since it may link the one they open.
-    const line = repoWide?.heldOn === undefined ? [] : [heldLineOn(held, name, repoWide.heldOn, { until: firstReset, reset: true })];
+    const line = repoWide?.heldOn === undefined ? [] : [heldLineOn(held, name, repoWide.heldOn, { until: firstReset, reset: true, timeZone: config.timeZone })];
     return { kind: "act", actions: [...holding(held, firstReset), ...notice, ...line] };
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
@@ -264,7 +265,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       how,
       runUrl: run.runUrl,
       resetsAt: run.report?.resetsAt ?? null,
-      ranOn,
+      ranOn: { ...ranOn, timeZone: config.timeZone },
     });
   }
   const broken = brokenRunOf(run, failure);
@@ -275,7 +276,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   // A failed conflict-only run (#304) isn't resumed: its PR goes to the Operator until main moves.
   if (run.conflict !== undefined && !(RERUN_FAILURES.includes(failure) && anotherSubscriptionFree(context.kitIssues, ranOn))) {
     const { pullRequest: conflicted, main } = run.conflict;
-    const detail = run.report?.detail.trim() ?? "";
+    const detail = quotedDetail(run, failure);
     return {
       kind: "act",
       actions: [
@@ -312,6 +313,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     runUrl: run.runUrl,
     resetsAt: run.report?.resetsAt ?? null,
     ...ranOn,
+    timeZone: config.timeZone,
   });
   // Another Subscription is free: the new Loop run's Kit job starts the run on it,
   // as an Infrastructure failure's resumption that never counts against retries.
@@ -332,10 +334,10 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     marker: target === run.issue || run.role === "implement" ? FAILURE_MARKERS[run.role] : undefined,
     mention: repoWide === null ? operator : null,
     failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
-    detail: run.report?.detail ?? "",
+    detail: quotedDetail(run, failure),
     commits: run.report?.commits === undefined ? null : commitsLeft(run.report.commits),
     failureKind: broken === null ? `This is an Infrastructure failure, so ${notRetried(run.role)}.` : freeBrokenRun(pullRequest),
-    resume: resumeAfter(failure, run, resume),
+    resume: resumeAfter(failure, run, resume, config.timeZone),
     pointer: repoWide?.pointer ?? null,
     runUrl: run.runUrl,
     handBack: { kind: handBackOfFailed(run.role, broken), role: run.role, failure, ...(run.role === "design" ? namedRun(run.runUrl) : {}) },
@@ -449,6 +451,15 @@ function freeBrokenRun(pullRequest: PullRequestSnapshot | null): string {
 /** What a Broken run's comment or Verdict says after its opening: the agent job's detail, quoted, what it had committed, and the run. */
 function brokenRunLines(run: FailedRun): string[] {
   return [...brokenRunDetail(run), "", `[The run](${run.runUrl})`];
+}
+
+/**
+ * The agent job's detail on a failed run, as a notice quotes it: none for a
+ * weekly limit whose reset is known, which the notice says itself in the
+ * Operator's time zone, so a comment never shows the reset in two clocks.
+ */
+function quotedDetail(run: FailedRun, failure: InfrastructureFailure): string {
+  return failure === "weekly-limit" && run.report?.resetsAt !== undefined ? "" : (run.report?.detail.trim() ?? "");
 }
 
 /**

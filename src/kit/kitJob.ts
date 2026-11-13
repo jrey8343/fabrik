@@ -18,7 +18,7 @@ import type { Action, KitConfig, KitIssueSnapshot, Plan } from "../loop/types.ts
  */
 export function kitJobSummary(
   plan: Plan,
-  config: Pick<KitConfig, "subscriptions" | "ui">,
+  config: Pick<KitConfig, "subscriptions" | "ui" | "timeZone">,
   kitIssues: readonly KitIssueSnapshot[],
 ): string | null {
   if (plan.kind === "nothing") return `### Fabrik Kit job\n\nNothing to do: ${plan.reason}.\n`;
@@ -29,7 +29,7 @@ export function kitJobSummary(
     lines.push(`The ${runNamed(run.role)} on #${run.issue} was given the Subscription **${subscriptionOf(run)}**.`);
   }
   const why = usedUp(kitIssues, config);
-  for (const hold of held) lines.push(heldSummaryLine(hold, why));
+  for (const hold of held) lines.push(heldSummaryLine(hold, why, config.timeZone));
   if (lines.length === 0) return null;
   if (!rotationIsOn(config)) {
     lines.push("Subscription rotation is off until a second Subscription is listed in Kit config's `subscriptions`.");
@@ -47,10 +47,10 @@ function heldIn(plan: Plan): Hold[] {
   return plan.kind === "act" ? plan.actions.filter((action): action is Hold => action.kind === "hold-agent-run") : [];
 }
 
-/** The step summary's line for a held run: until when, and why. */
-function heldSummaryLine(hold: Hold, why: string): string {
+/** The step summary's line for a held run: until when, in `timeZone`, the Operator's, and why. */
+function heldSummaryLine(hold: Hold, why: string, timeZone: string | null): string {
   const until =
-    hold.until === null ? "a Subscription is free again, which the Kit can't time" : readable(hold.until);
+    hold.until === null ? "a Subscription is free again, which the Kit can't time" : readable(hold.until, timeZone);
   return `The ${runNamed(hold.role)} on #${hold.issue} was held until ${until}: ${why} Its \`${hold.label}\` label came off.`;
 }
 

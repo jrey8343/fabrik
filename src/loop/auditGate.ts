@@ -20,7 +20,7 @@ export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the audit slice the audit gate weighs" };
   }
-  const held = heldBack("Audit", day, auditsIn(slice.issues), now);
+  const held = heldBack("Audit", day, auditsIn(slice.issues), now, config.timeZone);
   if (held !== null) return { kind: "nothing", reason: held };
 
   const { head } = slice;

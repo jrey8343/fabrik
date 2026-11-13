@@ -753,6 +753,7 @@ describe("The starters the Product repo then owns", () => {
       ui: null,
       preview: { url: null },
       production: null,
+      time_zone: null,
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
       ok: true,
@@ -886,14 +887,15 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
     expect(storeActions(lostSecret)).toEqual(["create-service-account"]);
   });
 
-  it("moves the Weekly summary's schedule when the Operator gives a new time zone, and touches nothing else", () => {
+  it("moves the Weekly summary's schedule and the Kit config's time_zone when the Operator gives a new time zone, and touches nothing else", () => {
     const clean = aCleanProduct();
     const setUp = afterApplying(clean, planSetup(clean, kit, operator));
 
     const actions = planSetup(setUp, kit, { timeZone: "Europe/London" }).actions;
 
-    expect(actions.map((a) => a.kind)).toEqual(["write-store-file"]);
+    expect(actions.map((a) => a.kind)).toEqual(["write-file", "write-store-file"]);
     expect(storeWritten(actions, ".github/workflows/weekly-summary.yml")).toContain('timezone: "Europe/London"');
+    expect(written(actions, ".fabrik/config.json")).toContain('"time_zone": "Europe/London"');
   });
 
   // #461: the daily Tick check's workflow doesn't exist at a release from before it, and a caller naming it there fails every run at startup.
@@ -1144,8 +1146,8 @@ describe("The production block, which Setup proposes", () => {
     const config = written(actions, ".fabrik/config.json");
     expect(config).toBe(
       kit.templates.kitConfig.replace(
-        '  "production": null\n',
-        '  "production": {\n    "url": "https://clinic.example.com",\n    "environment": "production"\n  }\n',
+        '  "production": null,\n',
+        '  "production": {\n    "url": "https://clinic.example.com",\n    "environment": "production"\n  },\n',
       ),
     );
     expect(declared(config)).toEqual(live);
@@ -1229,6 +1231,73 @@ describe("The production block, which Setup proposes", () => {
 
     expect(declared(written(actions, ".fabrik/config.json"))).toEqual(live);
     expect(why(actions)).toBe('write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production")');
+  });
+});
+
+describe("The Operator's time zone in the Kit config, which Setup keeps in step with the store's caller (ADR-0023)", () => {
+  const sydney = { timeZone: "Australia/Sydney" };
+  const why = (actions: readonly SetupAction[]) => {
+    const action = actions.find((a) => a.kind === "write-file" && a.path === ".fabrik/config.json");
+    return action === undefined ? undefined : describeAction(action);
+  };
+  const withConfig = (config: string) => aCleanProduct({ files: { ".fabrik/config.json": config } });
+  const zoneIn = (config: string | undefined) => {
+    const resolved = resolveKitConfig({ config: config ?? null });
+    return resolved.ok ? resolved.config.timeZone : resolved.errors;
+  };
+
+  it("writes the starter with the answered zone in its time_zone, where it stands, and names it in the plan", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, sydney);
+
+    const config = written(actions, ".fabrik/config.json");
+    expect(config).toBe(kit.templates.kitConfig.replace('  "time_zone": null\n', '  "time_zone": "Australia/Sydney"\n'));
+    expect(zoneIn(config)).toBe("Australia/Sydney");
+    expect(why(actions)).toBe('write .fabrik/config.json (a starter Kit config with every v1 default, and time_zone "Australia/Sydney")');
+  });
+
+  it("adds time_zone to an existing Kit config, every other byte kept", () => {
+    const { actions } = planSetup(withConfig('{\n  "max_in_flight": 1\n}\n'), kit, sydney);
+
+    expect(written(actions, ".fabrik/config.json")).toBe('{\n  "max_in_flight": 1,\n  "time_zone": "Australia/Sydney"\n}\n');
+    expect(why(actions)).toBe('write .fabrik/config.json (set time_zone "Australia/Sydney")');
+  });
+
+  it("overwrites a time_zone the Kit config already gives, where it stands", () => {
+    const { actions } = planSetup(withConfig('{\n  "time_zone": "Europe/London",\n  "max_in_flight": 1\n}\n'), kit, sydney);
+
+    expect(written(actions, ".fabrik/config.json")).toBe('{\n  "time_zone": "Australia/Sydney",\n  "max_in_flight": 1\n}\n');
+  });
+
+  it("writes nothing when the Kit config already gives the answered zone, or setup runs again with it", () => {
+    expect(written(planSetup(withConfig('{\n  "time_zone": "Australia/Sydney"\n}\n'), kit, sydney).actions, ".fabrik/config.json")).toBeUndefined();
+    const setUp = afterApplying(aCleanProduct(), planSetup(aCleanProduct(), kit, sydney));
+    expect(written(planSetup(setUp, kit, sydney).actions, ".fabrik/config.json")).toBeUndefined();
+  });
+
+  it("writes no time_zone when the Operator leaves fabrik-runs out, or gives a zone that isn't one", () => {
+    const own = '{\n  "time_zone": "Europe/London"\n}\n';
+    for (const answers of [{}, { timeZone: "Mars/Olympus_Mons" }]) {
+      expect(written(planSetup(aCleanProduct(), kit, answers).actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
+      expect(written(planSetup(withConfig(own), kit, answers).actions, ".fabrik/config.json")).toBeUndefined();
+    }
+  });
+
+  it("sets it in the same one write as the production block", () => {
+    const live = { url: "https://clinic.example.com", environment: "production" };
+
+    const { actions } = planSetup(withConfig('{\n  "max_in_flight": 1\n}\n'), kit, { ...sydney, production: live });
+
+    const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
+    expect(config.ok && [config.config.production, config.config.timeZone]).toEqual([live, "Australia/Sydney"]);
+    expect(why(actions)).toBe('write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production", and set time_zone "Australia/Sydney")');
+    expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
+  });
+
+  it("leaves a Kit config that is not a JSON object byte for byte, with one line saying why", () => {
+    const { actions, notes } = planSetup(withConfig("[]\n"), kit, sydney);
+
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+    expect(notes).toContainEqual(".fabrik/config.json isn't a JSON object, so setup didn't set time_zone in it: fix it, then run setup again.");
   });
 });
 

@@ -11,7 +11,7 @@
 import { auditsIn, isPendingAudit, startAuditorRun } from "./audit.ts";
 import { runNamed } from "./heldRun.ts";
 import { runsDueAreHeld } from "./hold.ts";
-import { repoWideNotice } from "./kitIssues.ts";
+import { repoWideNotice, type StalledRun } from "./kitIssues.ts";
 import { AUDIT_FAILED_MARKER, auditMarker, auditMarksIn, RETRO_FAILED_MARKER, retroMarker, retroMarksIn } from "./markers.ts";
 import { isPendingRetro, retrosIn } from "./retro.ts";
 import { startAgentRun } from "./runs.ts";
@@ -95,11 +95,11 @@ export interface WeeklyRunFailure {
   /** For the weekly limit, when it resets, if known. */
   readonly resetsAt: string | null;
   /**
-   * The Subscription it ran on, and whether rotation is on, for the repo-wide
-   * notice; absent when the run's own reply failed it, which stalls no other
-   * run, or when it never started.
+   * The Subscription it ran on, whether rotation is on, and the Operator's
+   * time zone, for the repo-wide notice; absent when the run's own reply
+   * failed it, which stalls no other run, or when it never started.
    */
-  readonly ranOn?: RanOn;
+  readonly ranOn?: RanOn & Pick<StalledRun, "timeZone">;
 }
 
 /**

@@ -49,10 +49,10 @@ export function landRetro(event: RetroFinished, context: IssueContext, config: K
   const actions: Action[] =
     kept.length === 0
       ? [
-          { kind: "edit-issue-body", issue: issue.number, body: cleanBody(windowEnd, event.evidence) },
+          { kind: "edit-issue-body", issue: issue.number, body: cleanBody(windowEnd, event.evidence, config.timeZone) },
           { kind: "close", issue: issue.number, reason: "completed" },
         ]
-      : [{ kind: "edit-issue-body", issue: issue.number, body: filledBody(filed, windowEnd, event) }];
+      : [{ kind: "edit-issue-body", issue: issue.number, body: filledBody(filed, windowEnd, event, config.timeZone) }];
   return { kind: "act", actions, ...(notes.length === 0 ? {} : { notes }) };
 }
 
@@ -164,23 +164,23 @@ const KIND_LABELS: Readonly<Record<ProposalKind, string>> = { mechanical: "Mecha
 const DIRECTION_LABELS: Readonly<Record<ProposalDirection, string>> = { tighten: "Tighten", loosen: "Loosen" };
 
 /** A clean Retro: one line, then its retro marker. */
-function cleanBody(windowEnd: string, evidence: RetroEvidence): string {
-  return [`The Retro read the factory's runs ${windowOf(evidence)} and has nothing to propose.`, "", retroMarker(windowEnd)].join("\n");
+function cleanBody(windowEnd: string, evidence: RetroEvidence, timeZone: string | null): string {
+  return [`The Retro read the factory's runs ${windowOf(evidence, timeZone)} and has nothing to propose.`, "", retroMarker(windowEnd)].join("\n");
 }
 
 /** A filled Retro: the window it read and what to do, a card per proposal in the Retro's order, then its retro marker. */
-function filledBody(proposals: readonly Filed[], windowEnd: string, event: RetroFinished): string {
+function filledBody(proposals: readonly Filed[], windowEnd: string, event: RetroFinished, timeZone: string | null): string {
   return [
-    `The Retro read the factory's runs ${windowOf(event.evidence)}. File the proposals you want, comment here on any you reject so the next Retro knows, and close this Retro when you're done: as completed if you filed any, as not planned if you didn't.`,
+    `The Retro read the factory's runs ${windowOf(event.evidence, timeZone)}. File the proposals you want, comment here on any you reject so the next Retro knows, and close this Retro when you're done: as completed if you filed any, as not planned if you didn't.`,
     ...proposals.flatMap((proposal) => ["", ...card(proposal, event)]),
     "",
     retroMarker(windowEnd),
   ].join("\n");
 }
 
-/** The window the evidence covers, as the Retro's opening line says it. */
-function windowOf({ window: { start, end } }: RetroEvidence): string {
-  return `from ${readable(Date.parse(start))} to ${readable(Date.parse(end))}`;
+/** The window the evidence covers, as the Retro's opening line says it, in `timeZone`, the Operator's. */
+function windowOf({ window: { start, end } }: RetroEvidence, timeZone: string | null): string {
+  return `from ${readable(Date.parse(start), timeZone)} to ${readable(Date.parse(end), timeZone)}`;
 }
 
 /**

@@ -29,7 +29,7 @@ import { digestHeadReader, snapshotWithAsks } from "./github/digestCarry.ts";
 import { readDigestGiven } from "./github/digestGiven.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
-import { resolveKitConfig } from "./kit/config.ts";
+import { resolveKitConfig, timeZoneNote } from "./kit/config.ts";
 import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
@@ -452,6 +452,11 @@ async function loadKit(github: GitHub, repo: Repo): Promise<KitConfig | null> {
     await report(`The Kit config is invalid, so the Loop did nothing:\n\n${check.errors.map((e) => `- ${e}`).join("\n")}`);
     return null;
   }
+  // A time_zone the runtime doesn't know fails nothing: the Kit writes its times in UTC, and says so once (ADR-0023).
+  const note = timeZoneNote(sources.config);
+  if (note !== null) await report(note);
+  // For the scheduled tick's skills bump, whose summary says its times in it.
+  if (check.config.timeZone !== null) await appendFile(required("GITHUB_OUTPUT"), `time-zone=${check.config.timeZone}\n`);
   return check.config;
 }
 

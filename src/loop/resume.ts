@@ -70,7 +70,7 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   const closing = new Set(planned.flatMap((action) => (action.kind === "close" ? [action.issue] : [])));
   const stillOpen = snapshot.kitIssues.filter((issue) => issue.number !== closed && !closing.has(issue.number));
   // The Operator closing a weekly-limit issue says its Subscription works again, whatever else is open (#440).
-  if (handClosed === null && freeSubscriptions(stillOpen, config).length === 0) return strandedHeldAgain(plan, limits, stillOpen);
+  if (handClosed === null && freeSubscriptions(stillOpen, config).length === 0) return strandedHeldAgain(plan, limits, stillOpen, config.timeZone);
   const waiting = waitingHeldRuns(limits);
   if (waiting.length === 0) return plan;
   if (snapshot.held === null) {
@@ -87,7 +87,7 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
     const backOn = on?.open === true && run.label !== null && on.labels.includes(run.label);
     if (on !== undefined && (backOn || givenBackSince(entry, on))) {
       // Its held line too, in case the edit was what failed: one already edited is left as it is.
-      if (run.label !== null) resumes.push(heldLineEnded(entry, { kind: "resumed" }));
+      if (run.label !== null) resumes.push(heldLineEnded(entry, { kind: "resumed" }, config.timeZone));
       dealtWith.push(entry);
       continue;
     }
@@ -95,10 +95,10 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
     if (reason !== null || on === undefined) {
       resumes.push({ kind: "drop-held-run", role: run.role, issue: run.issue, reason: reason ?? "" });
       // An issue GitHub no longer has has no held line left to edit.
-      if (on !== undefined && run.label !== null) resumes.push(heldLineEnded(entry, { kind: "dropped", reason: reason ?? "" }));
+      if (on !== undefined && run.label !== null) resumes.push(heldLineEnded(entry, { kind: "dropped", reason: reason ?? "" }, config.timeZone));
     } else if (run.label !== null) {
       // The line first: the label may start a run held again, whose own new line this edit must leave alone.
-      resumes.push(heldLineEnded(entry, { kind: "resumed" }), { kind: "add-labels", issue: run.issue, labels: [run.label] });
+      resumes.push(heldLineEnded(entry, { kind: "resumed" }, config.timeZone), { kind: "add-labels", issue: run.issue, labels: [run.label] });
     } else {
       // Only an Auditor run has no trigger label: a Retro run was never held, so movedOn dropped it.
       resumes.push(...failedHeldAudit(on));
@@ -126,8 +126,8 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
 }
 
 /** The edit saying a held run's hold ended, on the held line its newest held marker put on its issue or PR (#471). */
-function heldLineEnded({ run, newest }: Waiting, ended: HoldEnded): Action {
-  return { kind: "end-held-line", role: run.role, issue: newest.lineOn, on: newest.on, ended };
+function heldLineEnded({ run, newest }: Waiting, ended: HoldEnded, timeZone: string | null): Action {
+  return { kind: "end-held-line", role: run.role, issue: newest.lineOn, on: newest.on, ended, timeZone };
 }
 
 /**
@@ -136,13 +136,13 @@ function heldLineEnded({ run, newest }: Waiting, ended: HoldEnded): Action {
  * open, in their places: closed, its held markers are no longer read, so
  * nothing would ever resume them (#470).
  */
-function strandedHeldAgain(plan: Plan, carriers: readonly KitIssueSnapshot[], stillOpen: readonly KitIssueSnapshot[]): Plan {
+function strandedHeldAgain(plan: Plan, carriers: readonly KitIssueSnapshot[], stillOpen: readonly KitIssueSnapshot[], timeZone: string | null): Plan {
   const open = new Set(stillOpen.map((issue) => issue.number));
   const stillHeld = new Set(waitingHeldRuns(carriers.filter((issue) => open.has(issue.number))).map(({ run }) => `${run.role}:${run.issue}`));
   const stranded = waitingHeldRuns(carriers).flatMap(({ run }): HoldableRun[] =>
     run.label === null || stillHeld.has(`${run.role}:${run.issue}`) ? [] : [{ ...run, label: run.label }],
   );
-  const again = heldAgain(stranded, stillOpen);
+  const again = heldAgain(stranded, stillOpen, timeZone);
   if (again.length === 0) return plan;
   // Before the Plan's own actions, a close among them, as for a resume (#438).
   const planned = plan.kind === "act" ? plan.actions : [];

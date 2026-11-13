@@ -19,7 +19,7 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the retro slice the retro gate weighs" };
   }
-  const held = heldBack("Retro", day, retrosIn(slice.issues), now);
+  const held = heldBack("Retro", day, retrosIn(slice.issues), now, config.timeZone);
   if (held !== null) return { kind: "nothing", reason: held };
   // The store's opt-in step isn't done: a Retro would have nothing to read, and isn't worth a notice (#139).
   if (!slice.storeReady) return { kind: "nothing", reason: "The fabrik-runs store isn't ready: the Fabrik App isn't on it, or it isn't private" };
@@ -27,24 +27,25 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   // The slice counts what's new from the same window start (src/github/snapshot.ts).
   const since = retroWindowStart(now, slice.issues);
   if (!slice.agentPullRequestClosed && !slice.escapeFiled) {
-    return { kind: "nothing", reason: `Nothing is new since ${readable(Date.parse(since))}: no agent PR merged or closed, and no escape was filed` };
+    return { kind: "nothing", reason: `Nothing is new since ${readable(Date.parse(since), config.timeZone)}: no agent PR merged or closed, and no escape was filed` };
   }
   // Last of all, so it's named only when it alone holds the week's Retro back (#442).
   const waiting = waitingForSubscription("retro", now, snapshot, config);
   if (waiting !== null) return waiting;
-  return { kind: "act", actions: [pendingRetro(now, since)] };
+  return { kind: "act", actions: [pendingRetro(now, since, config.timeZone)] };
 }
 
 /**
  * This week's pending Retro, reading the window from `since` to the tick at
- * `now`: no state label, assignee or mention, so opening it buzzes nobody.
+ * `now`, saying since when in `timeZone`, the Operator's: no state label,
+ * assignee or mention, so opening it buzzes nobody.
  */
-function pendingRetro(now: string, since: string): Action {
+function pendingRetro(now: string, since: string, timeZone: string | null): Action {
   return {
     kind: "open-issue",
     title: `Retro: week of ${dateOf(weekStart(now))}`,
     body: [
-      `The Retro is reading the factory's runs since ${readable(Date.parse(since))}, and this issue fills in when it's done.`,
+      `The Retro is reading the factory's runs since ${readable(Date.parse(since), timeZone)}, and this issue fills in when it's done.`,
       "",
       retroMarker(now),
       RETRO_PENDING_MARKER,

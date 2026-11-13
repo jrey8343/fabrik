@@ -6,6 +6,7 @@
 import type { KitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL, READY_FOR_HUMAN, WONTFIX } from "../loop/labels.ts";
 import { monitorMarkerIn, monitorMarkerLine } from "../loop/markers.ts";
+import { readable } from "../loop/readable.ts";
 import {
   ascending,
   type BodyRewrite,
@@ -43,6 +44,8 @@ export interface MonitorInput {
   readonly cap: number;
   /** The Operator's GitHub login, whom the Sentry token's rotation issue is assigned to. */
   readonly operator: string;
+  /** The Operator's time zone from the Kit config (ADR-0023), which an error issue says when Sentry saw it in; null for UTC. */
+  readonly timeZone: string | null;
 }
 
 export type SentryRead =
@@ -119,7 +122,7 @@ const SENTRY_TOKEN_ITEM = "`Sentry token` item in the `Fabrik App` 1Password vau
  * the Sentry token's rotation issue (sentryTokenPlan).
  */
 function productionErrors(input: MonitorInput): MonitorPlan {
-  const { monitor, sentry, issues, cap } = input;
+  const { monitor, sentry, issues, cap, timeZone } = input;
   if (monitor.errors === null || sentry === null) {
     return {
       open: [],
@@ -174,7 +177,7 @@ function productionErrors(input: MonitorInput): MonitorPlan {
   const held = candidates.length - filing.length;
   const heldLine = held === 0 ? null : heldLineOf(held, cap);
   const open = filing.map(({ group, regressedFrom }, i) =>
-    errorIssueFor(group, regressedFrom, i === filing.length - 1 ? heldLine : null),
+    errorIssueFor(group, regressedFrom, i === filing.length - 1 ? heldLine : null, timeZone),
   );
   // The newest open error issue shows the held line: the last one filed now,
   // as GitHub numbers them in the order they're filed, or else the newest
@@ -184,7 +187,7 @@ function productionErrors(input: MonitorInput): MonitorPlan {
   for (const issue of openErrorIssues) {
     const line = issue === holder ? heldLine : null;
     const group = refreshing.get(issue.number);
-    const rewritten = group === undefined ? heldRewriteFor(issue, line) : statsRewriteFor(issue, group, line);
+    const rewritten = group === undefined ? heldRewriteFor(issue, line) : statsRewriteFor(issue, group, line, timeZone);
     if (rewritten !== null) rewrite.push(rewritten);
   }
   const summary: string[] = [];
@@ -360,11 +363,11 @@ function regressedSince(issue: MonitorIssue, group: GroupFacts, minEvents: numbe
  * The issue to file for a group, new or regressed from the issue numbered
  * `regressedFrom`, its stats block ending with this held line when it has one.
  */
-function errorIssueFor(group: GroupFacts, regressedFrom: number | null, heldLine: string | null): IssueToOpen {
+function errorIssueFor(group: GroupFacts, regressedFrom: number | null, heldLine: string | null, timeZone: string | null): IssueToOpen {
   return {
     sentryGroup: group.id,
     title: errorTitleOf(group),
-    body: errorBodyOf(group, regressedFrom, heldLine),
+    body: errorBodyOf(group, regressedFrom, heldLine, timeZone),
     labels: [MONITOR_LABEL],
   };
 }
@@ -383,7 +386,7 @@ const FRAMES_MAX = 10;
  * as Markdown, mention anyone, or pass for a marker. A regression's body
  * opens by naming the issue it regressed from.
  */
-function errorBodyOf(group: GroupFacts, regressedFrom: number | null, heldLine: string | null): string {
+function errorBodyOf(group: GroupFacts, regressedFrom: number | null, heldLine: string | null, timeZone: string | null): string {
   const event = group.latestEvent;
   return [
     monitorMarkerLine({ kind: "sentry", group: group.id }),
@@ -400,8 +403,8 @@ function errorBodyOf(group: GroupFacts, regressedFrom: number | null, heldLine: 
     "",
     `- Culprit: ${group.culprit === null ? "none given" : bodyCode(group.culprit, BODY_FIELD_MAX)}`,
     `- Level: ${group.level}`,
-    `- First seen: ${readable(group.firstSeen)}`,
-    ...monitorBlock(statsLinesOf(group, heldLine)),
+    `- First seen: ${seenAt(group.firstSeen, timeZone)}`,
+    ...monitorBlock(statsLinesOf(group, heldLine, timeZone)),
     "",
     "## In-app stack frames",
     "",
@@ -415,11 +418,11 @@ function errorBodyOf(group: GroupFacts, regressedFrom: number | null, heldLine: 
 const RELEASE_LINE = "- Release: ";
 
 /** The group's stats, as its issue's stats block gives them, naming this release, then the held line when it has one. */
-function statsLinesOf(group: GroupFacts, heldLine: string | null, release = releaseOf(group.latestEvent)): string[] {
+function statsLinesOf(group: GroupFacts, heldLine: string | null, timeZone: string | null, release = releaseOf(group.latestEvent)): string[] {
   return [
     `- Events in the last 24 hours: ${group.events24h}`,
     `- Users affected: ${group.usersAffected}`,
-    `- Last seen: ${readable(group.lastSeen)}`,
+    `- Last seen: ${seenAt(group.lastSeen, timeZone)}`,
     `${RELEASE_LINE}${release}`,
     ...(heldLine === null ? [] : [heldLine]),
   ];
@@ -464,11 +467,11 @@ function releaseOf(event: LatestEventFacts | null): string {
  * changed or the body has no stats block. A latest event that wasn't read
  * leaves the release the block already names.
  */
-function statsRewriteFor(issue: MonitorIssue, group: GroupFacts, heldLine: string | null): BodyRewrite | null {
+function statsRewriteFor(issue: MonitorIssue, group: GroupFacts, heldLine: string | null, timeZone: string | null): BodyRewrite | null {
   const current = monitorBlockIn(issue.body);
   if (current === null) return null;
   const kept = group.latestEvent === null ? current.find((line) => line.startsWith(RELEASE_LINE))?.slice(RELEASE_LINE.length) : undefined;
-  const body = withMonitorBlock(issue, statsLinesOf(group, heldLine, kept));
+  const body = withMonitorBlock(issue, statsLinesOf(group, heldLine, timeZone, kept));
   if (body === null) return null;
   return { kind: "stats", issue: issue.number, sentryGroup: group.id, body, summary: `Refreshed the stats block on #${issue.number}.` };
 }
@@ -522,11 +525,9 @@ function sentryLink(permalink: string): string {
   return `[The group in Sentry](${url.href.replaceAll("(", "%28").replaceAll(")", "%29")})`;
 }
 
-/** Such as "2026-11-09 04:00 UTC"; a time Sentry gave that doesn't parse is quoted as code. */
-function readable(iso: string): string {
-  if (Number.isNaN(Date.parse(iso))) return bodyCode(iso, BODY_FIELD_MAX);
-  const at = new Date(iso).toISOString();
-  return `${at.slice(0, 10)} ${at.slice(11, 16)} UTC`;
+/** When Sentry saw a group, as the Kit writes a time in `timeZone`, the Operator's; a time Sentry gave that doesn't parse is quoted as code. */
+function seenAt(iso: string, timeZone: string | null): string {
+  return Number.isNaN(Date.parse(iso)) ? bodyCode(iso, BODY_FIELD_MAX) : readable(iso, timeZone);
 }
 
 /** The longest exception type and culprit an error issue's title quotes. */

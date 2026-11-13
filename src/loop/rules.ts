@@ -225,7 +225,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       // Before all that, a Tick that runs at all closes its repo's Dead-tick issue (#461).
       return thenCheckQueues(
         alongside(
-          withDeadTickClosed(event, snapshot, withReasonNoted(stuckTriggers(event.now, snapshot, config))),
+          withDeadTickClosed(event, snapshot, config, withReasonNoted(stuckTriggers(event.now, snapshot, config))),
           scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate], event.now, snapshot, config),
         ),
       );
@@ -233,8 +233,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
 }
 
 /** The plan, after closing the repo's open Dead-tick issue, if one is open. */
-function withDeadTickClosed(event: Extract<LoopEvent, { kind: "scheduled-tick" }>, snapshot: Snapshot, plan: Plan): Plan {
-  const closing = deadTickClosed(event.now, event.release ?? null, snapshot);
+function withDeadTickClosed(event: Extract<LoopEvent, { kind: "scheduled-tick" }>, snapshot: Snapshot, config: KitConfig, plan: Plan): Plan {
+  const closing = deadTickClosed(event.now, event.release ?? null, snapshot, config.timeZone);
   return closing.length === 0 ? plan : alongside({ kind: "act", actions: closing }, plan);
 }
 

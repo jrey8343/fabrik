@@ -1,6 +1,6 @@
 // The Kit config: loaded from a Product repo's .fabrik/ folder, with every v1
 // default filled in, and validated at the start of every run. Pure, no I/O.
-import { spelled } from "../loop/readable.ts";
+import { knownTimeZone, spelled } from "../loop/readable.ts";
 import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
@@ -94,6 +94,12 @@ export interface KitConfig {
   readonly preview: PreviewConfig | null;
   /** Where the Product repo's production is (ADR-0021); null declares nothing, and nothing in the Loop reads it. */
   readonly production: ProductionConfig | null;
+  /**
+   * The Operator's time zone (ADR-0023), an IANA zone every time the Kit shows
+   * the Operator is written in; null, as when `time_zone` is unset or names no
+   * zone the runtime knows (timeZoneNote), writes them in UTC.
+   */
+  readonly timeZone: string | null;
 }
 
 /** The `ui` block: which changed files make a pull request UI, and how the Sandbox serves the branch to capture it. */
@@ -444,6 +450,8 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   preview: null,
   // Production is declared by a Product repo, never guessed.
   production: null,
+  // UTC until the Operator gives their time zone, as Setup writes it.
+  timeZone: null,
 };
 
 /** Where the Kit config lives in a Product repo (ADR-0005). */
@@ -654,7 +662,27 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     ui: readUi(file.nullableObject("ui")),
     preview: readPreview(file.nullableObject("preview")),
     production: readProduction(file.nullableObject("production")),
+    // A time_zone the runtime doesn't know falls back to UTC, and never fails the Kit config (ADR-0023).
+    timeZone: knownTimeZone(file.unchecked("time_zone")),
   };
+}
+
+/**
+ * The step summary's one line for a `time_zone` that names no IANA zone the
+ * runtime knows, naming it, or null when it's unset, a zone, or the Kit
+ * config isn't a JSON object, whose errors say so instead.
+ */
+export function timeZoneNote(configText: string | null): string | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(configText ?? "");
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const value = (raw as Record<string, unknown>)["time_zone"];
+  if (value === undefined || value === null || knownTimeZone(value) !== null) return null;
+  return `\`time_zone\` in ${KIT_CONFIG_PATH} is ${JSON.stringify(value)}, which isn't an IANA time zone, such as Europe/London, so the Kit writes its times in UTC.`;
 }
 
 /** A field left out (undefined) takes its default; an explicit null is kept. */
@@ -1197,6 +1225,11 @@ class Reader {
       else result[name] = value;
     }
     return refused ? undefined : result;
+  }
+
+  /** Whatever this object gives for `key`, unchecked: for a field whose bad value falls back rather than fails. */
+  unchecked(key: string): unknown {
+    return this.#take(key);
   }
 
   /** Whether this object gives `key` at all. */

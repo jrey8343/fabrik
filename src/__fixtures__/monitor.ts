@@ -101,6 +101,7 @@ export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<M
     mainChecks: null,
     cap: DEFAULT_KIT_CONFIG.caps.monitorIssues,
     operator: "operator",
+    timeZone: null,
     ...overrides,
   };
 }

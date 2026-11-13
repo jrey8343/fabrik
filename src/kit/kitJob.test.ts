@@ -53,6 +53,15 @@ describe("The Kit job's step summary", () => {
     );
   });
 
+  it("says until when a held run waits in the Operator's time zone", () => {
+    const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], timeZone: "Australia/Sydney" });
+    const secondUsedUp: KitIssueSnapshot = { ...firstUsedUp, number: 41, body: "<!-- fabrik:resets-at 2026-11-08T10:00:00.000Z -->\n<!-- fabrik:subscription Claude token 2 -->" };
+    const kitIssues = [firstUsedUp, secondUsedUp];
+    const plan = planFor(triage, snapshotOf(ticket, { kitIssues }), config);
+
+    expect(kitJobSummary(plan, config, kitIssues)).toContain("The Triage run on #7 was held until 2026-11-08 21:00 Australia/Sydney: ");
+  });
+
   it("names both reasons when one Subscription is used up by its weekly limit and another by a usage-credits kill", () => {
     const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
     const usageCredits: KitIssueSnapshot = {

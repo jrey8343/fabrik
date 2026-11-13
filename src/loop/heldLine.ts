@@ -62,10 +62,15 @@ export function heldRunName(role: AgentRole, kind: HeldRunKind = {}): string {
   return `The ${runNamed(role)}`;
 }
 
-/** When the carrier a run is held on frees it: at `until` if known, for a weekly-limit issue; `reset` false for one with none (#470). */
+/**
+ * When the carrier a run is held on frees it: at `until` if known, for a
+ * weekly-limit issue; `reset` false for one with none (#470). `timeZone` is the
+ * Operator's, which `until` is written in.
+ */
 export interface HeldUntil {
   readonly until: string | null;
   readonly reset: boolean;
+  readonly timeZone: string | null;
 }
 
 /**
@@ -76,7 +81,7 @@ export interface HeldUntil {
  * a usage-credits or token-rotation issue by a close of any issue blocking a
  * Subscription (#470). `on` is an existing issue, or one the Plan opens.
  */
-export function heldLineOn(held: HoldableRun, name: string, on: number | CreatedIssue, { until, reset }: HeldUntil): Action {
+export function heldLineOn(held: HoldableRun, name: string, on: number | CreatedIssue, { until, reset, timeZone }: HeldUntil): Action {
   const issue = typeof on === "number" ? `#${on}` : on;
   const opening = `${openMarker(held.role)}\n${name} is held on `;
   const restarts = "The Kit restarts the run by itself then, so there's nothing to do.";
@@ -96,7 +101,7 @@ export function heldLineOn(held: HoldableRun, name: string, on: number | Created
           issue,
           ` once agent runs work again frees one. ${restarts}`,
         ]
-      : [opening, issue, `: every Subscription is used up until ${readable(until)}, when the first weekly limit resets. ${restarts}`];
+      : [opening, issue, `: every Subscription is used up until ${readable(until, timeZone)}, when the first weekly limit resets. ${restarts}`];
   const item = heldLineIssue(held);
   if (body.every((part) => typeof part === "string")) return { kind: "comment", issue: item, body: body.join("") };
   return { kind: "comment-linking", issue: item, body };
@@ -105,8 +110,8 @@ export function heldLineOn(held: HoldableRun, name: string, on: number | Created
 /** How a hold ended. */
 export type HoldEnded = { readonly kind: "resumed" } | { readonly kind: "dropped"; readonly reason: string };
 
-/** A held line as it reads once its hold ended, at `at`: resumed, or dropped and why. */
-export function endedHeldLine(role: AgentRole, on: number, ended: HoldEnded, at: string): string {
-  const how = ended.kind === "resumed" ? `resumed ${readable(at)}` : `dropped: ${ended.reason}`;
+/** A held line as it reads once its hold ended, at `at`, written in `timeZone`, the Operator's: resumed, or dropped and why. */
+export function endedHeldLine(role: AgentRole, on: number, ended: HoldEnded, at: string, timeZone: string | null): string {
+  const how = ended.kind === "resumed" ? `resumed ${readable(at, timeZone)}` : `dropped: ${ended.reason}`;
   return [endedMarker(role), `Was held on #${on} · ${how}`].join("\n");
 }

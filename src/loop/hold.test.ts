@@ -255,6 +255,42 @@ describe("A run due while every Subscription is used up, with rotation on", () =
   });
 });
 
+describe("A held run, in the Operator's time zone", () => {
+  const sydney = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], timeZone: "Australia/Sydney" });
+
+  it("a run due says until when it is held in it, in its held line and on the weekly-limit issue", () => {
+    const [event, snapshot] = STARTS[2]![2](BOTH_USED_UP);
+
+    const plan = planFor(event, snapshot, sydney);
+
+    expect(heldLinesOn(plan, 7)[0]).toContain("The Implement run is held on #41: every Subscription is used up until 2026-11-08 21:00 Australia/Sydney, when");
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "comment",
+      issue: 41,
+      body: expect.stringContaining("The Implement run on #7 is held until 2026-11-08 21:00 Australia/Sydney, when"),
+    });
+  });
+
+  it("a run refused while none is free says until when it is held in it, in its held line and the weekly-limit issue it opens", () => {
+    const other = weeklyLimitIssue(40, "Claude token 2", EARLIER, false);
+
+    const actions = actionsOf(planFor(refused("implement", 7), snapshotOf(anIssue({ number: 7 }), { kitIssues: [other] }), sydney));
+
+    expect(actions).toContainEqual(
+      expect.objectContaining({
+        kind: "comment-linking",
+        body: expect.arrayContaining([expect.stringContaining("used up until 2026-11-08 21:00 Australia/Sydney, when the first weekly limit resets.")]),
+      }),
+    );
+    expect(actions).toContainEqual(
+      expect.objectContaining({ kind: "open-issue", body: expect.stringContaining("The first resets at 2026-11-08 21:00 Australia/Sydney.") }),
+    );
+    expect(actions).toContainEqual(
+      expect.objectContaining({ kind: "open-issue", body: expect.stringContaining("The Implement run on #7 is held until 2026-11-08 21:00 Australia/Sydney, when") }),
+    );
+  });
+});
+
 describe("Jobs with no agent in them, while every Subscription is used up", () => {
   const PLANS: readonly (readonly [string, LoopEvent, Snapshot])[] = [
     ["the Merge gate", { kind: "pull-request-left-draft", pullRequest: 50 }, snapshotOfPullRequest(aPullRequest({ draft: false }))],

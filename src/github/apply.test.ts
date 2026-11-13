@@ -941,9 +941,9 @@ describe("Applying the end of a held run's held line", () => {
       },
     };
   }
-  const resumed = (ended: { kind: "resumed" } | { kind: "dropped"; reason: string } = { kind: "resumed" }): Plan => ({
+  const resumed = (ended: { kind: "resumed" } | { kind: "dropped"; reason: string } = { kind: "resumed" }, timeZone: string | null = null): Plan => ({
     kind: "act",
-    actions: [{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended }],
+    actions: [{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended, timeZone }],
   });
   const run = { id: 7, at: "2026-11-09T04:05:00.000Z" };
 
@@ -954,6 +954,14 @@ describe("Applying the end of a held run's held line", () => {
 
     expect(github.comments[1]?.body).toBe('<!-- fabrik:on-hold-ended {"role":"implement"} -->\nWas held on #41 · resumed 2026-11-09 04:05 UTC');
     expect(github.calls.filter(({ method }) => method === "POST")).toEqual([]);
+  });
+
+  it("says when it resumed in the Operator's time zone", async () => {
+    const github = withComments([{ id: 2, body: waiting("implement") }]);
+
+    await applyPlan(github, repo, resumed({ kind: "resumed" }, "Australia/Sydney"), null, run);
+
+    expect(github.comments[0]?.body).toBe('<!-- fabrik:on-hold-ended {"role":"implement"} -->\nWas held on #41 · resumed 2026-11-09 15:05 Australia/Sydney');
   });
 
   it("edits it to say it was dropped, and why", async () => {

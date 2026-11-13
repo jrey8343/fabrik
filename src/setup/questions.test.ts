@@ -124,6 +124,28 @@ describe("Setup's questions", () => {
     expect(answers).toEqual({ timeZone: "Europe/Berlin" });
   });
 
+  it("offers the Kit config's time_zone when fabrik-runs holds none", async () => {
+    const prompt = scripted("", "", "");
+    const { answers } = await ask({}, prompt, aCleanProduct({ files: { ".fabrik/config.json": '{ "time_zone": "Europe/Berlin" }\n' } }));
+
+    expect(prompt.questions[0]).toBe("Your time zone, or no to leave fabrik-runs out [Europe/Berlin]: ");
+    expect(answers).toEqual({ timeZone: "Europe/Berlin" });
+  });
+
+  it("offers fabrik-runs' zone before the Kit config's, which it brings back in step", async () => {
+    const prompt = scripted("", "", "");
+    await ask({}, prompt, aCleanProduct({ store: storeIn("Europe/London"), files: { ".fabrik/config.json": '{ "time_zone": "Europe/Berlin" }\n' } }));
+
+    expect(prompt.questions[0]).toBe("Your time zone, or no to leave fabrik-runs out [Europe/London]: ");
+  });
+
+  it("offers this machine's zone over a Kit config time_zone that isn't one", async () => {
+    const prompt = scripted("", "", "");
+    await ask({}, prompt, aCleanProduct({ files: { ".fabrik/config.json": '{ "time_zone": "Mars/Olympus_Mons" }\n' } }));
+
+    expect(prompt.questions[0]).toBe("Your time zone, or no to leave fabrik-runs out [Australia/Sydney]: ");
+  });
+
   it("takes another time zone, or no", async () => {
     expect((await ask({}, scripted("America/New_York", "", ""))).answers).toEqual({ timeZone: "America/New_York" });
     expect((await ask({}, scripted("no", "", ""))).answers).toEqual({});

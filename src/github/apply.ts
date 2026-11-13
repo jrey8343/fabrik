@@ -491,7 +491,7 @@ async function endHeldLine(
 ): Promise<void> {
   const base = `/repos/${repo.owner}/${repo.name}/issues`;
   const comments = await allPages<{ id: number; body: string | null; user: { type: string } | null }>(github, `${base}/${action.issue}/comments`);
-  const body = endedHeldLine(action.role, action.on, action.ended, at);
+  const body = endedHeldLine(action.role, action.on, action.ended, at, action.timeZone);
   for (const comment of comments) {
     if (comment.user?.type !== "Bot" || waitingHeldLineRole(comment.body ?? "") !== action.role) continue;
     await github.rest("PATCH", `${base}/comments/${comment.id}`, { body });

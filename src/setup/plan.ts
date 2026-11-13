@@ -3,6 +3,7 @@
 // ready to run the Loop, and nothing a working install already has.
 import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
 import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
+import { isTimeZone } from "../loop/readable.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
 import { setupCommand } from "./finish.ts";
 import { withMember } from "./json.ts";
@@ -287,10 +288,11 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
 /**
  * The Kit config is the Product's: setup writes the starter once, when the repo
  * lacks one, and after that changes only its subscriptions list, on the
- * Operator's yes to a second Subscription. Until the setup PR merges, the
- * starter on setup's branch is still setup's own, so a later run's answer on
- * pausing sets its max_in_flight. Visual evidence, the one block that needs
- * judgment, is /fabrik-visual-evidence's to write (Spec #330).
+ * Operator's yes to a second Subscription, its production block, while it
+ * declares none, and its time_zone, to the Operator's answer (ADR-0023). Until
+ * the setup PR merges, the starter on setup's branch is still setup's own, so a
+ * later run's answer on pausing sets its max_in_flight. Visual evidence, the
+ * one block that needs judgment, is /fabrik-visual-evidence's to write (Spec #330).
  */
 function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[], { wroteStarter = false }: PlanContext): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
@@ -299,34 +301,73 @@ function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, no
     if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
     const maxInFlight = paused ? 0 : DEFAULT_KIT_CONFIG.maxInFlight;
     const repaused = pausesDispatch(existing) === paused ? null : withMember(existing, ["max_in_flight"], maxInFlight);
-    const listed = withSecondSubscription(repaused ?? existing, state, answers);
-    const live = withProduction(listed ?? repaused ?? existing, answers, notes);
-    if (repaused === null) return edits(listed, live, answers);
-    const why = `the starter Kit config, with Dispatch ${paused ? "" : "not "}paused now (max_in_flight ${maxInFlight})${alsoWords(listed, live, answers)}`;
-    return [write(KIT_CONFIG_PATH, live ?? listed ?? repaused, why)];
+    const edited = answeredEdits(repaused ?? existing, state, answers, notes);
+    if (repaused === null) return edits(edited);
+    const why = `the starter Kit config, with Dispatch ${paused ? "" : "not "}paused now (max_in_flight ${maxInFlight})${alsoWords(edited)}`;
+    return [write(KIT_CONFIG_PATH, edited.text ?? repaused, why)];
   }
   if (existing !== null) {
     if (paused) notes.push(pausedHadNoEffect(existing));
-    const listed = withSecondSubscription(existing, state, answers);
-    return edits(listed, withProduction(listed ?? existing, answers, notes), answers);
+    return edits(answeredEdits(existing, state, answers, notes));
   }
   if (!paused) notes.push(...readyForAgentWarning(state.readyForAgent));
   const starter = paused ? pausedStarter(kit.templates.kitConfig) : kit.templates.kitConfig;
-  const listed = withSecondSubscription(starter, state, answers);
-  const live = withProduction(listed ?? starter, answers, notes);
-  const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}${alsoWords(listed, live, answers)}`;
-  return [write(KIT_CONFIG_PATH, live ?? listed ?? starter, why)];
+  const edited = answeredEdits(starter, state, answers, notes);
+  const why = `a starter Kit config with every v1 default${paused ? " but Dispatch paused (max_in_flight 0)" : ""}${alsoWords(edited)}`;
+  return [write(KIT_CONFIG_PATH, edited.text ?? starter, why)];
 }
 
-/** The one write of a Kit config whose only changes are the second Subscription listed and the production block added, or none. */
-function edits(listed: string | null, live: string | null, answers: SetupAnswers): SetupAction[] {
-  const words = [listed === null ? null : LIST_SECOND_SUBSCRIPTION, live === null ? null : `add ${productionWords(answers)}`].filter((w) => w !== null);
-  return words.length === 0 ? [] : [write(KIT_CONFIG_PATH, live ?? listed ?? "", words.join(", and "))];
+/** The Kit config's text with the Operator's answers in it, or null when they change nothing, and how the plan names each change. */
+interface AnsweredEdits {
+  readonly text: string | null;
+  /** As the plan names the change on its own, such as "add the production block: …". */
+  readonly changes: readonly string[];
+  /** As the plan names it after a starter's or a re-pause's write, such as "the production block: …". */
+  readonly also: readonly string[];
 }
 
-/** What a starter's write also does: the second Subscription listed and the production block added. */
-function alsoWords(listed: string | null, live: string | null, answers: SetupAnswers): string {
-  return `${listed === null ? "" : ", and the second Subscription listed"}${live === null ? "" : `, and ${productionWords(answers)}`}`;
+/** The second Subscription listed, the production block added and time_zone set, each on the text the one before left. */
+function answeredEdits(text: string, state: ProductState, answers: SetupAnswers, notes: string[]): AnsweredEdits {
+  const listed = withSecondSubscription(text, state, answers);
+  const live = withProduction(listed ?? text, answers, notes);
+  const zoned = withTimeZone(live ?? listed ?? text, answers, notes);
+  const made: (readonly [change: string, also: string])[] = [];
+  if (listed !== null) made.push([LIST_SECOND_SUBSCRIPTION, "the second Subscription listed"]);
+  if (live !== null) made.push([`add ${productionWords(answers)}`, productionWords(answers)]);
+  if (zoned !== null) made.push([`set ${timeZoneWords(answers)}`, timeZoneWords(answers)]);
+  return { text: zoned ?? live ?? listed, changes: made.map(([change]) => change), also: made.map(([, also]) => also) };
+}
+
+/** The one write of a Kit config whose only changes are the Operator's answers, or none. */
+function edits({ text, changes }: AnsweredEdits): SetupAction[] {
+  return text === null ? [] : [write(KIT_CONFIG_PATH, text, changes.join(", and "))];
+}
+
+/** What a starter's or a re-pause's write also does. */
+function alsoWords({ also }: AnsweredEdits): string {
+  return also.map((words) => `, and ${words}`).join("");
+}
+
+/** The time_zone the plan sets, named with its value. */
+function timeZoneWords({ timeZone }: SetupAnswers): string {
+  return `time_zone ${JSON.stringify(timeZone)}`;
+}
+
+/**
+ * The Kit config's text with time_zone set to the Operator's time zone, where
+ * it stands or added, every other byte kept, or null when there's nothing to
+ * write: no answer, as when they left fabrik-runs out, an answer that isn't a
+ * zone, which the store's note says, the zone it gives already, or a Kit
+ * config setup can't set a member in, which it says.
+ */
+function withTimeZone(text: string, { timeZone }: SetupAnswers, notes: string[]): string | null {
+  if (timeZone === undefined || !isTimeZone(timeZone)) return null;
+  const config = jsonObject(text);
+  if (config === null) {
+    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so setup didn't set time_zone in it: fix it, then run setup again.`);
+    return null;
+  }
+  return config["time_zone"] === timeZone ? null : withMember(text, ["time_zone"], timeZone);
 }
 
 /** The production block the plan writes, named with both its values. */
@@ -521,17 +562,6 @@ export function takesSecondSubscription(listed: readonly string[]): boolean {
  * The fabrik-runs store: Run records and the Weekly summary turn on once it
  * exists with the Fabrik App installed on it (the wizard's stage).
  */
-/** Whether GitHub's schedule `timezone:` takes it: an IANA name the runtime's time zone data knows. */
-export function isTimeZone(name: string): boolean {
-  if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(name)) return false;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** The store's one Actions secret, which its caller workflow passes to the Weekly summary. */
 const STORE_SECRET = "FABRIK_OP_PUSH_TOKEN";
 

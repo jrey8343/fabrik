@@ -45,6 +45,8 @@ export interface StalledRun extends RanOn {
   readonly resetsAt: string | null;
   /** With rotation on, the run the Kit holds rather than fails, which the weekly-limit notice names. */
   readonly held?: HoldableRun;
+  /** The Operator's time zone the notice writes its times in (src/loop/readable.ts); null for UTC. */
+  readonly timeZone: string | null;
 }
 
 /**
@@ -105,12 +107,12 @@ export function repoWideNotice(
  * The scheduled tick: closes the weekly-limit issue once its reset time has
  * passed. With rotation on, it closes each Subscription's at its own reset.
  */
-export function scheduledTick(now: string, { kitIssues }: Snapshot, config: Pick<KitConfig, "subscriptions">): Plan {
+export function scheduledTick(now: string, { kitIssues }: Snapshot, config: Pick<KitConfig, "subscriptions" | "timeZone">): Plan {
   const limits = kitIssues.filter((issue) => issue.labels.includes(WEEKLY_LIMIT_LABEL));
   const [first] = limits;
   if (first === undefined) return { kind: "nothing", reason: "No weekly-limit issue is open" };
-  if (!rotationIsOn(config)) return closedAtReset(now, first, null);
-  const plans = limits.map((issue) => closedAtReset(now, issue, kitIssueSubscriptionOf(issue, config)));
+  if (!rotationIsOn(config)) return closedAtReset(now, first, null, config.timeZone);
+  const plans = limits.map((issue) => closedAtReset(now, issue, kitIssueSubscriptionOf(issue, config), config.timeZone));
   const actions = plans.flatMap((plan) => (plan.kind === "act" ? plan.actions : []));
   if (actions.length > 0) return { kind: "act", actions };
   return { kind: "nothing", reason: plans.map((plan) => (plan.kind === "nothing" ? plan.reason : "")).join("; ") };
@@ -121,31 +123,32 @@ export function scheduledTick(now: string, { kitIssues }: Snapshot, config: Pick
  * run, since running is all it takes. Only an issue with the marker the
  * daily check left in the App's own body counts.
  */
-export function deadTickClosed(now: string, release: string | null, { kitIssues }: Pick<Snapshot, "kitIssues">): Action[] {
+export function deadTickClosed(now: string, release: string | null, { kitIssues }: Pick<Snapshot, "kitIssues">, timeZone: string | null): Action[] {
   return kitIssues
     .filter((issue) => issue.labels.includes(DEAD_TICK_LABEL) && issue.body.includes(DEAD_TICK_MARKER))
     .flatMap((issue): Action[] => [
-      { kind: "comment", issue: issue.number, body: tickStartedAgain(now, release) },
+      { kind: "comment", issue: issue.number, body: tickStartedAgain(now, release, timeZone) },
       { kind: "close", issue: issue.number, reason: "completed" },
     ]);
 }
 
 /**
  * The comment closing a Dead-tick issue (#461) once a Tick has started again,
- * as the Tick itself posts it and as the store's daily check does.
+ * as the Tick itself posts it, in the Operator's time zone from the Kit
+ * config, and as the store's daily check does, in its caller's.
  */
-export function tickStartedAgain(at: string, release: string | null): string {
-  return `The hourly Tick started again at ${readable(at)}${release === null ? "" : `, on Fabrik ${release}`}, so the Kit is closing this issue.`;
+export function tickStartedAgain(at: string, release: string | null, timeZone: string | null): string {
+  return `The hourly Tick started again at ${readable(at, timeZone)}${release === null ? "" : `, on Fabrik ${release}`}, so the Kit is closing this issue.`;
 }
 
 /** One weekly-limit issue, closed once its reset has passed, naming its Subscription when rotation is on. */
-function closedAtReset(now: string, open: KitIssueSnapshot, subscription: string | null): Plan {
+function closedAtReset(now: string, open: KitIssueSnapshot, subscription: string | null, timeZone: string | null): Plan {
   const resetsAt = resetsAtOf(open);
   if (resetsAt === null) {
     return { kind: "nothing", reason: `#${open.number} doesn't say when the weekly limit resets, so the Operator closes it` };
   }
   if (Date.parse(now) < Date.parse(resetsAt)) {
-    return { kind: "nothing", reason: `The weekly limit in #${open.number} resets at ${readable(resetsAt)}` };
+    return { kind: "nothing", reason: `The weekly limit in #${open.number} resets at ${readable(resetsAt, timeZone)}` };
   }
   return {
     kind: "act",
@@ -155,8 +158,8 @@ function closedAtReset(now: string, open: KitIssueSnapshot, subscription: string
         issue: open.number,
         body:
           subscription === null
-            ? `The weekly usage limit reset at ${readable(resetsAt)}, so the Kit is closing this issue. Stalled Tickets stay stalled until their trigger label is re-added.`
-            : `The weekly usage limit of the \`${subscription}\` Subscription reset at ${readable(resetsAt)}, so the Kit is closing this issue.`,
+            ? `The weekly usage limit reset at ${readable(resetsAt, timeZone)}, so the Kit is closing this issue. Stalled Tickets stay stalled until their trigger label is re-added.`
+            : `The weekly usage limit of the \`${subscription}\` Subscription reset at ${readable(resetsAt, timeZone)}, so the Kit is closing this issue.`,
       },
       { kind: "close", issue: open.number, reason: "completed" },
     ],
@@ -174,7 +177,7 @@ function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun):
     const body = notified(open)
       ? `${stalled.run} stalled on the limit too. [The run](${stalled.runUrl})`
       : [
-          `@${operator} ${stalled.run} hit the weekly usage limit${resetsAt === null ? "" : `, which resets at ${readable(resetsAt)}`}. Until then every agent run in this repo stalls. [The run](${stalled.runUrl})`,
+          `@${operator} ${stalled.run} hit the weekly usage limit${resetsAt === null ? "" : `, which resets at ${readable(resetsAt, stalled.timeZone)}`}. Until then every agent run in this repo stalls. [The run](${stalled.runUrl})`,
           "",
           NOTIFIED,
         ].join("\n");
@@ -184,11 +187,11 @@ function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun):
     };
   }
   const title =
-    resetsAt === null ? "The weekly usage limit is reached" : `The weekly usage limit is reached until ${readable(resetsAt)}`;
+    resetsAt === null ? "The weekly usage limit is reached" : `The weekly usage limit is reached until ${readable(resetsAt, stalled.timeZone)}`;
   const when =
     resetsAt === null
       ? "When it resets isn't known, so close this issue yourself once agent runs work again."
-      : `It resets at ${readable(resetsAt)}.`;
+      : `It resets at ${readable(resetsAt, stalled.timeZone)}.`;
   return {
     actions: [
       ...(open === undefined ? [] : [{ kind: "close" as const, issue: open.number, reason: "completed" as const }]),
@@ -203,7 +206,7 @@ function weeklyLimit({ kitIssues, operator }: RepoContext, stalled: StalledRun):
           "",
           resetsAt === null
             ? "- [ ] Wait until agent runs work again: when the limit resets isn't known."
-            : `- [ ] Wait for the limit to reset at ${readable(resetsAt)}.`,
+            : `- [ ] Wait for the limit to reset at ${readable(resetsAt, stalled.timeZone)}.`,
           "- [ ] Re-add the trigger label named in each stalled Ticket's failure comment, to run it again. The Kit doesn't restart them.",
           "",
           `${resetsAt === null ? "" : "The Kit closes this issue after the reset. "}Run \`/fabrik-pair\` on this issue to work through these steps with an agent.`,
@@ -244,17 +247,17 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
   const earliest = earliestOf([...others.map(resetsAtOf), mine !== undefined && !newWindow ? mineResetsAt : resetsAt]);
   const allUsedUp = [
     `${stalled.run} hit the weekly usage limit of the \`${subscription}\` Subscription, and every listed Subscription has now hit its limit.`,
-    earliest === null ? "When the first resets isn't known." : `The first resets at ${readable(earliest)}.`,
+    earliest === null ? "When the first resets isn't known." : `The first resets at ${readable(earliest, stalled.timeZone)}.`,
     "Until then every agent run in this repo stalls",
   ].join(" ");
   // A held run is named on the issue that buzzed, or buzzes now; else on this Subscription's own.
   const buzzed = buzz ? undefined : stayingOpen.find(notified);
   const elsewhere = buzzed !== undefined && buzzed !== mine;
-  const heldHere = stalled.held === undefined || elsewhere ? [] : ["", heldMarkerComment(stalled.held, earliest)];
+  const heldHere = stalled.held === undefined || elsewhere ? [] : ["", heldMarkerComment(stalled.held, earliest, stalled.timeZone)];
   const heldThere =
     stalled.held === undefined || buzzed === undefined || !elsewhere
       ? []
-      : [{ kind: "comment" as const, issue: buzzed.number, body: heldMarkerComment(stalled.held, earliest) }];
+      : [{ kind: "comment" as const, issue: buzzed.number, body: heldMarkerComment(stalled.held, earliest, stalled.timeZone) }];
   if (mine !== undefined && !newWindow) {
     const body = [
       buzz
@@ -272,11 +275,11 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
   const title =
     resetsAt === null
       ? `The weekly usage limit of the \`${subscription}\` Subscription is reached`
-      : `The weekly usage limit of the \`${subscription}\` Subscription is reached until ${readable(resetsAt)}`;
+      : `The weekly usage limit of the \`${subscription}\` Subscription is reached until ${readable(resetsAt, stalled.timeZone)}`;
   const when =
     resetsAt === null
       ? "When it resets isn't known, so close this issue yourself once it works again."
-      : `It resets at ${readable(resetsAt)}, and the Kit closes this issue then.`;
+      : `It resets at ${readable(resetsAt, stalled.timeZone)}, and the Kit closes this issue then.`;
   const body = buzz
     ? [
         // The @-mention is this issue's one notification.
@@ -291,7 +294,7 @@ function subscriptionWeeklyLimit({ kitIssues, operator }: RepoContext, stalled: 
               "- [ ] Nothing to re-add: the Kit resumes each held run itself, in the order they were held.",
             ]
           : [
-              `- [ ] Wait for the first limit to reset at ${readable(earliest)}.`,
+              `- [ ] Wait for the first limit to reset at ${readable(earliest, stalled.timeZone)}.`,
               "- [ ] Nothing to re-add: at the reset the Kit resumes each held run itself, in the order they were held.",
             ]),
         "",

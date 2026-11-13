@@ -43,6 +43,9 @@ outputs:
   design-queue:
     description: '"true" when the plan asked for a Design queue check.'
     value: ${{ steps.loop.outputs.design-queue }}
+  time-zone:
+    description: The Operator's time zone, from the Kit config's time_zone (ADR-0023); empty when it gives none.
+    value: ${{ steps.loop.outputs.time-zone }}
   replay-ticket:
     description: For loop.yml's claim job on a replay, the replay Ticket the plan marked in progress in this run (#156); empty when it marked none.
     value: ${{ steps.loop.outputs.replay-ticket }}

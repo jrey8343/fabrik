@@ -1797,6 +1797,8 @@ export type Action =
       /** The weekly-limit issue it was held on. */
       readonly on: number;
       readonly ended: HoldEnded;
+      /** The Operator's time zone, which the edit says when it resumed in; null for UTC. */
+      readonly timeZone: string | null;
     }
   /** Push the agent branch the Implement run built, which the push job holds from its bundle. */
   | { readonly kind: "push-branch"; readonly branch: string }

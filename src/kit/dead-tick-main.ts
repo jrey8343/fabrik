@@ -8,12 +8,15 @@
 // Reads one Fabrik App token, FABRIK_TICK_CHECK_TOKEN, on every installed
 // repo with Checks read, Contents read and Issues write. FABRIK_STORE_DIR is
 // the store's checkout, and FABRIK_APP_SLUG the Fabrik App's slug, which
-// tells its own issues from anyone else's.
+// tells its own issues from anyone else's. It writes its times in the
+// Operator's time zone, as the store's caller names it (ADR-0023).
 import { appendFile } from "node:fs/promises";
 import { GitHub, GitHubError } from "../github/client.ts";
 import { productReposOf } from "../github/facts.ts";
 import { openDeadTickIssues, readProductTicks } from "../github/tickFacts.ts";
 import { DEAD_TICK_LABEL, LOOP_LABELS } from "../loop/labels.ts";
+import { knownTimeZone } from "../loop/readable.ts";
+import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type DeadTickPlan, deadTickPlan, recentReposOf } from "./deadTick.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "./runStore.ts";
@@ -65,6 +68,8 @@ async function main(): Promise<string[]> {
   const github = new GitHub(required("FABRIK_TICK_CHECK_TOKEN"), process.env["GITHUB_API_URL"]);
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
   const now = new Date().toISOString();
+  // The run is on the store, so GITHUB_SHA is the store's commit, whose caller started it.
+  const caller = await github.fileText(RUN_STORE, STORE_CALLER_PATH, required("GITHUB_SHA"));
   // The records only name the repos the store has heard from, so any Subscription list reads them.
   const { records } = await readStoreRunRecords(required("FABRIK_STORE_DIR"), DEFAULT_KIT_CONFIG.subscriptions);
   const products = [];
@@ -75,6 +80,7 @@ async function main(): Promise<string[]> {
     products,
     recentRepos: recentReposOf(Object.values(records), now),
     storeIssues: await openDeadTickIssues(github, RUN_STORE_REPO, appLogin),
+    timeZone: knownTimeZone(caller === null ? null : timeZoneIn(caller)),
   });
   return [...plan.summary, ...(await apply(github, plan))];
 }
