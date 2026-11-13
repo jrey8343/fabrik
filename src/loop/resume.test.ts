@@ -65,6 +65,12 @@ function actionsOf(plan: Plan): readonly Action[] {
   return plan.actions;
 }
 
+/** What a plan does about held runs: resumes, drops, held lines ended, and comments, markers among them. */
+function heldRunActions(plan: Plan): readonly Action[] {
+  const kinds: readonly Action["kind"][] = ["add-labels", "drop-held-run", "end-held-line", "comment"];
+  return actionsOf(plan).filter((action) => kinds.includes(action.kind));
+}
+
 function labelsAdded(plan: Plan): readonly Action[] {
   return actionsOf(plan).filter((action) => action.kind === "add-labels");
 }
@@ -258,21 +264,27 @@ describe("A weekly-limit issue the Operator closes by hand, with runs held and r
     expect(notificationsOf(plan)).toEqual([]);
   });
 
-  it("leaves the resumed markers on the weekly-limit issue still open, and none on the one closed", () => {
+  it("leaves the resumed markers on the weekly-limit issue still open, and on the one closed, so a later tick reading it plans nothing (#533)", () => {
     const plan = planFor(closedA, closedSnapshot([limitB]), TWO_SUBSCRIPTIONS);
 
     const comments = actionsOf(plan).filter((action) => action.kind === "comment");
-    expect(comments.map((action) => ("issue" in action ? action.issue : null))).toEqual([51]);
+    expect(comments.map((action) => ("issue" in action ? action.issue : null))).toEqual([50, 51]);
     expect(comments[0]).toEqual(
+      expect.objectContaining({ body: expect.stringContaining('<!-- fabrik:resumed {"issue":10,"role":"design","held":1} -->') }),
+    );
+    expect(comments[1]).toEqual(
       expect.objectContaining({ body: expect.stringContaining('<!-- fabrik:resumed {"issue":10,"role":"design","held":0} -->') }),
     );
+    const afterwards = { ...limitA, comments: [...limitA.comments, ...comments.flatMap((action) => (action.kind === "comment" && action.issue === 50 ? [action.body] : []))] };
+    const later = planFor(tick("2026-11-09T11:00:00.000Z"), tickSnapshot({ kitIssues: [limitB], closedCarriers: [afterwards], held: heldOn }), TWO_SUBSCRIPTIONS);
+    expect(heldRunActions(later)).toEqual([]);
   });
 
-  it("resumes them with no marker comment when no weekly-limit issue is left open", () => {
+  it("resumes them with only the closed issue's marker comment when no weekly-limit issue is left open", () => {
     const plan = planFor(closedA, closedSnapshot([]), TWO_SUBSCRIPTIONS);
 
     expect(labelsAdded(plan)).toHaveLength(5);
-    expect(actionsOf(plan).filter((action) => action.kind === "comment")).toEqual([]);
+    expect(actionsOf(plan).filter((action) => action.kind === "comment").map((action) => ("issue" in action ? action.issue : null))).toEqual([50]);
   });
 
   it("resumes them even while the Subscription has another issue open, since the Operator says it works again", () => {
@@ -828,5 +840,160 @@ describe("A held run's held line, when its hold ends", () => {
     const plan = planFor(PAST_EARLIER, tickSnapshot({ kitIssues: resumedThenHeldAgain, held: [anIssueHeld(12, ["enhancement", "ready-for-agent"])] }), TWO_SUBSCRIPTIONS);
 
     expect(endedOn(plan)).toEqual([{ kind: "end-held-line", role: "implement", issue: 12, on: 41, ended: { kind: "resumed" }, timeZone: null }]);
+  });
+});
+
+// The issue-closed event may fail partway, or never run: the tick reads the
+// Carriers closed in the last 7 days too, so no Held run on one is lost (#533).
+describe("A Carrier closed with runs still waiting on it, read by the scheduled tick (#533)", () => {
+  const IN_DAYS = "2026-11-14T10:00:00.000Z";
+  const NOW = tick("2026-11-09T11:00:00.000Z");
+  // A's usage-credits issue #51 held three runs and was closed; no issue-closed event dealt with them.
+  const usageCreditsA = (comments: readonly string[] = [held(7, "triage", "needs-triage"), held(60, "review", "agent:review"), held(8, "implement", "agent:implement")]): KitIssueSnapshot => ({
+    number: 51,
+    labels: ["ready-for-human", "fabrik:usage-credits"],
+    body: "Turn off usage credits.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token -->",
+    comments,
+  });
+  const heldOn = [anIssueHeld(7, ["bug"]), aDraftHeld(60), anIssueHeld(8, ["enhancement", "ready-for-agent"])];
+
+  it("resumes each run waiting on it while a Subscription is free, even with no issue-closed event run at all", () => {
+    const plan = planFor(NOW, tickSnapshot({ kitIssues: [], closedCarriers: [usageCreditsA()], held: heldOn }), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+      { kind: "add-labels", issue: 60, labels: ["agent:review"] },
+      { kind: "add-labels", issue: 8, labels: ["agent:implement"] },
+    ]);
+  });
+
+  it("leaves resumed markers on it, so the next tick plans nothing for it", () => {
+    const first = actionsOf(planFor(NOW, tickSnapshot({ kitIssues: [], closedCarriers: [usageCreditsA()], held: heldOn }), TWO_SUBSCRIPTIONS));
+    const markers = first.flatMap((action) => (action.kind === "comment" && action.issue === 51 ? [action.body] : []));
+    expect(markers).toEqual([expect.stringContaining('<!-- fabrik:resumed {"issue":8,"role":"implement","held":1} -->')]);
+    const afterwards = usageCreditsA([...usageCreditsA().comments, ...markers]);
+
+    const next = planFor(NOW, tickSnapshot({ kitIssues: [], closedCarriers: [afterwards], held: heldOn }), TWO_SUBSCRIPTIONS);
+    expect(heldRunActions(next)).toEqual([]);
+  });
+
+  it("holds them again on a Carrier still open, in their places, while every Subscription is used up, and only once", () => {
+    const ordered = (issue: number, role: AgentRole, label: string, order: number) =>
+      `The run is held.\n\n<!-- fabrik:held ${JSON.stringify({ issue, role, label, order })} -->`;
+    const closedA = usageCreditsA([ordered(8, "implement", "agent:implement", 4), ordered(7, "triage", "needs-triage", 2)]);
+    const limitA = weeklyLimitIssue(50, "Claude token", IN_DAYS, [], true);
+    const limitB = weeklyLimitIssue(52, "Claude token 2", IN_DAYS, [ordered(9, "implement", "agent:implement", 3)]);
+
+    const first = actionsOf(planFor(NOW, tickSnapshot({ kitIssues: [limitA, limitB], closedCarriers: [closedA], held: heldOn }), TWO_SUBSCRIPTIONS));
+
+    expect(labelsAdded({ kind: "act", actions: first })).toEqual([]);
+    const again = first.filter((action) => action.kind === "comment");
+    expect(again).toEqual([
+      {
+        kind: "comment",
+        issue: 50,
+        body: expect.stringMatching(/"issue":7,"role":"triage","label":"needs-triage","order":2[\s\S]*"issue":8,"role":"implement","label":"agent:implement","order":4/),
+      },
+    ]);
+
+    const landed = { ...limitA, comments: again.flatMap((action) => (action.kind === "comment" ? [action.body] : [])) };
+    const next = planFor(NOW, tickSnapshot({ kitIssues: [landed, limitB], closedCarriers: [closedA], held: heldOn }), TWO_SUBSCRIPTIONS);
+    expect(heldRunActions(next)).toEqual([]);
+  });
+});
+
+describe("An issue-closed event on a Carrier failing partway, then the scheduled tick (#533)", () => {
+  const IN_DAYS = "2026-11-14T10:00:00.000Z";
+  const NEXT_TICK = tick("2026-11-09T11:00:00.000Z");
+  const heldOn = [anIssueHeld(7, ["bug"]), aDraftHeld(60), anIssueHeld(8, ["enhancement", "ready-for-agent"])];
+  const runs = [held(7, "triage", "needs-triage"), held(60, "review", "agent:review"), held(8, "implement", "agent:implement")];
+
+  /** The issues and PRs held runs are on once these actions have landed: only labels change them. */
+  function labelled(actions: readonly Action[]): HeldTargetSnapshot[] {
+    return heldOn.map((on) => {
+      const added = actions.flatMap((action) => (action.kind === "add-labels" && action.issue === on.number ? action.labels : []));
+      return { ...on, labels: [...on.labels, ...added] };
+    });
+  }
+
+  /** The event's plan, applied up to (not including) the second resume, then the tick's: every label each added. */
+  function eventFailingThenTick(carrier: KitIssueSnapshot, kitIssues: readonly KitIssueSnapshot[]): readonly Action[] {
+    const event = snapshotOf(anIssue({ number: carrier.number, open: false, byApp: true, labels: carrier.labels, body: carrier.body }), {
+      kitIssues,
+      closedKitIssue: carrier,
+      held: heldOn,
+    });
+    const first = actionsOf(planFor({ kind: "issue-closed", issue: carrier.number }, event, TWO_SUBSCRIPTIONS));
+    const applied = first.slice(0, first.findIndex((action) => action.kind === "add-labels" && action.issue === 60));
+    const next = actionsOf(planFor(NEXT_TICK, tickSnapshot({ kitIssues, closedCarriers: [carrier], held: labelled(applied) }), TWO_SUBSCRIPTIONS));
+    expect(next.filter((action) => action.kind === "drop-held-run")).toEqual([]);
+    return [...applied, ...next].filter((action) => action.kind === "add-labels");
+  }
+
+  it("a hand-closed weekly-limit issue's three runs each resume exactly once", () => {
+    const limitA: KitIssueSnapshot = {
+      number: 50,
+      labels: ["fabrik:weekly-limit"],
+      body: "Every listed Subscription has now hit its limit.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token -->",
+      comments: runs,
+    };
+
+    expect(eventFailingThenTick(limitA, [weeklyLimitIssue(51, "Claude token 2", IN_DAYS)])).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+      { kind: "add-labels", issue: 60, labels: ["agent:review"] },
+      { kind: "add-labels", issue: 8, labels: ["agent:implement"] },
+    ]);
+  });
+
+  it("a usage-credits issue closed while a Subscription is free: the tick resumes the rest, each exactly once", () => {
+    const usageCredits: KitIssueSnapshot = {
+      number: 51,
+      labels: ["ready-for-human", "fabrik:usage-credits"],
+      body: "Turn off usage credits.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token 2 -->",
+      comments: runs,
+    };
+
+    expect(eventFailingThenTick(usageCredits, [])).toEqual([
+      { kind: "add-labels", issue: 7, labels: ["needs-triage"] },
+      { kind: "add-labels", issue: 60, labels: ["agent:review"] },
+      { kind: "add-labels", issue: 8, labels: ["agent:implement"] },
+    ]);
+  });
+
+  it("a hand-closed weekly-limit issue the tick picks up resumes nothing while another issue keeps its Subscription used up (#440 is the event's alone)", () => {
+    const limitA: KitIssueSnapshot = {
+      number: 50,
+      labels: ["fabrik:weekly-limit"],
+      body: "Every listed Subscription has now hit its limit.\n\n<!-- fabrik:notified -->\n<!-- fabrik:subscription Claude token -->",
+      comments: runs,
+    };
+    const usageCreditsA: KitIssueSnapshot = {
+      number: 52,
+      labels: ["ready-for-human", "fabrik:usage-credits"],
+      body: "Turn off usage credits.\n\n<!-- fabrik:subscription Claude token -->",
+      comments: [],
+    };
+    const kitIssues = [weeklyLimitIssue(51, "Claude token 2", IN_DAYS), usageCreditsA];
+
+    const plan = planFor(NEXT_TICK, tickSnapshot({ kitIssues, closedCarriers: [limitA], held: heldOn }), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toEqual([]);
+    // Held again on an open Carrier instead, so a later free Subscription resumes them.
+    expect(actionsOf(plan)).toContainEqual({ kind: "comment", issue: 51, body: expect.stringContaining('"issue":8,"role":"implement"') });
+  });
+
+  it("the old weekly-limit issue the Kit closed at a new reset: the tick holds its runs again on the new one when the event failed", () => {
+    // Both Subscriptions used up: a refusal reported a later reset, so the Kit closed #50 and opened #53 in one plan; #50's event never landed.
+    // Buzzed, and first to reset: were it still open, it would take the held markers.
+    const old = weeklyLimitIssue(50, "Claude token", "2026-11-08T10:00:00.000Z", runs, true);
+    const renewed = weeklyLimitIssue(53, "Claude token", IN_DAYS);
+    const limitB = weeklyLimitIssue(52, "Claude token 2", "2026-11-15T10:00:00.000Z");
+
+    const plan = planFor(NEXT_TICK, tickSnapshot({ kitIssues: [limitB, renewed], closedCarriers: [old], held: heldOn }), TWO_SUBSCRIPTIONS);
+
+    expect(labelsAdded(plan)).toEqual([]);
+    expect(actionsOf(plan).filter((action) => action.kind === "comment")).toEqual([
+      { kind: "comment", issue: 53, body: expect.stringMatching(/"issue":7[\s\S]*"issue":60[\s\S]*"issue":8/) },
+    ]);
   });
 });

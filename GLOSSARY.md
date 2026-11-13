@@ -259,7 +259,7 @@ A Kit-owned issue telling the Operator to turn usage credits off on a Subscripti
 _Avoid_: overage issue, billing issue
 
 **Carrier**:
-A weekly-limit, usage-credits or token-rotation issue that, while open, names Held runs with held markers while every Subscription is used up, and notes the week's Audit or Retro while it waits on a free Subscription. A weekly-limit issue carries them when one is open, else the one already carrying Held runs, else the most recently opened. Its close may free a Subscription and resume them; a closed one keeps what it noted, so the week's wait is noted once and the Weekly summary still names it.
+A weekly-limit, usage-credits or token-rotation issue that names Held runs with held markers while every Subscription is used up, and notes the week's Audit or Retro while it waits on a free Subscription. Only an open one takes new held markers: a weekly-limit issue when one is open, else the one already carrying Held runs, else the most recently opened. Its close may free a Subscription and resume them. It stays a Carrier once closed, until every Held run on it is resumed or dropped, or held again on an open one; a closed one keeps what it noted, so the week's wait is noted once and the Weekly summary still names it.
 _Avoid_: holder, held issue
 
 **Step-up**:

@@ -13,7 +13,13 @@
 // usage-credits or token-rotation issue the Operator closes is read the same
 // way, though its runs resume only once a Subscription is free: until then,
 // the runs held only on it are held again on a carrier still open, keeping
-// their places, since a closed one is no longer read (#470). A run with a trigger label gets
+// their places, since only an open one takes held markers (#470). Should that
+// event fail partway, or never run, the scheduled tick reads the carriers
+// closed in the last 7 days too, and deals with the runs still waiting on them
+// by the same rule, though a hand-closed weekly-limit issue's runs it reads
+// resume only once a Subscription is free: that exception is the event's
+// (#533). A closed carrier only ever counts toward what waits, never toward
+// whether a Subscription is free or where a run is held. A run with a trigger label gets
 // it back on the App token, so a normal Loop run starts it on the freed
 // Subscription, under Dispatch's max_in_flight cap and the Design session cap
 // as usual: each held run kept its slot. A run whose issue or PR has closed,
@@ -23,15 +29,14 @@
 // resumed or dropped run's held line on its own issue or PR is edited to say
 // so (src/loop/heldLine.ts, #471): the line is never read, so one the Operator
 // deleted changes nothing. Every
-// carrier then gets a resumed marker for each run dealt with, so
+// carrier read, open or closed, then gets a resumed marker for each run dealt with, so
 // that only a later held marker, if the resumed run is refused again, holds it
 // again; the marker carries the run's place in the order, so that held again
 // it keeps its first place even once the issue its first held marker was on
-// has closed. Only when every carrier closes in one tick is no open
-// issue left to carry it, and a run held again then takes a new place. The
-// plan's own actions, a weekly-limit issue's close among them, come last
-// (#438): a plan that fails partway leaves the issue open with its held
-// markers, so the next tick deals with what's left rather than drop it. A
+// has closed, and a closed carrier the tick reads has nothing left waiting
+// on it. The plan's own actions, a weekly-limit issue's close among them,
+// come last (#438): a plan that fails partway leaves the issue open with its
+// held markers, so the next tick deals with what's left rather than drop it. A
 // held run whose trigger label is back on its issue or PR, or that the App
 // added after its newest held marker, since the resume landed but the plan
 // failed before its resumed markers, isn't given it again nor dropped, even
@@ -55,8 +60,11 @@ import { heldAgain } from "./hold.ts";
  * which the snapshot may still list. The snapshot's closedKitIssue holds it,
  * so the runs held on it are read too (#470). A weekly-limit one is the
  * Operator saying its Subscription works again, so the runs held on it
- * resume, even while another issue keeps that Subscription used up (#440). While every Subscription is used up, or with
- * rotation off, or with no run held, it is left as it is.
+ * resume, even while another issue keeps that Subscription used up (#440).
+ * The tick's closedCarriers, those closed in the last 7 days, are read too,
+ * by the ordinary rule (#533). While every Subscription is used up, the runs
+ * held only on a closed carrier are held again on an open one. With rotation
+ * off, or with no run waiting, it is left as it is.
  */
 export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConfig, closed: number | null = null): Plan {
   if (plan.kind === "fail" || !rotationIsOn(config)) return plan;
@@ -64,9 +72,12 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   // A carrier closed by hand has left kitIssues, so the snapshot holds it apart (#440, #470).
   const closedCarrier = snapshot.closedKitIssue?.number === closed ? snapshot.closedKitIssue : null;
   const handClosed = closedCarrier?.labels.includes(WEEKLY_LIMIT_LABEL) === true ? closedCarrier : null;
-  const limits = [...snapshot.kitIssues.filter((issue) => issue.number !== closed), ...(closedCarrier === null ? [] : [closedCarrier])]
-    .filter(isCarrier)
-    .sort((a, b) => a.number - b.number);
+  const open = snapshot.kitIssues.filter((issue) => issue.number !== closed);
+  // The tick reads the Carriers closed in the last 7 days too, should the event have failed to deal with their runs (#533).
+  const closedCarriers = [...(closedCarrier === null ? [] : [closedCarrier]), ...(snapshot.closedCarriers ?? [])].filter(
+    (issue, at, all) => !open.some(({ number }) => number === issue.number) && all.findIndex(({ number }) => number === issue.number) === at,
+  );
+  const limits = [...open, ...closedCarriers].filter(isCarrier).sort((a, b) => a.number - b.number);
   const closing = new Set(planned.flatMap((action) => (action.kind === "close" ? [action.issue] : [])));
   const stillOpen = snapshot.kitIssues.filter((issue) => issue.number !== closed && !closing.has(issue.number));
   // The Operator closing a weekly-limit issue says its Subscription works again, whatever else is open (#440).
@@ -105,14 +116,14 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
     }
     dealtWith.push(entry);
   }
-  // On every carrier still open, so that a run held again keeps its
-  // place even once the issue its held markers were on has closed, and so that
-  // one the plan fails to close resumes nothing again. One already closed is no
-  // longer read.
+  // On every carrier read, open or closed, so that a run held again keeps its
+  // place even once the issue its held markers were on has closed, so that one
+  // the plan fails to close resumes nothing again, and so that the tick,
+  // reading a closed one, finds nothing left waiting on it (#533).
   const why = limits.some((issue) => closing.has(issue.number) && issue.labels.includes(WEEKLY_LIMIT_LABEL))
     ? "A Subscription's weekly limit reset, so the Kit has dealt with the runs held here."
     : "A Subscription is free again, so the Kit has dealt with the runs held here.";
-  const markers = limits.filter((issue) => issue.number !== closed).flatMap((issue): Action[] => {
+  const markers = limits.flatMap((issue): Action[] => {
     const here = dealtWith.map(({ run, markers: counts }) =>
       resumedMarker({ role: run.role, issue: run.issue, held: counts.get(issue.number) ?? 0, order: run.order ?? null }),
     );
@@ -120,7 +131,7 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
     const body = [why, "", ...here].join("\n");
     return [{ kind: "comment", issue: issue.number, body }];
   });
-  // The plan's own actions, a close among them, last (#438): closed, the issue's held markers are no longer read, so whatever hadn't landed would be dropped.
+  // The plan's own actions, a close among them, last (#438): open, the issue's held markers are read on every tick, not only for 7 days.
   const notes = plan.kind === "act" ? plan.notes : undefined;
   return { kind: "act", actions: [...resumes, ...markers, ...planned], ...(notes === undefined ? {} : { notes }) };
 }
@@ -133,8 +144,8 @@ function heldLineEnded({ run, newest }: Waiting, ended: HoldEnded, timeZone: str
 /**
  * While no Subscription is free, the Plan with the runs held only on a
  * carrier that has closed, or that the Plan closes, held again on one still
- * open, in their places: closed, its held markers are no longer read, so
- * nothing would ever resume them (#470).
+ * open, in their places: the tick reads a closed one only for 7 days, so past
+ * that nothing would resume them (#470, #533).
  */
 function strandedHeldAgain(plan: Plan, carriers: readonly KitIssueSnapshot[], stillOpen: readonly KitIssueSnapshot[], timeZone: string | null): Plan {
   const open = new Set(stillOpen.map((issue) => issue.number));
