@@ -308,7 +308,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       const merged = {
         ...summary,
         pausesDispatch: kitConfig !== null && pausesDispatch(kitConfig),
-        // So the closing lines leave out the notes for steps it and the repo already show done.
+        // So the closing lines leave out the notes for steps the setup branch's Kit config and the Product repo already show done.
         alreadyDone: stepsDone({ kitConfig, skillsLock, ...readAfter }),
       };
       const published = await publishSetupPr({ run, cwd, branch, defaultBranch: repo.defaultBranch, release, summary: merged });

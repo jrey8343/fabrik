@@ -155,6 +155,12 @@ describe("The closing lines' Then list, leaving out each step the Kit config and
     expect(has(SUMMARY, start)).toBe(true);
   });
 
+  it("with an invalid Kit config, gives every note as before", () => {
+    const alreadyDone = stepsDone({ kitConfig: '{ "sandbox": { "checks": ["gate"] }, "ui": false }', skillsLock: null, protection: null, appItems: [] });
+
+    expect(then({ ...SUMMARY, alreadyDone })).toEqual(then(SUMMARY));
+  });
+
   it("always gives the Weekly summary and repair notes, and the paused-Dispatch note as before", () => {
     const allDone = { checks: true, extraSkills: true, monitor: true, visualEvidence: true };
     const lines = then({ ...PAUSED, alreadyDone: allDone });

@@ -651,10 +651,11 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       visualEvidence: "- With Visual evidence on",
     };
     const thenOf = (said: string[]) => said.slice(said.indexOf("Then:") + 1);
-    const ownKitConfig = async (config: object) => {
+    const ownKitConfig = async (config: object | string, skillsLock?: string) => {
       await mkdir(join(checkout, ".fabrik"));
-      await writeFile(join(checkout, ".fabrik", "config.json"), `${JSON.stringify(config, null, 2)}\n`);
-      git("add", ".fabrik/config.json");
+      await writeFile(join(checkout, ".fabrik", "config.json"), typeof config === "string" ? config : `${JSON.stringify(config, null, 2)}\n`);
+      if (skillsLock !== undefined) await writeFile(join(checkout, ".fabrik", "skills.lock.json"), skillsLock);
+      git("add", ".fabrik");
       git("commit", "-q", "-m", "Our Kit config");
       git("push", "-q", "origin", "main");
     };
@@ -680,6 +681,27 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(then.some((line) => line.startsWith(THEN.visualEvidence))).toBe(false);
       expect(then.some((line) => line.startsWith(THEN.extraSkills))).toBe(true);
       expect(then.some((line) => line.startsWith("- Running setup again repairs the install"))).toBe(true);
+    });
+
+    it("leaves out the Extra skills note once the setup branch's lockfile pins a source some role picks from", async () => {
+      await ownKitConfig(
+        { roles: { design: { skills: ["acme/skills/event-storming"] } } },
+        `${JSON.stringify([{ repository: "acme/skills", sha: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d" }])}\n`,
+      );
+
+      const { code, said } = await setupOnce(aWorld());
+
+      expect(code).toBe(0);
+      expect(thenOf(said).some((line) => line.startsWith(THEN.extraSkills))).toBe(false);
+      expect(thenOf(said).some((line) => line.startsWith(THEN.visualEvidence))).toBe(true);
+    });
+
+    it("gives every note when the setup branch's Kit config is invalid, however much it lists", async () => {
+      await ownKitConfig('{ "sandbox": { "checks": ["gate"] }, "ui": false }\n');
+
+      const { said } = await setupOnce(aWorld());
+
+      for (const start of Object.values(THEN)) expect(thenOf(said).some((line) => line.startsWith(start))).toBe(true);
     });
 
     it("gives every note on a fresh repo, whose starter Kit config lists no checks, no Sentry project and no ui", async () => {
