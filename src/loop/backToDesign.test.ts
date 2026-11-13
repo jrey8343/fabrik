@@ -115,21 +115,21 @@ describe("A third Execution flaw counts as a Design flaw", () => {
 });
 
 describe("A Verdict that would go back to design while the Ticket is closed (#585)", () => {
-  const closedTicket = { ticketState: "closed" } as const;
+  const ticketClosed = { ticketState: "closed" } as const;
 
   it.each([
-    ["A Design flaw", designFlaw, aPullRequest(closedTicket), "#7 is closed, so this PR stays open and no Design session starts."],
+    ["A Design flaw", designFlaw, aPullRequest(ticketClosed), "The Ticket #7 is closed, so this PR stays open and no Design session starts."],
     [
       "A third Execution flaw from the Reviewer",
       reviewed("verdict: execution-flaw\n\nStill throws on the empty cart."),
-      aPullRequest({ ...usedUp, ...closedTicket }),
-      "This is the Ticket's third Execution flaw, which counts as a Design flaw. #7 is closed, so this PR stays open and no Design session starts.",
+      aPullRequest({ ...usedUp, ...ticketClosed }),
+      "This is the Ticket's third Execution flaw, which counts as a Design flaw. The Ticket #7 is closed, so this PR stays open and no Design session starts.",
     ],
     [
       "A third Execution flaw from red CI",
       redChecks(),
-      aPullRequest({ ...usedUp, ...closedTicket }),
-      "This is the Ticket's third Execution flaw, which counts as a Design flaw. #7 is closed, so this PR stays open and no Design session starts.",
+      aPullRequest({ ...usedUp, ...ticketClosed }),
+      "This is the Ticket's third Execution flaw, which counts as a Design flaw. The Ticket #7 is closed, so this PR stays open and no Design session starts.",
     ],
   ])("%s posts its Verdict, ending with why, and closes nothing and leaves the Ticket alone", (_, event, pullRequest, line) => {
     const actions = actionsOf(planFor(event, snapshotOfPullRequest(pullRequest), kitConfig()));

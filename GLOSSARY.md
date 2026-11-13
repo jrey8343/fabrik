@@ -331,7 +331,7 @@ An Implementer run, on the Step-up model, that brings an agent pull request up t
 _Avoid_: rebase run, conflict retry
 
 **Send it back**:
-The Operator's move at the Merge gate that closes an agent pull request unmerged and sends its Ticket to a Design session, for a change too large or too foggy to build as a Request changes.
+The Operator's move at the Merge gate that closes an agent pull request unmerged and sends its Ticket to a Design session, for a change too large or too foggy to build as a Request changes. While the Ticket is closed it's declined, and the pull request stays open.
 _Avoid_: reject, redesign
 
 **Operator comment**:

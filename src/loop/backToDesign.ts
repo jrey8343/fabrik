@@ -4,7 +4,7 @@
 // needs-design, which starts a Design session. The Kit's note on the Ticket
 // links the closed PR and its Verdict, so that session's round 1 can too.
 // While the Ticket is closed no Design session can start, so it declines
-// instead: the PR stays open and the Ticket is left as the Operator closed it (#585).
+// instead: the PR stays open and the Ticket is left as it is (#585).
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { KEPT_BRANCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
@@ -33,7 +33,7 @@ export function sentBackByOperator(pullRequest: PullRequestSnapshot): Action[] {
   const ticket = pullRequest.ticket;
   if (ticket === null) return [close];
   if (ticketClosed(pullRequest)) {
-    const why = `the Ticket #${ticket} is closed, so no Design session can start on it, and #${pullRequest.number} stays open. To Send it back, reopen #${ticket} and add \`${NEEDS_DESIGN}\` to #${pullRequest.number} again`;
+    const why = `the Ticket #${ticket} is closed, so no Design session can start on it and #${pullRequest.number} stays open; to Send it back, reopen #${ticket} and add \`${NEEDS_DESIGN}\` to #${pullRequest.number} again`;
     return declineTrigger(pullRequest.number, NEEDS_DESIGN, why);
   }
   return [
@@ -67,7 +67,7 @@ export function backToDesignLine(pullRequest: PullRequestSnapshot, reason: BackT
   const ticket = pullRequest.ticket;
   const why =
     reason === "design-flaw" ? "" : "This is the Ticket's third Execution flaw, which counts as a Design flaw. ";
-  if (ticketClosed(pullRequest)) return `${why}#${ticket} is closed, so this PR stays open and no Design session starts.`;
+  if (ticketClosed(pullRequest)) return `${why}The Ticket #${ticket} is closed, so this PR stays open and no Design session starts.`;
   const branch = ticket === null ? "" : `, keeping its branch \`${agentBranchFor(ticket)}\``;
   const back = ticket === null ? "" : `, and #${ticket} goes back to design`;
   return `${why}This PR closes unmerged${branch}${back}.`;
