@@ -425,6 +425,38 @@ describe("The Kit's workflows", () => {
     });
   });
 
+  // The word that a newly pinned release is running (#548), which must never cost the caller a new permission.
+  describe("schedule.yml's Release running job", () => {
+    const job = jobIn(schedule, "release-running");
+    const steps = stepsOf(job);
+    const run = steps.find((step) => step.includes("run: node kit/src/kit/release-running-main.ts"));
+
+    it("checks out only the Kit, holds no GITHUB_TOKEN permissions, and writes with a Fabrik App token", () => {
+      const checkouts = steps.filter((step) => step.includes("uses: actions/checkout@"));
+
+      expect(checkouts).toHaveLength(1);
+      expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
+      expect(checkouts[0]).toContain("persist-credentials: false");
+      expect(job).toMatch(/\n {4}permissions: \{\}\n/);
+      expect(run).toContain("FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}");
+      expect(run).toContain("FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}");
+      expect(existsSync(new URL("src/kit/release-running-main.ts", root))).toBe(true);
+    });
+
+    it("names the release from the Kit's workflow ref, the time from the run's first job, in the Operator's time zone", () => {
+      expect(run).toContain("FABRIK_KIT_REF: ${{ needs.kit.outputs.ref }}");
+      expect(run).toContain("FABRIK_TICK_STARTED_AT: ${{ needs.kit.outputs.started-at }}");
+      expect(run).toContain("FABRIK_TIME_ZONE: ${{ needs.tick.outputs.time-zone }}");
+    });
+
+    it("runs whether or not the Tick job did, can't fail the run, and runs one at a time", () => {
+      expect(job).toMatch(/\n {4}needs: \[kit, tick\]\n/);
+      expect(job).toContain("\n    if: ${{ !cancelled() && needs.kit.result == 'success' }}\n");
+      expect(job).toContain("\n    continue-on-error: true\n");
+      expect(job).toMatch(/concurrency:\n\s+group: fabrik-release-running\n\s+cancel-in-progress: false\n/);
+    });
+  });
+
   // The Monitor (#148): plain Kit code on the hourly tick, reading GitHub and Sentry through their APIs alone.
   describe("schedule.yml's Monitor job", () => {
     const monitor = jobIn(schedule, "monitor");
