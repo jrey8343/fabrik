@@ -10,7 +10,7 @@ import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
-import type { PrototypeRequestMarker } from "./markers.ts";
+import type { FlakyCheckMark, PrototypeRequestMarker } from "./markers.ts";
 import type { RequestChangesText, RollInIssue } from "./owedRollIn.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
@@ -790,6 +790,8 @@ export interface PullRequestSnapshot {
   readonly labels: readonly string[];
   /** The Verdicts the Fabrik App has posted on it, oldest first, read from their markers (src/loop/verdict.ts). */
   readonly verdicts: readonly VerdictRecord[];
+  /** The Fabrik App's Flaky check lines on it (#462), oldest first, read from their markers. */
+  readonly flakyCheckMarks: readonly FlakyCheckMark[];
   /**
    * The fingerprint of its own change at `headSha` (#643), which a Verdict on
    * that head records under its marker. No snapshot read from GitHub holds
@@ -993,6 +995,24 @@ export interface FlawHeadChecks {
   /** The checks the Verdict named as failed. */
   readonly checks: readonly string[];
   readonly checkRuns: readonly HeadCheckRun[];
+}
+
+/**
+ * An open agent PR out of draft at the Merge gate, whose head is still the
+ * one its latest pass Verdict was given on, with every check run on that head
+ * (#693): the tick reports any Required check there that has both failed and
+ * passed as a Flaky check.
+ */
+export interface PassedHeadChecks {
+  readonly pullRequest: number;
+  readonly ticket: number | null;
+  /** The head the Reviewer passed, which is the PR's head now. */
+  readonly headSha: string;
+  /** The default branch's own list of Required checks, read from the branch in the same tick. */
+  readonly required: readonly string[];
+  readonly checkRuns: readonly HeadCheckRun[];
+  /** The Flaky check lines already on the PR, so the tick names each check on each head once. */
+  readonly marks: readonly FlakyCheckMark[];
 }
 
 /** A required check that reported both failure and success on the same head commit (GLOSSARY.md), with a link to a run of each. */
@@ -1214,6 +1234,14 @@ export interface Snapshot {
    * "no-permission" when the Fabrik App lacks Checks: read; null for any other event.
    */
   readonly flakySweep: readonly FlawHeadChecks[] | "no-permission" | null;
+  /**
+   * For the scheduled tick: each open agent PR out of draft at the head its
+   * latest pass was given on, with every check run there (#693);
+   * "no-permission" when the Fabrik App lacks Checks: read; "branch-unread"
+   * when the default branch's Required checks couldn't be read; null for any
+   * other event.
+   */
+  readonly passedHeads: readonly PassedHeadChecks[] | "no-permission" | "branch-unread" | null;
   /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.

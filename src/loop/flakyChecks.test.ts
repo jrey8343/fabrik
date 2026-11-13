@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
-import type { Action, FlakyCheck, FlawHeadChecks, HeadCheckRun, LoopEvent, Plan, RerunReport } from "./types.ts";
+import type { Action, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, LoopEvent, PassedHeadChecks, Plan, RerunReport, Snapshot } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const E2E: FlakyCheck = { name: "e2e", red: "https://github.com/acme/shop/actions/runs/7/job/70", green: "https://github.com/acme/shop/actions/runs/7/job/99" };
@@ -148,5 +148,126 @@ describe("The hourly tick's sweep for Flaky checks (#462)", () => {
 
   it("is quiet when the Fabrik App can't read check runs", () => {
     expect(swept(sweep("no-permission"))).toEqual([]);
+  });
+});
+
+describe("The hourly tick's read of each passed head at the Merge gate (#693)", () => {
+  const TICK: LoopEvent = { kind: "scheduled-tick", now: "2026-11-11T12:17:00Z" };
+  const PASSED = "c".repeat(40);
+  const short = PASSED.slice(0, 7);
+  const run = (name: string, conclusion: string | null, startedAt: string, id: number): HeadCheckRun => ({
+    name,
+    status: conclusion === null ? "in_progress" : "completed",
+    conclusion,
+    startedAt,
+    url: `https://github.com/acme/shop/actions/runs/7/job/${id}`,
+  });
+  const greenThenRed = [run("ci", "success", "2026-11-11T09:00:00Z", 70), run("ci", "failure", "2026-11-11T11:00:00Z", 99)];
+  const head = (checkRuns: HeadCheckRun[], overrides: Partial<PassedHeadChecks> = {}): PassedHeadChecks => ({
+    pullRequest: 50,
+    ticket: 7,
+    headSha: PASSED,
+    required: ["ci"],
+    checkRuns,
+    marks: [],
+    ...overrides,
+  });
+  const read = (heads: Snapshot["passedHeads"], flakySweep: Snapshot["flakySweep"] = [], flakyCheckIssues: KitIssueSnapshot[] = []) =>
+    planFor(TICK, { ...tickSnapshot(), flakySweep, passedHeads: heads, flakyCheckIssues }, kitConfig());
+  const swept = (plan: Plan) => (plan.kind === "act" ? plan.actions : []).filter((action) => action.kind !== "check-dispatch" && action.kind !== "check-design-queue");
+  const lines = (plan: Plan) => swept(plan).map(textOf).filter((text) => text.includes("<!-- fabrik:flaky-check "));
+
+  it("reports a Required check that succeeded then failed on the passed head: one line on the PR and a filed issue", () => {
+    const plan = read([head(greenThenRed)]);
+
+    expect(lines(plan)).toEqual([
+      `<!-- fabrik:flaky-check {"headSha":"${PASSED}","checks":["ci"]} -->\n\`ci\` has both failed and succeeded on ${short}, the head the Reviewer passed: a Flaky check (#new).`,
+    ]);
+    expect(swept(plan)).toContainEqual(
+      expect.objectContaining({
+        kind: "create-issue",
+        title: "Flaky required check: ci",
+        labels: ["needs-triage", "fabrik:flaky-check"],
+        body: expect.stringContaining("[red](https://github.com/acme/shop/actions/runs/7/job/99), [green](https://github.com/acme/shop/actions/runs/7/job/70)"),
+      }),
+    );
+    expect(swept(plan).find((action) => action.kind === "comment-linking")).toMatchObject({ issue: 50 });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("reports one whose failure came before its success, the same way", () => {
+    const redThenGreen = [run("ci", "failure", "2026-11-11T09:00:00Z", 70), run("ci", "success", "2026-11-11T11:00:00Z", 99)];
+
+    expect(lines(read([head(redThenGreen)]))).toEqual([expect.stringContaining(`\`ci\` has both failed and succeeded on ${short}, the head the Reviewer passed`)]);
+  });
+
+  it("comments on the check's open Flaky check issue rather than filing another", () => {
+    const open = { number: 88, labels: ["fabrik:flaky-check"], body: '<!-- fabrik:flaky-check-issue {"check":"ci"} -->\nFlaky.', comments: [] };
+    const plan = read([head(greenThenRed)], [], [open]);
+
+    expect(swept(plan).some((action) => action.kind === "create-issue")).toBe(false);
+    expect(swept(plan)).toContainEqual(expect.objectContaining({ kind: "comment", issue: 88, body: expect.stringContaining(`#50 at ${short}`) }));
+    expect(lines(plan)).toEqual([expect.stringContaining("a Flaky check (#88).")]);
+  });
+
+  it.each([
+    ["this read's own earlier line", { headSha: PASSED, checks: ["ci"] }],
+    ["the Kit's re-run line from the Review", { headSha: PASSED, checks: ["e2e", "ci"] }],
+    ["a count-back line", { headSha: PASSED, checks: ["ci"], countedBack: true as const }],
+  ])("says nothing of a check on a head %s already names", (_, mark) => {
+    expect(swept(read([head(greenThenRed, { marks: [mark] })]))).toEqual([]);
+  });
+
+  it("still reports a check a line names on another head", () => {
+    expect(lines(read([head(greenThenRed, { marks: [{ headSha: "d".repeat(40), checks: ["ci"] }] })]))).toHaveLength(1);
+  });
+
+  it("says nothing of a check that passed only by being skipped or neutral", () => {
+    const skipped = [run("ci", "skipped", "2026-11-11T09:00:00Z", 70), run("ci", "failure", "2026-11-11T11:00:00Z", 99)];
+    const neutral = [run("ci", "neutral", "2026-11-11T09:00:00Z", 70), run("ci", "failure", "2026-11-11T11:00:00Z", 99)];
+
+    expect(swept(read([head(skipped), head(neutral, { pullRequest: 51 })]))).toEqual([]);
+  });
+
+  it("says nothing of a check the branch doesn't require, however it flaked", () => {
+    expect(swept(read([head(greenThenRed, { required: ["lint"] })]))).toEqual([]);
+  });
+
+  it.each(["no-permission", "branch-unread"] as const)("is quiet when the read is %s", (heads) => {
+    expect(swept(read(heads))).toEqual([]);
+  });
+
+  it("files one issue for a check flaking on two PRs in one tick, which both lines link", () => {
+    const plan = read([head(greenThenRed), head(greenThenRed, { pullRequest: 51, ticket: 8 })]);
+    const linking = swept(plan).filter((action) => action.kind === "comment-linking");
+
+    expect(swept(plan).filter((action) => action.kind === "create-issue")).toHaveLength(1);
+    expect(linking.map((action) => action.kind === "comment-linking" && action.issue)).toEqual([50, 51]);
+    expect(linking.map((action) => action.kind === "comment-linking" && action.body.find((part) => typeof part !== "string"))).toEqual([
+      { created: expect.any(String) },
+      { created: expect.any(String) },
+    ]);
+  });
+
+  it("moves nothing else: no Verdict, label, draft, Review or notification", () => {
+    const kinds = swept(read([head(greenThenRed)])).map((action) => action.kind);
+
+    expect(new Set(kinds)).toEqual(new Set(["create-issue", "comment-linking"]));
+  });
+
+  it("files a separate issue for each check when the count-back sweep and this read each find one on the same head", () => {
+    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["e2e"], checkRuns: [run("e2e", "failure", "2026-11-11T09:00:00Z", 60), run("e2e", "success", "2026-11-11T10:00:00Z", 61)] };
+    const created = swept(read([head(greenThenRed)], [flaw])).flatMap((action) => (action.kind === "create-issue" ? [action.key] : []));
+
+    expect(created).toHaveLength(2);
+    expect(new Set(created).size).toBe(2);
+  });
+
+  it("leaves the count-back sweep as it was, and says a check it counts back on that head once", () => {
+    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["ci"], checkRuns: [run("ci", "failure", "2026-11-11T09:00:00Z", 70), run("ci", "success", "2026-11-11T11:00:00Z", 99)] };
+    const plan = read([head(flaw.checkRuns as HeadCheckRun[])], [flaw]);
+
+    expect(lines(plan)).toEqual([expect.stringContaining('"countedBack":true')]);
+    expect(swept(plan).filter((action) => action.kind === "create-issue")).toHaveLength(1);
   });
 });

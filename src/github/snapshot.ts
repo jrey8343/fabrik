@@ -39,7 +39,7 @@ import {
   USAGE_CREDITS_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
-import { escapeMarkerIn } from "../loop/markers.ts";
+import { escapeMarkerIn, flakyCheckMarksIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { weekStart } from "../loop/weeklyGate.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
@@ -49,6 +49,8 @@ import type {
   ConflictCandidate,
   ConflictSnapshot,
   FlawHeadChecks,
+  HeadCheckRun,
+  PassedHeadChecks,
   DesignQueueIssue,
   DesignQueueSnapshot,
   DispatchSnapshot,
@@ -75,7 +77,8 @@ import type {
   TriggerSweepSnapshot,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
-import { uncountedFlaws } from "../loop/flakyChecks.ts";
+import { passedHeadAtGate, uncountedFlaws } from "../loop/flakyChecks.ts";
+import { readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { allPages, GitHubError, pagesOf, type ReadClient, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
@@ -618,6 +621,8 @@ export async function gatherSnapshot(
         : null;
   // The tick counts back an Execution flaw whose checks have since passed on its head (#462).
   const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests) : null;
+  // And reports a Required check that has both failed and succeeded on a head the Reviewer passed, at the Merge gate (#693).
+  const passedHeads = event.kind === "scheduled-tick" && conflicts !== null ? await gatherPassedHeads(github, repo, conflicts.pullRequests) : null;
   // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480).
   const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
   // By default the Operator owns the Product repos they run Fabrik in.
@@ -636,8 +641,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -664,15 +669,7 @@ async function gatherFlakySweep(
   try {
     for (const { pullRequest } of candidates) {
       for (const { headSha, checks = [] } of uncountedFlaws(pullRequest)) {
-        const path = `/repos/${repo.owner}/${repo.name}/commits/${headSha}/check-runs?filter=all`;
-        const runs = await allPages<RawHeadCheckRun>(github, path, (page) => (page as { check_runs: RawHeadCheckRun[] }).check_runs);
-        heads.push({
-          pullRequest: pullRequest.number,
-          ticket: pullRequest.ticket,
-          headSha,
-          checks,
-          checkRuns: runs.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion, startedAt: run.started_at, url: run.html_url ?? "" })),
-        });
+        heads.push({ pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha, checks, checkRuns: await readHeadCheckRuns(github, repo, headSha) });
       }
     }
   } catch (error) {
@@ -680,6 +677,52 @@ async function gatherFlakySweep(
     throw error;
   }
   return heads;
+}
+
+/**
+ * For the tick's read of the Merge gate (#693): each open agent PR out of
+ * draft whose head is still the one its latest pass was given on, with the
+ * default branch's own Required checks, every check run on that head, every
+ * attempt included, and the PR's Flaky check lines. A branch that can't be
+ * read is "branch-unread", and no head is read; without Checks: read it is
+ * "no-permission". Either way the tick reports nothing of it.
+ */
+async function gatherPassedHeads(
+  github: Pick<ReadClient, "rest">,
+  repo: Repo,
+  candidates: readonly ConflictCandidate[],
+): Promise<PassedHeadChecks[] | "no-permission" | "branch-unread"> {
+  const atGate = candidates.flatMap(({ pullRequest }) => {
+    const headSha = passedHeadAtGate(pullRequest);
+    return headSha === null ? [] : [{ pullRequest, headSha }];
+  });
+  if (atGate.length === 0) return [];
+  const branch = await readDefaultBranchRequiredChecks(github, `${repo.owner}/${repo.name}`);
+  if (branch.kind === "unread") return "branch-unread";
+  const heads: PassedHeadChecks[] = [];
+  try {
+    for (const { pullRequest, headSha } of atGate) {
+      heads.push({
+        pullRequest: pullRequest.number,
+        ticket: pullRequest.ticket,
+        headSha,
+        required: branch.required,
+        checkRuns: await readHeadCheckRuns(github, repo, headSha),
+        marks: pullRequest.flakyCheckMarks,
+      });
+    }
+  } catch (error) {
+    if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";
+    throw error;
+  }
+  return heads;
+}
+
+/** Every check run on a head, every attempt included, as the Flaky check sweep reads them. */
+async function readHeadCheckRuns(github: Pick<ReadClient, "rest">, repo: Repo, headSha: string): Promise<HeadCheckRun[]> {
+  const path = `/repos/${repo.owner}/${repo.name}/commits/${headSha}/check-runs?filter=all`;
+  const runs = await allPages<RawHeadCheckRun>(github, path, (page) => (page as { check_runs: RawHeadCheckRun[] }).check_runs);
+  return runs.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion, startedAt: run.started_at, url: run.html_url ?? "" }));
 }
 
 /** The events whose plan may find a Flaky check (#462). */
@@ -1262,6 +1305,7 @@ type EventPart = Omit<
   | "readyTickets"
   | "flakyCheckIssues"
   | "flakySweep"
+  | "passedHeads"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
@@ -1959,6 +2003,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     labels: pullRequest.labels.nodes.map((label) => label.name),
     // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
     verdicts: verdictsIn(botComments),
+    flakyCheckMarks: flakyCheckMarksIn(botComments),
     requestChangesRun: requestChangesRunIn(botComments),
     conflictRun: conflictRunIn(botComments),
     conflictAttempts: conflictAttemptsIn(botComments),
