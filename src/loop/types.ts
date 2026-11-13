@@ -1139,6 +1139,13 @@ export interface DispatchSnapshot {
   readonly openAgentPullRequestsAtMergeGate: readonly number[];
   readonly implementRunsInProgress: number;
   /**
+   * The Tickets the Implement runs under way name, lowest first: from its
+   * claim taking agent:implement off until its push job opens the draft PR,
+   * a run is the only sign its Ticket is taken (#578). A run of an earlier
+   * Kit release names none, so it takes a slot but no Ticket.
+   */
+  readonly implementRunTickets: readonly number[];
+  /**
    * The Implement runs in progress whose Ticket has no open agent PR, or that
    * name no Ticket: work on its way to the Merge gate (#459). A Retry or
    * Request-changes run on a Ticket's PR isn't counted again, since its PR is.
@@ -1530,6 +1537,8 @@ export interface ReplayCapacitySnapshot {
   readonly tickets: readonly TicketSnapshot[];
   /** And every open `wayfinder:research` issue, in any order. */
   readonly researchDecisions: readonly ResearchDecisionSnapshot[];
+  /** The Tickets the Implement runs under way name, as Dispatch reads them (#578); none when the Actions API couldn't be read. */
+  readonly implementRunTickets: readonly number[];
   /**
    * The newest weekly-limit reading on each Subscription, from the store's
    * Run records of the last two months, every Product repo's and Replay

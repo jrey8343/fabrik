@@ -13,6 +13,7 @@ import {
   tickSnapshot,
   withoutNotes,
 } from "../__fixtures__/snapshots.ts";
+import { waitingForDispatch } from "./dispatch.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
 
@@ -77,6 +78,37 @@ describe("A Dispatch check", () => {
       kind: "act",
       actions: [{ kind: "add-labels", issue: 5, labels: ["agent:implement"] }],
     });
+  });
+});
+
+describe("A Ticket whose Implement run is under way (#578)", () => {
+  // The Pilot at 10:22:20: the claim took agent:implement off, and the draft PR isn't open yet.
+  const underWay = { implementRunsInProgress: 1, implementRunsWithoutPullRequest: 1, implementRunTickets: [12] };
+
+  it("isn't released again, saying its run is under way", () => {
+    const plan = planFor(check, dispatchSnapshotOf([aTicket({ number: 12 })], underWay), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: "No Ticket can be dispatched: #12 has an Implement run under way" });
+  });
+
+  it("leaves the free slot to the next eligible Ticket", () => {
+    const plan = planFor(check, dispatchSnapshotOf([aTicket({ number: 12 }), aTicket({ number: 13 })], underWay), kitConfig());
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 13, labels: ["agent:implement"] }] });
+  });
+
+  it("isn't stopped for a gone Kept branch while its run is under way", () => {
+    const gone = aTicket({ number: 12, labels: ["ready-for-agent", "fabrik:kept-branch"], keptBranch: null });
+
+    const plan = planFor(check, dispatchSnapshotOf([gone], underWay), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: "No Ticket can be dispatched: #12 has an Implement run under way" });
+  });
+
+  it("isn't waiting for Dispatch", () => {
+    const candidates = { tickets: [aTicket({ number: 12 }), aTicket({ number: 13 })], researchDecisions: [], implementRunTickets: [12] };
+
+    expect(waitingForDispatch(candidates, { implement: [], research: [] })).toEqual([13]);
   });
 });
 

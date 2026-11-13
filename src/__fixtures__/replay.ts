@@ -58,5 +58,5 @@ export function replaySlice(
   capacity: Partial<NonNullable<ReplaySnapshot["capacity"]>> = {},
   acceptance: ReplaySnapshot["acceptance"] = null,
 ): ReplaySnapshot {
-  return { issues, capacity: { tickets: [], researchDecisions: [], weeklyLimits: {}, ...capacity }, acceptance };
+  return { issues, capacity: { tickets: [], researchDecisions: [], implementRunTickets: [], weeklyLimits: {}, ...capacity }, acceptance };
 }

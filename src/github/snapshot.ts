@@ -547,7 +547,7 @@ export const REPLAY_RECORD_JOB_NAME = "Replay record";
  * bot's issue is taken for the App's (see byAppOf). A
  * Dispatch check also reads workflow runs, through `actions`, and so do a
  * conflict check when it's given them (#387), and the scheduled tick's
- * stuck-trigger sweep (#419): the Fabrik App has no Actions
+ * stuck-trigger sweep (#419) and replay step (#578): the Fabrik App has no Actions
  * permission (ADR-0002), so that is the job's own read-only GITHUB_TOKEN. A
  * scheduled tick also reads whether the fabrik-runs store is private,
  * through `store` (see gatherRetroSlice), and the store's Run records through
@@ -630,7 +630,7 @@ export async function gatherSnapshot(
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   const replay =
     event.kind === "scheduled-tick" && replayStore !== null
-      ? await gatherReplaySlice(github, repo, event.now, kitIssues, theOperator, appLogin, replayStore)
+      ? await gatherReplaySlice(github, actions, repo, event.now, kitIssues, theOperator, appLogin, replayStore)
       : // A replay Ticket's claim weighs every open replay issue, since one replay Ticket runs at a time across them all.
         event.kind === "label-added" && event.label === REPLAY_TRIGGER_LABEL
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
@@ -1589,6 +1589,7 @@ const REPLAY_ISSUES_QUERY = `
  */
 async function gatherReplaySlice(
   github: ReadClient,
+  actions: Pick<ReadClient, "rest"> | null,
   repo: Repo,
   now: string,
   kitIssues: readonly KitIssueSnapshot[],
@@ -1599,9 +1600,27 @@ async function gatherReplaySlice(
   if (!kitIssues.some((issue) => issue.labels.includes(REPLAY_LABEL))) return { issues: [], capacity: null, acceptance: null };
   const issues = await gatherReplayIssues(github, repo, appLogin);
   if (!issues.some((issue) => isOperatorsReplay(issue, operator))) return { issues, capacity: null, acceptance: null };
-  const [dispatch, records] = await Promise.all([gatherDispatchCandidates(github, repo, appLogin), store.records()]);
+  const [dispatch, implementRunTickets, records] = await Promise.all([
+    gatherDispatchCandidates(github, repo, appLogin),
+    implementRunTicketsOf(actions, repo),
+    store.records(),
+  ]);
   const acceptance = await gatherReplayAcceptance(github, repo, now, { operator, issues }, records);
-  return { issues, capacity: { ...dispatch, weeklyLimits: records === null ? null : newestWeeklyLimits(records, now) }, acceptance };
+  return { issues, capacity: { ...dispatch, implementRunTickets, weeklyLimits: records === null ? null : newestWeeklyLimits(records, now) }, acceptance };
+}
+
+/**
+ * The Tickets the Implement runs under way name, through the job's own
+ * Actions token (#578); none when it can't be read, so each such Ticket
+ * counts as waiting for Dispatch and only keeps a replay waiting.
+ */
+async function implementRunTicketsOf(actions: Pick<ReadClient, "rest"> | null, repo: Repo): Promise<readonly number[]> {
+  if (actions === null) return [];
+  try {
+    return dispatchedRunsOf(await readRunsInFlight(actions, repo)).implementTickets;
+  } catch {
+    return [];
+  }
 }
 
 interface ReplayIssuesQueryResult {
@@ -2203,6 +2222,7 @@ async function gatherDispatch(
       tickets,
       ...agentPullRequestsByGate(agentPullRequests),
       implementRunsInProgress: runs.implement,
+      implementRunTickets: runs.implementTickets,
       implementRunsWithoutPullRequest: implementRunsWithoutPullRequestOf(runsInFlight, agentPullRequests).count,
       researchDecisions,
       researchRunsInProgress: runs.research,

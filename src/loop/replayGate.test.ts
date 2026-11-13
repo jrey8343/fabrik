@@ -71,6 +71,10 @@ describe("The scheduled tick's replay step", () => {
     ])("but starts one beside a Ticket that's %s, which Dispatch wouldn't start", (_, ticket) => {
       expect(tick(replaySlice(undefined, { tickets: [ticket] }))).toEqual(STARTS_140);
     });
+
+    it("but starts one beside a Ticket whose Implement run is under way, which Dispatch won't release again (#578)", () => {
+      expect(tick(replaySlice(undefined, { tickets: [aTicket({ number: 31 })], implementRunTickets: [31] }))).toEqual(STARTS_140);
+    });
   });
 
   describe("starts no replay while any Subscription is used up", () => {
