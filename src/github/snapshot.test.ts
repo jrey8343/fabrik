@@ -173,10 +173,21 @@ describe("Counting the Research runs a Dispatch check sees in flight", () => {
     expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 3, implementTickets: [] });
   });
 
-  it("doesn't count a finished Research job, or any other job", async () => {
+  // #500: the claim took agent:research off the Decision, so until Push lands the run, the run is all that holds the slot.
+  it("counts a Research job that's done while its run's push job is still to land it", async () => {
     const actions = actionsWith([
-      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed" }, { name: "fabrik / Push", status: "in_progress" }] },
-      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Retro evidence", status: "in_progress" }, { name: "fabrik / Research failed", status: "in_progress" }] },
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 1, implementTickets: [] });
+  });
+
+  it("doesn't count a Research job once its run's push job has completed, one its run skipped, or any other job", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "completed", conclusion: "success" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "failure" }, { name: "fabrik / Push", status: "completed", conclusion: "failure" }] },
+      { id: 3, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "skipped" }] },
+      { id: 4, status: "in_progress", jobs: [{ name: "fabrik / Retro evidence", status: "in_progress" }, { name: "fabrik / Research failed", status: "in_progress" }] },
     ]);
 
     expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 0, research: 0, implementTickets: [] });
@@ -263,6 +274,16 @@ describe("Reading the runs in flight, by the names the Loop gives its jobs (#606
     expect(await readRunsInFlight(actions, repo)).toEqual([run(1, { issue: 12, job: "landing" })]);
   });
 
+  // #500: a Research job lands as an Implement job does.
+  it("takes a Research job that's done as landing until its run's push job has", async () => {
+    const actions = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 2, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "completed", conclusion: "failure" }] },
+    ]);
+
+    expect(await readRunsInFlight(actions, repo)).toEqual([run(1, { role: "research", job: "landing" })]);
+  });
+
   it("says whether a job waits behind its concurrency group or for a runner", async () => {
     const actions = actionsWith([
       { id: 1, status: "queued", jobs: [{ name: "fabrik / Implement #12", status: "queued" }] },
@@ -285,7 +306,7 @@ describe("Reading the runs in flight, by the names the Loop gives its jobs (#606
     ]);
 
     expect(dispatchedRunsOf(await readRunsInFlight(actions, repo))).toEqual(await countDispatchedRuns(actions, repo));
-    expect(dispatchedRunsOf(await readRunsInFlight(actions, repo))).toEqual({ implement: 2, research: 1, implementTickets: [12] });
+    expect(dispatchedRunsOf(await readRunsInFlight(actions, repo))).toEqual({ implement: 2, research: 2, implementTickets: [12] });
   });
 });
 
@@ -3692,6 +3713,20 @@ describe("Gathering a scheduled tick's trigger-sweep slice (#419)", () => {
     const snapshot = await gatherSnapshot(github, repo, tick, null, APP_LOGIN, actions as unknown as GitHub);
 
     expect(snapshot.triggers?.underWay).toMatchObject({ implement: true, review: true });
+  });
+
+  // #500: the sweep reads a Research job under way as Dispatch does.
+  it("reads a Research job that's done as under way until its run's push job has completed", async () => {
+    const { github } = githubWith([]);
+    const landing = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+    ]);
+    const landed = actionsWith([
+      { id: 1, status: "in_progress", jobs: [{ name: "fabrik / Research", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "completed", conclusion: "success" }] },
+    ]);
+
+    expect((await gatherSnapshot(github, repo, tick, null, APP_LOGIN, landing as unknown as GitHub)).triggers?.underWay).toMatchObject({ research: true });
+    expect((await gatherSnapshot(github, repo, tick, null, APP_LOGIN, landed as unknown as GitHub)).triggers?.underWay).toMatchObject({ research: false });
   });
 
   it("reads a Review checks job as Review under way", async () => {
