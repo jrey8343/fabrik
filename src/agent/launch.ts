@@ -10,6 +10,7 @@ import { writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type { AgentStreamEvent } from "@ai-hero/sandcastle";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import type { KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
 import type { FailedRunCommits, FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
@@ -101,10 +102,24 @@ export function claudeArgs(model: string, effort: string | null, flags: readonly
   ];
 }
 
-/** One onSandboxReady hook: the Product's setup, then the preflight last (Sandcastle runs hooks in parallel). */
-export function readyHook(setup: string | null): string {
+/**
+ * Which of the Product's Sandbox commands a run's ready hook runs before the
+ * agent starts: none for a role that only reads the code, `sandbox.setup` for
+ * one that runs it, and `sandbox.setup` then `sandbox.build` for one that
+ * builds a branch, so its agent starts with the Product's dependencies
+ * installed (#703).
+ */
+export type SandboxReadying = "none" | "setup" | "setup-and-build";
+
+/**
+ * One onSandboxReady hook: the Product's commands the run readies, then the
+ * preflight last (Sandcastle runs hooks in parallel), each step only if the one
+ * before it passed. A null command is skipped.
+ */
+export function readyHook(readies: SandboxReadying, sandbox: Pick<KitConfig["sandbox"], "setup" | "build">): string {
   const preflight = `node ${JSON.stringify(join(KIT_DIR, "src", "preflight", "main.ts"))}`;
-  return setup === null ? preflight : `(${setup}) && ${preflight}`;
+  const commands = readies === "none" ? [] : readies === "setup" ? [sandbox.setup] : [sandbox.setup, sandbox.build];
+  return [...commands.flatMap((command) => (command === null ? [] : [`(${command})`])), preflight].join(" && ");
 }
 
 /**

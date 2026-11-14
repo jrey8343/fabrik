@@ -8,7 +8,7 @@ import {
   parseImplementOutput,
   readRequestChangesRunOutput,
 } from "../loop/implementOutput.ts";
-import { type Checked, leaveFailureReport, replySchemaOf, settleReply, streamWatch } from "./launch.ts";
+import { type Checked, leaveFailureReport, readyHook, replySchemaOf, settleReply, streamWatch } from "./launch.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 const init = line({ type: "system", subtype: "init", apiKeySource: "none" });
@@ -182,5 +182,37 @@ describe("A run's reply", () => {
 
     expect(output).toBe("VERDICT: PASS");
     expect(saved).toBe("Verdict: pass");
+  });
+});
+
+describe("A run's onSandboxReady hook", () => {
+  const preflight = (hook: string) => hook.slice(hook.lastIndexOf("node "));
+  const both = { setup: "mise install", build: "pnpm install" };
+
+  it("ends in the preflight, alone when the run readies nothing", () => {
+    const hook = readyHook("none", both);
+
+    expect(hook).toMatch(/^node ".*src\/preflight\/main\.ts"$/);
+  });
+
+  it("runs setup, then build, then the preflight, each only if the one before passed, for a run that builds a branch", () => {
+    const hook = readyHook("setup-and-build", both);
+
+    expect(hook).toBe(`(mise install) && (pnpm install) && ${preflight(hook)}`);
+  });
+
+  it("skips a null build or a null setup for a run that builds a branch, and runs the preflight alone when both are null", () => {
+    const hook = readyHook("none", both);
+
+    expect(readyHook("setup-and-build", { setup: "mise install", build: null })).toBe(`(mise install) && ${hook}`);
+    expect(readyHook("setup-and-build", { setup: null, build: "pnpm install" })).toBe(`(pnpm install) && ${hook}`);
+    expect(readyHook("setup-and-build", { setup: null, build: null })).toBe(hook);
+  });
+
+  it("runs setup alone before the preflight, never build, for a run that only runs the Product", () => {
+    const hook = readyHook("none", both);
+
+    expect(readyHook("setup", both)).toBe(`(mise install) && ${hook}`);
+    expect(readyHook("setup", { setup: null, build: "pnpm install" })).toBe(hook);
   });
 });

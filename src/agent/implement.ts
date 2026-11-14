@@ -533,6 +533,17 @@ async function mainToMerge(productDir: string, defaultBranch: string): Promise<M
 }
 
 /**
+ * The Sandbox's build command as a run that builds a branch is told it: its
+ * ready hook ran it before the agent started (#703), so the agent runs it
+ * again only after changing the dependencies, or to test what it built.
+ */
+export function buildLine(build: string | null): string {
+  return build === null
+    ? "- Build: none configured"
+    : `- Build: \`${build}\`, which the Kit ran before you started. Run it again after you change the dependencies, or before you test what you built.`;
+}
+
+/**
  * What the Implementer's prompt carries beyond the Ticket: its parent Spec,
  * the repo's glossary and ADRs, and the Sandbox's commands.
  */
@@ -540,7 +551,7 @@ export async function implementContext(productDir: string, specFile: string, con
   const parts = await ticketContext(productDir, specFile);
   const { build, test, checks } = config.sandbox;
   const commands = [
-    build === null ? "- Build: none configured" : `- Build: \`${build}\``,
+    buildLine(build),
     test === null ? "- Test: none configured" : `- Test: \`${test}\``,
     ...(checks.length === 0 ? [] : [`- Required checks on the PR: ${checks.map((check) => `\`${check}\``).join(", ")}`]),
   ];

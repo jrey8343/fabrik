@@ -16,7 +16,7 @@ import { prototypeBranchFor, variantLetter } from "../loop/designOutput.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import { fenced } from "./design.ts";
-import { cutBranch } from "./implement.ts";
+import { buildLine, cutBranch } from "./implement.ts";
 import type { BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -58,7 +58,7 @@ export function prototypeTurnContext(
       "What the variants explore, as the Design session's request gives it:",
       fenced(brief.trimEnd(), "markdown"),
       `## ${PROTOTYPE_SECTIONS.sandbox}`,
-      [build === null ? "- Build: none configured" : `- Build: \`${build}\``, `- Serve: \`${ui.serve}\`, which answers at \`${ui.url}\``].join("\n"),
+      [buildLine(build), `- Serve: \`${ui.serve}\`, which answers at \`${ui.url}\``].join("\n"),
       `Once you finish, the Kit builds the branch, serves it, and captures each variant at mobile and desktop widths, at \`${variantPage(served, letters[0] ?? "A")}\` and so on, so each variant must render there from its letter alone.`,
     ],
   };
