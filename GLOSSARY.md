@@ -283,7 +283,7 @@ A Ticket marked, by the Design session that rewrote it or by the Operator, so th
 _Avoid_: resume (a held run resumes), reuse, restart on the branch
 
 **Sandbox**:
-An isolated environment where an Implementer, or a Design session's prototype turn, does its work on a branch, holding no production secrets. The Kit installs the Product's dependencies in it before the agent starts.
+An isolated environment where an Implementer, or a Design session's prototype turn, does its work on a branch, holding no production secrets. In a run that builds a branch, the Kit installs the Product's dependencies in it before the agent starts.
 _Avoid_: container, VM, workspace
 
 **Trust-root file**:

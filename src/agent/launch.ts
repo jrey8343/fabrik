@@ -10,6 +10,7 @@ import { writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type { AgentStreamEvent } from "@ai-hero/sandcastle";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import type { KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
 import type { FailedRunCommits, FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
@@ -115,7 +116,7 @@ export type SandboxReadying = "none" | "setup" | "setup-and-build";
  * preflight last (Sandcastle runs hooks in parallel), each step only if the one
  * before it passed. A null command is skipped.
  */
-export function readyHook(readies: SandboxReadying, sandbox: { readonly setup: string | null; readonly build: string | null }): string {
+export function readyHook(readies: SandboxReadying, sandbox: Pick<KitConfig["sandbox"], "setup" | "build">): string {
   const preflight = `node ${JSON.stringify(join(KIT_DIR, "src", "preflight", "main.ts"))}`;
   const commands = readies === "none" ? [] : readies === "setup" ? [sandbox.setup] : [sandbox.setup, sandbox.build];
   return [...commands.flatMap((command) => (command === null ? [] : [`(${command})`])), preflight].join(" && ");

@@ -358,7 +358,6 @@ const REPLAY_SPECS = {
     ...ROLE_SPECS.review,
     describe: (ticket, output) => `The Reviewer on the replay of #${ticket} gave the Verdict ${output.verdict}`,
     reviewsPullRequest: false,
-    readies: "none",
     replay: "review",
   } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
 };
