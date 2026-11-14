@@ -207,6 +207,19 @@ describe("The Implementer's context", () => {
     expect(text).toContain("## This Product repo's Sandbox");
     expect(text).toContain("- Required checks on the PR: `build`, `e2e`");
   });
+
+  it("says the Kit already ran the build before it started, and when to run it again (#703)", async () => {
+    const productDir = await mkdtemp(join(tmpdir(), "fabrik-implement-"));
+    const config = kitConfig();
+    const withBuild = { ...config, sandbox: { ...config.sandbox, build: "pnpm install && pnpm build" } };
+
+    const text = (await implementContext(productDir, await fileOf(null), withBuild)).join("\n");
+
+    expect(text).toContain(
+      "- Build: `pnpm install && pnpm build`, which the Kit ran before you started. Run it again after you change the dependencies, or before you test what you built.",
+    );
+    expect((await implementContext(productDir, await fileOf(null), config)).join("\n")).toContain("- Build: none configured");
+  });
 });
 
 describe("A retry on a PR the Operator requested changes on is given the amended Ticket (ADR-0010)", () => {

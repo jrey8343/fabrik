@@ -111,6 +111,7 @@ import {
   type OutputContract,
   readyHook,
   replySchemaOf,
+  type SandboxReadying,
   setAgentEnv,
   settleReply,
   streamWatch,
@@ -159,6 +160,13 @@ interface RoleSpec<T> {
   readonly output: OutputContract<T> | ((issue: number) => OutputContract<T>);
   /** How the Product's own instructions for this role relate to the Kit's prompt. */
   readonly instructionsNote: string;
+  /**
+   * What the run's ready hook runs of the Product's Sandbox commands before
+   * the agent starts: `setup` then `build` for a run that builds a branch,
+   * `setup` alone for one that runs the Product's code but builds no branch,
+   * and nothing for one that only reads the code.
+   */
+  readonly readies: SandboxReadying;
   readonly describe: (issue: number, output: T) => string;
   /** The heading over the issue in the prompt. */
   readonly issueHeading?: string;
@@ -225,6 +233,7 @@ function readReview(reply: string): ParsedVerdict & { ok: true } {
 const ROLE_SPECS = {
   triage: {
     role: "triage",
+    readies: "setup",
     output: { read: readTriageOutput },
     comparesIssues: true,
     instructionsNote:
@@ -233,6 +242,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<TriageOutput>,
   design: {
     role: "design",
+    readies: "setup",
     // Both sides check the contract against the issue's number: here the turn gets its one chance to put a refused Roll-in right.
     output: (issue) => ({ read: (value) => readDesignTurnOutput(value, issue) }),
     instructionsNote:
@@ -264,6 +274,8 @@ const ROLE_SPECS = {
   prototype: {
     role: "design",
     prompt: "prototype",
+    // A prototype turn builds a branch, so it starts as the Implementer does, with the Product's dependencies installed.
+    readies: "setup-and-build",
     // A prototype turn ends only in a prototype-round, so Sandcastle asks the agent to fix any other kind.
     output: { read: readPrototypeTurnOutput },
     instructionsNote:
@@ -272,6 +284,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<PrototypeRoundOutput>,
   implement: {
     role: "implement",
+    readies: "setup-and-build",
     output: { read: readImplementOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you build here but never change the rules or the output contract above.",
@@ -281,6 +294,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<ImplementOutput>,
   review: {
     role: "review",
+    readies: "none",
     output: { text: readReview },
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you judge PRs here but never change the Verdict contract above.",
@@ -290,6 +304,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
   audit: {
     role: "audit",
+    readies: "none",
     output: { read: readAuditOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They refine where you look and what you weigh here but never let you change anything, and never change the output contract above.",
@@ -299,6 +314,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<AuditOutput>,
   retro: {
     role: "retro",
+    readies: "none",
     output: { read: readRetroOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They say where to look and what to weigh here but never lift a rule above, never let you change anything, and never change the output contract above.",
@@ -308,6 +324,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<RetroOutput>,
   research: {
     role: "research",
+    readies: "none",
     output: { read: readResearchOutput },
     instructionsNote:
       "The Operator wrote these for this repo. They say where to look and what to weigh here but never let you decide, never let you write any file but the findings file, and never change the output contract above.",
@@ -317,6 +334,7 @@ const ROLE_SPECS = {
   } satisfies RoleSpec<ResearchOutput>,
   digest: {
     role: "digest",
+    readies: "none",
     output: { read: readDigestReply },
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you word a Digest here but never let you judge or change anything, and never change the output contract above.",
@@ -340,6 +358,7 @@ const REPLAY_SPECS = {
     ...ROLE_SPECS.review,
     describe: (ticket, output) => `The Reviewer on the replay of #${ticket} gave the Verdict ${output.verdict}`,
     reviewsPullRequest: false,
+    readies: "none",
     replay: "review",
   } satisfies RoleSpec<ParsedVerdict & { ok: true }>,
 };
@@ -502,13 +521,6 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   if (spec.replay === "review") {
     extra.push(...(await replayReviewContext(productDir, required("FABRIK_SPEC_FILE"), required(BASE_SHA_ENV))));
   }
-  const runsProductCode =
-    spec.reviewsPullRequest !== true &&
-    spec.replay !== "review" &&
-    spec.audits !== true &&
-    spec.retros !== true &&
-    spec.researches !== true &&
-    spec.digests !== true;
   // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
   const ownContract = typeof spec.output === "function" ? spec.output(issueNumber) : spec.output;
   const contract: OutputContract<T> = kind === "first" ? ownContract : ({ read: IMPLEMENT_OUTPUT_READERS[kind] } as unknown as OutputContract<T>);
@@ -547,10 +559,10 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       }),
       maxIterations: 1,
       output,
-      // The Reviewer, the Auditor, the Retro, the Researcher and the Digest writer read the code and run none of it, so they need no Sandbox setup.
+      // The role spec says which of the Product's Sandbox commands run before the agent starts (#703).
       hooks: {
         sandbox: {
-          onSandboxReady: [{ command: readyHook(runsProductCode ? config.sandbox.setup : null), timeoutMs }],
+          onSandboxReady: [{ command: readyHook(spec.readies, config.sandbox), timeoutMs }],
         },
       },
       signal: abort.signal,
@@ -602,28 +614,41 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   }
 }
 
-const roles: Record<string, () => Promise<void>> = {
-  triage: () => runRole(ROLE_SPECS.triage),
-  design: () => runRole(ROLE_SPECS.design),
-  prototype: () => runRole(ROLE_SPECS.prototype),
-  implement: () => runRole(ROLE_SPECS.implement),
-  review: () => runRole(ROLE_SPECS.review),
-  audit: () => runRole(ROLE_SPECS.audit),
-  retro: () => runRole(ROLE_SPECS.retro),
-  research: () => runRole(ROLE_SPECS.research),
-  digest: () => runRole(ROLE_SPECS.digest),
-  "replay-implement": () => runRole(REPLAY_SPECS.implement),
-  "replay-review": () => runRole(REPLAY_SPECS.review),
+/** One run this script runs: what its ready hook readies, and how to start it. */
+interface Run {
+  readonly readies: SandboxReadying;
+  readonly start: () => Promise<void>;
+}
+
+function runOf<T>(spec: RoleSpec<T>): Run {
+  return { readies: spec.readies, start: () => runRole(spec) };
+}
+
+/** Each run this script runs, by the name its first argument gives. */
+export const RUNS: Readonly<Record<string, Run>> = {
+  triage: runOf(ROLE_SPECS.triage),
+  design: runOf(ROLE_SPECS.design),
+  prototype: runOf(ROLE_SPECS.prototype),
+  implement: runOf(ROLE_SPECS.implement),
+  review: runOf(ROLE_SPECS.review),
+  audit: runOf(ROLE_SPECS.audit),
+  retro: runOf(ROLE_SPECS.retro),
+  research: runOf(ROLE_SPECS.research),
+  digest: runOf(ROLE_SPECS.digest),
+  "replay-implement": runOf(REPLAY_SPECS.implement),
+  "replay-review": runOf(REPLAY_SPECS.review),
 };
 
-const roleName = process.argv[2] ?? "";
-const runner = roles[roleName];
-if (runner === undefined) {
-  console.error(`Usage: node src/agent/run.ts <${Object.keys(roles).join("|")}>`);
-  process.exitCode = 2;
-} else {
-  runner().catch((error: unknown) => {
-    console.log(`::error title=Agent run failed::${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  });
+if (import.meta.main) {
+  const roleName = process.argv[2] ?? "";
+  const runner = Object.hasOwn(RUNS, roleName) ? RUNS[roleName] : undefined;
+  if (runner === undefined) {
+    console.error(`Usage: node src/agent/run.ts <${Object.keys(RUNS).join("|")}>`);
+    process.exitCode = 2;
+  } else {
+    runner.start().catch((error: unknown) => {
+      console.log(`::error title=Agent run failed::${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    });
+  }
 }

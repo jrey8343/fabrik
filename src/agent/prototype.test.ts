@@ -44,7 +44,10 @@ describe("A prototype turn's context", () => {
 
     expect(parts.slice(4)).toEqual([
       `## ${PROTOTYPE_SECTIONS.sandbox}`,
-      ["- Build: `npm run build`", "- Serve: `npm run preview`, which answers at `http://127.0.0.1:4321`"].join("\n"),
+      [
+        "- Build: `npm run build`, which the Kit ran before you started. Run it again after you change the dependencies, or before you test what you built.",
+        "- Serve: `npm run preview`, which answers at `http://127.0.0.1:4321`",
+      ].join("\n"),
       "Once you finish, the Kit builds the branch, serves it, and captures each variant at mobile and desktop widths, at `http://127.0.0.1:4321/book?variant=A` and so on, so each variant must render there from its letter alone.",
     ]);
     expect(prototypeTurnContext(kitConfig({ ui: UI }), 7, REQUEST).parts[5]).toBe(

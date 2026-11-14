@@ -92,7 +92,7 @@ async function main(): Promise<void> {
       maxIterations: 1,
       output: judgeOutput(rubrics),
       // No setup: the judge runs nothing, so only the preflight.
-      hooks: { sandbox: { onSandboxReady: [{ command: readyHook(null), timeoutMs: JUDGE_TIMEOUT_MINUTES * 60_000 }] } },
+      hooks: { sandbox: { onSandboxReady: [{ command: readyHook("none", { setup: null, build: null }), timeoutMs: JUDGE_TIMEOUT_MINUTES * 60_000 }] } },
       signal: abort.signal,
       logging: { type: "file", path: join(outDir, "agent.log"), onAgentStreamEvent: watch.onAgentStreamEvent },
     });

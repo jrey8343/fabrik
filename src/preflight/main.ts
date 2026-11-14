@@ -1,5 +1,6 @@
 // The metered-billing preflight as a command, for the agent job's last
-// onSandboxReady hook (chained after the Product's sandbox.setup, because
+// onSandboxReady hook (chained after the Product's sandbox.setup and, in a run
+// that builds a branch, sandbox.build, because
 // Sandcastle runs hooks in parallel). It runs inside the Sandbox with the
 // agent's own env, gathers what the pure check needs, and exits non-zero on
 // any refused route, which fails the run before the agent starts.
