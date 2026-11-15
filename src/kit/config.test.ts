@@ -1423,6 +1423,37 @@ describe("The ui and preview blocks, which Visual evidence reads", () => {
     ]);
   });
 
+  it("resolves resolve_route, the command that turns a dynamic route into a path to capture", () => {
+    const result = resolveKitConfig({ config: withUi({ resolve_route: "pnpm resolve-route" }) });
+
+    expect(result.ok && result.config.ui?.resolveRoute).toBe("pnpm resolve-route");
+  });
+
+  it.each([{}, { resolve_route: null }])("resolves no resolve_route when it's unset or null: %j", (changes) => {
+    const result = resolveKitConfig({ config: withUi(changes) });
+
+    expect(result.ok && result.config.ui !== null && "resolveRoute" in result.config.ui).toBe(false);
+  });
+
+  it.each([
+    [{ resolve_route: " " }, `ui.resolve_route is " ": a route-resolving command can't be blank`],
+    [{ resolve_route: 1 }, "ui.resolve_route must be a string"],
+    [
+      { resolve_route: "pnpm resolve-route", url: "https://staging.example.com" },
+      `ui.url is "https://staging.example.com": a ui with resolve_route serves on a loopback address, such as http://localhost:4321, so a route is only ever resolved against the Sandbox's own server`,
+    ],
+  ])("refuses a resolve_route that doesn't read, or whose ui.url isn't loopback: %j", (changes, error) => {
+    expect(resolveKitConfig({ config: withUi(changes) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("names a non-loopback ui.url once, for sign_in and resolve_route together", () => {
+    const result = resolveKitConfig({ config: withUi({ ...SIGN_IN, resolve_route: "pnpm resolve-route", url: "https://staging.example.com" }) });
+
+    expect(!result.ok && result.errors).toEqual([
+      `ui.url is "https://staging.example.com": a ui with sign_in and resolve_route serves on a loopback address, such as http://localhost:4321, so a sign-in or a route's resolving only ever reaches the Sandbox's own server`,
+    ]);
+  });
+
   it("names every bad default route, not just the first", () => {
     const result = resolveKitConfig({ config: withUi({ default_routes: ["book", "/", "services"] }) });
 

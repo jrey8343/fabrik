@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import { type Browser, type BrowserContext, chromium, errors, type Page } from "playwright-core";
 import type { CaptureIdentity, Viewport } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
+import { isErrorStatus } from "./uiEvidence.ts";
 import {
   type Capturer,
   type Finished,
@@ -20,6 +21,7 @@ import {
   isStorageState,
   ON_SIGN_IN,
   type PageUnreachable,
+  type ResolveRouteEnd,
   servedAt,
   type Shot,
   type SignInEnd,
@@ -31,6 +33,12 @@ const run = promisify(execFile);
 
 /** The env a sign-in command writes its Playwright storage state's path in. */
 export const STORAGE_STATE_ENV = "FABRIK_STORAGE_STATE";
+
+/** The env `ui.resolve_route` reads the route it resolves from (ADR-0024). */
+export const ROUTE_ENV = "FABRIK_ROUTE";
+
+/** The most of what `ui.resolve_route` prints that's kept: a path is short, and the last line is all capture reads. */
+const RESOLVE_OUTPUT_CAP = 64 * 1024;
 
 /** The runner, as captureEvidence drives it. */
 export class PlaywrightCapturer implements Capturer {
@@ -133,6 +141,34 @@ export class PlaywrightCapturer implements Capturer {
     return "signed-in";
   }
 
+  resolveRoute(route: string, command: string, timeoutMs: number, identity: CaptureIdentity | undefined): Promise<ResolveRouteEnd> {
+    const state = identity === undefined ? undefined : this.states.get(identity);
+    if (identity !== undefined && state === undefined) throw new Error(`${identity} hasn't signed in, so there's no session to resolve ${route} as`);
+    const extra = { [ROUTE_ENV]: route, ...(state === undefined ? {} : { [STORAGE_STATE_ENV]: state }) };
+    const child = this.track(spawn("bash", ["-c", command], { cwd: this.productDir, env: { ...this.env, ...extra }, stdio: ["ignore", "pipe", "inherit"], detached: true }));
+    let printed = "";
+    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+      // The end is what's kept, since the last line is the path.
+      printed = (printed + chunk).slice(-RESOLVE_OUTPUT_CAP);
+    });
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        signalGroup(child, "SIGKILL");
+        resolve("timed-out");
+      }, Math.max(0, timeoutMs));
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        console.log(error.message);
+        resolve({ exitCode: null });
+      });
+      // close, not exit, so all it printed has been read.
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        resolve(code === 0 ? { printed } : { exitCode: code });
+      });
+    });
+  }
+
   async screenshot(shot: Shot, timeoutMs: number): Promise<number | "timed-out" | typeof ON_SIGN_IN | PageUnreachable> {
     const end = Date.now() + timeoutMs;
     const page = await (await this.contextFor(shot.viewport, shot.signedIn)).newPage();
@@ -150,6 +186,8 @@ export class PlaywrightCapturer implements Capturer {
       // A moment for late requests to settle, never more than a few seconds.
       await page.waitForLoadState("networkidle", { timeout: Math.max(1, Math.min(5_000, end - Date.now())) }).catch(() => undefined);
       if (landedOnSignIn(page, shot.signedIn)) return ON_SIGN_IN;
+      // An error page capture misses keeps no image of it.
+      if (shot.missesErrorPage && isErrorStatus(response.status())) return response.status();
       await mkdir(this.evidenceDir, { recursive: true });
       await page.screenshot({ path: join(this.evidenceDir, shot.image), type: "png", animations: "disabled", timeout: Math.max(1, end - Date.now()) });
       return response.status();

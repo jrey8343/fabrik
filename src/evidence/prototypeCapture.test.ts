@@ -62,6 +62,9 @@ function runner(overrides: Partial<Capturer> = {}) {
       calls.push(`record ${take.url} at ${take.viewport.name} as ${take.image} and ${take.video}`);
       return { status: 200, video: true };
     },
+    resolveRoute: async () => {
+      throw new Error("a prototype turn's capture resolves no route");
+    },
     signIn: async (identity, command) => {
       calls.push(`sign-in ${identity}: ${command}`);
       return "signed-in";

@@ -124,6 +124,12 @@ export interface UiConfig {
   readonly signInPath?: string;
   /** Which Capture identity views each route, the first rule to match winning; set, and never empty, whenever `signIn` is. */
   readonly signedInRoutes?: readonly SignedInRoute[];
+  /**
+   * The command that turns a route with a dynamic segment, such as
+   * `/patients/[patientId]`, into a concrete path to capture, run against the
+   * Sandbox's own server (ADR-0024). Absent, a dynamic route is never captured.
+   */
+  readonly resolveRoute?: string;
 }
 
 /** A named kind of user that UI evidence views a route as: one of `ui.sign_in`'s keys. */
@@ -770,9 +776,33 @@ function readUi(ui: Reader | null | undefined): UiConfig | null {
   const url = ui.requiredString("url", checkHttpOrHttpsUrl);
   const beforeUrl = ui.nullableString("before_url", checkHttpOrHttpsUrl);
   const defaultRoutes = ui.stringList("default_routes", checkRoute);
-  const signedIn = readSignIn(ui, url);
-  if (paths === undefined || serve === undefined || url === undefined || signedIn === undefined) return null;
-  return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [], ...signedIn };
+  const signsIn = ui.isObject("sign_in");
+  const signedIn = readSignIn(ui);
+  const resolveRoute = ui.nullableString("resolve_route", checkResolveRouteCommand);
+  const loopback = readLoopback(ui, url, [...(signsIn ? ["sign_in"] : []), ...(typeof resolveRoute === "string" ? ["resolve_route"] : [])]);
+  if (paths === undefined || serve === undefined || url === undefined || signedIn === undefined || !loopback) return null;
+  if (resolveRoute === undefined && ui.has("resolve_route")) return null;
+  const resolving = typeof resolveRoute === "string" ? { resolveRoute } : {};
+  return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [], ...signedIn, ...resolving };
+}
+
+/**
+ * Whether `ui.url` may serve these fields, which run Product commands
+ * against it (ADR-0012, ADR-0024): any URL when none is set, else only a
+ * loopback address, named once for them all when it isn't.
+ */
+function readLoopback(ui: Reader, url: string | undefined, fields: readonly string[]): boolean {
+  if (fields.length === 0 || url === undefined || isLoopback(url)) return true;
+  const what = fields.length === 1 && fields[0] === "sign_in" ? "a sign-in" : fields.length === 1 ? "a route's resolving" : "a sign-in or a route's resolving";
+  const reaches = fields.length === 1 && fields[0] === "resolve_route" ? "a route is only ever resolved against" : `${what} only ever reaches`;
+  ui.refuse(
+    `${ui.fieldName("url")} is ${JSON.stringify(url)}: a ui with ${spelled(fields, "and")} serves on a loopback address, such as http://localhost:4321, so ${reaches} the Sandbox's own server`,
+  );
+  return false;
+}
+
+function checkResolveRouteCommand(command: string): string | null {
+  return command.trim() === "" ? "a route-resolving command can't be blank" : null;
 }
 
 /** The `ui` block's sign-in fields, which only come together. */
@@ -780,10 +810,10 @@ const SIGNED_IN_FIELDS = ["sign_in_path", "signed_in_routes"] as const;
 
 /**
  * The `ui` block's sign-in fields (ADR-0012): none when it sets none, else
- * all three, with `ui.url` a loopback address; undefined once it has named
- * every problem.
+ * all three (readUi holds `ui.url` to a loopback address); undefined once
+ * it has named every problem.
  */
-function readSignIn(ui: Reader, url: string | undefined): Pick<UiConfig, "signIn" | "signInPath" | "signedInRoutes"> | undefined {
+function readSignIn(ui: Reader): Pick<UiConfig, "signIn" | "signInPath" | "signedInRoutes"> | undefined {
   const signIn = ui.nullableObject("sign_in");
   if (signIn === undefined || signIn === null) {
     const given = SIGNED_IN_FIELDS.filter((key) => ui.has(key));
@@ -806,13 +836,7 @@ function readSignIn(ui: Reader, url: string | undefined): Pick<UiConfig, "signIn
     ? ui.string("sign_in_path", checkRoute)
     : ui.refuse(`${ui.fieldName("sign_in_path")} is missing: with ${ui.fieldName("sign_in")}, name the route the app sends a signed-out visitor to`);
   const rules = readSignedInRoutes(ui, identities);
-  const loopback = url === undefined || isLoopback(url);
-  if (!loopback) {
-    ui.refuse(
-      `${ui.fieldName("url")} is ${JSON.stringify(url)}: a ui with sign_in serves on a loopback address, such as http://localhost:4321, so a sign-in only ever reaches the Sandbox's own server`,
-    );
-  }
-  if (commands === undefined || identities.length === 0 || path === undefined || rules === undefined || !loopback) return undefined;
+  if (commands === undefined || identities.length === 0 || path === undefined || rules === undefined) return undefined;
   return { signIn: commands, signInPath: path, signedInRoutes: rules };
 }
 
@@ -1235,6 +1259,12 @@ class Reader {
   /** Whether this object gives `key` at all. */
   has(key: string): boolean {
     return Object.hasOwn(this.#value, key);
+  }
+
+  /** Whether this object gives the field as an object, without reading it. */
+  isObject(key: string): boolean {
+    const value = this.#value[key];
+    return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
   /** Marks these fields read without reading them, as when a problem elsewhere already says why they can't be used. */

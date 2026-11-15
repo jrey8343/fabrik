@@ -55,9 +55,13 @@ When the app has a sign-in command, also suggest these three, from the repo's si
 - `ui.sign_in_path`: the route the app sends a signed-out visitor to, such as `/login`. A signed-in page that lands there stops capture as `sign-in-failed`.
 - `ui.signed_in_routes`: an ordered list of rules saying which Capture identity views a route, such as `{ "route": "/admin/**", "as": "owner" }`, the first rule to match winning. In a `route`, `*` matches within one path segment and `**` across segments, and `/**` matches `/` too. `as` is one of `ui.sign_in`'s identities, or `null` for a public route, and a route no rule matches is viewed signed out. Put the public routes' rules first when a later rule such as `/**` would cover them.
 
-Then check with the Operator that `sandbox.build`, `ui.serve` and each sign-in command work without `sandbox.secrets`, which capture never gives them. If one needs a value, give it a non-secret stand-in in `sandbox.env`, or capture fails with `build-failed`, `server-did-not-start` or `sign-in-failed`.
+Then look at the Product's routes: its route files, its router config, and the routes Tickets and `ui.default_routes` name. When any has a dynamic segment, such as `[patientId]`, `<patientId>` or `:patientId`, say which you found, and offer the route resolver (ADR-0024):
 
-**Done when:** the Operator has confirmed or corrected all six answers, and, with a sign-in command, the three sign-in fields too.
+- `ui.resolve_route`, optional: one command that turns a route with a dynamic segment into a concrete path on the Sandbox's own server, such as `npm run resolve-route`. Capture never visits a route that still has a dynamic segment, since its page is the app's 404: without this command, each such route's screenshots are missed as `unresolved-route`. Its contract: once `ui.serve` answers and any sign-ins are done, capture runs it once for each named route with a dynamic segment, for up to 2 minutes, with the env `ui.serve` gets, never `sandbox.secrets`. The route as named is in `FABRIK_ROUTE`, such as `/patients/[patientId]`, and, when `ui.signed_in_routes` views that route as a Capture identity, that identity's storage state is in `FABRIK_STORAGE_STATE`, so the command can act as that user. It prints the path to capture on stdout, such as `/patients/0b7e`, as its last line, or exits non-zero when it can't find a record. It may find a record or make one. Like a sign-in, it needs a loopback `ui.url`, and a resolved route has no Before, since the record it found isn't on the production site. If the repo has no such command yet, the answer is `null`. Don't write the command, not even as a suggestion in a file: it's the Product repo's own code, which a Ticket can build. Once it's merged, the Operator runs `/fabrik-visual-evidence` again.
+
+Then check with the Operator that `sandbox.build`, `ui.serve`, each sign-in command and any `ui.resolve_route` work without `sandbox.secrets`, which capture never gives them. If one needs a value, give it a non-secret stand-in in `sandbox.env`, or capture fails with `build-failed`, `server-did-not-start` or `sign-in-failed`, or misses its dynamic routes as `unresolved-route`.
+
+**Done when:** the Operator has confirmed or corrected all six answers, and, with a sign-in command, the three sign-in fields too, and, when the Product's routes have dynamic segments, `ui.resolve_route`.
 
 ## 4. Write the answers
 
@@ -73,7 +77,7 @@ The change goes out on the branch `fabrik/visual-evidence`. Run `git fetch origi
 - **An earlier run's PR is open:** switch to its branch with `git switch -C fabrik/visual-evidence origin/fabrik/visual-evidence`, and push to it in step 5.
 - **Otherwise:** start the branch from the up-to-date default branch with `git switch -C fabrik/visual-evidence`. That also starts again a branch left from an earlier run whose PR was merged or closed, and loses nothing, since every run confirms its answers again.
 
-Run the writer from the repo's root, with the confirmed answers on stdin as the `ui` and `preview` blocks, in JSON spelled as Kit config spells them. Give every answer, with `null` or `[]` for an optional one the Operator left out. Give the sign-in fields only with a sign-in command, `ui.sign_in` as an object and `ui.signed_in_routes` as a list of rules, in the Operator's order. The quoted `'EOF'` keeps the shell off the values:
+Run the writer from the repo's root, with the confirmed answers on stdin as the `ui` and `preview` blocks, in JSON spelled as Kit config spells them. Give every answer, with `null` or `[]` for an optional one the Operator left out. Give the sign-in fields only with a sign-in command, `ui.sign_in` as an object and `ui.signed_in_routes` as a list of rules, in the Operator's order. Give `ui.resolve_route` only when the Operator answered it, as its command or `null`. The quoted `'EOF'` keeps the shell off the values:
 
 ```sh
 node "$FABRIK/src/setup/visual-evidence-main.ts" <<'EOF'
@@ -90,7 +94,7 @@ node "$FABRIK/src/setup/visual-evidence-main.ts" <<'EOF'
 EOF
 ```
 
-With a sign-in command, the `ui` block also holds the three sign-in fields:
+With a sign-in command, the `ui` block also holds the three sign-in fields, and here a route resolver too:
 
 ```sh
 node "$FABRIK/src/setup/visual-evidence-main.ts" <<'EOF'
@@ -106,7 +110,8 @@ node "$FABRIK/src/setup/visual-evidence-main.ts" <<'EOF'
     "signed_in_routes": [
       { "route": "/book/**", "as": null },
       { "route": "/**", "as": "owner" }
-    ]
+    ],
+    "resolve_route": "npm run resolve-route"
   },
   "preview": { "url": null }
 }
@@ -116,7 +121,7 @@ EOF
 It writes only those two blocks of `.fabrik/config.json`, in place or before its closing brace, printed as Prettier prints JSON, and keeps every other byte. A field of a block the file already has that the answers leave out keeps its value, so a `ui` block that signs in keeps its sign-in fields when the answers leave them out. An answer for `ui.sign_in` or `ui.signed_in_routes` replaces the field whole, so give every identity and every rule. What it prints decides what's next:
 
 - **`Wrote the … to .fabrik/config.json.`** Go on to step 5.
-- **`Nothing was written to .fabrik/config.json:`**, then one line per problem: the Kit config would refuse the answers, so nothing was written. Settle each problem with the Operator and run the writer again. A sign-in with a `ui.url` that isn't loopback is one: the Operator gives a loopback `ui.url`, never a deployed one.
+- **`Nothing was written to .fabrik/config.json:`**, then one line per problem: the Kit config would refuse the answers, so nothing was written. Settle each problem with the Operator and run the writer again. A sign-in or a `ui.resolve_route` with a `ui.url` that isn't loopback is one: the Operator gives a loopback `ui.url`, never a deployed one.
 - **`.fabrik/config.json already holds these answers, so nothing was written.`** Tell the Operator Visual evidence already has these answers, remove the branch and the temporary folder, and stop.
 
 **Done when:** the writer has written the blocks, or says the Kit config already holds them.
@@ -124,11 +129,13 @@ It writes only those two blocks of `.fabrik/config.json`, in place or before its
 ## 5. Open the pull request
 
 1. The writer prints for Prettier's default width, 80 columns. If the Product's own Prettier settings set another (`printWidth` in `.prettierrc` or in `package.json`'s `prettier` key, or `max_line_length` in `.editorconfig`), run the Product's own `prettier --write .fabrik/config.json`, so the PR passes its `prettier --check`.
-2. Commit `.fabrik/config.json` alone. When step 4 found an earlier run's PR open, push with `git push origin fabrik/visual-evidence`, which updates that PR. Otherwise push with `git push --force-with-lease -u origin fabrik/visual-evidence`, which replaces a branch GitHub kept from a merged or closed PR, and open a PR to the default branch with `gh pr create`. Its body lists each answer, and says the check that `sandbox.build`, `ui.serve` and any sign-in command work without `sandbox.secrets` was made.
+2. Commit `.fabrik/config.json` alone. When step 4 found an earlier run's PR open, push with `git push origin fabrik/visual-evidence`, which updates that PR. Otherwise push with `git push --force-with-lease -u origin fabrik/visual-evidence`, which replaces a branch GitHub kept from a merged or closed PR, and open a PR to the default branch with `gh pr create`. Its body lists each answer, and says the check that `sandbox.build`, `ui.serve`, any sign-in command and any `ui.resolve_route` work without `sandbox.secrets` was made.
 3. Remove the temporary Fabrik folder.
 4. Tell the Operator to merge the PR themselves. The push job reads the `ui` block from the default branch, so capture starts on the first UI PR after the merge. Then tell them:
    - That with Visual evidence on, each PR whose diff touches `ui.paths` gets an evidence section linking an Evidence page of its screenshots, and the Reviewer sees them.
    - With a sign-in, that each signed-in screenshot names the Capture identity it was viewed as, and has no Before, and that a sign-in that fails, or a signed-in page that lands on `ui.sign_in_path`, shows in the evidence section as `sign-in-failed`.
+   - With `ui.resolve_route`, that each dynamic route's screenshots show the route beside the path it was captured at, and have no Before, and that a route it can't resolve shows in the evidence section as not captured, with why.
+   - That an After page answering 4xx or 5xx shows in the evidence section as not captured, with its status, rather than as a screenshot of the error page.
    - That the merge is all it needs: Setup and its wizard needn't run again for it.
    - That running `/fabrik-visual-evidence` again changes its answers, and with the same answers it writes nothing.
 

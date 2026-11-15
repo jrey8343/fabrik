@@ -11,6 +11,7 @@ import {
   CAPTURE_SIDES,
   isServerError,
   ROUTE_REASON_WORDS,
+  routeWords,
   serverErrorWords,
   SIDE_WORDS,
   signedInWords,
@@ -105,19 +106,23 @@ function routesOf(captures: readonly EvidencePageShot[]): EvidencePageShot[] {
 }
 
 /** A route's heading, then a row per viewport it was captured at, mobile first, with Before beside After. */
-function routeSection({ route, reason, identity }: EvidencePageShot, captures: readonly EvidencePageShot[]): string[] {
+function routeSection({ route, resolved, reason, identity }: EvidencePageShot, captures: readonly EvidencePageShot[]): string[] {
   const rows = UI_VIEWPORTS.flatMap((viewport) => {
     const row = CAPTURE_SIDES.flatMap((side) =>
       captures.filter((capture) => capture.route === route && capture.viewport === viewport.name && capture.side === side),
     );
     return row.length === 0 ? [] : [`<h3>${capitalised(viewport.name)}, ${viewport.width} × ${viewport.height}</h3>`, `<div class="pair">${row.map(figure).join("")}</div>`];
   });
-  const heading = `<h2><code>${escaped(route)}</code>, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, htmlCode)}</h2>`;
+  const heading = `<h2>${routeWords(route, resolved, htmlCode)}, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, htmlCode)}</h2>`;
   const noBefore =
     identity === undefined
       ? []
       : [`<p>Signed in as ${htmlCode(identity)}, so it never has a Before: the Kit only ever signs in to the Sandbox's own server, never to the production site Before is taken from.</p>`];
-  return ["<section>", heading, ...noBefore, ...rows, "</section>"];
+  const noResolvedBefore =
+    resolved === undefined
+      ? []
+      : ["<p>Resolved through <code>ui.resolve_route</code> to a record on the Sandbox's own server, so it never has a Before: the production site Before is taken from doesn't hold that record.</p>"];
+  return ["<section>", heading, ...noBefore, ...noResolvedBefore, ...rows, "</section>"];
 }
 
 /** One screenshot, inlined, captioned with its side, and flagged when its page answered a server error. */

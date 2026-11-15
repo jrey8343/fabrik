@@ -83,6 +83,25 @@ function onceEach(routes: readonly ChosenRoute[]): ChosenRoute[] {
   return routes.filter(({ route }, index) => routes.findIndex((other) => other.route === route) === index);
 }
 
+/**
+ * A path segment that stands for a value rather than names a page, as a
+ * framework's route files spell one: `[patientId]` (or `[...slug]`),
+ * `<patientId>`, or `:patientId`.
+ */
+const DYNAMIC_SEGMENT = /\[[^\]/]*\]|<[^>/]*>|^:[A-Za-z_]/;
+
+/**
+ * Whether a route has a dynamic segment (DYNAMIC_SEGMENT) in its path, its
+ * query and fragment left out: a route no page answers as written, which
+ * capture resolves through `ui.resolve_route` (ADR-0024) or misses.
+ */
+export function hasDynamicSegment(route: string): boolean {
+  return route
+    .replace(/[?#].*$/s, "")
+    .split("/")
+    .some((segment) => DYNAMIC_SEGMENT.test(segment));
+}
+
 /** Which site a capture is of: the production site at `ui.before_url`, or the branch served in the Sandbox. */
 export const CAPTURE_SIDES = ["before", "after"] as const;
 
@@ -116,24 +135,61 @@ export interface Capture {
    * was viewed signed out, as every capture written before sign-ins was.
    */
   readonly identity?: CaptureIdentity;
+  /**
+   * The path the page was captured at, when `route` has a dynamic segment
+   * that `ui.resolve_route` resolved (ADR-0024); absent, it was captured at
+   * `route`, as every capture written before resolving was.
+   */
+  readonly resolved?: string;
 }
 
 /** Why capture missed a shot of a side and went on to the rest: its page wouldn't load, refused or not found (MissedShot). */
 export type Unreachable = `${CaptureSide}-unreachable`;
 
 /**
+ * Why a route with a dynamic segment wasn't resolved, so none of it was
+ * captured (ADR-0024): Kit config sets no `ui.resolve_route`; its command
+ * exited non-zero, with its code, or was killed by a signal; it ran past its
+ * time; it printed no path; or the path it printed still has a dynamic segment.
+ */
+export type UnresolvedError = "no-resolve-route" | `exit-${number}` | "exit-signal" | "timed-out" | "bad-output" | "still-dynamic";
+
+/** What reads as an UnresolvedError. */
+const UNRESOLVED_ERROR = /^(?:no-resolve-route|exit-(?:\d{1,3}|signal)|timed-out|bad-output|still-dynamic)$/;
+
+/**
  * A screenshot of a pull request capture meant to take but missed, going on
  * to the rest: of which route and why, at which viewport, of which side and
- * URL, and why it missed, with the browser's error code, such as
- * ERR_CONNECTION_REFUSED when production was down or refused the browser.
+ * URL, and why it missed. Its page wouldn't load, with the browser's error
+ * code, such as ERR_CONNECTION_REFUSED when production was down or refused
+ * the browser; its route's dynamic segment wasn't resolved, so no page was
+ * visited; or, an After, its page answered a 4xx or 5xx, so no screenshot was kept.
  */
-export interface MissedShot extends ChosenRoute {
+export type MissedShot = MissedShotOf &
+  (
+    | { readonly why: Unreachable; readonly error: string }
+    | { readonly why: "unresolved-route"; readonly error: UnresolvedError }
+    | { readonly why: "error-status"; readonly status: number }
+  );
+
+/** What every missed shot names, whatever it missed for. */
+interface MissedShotOf extends ChosenRoute {
   readonly viewport: Viewport["name"];
   readonly side: CaptureSide;
+  /** The URL capture went to, or would have gone to for an unresolved route. */
   readonly url: string;
-  /** Always its side's: `before-unreachable` for a Before. */
-  readonly why: Unreachable;
-  readonly error: string;
+  /** The path `route` was resolved to (ADR-0024), when it was. */
+  readonly resolved?: string;
+}
+
+/** Whether a page's status is an error page's, 4xx or 5xx, which an After never keeps as a capture. */
+export function isErrorStatus(status: number): boolean {
+  return status >= 400 && status <= 599;
+}
+
+/** Whether a path a route resolved to reads: a route with nothing a URL's path can't hold as it is, and no dynamic segment left. */
+export function isResolvedPath(value: unknown): value is string {
+  return isRoute(value) && !/[\s\u0000-\u001f\u007f]/.test(value) && !hasDynamicSegment(value);
 }
 
 /** The letters a Prototype's variants go by, in order, one for each up to PROTOTYPE_VARIANT_CAP: A is the first (variantLetter). */
@@ -252,7 +308,7 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
     errors.push(`${at} must be an object`);
     return null;
   }
-  const { route, reason, viewport, side, variant, status, image, video, identity } = value;
+  const { route, reason, viewport, side, variant, status, image, video, identity, resolved } = value;
   const ofVariant = variant !== undefined;
   const before = errors.length;
   // As the Implementer output reads a route, so a route it named never makes its capture unreadable.
@@ -276,6 +332,7 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
   if (identity !== undefined && !isCaptureIdentity(identity)) {
     errors.push(`${at}.identity must be a Capture identity's name, such as owner: letters, digits, - and _`);
   }
+  if (!ofVariant && resolved !== undefined && !isResolvedPath(resolved)) errors.push(resolvedProblem(at));
   // Whether it's a side's or a variant's decides how every reader shows it.
   if (ofVariant && side !== undefined) errors.push(`${at} must have a side or a variant, not both`);
   if (errors.length > before) return null;
@@ -299,7 +356,12 @@ function readCapture(value: unknown, at: string, errors: string[]): Capture | Va
     status: status as number,
     image: image as string,
     ...signedIn,
+    ...(resolved === undefined ? {} : { resolved: resolved as string }),
   };
+}
+
+function resolvedProblem(at: string): string {
+  return `${at}.resolved must be the path a dynamic route was captured at, such as /patients/0b7e, with no dynamic segment left`;
 }
 
 /** A browser's error code for a page that wouldn't load, as Chromium names it: ERR_CONNECTION_REFUSED. */
@@ -311,17 +373,28 @@ function readMissedShot(value: unknown, at: string, errors: string[]): MissedSho
     errors.push(`${at} must be an object`);
     return null;
   }
-  const { route, reason, viewport, side, url, why, error } = value;
+  const { route, reason, viewport, side, url, why, error, status, resolved } = value;
   const before = errors.length;
   if (!isRoute(route)) errors.push(`${at}.route must be a path starting with one /, such as /book`);
   if (!isOneOf(ROUTE_REASONS, reason)) errors.push(`${at}.reason must be ${spelled(ROUTE_REASONS)}`);
   if (!isOneOf(VIEWPORT_NAMES, viewport)) errors.push(`${at}.viewport must be ${spelled(VIEWPORT_NAMES)}`);
-  if (!isOneOf(CAPTURE_SIDES, side)) errors.push(`${at}.side must be ${spelled(CAPTURE_SIDES)}`);
-  else if (why !== `${side}-unreachable`) errors.push(`${at}.why must be ${side}-unreachable, its side's`);
   if (typeof url !== "string" || !URL.canParse(url)) errors.push(`${at}.url must be the URL capture went to`);
-  if (typeof error !== "string" || !BROWSER_ERROR.test(error)) errors.push(`${at}.error must be a browser error code, such as ERR_CONNECTION_REFUSED`);
+  if (resolved !== undefined && !isResolvedPath(resolved)) errors.push(resolvedProblem(at));
+  if (!isOneOf(CAPTURE_SIDES, side)) errors.push(`${at}.side must be ${spelled(CAPTURE_SIDES)}`);
+  else if (why === "unresolved-route" || why === "error-status") {
+    // Only an After is ever missed for these: a dynamic route has no Before, and a Before's error page is kept.
+    if (side !== "after") errors.push(`${at}.side must be after for a shot missed as ${why}`);
+    if (why === "unresolved-route" && (typeof error !== "string" || !UNRESOLVED_ERROR.test(error))) {
+      errors.push(`${at}.error must say why the route wasn't resolved: no-resolve-route, exit- and its code, exit-signal, timed-out, bad-output or still-dynamic`);
+    }
+    if (why === "error-status" && (!Number.isInteger(status) || !isErrorStatus(status as number))) errors.push(`${at}.status must be an HTTP error status from 400 to 599`);
+  } else if (why !== `${side}-unreachable`) errors.push(`${at}.why must be ${side}-unreachable, its side's, unresolved-route or error-status`);
+  if (why !== "unresolved-route" && why !== "error-status" && (typeof error !== "string" || !BROWSER_ERROR.test(error))) {
+    errors.push(`${at}.error must be a browser error code, such as ERR_CONNECTION_REFUSED`);
+  }
   if (errors.length > before) return null;
-  return { route, reason, viewport, side, url, why, error } as MissedShot;
+  const shot = { route, reason, viewport, side, url, ...(resolved === undefined ? {} : { resolved }) };
+  return (why === "error-status" ? { ...shot, why, status } : { ...shot, why, error }) as MissedShot;
 }
 
 /** Which shot of its route and viewport a capture is: its side, or its variant. */
@@ -460,6 +533,7 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
       ...stale,
       "After is this branch, served in the Implement run's Sandbox; Before, where there is one, is the production site.",
       ...(given.some(({ identity }) => identity !== undefined) ? [NO_SIGNED_IN_BEFORE] : []),
+      ...(given.some(({ resolved }) => resolved !== undefined) ? [NO_RESOLVED_BEFORE] : []),
       ...missingSides(result.missed ?? []),
       "Each shows one screen of the page from its top, not the whole page, so content below its bottom edge is out of view rather than cut off.",
       `${where} in \`${REVIEWER_IMAGES_DIR}/\` in your working directory: open each with your Read tool to see it.${of}`,
@@ -478,22 +552,73 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
 /** What the Reviewer's block says of a signed-in screenshot's Before, when it's given one. */
 const NO_SIGNED_IN_BEFORE = "A screenshot signed in as a Capture identity, a fake user of the Sandbox's own server, has no Before, since Before is never signed in.";
 
+/** What the Reviewer's block says of a resolved screenshot's Before, when it's given one (ADR-0024). */
+const NO_RESOLVED_BEFORE =
+  "A route with a dynamic segment, resolved to a record on the Sandbox's own server, has no Before, since the production site Before is taken from doesn't hold that record.";
+
 /** Where each side's page is, and what its missing leaves the Reviewer without, for a route or for several. */
 const MISSING_WORDS: Readonly<Record<CaptureSide, { readonly site: string; readonly without: (several: boolean) => string }>> = {
   before: { site: "the production site", without: (several) => `so there's no Before to compare ${several ? "their" : "its"} After against` },
   after: { site: "this branch's page", without: (several) => `so there's no screenshot of ${several ? "them" : "it"}` },
 };
 
-/** For each side capture missed shots of, the routes it's missing for and why, in the Reviewer's block: none when it missed none. */
+/**
+ * For each side capture missed shots of, and each way it missed them, the
+ * routes it's missing for and why, in the Reviewer's block: none when it missed none.
+ */
 function missingSides(missed: readonly MissedShot[]): string[] {
   return CAPTURE_SIDES.flatMap((side) => {
-    const shots = missed.filter((shot) => shot.side === side);
-    if (shots.length === 0) return [];
-    const routes = [...new Set(shots.map(({ route }) => route))];
-    const errors = [...new Set(shots.map(({ error }) => error))].map(code);
     const { site, without } = MISSING_WORDS[side];
-    return [`${SIDE_WORDS[side]} is missing for ${spelled(routes.map(code), "and")}, where ${site} wouldn't load (${spelled(errors, "and")}), ${without(routes.length > 1)}.`];
+    const ofSide = missed.filter((shot) => shot.side === side);
+    const missing = (shots: readonly MissedShot[], where: (several: boolean) => string, details: readonly string[]) => {
+      if (shots.length === 0) return [];
+      const routes = [...new Set(shots.map(({ route }) => route))];
+      const several = routes.length > 1;
+      return [`${SIDE_WORDS[side]} is missing for ${spelled(routes.map(code), "and")}, ${where(several)} (${spelled([...new Set(details)], "and")}), ${without(several)}.`];
+    };
+    const unreachable = ofSide.filter((shot) => shot.why === `${side}-unreachable`);
+    const unresolved = ofSide.filter((shot) => shot.why === "unresolved-route");
+    const errorPages = ofSide.filter((shot) => shot.why === "error-status");
+    return [
+      ...missing(unreachable, () => `where ${site} wouldn't load`, unreachable.map((shot) => code("error" in shot ? shot.error : ""))),
+      ...missing(
+        unresolved,
+        (several) => `${several ? "routes" : "a route"} with a dynamic segment that wasn't resolved to a page`,
+        unresolved.map((shot) => (shot.why === "unresolved-route" ? unresolvedWords(shot.error) : "")),
+      ),
+      ...missing(errorPages, () => `where ${site} answered an error page`, errorPages.map((shot) => code("status" in shot ? String(shot.status) : ""))),
+    ];
   });
+}
+
+/** Which of UnresolvedError's kinds an error is: an exit code's is by its prefix. */
+function unresolvedKind(error: UnresolvedError): "no-resolve-route" | "exit" | "exit-signal" | "timed-out" | "bad-output" | "still-dynamic" {
+  return error.startsWith("exit-") && error !== "exit-signal" ? "exit" : (error as Exclude<UnresolvedError, `exit-${number}`>);
+}
+
+/** Why a dynamic route wasn't resolved, in the words the evidence section and the Reviewer's block share. */
+const UNRESOLVED_WORDS: Readonly<Record<ReturnType<typeof unresolvedKind>, (error: UnresolvedError) => string>> = {
+  "no-resolve-route": () => "Kit config sets no `ui.resolve_route`",
+  exit: (error) => `\`ui.resolve_route\` exited ${error.slice("exit-".length)}`,
+  "exit-signal": () => "`ui.resolve_route` was stopped by a signal",
+  "timed-out": () => `\`ui.resolve_route\` ran past its ${RESOLVE_ROUTE_MINUTES} minutes`,
+  "bad-output": () => "`ui.resolve_route` printed no path",
+  "still-dynamic": () => "`ui.resolve_route` printed a path that still has a dynamic segment",
+};
+
+function unresolvedWords(error: UnresolvedError): string {
+  return UNRESOLVED_WORDS[unresolvedKind(error)](error);
+}
+
+/** How long capture gives each run of `ui.resolve_route`, in minutes: capture's own, which a reader words it by. */
+export const RESOLVE_ROUTE_MINUTES = 2;
+
+/**
+ * A route as the evidence names it, each part in its reader's markup: its
+ * pattern, and beside it the path it was resolved to, when it was (ADR-0024).
+ */
+export function routeWords(route: string, resolved: string | undefined, markup: (text: string) => string): string {
+  return resolved === undefined ? markup(route) : `${markup(route)} resolved to ${markup(resolved)}`;
 }
 
 /** Why the Reviewer has no screenshots when there's no capture result to read, and nothing says why capture failed. */
@@ -505,11 +630,11 @@ function reviewerFailureWords(reason: CaptureFailure): string {
 }
 
 /** One screenshot the Reviewer is given: its file, then its route (agent text, so as code on one line), viewport and side. */
-function reviewerImageLine({ image, route, viewport, side, status, identity }: Capture): string {
+function reviewerImageLine({ image, route, resolved, viewport, side, status, identity }: Capture): string {
   const size = UI_VIEWPORTS.find(({ name }) => name === viewport);
   const width = size === undefined ? "" : ` (${size.width}×${size.height})`;
   const error = isServerError(status) ? `. It ${serverErrorWords(String(status), "it shows")}` : "";
-  return `- \`${REVIEWER_IMAGES_DIR}/${image}\`: ${code(route)} at ${viewport} width${width}, ${SIDE_WORDS[side]}${signedInWords(identity, code)}${error}`;
+  return `- \`${REVIEWER_IMAGES_DIR}/${image}\`: ${routeWords(route, resolved, code)} at ${viewport} width${width}, ${SIDE_WORDS[side]}${signedInWords(identity, code)}${error}`;
 }
 
 /**
@@ -568,6 +693,12 @@ export interface EvidenceMarker {
    */
   readonly preview?: MarkerPreview;
   /**
+   * Each route with a dynamic segment `ui.resolve_route` resolved (ADR-0024),
+   * and the path it was captured at, in `routes`' order. Absent when none
+   * was, and from a marker written before routes were resolved.
+   */
+  readonly resolved?: readonly MarkerResolvedRoute[];
+  /**
    * Every shot capture meant to take and missed, going on to the rest (#667),
    * in the capture result's order, by route, viewport and side alone: why it
    * missed, the address tried and the browser's error stay in the artifact.
@@ -582,6 +713,12 @@ export interface EvidenceMarker {
 export type MarkerPreview =
   | { readonly is: "none" | "pending" }
   | { readonly is: "linked" | "never-answered"; readonly url: string };
+
+/** A route resolved to a path, as its evidence marker records it. */
+export interface MarkerResolvedRoute {
+  readonly route: string;
+  readonly path: string;
+}
 
 /** A shot capture missed, as its evidence marker records it: which route, at which viewport, of which side. */
 export interface MarkerMissedShot {
@@ -684,8 +821,10 @@ export function screenshots(count: number): string {
 function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[], missed: readonly MissedShot[]): string {
   // Kit config's rules view a route as one identity, so its first capture names it for all.
   const identity = captures.find((capture) => capture.route === route)?.identity;
-  // Its route may be the Implementer's: agent text, which never mentions anyone.
-  const named = `- ${code(withoutMentions(route))}, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, code)}`;
+  // A route is resolved once, so the first of its shots that names a path names it for all.
+  const resolved = [...captures, ...missed].find((shot) => shot.route === route && shot.resolved !== undefined)?.resolved;
+  // Its route may be the Implementer's, and its path the Product's command's: text that never mentions anyone.
+  const named = `- ${routeWords(route, resolved, (text) => code(withoutMentions(text)))}, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, code)}`;
   const line = named + missedWords(captures.filter((capture) => capture.route === route), missed.filter((shot) => shot.route === route));
   const errors = captures.filter((capture) => capture.route === route && isServerError(capture.status));
   if (errors.length === 0) return line;
@@ -704,14 +843,24 @@ function missedWords(captures: readonly Capture[], missed: readonly MissedShot[]
     const viewports = captures.filter((capture) => capture.side === side).map(({ viewport }) => viewport);
     return viewports.length === 0 ? [] : [`${SIDE_WORDS[side]} at ${spelled(viewports, "and")}`];
   });
-  // Each side and error once, where it was first missed, with every viewport it was missed at.
-  const lost = missed
-    .filter((shot, at) => missed.findIndex((other) => other.side === shot.side && other.error === shot.error) === at)
-    .map(({ side, error }) => {
-      const viewports = missed.filter((shot) => shot.side === side && shot.error === error).map(({ viewport }) => viewport);
-      return `${SIDE_WORDS[side]}: unreachable, ${code(error)}, at ${spelled(viewports, "and")}`;
-    });
+  // Each side and why once, where it was first missed, with every viewport it was missed at.
+  const words = missed.map((shot) => `${SIDE_WORDS[shot.side]}: ${missedWhyWords(shot)}`);
+  const lost = words
+    .filter((said, at) => words.indexOf(said) === at)
+    .map((said) => `${said}, at ${spelled(missed.filter((_, at) => words[at] === said).map(({ viewport }) => viewport), "and")}`);
   return `. Captured: ${took.length === 0 ? "nothing" : took.join("; ")}. **Not captured:** ${lost.join("; ")}.`;
+}
+
+/** Why a shot was missed, as the evidence section's route line says it. */
+function missedWhyWords(shot: MissedShot): string {
+  switch (shot.why) {
+    case "unresolved-route":
+      return `unresolved route, ${unresolvedWords(shot.error)}`;
+    case "error-status":
+      return `answered ${shot.status}`;
+    default:
+      return `unreachable, ${code(shot.error)}`;
+  }
 }
 
 /** Whether a page answered with a server error, so its screenshot is of an error page. */
@@ -762,7 +911,12 @@ function evidenceMarker({ run, artifact, result, preview }: UiEvidence, routes: 
   const failure = result.outcome === "failed" ? result.reason : null;
   // With no capture result to read, the push job doesn't know what capture missed, so it records nothing rather than none.
   const missed = failure === "no-result" ? {} : { missed: (result.missed ?? []).map(({ route, viewport, side }) => ({ route, viewport, side })) };
-  return markerLine({ run, artifact, failure, routes, preview: markerPreview(preview), ...missed });
+  const shots = [...sideCaptures(result.captures), ...(result.missed ?? [])];
+  const resolved = routes.flatMap((route) => {
+    const path = shots.find((shot) => shot.route === route && shot.resolved !== undefined)?.resolved;
+    return path === undefined ? [] : [{ route, path }];
+  });
+  return markerLine({ run, artifact, failure, routes, preview: markerPreview(preview), ...missed, ...(resolved.length === 0 ? {} : { resolved }) });
 }
 
 /** An evidence marker line holding this value, on one line. */
@@ -842,7 +996,7 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
     return null;
   }
   if (!isObject(value)) return null;
-  const { run, artifact, failure, routes, preview, missed } = value;
+  const { run, artifact, failure, routes, preview, missed, resolved } = value;
   if (!isId(run) || !(artifact === null || isId(artifact))) return null;
   // A field it doesn't record, or that doesn't read, leaves where the evidence is kept, and the other fields, as they were.
   return {
@@ -852,7 +1006,13 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
     ...(Array.isArray(routes) && routes.every((route) => typeof route === "string") ? { routes } : {}),
     ...(markerPreviewOf(preview) ?? {}),
     ...(Array.isArray(missed) && missed.every(isMarkerMissedShot) ? { missed: missed.map(({ route, viewport, side }) => ({ route, viewport, side })) } : {}),
+    ...(Array.isArray(resolved) && resolved.every(isMarkerResolvedRoute) ? { resolved: resolved.map(({ route, path }) => ({ route, path })) } : {}),
   };
+}
+
+/** Whether a marker's resolved route reads: its route and path, each as text. */
+function isMarkerResolvedRoute(value: unknown): value is MarkerResolvedRoute {
+  return isObject(value) && typeof value.route === "string" && typeof value.path === "string";
 }
 
 /** Whether a marker's missed shot reads: a route as text, a viewport the Kit captures at and a side. */

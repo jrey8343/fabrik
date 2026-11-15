@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UiConfig } from "../kit/config.ts";
-import { buildAndServeEnv, type CaptureInput, isOnSignInPath, isStorageState, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary, implementerRoutesIn, implementJobTimeoutMinutes, servedAt } from "./capture.ts";
+import { buildAndServeEnv, type CaptureInput, type ResolveRouteEnd, isOnSignInPath, isStorageState, type CaptureOutcome, type Capturer, captureEvidence, captureStepFiles, captureStepOutputs, captureStepSummary, implementerRoutesIn, implementJobTimeoutMinutes, servedAt } from "./capture.ts";
 import { type Capture, type CaptureFailure, type CaptureResult, parseCaptureResult } from "./uiEvidence.ts";
 
 const HEAD = "c".repeat(40);
@@ -66,6 +66,10 @@ function runner(overrides: Partial<Capturer> = {}) {
     signIn: async (identity, command) => {
       calls.push(`sign-in ${identity}: ${command}`);
       return "signed-in";
+    },
+    resolveRoute: async (route, command) => {
+      calls.push(`resolve ${route}: ${command}`);
+      return { printed: route };
     },
     stop: async () => {
       calls.push("stop");
@@ -421,19 +425,225 @@ describe("Capturing UI evidence", () => {
     ]);
   });
 
-  // The evidence section and the Evidence page flag it; it's still evidence, never a failure.
-  it("records a page that answered a server error with its status, and still counts the capture as captured", async () => {
-    const { capturer } = runner({ screenshot: async (shot) => (shot.side === "after" ? 500 : 200) });
+  it("misses an After page that answered 404 or 500, keeping no screenshot of it, and records a Before 404 as it is", async () => {
+    const { capturer } = runner({
+      screenshot: async (shot) => {
+        if (shot.side === "before") return 404;
+        return shot.viewport.name === "mobile" ? 404 : 500;
+      },
+    });
 
-    const outcome = await captureEvidence(input(), capturer);
+    const outcome = await captureEvidence(input({ implementerRoutes: ["/"] }), capturer);
 
-    expect(outcome).toMatchObject({ result: { outcome: "captured" } });
-    expect(outcome.kind === "recorded" && outcome.result.captures.map(({ side, status }) => `${side} ${status}`)).toEqual([
-      "after 500",
-      "after 500",
-      "before 200",
-      "before 200",
+    const result = outcome.kind === "recorded" ? outcome.result : null;
+    expect(result?.captures.map(({ side, route, viewport, status }) => `${side} ${route} ${viewport} ${status}`)).toEqual([
+      "before /book mobile 404",
+      "before /book desktop 404",
+      "before / mobile 404",
+      "before / desktop 404",
     ]);
+    expect(result?.missed).toEqual([
+      { route: "/book", reason: "ticket", viewport: "mobile", side: "after", url: "http://127.0.0.1:4321/book", why: "error-status", status: 404 },
+      { route: "/book", reason: "ticket", viewport: "desktop", side: "after", url: "http://127.0.0.1:4321/book", why: "error-status", status: 500 },
+      { route: "/", reason: "implementer", viewport: "mobile", side: "after", url: "http://127.0.0.1:4321/", why: "error-status", status: 404 },
+      { route: "/", reason: "implementer", viewport: "desktop", side: "after", url: "http://127.0.0.1:4321/", why: "error-status", status: 500 },
+    ]);
+    // It took the Before screenshots, so capture still counts as captured.
+    expect(result?.outcome).toBe("captured");
+  });
+
+  it("tells the shell to keep no screenshot of an After error page, and to keep a Before's", async () => {
+    const seen: string[] = [];
+    const { capturer } = runner({
+      screenshot: async (shot) => {
+        seen.push(`${shot.side} ${shot.missesErrorPage}`);
+        return 200;
+      },
+    });
+
+    await captureEvidence(input(), capturer);
+
+    expect([...new Set(seen)]).toEqual(["after true", "before false"]);
+  });
+
+  it("records unreachable when every After answered an error page and there's no Before", async () => {
+    const { capturer } = runner({ screenshot: async () => 404 });
+
+    const outcome = await captureEvidence(input({ ui: { ...ui, beforeUrl: null } }), capturer);
+
+    expect(outcome).toMatchObject({ result: { outcome: "failed", reason: "unreachable", captures: [] } });
+    expect(outcome.kind === "recorded" && outcome.result.missed?.map(({ why }) => why)).toEqual(["error-status", "error-status"]);
+  });
+});
+
+describe("Capturing a route with a dynamic segment", () => {
+  /** The Pilot's ui block, served on loopback, resolving its dynamic routes. */
+  const resolving: UiConfig = { ...ui, url: "http://localhost:4321", resolveRoute: "pnpm resolve-route" };
+
+  /** A runner whose route resolver ends as `end` for every route, noting each run in `calls`. */
+  function runnerResolving(end: ResolveRouteEnd, overrides: Partial<Capturer> = {}) {
+    const ran = runner(overrides);
+    ran.capturer.resolveRoute = async (route, command, _timeoutMs, identity) => {
+      ran.calls.push(`resolve ${route}: ${command}${identity === undefined ? "" : ` as ${identity}`}`);
+      return end;
+    };
+    return ran;
+  }
+
+  it.each(["/patients/[patientId]", "/patients/<patientId>", "/patients/:patientId"])(
+    "captures %s at the path ui.resolve_route prints, once for both viewports, and takes no Before of it",
+    async (pattern) => {
+      const { capturer, calls } = runnerResolving({ printed: "/patients/0b7e" });
+
+      const outcome = await captureEvidence(input({ ui: resolving, ticketBody: `Show \`${pattern}\`.` }), capturer);
+
+      expect(calls.filter((call) => /^(resolve|screenshot|sign-in)/.test(call))).toEqual([
+        `resolve ${pattern}: pnpm resolve-route`,
+        "screenshot http://localhost:4321/patients/0b7e at mobile as after-mobile-1-patients-patientid.png",
+        "screenshot http://localhost:4321/patients/0b7e at desktop as after-desktop-1-patients-patientid.png",
+      ]);
+      expect(outcome).toEqual({
+        kind: "recorded",
+        result: {
+          outcome: "captured",
+          headSha: HEAD,
+          captures: [
+            { route: pattern, resolved: "/patients/0b7e", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-patients-patientid.png" },
+            { route: pattern, resolved: "/patients/0b7e", reason: "ticket", viewport: "desktop", side: "after", status: 200, image: "after-desktop-1-patients-patientid.png" },
+          ],
+        },
+      });
+    },
+  );
+
+  it("resolves after the server answers and the sign-ins, passing a signed-in route's Capture identity, chosen by its pattern", async () => {
+    const signedIn: UiConfig = {
+      ...resolving,
+      signIn: { owner: "pnpm sign-in owner" },
+      signInPath: "/sign-in",
+      signedInRoutes: [{ route: "/patients/**", as: "owner" }, { route: "/**", as: null }],
+    };
+    const { capturer, calls } = runnerResolving({ printed: "/patients/0b7e" });
+
+    const outcome = await captureEvidence(input({ ui: signedIn, ticketBody: "Show `/patients/[patientId]`." }), capturer);
+
+    expect(calls.slice(calls.indexOf("serve node ./dist/server/entry.mjs at http://localhost:4321"))).toEqual([
+      "serve node ./dist/server/entry.mjs at http://localhost:4321",
+      "sign-in owner: pnpm sign-in owner",
+      "resolve /patients/[patientId]: pnpm resolve-route as owner",
+      "screenshot http://localhost:4321/patients/0b7e at mobile as after-mobile-1-patients-patientid.png",
+      "screenshot http://localhost:4321/patients/0b7e at desktop as after-desktop-1-patients-patientid.png",
+      "stop",
+    ]);
+    expect(outcome.kind === "recorded" && outcome.result.captures.map(({ identity, resolved }) => `${identity} ${resolved}`)).toEqual([
+      "owner /patients/0b7e",
+      "owner /patients/0b7e",
+    ]);
+  });
+
+  it("keeps the Before of a route with no dynamic segment beside a resolved one, and resolves nothing for it", async () => {
+    const { capturer, calls } = runnerResolving({ printed: "/patients/0b7e" });
+
+    const outcome = await captureEvidence(input({ ui: resolving, ticketBody: "Show `/patients/[patientId]` from `/patients`." }), capturer);
+
+    expect(calls.filter((call) => call.startsWith("resolve"))).toEqual(["resolve /patients/[patientId]: pnpm resolve-route"]);
+    expect(outcome.kind === "recorded" && outcome.result.captures.map(({ side, route }) => `${side} ${route}`)).toEqual([
+      "after /patients/[patientId]",
+      "after /patients/[patientId]",
+      "after /patients",
+      "after /patients",
+      "before /patients",
+      "before /patients",
+    ]);
+  });
+
+  it.each<[string, ResolveRouteEnd, string]>([
+    ["exits non-zero", { exitCode: 3 }, "exit-3"],
+    ["is killed by a signal", { exitCode: null }, "exit-signal"],
+    ["runs past its two minutes", "timed-out", "timed-out"],
+    ["prints nothing", { printed: "  \n" }, "bad-output"],
+    ["prints something that isn't a path", { printed: "0b7e" }, "bad-output"],
+    ["prints a path with a space in it", { printed: "/patients/0b7e now" }, "bad-output"],
+    ["prints a path that still has a dynamic segment", { printed: "/patients/[patientId]" }, "still-dynamic"],
+  ])("misses every shot of a route as unresolved-route, taking none, when ui.resolve_route %s", async (_, end, error) => {
+    const { capturer, calls } = runnerResolving(end);
+
+    const outcome = await captureEvidence(input({ ui: resolving, ticketBody: "Show `/patients/[patientId]` from `/patients`." }), capturer);
+
+    expect(calls.filter((call) => call.startsWith("screenshot") && call.includes("patients/"))).toEqual([]);
+    expect(outcome.kind === "recorded" && outcome.result.missed).toEqual(
+      ["mobile", "desktop"].map((viewport) => ({
+        route: "/patients/[patientId]",
+        reason: "ticket",
+        viewport,
+        side: "after",
+        url: "http://localhost:4321/patients/[patientId]",
+        why: "unresolved-route",
+        error,
+      })),
+    );
+    expect(outcome).toMatchObject({ result: { outcome: "captured" } });
+  });
+
+  it("takes the last line a resolve command prints, so a package manager's banner above it is no matter", async () => {
+    const { capturer } = runnerResolving({ printed: "\n> clinic@1.0.0 resolve-route\n> node scripts/resolve.js\n\n/patients/0b7e\n" });
+
+    const outcome = await captureEvidence(input({ ui: resolving, ticketBody: "Show `/patients/[patientId]`." }), capturer);
+
+    expect(outcome.kind === "recorded" && outcome.result.captures[0]?.resolved).toBe("/patients/0b7e");
+  });
+
+  it("misses a dynamic route as unresolved-route without ui.resolve_route, visiting nothing for it, and fails as unreachable when it's the only route", async () => {
+    const { capturer, calls } = runnerResolving({ printed: "/patients/0b7e" });
+
+    const outcome = await captureEvidence(input({ ticketBody: "Show `/patients/<patientId>`." }), capturer);
+
+    expect(calls.some((call) => call.startsWith("resolve") || call.startsWith("screenshot"))).toBe(false);
+    expect(outcome).toMatchObject({ result: { outcome: "failed", reason: "unreachable", captures: [] } });
+    expect(outcome.kind === "recorded" && outcome.result.missed?.map((shot) => `${shot.side} ${shot.why} ${"error" in shot ? shot.error : ""}`)).toEqual([
+      "after unresolved-route no-resolve-route",
+      "after unresolved-route no-resolve-route",
+    ]);
+  });
+
+  it("misses an After of a resolved route that answered 404, recording the path it went to", async () => {
+    const { capturer } = runnerResolving({ printed: "/patients/0b7e" }, { screenshot: async () => 404 });
+
+    const outcome = await captureEvidence(input({ ui: resolving, ticketBody: "Show `/patients/[patientId]`." }), capturer);
+
+    expect(outcome).toMatchObject({ result: { outcome: "failed", reason: "unreachable", captures: [] } });
+    expect(outcome.kind === "recorded" && outcome.result.missed?.[0]).toEqual({
+      route: "/patients/[patientId]",
+      resolved: "/patients/0b7e",
+      reason: "ticket",
+      viewport: "mobile",
+      side: "after",
+      url: "http://localhost:4321/patients/0b7e",
+      why: "error-status",
+      status: 404,
+    });
+  });
+
+  it("gives each resolve two minutes, within capture's budget, and records timeout when capture's own time runs out while it resolves", async () => {
+    const given: number[] = [];
+    let clock = 0;
+    const { capturer } = runnerResolving("timed-out", {
+      now: () => clock,
+      serve: async () => {
+        clock = 17 * 60_000;
+        return "answered";
+      },
+    });
+    const wrapped = capturer.resolveRoute;
+    capturer.resolveRoute = async (route, command, timeoutMs, identity) => {
+      given.push(timeoutMs);
+      return wrapped(route, command, timeoutMs, identity);
+    };
+
+    const outcome = await captureEvidence(input({ ui: resolving, ticketBody: "Show `/patients/[patientId]`." }), capturer);
+
+    expect(given).toEqual([60_000]);
+    expect(outcome).toMatchObject({ result: { outcome: "failed", reason: "timeout" } });
   });
 });
 
