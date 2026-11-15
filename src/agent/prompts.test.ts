@@ -66,6 +66,19 @@ describe("The prompts of the runs on a PR the Operator requested changes on (ADR
     expect(section(text, "When you're fixing a PR")).toContain("Never revert a requested change");
   });
 
+  it.each([
+    ["When you're fixing a PR", "- Keep the earlier work that's sound."],
+    ["When the Operator requested changes", "- Keep the earlier work the Operator didn't ask you to change."],
+  ])("implement's %s section asks the run to load `tdd`, and `diagnosing-bugs` for a red check of unknown cause, straight after its keep-the-earlier-work bullet", async (heading, keepBullet) => {
+    const lines = section(await prompt("implement"), heading).split("\n");
+    const skills = lines[lines.findIndex((line) => line.startsWith(keepBullet)) + 1] ?? "";
+    expect(skills).toContain("call the Skill tool with `tdd`");
+    expect(skills).toContain("call the Skill tool with `diagnosing-bugs`");
+    expect(skills).toBe(
+      "- How to work applies to a retry as it does to a first run: call the Skill tool with `tdd` before your first change, and write the failing test for each finding before its fix. When a finding is a red check whose cause you don't yet know, call the Skill tool with `diagnosing-bugs` first.",
+    );
+  });
+
   it("implement no longer has a Request-changes run meet a criterion its requested changes conflict with, and has it name each criterion it amended", async () => {
     const run = section(await prompt("implement"), "When the Operator requested changes");
     expect(run).not.toContain("and still meet the Ticket's acceptance criteria");
