@@ -15,9 +15,14 @@ import {
   type CaptureResult,
   type CaptureSide,
   type ChosenRoute,
+  hasDynamicSegment,
+  isErrorStatus,
+  isResolvedPath,
   isUi,
   type MissedShot,
   pageAt,
+  RESOLVE_ROUTE_MINUTES,
+  type UnresolvedError,
   routesFor,
   screenshots,
   type VariantCapture,
@@ -65,6 +70,13 @@ export interface Shot extends ChosenRoute {
   readonly image: string;
   /** Who the page is viewed as, when it's viewed signed in; absent, it's viewed signed out. */
   readonly signedIn?: SignedInAs;
+  /**
+   * Whether a page answering 4xx or 5xx is missed rather than kept, as an
+   * After's is: then the shell saves no screenshot of it, giving its status alone.
+   */
+  readonly missesErrorPage: boolean;
+  /** The path `route` was resolved to (ADR-0024), which `url` is at, when it has a dynamic segment. */
+  readonly resolved?: string;
 }
 
 /**
@@ -106,6 +118,13 @@ export type SignInEnd = "signed-in" | "failed" | "timed-out" | "no-state" | "bad
 /** What a signed-in shot or take reports when its page landed on `ui.sign_in_path`, its image thrown away. */
 export const ON_SIGN_IN = "on-sign-in";
 
+/**
+ * How a run of `ui.resolve_route` ended: what it printed to stdout, once it
+ * exited 0; its exit code when it failed, null when a signal killed it; or
+ * that it ran past its time.
+ */
+export type ResolveRouteEnd = { readonly printed: string } | { readonly exitCode: number | null } | "timed-out";
+
 /** What a shot reports when its page wouldn't load, refused or not found: the browser's error code, such as ERR_CONNECTION_REFUSED. */
 export interface PageUnreachable {
   readonly unreachable: string;
@@ -133,6 +152,13 @@ export interface Capturer {
    * and take signed in as it loads.
    */
   signIn(identity: CaptureIdentity, command: string, timeoutMs: number): Promise<SignInEnd>;
+  /**
+   * Runs `ui.resolve_route` for a route with a dynamic segment (ADR-0024) in
+   * the Product directory, with the env `ui.serve` gets, the route in
+   * `FABRIK_ROUTE`, and, when the route is viewed signed in, that Capture
+   * identity's storage state's path in `FABRIK_STORAGE_STATE`.
+   */
+  resolveRoute(route: string, command: string, timeoutMs: number, identity: CaptureIdentity | undefined): Promise<ResolveRouteEnd>;
   /**
    * Loads the shot's URL at its viewport, signed in when it says so, and
    * saves its screenshot: the HTTP status the page answered; for a
@@ -173,6 +199,9 @@ const SERVER_START_MS = 3 * 60_000;
 
 /** How long each Capture identity's sign-in command gets to run. */
 const SIGN_IN_MS = 3 * 60_000;
+
+/** How long each run of `ui.resolve_route` gets. */
+const RESOLVE_ROUTE_MS = RESOLVE_ROUTE_MINUTES * 60_000;
 
 /** How long each page gets to load. */
 const PAGE_LOAD_MS = 60_000;
@@ -271,23 +300,92 @@ async function takeShots(
 ): Promise<CaptureFailure | null> {
   const left = budget(capturer);
   const shots = shotsFor(routes, ui);
-  const serving = await serveBranch(build, ui, capturer, left, shots);
+  // A dynamic route with nothing to resolve it is never visited, so needs no sign-in.
+  const visited = ui.resolveRoute === undefined ? shots.filter(({ route }) => !hasDynamicSegment(route)) : shots;
+  const serving = await serveBranch(build, ui, capturer, left, visited);
   if (serving !== null) return serving;
-  for (const shot of shots) {
-    if (left() <= 0) return stopped(capturer, "timeout", `before ${shot.url} at ${shot.viewport.name}`);
+  const resolved = await resolveRoutes(ui, routes, capturer, left);
+  if (typeof resolved === "string") return resolved;
+  for (const planned of shots) {
+    const { route, reason, viewport, side } = planned;
+    const resolution = resolved.get(route);
+    if (resolution !== undefined && "unresolved" in resolution) {
+      const why = "unresolved-route" as const;
+      capturer.log(`Capture missed (${why}) ${route} at ${viewport.name}: ${resolution.unresolved}. It visited no page for it.`);
+      missed.push({ route, reason, viewport: viewport.name, side, url: planned.url, why, error: resolution.unresolved });
+      continue;
+    }
+    const shot: Shot = resolution === undefined ? planned : { ...planned, url: pageAt(ui.url, resolution.path), resolved: resolution.path };
+    const { image, url } = shot;
+    const resolvedTo = shot.resolved === undefined ? {} : { resolved: shot.resolved };
+    if (left() <= 0) return stopped(capturer, "timeout", `before ${url} at ${viewport.name}`);
     const status = await capturer.screenshot(shot, Math.min(PAGE_LOAD_MS, left()));
-    if (status === "timed-out") return stopped(capturer, "timeout", `loading ${shot.url} at ${shot.viewport.name}`);
+    if (status === "timed-out") return stopped(capturer, "timeout", `loading ${url} at ${viewport.name}`);
     if (status === ON_SIGN_IN) return signedOut(capturer, shot);
-    const { route, reason, viewport, side, image, url } = shot;
     if (typeof status === "object") {
       const why = `${side}-unreachable` as const;
       capturer.log(`Capture missed (${why}) ${url} at ${viewport.name}: ${status.unreachable}. It goes on to the rest.`);
-      missed.push({ route, reason, viewport: viewport.name, side, url, why, error: status.unreachable });
+      missed.push({ route, ...resolvedTo, reason, viewport: viewport.name, side, url, why, error: status.unreachable });
       continue;
     }
-    captures.push({ route, reason, viewport: viewport.name, side, status, image, ...identityOf(shot) });
+    if (shot.missesErrorPage && isErrorStatus(status)) {
+      capturer.log(`Capture missed (error-status) ${url} at ${viewport.name}: it answered ${status}, so no screenshot was kept. It goes on to the rest.`);
+      missed.push({ route, ...resolvedTo, reason, viewport: viewport.name, side, url, why: "error-status", status });
+      continue;
+    }
+    captures.push({ route, ...resolvedTo, reason, viewport: viewport.name, side, status, image, ...identityOf(shot) });
   }
   return null;
+}
+
+/** What came of resolving a route with a dynamic segment: the path to capture it at, or why it has none. */
+type Resolution = { readonly path: string } | { readonly unresolved: UnresolvedError };
+
+/**
+ * Resolves each route with a dynamic segment once, in the order chosen,
+ * through `ui.resolve_route` (ADR-0024), once the server answers and its
+ * Capture identities have signed in, each signed in as its route's identity,
+ * within what's `left` of capture's budget: each such route's resolution, or
+ * why capture stopped. Without `ui.resolve_route` none is resolved, and none
+ * is run.
+ */
+async function resolveRoutes(
+  ui: UiConfig,
+  routes: readonly ChosenRoute[],
+  capturer: Capturer,
+  left: () => number,
+): Promise<ReadonlyMap<string, Resolution> | CaptureFailure> {
+  const resolutions = new Map<string, Resolution>();
+  for (const { route } of routes.filter(({ route }) => hasDynamicSegment(route))) {
+    if (ui.resolveRoute === undefined) {
+      resolutions.set(route, { unresolved: "no-resolve-route" });
+      continue;
+    }
+    if (left() <= 0) return stopped(capturer, "timeout", `before resolving ${route}`);
+    const resolveMs = Math.min(RESOLVE_ROUTE_MS, left());
+    const ended = await capturer.resolveRoute(route, ui.resolveRoute, resolveMs, signedInAs(route, ui).signedIn?.identity);
+    // As with a sign-in: a resolve cut short by capture's own budget is capture running out of time.
+    if (ended === "timed-out" && resolveMs < RESOLVE_ROUTE_MS) return stopped(capturer, "timeout", `resolving ${route}`);
+    const resolution = resolutionOf(ended);
+    if ("path" in resolution) capturer.log(`Resolved ${route} to ${resolution.path}.`);
+    resolutions.set(route, resolution);
+  }
+  return resolutions;
+}
+
+/**
+ * What a run of `ui.resolve_route` resolved its route to: the last line it
+ * printed, so a package manager's banner above it is no matter, when that's
+ * a path with no dynamic segment left; else why it resolved nothing.
+ */
+function resolutionOf(ended: ResolveRouteEnd): Resolution {
+  if (ended === "timed-out") return { unresolved: "timed-out" };
+  if ("exitCode" in ended) return { unresolved: ended.exitCode === null ? "exit-signal" : `exit-${ended.exitCode}` };
+  const path = ended.printed.split("\n").map((line) => line.trim()).findLast((line) => line !== "") ?? "";
+  // Only a path that would read but for its dynamic segment is still-dynamic.
+  const stillDynamic = hasDynamicSegment(path) && isResolvedPath(path.replace(/[[\]<>:]/g, ""));
+  if (isResolvedPath(path)) return { path };
+  return { unresolved: stillDynamic ? "still-dynamic" : "bad-output" };
 }
 
 /**
@@ -430,8 +528,10 @@ function signedInAs(route: string, ui: UiConfig): { readonly signedIn?: SignedIn
  * Every shot of these routes: After, from the branch served at `ui.url`,
  * each signed in as its Capture identity when it has one, then Before, from
  * `ui.before_url` when there is one, of the routes viewed signed out alone,
- * since no sign-in ever reaches a deployed site (ADR-0012); each route in
- * the order chosen, at mobile then desktop.
+ * since no sign-in ever reaches a deployed site (ADR-0012), and with no
+ * dynamic segment, since a record the Sandbox resolved it to isn't there
+ * (ADR-0024); each route in the order chosen, at mobile then desktop. A
+ * dynamic route's After is at its pattern until it's resolved.
  */
 function shotsFor(routes: readonly ChosenRoute[], ui: UiConfig): Shot[] {
   const sides: [CaptureSide, string][] = [["after", ui.url]];
@@ -439,7 +539,7 @@ function shotsFor(routes: readonly ChosenRoute[], ui: UiConfig): Shot[] {
   return sides.flatMap(([side, base]) =>
     routes.flatMap(({ route, reason }, at) => {
       const signedIn = signedInAs(route, ui);
-      if (side === "before" && signedIn.signedIn !== undefined) return [];
+      if (side === "before" && (signedIn.signedIn !== undefined || hasDynamicSegment(route))) return [];
       return UI_VIEWPORTS.map((viewport) => ({
         route,
         reason,
@@ -447,6 +547,7 @@ function shotsFor(routes: readonly ChosenRoute[], ui: UiConfig): Shot[] {
         side,
         url: pageAt(base, route),
         image: `${side}-${viewport.name}-${at + 1}-${routeSlug(route)}.png`,
+        missesErrorPage: side === "after",
         ...(side === "after" ? signedIn : {}),
       }));
     }),
@@ -548,11 +649,11 @@ function summary(line: string): string {
   return `### UI evidence\n\n${line}\n`;
 }
 
-/** What build and serve never get: the 1Password step's outputs, the Claude token, and any GitHub or Actions token. */
+/** What build, serve, sign-in and the route resolver never get: the 1Password step's outputs, the Claude token, and any GitHub or Actions token. */
 const WITHHELD = /^(?:FABRIK_SECRETS|CLAUDE_CODE_OAUTH_TOKEN|GH_TOKEN|GITHUB_TOKEN|ACTIONS_\w*TOKEN\w*)$/;
 
 /**
- * The env `sandbox.build`, `ui.serve` and `ui.sign_in` run with: the runner's, with Kit
+ * The env `sandbox.build`, `ui.serve`, `ui.sign_in` and `ui.resolve_route` run with: the runner's, with Kit
  * config's `sandbox.env` over it, less anything WITHHELD, which no Product
  * code capture runs may hold.
  */

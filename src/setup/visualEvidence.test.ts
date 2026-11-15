@@ -469,6 +469,16 @@ describe("The Visual evidence skill's offers", () => {
   const skill = readFileSync(resolve(KIT, "skills", "fabrik-visual-evidence", "SKILL.md"), "utf8");
   const suggest = skill.slice(skill.indexOf("## 3. Suggest the answers"), skill.indexOf("## 4."));
 
+  it("offers ui.resolve_route when the Product's routes have dynamic segments, with its contract and an example", () => {
+    const resolve = suggest.split("\n").find((line) => line.startsWith("- `ui.resolve_route`")) ?? "";
+
+    expect(resolve).toContain("dynamic segment");
+    expect(resolve).toContain("`FABRIK_ROUTE`");
+    expect(resolve).toContain("`FABRIK_STORAGE_STATE`");
+    expect(resolve).toContain("prints");
+    expect(resolve).toMatch(/such as `[^`]+`/);
+  });
+
   it("offers production.url for ui.before_url when Kit config declares one, saying where the offer came from", () => {
     const before = suggest.split("\n").find((line) => line.startsWith("- `ui.before_url`")) ?? "";
 
@@ -476,3 +486,27 @@ describe("The Visual evidence skill's offers", () => {
     expect(before).toContain("say it came from the `production` block");
   });
 });
+
+describe("Writing ui.resolve_route", () => {
+  const config = '{\n  "operator": "jrey8343"\n}\n';
+
+  it("writes resolve_route with the rest of the ui block, on a loopback ui.url", () => {
+    const resolving = { ...answers, ui: { ...answers.ui, url: "http://localhost:4321", resolve_route: "npm run resolve-route" } };
+
+    const result = write(config, resolving);
+
+    expect(result.ok && JSON.parse(result.config).ui.resolve_route).toBe("npm run resolve-route");
+  });
+
+  it("writes nothing for a resolve_route whose ui.url isn't loopback, naming why", () => {
+    const deployed = { ...answers, ui: { ...answers.ui, url: "https://staging.clinic.example.com", resolve_route: "npm run resolve-route" } };
+
+    expect(write(config, deployed)).toEqual({
+      ok: false,
+      problems: [
+        `ui.url is "https://staging.clinic.example.com": a ui with resolve_route serves on a loopback address, such as http://localhost:4321, so a route is only ever resolved against the Sandbox's own server`,
+      ],
+    });
+  });
+});
+

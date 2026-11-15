@@ -133,3 +133,15 @@ describe("The Evidence page of a route viewed signed in", () => {
     expect(html.match(/never has a Before/g)).toHaveLength(1);
   });
 });
+
+describe("The Evidence page of a resolved route", () => {
+  it("heads the route with its pattern beside the path it was captured at, and says it has no Before", () => {
+    const resolved = shot({ route: "/patients/[patientId]", resolved: "/patients/0b7e", reason: "ticket", viewport: "mobile", side: "after", status: 200, image: "after-mobile-1-patients-patientid.png" }, 1);
+
+    const html = evidencePage([resolved], meta);
+
+    expect(html).toContain("<h2><code>/patients/[patientId]</code> resolved to <code>/patients/0b7e</code>, named by the Ticket</h2>");
+    expect(html).toContain("<p>Resolved through <code>ui.resolve_route</code> to a record on the Sandbox's own server, so it never has a Before: the production site Before is taken from doesn't hold that record.</p>");
+  });
+});
+

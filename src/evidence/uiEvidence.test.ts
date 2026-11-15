@@ -9,6 +9,7 @@ import {
   captureFailureSentence,
   evidenceMarkerIn,
   evidenceSection,
+  hasDynamicSegment,
   isUi,
   type MissedShot,
   parseCaptureResult,
@@ -931,14 +932,14 @@ describe("UI evidence of a route viewed signed in", () => {
 });
 
 describe("UI evidence of a page that wouldn't load", () => {
-  const refused = (route: string, reason: Capture["reason"], viewport: Capture["viewport"], side: Capture["side"] = "before"): MissedShot => ({
+  const refused = (route: string, reason: Capture["reason"], viewport: Capture["viewport"], side: Capture["side"] = "before", error = "ERR_CONNECTION_REFUSED"): MissedShot => ({
     route,
     reason,
     viewport,
     side,
     url: `${side === "before" ? "https://www.penrithphysio.com.au" : "http://127.0.0.1:4321"}${route}`,
     why: `${side}-unreachable`,
-    error: "ERR_CONNECTION_REFUSED",
+    error,
   });
 
   /** Production refused the browser: every After of /book and /book/waitlist taken, and no Before of /book. */
@@ -960,7 +961,7 @@ describe("UI evidence of a page that wouldn't load", () => {
 
     expect(read.ok).toBe(false);
     expect(read.ok ? [] : read.errors).toEqual([
-      "missed[0].why must be before-unreachable, its side's",
+      "missed[0].why must be before-unreachable, its side's, unresolved-route or error-status",
       "missed[0].error must be a browser error code, such as ERR_CONNECTION_REFUSED",
     ]);
   });
@@ -1023,7 +1024,7 @@ describe("UI evidence of a page that wouldn't load", () => {
     const afterRefused: CaptureResult<Capture> = {
       ...allCaptured,
       captures: allCaptured.captures.filter(({ route }) => route !== "/book/waitlist"),
-      missed: [refused("/book/waitlist", "implementer", "mobile", "after"), { ...refused("/book/waitlist", "implementer", "desktop", "after"), error: "ERR_TOO_MANY_REDIRECTS" }],
+      missed: [refused("/book/waitlist", "implementer", "mobile", "after"), refused("/book/waitlist", "implementer", "desktop", "after", "ERR_TOO_MANY_REDIRECTS")],
     };
 
     const block = reviewerEvidenceBlock({ result: afterRefused, given: reviewerImages(afterRefused.captures), head: HEAD, recorded: null });
@@ -1120,3 +1121,135 @@ describe("The shots an evidence marker records as missed", () => {
     });
   });
 });
+
+describe("Whether a route has a dynamic segment", () => {
+  it.each(["/patients/[patientId]", "/docs/[...slug]", "/docs/[[...slug]]", "/patients/<patientId>", "/patients/:patientId", "/[clinic]/today?tab=1"])("%s has one", (route) => {
+    expect(hasDynamicSegment(route)).toBe(true);
+  });
+
+  it.each(["/", "/patients", "/patients/0b7e", "/book?when=[today]", "/a:b", "/time/10:30", "/search#<top>"])("%s has none", (route) => {
+    expect(hasDynamicSegment(route)).toBe(false);
+  });
+});
+
+describe("UI evidence of a dynamic route, and of an After that answered an error page", () => {
+  const PATTERN = "/patients/[patientId]";
+  /** The Ticket's dynamic route, resolved and captured at both viewports, After only; the Implementer's /book, whose After answered 404. */
+  const resolvedResult: CaptureResult<Capture> = {
+    outcome: "captured",
+    headSha: HEAD,
+    captures: (["mobile", "desktop"] as const).map((viewport) => ({
+      route: PATTERN,
+      resolved: "/patients/0b7e",
+      reason: "ticket",
+      viewport,
+      side: "after",
+      status: 200,
+      image: `after-${viewport}-1-patients-patientid.png`,
+    })),
+    missed: (["mobile", "desktop"] as const).map((viewport) => ({
+      route: "/book",
+      reason: "implementer",
+      viewport,
+      side: "after",
+      url: "http://localhost:4321/book",
+      why: "error-status",
+      status: 404,
+    })),
+  };
+
+  /** The Ticket's dynamic route, which no ui.resolve_route resolved. */
+  const unresolvedResult = (error: string): CaptureResult<Capture> => ({
+    outcome: "failed",
+    reason: "unreachable",
+    headSha: HEAD,
+    captures: [],
+    missed: (["mobile", "desktop"] as const).map((viewport) => ({
+      route: PATTERN,
+      reason: "ticket",
+      viewport,
+      side: "after",
+      url: `http://localhost:4321${PATTERN}`,
+      why: "unresolved-route",
+      error,
+    })) as MissedShot[],
+  });
+
+  it("reads back with each capture's resolved path, and each shot missed as unresolved-route or for its error status", () => {
+    expect(parseCaptureResult(JSON.stringify(resolvedResult))).toEqual({ ok: true, result: resolvedResult });
+    expect(parseCaptureResult(JSON.stringify(unresolvedResult("exit-3")))).toEqual({ ok: true, result: unresolvedResult("exit-3") });
+  });
+
+  it("refuses a resolved path with a dynamic segment left, an unresolved Before, an unknown unresolved error, and an error status that isn't one", () => {
+    const bad = {
+      ...resolvedResult,
+      captures: [{ ...resolvedResult.captures[0], resolved: "/patients/[patientId]" }],
+      missed: [
+        { ...unresolvedResult("exit-3").missed![0], side: "before" },
+        { ...unresolvedResult("exit-3").missed![0], error: "it broke" },
+        { ...resolvedResult.missed![0], status: 200 },
+      ],
+    };
+
+    const read = parseCaptureResult(JSON.stringify(bad));
+
+    expect(read.ok ? [] : read.errors).toEqual([
+      "captures[0].resolved must be the path a dynamic route was captured at, such as /patients/0b7e, with no dynamic segment left",
+      "missed[0].side must be after for a shot missed as unresolved-route",
+      "missed[1].error must say why the route wasn't resolved: no-resolve-route, exit- and its code, exit-signal, timed-out, bad-output or still-dynamic",
+      "missed[2].status must be an HTTP error status from 400 to 599",
+    ]);
+  });
+
+  it("shows the pattern beside the path it was captured at, and an After error page as not captured, with its status", () => {
+    expect(evidenceSection(evidence(resolvedResult)).split("\n").filter((line) => line.startsWith("- "))).toEqual([
+      "- `/patients/[patientId]` resolved to `/patients/0b7e`, named by the Ticket",
+      "- `/book`, named by the Implementer. Captured: nothing. **Not captured:** After: answered 404, at mobile and desktop.",
+    ]);
+  });
+
+  it.each([
+    ["no-resolve-route", "Kit config sets no `ui.resolve_route`"],
+    ["exit-3", "`ui.resolve_route` exited 3"],
+    ["exit-signal", "`ui.resolve_route` was stopped by a signal"],
+    ["timed-out", "`ui.resolve_route` ran past its 2 minutes"],
+    ["bad-output", "`ui.resolve_route` printed no path"],
+    ["still-dynamic", "`ui.resolve_route` printed a path that still has a dynamic segment"],
+  ])("says why a route missed as %s wasn't resolved", (error, words) => {
+    expect(evidenceSection(evidence(unresolvedResult(error), { evidencePage: null })).split("\n").filter((line) => line.startsWith("- "))).toEqual([
+      `- \`/patients/[patientId]\`, named by the Ticket. Captured: nothing. **Not captured:** After: unresolved route, ${words}, at mobile and desktop.`,
+    ]);
+  });
+
+  it("records the path each resolved route was captured at in the marker, which reads it back", () => {
+    const section = evidenceSection(evidence(resolvedResult));
+
+    expect(section.split("\n").at(-1)).toBe(
+      `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/patients/[patientId]","/book"],"preview":{"is":"none"},"missed":[{"route":"/book","viewport":"mobile","side":"after"},{"route":"/book","viewport":"desktop","side":"after"}],"resolved":[{"route":"/patients/[patientId]","path":"/patients/0b7e"}]} -->`,
+    );
+    expect(evidenceMarkerIn(section)?.resolved).toEqual([{ route: PATTERN, path: "/patients/0b7e" }]);
+  });
+
+  it("reads a marker that records no resolved routes, as one an earlier release wrote, with none", () => {
+    expect(evidenceMarkerIn(evidenceSection(evidence(allCaptured)))).not.toHaveProperty("resolved");
+  });
+
+  it("names the path a resolved screenshot was captured at to the Reviewer, says it has no Before, and says After is missing for an error page", () => {
+    const block = reviewerEvidenceBlock({ result: resolvedResult, given: reviewerImages(resolvedResult.captures), head: HEAD, recorded: null });
+
+    expect(block[2]).toContain("- `fabrik-ui-evidence/after-mobile-1-patients-patientid.png`: `/patients/[patientId]` resolved to `/patients/0b7e` at mobile width");
+    expect(block[1]).toContain("A route with a dynamic segment, resolved to a record on the Sandbox's own server, has no Before");
+    expect(block[1]).toContain("After is missing for `/book`, where this branch's page answered an error page (`404`), so there's no screenshot of it.");
+  });
+
+  it("tells the Reviewer After is missing for a dynamic route that wasn't resolved", () => {
+    const partly: CaptureResult<Capture> = { ...allCaptured, missed: unresolvedResult("no-resolve-route").missed };
+
+    const block = reviewerEvidenceBlock({ result: partly, given: reviewerImages(partly.captures), head: HEAD, recorded: null });
+
+    expect(block[1]).toContain(
+      "After is missing for `/patients/[patientId]`, a route with a dynamic segment that wasn't resolved to a page (Kit config sets no `ui.resolve_route`), so there's no screenshot of it.",
+    );
+  });
+});
+

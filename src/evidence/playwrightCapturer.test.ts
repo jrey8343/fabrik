@@ -38,11 +38,11 @@ const page = (title) => "<!doctype html><title>" + title + "</title><h1>" + titl
 createServer((request, response) => {
   const path = new URL(request.url, "http://x").pathname;
   const signedIn = (request.headers.cookie ?? "").split(/;\\s*/).includes("session=good");
-  if (path === "/today" && !signedIn) {
+  if ((path === "/today" || path.startsWith("/patients/")) && !signedIn) {
     response.writeHead(302, { location: "/sign-in?next=%2Ftoday" });
     return response.end();
   }
-  const title = { "/today": "Today", "/pricing": "Pricing", "/sign-in": "Sign in" }[path];
+  const title = { "/today": "Today", "/pricing": "Pricing", "/sign-in": "Sign in", "/patients/p-1": "Patient file" }[path];
   response.writeHead(title === undefined ? 404 : 200, { "content-type": "text/html" });
   response.end(page(title ?? "Not found"));
 }).listen(Number(process.env.PORT), "localhost");
@@ -59,6 +59,18 @@ writeFileSync("sign-in-env.json", JSON.stringify(process.env));
 const [session] = process.argv.slice(2);
 const cookie = { name: "session", value: session, domain: "localhost", path: "/", expires: -1, httpOnly: true, secure: false, sameSite: "Lax" };
 writeFileSync(process.env.FABRIK_STORAGE_STATE, JSON.stringify({ cookies: [cookie], origins: [] }));
+`;
+
+/**
+ * The fixture's route resolver: writes the env it ran with beside it in the
+ * Product directory, for the test to read, then prints a banner and the
+ * patient's path, as \`npm run\` would.
+ */
+const RESOLVE_ROUTE = `
+import { writeFileSync } from "node:fs";
+writeFileSync("resolve-env.json", JSON.stringify(process.env));
+console.log("> clinic@1.0.0 resolve-route");
+console.log(process.argv[2] ?? "/patients/p-1");
 `;
 
 /** The real capturer, but for installing the browser, which the runner has, and diffing, which the fixture has no history for. */
@@ -78,6 +90,7 @@ async function aProduct(signIn: string, beforeUrl: string | null = null) {
   const out = await tempDir("fabrik-out");
   await writeFile(join(product, "server.mjs"), SERVER);
   await writeFile(join(product, "sign-in.mjs"), SIGN_IN);
+  await writeFile(join(product, "resolve-route.mjs"), RESOLVE_ROUTE);
   const port = await freePort();
   const ui: UiConfig = {
     paths: ["src/pages/**"],
@@ -91,6 +104,7 @@ async function aProduct(signIn: string, beforeUrl: string | null = null) {
       { route: "/pricing", as: null },
       { route: "/**", as: "owner" },
     ],
+    resolveRoute: "node resolve-route.mjs",
   };
   // The 1Password step's outputs, as the agent step's env holds them; capture's never does, and must not pass them on if it did.
   const runnerEnv = { ...process.env, PORT: String(port), FABRIK_SECRETS: JSON.stringify({ STRIPE_KEY: "sk_test_fixture_secret" }) };
@@ -119,6 +133,31 @@ describe("The browser error a page load failed with", () => {
     expect(browserErrorOf(new errors.TimeoutError("page.goto: Timeout 60000ms exceeded. net::ERR_ABORTED"))).toBeNull();
     expect(browserErrorOf(new Error("page.goto: Target page, context or browser has been closed"))).toBeNull();
     expect(browserErrorOf("net::ERR_CONNECTION_REFUSED")).toBeNull();
+  });
+});
+
+describe("The Playwright capturer, resolving a route", { timeout: 30_000 }, () => {
+  it("runs ui.resolve_route with the route in FABRIK_ROUTE and the env ui.serve gets, never the test secrets, and gives back what it printed", async () => {
+    const { product, capturer } = await aProduct("node sign-in.mjs good");
+
+    const ended = await capturer.resolveRoute("/patients/[patientId]", "node resolve-route.mjs /patients/p-1", 10_000, undefined);
+    const env = JSON.parse(await readFile(join(product, "resolve-env.json"), "utf8")) as Record<string, string>;
+
+    expect(ended).toEqual({ printed: "> clinic@1.0.0 resolve-route\n/patients/p-1\n" });
+    expect(env["FABRIK_ROUTE"]).toBe("/patients/[patientId]");
+    expect(env[STORAGE_STATE_ENV]).toBeUndefined();
+    expect(env["FABRIK_SECRETS"]).toBeUndefined();
+    expect(JSON.stringify(env)).not.toContain("sk_test_fixture_secret");
+  });
+
+  it.each([
+    ["its exit code when it fails", "exit 3", { exitCode: 3 }],
+    ["timed-out, stopping it, when it runs past its time", "sleep 5", "timed-out"],
+  ])("gives back %s", async (_, command, end) => {
+    const { capturer } = await aProduct("node sign-in.mjs good");
+
+    expect(await capturer.resolveRoute("/patients/[patientId]", command, 500, undefined)).toEqual(end);
+    await capturer.stop();
   });
 });
 
@@ -232,5 +271,31 @@ describe.skipIf(!hasChromium && process.env.CI === undefined)("The Playwright ca
       { status: 200, identity: "owner" },
     ]);
     expect((await filesUnder(evidenceDir)).every((file) => /^variant-a-(mobile|desktop)\.(png|webm)$/.test(file))).toBe(true);
+  });
+
+  it("resolves a dynamic route as its identity, passing that identity's storage state, and captures the path it printed", async () => {
+    const { product, capturer, input } = await aProduct("node sign-in.mjs good");
+
+    const outcome = await captureEvidence({ ...input, ticketBody: "Show `/patients/[patientId]`." }, capturer);
+    const env = JSON.parse(await readFile(join(product, "resolve-env.json"), "utf8")) as Record<string, string>;
+
+    expect(outcome).toMatchObject({ result: { outcome: "captured" } });
+    expect(outcome.kind === "recorded" && outcome.result.captures.map(({ route, resolved, status, identity }) => ({ route, resolved, status, identity }))).toEqual([
+      { route: "/patients/[patientId]", resolved: "/patients/p-1", status: 200, identity: "owner" },
+      { route: "/patients/[patientId]", resolved: "/patients/p-1", status: 200, identity: "owner" },
+    ]);
+    expect(env[STORAGE_STATE_ENV]).toMatch(/owner\.json$/);
+  });
+
+  it("keeps no screenshot of an After that answered 404, missing it with its status", async () => {
+    const { evidenceDir, capturer, input } = await aProduct("node sign-in.mjs good");
+
+    const outcome = await captureEvidence({ ...input, ticketBody: "Show `/pricing` and `/missing`." , ui: { ...input.ui!, signedInRoutes: [{ route: "/**", as: null }] } }, capturer);
+
+    expect(outcome.kind === "recorded" && outcome.result.missed?.map((shot) => `${shot.route} ${shot.why} ${"status" in shot ? shot.status : ""}`)).toEqual([
+      "/missing error-status 404",
+      "/missing error-status 404",
+    ]);
+    expect((await filesUnder(evidenceDir)).toSorted()).toEqual(["after-desktop-1-pricing.png", "after-mobile-1-pricing.png"]);
   });
 });

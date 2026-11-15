@@ -350,6 +350,10 @@ _Avoid_: PR summary, brief, report, changelog
 A named kind of user that UI evidence views a route as, signed in to the Sandbox's own server with fake credentials.
 _Avoid_: role, persona, test user
 
+**Dynamic route**:
+A route UI evidence is named with a segment that stands for a record, such as `/patients/[patientId]`, which the Product repo's route resolver turns into a concrete path on the Sandbox's own server before capture visits it. A dynamic route has no Before.
+_Avoid_: placeholder route, parameterised URL, template route
+
 **Prototype**:
 Throwaway variants of one UI route that a Design session builds on a branch that is never merged, so the Operator can choose a design by looking at it.
 _Avoid_: mockup, spike, preview
