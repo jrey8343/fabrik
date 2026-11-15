@@ -4,7 +4,7 @@
 // behind the Capturer, which does what capture does to the runner. The
 // Playwright shell (src/evidence/playwrightCapturer.ts, which
 // src/evidence/capture-main.ts runs) is the real Capturer, and tests fake it. Pure, no I/O.
-import { type CaptureIdentity, captureIdentityOf, isRoute, slug, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import { type CaptureIdentity, captureIdentityOf, slug, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
 import type { PrototypeVariant } from "../loop/designOutput.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
 import { CAPTURE_TIMEOUT_MINUTES } from "./captureTimeout.ts";
@@ -300,7 +300,9 @@ async function takeShots(
 ): Promise<CaptureFailure | null> {
   const left = budget(capturer);
   const shots = shotsFor(routes, ui);
-  const serving = await serveBranch(build, ui, capturer, left, shots);
+  // A dynamic route with nothing to resolve it is never visited, so needs no sign-in.
+  const visited = ui.resolveRoute === undefined ? shots.filter(({ route }) => !hasDynamicSegment(route)) : shots;
+  const serving = await serveBranch(build, ui, capturer, left, visited);
   if (serving !== null) return serving;
   const resolved = await resolveRoutes(ui, routes, capturer, left);
   if (typeof resolved === "string") return resolved;
@@ -315,7 +317,7 @@ async function takeShots(
     }
     const shot: Shot = resolution === undefined ? planned : { ...planned, url: pageAt(ui.url, resolution.path), resolved: resolution.path };
     const { image, url } = shot;
-    const at = shot.resolved === undefined ? {} : { resolved: shot.resolved };
+    const resolvedTo = shot.resolved === undefined ? {} : { resolved: shot.resolved };
     if (left() <= 0) return stopped(capturer, "timeout", `before ${url} at ${viewport.name}`);
     const status = await capturer.screenshot(shot, Math.min(PAGE_LOAD_MS, left()));
     if (status === "timed-out") return stopped(capturer, "timeout", `loading ${url} at ${viewport.name}`);
@@ -323,15 +325,15 @@ async function takeShots(
     if (typeof status === "object") {
       const why = `${side}-unreachable` as const;
       capturer.log(`Capture missed (${why}) ${url} at ${viewport.name}: ${status.unreachable}. It goes on to the rest.`);
-      missed.push({ route, ...at, reason, viewport: viewport.name, side, url, why, error: status.unreachable });
+      missed.push({ route, ...resolvedTo, reason, viewport: viewport.name, side, url, why, error: status.unreachable });
       continue;
     }
     if (shot.missesErrorPage && isErrorStatus(status)) {
       capturer.log(`Capture missed (error-status) ${url} at ${viewport.name}: it answered ${status}, so no screenshot was kept. It goes on to the rest.`);
-      missed.push({ route, ...at, reason, viewport: viewport.name, side, url, why: "error-status", status });
+      missed.push({ route, ...resolvedTo, reason, viewport: viewport.name, side, url, why: "error-status", status });
       continue;
     }
-    captures.push({ route, ...at, reason, viewport: viewport.name, side, status, image, ...identityOf(shot) });
+    captures.push({ route, ...resolvedTo, reason, viewport: viewport.name, side, status, image, ...identityOf(shot) });
   }
   return null;
 }
@@ -380,8 +382,10 @@ function resolutionOf(ended: ResolveRouteEnd): Resolution {
   if (ended === "timed-out") return { unresolved: "timed-out" };
   if ("exitCode" in ended) return { unresolved: ended.exitCode === null ? "exit-signal" : `exit-${ended.exitCode}` };
   const path = ended.printed.split("\n").map((line) => line.trim()).findLast((line) => line !== "") ?? "";
+  // Only a path that would read but for its dynamic segment is still-dynamic.
+  const stillDynamic = hasDynamicSegment(path) && isResolvedPath(path.replace(/[[\]<>:]/g, ""));
   if (isResolvedPath(path)) return { path };
-  return { unresolved: isRoute(path) && hasDynamicSegment(path) && !/\s/.test(path) ? "still-dynamic" : "bad-output" };
+  return { unresolved: stillDynamic ? "still-dynamic" : "bad-output" };
 }
 
 /**

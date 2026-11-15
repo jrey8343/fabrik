@@ -779,7 +779,7 @@ function readUi(ui: Reader | null | undefined): UiConfig | null {
   const signsIn = ui.isObject("sign_in");
   const signedIn = readSignIn(ui);
   const resolveRoute = ui.nullableString("resolve_route", checkResolveRouteCommand);
-  const loopback = readLoopback(ui, url, [...(signsIn ? ["sign_in"] : []), ...(typeof resolveRoute === "string" ? ["resolve_route"] : [])]);
+  const loopback = refuseUnlessLoopback(ui, url, [...(signsIn ? ["sign_in"] : []), ...(typeof resolveRoute === "string" ? ["resolve_route"] : [])]);
   if (paths === undefined || serve === undefined || url === undefined || signedIn === undefined || !loopback) return null;
   if (resolveRoute === undefined && ui.has("resolve_route")) return null;
   const resolving = typeof resolveRoute === "string" ? { resolveRoute } : {};
@@ -787,14 +787,14 @@ function readUi(ui: Reader | null | undefined): UiConfig | null {
 }
 
 /**
- * Whether `ui.url` may serve these fields, which run Product commands
+ * Whether `ui.url` may serve these fields, refusing it when it can't: they run Product commands
  * against it (ADR-0012, ADR-0024): any URL when none is set, else only a
  * loopback address, named once for them all when it isn't.
  */
-function readLoopback(ui: Reader, url: string | undefined, fields: readonly string[]): boolean {
+function refuseUnlessLoopback(ui: Reader, url: string | undefined, fields: readonly string[]): boolean {
   if (fields.length === 0 || url === undefined || isLoopback(url)) return true;
-  const what = fields.length === 1 && fields[0] === "sign_in" ? "a sign-in" : fields.length === 1 ? "a route's resolving" : "a sign-in or a route's resolving";
-  const reaches = fields.length === 1 && fields[0] === "resolve_route" ? "a route is only ever resolved against" : `${what} only ever reaches`;
+  const reaches =
+    fields.length > 1 ? "a sign-in or a route's resolving only ever reaches" : fields[0] === "sign_in" ? "a sign-in only ever reaches" : "a route is only ever resolved against";
   ui.refuse(
     `${ui.fieldName("url")} is ${JSON.stringify(url)}: a ui with ${spelled(fields, "and")} serves on a loopback address, such as http://localhost:4321, so ${reaches} the Sandbox's own server`,
   );

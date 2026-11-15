@@ -1,6 +1,6 @@
 # Release notes: Visual evidence resolves dynamic routes
 
-The notes for the minor release that lets Visual evidence capture routes with a dynamic segment, and counts placeholder routes and After error pages as missed ([#707](https://github.com/jrey8343/fabrik/issues/707), ADR-0024). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
+The notes for the minor release that lets Visual evidence capture routes with a dynamic segment, and counts unresolved dynamic routes and After error pages as missed ([#707](https://github.com/jrey8343/fabrik/issues/707), ADR-0024). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
 
 ## What changed
 

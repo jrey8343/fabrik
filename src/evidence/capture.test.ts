@@ -606,6 +606,16 @@ describe("Capturing a route with a dynamic segment", () => {
     ]);
   });
 
+  it("signs in no identity for a dynamic route without ui.resolve_route, since it's never visited", async () => {
+    const signedIn: UiConfig = { ...ui, url: "http://localhost:4321", signIn: { owner: "exit 1" }, signInPath: "/sign-in", signedInRoutes: [{ route: "/patients/**", as: "owner" }, { route: "/**", as: null }] };
+    const { capturer, calls } = runnerResolving({ printed: "/patients/0b7e" }, { signIn: async () => "failed" });
+
+    const outcome = await captureEvidence(input({ ui: signedIn, ticketBody: "Show `/patients/[patientId]`." }), capturer);
+
+    expect(calls.some((call) => call.startsWith("sign-in"))).toBe(false);
+    expect(outcome).toMatchObject({ result: { outcome: "failed", reason: "unreachable" } });
+  });
+
   it("misses an After of a resolved route that answered 404, recording the path it went to", async () => {
     const { capturer } = runnerResolving({ printed: "/patients/0b7e" }, { screenshot: async () => 404 });
 

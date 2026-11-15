@@ -165,7 +165,7 @@ const UNRESOLVED_ERROR = /^(?:no-resolve-route|exit-(?:\d{1,3}|signal)|timed-out
  * the browser; its route's dynamic segment wasn't resolved, so no page was
  * visited; or, an After, its page answered a 4xx or 5xx, so no screenshot was kept.
  */
-export type MissedShot = MissedShotOf &
+export type MissedShot = MissedShotFields &
   (
     | { readonly why: Unreachable; readonly error: string }
     | { readonly why: "unresolved-route"; readonly error: UnresolvedError }
@@ -173,7 +173,7 @@ export type MissedShot = MissedShotOf &
   );
 
 /** What every missed shot names, whatever it missed for. */
-interface MissedShotOf extends ChosenRoute {
+interface MissedShotFields extends ChosenRoute {
   readonly viewport: Viewport["name"];
   readonly side: CaptureSide;
   /** The URL capture went to, or would have gone to for an unresolved route. */
@@ -821,8 +821,7 @@ export function screenshots(count: number): string {
 function routeLine({ route, reason }: ChosenRoute, captures: readonly Capture[], missed: readonly MissedShot[]): string {
   // Kit config's rules view a route as one identity, so its first capture names it for all.
   const identity = captures.find((capture) => capture.route === route)?.identity;
-  // A route is resolved once, so the first of its shots that names a path names it for all.
-  const resolved = [...captures, ...missed].find((shot) => shot.route === route && shot.resolved !== undefined)?.resolved;
+  const resolved = resolvedPathOf(route, [...captures, ...missed]);
   // Its route may be the Implementer's, and its path the Product's command's: text that never mentions anyone.
   const named = `- ${routeWords(route, resolved, (text) => code(withoutMentions(text)))}, ${ROUTE_REASON_WORDS[reason]}${signedInWords(identity, code)}`;
   const line = named + missedWords(captures.filter((capture) => capture.route === route), missed.filter((shot) => shot.route === route));
@@ -849,6 +848,11 @@ function missedWords(captures: readonly Capture[], missed: readonly MissedShot[]
     .filter((said, at) => words.indexOf(said) === at)
     .map((said) => `${said}, at ${spelled(missed.filter((_, at) => words[at] === said).map(({ viewport }) => viewport), "and")}`);
   return `. Captured: ${took.length === 0 ? "nothing" : took.join("; ")}. **Not captured:** ${lost.join("; ")}.`;
+}
+
+/** The path a route was resolved to, from these shots: a route is resolved once, so the first that names a path names it for all. */
+function resolvedPathOf(route: string, shots: readonly (Capture | MissedShot)[]): string | undefined {
+  return shots.find((shot) => shot.route === route && shot.resolved !== undefined)?.resolved;
 }
 
 /** Why a shot was missed, as the evidence section's route line says it. */
@@ -913,7 +917,7 @@ function evidenceMarker({ run, artifact, result, preview }: UiEvidence, routes: 
   const missed = failure === "no-result" ? {} : { missed: (result.missed ?? []).map(({ route, viewport, side }) => ({ route, viewport, side })) };
   const shots = [...sideCaptures(result.captures), ...(result.missed ?? [])];
   const resolved = routes.flatMap((route) => {
-    const path = shots.find((shot) => shot.route === route && shot.resolved !== undefined)?.resolved;
+    const path = resolvedPathOf(route, shots);
     return path === undefined ? [] : [{ route, path }];
   });
   return markerLine({ run, artifact, failure, routes, preview: markerPreview(preview), ...missed, ...(resolved.length === 0 ? {} : { resolved }) });
