@@ -47,6 +47,8 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     sentBack: null,
     landedNothing: 0,
     keptBranch: null,
+    unlandedImplementRuns: null,
+    runsWithOutcome: [],
     openBlockers: [],
     openBlocking: [],
     ...overrides,

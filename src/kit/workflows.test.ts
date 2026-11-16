@@ -1669,9 +1669,20 @@ describe("The conflict check's read of the Implement jobs under way (#387)", () 
   const tick = jobIn(schedule, "tick");
   const callerTick = jobIn(readFileSync(new URL("templates/fabrik.yml", root), "utf8"), "tick");
 
-  it("gives a push to the default branch's push job a token that reads workflow runs, and no other push job", () => {
+  // And agent:implement's, whose start check reads the Implement runs still landing on the Ticket (#725).
+  it("gives a push to the default branch's push job, and agent:implement's, a token that reads workflow runs, and no other push job", () => {
     expect(jobIn(loop, "push")).toMatch(/\n    permissions:\n(?: {6}#.*\n)* {6}actions: read\n(?! {6})/);
-    expect(jobIn(loop, "push")).toContain("\n          actions-token: ${{ github.event_name == 'push' && github.token || '' }}\n");
+    expect(jobIn(loop, "push")).toContain(
+      "\n          actions-token: ${{ (github.event_name == 'push' || (github.event_name == 'issues' && github.event.label.name == 'agent:implement')) && github.token || '' }}\n",
+    );
+  });
+
+  // The Kit job routes agent:implement, so the start check it plans with reads the runs with its own token (#725).
+  it("lets the Kit job read workflow runs, beside the issue and pull request it reads, and write nothing", () => {
+    const permissions = /\n    permissions:\n((?: {6}.*\n)+)/.exec(jobIn(loop, "kit"))?.[1] ?? "";
+    const granted = permissions.split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#"));
+
+    expect(granted).toEqual(["id-token: write", "contents: read", "issues: read", "pull-requests: read", "actions: read"]);
   });
 
   it("gives the scheduled tick a token that reads workflow runs, which the caller's tick job grants", () => {

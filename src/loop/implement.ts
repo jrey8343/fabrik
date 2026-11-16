@@ -17,6 +17,7 @@ import {
   CONFLICT_RUN_MARKER,
   EMPTY_DIFF_MARKER,
   handBackMarker,
+  KEPT_BRANCH_START_AGAIN_MARKER,
   pushedHeadMarker,
   requestChangesAnswersMarker,
   REQUEST_CHANGES_RUN_EMPTY_MARKER,
@@ -83,6 +84,11 @@ export function startImplementer(
   }
   const unbuildable = whyNotBuildable(issueNumber, issue);
   if (unbuildable !== null) return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, unbuildable) };
+  // Another run on it is still landing, so this one would build the same Ticket twice (#725).
+  const underWay = unlandedRunOf(issue);
+  if (underWay !== null) {
+    return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, `#${issueNumber} has an Implement run under way (run ${underWay})`) };
+  }
   // Marked to carry on a Kept branch that's gone, it starts nothing and goes to the Operator (#536).
   if (keptBranchGone(issue.labels, issue.keptBranch)) {
     return { kind: "act", actions: [removeLabel, ...stopForGoneKeptBranch(issueNumber, operator), CHECK_DISPATCH] };
@@ -116,6 +122,18 @@ export function startImplementer(
       },
     ],
   };
+}
+
+/**
+ * Another Implement run on the Ticket that hasn't landed and hasn't posted its
+ * outcome there (#725), or null. An empty diff's, a Broken run's and a
+ * Kept-branch start-again's push job each post the outcome, then add
+ * agent:implement for the run after while that push job is still running, so
+ * such a run is done with the Ticket. A Ticket whose runs weren't read has
+ * none, so a failed read never stalls it.
+ */
+function unlandedRunOf({ unlandedImplementRuns, runsWithOutcome }: IssueSnapshot): number | null {
+  return (unlandedImplementRuns ?? []).find((run) => !runsWithOutcome.includes(run)) ?? null;
 }
 
 function listed(action: Action | null): Action[] | null {
@@ -643,9 +661,11 @@ function startAgain(
  * the Operator pushed to it, and whose commits couldn't be rebased onto the
  * new head: the Kit discards them and starts the run again on that head, as
  * it does a retry's (startAgain). It isn't an empty diff, so it uses no
- * retry, and it's silent.
+ * retry, and it's silent. Its comment is marked and links the run, so the
+ * start check reads the run as done with the Ticket while its push job, which
+ * adds agent:implement, is still running (#725).
  */
-function keptBranchStartsAgain({ issue: ticket, branch }: ImplementRunFinished, onto: string, held: HeldOn | null): Plan {
+function keptBranchStartsAgain({ issue: ticket, branch, runUrl }: ImplementRunFinished, onto: string, held: HeldOn | null): Plan {
   const head = onto.slice(0, 7);
   return {
     kind: "act",
@@ -654,9 +674,12 @@ function keptBranchStartsAgain({ issue: ticket, branch }: ImplementRunFinished, 
         kind: "comment",
         issue: ticket,
         body: [
+          KEPT_BRANCH_START_AGAIN_MARKER,
           `\`${branch}\` moved to ${head} while the Implementer worked on it, and its commits couldn't be rebased onto the new head without a conflict, so the Kit discarded them.`,
           "",
           `The run starts again on ${head}${onceReset(held)}, using no retry.${heldUntilThen(held)}`,
+          "",
+          `[The run](${runUrl})`,
         ].join("\n"),
       },
       { kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] },

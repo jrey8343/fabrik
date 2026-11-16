@@ -14,6 +14,7 @@ import {
   DESIGN_TURN_FAILED_MARKER,
   isBrokenRunComment,
   isEmptyDiffComment,
+  isKeptBranchStartAgainComment,
   LIVE_OUTCOME_MARKER,
   PROTOTYPE_FAILURE_ROUND_MARKER,
   PROTOTYPE_ROUND_MARKER,
@@ -517,6 +518,28 @@ export function countLandedNothing(comments: readonly KitComment[]): number {
   }
   return count;
 }
+
+/**
+ * The Actions runs whose outcome the Kit posted on a Ticket, from its
+ * comments (#725): each empty-diff, Broken-run or Kept-branch start-again
+ * comment links the run it is the outcome of, its last line. Only the Fabrik
+ * App's comments count (`byApp`), so nobody can end another run's hold on the
+ * Ticket by posting one.
+ */
+export function runsWithOutcomeIn(comments: readonly KitComment[]): number[] {
+  return kitCommentsIn(comments).flatMap(({ body }) => {
+    if (!isEmptyDiffComment(body) && !isBrokenRunComment(body) && !isKeptBranchStartAgainComment(body)) return [];
+    const linked = RUN_LINK.exec(body);
+    return linked === null ? [] : [Number(linked[1])];
+  });
+}
+
+/**
+ * The `[The run](…/actions/runs/<id>…)` line an outcome comment ends with.
+ * Only its last line counts, as the summary an empty diff quotes above it is
+ * agent text, which could carry a look-alike link.
+ */
+const RUN_LINK = /\[The run\]\(https?:\/\/[^)\s]*\/actions\/runs\/([0-9]+)(?:[/?#][^)\s]*)?\)\s*$/;
 
 /**
  * Where an issue's current Design session stands, from its comments oldest

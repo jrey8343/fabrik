@@ -709,6 +709,20 @@ export interface IssueSnapshot {
    * branch is gone.
    */
   readonly keptBranch: KeptBranch | null;
+  /**
+   * The Actions runs of the Implement runs that name it and haven't landed:
+   * each run's Push job hasn't finished, as Dispatch counts it in flight
+   * (#725). Null when the Actions runs weren't read, for want of a token that
+   * can read them or as the API failed, or, as for any event but
+   * agent:implement added, weren't asked for.
+   */
+  readonly unlandedImplementRuns: readonly number[] | null;
+  /**
+   * The Actions runs whose outcome the Fabrik App's comments on it posted, an
+   * empty diff, a Broken run or a Kept-branch start-again, each of which adds
+   * agent:implement for the run after while its own Push job is still running.
+   */
+  readonly runsWithOutcome: readonly number[];
   /** The open issues blocking it, by GitHub's native issue dependencies. */
   readonly openBlockers: readonly number[];
   /** The open issues it blocks. */

@@ -268,4 +268,16 @@ describe("Landing a Kept-branch start", () => {
     expect(actions[1]).toEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
     expect((actions[0] as { body: string }).body).not.toContain("<!-- fabrik:empty-diff");
   });
+
+  // Its push job adds agent:implement while it is still running, so the start check reads the run as done with the Ticket (#725).
+  it("marks its start-again comment and links its run, and the comment counts as no empty diff", () => {
+    const changes = { net: [], commits: [], rebase: { onto: "9".repeat(40), conflicted: true } };
+
+    const [comment] = actionsOf(planFor(keptRun({ changes }), snapshotOf(ticket), kitConfig()));
+
+    const body = (comment as { body: string }).body;
+    expect(body.split("\n")[0]).toBe("<!-- fabrik:kept-branch-start-again -->");
+    expect(body).toContain(`[The run](${RUN})`);
+    expect(body).toContain("The run starts again on 9999999, using no retry.");
+  });
 });
