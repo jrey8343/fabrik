@@ -1139,12 +1139,15 @@ function issueGitHub({
   body = "",
   labels = ["needs-design"],
   parent = null,
+  openPullRequests = [],
 }: {
   author?: { login: string; __typename: string } | null;
   title?: string;
   body?: string;
   labels?: string[];
   parent?: GitHubParent | null;
+  /** The agent draft PRs open for it, by number. */
+  openPullRequests?: readonly number[];
 } = {}): GitHub {
   return {
     async graphql(query: string): Promise<unknown> {
@@ -1173,7 +1176,9 @@ function issueGitHub({
                   },
             comments: { nodes: [] },
             timelineItems: { nodes: [] },
-            closedByPullRequestsReferences: { nodes: [] },
+            closedByPullRequestsReferences: {
+              nodes: openPullRequests.map((number) => ({ number, state: "OPEN", isDraft: true, headRefName: "fabrik/ticket-98", author: { __typename: "Bot" } })),
+            },
             blockedBy: { nodes: [] },
             blocking: { nodes: [] },
           },
@@ -4016,6 +4021,55 @@ describe("Gathering whether a Reviewer's Verdict's PR merges cleanly (#480)", ()
     const snapshot = await gatherSnapshot(githubReading(["CONFLICTING"]).github, repo, { kind: "pull-request-pushed", pullRequest: 50 }, null, APP_LOGIN);
 
     expect(snapshot.mergeable).toBeNull();
+  });
+});
+
+describe("Gathering whether the PR of a Review that stopped on a conflict still conflicts (#704)", () => {
+  const stopped = (failure: "merge-conflict" | "unreported-checks"): LoopEvent => ({
+    kind: "agent-run-failed",
+    role: "review",
+    issue: 98,
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    jobResult: "failure",
+    secretsStep: "success",
+    report: { failure, detail: "", checks: ["e2e"] },
+  });
+
+  /** The Ticket, its open agent draft PR #50, and that PR's mergeable state as GitHub reads it. */
+  function ticketWithConflictedPullRequest(state: string) {
+    const issues = issueGitHub({ labels: ["ready-for-agent"], openPullRequests: [50] });
+    const pullRequests = pullRequestGitHub();
+    const mergeableReads: Record<string, unknown>[] = [];
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>) {
+        if (/pullRequest\(number: \$number\) \{ mergeable \}/.test(query)) {
+          mergeableReads.push(variables);
+          return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequest: { mergeable: state } } };
+        }
+        return (query.includes("pullRequest(number: $number)") ? pullRequests : issues).graphql(query, variables);
+      },
+    } as unknown as GitHub;
+    return { github, mergeableReads };
+  }
+
+  it("gathers the Ticket's open PR and reads whether it merges cleanly against main as it is now", async () => {
+    const { github, mergeableReads } = ticketWithConflictedPullRequest("CONFLICTING");
+
+    const snapshot = await gatherSnapshot(github, repo, stopped("merge-conflict"), null, APP_LOGIN);
+
+    expect(snapshot.pullRequest).toMatchObject({ number: 50, draft: true });
+    expect(snapshot.mergeable).toEqual({ main: "d".repeat(40), mergeable: false });
+    expect(mergeableReads).toEqual([expect.objectContaining({ number: 50 })]);
+  });
+
+  it("reads neither for a Review that failed any other way", async () => {
+    const { github, mergeableReads } = ticketWithConflictedPullRequest("CONFLICTING");
+
+    const snapshot = await gatherSnapshot(github, repo, stopped("unreported-checks"), null, APP_LOGIN);
+
+    expect(snapshot.mergeable).toBeNull();
+    expect(snapshot.pullRequest).toBeNull();
+    expect(mergeableReads).toEqual([]);
   });
 });
 

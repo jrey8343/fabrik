@@ -170,6 +170,7 @@ const REPORTED: readonly ReportedFailure[] = [
   "unread-inputs",
   "unread-checks",
   "unreported-checks",
+  "merge-conflict",
   "unlandable-branch",
   "left-branch",
   "timeout",
@@ -190,6 +191,7 @@ export function readFailureReport(text: string): FailureReport {
     ...(typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? { resetsAt } : {}),
     ...(value?.["refused"] === true ? { refused: true as const } : {}),
     ...withChecks(value?.["checks"]),
+    ...withWait(value),
     ...withCommits(value?.["commits"]),
   };
 }
@@ -198,6 +200,22 @@ export function readFailureReport(text: string): FailureReport {
 function withChecks(value: unknown): { checks?: readonly string[] } {
   if (!Array.isArray(value) || !value.every((name) => typeof name === "string")) return {};
   return { checks: value };
+}
+
+/**
+ * What a Review's wait recorded of how it waited (#704): the head, whole
+ * minutes, and the PR's last mergeable state, null when unknown. Each that
+ * doesn't read is left out, as for a report that predates them.
+ */
+function withWait(value: Record<string, unknown> | null | undefined): Pick<FailureReport, "headSha" | "waitedMinutes" | "mergeable"> {
+  const headSha = value?.["headSha"];
+  const waitedMinutes = value?.["waitedMinutes"];
+  const mergeable = value?.["mergeable"];
+  return {
+    ...(typeof headSha === "string" && FULL_SHA.test(headSha) ? { headSha } : {}),
+    ...(Number.isInteger(waitedMinutes) && (waitedMinutes as number) >= 0 ? { waitedMinutes: waitedMinutes as number } : {}),
+    ...(typeof mergeable === "boolean" || mergeable === null ? { mergeable } : {}),
+  };
 }
 
 /** What a run had committed, as the report gives it; nothing if any of it doesn't read. */

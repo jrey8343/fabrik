@@ -304,8 +304,13 @@ describe("Failure notices", () => {
     const review = (report: NonNullable<Extract<LoopEvent, { kind: "agent-run-failed" }>["report"]>) =>
       planFor(failed({ role: "review", report }), snapshotOf(issue), kitConfig());
 
-    it("names a Required check that never reported, says where to look, and that re-adding the label won't change it", () => {
-      const plan = review({ failure: "unreported-checks", detail: "", checks: ["e2e"] });
+    const WAITED = "1955872".padEnd(40, "0");
+    /** What a Review's wait recorded when it gave up on #12's head (#704). */
+    const gaveUp = (checks: readonly string[], mergeable: boolean | null | "unrecorded" = true) =>
+      review({ failure: "unreported-checks", detail: "", checks, headSha: WAITED, waitedMinutes: 27, ...(mergeable === "unrecorded" ? {} : { mergeable }) });
+
+    it("on a PR that merges cleanly, says what happened and the one likely cause, then that it needs the Operator, keeping the bookkeeping hidden", () => {
+      const plan = gaveUp(["gate", "e2e"]);
 
       expect(plan).toEqual({
         kind: "act",
@@ -316,30 +321,50 @@ describe("Failure notices", () => {
       });
       expect(commentOf(plan)).toBe(
         [
-          "@operator The Review run on #12 failed: the Required check `e2e` never reported on this PR; fix its workflow's name or `paths:` filter, or take it off the default branch's required list on github.com, and out of `sandbox.checks` too if it's listed there.",
+          "@operator Review waited 27 minutes on #12's head `1955872`, and `gate` and `e2e` never started. #12 merges cleanly with `main`, so the likely cause is the workflows: check that their jobs are named `gate` and `e2e`, and that no `paths:` filter skips this PR's files.",
           "",
-          "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-adding the `agent:review` label won't change this. After fixing the workflow or the Required checks, re-add `agent:review` on this PR to run it again.",
+          "**This needs you.** Once it's fixed, re-add `agent:review` on #12.",
           "",
           `[The run](${RUN})`,
+          "<!-- This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. -->",
           '<!-- fabrik:hand-back {"kind":"infrastructure-failure","role":"review","failure":"unreported-checks"} -->',
         ].join("\n"),
       );
     });
 
-    it("names every Required check that never reported", () => {
-      const body = commentOf(review({ failure: "unreported-checks", detail: "", checks: ["e2e", "smoke"] }));
-
-      expect(body).toContain(
-        "failed: the Required checks `e2e` and `smoke` never reported on this PR; fix their workflows' names or `paths:` filters, or take them off the default branch's required list on github.com, and out of `sandbox.checks` too if they're listed there.",
+    it("names one check that never started as one workflow's job", () => {
+      expect(commentOf(gaveUp(["e2e"]))).toContain(
+        "and `e2e` never started. #12 merges cleanly with `main`, so the likely cause is the workflow: check that its job is named `e2e`, and that no `paths:` filter skips this PR's files.",
       );
     });
 
-    it("still says where to look when the report lost the names of the checks that never reported", () => {
+    it("never says re-adding the label won't help, nor points at branch protection or `sandbox.checks`", () => {
+      const body = commentOf(gaveUp(["e2e"]));
+
+      expect(body).not.toContain("won't change this");
+      expect(body).not.toContain("sandbox.checks");
+      expect(body).not.toContain("required list");
+    });
+
+    it("adds that a conflict would also stop the checks when GitHub hadn't worked out whether the PR merges cleanly, and only then", () => {
+      const unknown = commentOf(gaveUp(["e2e"], null));
+      const sentence = "GitHub hadn't yet worked out whether #12 merges cleanly; if it conflicts with `main`, that would also stop the checks.";
+
+      expect(unknown).toContain(`never started. The likely cause is the workflow: check that its job is named \`e2e\`, and that no \`paths:\` filter skips this PR's files. ${sentence}`);
+      expect(commentOf(gaveUp(["e2e"]))).not.toContain("hadn't yet worked out");
+      // A report from before #704 recorded no mergeable state, so it claims neither.
+      const older = commentOf(gaveUp(["e2e"], "unrecorded"));
+      expect(older).not.toContain("hadn't yet worked out");
+      expect(older).not.toContain("merges cleanly");
+    });
+
+    it("still says where to look when the report lost what it waited on and the checks' names", () => {
       const body = commentOf(review({ failure: "unreported-checks", detail: "" }));
 
       expect(body).toContain(
-        "failed: a Required check never reported on this PR; check the workflow names and `paths:` filters of the Required checks, those the default branch requires and those `sandbox.checks` lists.",
+        "@operator Review waited on #12, and a Required check never started. The likely cause is the workflows: check that their jobs are named as the Required checks are, and that no `paths:` filter skips this PR's files.",
       );
+      expect(body).toContain("**This needs you.** Once it's fixed, re-add `agent:review` on #12.");
     });
 
     it("names the checks still running when it gave up short of its timeout, and offers the label to wait again", () => {
