@@ -129,14 +129,16 @@ function skillLoads(steps: readonly StreamStep[]): string[] {
   });
 }
 
+/**
+ * The run's model and the skills it loaded. Never the skills its init message
+ * says it had (#739): a judge given that list picked the practices that "fit"
+ * from it, where the rubric alone names them.
+ */
 function headerLines(init: StreamMessage | null, steps: readonly StreamStep[]): string[] {
   const model = init?.["model"];
-  const had = init?.["skills"];
-  const skills = Array.isArray(had) ? had.filter((skill): skill is string => typeof skill === "string") : [];
   const loaded = skillLoads(steps);
   return [
     `Model: ${typeof model === "string" ? model : init === null ? "unknown (no init message)" : "unknown"}`,
-    `Skills it had: ${skills.length === 0 ? "none reported" : quoted(skills)}`,
     `Skills it loaded, in order: ${loaded.length === 0 ? "none" : quoted(loaded)}`,
   ];
 }

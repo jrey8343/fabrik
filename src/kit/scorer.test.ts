@@ -173,7 +173,7 @@ describe("The scoring plan for a finished run", () => {
 const RUBRICS: readonly Rubric[] = [
   { name: "efficiency", version: 1, threshold: 0.7, labels: ["clean", "repeated-calls", "dead-end-loop"], text: "How directly the run worked." },
   { name: "ticket-compliance", version: 1, threshold: 0.8, labels: ["compliant", "scope-creep", "guessed"], text: "Whether it built the Ticket." },
-  { name: "skill-use", version: 1, threshold: 0.7, labels: ["followed", "missed-skill"], text: "Whether it used its skills." },
+  { name: "test-first", version: 1, threshold: 0.8, labels: ["test-first", "test-after", "not-applicable"], text: "Whether it wrote its failing tests first." },
 ];
 
 describe("The scored run as the judge is told of it (#450)", () => {
@@ -244,7 +244,7 @@ function judgeOutput(answers: Record<string, Partial<{ score: unknown; label: un
   const base: Record<string, { score: unknown; label: unknown; rationale: unknown }> = {
     efficiency: { score: 0.9, label: "clean", rationale: "Each call moved the work on." },
     "ticket-compliance": { score: 0.85, label: "compliant", rationale: "Built what the Ticket asked." },
-    "skill-use": { score: 0.75, label: "followed", rationale: "Loaded tdd and followed it." },
+    "test-first": { score: 1, label: "test-first", rationale: "Ran each test red before its fix." },
   };
   return { answers: Object.entries(base).map(([scorer, answer]) => ({ scorer, ...answer, ...answers[scorer] })) };
 }
@@ -256,7 +256,7 @@ describe("The score file", () => {
     const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judged", judge, output: judgeOutput() } });
 
     expect(file).toEqual({
-      schema: 2,
+      schema: 3,
       kitSha: scored.kitSha,
       repo: "owner/product",
       runId: 1007,
@@ -267,14 +267,14 @@ describe("The score file", () => {
       replay: null,
       record: SCORED_PATH,
       scoredAt: SCORED_AT,
-      rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
+      rubrics: ["efficiency@1", "ticket-compliance@1", "test-first@1"],
       judge: { model: "claude-sonnet-5", record: JUDGE_RECORD },
       digestTrimmed: false,
       skip: null,
       entries: [
         { scorer: "efficiency", version: 1, threshold: 0.7, score: 0.9, pass: true, label: "clean", rationale: "Each call moved the work on." },
         { scorer: "ticket-compliance", version: 1, threshold: 0.8, score: 0.85, pass: true, label: "compliant", rationale: "Built what the Ticket asked." },
-        { scorer: "skill-use", version: 1, threshold: 0.7, score: 0.75, pass: true, label: "followed", rationale: "Loaded tdd and followed it." },
+        { scorer: "test-first", version: 1, threshold: 0.8, score: 1, pass: true, label: "test-first", rationale: "Ran each test red before its fix." },
       ],
     });
   });
@@ -283,14 +283,14 @@ describe("The score file", () => {
     const output = judgeOutput({
       efficiency: { score: 0.7, label: "repeated-calls" },
       "ticket-compliance": { score: 0.79, label: "scope-creep" },
-      "skill-use": { score: 0.69, label: "missed-skill" },
+      "test-first": { score: 0.5, label: "test-after" },
     });
     const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judged", judge, output } });
 
     expect(file.entries?.map(({ scorer, pass }) => [scorer, pass])).toEqual([
       ["efficiency", true],
       ["ticket-compliance", false],
-      ["skill-use", false],
+      ["test-first", false],
     ]);
   });
 
@@ -298,7 +298,7 @@ describe("The score file", () => {
     const output = { answers: [...judgeOutput().answers].reverse() };
     const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judged", judge, output } });
 
-    expect(file.entries?.map((entry) => entry.scorer)).toEqual(["efficiency", "ticket-compliance", "skill-use"]);
+    expect(file.entries?.map((entry) => entry.scorer)).toEqual(["efficiency", "ticket-compliance", "test-first"]);
   });
 
   describe("records a skip with its reason and no scores", () => {
@@ -310,7 +310,7 @@ describe("The score file", () => {
       const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: plan });
 
       expect(file).toEqual({
-        schema: 2,
+        schema: 3,
         kitSha: scored.kitSha,
         repo: "owner/product",
         runId: 1007,
@@ -321,7 +321,7 @@ describe("The score file", () => {
         replay: null,
         record: SCORED_PATH,
         scoredAt: SCORED_AT,
-        rubrics: ["efficiency@1", "ticket-compliance@1", "skill-use@1"],
+        rubrics: ["efficiency@1", "ticket-compliance@1", "test-first@1"],
         judge: null,
         digestTrimmed: null,
         skip: { reason: "weekly-limit", rateLimit },
@@ -368,7 +368,7 @@ describe("The score file", () => {
       const bumped = RUBRICS.map((rubric) => (rubric.name === "ticket-compliance" ? { ...rubric, version: 3 } : rubric));
       const { file } = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: bumped, scoredAt: SCORED_AT, outcome });
 
-      expect(file.rubrics).toEqual(["efficiency@1", "ticket-compliance@3", "skill-use@1"]);
+      expect(file.rubrics).toEqual(["efficiency@1", "ticket-compliance@3", "test-first@1"]);
     });
 
     it("a skip goes where the scores would have", () => {
@@ -379,12 +379,48 @@ describe("The score file", () => {
     });
   });
 
+  describe("leaves a rubric unscored when the judge says it doesn't apply (#739)", () => {
+    const fileOf = (output: unknown) =>
+      scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: { kind: "judged", judge, output } }).file;
+
+    it("writes a not-applicable answer with no score as an entry with a null score and pass, at schema 3", () => {
+      const file = fileOf(judgeOutput({ "test-first": { score: null, label: "not-applicable", rationale: "A conflict-only rebase: nothing to test." } }));
+
+      expect(file.schema).toBe(3);
+      expect(file.skip).toBeNull();
+      expect(file.entries?.[2]).toEqual({
+        scorer: "test-first",
+        version: 1,
+        threshold: 0.8,
+        score: null,
+        pass: null,
+        label: "not-applicable",
+        rationale: "A conflict-only rebase: nothing to test.",
+      });
+    });
+
+    it.each([
+      ["efficiency", "clean"],
+      ["ticket-compliance", "compliant"],
+    ])("refuses no score for %s, whose labels don't list not-applicable", (scorer, label) => {
+      expect(fileOf(judgeOutput({ [scorer]: { score: null, label: "not-applicable" } }))).toMatchObject({ skip: { reason: "judge-output-invalid" }, entries: null });
+      expect(fileOf(judgeOutput({ [scorer]: { score: null, label } }))).toMatchObject({ skip: { reason: "judge-output-invalid" }, entries: null });
+    });
+
+    it.each([
+      ["no score with another label", { score: null, label: "test-after" }],
+      ["a score with not-applicable", { score: 0.5, label: "not-applicable" }],
+    ])("refuses %s", (_, given) => {
+      expect(fileOf(judgeOutput({ "test-first": given }))).toMatchObject({ skip: { reason: "judge-output-invalid" }, entries: null });
+    });
+  });
+
   describe("refuses the judge's output as a whole when any answer is invalid", () => {
     const { answers } = judgeOutput();
 
     it.each([
       ["a score above 1", judgeOutput({ efficiency: { score: 1.2 } })],
-      ["a score below 0", judgeOutput({ "skill-use": { score: -0.1 } })],
+      ["a score below 0", judgeOutput({ "test-first": { score: -0.1 } })],
       ["a label outside the rubric's list", judgeOutput({ efficiency: { label: "sandbox-fight" } })],
       ["another rubric's label", judgeOutput({ efficiency: { label: "compliant" } })],
       ["no answer for one rubric", { answers: answers.slice(1) }],
@@ -424,7 +460,7 @@ describe("The score file", () => {
     });
 
     it("another for a changed rubric version, so re-scoring under new rubrics keeps the old file", () => {
-      const bumped = RUBRICS.map((rubric) => (rubric.name === "skill-use" ? { ...rubric, version: 2 } : rubric));
+      const bumped = RUBRICS.map((rubric) => (rubric.name === "test-first" ? { ...rubric, version: 2 } : rubric));
       const before = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: RUBRICS, scoredAt: SCORED_AT, outcome: judged });
       const after = scoreFileFor({ scored, scoredPath: SCORED_PATH, rubrics: bumped, scoredAt: SCORED_AT, outcome: judged });
 

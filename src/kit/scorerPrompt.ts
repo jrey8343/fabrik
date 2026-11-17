@@ -7,7 +7,7 @@
 // and against a schema the rubrics make. The judge job builds it in
 // src/kit/judge-main.ts. Pure, no I/O.
 import type { Rubric } from "./rubrics.ts";
-import type { JudgeAnswer, JudgedRun, JudgeOutput } from "./scorer.ts";
+import { type JudgeAnswer, type JudgedRun, type JudgeOutput, NOT_APPLICABLE } from "./scorer.ts";
 import { cutMarker, trimmedTranscriptOf } from "./trimmedTranscript.ts";
 
 /** The tag the judge's answer comes in, as the runner's structured output reads it: the judge's role. */
@@ -19,25 +19,30 @@ export type JsonSchema = Readonly<Record<string, unknown>>;
 /**
  * The JSON Schema of the judge's JudgeOutput for these rubrics: its `answers`
  * hold one answer per rubric, each with the rubric's name (`scorer`), a
- * `score` from 0 to 1, one of that rubric's labels and a `rationale`. The
- * score file checks the output the same way.
+ * `score` from 0 to 1, one of that rubric's labels and a `rationale`; or, for
+ * a rubric whose labels list `not-applicable`, that label and a null `score`.
+ * The score file checks the output the same way.
  */
 export function judgeOutputSchema(rubrics: readonly Rubric[]): JsonSchema {
-  const answer = (rubric: Rubric): JsonSchema => ({
+  const answer = (rubric: Rubric, score: JsonSchema, labels: readonly string[]): JsonSchema => ({
     type: "object",
     properties: {
       scorer: { const: rubric.name },
-      score: { type: "number", minimum: 0, maximum: 1 },
-      label: { enum: rubric.labels },
+      score,
+      label: { enum: labels },
       rationale: { type: "string" },
     } satisfies Record<keyof JudgeAnswer, JsonSchema>,
     required: ["scorer", "score", "label", "rationale"] satisfies (keyof JudgeAnswer)[],
     additionalProperties: false,
   });
+  const answers = (rubric: Rubric): JsonSchema[] => {
+    const scored = answer(rubric, { type: "number", minimum: 0, maximum: 1 }, rubric.labels.filter((label) => label !== NOT_APPLICABLE));
+    return rubric.labels.includes(NOT_APPLICABLE) ? [scored, answer(rubric, { type: "null" }, [NOT_APPLICABLE])] : [scored];
+  };
   return {
     type: "object",
     properties: {
-      answers: { type: "array", items: { anyOf: rubrics.map(answer) }, minItems: rubrics.length, maxItems: rubrics.length },
+      answers: { type: "array", items: { anyOf: rubrics.flatMap(answers) }, minItems: rubrics.length, maxItems: rubrics.length },
     } satisfies Record<keyof JudgeOutput, JsonSchema>,
     required: ["answers"] satisfies (keyof JudgeOutput)[],
     additionalProperties: false,
@@ -148,7 +153,9 @@ export function judgePrompt({ transcript, ticket, run, brief, rubrics }: JudgePr
     `When you have scored every rubric, end your reply with exactly one \`<${JUDGE_OUTPUT_TAG}>\` tag holding a JSON object, and nothing after it. Its \`answers\` holds one answer per rubric, in the order above:`,
     [
       "- `scorer`: the rubric's name, as its heading gives it.",
-      "- `score`: a number from 0 to 1, on the rubric's scale.",
+      rubrics.some((rubric) => rubric.labels.includes(NOT_APPLICABLE))
+        ? `- \`score\`: a number from 0 to 1, on the rubric's scale; or null, with the label \`${NOT_APPLICABLE}\`, for a rubric whose labels list it and that says it doesn't apply to the run.`
+        : "- `score`: a number from 0 to 1, on the rubric's scale.",
       "- `label`: exactly one of that rubric's labels, picked as the rubric says.",
       "- `rationale`: one line saying why, pointing at the tool calls (`#n`) or the text that show it.",
     ].join("\n"),

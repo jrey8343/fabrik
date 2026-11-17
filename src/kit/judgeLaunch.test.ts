@@ -8,7 +8,7 @@ import { JUDGE_OUTPUT_TAG } from "./scorerPrompt.ts";
 describe("The judge's answer, read from its one reply", () => {
   const rubrics: readonly Rubric[] = [
     { name: "efficiency", version: 1, threshold: 0.7, labels: ["clean", "repeated-calls"], text: "How directly the run worked." },
-    { name: "skill-use", version: 1, threshold: 0.7, labels: ["followed", "missed-skill"], text: "Whether it used its skills." },
+    { name: "test-first", version: 1, threshold: 0.8, labels: ["test-first", "test-after", "not-applicable"], text: "Whether it wrote its failing tests first." },
   ];
   const answer = (scorer: string, label: string) => ({ scorer, score: 0.8, label, rationale: "Why." });
   const check = (value: unknown) => judgeOutput(rubrics).schema["~standard"].validate(value);
@@ -18,16 +18,25 @@ describe("The judge's answer, read from its one reply", () => {
   });
 
   it("takes an answer per rubric, each with one of its labels", async () => {
-    const output = { answers: [answer("efficiency", "clean"), answer("skill-use", "followed")] };
+    const output = { answers: [answer("efficiency", "clean"), answer("test-first", "test-first")] };
 
     expect(await check(output)).toEqual({ value: output });
   });
 
+  it("takes no score with not-applicable for a rubric that lists it, and refuses it for one that doesn't (#739)", async () => {
+    const notApplicable = (scorer: string) => ({ scorer, score: null, label: "not-applicable", rationale: "A rebase alone." });
+    const output = { answers: [answer("efficiency", "clean"), notApplicable("test-first")] };
+
+    expect(await check(output)).toEqual({ value: output });
+    expect(await check({ answers: [notApplicable("efficiency"), answer("test-first", "test-first")] })).toHaveProperty("issues");
+  });
+
   it("refuses an answer the score file would refuse, saying what each rubric owes", async () => {
-    const result = await check({ answers: [answer("efficiency", "clean"), answer("skill-use", "clean")] });
+    const result = await check({ answers: [answer("efficiency", "clean"), answer("test-first", "clean")] });
     const issues = "issues" in result && result.issues !== undefined ? result.issues.map((issue) => issue.message).join("\n") : "";
 
-    expect(issues).toMatch(/`efficiency`: one of `clean`, `repeated-calls`[\s\S]*`skill-use`: one of `followed`, `missed-skill`/);
+    expect(issues).toMatch(/`efficiency`: one of `clean`, `repeated-calls`\n/);
+    expect(issues).toMatch(/`test-first`: one of `test-first`, `test-after`, `not-applicable`, with a `score` of null for `not-applicable` alone/);
   });
 
   // A malformed answer fails the judge (missing-output), which the score file records as judge-output-invalid.

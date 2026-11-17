@@ -47,9 +47,9 @@ describe("A rubric file", () => {
 });
 
 describe("The Kit's Scorer rubrics", () => {
-  it("are Efficiency, Ticket compliance and Skill use, each with a version, a pass threshold, its labels and its text", async () => {
+  it("are Efficiency, Ticket compliance and Test-first, each with a version, a pass threshold, its labels and its text", async () => {
     const rubrics = await loadRubrics();
-    expect(rubrics.map((rubric) => rubric.name)).toEqual(["efficiency", "ticket-compliance", "skill-use"]);
+    expect(rubrics.map((rubric) => rubric.name)).toEqual(["efficiency", "ticket-compliance", "test-first"]);
     for (const rubric of rubrics) {
       expect(Number.isInteger(rubric.version) && rubric.version >= 1).toBe(true);
       expect(rubric.threshold).toBeGreaterThanOrEqual(0);
@@ -79,6 +79,23 @@ describe("The Kit's Scorer rubrics", () => {
     expect(compliance?.text).toMatch(/never scope creep/);
     expect(compliance?.text).toMatch(/conflict-only run .*rebase/);
     expect(compliance?.text).not.toContain("judge that work against the Ticket,");
+  });
+
+  it("give Test-first version 1 a pass line of 0.8, and the labels test-first, test-after, no test, fix before cause and not applicable", async () => {
+    const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
+    expect(testFirst).toMatchObject({ version: 1, threshold: 0.8, labels: ["test-first", "test-after", "no-test", "fix-before-cause", "not-applicable"] });
+  });
+
+  // #739: it scores the practice, never the Skill call, and the rubric alone names the practices, the same in every Product repo.
+  it("judge Test-first on the practice, never on a Skill call or the skills the run had, and say when no practice applies", async () => {
+    const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
+    expect(testFirst?.text).toMatch(/failing test before the code that passes it/);
+    expect(testFirst?.text).toMatch(/each finding before its fix/);
+    expect(testFirst?.text).toMatch(/cause found before the fix/);
+    expect(testFirst?.text).toMatch(/Calling the Skill tool counts neither for nor against/);
+    expect(testFirst?.text).toMatch(/Running the build and the tests before finishing isn't scored/);
+    expect(testFirst?.text).toMatch(/`score` null/);
+    expect(testFirst?.text).not.toMatch(/init message/);
   });
 
   it("give Efficiency the labels clean, repeated calls, re-reads, dead-end loop and Sandbox fight", async () => {
@@ -134,5 +151,9 @@ describe("The rubric version guard", () => {
 
   it("passes the Kit's rubrics against the hashes the Kit recorded for their versions", async () => {
     expect(rubricVersionErrors(await loadRubrics(), RUBRIC_HASHES)).toEqual([]);
+  });
+
+  it("keeps the hash of a rubric the Kit no longer has, so no version of it is reused and its score files still read under its name", () => {
+    expect(Object.keys(RUBRIC_HASHES)).toEqual(expect.arrayContaining(["skill-use@1", "test-first@1"]));
   });
 });

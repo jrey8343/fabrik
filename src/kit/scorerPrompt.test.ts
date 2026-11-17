@@ -16,11 +16,11 @@ const rubrics: readonly Rubric[] = [
     text: "Judge how directly the run got there.\n\n- `clean`: no waste.\n- `re-reads`: files read again.",
   },
   {
-    name: "skill-use",
+    name: "test-first",
     version: 1,
-    threshold: 0.7,
-    labels: ["followed", "missed-skill"],
-    text: "Judge whether the run loaded the skills that fit.",
+    threshold: 0.8,
+    labels: ["test-first", "test-after", "not-applicable"],
+    text: "Judge whether the run wrote its failing tests first.",
   },
 ];
 
@@ -66,12 +66,12 @@ function transcriptOf(prompt: string): string {
 }
 
 describe("The judge's output schema", () => {
-  it("holds one answer per rubric, each naming its rubric, a score from 0 to 1, one of that rubric's labels and a rationale", () => {
-    const answer = (scorer: string, labels: string[]) => ({
+  it("holds one answer per rubric, each naming its rubric, a score from 0 to 1, one of that rubric's labels and a rationale, or no score with not-applicable where the rubric lists it", () => {
+    const answer = (scorer: string, labels: string[], score: object = { type: "number", minimum: 0, maximum: 1 }) => ({
       type: "object",
       properties: {
         scorer: { const: scorer },
-        score: { type: "number", minimum: 0, maximum: 1 },
+        score,
         label: { enum: labels },
         rationale: { type: "string" },
       },
@@ -84,7 +84,13 @@ describe("The judge's output schema", () => {
       properties: {
         answers: {
           type: "array",
-          items: { anyOf: [answer("efficiency", ["clean", "re-reads"]), answer("skill-use", ["followed", "missed-skill"])] },
+          items: {
+            anyOf: [
+              answer("efficiency", ["clean", "re-reads"]),
+              answer("test-first", ["test-first", "test-after"]),
+              answer("test-first", ["not-applicable"], { type: "null" }),
+            ],
+          },
           minItems: 2,
           maxItems: 2,
         },
@@ -108,13 +114,22 @@ describe("The judge prompt", () => {
     }
   });
 
-  it("gives the run's model, the skills its init had, and each Skill load in place", () => {
+  // #739: so the judge never picks practices from the skills the run had.
+  it("gives the run's model and each Skill load in place, never the skills its init had", () => {
     const { prompt } = judgePrompt({ transcript: shortRun, ticket, rubrics });
 
     expect(prompt).toContain("Model: claude-opus-5-5");
-    expect(prompt).toContain("Skills it had: `tdd`, `diagnose`");
+    expect(prompt).not.toContain("Skills it had");
+    expect(prompt).not.toContain("`diagnose`");
     expect(prompt).toContain("Skills it loaded, in order: `tdd`");
     expect(prompt).toMatch(/^#1 Skill \{"skill":"tdd"\}\n#1 result: Launching skill: tdd$/m);
+  });
+
+  it("asks for no score, with the label not-applicable, only where a rubric lists it (#739)", () => {
+    expect(judgePrompt({ transcript: shortRun, ticket, rubrics }).prompt).toContain(
+      "- `score`: a number from 0 to 1, on the rubric's scale; or null, with the label `not-applicable`, for a rubric whose labels list it and that says it doesn't apply to the run.",
+    );
+    expect(judgePrompt({ transcript: shortRun, ticket, rubrics: rubrics.slice(0, 1) }).prompt).toContain("- `score`: a number from 0 to 1, on the rubric's scale.\n");
   });
 
   it("marks the text and tool calls a subagent gave with the call that started it", () => {
@@ -144,7 +159,6 @@ describe("The judge prompt", () => {
     const { prompt } = judgePrompt({ transcript: shortRun.filter((l) => !l.includes('"init"')).slice(2), ticket, rubrics });
 
     expect(prompt).toContain("Model: unknown (no init message)");
-    expect(prompt).toContain("Skills it had: none reported");
     expect(prompt).toContain("Skills it loaded, in order: none");
   });
 

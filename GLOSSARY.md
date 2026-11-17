@@ -373,8 +373,12 @@ The durable account of one AFK agent run in one role: its model, cost, outcome a
 _Avoid_: run log, telemetry, step summary
 
 **Scorer**:
-A Kit-owned rubric that a judge model applies to one finished run's transcript, scoring 0–1 how the run worked, never what it built.
+A Kit-owned rubric that a judge model applies to one finished run's transcript, scoring 0–1 how the run worked, or saying the rubric doesn't apply to it, never what it built.
 _Avoid_: eval, grader, judge
+
+**Test-first**:
+The Scorer that judges whether a run wrote a failing test before the code that passes it, one for each finding before its fix on a Retry or Request-changes run, and found the cause of a red check it didn't understand before fixing it. A run neither practice applies to is not applicable and goes unscored. Calling a skill counts neither way.
+_Avoid_: skill use, TDD score
 
 **Human touch**:
 Each time the Operator steps into a Ticket's path between Dispatch and merge: a push to its branch, a Request changes, a Retry or Step-up they asked for, or a Pairing session or Operator step on it. The merge, Design-session answers and Operator comments are not touches.

@@ -3617,10 +3617,10 @@ describe("the Weekly summary", () => {
       );
       if (result.kind !== "summary") throw new Error("expected a summary");
       expect(result.summary.scores.thisWeek.rubrics).toEqual([
-        { scorer: "efficiency", version: 1, runsScored: 1, medianScore: 0.4, passing: 0 },
-        { scorer: "efficiency", version: 2, runsScored: 1, medianScore: 0.9, passing: 1 },
-        { scorer: "ticket-compliance", version: 1, runsScored: 1, medianScore: 1, passing: 1 },
-        { scorer: "skill-use", version: 1, runsScored: 1, medianScore: 0.5, passing: 0 },
+        { scorer: "efficiency", version: 1, runsScored: 1, notApplicable: 0, medianScore: 0.4, passing: 0 },
+        { scorer: "efficiency", version: 2, runsScored: 1, notApplicable: 0, medianScore: 0.9, passing: 1 },
+        { scorer: "ticket-compliance", version: 1, runsScored: 1, notApplicable: 0, medianScore: 1, passing: 1 },
+        { scorer: "skill-use", version: 1, runsScored: 1, notApplicable: 0, medianScore: 0.5, passing: 0 },
       ]);
     });
 
@@ -3724,6 +3724,50 @@ describe("the Weekly summary", () => {
             "| Ticket compliance v1: passing | 50% | – | – |",
           ].join("\n"),
         );
+      });
+
+      // #739: a run Test-first doesn't apply to goes unscored, so it never sits in the median or the share passing.
+      describe("with Test-first runs it doesn't apply to", () => {
+        const testFirst = (score: number | null) =>
+          aScoreEntry({ scorer: "test-first", threshold: 0.8, score, pass: score === null ? null : score >= 0.8, label: score === null ? "not-applicable" : "test-first" });
+        const testFirstWeek = (...scores: (number | null)[]) =>
+          input({
+            records: scores.map((_, i) => aRunRecord({ runId: i + 1, endedAt: "2026-11-04T00:00:00Z" })),
+            scoreFiles: scores.map((score, i) => aScoreFile({ runId: i + 1, rubrics: ["test-first@1"], entries: [testFirst(score)] })),
+          });
+
+        it("leaves them out of its runs scored, median score and share passing, counting them on a row after runs scored", () => {
+          expect(bodyOf(testFirstWeek(1, 0, null))).toContain(
+            [
+              "| Test-first v1: runs scored | 2 | 0 | +2 |",
+              "| Test-first v1: not applicable | 1 | 0 | +1 |",
+              "| Test-first v1: median score | 0.50 | – | – |",
+              "| Test-first v1: passing | 50% | – | – |",
+            ].join("\n"),
+          );
+        });
+
+        it("shows no median or share passing in a week where it applied to no run", () => {
+          expect(bodyOf(testFirstWeek(null))).toContain(
+            [
+              "| Test-first v1: runs scored | 0 | 0 | 0 |",
+              "| Test-first v1: not applicable | 1 | 0 | +1 |",
+              "| Test-first v1: median score | – | – | – |",
+              "| Test-first v1: passing | – | – | – |",
+            ].join("\n"),
+          );
+        });
+
+        it("still shows a week's Skill use scores, from before Test-first, under Skill use v1, with no not-applicable row", () => {
+          const body = bodyOf(
+            input({
+              records: [aRunRecord({ runId: 1 })],
+              scoreFiles: [aScoreFile({ runId: 1, rubrics: ["skill-use@1"], entries: [aScoreEntry({ scorer: "skill-use", score: 0.75, label: "followed" })] })],
+            }),
+          );
+          expect(body).toContain(["| Skill use v1: runs scored | 1 | 0 | +1 |", "| Skill use v1: median score | 0.75 | – | – |"].join("\n"));
+          expect(body).not.toContain("Skill use v1: not applicable");
+        });
       });
 
       it("shows what scoring cost and its share of the cost, this week and last week, and how many judge runs it leaves out", () => {
@@ -3895,7 +3939,7 @@ describe("the Weekly summary", () => {
       );
       expect(summary.scores.thisWeek).toEqual({
         scoreFiles: 1,
-        rubrics: [{ scorer: "efficiency", version: 1, runsScored: 1, medianScore: 0.8, passing: 1 }],
+        rubrics: [{ scorer: "efficiency", version: 1, runsScored: 1, notApplicable: 0, medianScore: 0.8, passing: 1 }],
         skips: { "weekly-limit": 0, "no-transcript": 0, "infrastructure-failure": 0, "judge-failed": 0, "judge-output-invalid": 0 },
       });
     });
