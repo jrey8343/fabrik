@@ -592,7 +592,7 @@ describe("Starting Triage", () => {
           role: "triage",
           issue: 7,
           model: "claude-opus-5-5",
-          effort: null,
+          effort: "medium",
           timeoutMinutes: 10,
           subscription: "Claude token",
         },

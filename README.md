@@ -20,7 +20,7 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/skills/bump.ts` decides the weekly skills bump PR (`.github/workflows/skills-bump.yml`), with the upstream diff in its body; `src/skills/bump-main.ts` is its step. The same planner decides a Product repo's bump PRs for its own Skills sources, which `src/skills/sourceBumps.ts` pushes from the scheduled tick (`src/skills/source-bumps-main.ts`, gated by `src/skills/source-bumps-due.ts`).
 - `src/release/` checks that each release pins Sandcastle, the Claude Code CLI and Playwright at exact versions, which Dependabot bumps (`.github/dependabot.yml`). See [docs/releasing.md](docs/releasing.md) for the release process.
 - `src/kit/jobs.ts` is the Kit job's step: it checks the Kit config and the caller workflow's pins, asks the Loop rules core what the event calls for, and routes it to an agent job (when the plan starts an agent run), to the push job, or nowhere. The Kit job's last step does nothing, and its name is one line of JSON saying what the job routed, held and declined included (`src/kit/kitSaid.ts`).
-- `prompts/` holds the Kit's agent prompts, and `prompts/scorers/` the Scorers' versioned rubrics (Efficiency, Ticket compliance and Skill use), which `src/kit/kitFiles.ts` reads and `src/kit/rubrics.ts` parses. A rubric changed without a version bump fails its tests' version guard. The `run-judge` action has the Kit's fixed judge model apply them to a finished Implement run's transcript, with no tools and no write credential (`src/kit/judge-main.ts`), and the `write-score-record` action writes the score file and the judge's own Run record to `fabrik-runs` (`src/kit/score-record-main.ts`), which, like `src/main.ts`, imports no runtime dependency: a test holds every program an action runs without `npm ci` to that. `loop.yml`'s judge job (`score`) and score-record job run them.
+- `prompts/` holds the Kit's agent prompts, and `prompts/scorers/` the Scorers' versioned rubrics (Efficiency, Ticket compliance and Skill use), which `src/kit/kitFiles.ts` reads and `src/kit/rubrics.ts` parses. A rubric changed without a version bump fails its tests' version guard. The `run-judge` action has the Kit's fixed judge model, at its fixed `medium` effort, apply them to a finished Implement run's transcript, with no tools and no write credential (`src/kit/judge-main.ts`), and the `write-score-record` action writes the score file and the judge's own Run record to `fabrik-runs` (`src/kit/score-record-main.ts`), which, like `src/main.ts`, imports no runtime dependency: a test holds every program an action runs without `npm ci` to that. `loop.yml`'s judge job (`score`) and score-record job run them.
 - `.github/workflows/loop.yml` is the reusable workflow a Product repo calls. It holds wiring only. The steps its jobs share are composite actions in `.github/actions/`: `prepare-agent` readies an agent job (installs the Kit, fetches the skills, and reads the agent's inputs through `src/agent/inputs.ts`), and `run-loop` runs the Loop as the Fabrik App. After it, the push job's `write-run-record` writes the run's Run record and transcript to the `fabrik-runs` store (`src/kit/runRecord.ts`, `src/kit/recordWriter.ts`, ADR-0009), with the store token its `store-token` action mints, as `write-score-record` does. It never fails the push job, and a Product whose Operator hasn't set up `fabrik-runs` gets one step-summary line saying so. For a record in the store, the same step runs the Scorers' scoring plan (`src/kit/scorer.ts`, `src/kit/scoreRecord.ts`): it writes a skipped run's score file itself, and for a picked run the judge job (`score`) and then the score-record job, the judge run's own push job, run after the push job. Nothing in the Loop waits on them, and Dispatch never counts the judge job as an Implement run.
 - `.github/workflows/schedule.yml` is the reusable scheduled Tick the caller workflow runs hourly, for the Loop's time-based rules (closing the weekly-limit issue after its reset and, with Subscription rotation on, resuming the runs held until then, opening the week's pending Audit and pending Retro, and taking the Replays' next step), a Dispatch check and a Design queue check, once a week the Product repo's skills bumps, and in a job of its own the Monitor. Any run of it closes the repo's open Dead-tick issue (`deadTickClosed` in `src/loop/kitIssues.ts`), naming the release it ran on. Like the push job, it never touches Product code.
 - `src/monitor/` holds the **Monitor**, which the scheduled tick runs hourly in its own job, with no model call and no Run record: `core.ts` is the pure Monitor core (what it files, rewrites, holds and closes, and the step summary's lines), `redMain.ts` its red-main part, `issues.ts` what both parts share of a Monitor issue and its body, `sentry.ts` the pure Sentry translator, `sentryApi.ts` the Sentry API reads, and `main.ts` the thin program that gathers the facts, with the GitHub reads in `src/github/monitorFacts.ts`, and applies the plan. `errors-set.ts` is the job's gate, so the Sentry token loads only when the Kit config sets `monitor.errors`. See `monitor` in the [Kit config](#kit-config).
@@ -402,42 +402,42 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
   "roles": {
     "triage": {
       "model": "claude-opus-5-5",
-      "effort": null,
+      "effort": "medium",
       "timeout_minutes": 10
     },
     "design": {
       "model": "claude-opus-5-5",
-      "effort": null,
+      "effort": "medium",
       "timeout_minutes": 30
     },
     "implement": {
       "model": "claude-sonnet-5-5",
-      "effort": null,
+      "effort": "medium",
       "timeout_minutes": 60
     },
     "review": {
       "model": "claude-opus-5-5",
-      "effort": null,
+      "effort": "medium",
       "timeout_minutes": 30
     },
     "audit": {
       "model": "claude-opus-5-5",
-      "effort": null,
+      "effort": "medium",
       "timeout_minutes": 45
     },
     "retro": {
       "model": "claude-opus-5-5",
-      "effort": null,
+      "effort": "medium",
       "timeout_minutes": 45
     },
     "research": {
       "model": "claude-opus-5-5",
-      "effort": null,
+      "effort": "medium",
       "timeout_minutes": 30
     },
     "digest": { "timeout_minutes": 10 },
     "dispatch": { "timeout_minutes": 10 },
-    "step_up": { "model": "claude-opus-5-5", "effort": null }
+    "step_up": { "model": "claude-opus-5-5", "effort": "medium" }
   },
   "max_in_flight": 2,
   "caps": {
@@ -459,7 +459,7 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
 }
 ```
 
-- Leave a field out to take its default. `null` is accepted only where the default is `null` (the Sandbox commands, `effort`, `monitor.errors`, `operator`, `ui`, `ui.before_url`, `preview`, `preview.url`, `production`, `production.environment` and `time_zone`), and in `audit.day` and `retro.day`, where it turns the Audit or the Retro off. A `null` effort means the Claude Code CLI's default; otherwise set it to `low`, `medium`, `high`, `xhigh` or `max`.
+- Leave a field out to take its default. `null` is accepted only where the default is `null` (the Sandbox commands, `monitor.errors`, `operator`, `ui`, `ui.before_url`, `preview`, `preview.url`, `production`, `production.environment` and `time_zone`), and in `audit.day` and `retro.day`, where it turns the Audit or the Retro off. Every role's `effort` defaults to `medium`, named outright so each Run record says the level it ran at and a Claude Code upgrade can't change it unseen; set it to `low`, `medium`, `high`, `xhigh` or `max`, or to `null` to pass no `--effort` and take the Claude Code CLI's default.
 - The Sandbox commands, each skipped when `null`:
   - `sandbox.setup` readies the runner: tools, services and stubs (daemonise any it starts). It runs before the agent starts in every run that runs the Product's code: an Implement run (first, Retry, Step-up and Request-changes alike), a Replay arm's Implement run, Triage, and every turn of an async Design session, a prototype turn included. Replay's gates run it too.
   - `sandbox.build` installs the Product's dependencies and builds it. It runs after `sandbox.setup`, before the agent starts, in every run that builds a branch: an Implement run, a Replay arm's Implement run and a prototype turn. Their prompts give it to the agent to run again after changing the dependencies. Replay's gates run it after `sandbox.setup`, and UI evidence and Prototype capture run it before `ui.serve`.
@@ -476,9 +476,9 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
 - `monitor` says what the Monitor watches. It files issues with the `fabrik:monitor` label and no state label, so Intake gives them `needs-triage`, except its Sentry token issue, which is `ready-for-human`. It never reopens them, and its only comments are the notes it closes its red-main issue and its Sentry token issue with. An invalid `monitor` block is a Kit config error like any other. Each source it can't read yet, for a setup step not done, is a quiet note in the hourly tick's step summary, never a failed run.
   - `monitor.errors` is where it reads production errors. `null`, the default, leaves them off. To turn them on, set it to `{ "provider": "sentry", "org": "<org slug>", "project": "<project slug>" }`, then run Setup again: while 1Password lacks the Sentry token, it walks the wizard's Sentry stage to store it. `provider` takes only `sentry`, and `org` and `project` are the slugs in the project's Sentry URL. Once the Monitor has filed an issue for a Sentry group, a token Sentry rejects (with a `::warning`) or a `Sentry token` item that goes missing gets one "Rotate the Sentry token" issue, `ready-for-human` and assigned to the Operator, which the Monitor closes itself on the first tick that reads Sentry again. `url` (default `https://sentry.io`) points it at another Sentry region or a Sentry-compatible host such as GlitchTip, and must be `https://`, since the token is sent there. `min_events` (default 3) is how many events in 24 hours an unresolved `error` group needs before it's filed; a `fatal` group needs none. Each qualifying group gets one issue, whose stats block the Monitor rewrites in place while it's open. A group that comes back after its issue was closed as completed gets a new issue, "Regressed from #n"; one closed as not planned or as a duplicate, or labelled `wontfix`, is never filed again. The issue quotes only Sentry's title, culprit, counts, release and in-app frames (file, line and function), never request data, breadcrumbs, user context, tags or variables.
   - `monitor.red_main` (default `true`) has the Monitor file one issue while the default branch's newest decided commit is red, and close it itself, with a "green at" note, once the newest decided commit is green. Set it to `false` to turn it off. It needs the Fabrik App's Checks: read, and at least one of the checks it reads running on pushes to the default branch: the Required checks `sandbox.checks` lists when it lists any, else every check but those of Fabrik's own `loop` and `tick` jobs. A commit is decided once the checks it reads have all finished and one failed or timed out (red), or none did and one passed (green); cancelled, skipped and neutral results decide nothing. This is the Monitor's own question, whether the default branch is healthy, not the Review's: a pull request's skipped or neutral Required check has passed. A red-main issue the Operator closes stays closed until the default branch is seen green.
-- `audit.day` is the UTC day of the week the Audit is due, `"monday"` to `"sunday"` (default `"sunday"`, so it's open by Monday's Weekly summary), or `null` to turn the Audit off in this repo. `roles.audit` sets the Auditor's model, effort and timeout like any role: by default the Reviewer's frontier model, Opus 5.5, with the CLI's effort and 45 minutes. See [Audit](#audit).
-- `retro.day` is the UTC day of the week the Retro is due, `"monday"` to `"sunday"` (default `"saturday"`, a day before the Audit's default, so the two frontier runs never share an hour and both are open by Monday's Weekly summary), or `null` to turn the Retro off in this repo. `retro` takes no other field. `roles.retro` sets the Retro's model, effort and timeout like any role: by default the Reviewer's frontier model, Opus 5.5, with the CLI's effort and 45 minutes, within which its evidence job runs too. See [Retro](#retro).
-- `roles.research` sets the Researcher's model, effort and timeout like any role: by default Opus 5.5, with the CLI's effort and 30 minutes. See [Maps](#maps).
+- `audit.day` is the UTC day of the week the Audit is due, `"monday"` to `"sunday"` (default `"sunday"`, so it's open by Monday's Weekly summary), or `null` to turn the Audit off in this repo. `roles.audit` sets the Auditor's model, effort and timeout like any role: by default the Reviewer's frontier model, Opus 5.5, at `medium` effort and 45 minutes. See [Audit](#audit).
+- `retro.day` is the UTC day of the week the Retro is due, `"monday"` to `"sunday"` (default `"saturday"`, a day before the Audit's default, so the two frontier runs never share an hour and both are open by Monday's Weekly summary), or `null` to turn the Retro off in this repo. `retro` takes no other field. `roles.retro` sets the Retro's model, effort and timeout like any role: by default the Reviewer's frontier model, Opus 5.5, at `medium` effort and 45 minutes, within which its evidence job runs too. See [Retro](#retro).
+- `roles.research` sets the Researcher's model, effort and timeout like any role: by default Opus 5.5, at `medium` effort and 30 minutes. See [Maps](#maps).
 - `roles.digest` sets the Digest writer's model, effort and time limit. Left out, its model and effort are the repo's own `roles.review`, whatever that is set to, and its time limit is 10 minutes, so the block above names only the time limit. `digest.enabled` (default `true`) is the Digest's switch: set it to `false` and a pass opens the Merge gate itself, with no Digest, and `agent:digest` is declined, with one line saying so. See [Digest](#digest).
 - `subscriptions` lists the Subscriptions the Kit runs agents on, each the name of an item in the `Fabrik` 1Password vault that holds that Claude account's token, as `claude setup-token` gives it. The default is the one V1 item, `Claude token`. List one and rotation is off: every run uses it, as before. List two or more, such as `["Claude token", "Claude token 2"]`, and Subscription rotation is on. Setup lists the second one itself: when the Operator says yes to a second Subscription, in the run that installs the Kit or any later one, Setup walks the wizard's "A second Subscription" stage, which creates the `Claude token 2` item, and then lists it after the first, in the setup PR. Setup never adds to a list of two or more: it doesn't ask about a second Subscription then, `--second-subscription` has no effect but to say so, and the wizard's stage says to list a `Claude token 2` it stores there by hand. A list that names `Claude token 2` already, alone or not, has nothing for Setup to list, so it doesn't ask then either. With rotation on:
   - **The order is the Operator's, and the Kit fails over, never balances.** Every run starts on the first listed Subscription with no open weekly-limit, usage-credits or token-rotation issue, so the second is used only while the first is used up. Each run's Kit job step summary names the Subscription it gave the run, and its Run record names it too. A Kit job whose plan does nothing, as for an event the Loop declines, says why in its step summary instead.

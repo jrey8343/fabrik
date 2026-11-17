@@ -426,6 +426,8 @@ export interface JudgeRunEnd {
   readonly judge: NeededJob;
   /** The Kit's fixed judge model, which the record names when the judge job passed out none. */
   readonly judgeModel: string;
+  /** The Kit's fixed judge effort, which the record names with the judge model when the judge job passed out none. */
+  readonly judgeEffort: string;
   /** The Kit commit writing the record. */
   readonly kitSha: string;
   /** When the score-record job ran, as an ISO 8601 time. */
@@ -457,7 +459,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     issue: scored.issue,
     pullRequest: scored.pullRequest,
     endedAt: end.endedAt,
-    ...whatRan(judge.outputs, {}, { model: end.judgeModel, effort: null }),
+    ...whatRan(judge.outputs, {}, { model: end.judgeModel, effort: end.judgeEffort }),
     // The Kit job gives the judge the Subscription it gave the run the judge scores.
     subscription: scored.subscription,
     retry: 0,

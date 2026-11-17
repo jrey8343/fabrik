@@ -1471,6 +1471,109 @@ describe("A Replay's results", () => {
     });
   });
 
+  describe("store each Arm's scores by rubric id", () => {
+    /** The results marker's line in a body. */
+    const markerOf = (body: string) => body.split("\n").find((line) => line.startsWith("<!-- fabrik:replay-results ")) ?? "";
+
+    /** The body with its results marker's line replaced by one holding `results`. */
+    const withMarker = (body: string, results: unknown) => body.replace(markerOf(body), `<!-- fabrik:replay-results ${JSON.stringify(results)} -->`);
+
+    /** Ticket 12's result in run 9001, as a results marker holds it, with each arm's scores as given. */
+    const storedTwelve = (baseline: unknown, variant: unknown) => {
+      const arm = (scores: unknown, side: ReplayArm) => ({
+        gates: "passed",
+        hiddenTests: "passed",
+        verdict: "pass",
+        scores,
+        costUsd: 2,
+        turns: 24,
+        durationMs: 180000,
+        patch: `replays/owner/product/140/12-${side}-9001.patch`,
+      });
+      return [{ ticket: 12, run: 9001, arms: { baseline: arm(baseline, "baseline"), variant: arm(variant, "variant") }, original: { verdict: null, costUsd: null, turns: null, durationMs: null, noReview: false } }];
+    };
+
+    /** Ticket 12's two rows and the totals, once Ticket 7 starts and the body's results are read back from its marker. */
+    const readBack = (body: string) => {
+      const running = started({ ...aReplayIssue(140), body }, 7, 9002).body;
+      return { heading: visible(running).find((line) => line.startsWith("| Ticket |")), rows: rowsOf(running).slice(0, 2), totals: totalsIn(running) };
+    };
+
+    /** Ticket 12 done in run 9001, its results shown from the store. */
+    const twelveDone = () => {
+      const twelve = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" });
+      return resultsIn(twelve.body, outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001, { scores: [0.6, 0.85, 0.7] })));
+    };
+
+    it("naming each score's rubric in the results marker it writes", () => {
+      const stored = JSON.parse(markerOf(twelveDone()).replace(/^<!-- fabrik:replay-results (.*) -->$/, "$1"));
+
+      expect(stored[0].arms.baseline.scores).toEqual({ "efficiency@1": 0.8, "ticket-compliance@1": 0.9, "skill-use@1": 0.75 });
+      expect(stored[0].arms.variant.scores).toEqual({ "efficiency@1": 0.6, "ticket-compliance@1": 0.85, "skill-use@1": 0.7 });
+    });
+
+    it("reading a positional results marker from before them as efficiency, ticket compliance and skill use, in that order", () => {
+      const positional = withMarker(twelveDone(), storedTwelve([0.8, 0.9, 0.75], [0.6, null, 0.7]));
+
+      expect(readBack(positional)).toEqual({
+        heading: "| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |",
+        rows: [
+          `| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline", 9001)} | – |`,
+          `| #12 (merged in #112) | variant, effort high | passed | pass | passed | 0.60 | – | 0.70 | $2.00 | 24 | 3 min | ${patchOf(12, "variant", 9001)} | – |`,
+        ],
+        totals: [
+          "Over the 1 Ticket done, beside the original: each one's first Implement run and its Review.",
+          "| Arm | Gates | Pass Verdicts | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| baseline | 1/1 | 1/1 | 1/1 | 0.80 (1/1) | 0.90 (1/1) | 0.75 (1/1) | $2.00 | 24 | 3 min |",
+          "| variant | 1/1 | 1/1 | 1/1 | 0.60 (1/1) | – | 0.70 (1/1) | $2.00 | 24 | 3 min |",
+          "| original | – | – | – | – | – | – | – | – | – |",
+          "Baseline vs original: pass Verdicts 1/1 vs –.",
+        ],
+      });
+    });
+
+    it("showing – in the column of a rubric an Arm has no score for", () => {
+      const keyed = withMarker(
+        twelveDone(),
+        storedTwelve({ "efficiency@1": 0.8, "ticket-compliance@2": 0.9, "skill-use@1": 0.75 }, { "efficiency@1": 0.6, "skill-use@1": 0.7 }),
+      );
+
+      const { rows, totals } = readBack(keyed);
+
+      expect(rows[1]).toBe(`| #12 (merged in #112) | variant, effort high | passed | pass | passed | 0.60 | – | 0.70 | $2.00 | 24 | 3 min | ${patchOf(12, "variant", 9001)} | – |`);
+      expect(totals).toContain("| variant | 1/1 | 1/1 | 1/1 | 0.60 (1/1) | – | 0.70 (1/1) | $2.00 | 24 | 3 min |");
+    });
+
+    it("whatever order the Kit lists its Scorers in, each score showing under its own rubric", () => {
+      const keyed = withMarker(
+        twelveDone(),
+        storedTwelve({ "skill-use@1": 0.75, "efficiency@1": 0.8, "ticket-compliance@2": 0.9 }, { "skill-use@1": 0.7, "efficiency@1": 0.6, "ticket-compliance@2": 0.85 }),
+      );
+
+      const { heading, rows } = readBack(keyed);
+
+      expect(heading).toBe("| Ticket | Arm | Gates | Verdict | Hidden tests | Skill use | Efficiency | Ticket compliance | Cost | Turns | Duration | Patch | Flags |");
+      expect(rows[0]).toContain("| passed | 0.75 | 0.80 | 0.90 | $2.00 |");
+      expect(rows[1]).toContain("| passed | 0.70 | 0.60 | 0.85 | $2.00 |");
+    });
+
+    it("never putting a score under another rubric's column, a rubric of a name no Kit Scorer has now included", () => {
+      const keyed = withMarker(
+        twelveDone(),
+        storedTwelve({ "efficiency@1": 0.8, "ticket-compliance@1": 0.9, "ticket-compliance@2": 0.85, "retired-rubric@3": 0.4 }, { "efficiency@1": 0.6 }),
+      );
+
+      const { heading, rows } = readBack(keyed);
+
+      expect(heading).toBe(
+        "| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance v1 | Ticket compliance v2 | Retired rubric | Cost | Turns | Duration | Patch | Flags |",
+      );
+      expect(rows[0]).toContain("| passed | 0.80 | 0.90 | 0.85 | 0.40 | $2.00 |");
+      expect(rows[1]).toContain("| passed | 0.60 | – | – | – | $2.00 |");
+    });
+  });
+
   describe("are in", () => {
     it("once every Ticket in the plan is done or failed", () => {
       const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
