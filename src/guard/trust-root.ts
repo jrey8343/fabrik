@@ -57,7 +57,7 @@ const KIT_RUBRICS = `${RUBRICS_DIR}/`;
  */
 const ROOT_FOLDERS = [".fabrik/", ".github/workflows/", "docs/product/"];
 
-/** The Product repo's Coding standards, which only the Reviewer reads, from the repo root. */
+/** The Product repo's Coding standards, which the Implementer builds to and the Reviewer judges against, from the repo root. */
 export const CODING_STANDARDS_FILE = "CODING_STANDARDS.md";
 
 /** Files that are trust roots only at the repo root: the Coding standards the Reviewer judges against. */
