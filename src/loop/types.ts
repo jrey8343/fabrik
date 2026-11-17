@@ -306,6 +306,8 @@ export type LoopEvent =
         readonly conflict?: string;
         /** The Operator comments on the PR the run was given; none when left out. */
         readonly operatorComments?: readonly GivenOperatorComment[];
+        /** Why the run Stepped up, from the Kit job's plan, which its push note records (#746); none when it didn't. */
+        readonly stepUpReason?: StepUpReason;
       };
     }
   | {
@@ -848,6 +850,13 @@ export interface PullRequestSnapshot {
   readonly requestChangesRun: boolean;
   /** Whether its latest push came from a conflict-only run (#304), so a Verdict on it is marked as one. */
   readonly conflictRun: boolean;
+  /**
+   * The Step-up reason the push note of the latest Implement run that pushed
+   * to it records (#746), or null: a run that didn't Step up, a note from
+   * before the reason was recorded, or no run's push yet. An Operator's push,
+   * or the Kit's own clean rebase onto main, is no run, so it leaves this as it was.
+   */
+  readonly lastPushStepUpReason: StepUpReason | null;
   /**
    * The default branch heads the Kit has tried to bring it up to date with
    * (#304), read from the Kit's attempt notes on it, oldest first: one attempt

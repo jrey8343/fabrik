@@ -12,7 +12,7 @@ import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { RequestChangesAnswers } from "./implementOutput.ts";
 import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
-import { AGENT_ROLES, type AgentRole, type Strength, type VerdictRecord } from "./types.ts";
+import { AGENT_ROLES, type AgentRole, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -265,6 +265,32 @@ export function pushedHeadIn(body: string): string | null {
     if (!line.startsWith("<!-- fabrik:")) return null;
     const sha = PUSHED_HEAD_MARKER.exec(line)?.[1];
     if (sha !== undefined) return sha;
+  }
+  return null;
+}
+
+/**
+ * The marker line recording why the run whose push note it's on Stepped up
+ * (#746), so a later run's model can be read from the PR alone. It goes among
+ * the note's other marker lines, after any the note's first line is read with,
+ * and only on the note of a run that Stepped up.
+ */
+export function stepUpReasonMarker(reason: StepUpReason): string {
+  return `<!-- fabrik:step-up-reason ${reason} -->`;
+}
+
+const STEP_UP_REASON_MARKER = /^<!-- fabrik:step-up-reason (\S+) -->$/;
+
+/**
+ * The Step-up reason a push note records, read from the marker lines it opens
+ * with, or null when it records none: a run that didn't Step up, and every
+ * note from before #746. Only a bot's comment should be passed in.
+ */
+export function stepUpReasonIn(body: string): StepUpReason | null {
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("<!-- fabrik:")) return null;
+    const reason = STEP_UP_REASON_MARKER.exec(line)?.[1];
+    if (reason !== undefined) return isStepUpReason(reason) ? reason : null;
   }
   return null;
 }

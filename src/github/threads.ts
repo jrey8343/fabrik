@@ -32,6 +32,7 @@ import {
   RETRY_RESTARTED_MARKER,
   sessionFinishedIn,
   startedReviewsIn,
+  stepUpReasonIn,
   stuckTriggerGaveUpMarker,
   stuckTriggerReaddedMarker,
   UNMARKED_RETRY_PUSH,
@@ -39,7 +40,7 @@ import {
   flakyCheckMarksIn,
 } from "../loop/markers.ts";
 import type { TriggerLabel } from "../loop/labels.ts";
-import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, UnbuiltChangesRequest, Verdict, VerdictRecord } from "../loop/types.ts";
+import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, StepUpReason, UnbuiltChangesRequest, Verdict, VerdictRecord } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
 /**
@@ -131,6 +132,17 @@ export function conflictRunIn(commentBodies: readonly string[]): boolean {
     else if (verdictsIn([body]).length > 0) latest = false;
   });
   return latest;
+}
+
+/**
+ * The Step-up reason the latest run's push note in a PR's Fabrik App comments,
+ * oldest first, records (#746), or null when there is no such note or it
+ * records none. Only a run's push note counts: an Operator's push posts none,
+ * and the Kit's clean rebase onto main is no run.
+ */
+export function lastPushStepUpReasonIn(commentBodies: readonly string[]): StepUpReason | null {
+  const latest = commentBodies.findLast(isPushNote);
+  return latest === undefined ? null : stepUpReasonIn(latest);
 }
 
 /** Whether the latest attempt note in these comments that started a conflict-only run was on a draft whose push GitHub never reviewed (#389). */
