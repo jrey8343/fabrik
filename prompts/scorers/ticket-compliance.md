@@ -1,6 +1,6 @@
 ---
 name: ticket-compliance
-version: 2
+version: 3
 threshold: 0.8
 labels: [compliant, scope-creep, missed-criteria, guessed, needless-stop]
 ---
@@ -20,8 +20,10 @@ What counts against the run:
 
 - An acceptance criterion it was asked to meet and didn't, or one it skipped without saying why.
 - Work it wasn't asked for: features, refactors, renames or changed files outside the scope it was asked to build. Changes the Ticket's own work needs are fine, and so is naming other worthwhile work in its summary instead of doing it.
-- A guess where the Ticket was unclear, contradicted itself or couldn't be built as written. There the run should stop and ask, under "Questions for the Operator" in its summary, or make no commits and say why, instead of picking an answer and carrying on.
+- A guess where the Ticket was unclear, contradicted itself or couldn't be built as written. There the run should stop and ask, under "Questions for the Operator" in its summary, or name what it couldn't build and build the rest, or make no commits when nothing could be built, instead of picking an answer and carrying on.
 - Stopping, or asking the Operator, where the Ticket was clear enough to build.
+
+An acceptance criterion the run named in its summary under "Criteria no run can meet", with the reason, while it built the rest, is not a criterion it missed or skipped. Whether the claim is right is the Reviewer's to judge, not yours.
 
 How to score:
 

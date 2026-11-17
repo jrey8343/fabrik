@@ -81,6 +81,34 @@ describe("The Kit's Scorer rubrics", () => {
     expect(compliance?.text).not.toContain("judge that work against the Ticket,");
   });
 
+  // #766: version 2's labels, scale and pass line are unchanged in version 3.
+  it("give Ticket compliance version 3 a pass line of 0.8, and the labels compliant, scope creep, missed criteria, guessed and needless stop", async () => {
+    const compliance = (await loadRubrics()).find((rubric) => rubric.name === "ticket-compliance");
+    expect(compliance).toMatchObject({ version: 3, threshold: 0.8, labels: ["compliant", "scope-creep", "missed-criteria", "guessed", "needless-stop"] });
+    expect(compliance?.text).toContain(
+      [
+        "- 1: it met every acceptance criterion it was asked to meet, kept to what it was asked, and asked wherever it needed to.",
+        "- 0.8: a small slip, such as one minor change nobody asked for.",
+        "- 0.5: an acceptance criterion missed, or a clear piece of scope creep.",
+        "- 0: it built something other than what it was asked, or guessed through a question that changed what it built.",
+      ].join("\n"),
+    );
+  });
+
+  // #766: a run that does as its prompt says (#764) builds the rest and names the criterion, and isn't scored missed-criteria for it.
+  it("don't count against a run a criterion it named in its summary as one no run can meet, with the reason, while it built the rest, and leave the claim to the Reviewer", async () => {
+    const compliance = (await loadRubrics()).find((rubric) => rubric.name === "ticket-compliance");
+    expect(compliance?.text).toMatch(/named in its summary under "Criteria no run can meet", with the reason, while it built the rest, is not a criterion it missed or skipped/);
+    expect(compliance?.text).toMatch(/Whether the claim is right is the Reviewer's to judge, not yours/);
+  });
+
+  // #766: in place of version 2's "make no commits and say why".
+  it("ask a run on a Ticket that couldn't be built as written to name what it couldn't build and build the rest, or make no commits when nothing could be built", async () => {
+    const compliance = (await loadRubrics()).find((rubric) => rubric.name === "ticket-compliance");
+    expect(compliance?.text).toMatch(/name what it couldn't build and build the rest, or make no commits when nothing could be built/);
+    expect(compliance?.text).not.toContain("make no commits and say why");
+  });
+
   it("give Test-first version 2 a pass line of 0.8, and the labels test-first, test-after, no test, fix before cause and not applicable", async () => {
     const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
     expect(testFirst).toMatchObject({ version: 2, threshold: 0.8, labels: ["test-first", "test-after", "no-test", "fix-before-cause", "not-applicable"] });
@@ -164,12 +192,18 @@ describe("The rubric version guard", () => {
   it("keeps the hash of a rubric the Kit no longer has, so no version of it is reused and its score files still read under its name", () => {
     expect(Object.keys(RUBRIC_HASHES)).toEqual(expect.arrayContaining(["skill-use@1", "test-first@1"]));
   });
+
+  // #766: so version 2's score files keep their meaning beside version 3's.
+  it("keeps Ticket compliance version 2's hash recorded beside version 3's", () => {
+    expect(Object.keys(RUBRIC_HASHES)).toEqual(expect.arrayContaining(["ticket-compliance@2", "ticket-compliance@3"]));
+  });
 });
 
 describe("A rubric's name in the Kit's reports", () => {
   it.each([
     ["efficiency@1", "Efficiency v1"],
     ["ticket-compliance@2", "Ticket compliance v2"],
+    ["ticket-compliance@3", "Ticket compliance v3"],
     ["skill-use@1", "Skill use v1"],
     ["test-first@1", "Test-first v1"],
     ["retired-rubric@3", "Retired rubric v3"],
