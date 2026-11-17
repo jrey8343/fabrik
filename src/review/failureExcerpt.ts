@@ -175,6 +175,57 @@ function refusal(error: unknown): string {
   return `GitHub refused the read: ${whyUnread(error, "the read")}`;
 }
 
+/** The file the Review checks job's first wait passes its excerpts out in, as a JSON list, in its artifact. */
+export const FAILURE_EXCERPTS_FILE = "failure-excerpts.json";
+/** The file the wait after the Kit's re-run passes its excerpts out in: those of the checks that failed again. */
+export const RERUN_FAILURE_EXCERPTS_FILE = "failure-excerpts-rerun.json";
+
+/**
+ * Each red check's latest excerpt, from the files the Review's waits passed
+ * out (null for one that's missing): the re-run wait's for a check that
+ * failed again, else the first wait's. Read leniently: a file that doesn't
+ * read, or an excerpt in it that doesn't, is none, and its check says its
+ * failure couldn't be read.
+ */
+export function excerptsPassedOut(first: string | null, rerun: string | null): FailureExcerpt[] {
+  const latest = new Map<string, FailureExcerpt>();
+  for (const excerpt of [...excerptsIn(first), ...excerptsIn(rerun)]) latest.set(excerpt.check, excerpt);
+  return [...latest.values()];
+}
+
+function excerptsIn(text: string | null): FailureExcerpt[] {
+  if (text === null) return [];
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  return Array.isArray(value) ? value.filter(isExcerpt) : [];
+}
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
+function isExcerpt(value: unknown): value is FailureExcerpt {
+  if (typeof value !== "object" || value === null) return false;
+  const excerpt = value as Record<string, unknown>;
+  if (!isString(excerpt["check"]) || !isString(excerpt["link"])) return false;
+  if (excerpt["kind"] === "unread") return isString(excerpt["why"]);
+  if (excerpt["kind"] !== "actions") return false;
+  const { steps, annotations, annotationsUnread } = excerpt;
+  const isStep = (step: unknown) => {
+    const { name, lines, earlier, why } = (step ?? {}) as Record<string, unknown>;
+    return isString(name) && Array.isArray(lines) && lines.every(isString) && typeof earlier === "number" && (why === undefined || isString(why));
+  };
+  const isAnnotation = (annotation: unknown) => {
+    const { path, line, message } = (annotation ?? {}) as Record<string, unknown>;
+    return isString(path) && (line === null || typeof line === "number") && isString(message);
+  };
+  return (
+    Array.isArray(steps) && steps.every(isStep) && Array.isArray(annotations) && annotations.every(isAnnotation) && (annotationsUnread === undefined || isString(annotationsUnread))
+  );
+}
+
 /** The characters the log lines of all the red checks rendered together share, each line counted with its newline. */
 export const LOG_CAP = 40_000;
 

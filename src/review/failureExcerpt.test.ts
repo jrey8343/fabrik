@@ -8,6 +8,7 @@ import {
   type FailedStep,
   type FailureExcerpt,
   type FailureReader,
+  excerptsPassedOut,
   readFailureExcerpt,
   renderFailureExcerpts,
 } from "./failureExcerpt.ts";
@@ -395,6 +396,27 @@ describe("The cap on Failure excerpts' log lines", () => {
     expect(blocks.join("\n\n").length).toBeLessThanOrEqual(400);
     expect(blocks[0]).toContain(`- \`a\` ([the job](${link("a")}))`);
     expect(blocks[1]).toContain(`- \`b\` ([the job](${link("b")}))`);
+  });
+});
+
+describe("The excerpts the Review's waits pass out to the push job", () => {
+  const first = (check: string, why: string): FailureExcerpt => ({ kind: "unread", check, link: `https://github.com/acme/shop/actions/runs/7/job/${check}-1`, why });
+  const rerun = (check: string, why: string): FailureExcerpt => ({ kind: "unread", check, link: `https://github.com/acme/shop/actions/runs/7/job/${check}-2`, why });
+
+  it("are each check's latest read: the re-run's for a check that failed again, else the first wait's", () => {
+    const passed = excerptsPassedOut(JSON.stringify([first("unit", "first"), first("lint", "first")]), JSON.stringify([rerun("unit", "again")]));
+
+    expect(passed).toEqual([rerun("unit", "again"), first("lint", "first")]);
+  });
+
+  it("are the first wait's alone when nothing was re-run", () => {
+    expect(excerptsPassedOut(JSON.stringify([first("unit", "first")]), null)).toEqual([first("unit", "first")]);
+  });
+
+  it("are none when the artifact is missing, or doesn't read, so each check says its failure couldn't be read", () => {
+    expect(excerptsPassedOut(null, null)).toEqual([]);
+    expect(excerptsPassedOut("not json", "{}")).toEqual([]);
+    expect(excerptsPassedOut(JSON.stringify([{ kind: "actions", check: "unit" }, first("lint", "first")]), null)).toEqual([first("lint", "first")]);
   });
 });
 
