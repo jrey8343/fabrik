@@ -414,7 +414,7 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
     },
     "design": {
       "model": "claude-opus-5-5",
-      "effort": "medium",
+      "effort": "high",
       "timeout_minutes": 30
     },
     "implement": {
@@ -466,7 +466,7 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
 }
 ```
 
-- Leave a field out to take its default. `null` is accepted only where the default is `null` (the Sandbox commands, `monitor.errors`, `operator`, `ui`, `ui.before_url`, `preview`, `preview.url`, `production`, `production.environment` and `time_zone`), and in `audit.day` and `retro.day`, where it turns the Audit or the Retro off. Every role's `effort` defaults to `medium`, except the Review's, which defaults to `high` ([#759](https://github.com/jrey8343/fabrik/issues/759)), each named outright so each Run record says the level it ran at and a Claude Code upgrade can't change it unseen; set it to `low`, `medium`, `high`, `xhigh` or `max`. A `null` effort, as the starter Kit config once wrote for every role, names no level, so it reads as its default like a field left out (for `roles.digest`, as the repo's own `roles.review` effort, or `medium` when that names none).
+- Leave a field out to take its default. `null` is accepted only where the default is `null` (the Sandbox commands, `monitor.errors`, `operator`, `ui`, `ui.before_url`, `preview`, `preview.url`, `production`, `production.environment` and `time_zone`), and in `audit.day` and `retro.day`, where it turns the Audit or the Retro off. Every role's `effort` defaults to `medium`, except the Review's and Design's, which default to `high` ([#759](https://github.com/jrey8343/fabrik/issues/759), [#767](https://github.com/jrey8343/fabrik/issues/767); a prototype turn runs at Design's), each named outright so each Run record says the level it ran at and a Claude Code upgrade can't change it unseen; set it to `low`, `medium`, `high`, `xhigh` or `max`. A `null` effort, as the starter Kit config once wrote for every role, names no level, so it reads as its default like a field left out (for `roles.digest`, as the repo's own `roles.review` effort, or `medium` when that names none).
 - The Sandbox commands, each skipped when `null`:
   - `sandbox.setup` readies the runner: tools, services and stubs (daemonise any it starts). It runs before the agent starts in every run that runs the Product's code: an Implement run (first, Retry, Step-up and Request-changes alike), a Replay arm's Implement run, Triage, and every turn of an async Design session, a prototype turn included. Replay's gates run it too.
   - `sandbox.build` installs the Product's dependencies and builds it. It runs after `sandbox.setup`, before the agent starts, in every run that builds a branch: an Implement run, a Replay arm's Implement run and a prototype turn. Their prompts give it to the agent to run again after changing the dependencies. Replay's gates run it after `sandbox.setup`, and UI evidence and Prototype capture run it before `ui.serve`.

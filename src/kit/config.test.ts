@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { claudeArgs } from "../agent/launch.ts";
+import { prototypeRole } from "../loop/design.ts";
 import { captureIdentityOf, previewUrl, productionPageUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, timeZoneNote, type UiConfig, UI_VIEWPORTS, withRouteOn } from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -11,7 +12,7 @@ const DEFAULTS = {
   sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
   roles: {
     triage: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 10 },
-    design: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 30 },
+    design: { model: "claude-opus-5-5", effort: "high", timeoutMinutes: 30 },
     implement: { model: "claude-sonnet-5-5", effort: "medium", timeoutMinutes: 60 },
     review: { model: "claude-opus-5-5", effort: "high", timeoutMinutes: 30 },
     audit: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 45 },
@@ -265,7 +266,7 @@ describe("Kit config", () => {
       sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
       roles: {
         triage: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 10 },
-        design: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
+        design: { model: "claude-opus-5-5", effort: "high", timeout_minutes: 30 },
         implement: { model: "claude-sonnet-5-5", effort: "medium", timeout_minutes: 60 },
         review: { model: "claude-opus-5-5", effort: "high", timeout_minutes: 30 },
         audit: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 },
@@ -319,13 +320,33 @@ describe("Kit config", () => {
     expect(timeZoneNote("{ not json")).toBeNull();
   });
 
-  it("names medium outright for every role's effort but the Review's high when the Product names none (#740, #759)", () => {
+  it("names medium outright for every role's effort but the Review's and Design's high when the Product names none (#740, #759, #767)", () => {
     const result = resolveKitConfig({ config: "{}" });
     const roles = result.ok ? result.config.roles : null;
-    const efforts = [roles?.triage, roles?.design, roles?.implement, roles?.audit, roles?.retro, roles?.research, roles?.digest, roles?.stepUp];
+    const efforts = [roles?.triage, roles?.implement, roles?.audit, roles?.retro, roles?.research, roles?.digest, roles?.stepUp];
 
     expect(roles?.review.effort).toBe("high");
-    expect(efforts.map((role) => role?.effort)).toEqual(Array(8).fill("medium"));
+    expect(roles?.design.effort).toBe("high");
+    expect(efforts.map((role) => role?.effort)).toEqual(Array(7).fill("medium"));
+  });
+
+  it.each(["{}", `{ "roles": { "design": { "effort": null } } }`])("runs Design at high, within its 30 minutes, when the Kit config is %s (#767)", (config) => {
+    const result = resolveKitConfig({ config });
+
+    expect(result.ok && result.config.roles.design).toEqual({ model: "claude-opus-5-5", effort: "high", timeoutMinutes: 30 });
+  });
+
+  it("runs Design at a Product's own design.effort, such as medium, over the Kit's high (#767)", () => {
+    const result = resolveKitConfig({ config: `{ "roles": { "design": { "effort": "medium" } } }` });
+
+    expect(result.ok && result.config.roles.design.effort).toBe("medium");
+  });
+
+  it("runs a prototype turn at Design's high, within the Implement role's time limit, on an empty Kit config (#767)", () => {
+    const result = resolveKitConfig({ config: "{}" });
+    const roles = result.ok ? result.config.roles : DEFAULTS.roles;
+
+    expect(prototypeRole(roles)).toEqual({ model: "claude-opus-5-5", effort: "high", timeoutMinutes: 60 });
   });
 
   it("launches the Review with --effort high on an empty Kit config (#759)", () => {
@@ -341,7 +362,7 @@ describe("Kit config", () => {
     expect(result).toEqual({ ok: true, config: { ...DEFAULTS, roles: { ...DEFAULTS.roles, implement: { ...DEFAULTS.roles.implement, effort: "high" } } } });
   });
 
-  it("reads every role's explicit null effort, as the old starter wrote it, as medium, so each Run record names the level", () => {
+  it("reads every role's explicit null effort, as the old starter wrote it, as its default, so each Run record names the level", () => {
     const nulls = { model: undefined, effort: null };
     const config = JSON.stringify({
       roles: { triage: nulls, design: nulls, implement: nulls, review: nulls, audit: nulls, retro: nulls, research: nulls, digest: nulls, step_up: nulls },
@@ -970,6 +991,10 @@ describe("The Kit config template", () => {
     expect(starter.roles.digest).toEqual({ effort: "medium", timeout_minutes: 10 });
   });
 
+  it("names high for roles.design's effort (#767)", () => {
+    expect(JSON.parse(template)).toMatchObject({ roles: { design: { model: "claude-opus-5-5", effort: "high", timeout_minutes: 30 } } });
+  });
+
   it("spells out subscriptions at its Kit default, the one V1 Subscription", () => {
     expect(JSON.parse(template)).toMatchObject({ subscriptions: ["Claude token"] });
   });
@@ -999,6 +1024,12 @@ describe("The Kit config template", () => {
     expect(section).toMatch(/^ {4}\| No `production` \|/m);
     expect(section).toMatch(/^ {4}\| `production\.url`, no `environment` \|/m);
     expect(section).toMatch(/^ {4}\| `production\.url` and `environment` \|/m);
+  });
+
+  it("is documented in the README's Kit config section as defaulting every effort to medium but the Review's and Design's (#767)", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
+
+    expect(section).toMatch(/Every role's `effort` defaults to `medium`, except the Review's and Design's, which default to `high`/);
   });
 
   it("is the defaults block the README's Kit config section shows", () => {
