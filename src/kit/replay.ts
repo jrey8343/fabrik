@@ -34,7 +34,7 @@ import {
   varied,
 } from "./replayPick.ts";
 import { readReplayRequest, readReplayVariable, type ReplayRequest, type ReplayVariable, settingOf, variableLine } from "./replayRequest.ts";
-import { SCORERS } from "./rubrics.ts";
+import { rubricId, SCORERS } from "./rubrics.ts";
 import { firstRunOf, isLive, isReplayArm, REPLAY_ARMS, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
 import { storeFileUrl } from "./runStore.ts";
 import type { ScoreFile } from "./scorer.ts";
@@ -676,8 +676,11 @@ interface ArmResult {
   readonly hiddenTests: ReplayHiddenTests | null;
   /** Its Review's Verdict, `none` when the Review gave none. */
   readonly verdict: Verdict | "none" | null;
-  /** Its Implement run's score under each Scorer, in SCORERS' order. */
-  readonly scores: readonly (number | null)[];
+  /**
+   * Its Implement run's scores, each keyed by its rubric's id, such as
+   * `efficiency@1`: a rubric it has no score for is missing.
+   */
+  readonly scores: Readonly<Record<string, number>>;
   /** What its Implement and Review runs spent together. */
   readonly costUsd: number | null;
   readonly turns: number | null;
@@ -720,7 +723,7 @@ function ticketResultOf(ticket: number, run: number, outcomes: ReplayOutcomes): 
       gates: gates?.gates ?? null,
       hiddenTests: gates?.hiddenTests ?? null,
       verdict: review === undefined ? null : (review.verdict ?? "none"),
-      scores: SCORERS.map((scorer) => scored?.entries?.find((entry) => entry.scorer === scorer)?.score ?? null),
+      scores: Object.fromEntries((scored?.entries ?? []).map((entry) => [rubricId({ name: entry.scorer, version: entry.version }), entry.score])),
       // A done Ticket's arm with no Review record had none to spend: its patch wasn't laid (endOf in src/kit/replayRecord.ts).
       ...spentBy(review === undefined ? [implement] : [implement, review]),
       // The patch this run wrote, never another run's of the same arm.
@@ -815,9 +818,55 @@ function readArmResult(value: unknown): ArmResult | null {
   if (figures === null || !isObject(value)) return null;
   const { gates, hiddenTests, scores, patch } = value;
   if (!(gates === null || isKeyOf(GATES_WORDS, gates)) || !(hiddenTests === null || isKeyOf(HIDDEN_TESTS_WORDS, hiddenTests))) return null;
-  if (!Array.isArray(scores) || scores.length !== SCORERS.length || !scores.every((score) => score === null || isScore(score))) return null;
+  const keyed = readScores(scores);
+  if (keyed === null) return null;
   if (!(patch === null || (typeof patch === "string" && PATCH_PATH.test(patch)))) return null;
-  return { ...figures, gates, hiddenTests, scores, patch };
+  return { ...figures, gates, hiddenTests, scores: keyed, patch };
+}
+
+/**
+ * An arm's stored scores, keyed by rubric id. A results marker written before
+ * they were (#738) holds them as a list, one per Scorer the Kit had then, in
+ * POSITIONAL_RUBRICS' order, null for one with no score.
+ */
+function readScores(value: unknown): Record<string, number> | null {
+  if (Array.isArray(value)) {
+    if (value.length !== POSITIONAL_RUBRICS.length || !value.every((score) => score === null || isScore(score))) return null;
+    return Object.fromEntries(POSITIONAL_RUBRICS.flatMap((id, i) => (value[i] === null ? [] : [[id, value[i] as number]])));
+  }
+  if (!isObject(value)) return null;
+  const entries = Object.entries(value);
+  return entries.every((entry): entry is [string, number] => RUBRIC_ID.test(entry[0]) && isScore(entry[1])) ? Object.fromEntries(entries) : null;
+}
+
+/** The rubrics a positional results marker's scores are under, in its order: the Kit's Scorers at their versions when it was last written. */
+const POSITIONAL_RUBRICS = ["efficiency@1", "ticket-compliance@2", "skill-use@1"] as const;
+
+/** A rubric's id as rubricId gives it: `efficiency@1`. */
+const RUBRIC_ID = /^[a-z]+(?:-[a-z]+)*@[1-9][0-9]*$/;
+
+/** A score column of the results: one rubric's, keyed by its id, or a Kit Scorer's while no result holds a score. */
+interface ScoreColumn {
+  readonly id: string;
+  readonly heading: string;
+}
+
+/**
+ * The results' score columns: one for each rubric any arm has a score under,
+ * in the order the results first name them, so neither the Kit's Scorers nor
+ * their order now ever moves a stored score. A rubric's heading is its name,
+ * and its version too when the results hold another of the same name. With
+ * no score to show, a column for each of the Kit's Scorers.
+ */
+function scoreColumns(results: readonly TicketResult[]): ScoreColumn[] {
+  const ids = [...new Set(results.flatMap(({ arms }) => REPLAY_ARMS.flatMap((arm) => Object.keys(arms[arm].scores))))];
+  if (ids.length === 0) return SCORERS.map((scorer) => ({ id: scorer, heading: scorerWords(scorer) }));
+  const nameOf = (id: string) => id.slice(0, id.indexOf("@"));
+  return ids.map((id) => {
+    const name = nameOf(id);
+    const shared = ids.filter((other) => nameOf(other) === name).length > 1;
+    return { id, heading: shared ? `${scorerWords(name)} v${id.slice(name.length + 1)}` : scorerWords(name) };
+  });
 }
 
 /** An original's result: one written before the Kit told a first run with no Review apart, with no `noReview`, reads as having had one. */
@@ -843,6 +892,11 @@ function isKeyOf<K extends string>(words: Readonly<Record<K, string>>, value: un
   return typeof value === "string" && Object.hasOwn(words, value);
 }
 
+/** An arm's score under rubric `id`, or null for none. */
+function scoreUnder(scores: ArmResult["scores"], id: string): number | null {
+  return Object.hasOwn(scores, id) ? (scores[id] ?? null) : null;
+}
+
 function isScore(value: unknown): value is number {
   return typeof value === "number" && value >= 0 && value <= 1;
 }
@@ -864,7 +918,8 @@ function resultsLines({ plan, progress }: ReplayMarks, results: readonly TicketR
     return { planned, state, result };
   });
   const done = rows.flatMap(({ result }) => (result === undefined ? [] : [result]));
-  const totals = done.length === 0 ? null : totalsOf(done);
+  const columns = scoreColumns(done);
+  const totals = done.length === 0 ? null : totalsOf(done, columns);
   const headline = totals === null ? [] : comparison(totals.variant, totals.baseline);
   return [
     "## Replay results",
@@ -872,9 +927,9 @@ function resultsLines({ plan, progress }: ReplayMarks, results: readonly TicketR
     ...(headline.length === 0 ? [] : [`**variant: ${headline.join("; ")}**`, ""]),
     `Each Ticket runs twice from the commit its first Implement run started from: a baseline as it was built, and a variant with \`${variableLine(variable)}\`. Cost, turns and duration are its Implement and Review runs' together.`,
     "",
-    ...tableHead(["Ticket", "Arm", "Gates", "Verdict", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration", "Patch", "Flags"]),
-    ...rows.flatMap(({ planned, state, result }) => REPLAY_ARMS.map((arm) => armRow(planned, arm, variable, result?.arms[arm] ?? null, state, open))),
-    ...(totals === null ? [] : ["", ...totalsLines(totals)]),
+    ...tableHead(["Ticket", "Arm", "Gates", "Verdict", "Hidden tests", ...columns.map(({ heading }) => heading), "Cost", "Turns", "Duration", "Patch", "Flags"]),
+    ...rows.flatMap(({ planned, state, result }) => REPLAY_ARMS.map((arm) => armRow(planned, arm, variable, columns, result?.arms[arm] ?? null, state, open))),
+    ...(totals === null ? [] : ["", ...totalsLines(totals, columns)]),
     ...(plan.leftOut.length === 0 ? [] : ["", "Left out:", "", ...plan.leftOut.map(leftOutLine)]),
     "",
   ];
@@ -912,8 +967,8 @@ interface Totals {
   readonly gates: Tally | null;
   readonly verdicts: Tally;
   readonly hiddenTests: Tally | null;
-  /** The mean score under each Scorer, in SCORERS' order, over the runs it scored, and of how many Tickets done. */
-  readonly scores: readonly (MeanScore | null)[] | null;
+  /** The mean score under each score column's rubric, keyed by its id, over the runs it scored, and of how many Tickets done. */
+  readonly scores: ReadonlyMap<string, MeanScore | null> | null;
   /** What every run spent together, unknown when any run's is. */
   readonly costUsd: number | null;
   readonly turns: number | null;
@@ -928,7 +983,7 @@ interface Totals {
  * first count as failed. An original whose first run had no Review is left
  * out of the original's totals, and its Ticket out of the baseline's gap.
  */
-function totalsOf(done: readonly TicketResult[]): ReplayTotals {
+function totalsOf(done: readonly TicketResult[], columns: readonly ScoreColumn[]): ReplayTotals {
   const verdicts = (each: readonly RunFigures[]) => tally(each.map(({ verdict }) => verdict), ["pass"], ["none"]);
   const spent = (each: readonly RunFigures[]) => {
     // Nothing to total is no figure, never a zero.
@@ -945,7 +1000,7 @@ function totalsOf(done: readonly TicketResult[]): ReplayTotals {
       gates: tally(arms.map(({ gates }) => gates), ["passed"], ["no-test-command"]),
       verdicts: verdicts(arms),
       hiddenTests: tally(arms.map(({ hiddenTests }) => hiddenTests), ["passed"], ["no-hidden-tests", "no-test-command"]),
-      scores: SCORERS.map((_, i) => meanScoreOf(arms.flatMap(({ scores }) => scores[i] ?? []), arms.length)),
+      scores: new Map(columns.map(({ id }) => [id, meanScoreOf(arms.flatMap(({ scores }) => scoreUnder(scores, id) ?? []), arms.length)])),
       ...spent(arms),
     };
   };
@@ -978,7 +1033,7 @@ function meanScoreOf(scores: readonly number[], of: number): MeanScore | null {
 }
 
 /** The Totals section: a row for each arm and the original runs, then any original left out and the baseline's gap from the original. */
-function totalsLines(totals: ReplayTotals): string[] {
+function totalsLines(totals: ReplayTotals, columns: readonly ScoreColumn[]): string[] {
   const { done, noReviewOriginals } = totals;
   const row = (name: string, { gates, verdicts, hiddenTests, scores, costUsd, turns, durationMs }: Totals) =>
     tableRow([
@@ -986,7 +1041,7 @@ function totalsLines(totals: ReplayTotals): string[] {
       tallyWords(gates),
       tallyWords(verdicts),
       tallyWords(hiddenTests),
-      ...SCORERS.map((_, i) => meanScoreWords(scores?.[i] ?? null)),
+      ...columns.map(({ id }) => meanScoreWords(scores?.get(id) ?? null)),
       orNone(costUsd, dollars),
       orNone(turns, String),
       orNone(durationMs, minutes),
@@ -1003,7 +1058,7 @@ function totalsLines(totals: ReplayTotals): string[] {
     "",
     `Over the ${done === 1 ? "1 Ticket" : `${done} Tickets`} done, beside the original: each one's first Implement run and its Review.`,
     "",
-    ...tableHead(["Arm", "Gates", "Pass Verdicts", "Hidden tests", ...SCORERS.map(scorerWords), "Cost", "Turns", "Duration"]),
+    ...tableHead(["Arm", "Gates", "Pass Verdicts", "Hidden tests", ...columns.map(({ heading }) => heading), "Cost", "Turns", "Duration"]),
     row("baseline", totals.baseline),
     row("variant", totals.variant),
     row("original", totals.original),
@@ -1054,14 +1109,22 @@ function percentChange(to: number, from: number): string {
 }
 
 /** One arm of a planned Ticket as a row: what it measured, or where its Ticket stands while it has no result. */
-function armRow(planned: PlannedTicket, arm: ReplayArm, variable: ReplayVariable, result: ArmResult | null, progress: ReplayProgress, open: boolean): string {
+function armRow(
+  planned: PlannedTicket,
+  arm: ReplayArm,
+  variable: ReplayVariable,
+  columns: readonly ScoreColumn[],
+  result: ArmResult | null,
+  progress: ReplayProgress,
+  open: boolean,
+): string {
   const ticket = `#${planned.ticket} (merged in #${planned.pullRequest})`;
   const flags = planned.flags.length === 0 ? NONE : planned.flags.map((flag) => FLAG_WORDS[flag]).join(", ");
   const settings = armWords(arm, planned.arms[arm], variable);
   if (result === null) {
     const state = open || progress.state === "done" || progress.state === "failed" ? progressWords(progress) : "cancelled";
     // A failure's reason is the one cell not of the Kit's own words, so a pipe in it can't split the row.
-    return tableRow([ticket, settings, state.replaceAll("|", "\\|"), ...Array.from({ length: 6 + SCORERS.length }, () => NONE), flags]);
+    return tableRow([ticket, settings, state.replaceAll("|", "\\|"), ...Array.from({ length: 6 + columns.length }, () => NONE), flags]);
   }
   return tableRow([
     ticket,
@@ -1069,7 +1132,7 @@ function armRow(planned: PlannedTicket, arm: ReplayArm, variable: ReplayVariable
     result.gates === null ? NONE : GATES_WORDS[result.gates],
     result.verdict === null ? NONE : VERDICT_WORDS[result.verdict],
     result.hiddenTests === null ? NONE : HIDDEN_TESTS_WORDS[result.hiddenTests],
-    ...result.scores.map((score) => orNone(score, (value) => value.toFixed(2))),
+    ...columns.map(({ id }) => orNone(scoreUnder(result.scores, id), (value) => value.toFixed(2))),
     orNone(result.costUsd, dollars),
     orNone(result.turns, String),
     orNone(result.durationMs, minutes),

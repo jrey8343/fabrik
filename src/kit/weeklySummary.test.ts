@@ -1561,6 +1561,84 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("Retries per merged PR", () => {
+    const retriesPerMergedPullRequest = (records: RunRecord[], pullRequests: AgentPullRequestFacts[] = [aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 7 })]) => {
+      const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-03T00:00:00Z" }), ...records], facts: [factsOf({ pullRequests })] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.retriesPerMergedPullRequest.thisWeek;
+    };
+
+    it("counts the Retries on the merged PR and on the Ticket's earlier PR closed by Back to design", () => {
+      const records = [
+        aRunRecord({ issue: 7, pullRequest: 50, retry: 1, endedAt: "2026-11-03T06:00:00Z" }), // on #50, later closed by Back to design
+        aRunRecord({ issue: 7, pullRequest: 51, retry: 1, endedAt: "2026-11-04T00:00:00Z" }),
+        aRunRecord({ issue: 7, pullRequest: 51, retry: 2, endedAt: "2026-11-05T00:00:00Z" }),
+        aRunRecord({ issue: 8, pullRequest: 60, retry: 1, endedAt: "2026-11-05T00:00:00Z" }), // another Ticket's
+      ];
+      expect(retriesPerMergedPullRequest(records)).toBe(3);
+    });
+
+    it("counts a Retry on the Ticket's path that ended in an earlier week, and none that ended after the week", () => {
+      const records = [
+        aRunRecord({ issue: 7, pullRequest: 51, retry: 1, endedAt: "2026-10-20T00:00:00Z" }), // two weeks back
+        aRunRecord({ issue: 7, pullRequest: 51, retry: 2, endedAt: "2026-11-10T00:00:00Z" }), // after the week's end
+      ];
+      expect(retriesPerMergedPullRequest(records)).toBe(1);
+    });
+
+    it("counts a Retry with no PR after an empty diff", () => {
+      const records = [
+        aRunRecord({ issue: 7, pullRequest: null, emptyDiff: true, endedAt: "2026-11-02T00:00:00Z" }),
+        aRunRecord({ issue: 7, pullRequest: null, retry: 1, endedAt: "2026-11-03T00:00:00Z" }),
+      ];
+      expect(retriesPerMergedPullRequest(records)).toBe(1);
+    });
+
+    it("still counts a Retry whose flaw was later counted back as a Flaky check", () => {
+      const countedBack = `<!-- fabrik:flaky-check ${JSON.stringify({ headSha: "a".repeat(40), checks: ["e2e"], countedBack: true })} -->\nflaky`;
+      const pullRequest = aMergedPullRequest("2026-11-06T00:00:00Z", {
+        number: 51,
+        ticket: 7,
+        comments: [aVerdictComment("execution-flaw", "a".repeat(40), "2026-11-03T06:00:00Z"), aComment(countedBack, "2026-11-04T06:00:00Z")],
+      });
+      const records = [aRunRecord({ issue: 7, pullRequest: 51, retry: 1, endedAt: "2026-11-04T00:00:00Z" })];
+      expect(retriesPerMergedPullRequest(records, [pullRequest])).toBe(1);
+    });
+
+    it("counts a Retry started again after its landing failed once, here and in the Retries row", () => {
+      const landing = {
+        loopOutcome: "failure",
+        action: { kind: "mark-ready-for-review", description: "take #51 out of draft" },
+        request: "PATCH /repos/owner/product/pulls/51",
+        status: 502,
+        requestId: "C0DE:51",
+        class: "github",
+        refusal: null,
+        reason: null,
+      } as const;
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ issue: 7, pullRequest: 51, retry: 1, endedAt: "2026-11-03T00:00:00Z", landing }),
+            aRunRecord({ issue: 7, pullRequest: 51, retry: 1, endedAt: "2026-11-04T00:00:00Z" }),
+          ],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 7 })] })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { retriesPerMergedPullRequest: { thisWeek: 1 }, counts: { retries: { thisWeek: 1 } } } });
+    });
+
+    it("counts no Retries for a merged agent PR with no Ticket, and averages over every merged PR", () => {
+      const records = [aRunRecord({ issue: 7, pullRequest: 51, retry: 1, endedAt: "2026-11-04T00:00:00Z" })];
+      const pullRequests = [aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 7 }), aMergedPullRequest("2026-11-06T00:00:00Z", { number: 52, ticket: null })];
+      expect(retriesPerMergedPullRequest(records, pullRequests)).toBe(0.5);
+    });
+
+    it("is none in a week with no merged agent PRs", () => {
+      expect(retriesPerMergedPullRequest([aRunRecord({ retry: 1, endedAt: "2026-11-04T00:00:00Z" })], [])).toBeNull();
+    });
+  });
+
   describe("cycle time and Operator wait", () => {
     const HOUR = 60 * 60 * 1000;
     const summaryOf = (facts: GitHubFacts) => {
@@ -2476,6 +2554,20 @@ describe("the Weekly summary", () => {
       expect(body).toContain("| Step-ups | 1 | 0 | +1 |");
       expect(body).toContain("| · for a Retry | 1 | 0 | +1 |");
       expect(body).not.toContain("| · marked |");
+    });
+
+    it("shows Retries per merged PR to one decimal after Tickets dispatched and its Yield rows, with Retries still shown below", () => {
+      const { body } = rendered();
+      expect(body).toContain("| Retries per merged PR | 1.0 | 0.0 | +1.0 |");
+      expect(body.indexOf("| Tickets dispatched |")).toBeLessThan(body.indexOf("| Retries per merged PR |"));
+      expect(body.indexOf("| Retries per merged PR |")).toBeLessThan(body.indexOf("| Retries |"));
+    });
+
+    it("shows Retries per merged PR as none in a week with no merged agent PRs, as Human touches per merged PR shows it", () => {
+      const result = weeklySummary(input({ records: [aRunRecord({ retry: 1, endedAt: "2026-11-04T00:00:00Z" })] }));
+      const body = result.kind === "summary" ? result.body : "";
+      expect(body).toContain("| Human touches per merged PR | – | – | – |");
+      expect(body).toContain("| Retries per merged PR | – | – | – |");
     });
 
     it("says how many runs the cost leaves out and how close the Subscription came to its weekly limit", () => {

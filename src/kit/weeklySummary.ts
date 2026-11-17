@@ -375,6 +375,12 @@ export interface WeeklySummary {
   readonly subscriptions: readonly SubscriptionUsage[];
   /** Human touches per agent PR merged in the week, or null in a week with none merged. */
   readonly humanTouches: WeekOverWeek<number | null>;
+  /**
+   * The Retries on each agent PR merged in the week, averaged, or null in a
+   * week with none merged: every Retry on its Ticket's whole path that ended
+   * before the week did, on any of its PRs (#736).
+   */
+  readonly retriesPerMergedPullRequest: WeekOverWeek<number | null>;
   /** The median time from Dispatch to merge of the week's merged agent PRs, in ms, or null with none. */
   readonly cycleTimeMs: WeekOverWeek<number | null>;
   /**
@@ -400,10 +406,7 @@ export interface WeeklySummary {
     readonly mergedPullRequests: WeekOverWeek<number>;
     /** Tickets whose Dispatch, their first `agent:implement`, came in the week. */
     readonly ticketsDispatched: WeekOverWeek<number>;
-    /**
-     * Implement records with `retry > 0` and no Infrastructure failure, so a
-     * Retry refused on the weekly limit and then resumed counts once.
-     */
+    /** The Retries whose records ended in the week, each counted once however often it was started (retriesIn). */
     readonly retries: WeekOverWeek<number>;
     /** Implement records of a Broken run (#434), counted or not. */
     readonly brokenRuns: WeekOverWeek<number>;
@@ -893,6 +896,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       weeklyLimit: { thisWeek: weeklyLimit, lastWeek: lastWeek.subscriptions.find((other) => other.subscription === subscription)?.weeklyLimit ?? null },
     })),
     humanTouches: change("humanTouches"),
+    retriesPerMergedPullRequest: change("retriesPerMergedPullRequest"),
     cycleTimeMs: change("cycleTimeMs"),
     operatorWaitMs: change("operatorWaitMs"),
     revertRate: change("revertRate"),
@@ -952,6 +956,7 @@ interface WeekMetrics {
   readonly weeklyLimit: RateLimitReading | null;
   readonly subscriptions: readonly { readonly subscription: string; readonly cost: number; readonly weeklyLimit: RateLimitReading | null }[];
   readonly humanTouches: number | null;
+  readonly retriesPerMergedPullRequest: number | null;
   readonly cycleTimeMs: number | null;
   readonly operatorWaitMs: number | null;
   readonly revertRate: RevertRate;
@@ -994,6 +999,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     weeklyLimit: lastWeeklyLimitOf(records),
     subscriptions: subscriptionsOf(records),
     humanTouches: mean(merged.map((pullRequest) => pullRequest.humanTouches)),
+    retriesPerMergedPullRequest: mean(merged.map(({ repo, pullRequest }) => retriesOnPathOf(week, input.records, repo, pullRequest.ticket))),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
     operatorWaitMs: median(merged.flatMap((pullRequest) => operatorWaitOf(pullRequest, input.operator))),
     revertRate: revertRateOf(week, input),
@@ -1006,7 +1012,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
       const dispatch = dispatchOf(ticket);
       return dispatch !== null && within(week, dispatch);
     }).length,
-    retries: records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null).length,
+    retries: retriesIn(records),
     brokenRuns: records.filter((record) => record.brokenRun !== null).length,
     landingsFailed: records.filter((record) => record.landing !== null).length,
     flakyChecks: flakyChecksIn(week, input.facts),
@@ -1016,6 +1022,28 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     scores: scoresOf(week, input),
     scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
+}
+
+/**
+ * How many Retries a merged agent PR's Ticket had, on its whole path: every
+ * Retry on the Ticket, in its repo, that ended before the week did, on any of
+ * its PRs, the way the cost per merged PR walks it (./mergedCost.ts). None
+ * for a PR that names no Ticket.
+ */
+function retriesOnPathOf(week: Week, records: readonly RunRecord[], repo: string, ticket: number | null): number {
+  if (ticket === null) return 0;
+  return retriesIn(endedBy(week, records).filter((record) => record.repo === repo && record.issue === ticket));
+}
+
+/**
+ * How many Retries these records hold: Implement records with `retry > 0`
+ * and no Infrastructure failure, so a Retry refused on the weekly limit and
+ * then resumed counts once, and each (Ticket, PR, Retry number) once, so a
+ * Retry started again after its landing failed counts once too.
+ */
+function retriesIn(records: readonly RunRecord[]): number {
+  const retries = records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null);
+  return new Set(retries.map(({ repo, issue, pullRequest, retry }) => JSON.stringify([repo, issue, pullRequest, retry]))).size;
 }
 
 /**
@@ -1757,7 +1785,7 @@ function midnight(date: number, timeZone: string): number {
 // Waiting on you leads with the config's first error.
 
 function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords }: WeeklySummaryInput): string {
-  const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, cycleTimeMs, operatorWaitMs, revertRate, architecturalEscapes, counts } = summary;
+  const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, retriesPerMergedPullRequest, cycleTimeMs, operatorWaitMs, revertRate, architecturalEscapes, counts } = summary;
   const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
   const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
   const revertChange = pointsChange({ thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) });
@@ -1791,6 +1819,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords 
     costRow("Spend that never merged", spendNeverMerged),
     row("Merged agent PRs", counts.mergedPullRequests, count),
     row("Tickets dispatched", counts.ticketsDispatched, count),
+    row("Retries per merged PR", retriesPerMergedPullRequest, (value) => value.toFixed(1)),
     row("Retries", counts.retries, count),
     row("Broken runs", counts.brokenRuns, count),
     row("Landings failed", counts.landingsFailed, count),

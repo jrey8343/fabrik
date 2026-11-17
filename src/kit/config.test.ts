@@ -9,16 +9,16 @@ const readme = readFileSync(new URL("README.md", root), "utf8");
 const DEFAULTS = {
   sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
   roles: {
-    triage: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 10 },
-    design: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
-    implement: { model: "claude-sonnet-5-5", effort: null, timeoutMinutes: 60 },
-    review: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
-    audit: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
-    retro: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 45 },
-    research: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 30 },
-    digest: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 10 },
+    triage: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 10 },
+    design: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 30 },
+    implement: { model: "claude-sonnet-5-5", effort: "medium", timeoutMinutes: 60 },
+    review: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 30 },
+    audit: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 45 },
+    retro: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 45 },
+    research: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 30 },
+    digest: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 10 },
     dispatch: { timeoutMinutes: 10 },
-    stepUp: { model: "claude-opus-5-5", effort: null },
+    stepUp: { model: "claude-opus-5-5", effort: "medium" },
   },
   maxInFlight: 2,
   caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
@@ -53,7 +53,7 @@ describe("Kit config", () => {
       ok: true,
       config: {
         ...DEFAULTS,
-        roles: { ...DEFAULTS.roles, implement: { model: "claude-opus-5-5", effort: null, timeoutMinutes: 60 } },
+        roles: { ...DEFAULTS.roles, implement: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 60 } },
       },
     });
   });
@@ -263,16 +263,16 @@ describe("Kit config", () => {
     const starter = {
       sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
       roles: {
-        triage: { model: "claude-opus-5-5", effort: null, timeout_minutes: 10 },
-        design: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
-        implement: { model: "claude-sonnet-5-5", effort: null, timeout_minutes: 60 },
-        review: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
-        audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
-        retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 },
-        research: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 },
-        digest: { model: "claude-opus-5-5", effort: null, timeout_minutes: 10 },
+        triage: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 10 },
+        design: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
+        implement: { model: "claude-sonnet-5-5", effort: "medium", timeout_minutes: 60 },
+        review: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
+        audit: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 },
+        retro: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 },
+        research: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
+        digest: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 10 },
         dispatch: { timeout_minutes: 10 },
-        step_up: { model: "claude-opus-5-5", effort: null },
+        step_up: { model: "claude-opus-5-5", effort: "medium" },
       },
       max_in_flight: 2,
       caps: { design_sessions: 2, monitor_issues: 5, maps: 1, merge_gate: 3 },
@@ -316,6 +316,20 @@ describe("Kit config", () => {
 
   it("has no time zone note for a Kit config that isn't JSON, whose errors say so", () => {
     expect(timeZoneNote("{ not json")).toBeNull();
+  });
+
+  it("names medium outright for every role's effort when the Product names none (#740)", () => {
+    const result = resolveKitConfig({ config: "{}" });
+    const roles = result.ok ? result.config.roles : null;
+    const efforts = [roles?.triage, roles?.design, roles?.implement, roles?.review, roles?.audit, roles?.retro, roles?.research, roles?.digest, roles?.stepUp];
+
+    expect(efforts.map((role) => role?.effort)).toEqual(Array(9).fill("medium"));
+  });
+
+  it("runs Implement at a Product's own implement.effort, with every other role still at medium", () => {
+    const result = resolveKitConfig({ config: `{ "roles": { "implement": { "effort": "high" } } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, roles: { ...DEFAULTS.roles, implement: { ...DEFAULTS.roles.implement, effort: "high" } } } });
   });
 
   it("lets null reset an effort back to the CLI default", () => {
@@ -584,7 +598,7 @@ describe("The Audit's Kit config", () => {
     expect(result.ok && result.config.audit).toEqual({ day: "sunday" });
     expect(result.ok && result.config.roles.audit).toEqual({
       model: "claude-opus-5-5",
-      effort: null,
+      effort: "medium",
       timeoutMinutes: 45,
     });
   });
@@ -666,7 +680,7 @@ describe("The Retro's Kit config", () => {
     expect(result.ok && result.config.retro).toEqual({ day: "saturday" });
     expect(result.ok && result.config.roles.retro).toEqual({
       model: "claude-opus-5-5",
-      effort: null,
+      effort: "medium",
       timeoutMinutes: 45,
     });
   });
@@ -742,12 +756,12 @@ describe("The Retro's Kit config", () => {
 });
 
 describe("The Researcher's Kit config", () => {
-  it("gives a repo that sets nothing a Researcher on Opus 5.5 with no effort and a 30-minute timeout", () => {
+  it("gives a repo that sets nothing a Researcher on Opus 5.5 at medium effort with a 30-minute timeout", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 1 }` });
 
     expect(result.ok && result.config.roles.research).toEqual({
       model: "claude-opus-5-5",
-      effort: null,
+      effort: "medium",
       timeoutMinutes: 30,
     });
   });
@@ -790,7 +804,7 @@ describe("The Digest's Kit config (ADR-0022)", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 4 }` });
 
     expect(result.ok && result.config.digest).toEqual({ enabled: true });
-    expect(result.ok && result.config.roles.digest).toEqual({ model: "claude-opus-5-5", effort: null, timeoutMinutes: 10 });
+    expect(result.ok && result.config.roles.digest).toEqual({ model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 10 });
   });
 
   it("defaults roles.digest's model and effort to the repo's own roles.review, and its time limit to 10, never the Reviewer's", () => {
@@ -862,20 +876,20 @@ describe("The Kit config template", () => {
   it("spells out audit.day and roles.audit at their Kit defaults", () => {
     expect(JSON.parse(template)).toMatchObject({
       audit: { day: "sunday" },
-      roles: { audit: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 } },
+      roles: { audit: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 } },
     });
   });
 
   it("spells out retro.day and roles.retro at their Kit defaults", () => {
     expect(JSON.parse(template)).toMatchObject({
       retro: { day: "saturday" },
-      roles: { retro: { model: "claude-opus-5-5", effort: null, timeout_minutes: 45 } },
+      roles: { retro: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 } },
     });
   });
 
   it("spells out roles.research and caps.maps at their Kit defaults: the Researcher on Opus 5.5 for 30 minutes, and one open Map", () => {
     expect(JSON.parse(template)).toMatchObject({
-      roles: { research: { model: "claude-opus-5-5", effort: null, timeout_minutes: 30 } },
+      roles: { research: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 } },
       caps: { maps: 1 },
     });
   });
