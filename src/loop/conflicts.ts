@@ -8,12 +8,15 @@
 // changes main, only the PR's own branch. A draft whose push GitHub never
 // reviewed, because the draft conflicts with main, takes the same path (#389,
 // ADR-0016): nothing else would move it on. So does a draft whose Review passed
-// while it conflicts with main, before the Merge gate opens (#480).
+// while it conflicts with main, before the Merge gate opens (#480), and one whose
+// Review stopped waiting because it conflicts (#704, ADR-0028), at once, with no
+// grace period: the Review that period leaves room for has ended.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
 import type { Recovery } from "./recoveryWaits.ts";
+import { checkNames } from "./checkNames.ts";
 import { hasVerdictOn, runInFlight, runName, unstartedRetry } from "./retry.ts";
 import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure, KitConfig, MergeableSnapshot, Plan, PullRequestSnapshot } from "./types.ts";
@@ -55,40 +58,65 @@ export function checkConflicts(
       reasons.push("The default branch has no head, so no PR can conflict with it");
       continue;
     }
-    const why = whyNotRebased(candidate, main, operator, now, waits.unreviewedDraft);
-    if (why !== null) reasons.push(why);
+    const why = whyNotRebased(candidate, main, operator, { now, reviewMinutes: waits.unreviewedDraft });
+    if (why !== null) reasons.push(why.reason);
     else actions.push(rebaseOntoMain(candidate.pullRequest, main, held));
   }
   if (actions.length > 0) return { kind: "act", actions };
   return { kind: "nothing", reason: reasons.length === 0 ? "No agent PR is open, so none conflicts with main" : reasons.join("; ") };
 }
 
-/** Why the Kit doesn't bring this PR up to date with main at `main` now, or null when it does. */
+/** When a conflict check runs, and the unreviewed-draft grace period it leaves a draft's push, in minutes (ADR-0016). */
+interface Grace {
+  readonly now: string;
+  readonly reviewMinutes: number;
+}
+
+/**
+ * Which of whyNotRebased's rules keeps a PR as it is: a Request changes no run
+ * has started for, a run in flight, an attempt already made against this main
+ * head, a mergeable state GitHub hadn't worked out, no conflict, or any other.
+ */
+type NotRebasedRule = "undelivered" | "in-flight" | "tried" | "unknown" | "clean" | "other";
+
+/** Why the Kit doesn't bring a PR up to date with main now: the rule, and the reason the conflict check gives. */
+interface NotRebased {
+  readonly rule: NotRebasedRule;
+  readonly reason: string;
+}
+
+/**
+ * Why the Kit doesn't bring this PR up to date with main at `main` now, or
+ * null when it does. `grace` is when the check runs and the unreviewed-draft
+ * grace period, for a draft whose push may still have a Review under way;
+ * null when the caller knows its Review has ended (#704), so a conflicting
+ * draft is brought up to date with no wait.
+ */
 function whyNotRebased(
   { pullRequest, mergeable }: ConflictCandidate,
   main: string,
   operator: string,
-  now: string,
-  reviewMinutes: number,
-): string | null {
+  grace: Grace | null,
+): NotRebased | null {
   const { number } = pullRequest;
-  if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return `#${number} isn't an open agent PR for a Ticket`;
+  const other = (reason: string): NotRebased => ({ rule: "other", reason });
+  if (!pullRequest.isAgent || pullRequest.ticket === null || !pullRequest.open) return other(`#${number} isn't an open agent PR for a Ticket`);
   if (pullRequest.draft) {
-    const why = whyNotUnreviewedDraft(pullRequest, mergeable, now, reviewMinutes);
-    if (why !== null) return why;
+    const why = whyNotUnreviewedDraft(pullRequest, mergeable, grace);
+    if (why !== null) return other(why);
   }
   // Its Request-changes run, which the Kit starts once the review is past its grace period, brings main in itself, by merging (#341).
   if (unnotedChangesRequests(pullRequest, operator).length > 0) {
-    return `#${number} has a Request changes from the Operator that no run has started for yet, so its Request-changes run brings main in instead`;
+    return { rule: "undelivered", reason: `#${number} has a Request changes from the Operator that no run has started for yet, so its Request-changes run brings main in instead` };
   }
   const run = runInFlight(pullRequest);
-  if (run !== null) return `${runName(run)} on #${number} is still in flight, so main isn't brought in now: its push is rebased when it lands`;
+  if (run !== null) return { rule: "in-flight", reason: `${runName(run)} on #${number} is still in flight, so main isn't brought in now: its push is rebased when it lands` };
   if (pullRequest.conflictAttempts.includes(main)) {
-    return `#${number} was already tried against main at ${main.slice(0, 7)}, so it waits for main to move or for the Operator`;
+    return { rule: "tried", reason: `#${number} was already tried against main at ${main.slice(0, 7)}, so it waits for main to move or for the Operator` };
   }
-  if (mergeable === null) return `GitHub hadn't worked out whether #${number} conflicts with main, so it's left for the scheduled tick`;
+  if (mergeable === null) return { rule: "unknown", reason: `GitHub hadn't worked out whether #${number} conflicts with main, so it's left for the scheduled tick` };
   // Rebasing a PR that's only behind would push, and start a Review, on every PR after every merge.
-  if (mergeable) return `#${number} doesn't conflict with main, so it's left as it is`;
+  if (mergeable) return { rule: "clean", reason: `#${number} doesn't conflict with main, so it's left as it is` };
   return null;
 }
 
@@ -101,9 +129,14 @@ function whyNotRebased(
  * rules (a run in flight, one attempt per main head, a mergeable state
  * GitHub has worked out) apply to it as to a PR at the Merge gate. A push is
  * left `reviewMinutes` (the record's unreviewedDraft) for a Review that did
- * start before the Kit counts it as never reviewed.
+ * start before the Kit counts it as never reviewed; with no `grace`, the
+ * caller knows that Review has ended (#704), so there's nothing to leave.
  */
-function whyNotUnreviewedDraft(pullRequest: PullRequestSnapshot, mergeable: boolean | null, now: string, reviewMinutes: number): string | null {
+function whyNotUnreviewedDraft(
+  pullRequest: PullRequestSnapshot,
+  mergeable: boolean | null,
+  grace: Grace | null,
+): string | null {
   const { number, headSha, headPushedAt } = pullRequest;
   const head = headSha.slice(0, 7);
   // A Verdict on its head: the Loop's next step is already decided, or the Operator parked it after a pass.
@@ -111,7 +144,8 @@ function whyNotUnreviewedDraft(pullRequest: PullRequestSnapshot, mergeable: bool
     return `#${number} is a draft with a Verdict on ${head}, so it isn't brought up to date with main`;
   }
   // Only a conflict keeps GitHub from starting the Review its push should have.
-  if (mergeable !== false) return null;
+  if (mergeable !== false || grace === null) return null;
+  const { now, reviewMinutes } = grace;
   if (headPushedAt === null) return `#${number} is a draft and when ${head} was pushed isn't known, so it isn't brought up to date with main`;
   // A Review that did start, before main moved, is given its job's whole timeout to land.
   if (Date.parse(now) - Date.parse(headPushedAt) < reviewMinutes * 60_000) {
@@ -202,59 +236,144 @@ function rebaseOntoMain(
   main: string,
   held: HeldOn | null,
   stance: Stance = pullRequest.draft ? "unreviewed-draft" : "merge-gate",
+  noteBodies: RebaseNoteBodies | null = null,
 ): Action {
   const { number } = pullRequest;
   const ticket = pullRequest.ticket as number;
   const branch = agentBranchFor(ticket);
   const notes = stanceNotes(stance, number, main.slice(0, 7));
+  const said = noteBodies ?? stanceNoteBodies(notes, branch, number, held);
   const unreviewedDraft = notes.unreviewedDraft ? { unreviewedDraft: true as const } : {};
   const toDraft: Action[] = notes.atMergeGate ? [{ kind: "convert-to-draft", pullRequest: number }] : [];
+  const comment = (body: string): Action => ({ kind: "comment", issue: number, body });
   return {
     kind: "rebase-onto-main",
     pullRequest: number,
     branch,
     onto: main,
     clean: toDraft,
-    pushed: [
-      {
-        kind: "comment",
-        issue: number,
-        body: [
-          conflictAttemptMarker({ main, outcome: "rebased", ...unreviewedDraft }),
-          `${notes.why}, so the Kit rebased \`${branch}\` onto it${notes.rebasedTail}. The rebase was clean, so no agent ran and no retry was used.`,
-          "",
-          notes.pushed,
-        ].join("\n"),
-      },
-    ],
+    pushed: [comment([conflictAttemptMarker({ main, outcome: "rebased", ...unreviewedDraft }), said.pushed].join("\n"))],
     // The branch moved between the rebase and its push: nothing landed, so nothing is recorded. A draft stays one, and
     // a PR put in draft for the push says why it's back out (#436). Unmarked, so the next check tries again.
-    refused: notes.atMergeGate
-      ? [
-          { kind: "mark-ready-for-review", pullRequest: number },
-          {
-            kind: "comment",
-            issue: number,
-            body: `${notes.why}, so the Kit rebased \`${branch}\` onto it, but the branch moved before the rebase could be pushed, so nothing landed. #${number} is back out of draft as it was, and the next conflict check tries again.`,
-          },
-        ]
-      : [],
+    refused: [...(notes.atMergeGate ? [{ kind: "mark-ready-for-review" as const, pullRequest: number }] : []), ...(said.refused === null ? [] : [comment(said.refused)])],
     conflicted: [
-      {
-        kind: "comment",
-        issue: number,
-        body: [
-          conflictAttemptMarker({ main, outcome: "conflict-run", ...unreviewedDraft }),
-          `${notes.why}, and rebasing \`${branch}\` onto it conflicts too.`,
-          "",
-          `A conflict-only Implementer run ${startsWhen(held)}, on the Step-up model: it rebases the branch onto \`main\`, resolves the conflicts and changes nothing else. ${notes.conflicted}${heldUntilThen(held)}`,
-        ].join("\n"),
-      },
+      comment([conflictAttemptMarker({ main, outcome: "conflict-run", ...unreviewedDraft }), said.conflicted].join("\n")),
       ...toDraft,
       // A fresh agent:implement on the Ticket starts the run in flight on its open PR. It notifies nobody.
       { kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] },
     ],
   };
+}
+
+/**
+ * What a rebase's notes say after their marker: once pushed, once its lease
+ * refused it (null for none), and once it conflicted. A stance's own, unless
+ * its caller words them itself (afterConflictedReview).
+ */
+interface RebaseNoteBodies {
+  readonly pushed: string;
+  readonly refused: string | null;
+  readonly conflicted: string;
+}
+
+/** The notes a rebase gives for where the PR stands: a draft's lease refusal says nothing, for the next check. */
+function stanceNoteBodies(notes: StanceNotes, branch: string, number: number, held: HeldOn | null): RebaseNoteBodies {
+  return {
+    pushed: [`${notes.why}, so the Kit rebased \`${branch}\` onto it${notes.rebasedTail}. The rebase was clean, so no agent ran and no retry was used.`, "", notes.pushed].join("\n"),
+    refused: notes.atMergeGate
+      ? `${notes.why}, so the Kit rebased \`${branch}\` onto it, but the branch moved before the rebase could be pushed, so nothing landed. #${number} is back out of draft as it was, and the next conflict check tries again.`
+      : null,
+    conflicted: [
+      `${notes.why}, and rebasing \`${branch}\` onto it conflicts too.`,
+      "",
+      `A conflict-only Implementer run ${startsWhen(held)}, on the Step-up model: it rebases the branch onto \`main\`, resolves the conflicts and changes nothing else. ${notes.conflicted}${heldUntilThen(held)}`,
+    ].join("\n"),
+  };
+}
+
+/**
+ * What the Loop does after a Review whose checks wait stopped because its
+ * draft conflicts with main (#704, ADR-0028), from its own read of whether the
+ * PR conflicts, `mergeable`, not the wait's. While it conflicts, it takes the
+ * unreviewed-draft path (ADR-0016) at once, with no grace period, since that
+ * Review has ended: the rebase, else the conflict-only run, its Verdict
+ * counted as the unreviewed push's would have been, and every other rule of
+ * that path still applies. Its notes lead with what happened, naming the
+ * checks GitHub didn't start (`unstarted`), then say in bold whether the
+ * Operator has to act; only when they do does a note mention them and hand
+ * the PR back. When the Kit can't move the PR on from here, the note says why,
+ * what will, and how to move it sooner by hand. When it no longer conflicts,
+ * nothing will: GitHub won't start the checks on its head until something is
+ * pushed, so that note is the Operator's. Null for a PR
+ * that isn't an open agent draft for a Ticket, which a Review no longer
+ * weighs.
+ */
+export function afterConflictedReview(
+  pullRequest: PullRequestSnapshot,
+  mergeable: MergeableSnapshot,
+  unstarted: readonly string[],
+  operator: string,
+  held: HeldOn | null,
+): Action[] | null {
+  const { number, ticket } = pullRequest;
+  if (!pullRequest.isAgent || ticket === null || !pullRequest.open || !pullRequest.draft) return null;
+  const branch = agentBranchFor(ticket);
+  const checks = unstarted.length === 0 ? "its Required checks" : checkNames(unstarted, "or");
+  const main = mergeable.main;
+  const at = main === null ? "" : ` at ${main.slice(0, 7)}`;
+  const opening = `Review couldn't start on #${number}: it conflicts with \`main\`${at}, and GitHub doesn't run ${checks} on a PR it can't merge. Your workflows are fine.`;
+  const sooner = `To move sooner, merge \`main\` into \`${branch}\` yourself and push.`;
+  /** A note the Operator needn't act on: it mentions nobody and hands nothing back. */
+  const noActionNote = (said: string): Action[] => [{ kind: "comment", issue: number, body: [opening, "", said].join("\n") }];
+  /** A note only the Operator can act on: it mentions them, and hands the PR back. */
+  const handedBack = (first: string, said: string): Action[] => [
+    { kind: "comment", issue: number, body: [`@${operator} ${first}`, "", `**This needs you.** ${said}`, handBackMarker({ kind: "conflicted-review", role: "review" })].join("\n") },
+  ];
+  const mergeYourself = `Merge \`main\` into \`${branch}\` and push, and Review starts on the push.`;
+  if (main === null) return noActionNote(`**You don't need to do anything yet.** The default branch's head couldn't be read, so the Kit left #${number} for a later conflict check. ${sooner}`);
+  const why = whyNotRebased({ pullRequest, mergeable: mergeable.mergeable }, main, operator, null);
+  if (why === null) {
+    return [
+      rebaseOntoMain(pullRequest, main, held, "unreviewed-draft", {
+        pushed: [opening, "", `**You don't need to do anything.** The Kit rebased \`${branch}\` onto \`main\` cleanly and pushed it, so no agent ran and no retry was used. Review starts on the rebased head.`].join("\n"),
+        refused: [
+          opening,
+          "",
+          `**You don't need to do anything.** The Kit rebased \`${branch}\` onto \`main\`, but the branch moved before the rebase could be pushed, so nothing landed. Review starts on that push if it merges cleanly with \`main\`; if it still conflicts, a later conflict check brings it up to date.`,
+        ].join("\n"),
+        conflicted: [
+          opening,
+          "",
+          `**You don't need to do anything.** Rebasing \`${branch}\` onto \`main\` conflicts too, so a conflict-only Implementer run ${startsWhen(held)}, on the Step-up model: it rebases the branch onto \`main\`, resolves the conflicts and changes nothing else. It uses no retry, and the Verdict on its push counts as one on the unreviewed push would have. Review starts on the run's push.${heldUntilThen(held)}`,
+        ].join("\n"),
+      }),
+    ];
+  }
+  // It conflicted while the Review waited, but merges cleanly now: GitHub starts the checks on a push, and only a push.
+  // A run that pushes, in flight or owed for a Request changes, starts them; nothing else will.
+  if (mergeable.mergeable === true && why.rule !== "undelivered" && why.rule !== "in-flight") {
+    return handedBack(
+      `Review couldn't start on #${number}: it conflicted with \`main\` while Review waited, and GitHub doesn't run ${checks} on a PR it can't merge. Your workflows are fine.`,
+      `#${number} merges cleanly with \`main\`${at} now, but GitHub won't start the checks on \`${pullRequest.headSha.slice(0, 7)}\` until something is pushed to \`${branch}\`. ${mergeYourself}`,
+    );
+  }
+  switch (why.rule) {
+    case "undelivered":
+      return noActionNote(`**You don't need to do anything.** #${number} has a Request changes from you that no run has started for yet, and the Request-changes run brings \`main\` in when it starts. ${sooner}`);
+    case "in-flight": {
+      const run = runInFlight(pullRequest);
+      return noActionNote(`**You don't need to do anything.** ${run === null ? "A run" : runName(run)} on #${number} is still in flight, so the Kit isn't bringing the branch up to date now: its push is rebased when it lands. ${sooner}`);
+    }
+    case "unknown":
+      return noActionNote(
+        `**You don't need to do anything yet.** GitHub hadn't worked out whether #${number} still conflicts with \`main\`, so the Kit left it for a later conflict check, which brings it up to date if it does. If it merges cleanly, GitHub won't start the checks on \`${pullRequest.headSha.slice(0, 7)}\` until something is pushed to \`${branch}\`. ${sooner}`,
+      );
+    // A later conflict check tries again once main moves past this head.
+    case "tried":
+      return noActionNote(`**You don't need to do anything.** The Kit already tried to bring #${number} up to date with \`main\`${at}, so it tries again once \`main\` moves. ${sooner}`);
+    default:
+      return handedBack(opening, `The Kit isn't bringing it up to date from here: ${why.reason}. ${mergeYourself}`);
+  }
 }
 
 /**
