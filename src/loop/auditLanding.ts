@@ -3,7 +3,7 @@
 // only the candidates' text. The Audit stays silent: no state label, no
 // assignee, no mention.
 import { shortSha } from "../skills/lock.ts";
-import { isPendingAudit, TOP_RECOMMENDATION_HEADING } from "./audit.ts";
+import { INTRODUCED_BY, isPendingAudit, TOP_RECOMMENDATION_HEADING } from "./audit.ts";
 import { failWeekly } from "./weeklyRuns.ts";
 import { type AuditCandidate, type AuditOutput, parseAuditOutput } from "./auditOutput.ts";
 import { newIssueUrl } from "./followUps.ts";
@@ -138,7 +138,7 @@ function card(candidate: AuditCandidate, introducedBy: readonly number[], repoUr
     "",
     ...mermaid(candidate.after),
     "",
-    `**Introduced by:** ${introducedBy.length === 0 ? "No merged agent PR" : introducedBy.map((n) => `#${n}`).join(", ")}`,
+    `${INTRODUCED_BY} ${introducedBy.length === 0 ? "No merged agent PR" : introducedBy.map((n) => `#${n}`).join(", ")}`,
     "",
     `[Open as issue](${openAsIssue(candidate, introducedBy, repoUrl, audit)})`,
   ];

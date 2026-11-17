@@ -704,6 +704,14 @@ describe("The Auditor's prompt", () => {
     expect(tracing).toContain(`"${AUDIT_SECTIONS.pullRequests}"`);
   });
 
+  it("names in introducedBy only the PRs that introduced the structure or grew it into the problem, and none for a problem older than every agent PR", async () => {
+    const tracing = section(await prompt("audit"), "Tracing a candidate");
+    expect(tracing).toContain("only the merged agent PRs that introduced the structure or grew it into the problem");
+    expect(tracing).toContain("never one that only extended structure older than itself");
+    expect(tracing).toContain("A candidate whose problem predates every agent PR gets an empty `introducedBy`");
+    expect(tracing).toContain("filed with no escape marker");
+  });
+
   it(`asks for at most ${MAX_AUDIT_CANDIDATES} candidates, Strongest first, ending with the <audit> contract its example meets`, async () => {
     const text = await prompt("audit");
     expect(section(text, "Choosing candidates")).toContain(`At most ${MAX_AUDIT_CANDIDATES} candidates, Strongest first`);

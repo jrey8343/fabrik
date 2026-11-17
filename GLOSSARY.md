@@ -381,7 +381,7 @@ Each time the Operator steps into a Ticket's path between Dispatch and merge: a 
 _Avoid_: intervention, manual fix
 
 **Architectural escape**:
-An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted against those pull requests, never against a candidate the Operator set aside.
+An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted once, however many pull requests it traces to, never for a candidate the Operator set aside or hasn't decided.
 _Avoid_: architecture regression, design debt
 
 **Review miss**:
