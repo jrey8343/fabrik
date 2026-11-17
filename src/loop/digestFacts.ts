@@ -261,7 +261,7 @@ function row(who: RoundWho, what: RoundWhat): Round {
 }
 
 /** The round a note of the Kit's records, if it records one: a push, or a failure notice. */
-function noteRound(body: string, sofar: readonly string[], landedNothing: number): Round[] {
+export function noteRound(body: string, sofar: readonly string[], landedNothing: number): Round[] {
   if (body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH)) {
     // The Retry the latest Verdict called for, numbered as the Retry rules numbered it then.
     return [{ ...row("implementer", "retry"), retry: retryNumber(verdictsIn(sofar).slice(0, -1), landedNothing) }];

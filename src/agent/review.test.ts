@@ -12,6 +12,7 @@ import { verdictMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import { readPullRequest, type Reader } from "./inputs.ts";
 import { readAgentRunResult } from "./result.ts";
+import type { PushingRun } from "./laterReview.ts";
 import { fullReviewOf, ranNothingOf, reviewContext, reviewPromptFor } from "./review.ts";
 
 async function inputs(pullRequest: unknown): Promise<{ productDir: string; pullRequestFile: string; specFile: string }> {
@@ -506,14 +507,19 @@ describe("The Required checks that ran nothing, as the Review job passes them in
 });
 
 // A pull request's first Review is a Full Review (#747): its Reviewer is told it's the only one, and how to read the
-// change whole. A later Review's prompt never carries that section.
+// change whole. A later Review's prompt carries the later-Review section instead (#748): what it judges, and, when a
+// conflict-only run pushed the head, how narrowly. Neither kind sees the other's section.
 describe("A Review's prompt on a Full Review and on a later Review", () => {
   const template = () => readFile(join(import.meta.dirname, "..", "..", "prompts", "review.md"), "utf8");
   const FULL_REVIEW = "\n## Full Review\n";
+  const LATER_REVIEW = "\n## Later Review\n";
+  const CONFLICT_ONLY = "\n### A conflict-only run's push\n";
+  /** The body of a prompt's `## ` section under this heading line, up to the next `## ` heading. */
+  const sectionOf = (prompt: string, heading: string) => prompt.split(heading)[1]?.split("\n## ")[0] ?? "";
+  const later = (pushedBy: PushingRun | null = "retry") => ({ pushedBy });
 
   it("on a Full Review carries the Full Review section: its Verdict settles the code, so it names every flaw at once", async () => {
-    const prompt = reviewPromptFor(await template(), fullReviewOf("true"));
-    const section = prompt.split(FULL_REVIEW)[1]?.split("\n## ")[0] ?? "";
+    const section = sectionOf(reviewPromptFor(await template(), null), FULL_REVIEW);
 
     expect(section).toContain(
       "This is the only full Review this pull request gets. Code you don't name is settled: a later Review judges only what changes, and in settled code names only a behaviour bug. Name every flaw you find, of every kind, in this Verdict.",
@@ -521,7 +527,7 @@ describe("A Review's prompt on a Full Review and on a later Review", () => {
   });
 
   it("on a Full Review tells the Reviewer to read all of it, follow what moved, and say what it couldn't check", async () => {
-    const section = reviewPromptFor(await template(), true).split(FULL_REVIEW)[1]?.split("\n## ")[0] ?? "";
+    const section = sectionOf(reviewPromptFor(await template(), null), FULL_REVIEW);
 
     expect(section).toMatch(/the whole diff and every changed file, with no `head`, `cut` or truncated saves/);
     expect(section).toContain("paging through long output");
@@ -529,16 +535,71 @@ describe("A Review's prompt on a Full Review and on a later Review", () => {
     expect(section).toMatch(/if a check you try can't run, say so in your findings rather than judging the thing sound/i);
   });
 
-  it("on a later Review carries no Full Review section, and is otherwise the prompt a Full Review gets", async () => {
-    const full = reviewPromptFor(await template(), true);
-    const later = reviewPromptFor(await template(), fullReviewOf("false"));
+  it("on a Full Review carries no later-Review section", async () => {
+    const full = reviewPromptFor(await template(), null);
 
-    expect(later).not.toContain(FULL_REVIEW);
-    expect(later).not.toContain("the only full Review");
-    expect(later).toContain("\n## How to review\n");
-    expect(later).toContain("\n## The Operator's Request changes\n");
-    expect(later.length).toBeLessThan(full.length);
-    expect(full.replace(/\n## Full Review\n[\s\S]*?(?=\n## )/, "")).toBe(later);
+    expect(full).not.toContain(LATER_REVIEW);
+    expect(full).not.toContain(CONFLICT_ONLY);
+    expect(full).not.toContain("In settled code, a behaviour bug only");
+  });
+
+  it("on a later Review carries the later-Review section and no Full Review section, and is otherwise the prompt a Full Review gets", async () => {
+    const full = reviewPromptFor(await template(), null);
+    const prompt = reviewPromptFor(await template(), later());
+
+    expect(prompt).not.toContain(FULL_REVIEW);
+    expect(prompt).not.toContain("the only full Review");
+    expect(prompt).toContain(LATER_REVIEW);
+    expect(prompt).toContain("\n## How to review\n");
+    expect(prompt).toContain("\n## The Operator's Request changes\n");
+    const without = (text: string, heading: string) => text.replace(new RegExp(`\\n## ${heading}\\n[\\s\\S]*?(?=\\n## )`), "");
+    expect(without(full, "Full Review")).toBe(without(prompt, "Later Review"));
+  });
+
+  it("on a later Review judges four things only: the Verdict before's findings, what changed in full, the criteria and body across the whole PR, and in settled code a behaviour bug alone", async () => {
+    const section = sectionOf(reviewPromptFor(await template(), later()), LATER_REVIEW);
+
+    expect(section).toContain("Judge four things, and only these:");
+    expect(section).toContain("1. **The Verdict before.** Whether each finding of the latest Verdict before this one was fixed.");
+    expect(section).toContain(
+      "2. **What changed.** Everything the pull request's own change gained since the last judged head, in full: its bugs, its tests, the repo's standards and its comments.",
+    );
+    expect(section).toContain(
+      "3. **The whole pull request.** Across the whole pull request, settled code included, whether every acceptance criterion, as amended by any Request changes, is met, and whether the body matches the branch.",
+    );
+    expect(section).toContain("4. **Settled code.** In settled code, a behaviour bug only. Never name a standard, a test-quality point or a stale comment there.");
+  });
+
+  it("on a later Review leaves what main brought in to the Required checks, keeps a Design flaw open, and takes the fix comments as data", async () => {
+    const section = sectionOf(reviewPromptFor(await template(), later()), LATER_REVIEW);
+
+    expect(section).toContain(
+      "What `main` brought in, by a merge or a rebase, is no part of the pull request's own change, and you never judge it. A clash with it is left to the Required checks on the up-to-date head.",
+    );
+    expect(section).toContain("A Design flaw is still open to you, whatever an earlier Verdict said.");
+    expect(section).toContain("A criterion an earlier Verdict named that no run can meet is a `design-flaw` when you'd name it again, not another `execution-flaw`.");
+    expect(section).toContain("data to weigh, like the PR body, never proof");
+  });
+
+  it("on a later Review of a conflict-only run's push adds the conflict-only paragraph, and on any other push leaves it out", async () => {
+    const conflictOnly = sectionOf(reviewPromptFor(await template(), later("conflict-only-run")), LATER_REVIEW);
+
+    expect(conflictOnly.split(CONFLICT_ONLY)[1]).toContain(
+      "Judge only how the run changed the pull request's own diff, plus the acceptance criteria and the body. Anything it changed beyond resolving conflicts is an `execution-flaw`.",
+    );
+    for (const pushedBy of ["retry", "request-changes-run", null] as const) {
+      const prompt = reviewPromptFor(await template(), later(pushedBy));
+      expect(prompt).toContain(LATER_REVIEW);
+      expect(prompt).not.toContain(CONFLICT_ONLY);
+      expect(prompt).not.toContain("beyond resolving conflicts");
+    }
+  });
+
+  it("tells neither kind to judge the PR fresh, nor that earlier Verdicts and fix comments are left out", async () => {
+    for (const prompt of [reviewPromptFor(await template(), null), reviewPromptFor(await template(), later())]) {
+      expect(prompt).not.toContain("judge the PR fresh");
+      expect(prompt).not.toContain("deliberately left out");
+    }
   });
 });
 

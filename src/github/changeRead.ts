@@ -14,7 +14,7 @@ import { verdictsIn } from "./threads.ts";
  * its lines removed at one path and added at another, and full index lines,
  * which name a binary file's content.
  */
-const DIFF = [
+export const DIFF = [
   "-c",
   "core.quotePath=false",
   "diff",

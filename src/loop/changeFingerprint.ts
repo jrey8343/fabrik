@@ -153,8 +153,7 @@ function unquoted(quoted: string): Uint8Array {
  * comes to the same fingerprint as they do.
  */
 export function changeFingerprintOf(diff: Uint8Array | string): ChangeFingerprint {
-  const bytes = typeof diff === "string" ? new TextEncoder().encode(diff) : diff;
-  const files = changedFilesIn(byteStringOf(bytes)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const files = sortedFilesIn(diff);
   const over = (entries: readonly (readonly [string, string])[]) => hashOf(entries.map(([path, hash]) => `${path}\0${hash}\n`).join(""));
   return {
     v: 1,
@@ -162,6 +161,31 @@ export function changeFingerprintOf(diff: Uint8Array | string): ChangeFingerprin
     product: over(files.filter(([path]) => !isTestPath(path))),
     files: files.length > MAX_FILES ? null : Object.fromEntries(files),
   };
+}
+
+/** Each file a diff changes, with its hash, by path, read as changeFingerprintOf reads them. */
+function sortedFilesIn(diff: Uint8Array | string): [path: string, hash: string][] {
+  const bytes = typeof diff === "string" ? new TextEncoder().encode(diff) : diff;
+  return changedFilesIn(byteStringOf(bytes)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** Each file a diff changes, with its hash, as a fingerprint names them, however many there are (#748). */
+export function fileHashesOf(diff: Uint8Array | string): Readonly<Record<string, string>> {
+  return Object.fromEntries(sortedFilesIn(diff));
+}
+
+/**
+ * The paths whose hash differs between two sets of file hashes, or that only
+ * one of them has, sorted: every file of the change's, tests included, unlike
+ * productChangeBetween (#748). Null when either names no files.
+ */
+export function filesChangedBetween(
+  from: Readonly<Record<string, string>> | null,
+  to: Readonly<Record<string, string>> | null,
+): string[] | null {
+  if (from === null || to === null) return null;
+  const paths = [...new Set([...Object.keys(from), ...Object.keys(to)])];
+  return paths.filter((path) => !Object.hasOwn(from, path) || !Object.hasOwn(to, path) || from[path] !== to[path]).sort();
 }
 
 /** A fingerprint a comparison is given: none for a Verdict that records none. */
@@ -227,7 +251,11 @@ export function changeLine({ v, all, product, files }: ChangeFingerprint): strin
  */
 export function changeIn(body: string): ChangeFingerprint | null {
   const json = CHANGE_LINE.exec(body.split("\n", 2)[1]?.trim() ?? "")?.[1];
-  if (json === undefined) return null;
+  return json === undefined ? null : changeFingerprintIn(json);
+}
+
+/** The fingerprint this JSON holds, as a change line's does, or null when it doesn't read as one. */
+export function changeFingerprintIn(json: string): ChangeFingerprint | null {
   let value: unknown;
   try {
     value = JSON.parse(json);

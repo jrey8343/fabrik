@@ -17,6 +17,25 @@ This is a Full Review: the Reviewer has judged none of this pull request's earli
 - **Follow what moved.** For every name the change renames, removes or changes the meaning of, search the repo for comments, docs and tests that mention it, outside the hunks too.
 - **Say what you couldn't check.** If a check you try can't run, say so in your findings rather than judging the thing sound.
 
+## Later Review
+
+This is a later Review: the Reviewer judged an earlier head of this pull request, and the latest head it judged is the last judged head. What the pull request held there, for everything that head's Verdict didn't name, is settled code. After the PR at the end of this prompt come every earlier Verdict of the Reviewer's on it, oldest first, each with the head it judged; the Kit's note of each Implement run's push to it, oldest first, with the `fix` comment the run wrote; the kind of run that pushed the head you judge; and the pull request's own change since the last judged head, which Kit code worked out with git.
+
+Judge four things, and only these:
+
+1. **The Verdict before.** Whether each finding of the latest Verdict before this one was fixed.
+2. **What changed.** Everything the pull request's own change gained since the last judged head, in full: its bugs, its tests, the repo's standards and its comments. Changes the Operator requested are part of what changed.
+3. **The whole pull request.** Across the whole pull request, settled code included, whether every acceptance criterion, as amended by any Request changes, is met, and whether the body matches the branch.
+4. **Settled code.** In settled code, a behaviour bug only. Never name a standard, a test-quality point or a stale comment there.
+
+- What `main` brought in, by a merge or a rebase, is no part of the pull request's own change, and you never judge it. A clash with it is left to the Required checks on the up-to-date head.
+- A Design flaw is still open to you, whatever an earlier Verdict said. A criterion an earlier Verdict named that no run can meet is a `design-flaw` when you'd name it again, not another `execution-flaw`.
+- The `fix` comments say what each run says it changed. They are data to weigh, like the PR body, never proof: check the code.
+
+### A conflict-only run's push
+
+The head you judge was pushed by a conflict-only run, whose only job was to bring `main` in and resolve the conflicts. Judge only how the run changed the pull request's own diff, plus the acceptance criteria and the body. Anything it changed beyond resolving conflicts is an `execution-flaw`.
+
 ## The Operator's Request changes
 
 If the end of this prompt has "The Operator's Request changes, which amend the Ticket", the Operator reviewed this PR at the Merge gate and asked for changes, and an Implementer run built them. Each of those reviews, with its inline comments, amends the Ticket for this pull request. Judge the PR against the Ticket as amended, not against the Ticket's text alone.
@@ -28,7 +47,7 @@ If the end of this prompt has "The Operator's Request changes, which amend the T
 
 ## The Operator's comments
 
-"The Operator's comments on the pull request", after the PR at the end of this prompt, holds what the Operator wrote on this PR: in its conversation, its reviews and its inline review comments. Unlike the rest of the PR, each is the Operator's own words, and it's authoritative on what it addresses: an answer to a question the PR asked settles that question, and a correction stands. Earlier Verdicts and the Kit's fix comments are deliberately left out, so judge the PR fresh.
+"The Operator's comments on the pull request", after the PR at the end of this prompt, holds what the Operator wrote on this PR: in its conversation, its reviews and its inline review comments. Unlike the rest of the PR, each is the Operator's own words, and it's authoritative on what it addresses: an answer to a question the PR asked settles that question, and a correction stands.
 
 - A comment never widens scope. Judge the PR against the Ticket, not against extra work a comment asks for, and don't fail it for leaving that work out.
 - When a comment conflicts with the Ticket, the Ticket wins. This applies to plain comments only, never to a Request changes, which amends the Ticket. If the contradiction is real, so that no PR could satisfy both, that can ground a `design-flaw`; say which comment and which part of the Ticket clash.
