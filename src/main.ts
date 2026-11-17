@@ -9,7 +9,7 @@ import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult } from "./agen
 import { type AgentBranchGit, rebaseBranchOntoMain, rebuildAgentBranch } from "./github/branch.ts";
 import { agentBranchFor } from "./loop/agentPullRequest.ts";
 import { prototypeBranchFor } from "./loop/designOutput.ts";
-import { applyPlan, emptyDiffIn, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
+import { applyPlan, emptyDiffIn, implementPushOf, replayClaimIn, wantsDesignQueueCheck, wantsDispatchCheck } from "./github/apply.ts";
 import { planWithChange, readChangeFingerprint } from "./github/changeRead.ts";
 import { GitHub, type Repo } from "./github/client.ts";
 import { describePlan, describeRefusedCollapses } from "./github/describePlan.ts";
@@ -516,7 +516,7 @@ async function main(landing: Landing | null): Promise<void> {
   // A push to main's or the tick's plan may rebase an agent PR onto main, as the Fabrik App (#304), as may a Review's pass (#480).
   const rebaser = { rebase: (name: string, onto: string) => rebaseBranchOntoMain(name, onto, remote) };
   // A pass that carries the last Digest forward reads what the new head holds of the files its places name, as it is applied.
-  const { preview, readded, refusedCollapses } = await applyPlan(
+  const applied = await applyPlan(
     github,
     repo,
     plan,
@@ -525,6 +525,7 @@ async function main(landing: Landing | null): Promise<void> {
     rebaser,
     digestHeadReader(github, repo),
   );
+  const { preview, readded, refusedCollapses } = applied;
   // The Dispatch job runs the check on a fresh snapshot, once this plan's labels have landed.
   if (wantsDispatchCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "dispatch=true\n");
   // The replay jobs run only on the Ticket this run's claim marked in progress, once it has.
@@ -532,6 +533,9 @@ async function main(landing: Landing | null): Promise<void> {
   if (claimed !== null) await appendFile(required("GITHUB_OUTPUT"), `replay-ticket=${claimed}\n`);
   // The push job's Run record says the Implement run left an empty diff, once this plan has counted it (#448).
   if (emptyDiffIn(plan)) await appendFile(required("GITHUB_OUTPUT"), "empty-diff=true\n");
+  // And the PR and head an Implement run's push left, which Yield pairs with its first Verdict (#735): only once the whole plan landed.
+  const pushed = implementPushOf(event, plan, applied, branch?.head ?? null);
+  if (pushed !== null) await appendFile(required("GITHUB_OUTPUT"), `pushed-pull-request=${pushed.pullRequest}\npushed-head=${pushed.headSha}\n`);
   // The Design queue job runs the check likewise, once this plan has landed.
   if (wantsDesignQueueCheck(plan)) await appendFile(required("GITHUB_OUTPUT"), "design-queue=true\n");
   // The push job's preview step polls it and links it, once this plan has pushed (src/kit/previewLink.ts): a UI

@@ -59,6 +59,7 @@ import {
   WEEKLY_LIMIT,
 } from "./runRecord.ts";
 import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
+import { YIELD_KINDS, type YieldKind, type Yields, type YieldShare, yieldsOf } from "./yield.ts";
 
 // The sums of records' costs live with the cost per merged pull request (./mergedCost.ts).
 export { costOf, hasUnknownCostBasis } from "./mergedCost.ts";
@@ -378,6 +379,12 @@ export interface WeeklySummary {
   readonly operatorWaitMs: WeekOverWeek<number | null>;
   /** Of the agent PRs merged in the 30 days to the week's end, how many were reverted in that window. */
   readonly revertRate: WeekOverWeek<RevertRate>;
+  /**
+   * Of the live Implement runs of each kind whose push got its first Verdict
+   * in the week, how many passed it (#735): the Yield of first runs, Retry 1s
+   * and Retry 2s.
+   */
+  readonly yields: WeekOverWeek<Yields>;
   /** Of the agent PRs merged in the 90 days to the week's end, how many at least one Architectural escape names. */
   readonly escapeRate: WeekOverWeek<EscapeRate>;
   /** The Architectural escapes opened in the 90 days to the week's end, by Strength. */
@@ -876,6 +883,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     cycleTimeMs: change("cycleTimeMs"),
     operatorWaitMs: change("operatorWaitMs"),
     revertRate: change("revertRate"),
+    yields: change("yields"),
     escapeRate: change("escapeRate"),
     escapesByStrength: change("escapesByStrength"),
     escapesThisWeek: escapesThisWeekOf(weeks.thisWeek, input),
@@ -935,6 +943,7 @@ interface WeekMetrics {
   readonly cycleTimeMs: number | null;
   readonly operatorWaitMs: number | null;
   readonly revertRate: RevertRate;
+  readonly yields: Yields;
   readonly escapeRate: EscapeRate;
   readonly escapesByStrength: EscapesByStrength;
   readonly requestChanges: RequestChangesCounts;
@@ -977,6 +986,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
     operatorWaitMs: median(merged.flatMap((pullRequest) => operatorWaitOf(pullRequest, input.operator))),
     revertRate: revertRateOf(week, input),
+    yields: yieldsOf(week, input.records, input.facts),
     escapeRate: escapeRateOf(escapeWindow, escapes, input),
     escapesByStrength: escapesByStrengthOf(escapes),
     requestChanges: requestChangesCountsOf(requestChanges),
@@ -1717,6 +1727,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords 
     costRow("Spend that never merged", spendNeverMerged),
     row("Merged agent PRs", counts.mergedPullRequests, count),
     row("Tickets dispatched", counts.ticketsDispatched, count),
+    ...yieldRows(summary.yields),
     row("Retries", counts.retries, count),
     row("Broken runs", counts.brokenRuns, count),
     row("Landings failed", counts.landingsFailed, count),
@@ -2105,6 +2116,26 @@ function limitReading({ thisWeek, lastWeek }: WeekOverWeek<RateLimitReading | nu
 function row(name: string, { thisWeek, lastWeek }: WeekOverWeek<number | null>, format: (value: number) => string): string {
   const change = thisWeek === null || lastWeek === null ? NONE : signed(thisWeek - lastWeek, format);
   return `| ${name} | ${orNone(thisWeek, format)} | ${orNone(lastWeek, format)} | ${change} |`;
+}
+
+const YIELD_NAMES: Readonly<Record<YieldKind, string>> = {
+  first: "First-pass yield",
+  retry1: "Retry 1 yield",
+  retry2: "Retry 2 yield",
+};
+
+/** A row for each kind's Yield, read like the Revert rate, with a week that judged none of them saying so. */
+function yieldRows(yields: WeekOverWeek<Yields>): string[] {
+  const share = ({ passed, judged }: YieldShare) => (judged === 0 ? null : passed / judged);
+  const cell = (figure: YieldShare) => {
+    const value = share(figure);
+    return value === null ? "no judged runs" : `${percent(value)} (${figure.passed} of ${figure.judged})`;
+  };
+  return YIELD_KINDS.map((kind) => {
+    const thisWeek = yields.thisWeek[kind];
+    const lastWeek = yields.lastWeek[kind];
+    return `| ${YIELD_NAMES[kind]} | ${cell(thisWeek)} | ${cell(lastWeek)} | ${pointsChange({ thisWeek: share(thisWeek), lastWeek: share(lastWeek) })} |`;
+  });
 }
 
 /** The week's Request changes with a Review miss, amending the Ticket, and unanswered, each week over week. */
