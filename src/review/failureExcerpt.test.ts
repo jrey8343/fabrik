@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { SAMPLE_ANNOTATIONS, SAMPLE_JOB, SAMPLE_JOB_LINK, SAMPLE_STEP_LOG } from "../__fixtures__/failedCheckLogs.ts";
 import { GitHubError } from "../github/client.ts";
-import { type ActionsJob, type CheckAnnotation, type FailureReader, readFailureExcerpt } from "./failureExcerpt.ts";
+import {
+  type ActionsJob,
+  type CheckAnnotation,
+  type ExcerptAnnotation,
+  type FailedStep,
+  type FailureExcerpt,
+  type FailureReader,
+  readFailureExcerpt,
+  renderFailureExcerpts,
+} from "./failureExcerpt.ts";
 
 const SHA = "b".repeat(40);
 
@@ -204,6 +213,188 @@ describe("A red check's failure that can't be read", () => {
       link: "https://vercel.com/acme/shop/abc",
       why: "it isn't a GitHub Actions check, so the Kit reads no log for it",
     });
+  });
+});
+
+describe("Rendering Failure excerpts", () => {
+  const LINK = "https://github.com/acme/shop/actions/runs/7/job/8";
+  const actions = (check: string, steps: FailedStep[], annotations: ExcerptAnnotation[] = []): FailureExcerpt => ({
+    kind: "actions",
+    check,
+    link: LINK,
+    steps,
+    annotations,
+  });
+
+  it("puts a check's failed step, its log lines in a block of their own, and its error annotations under its name, with the job link", () => {
+    const [block] = renderFailureExcerpts([
+      actions(
+        "Typecheck and test",
+        [{ name: "Typecheck", earlier: 0, lines: ["> tsc --noEmit", "##[error]src/a.ts(2,3): error TS2741: nope", "##[error]Process completed with exit code 1."] }],
+        [{ path: "src/a.ts", line: 2, message: "Property 'x' is missing" }],
+      ),
+    ]);
+
+    expect(block).toBe(
+      [
+        `- \`Typecheck and test\` ([the job](${LINK}))`,
+        "",
+        "  The step `Typecheck` failed. The end of its log:",
+        "",
+        "  ```text",
+        "  > tsc --noEmit",
+        "  ##[error]src/a.ts(2,3): error TS2741: nope",
+        "  ##[error]Process completed with exit code 1.",
+        "  ```",
+        "",
+        "  Its error annotations:",
+        "",
+        "  - `src/a.ts`, line 2:",
+        "",
+        "    ```text",
+        "    Property 'x' is missing",
+        "    ```",
+      ].join("\n"),
+    );
+  });
+
+  it("says how many earlier lines were left out, linking the job, above the lines it kept", () => {
+    const [block] = renderFailureExcerpts([actions("gate", [{ name: "Run pnpm test", earlier: 884, lines: ["FAIL a.test.ts"] }])]);
+
+    expect(block).toContain(`  _884 earlier lines left out: [the whole log](${LINK})._\n\n  \`\`\`text\n  FAIL a.test.ts\n  \`\`\``);
+  });
+
+  it("shows each failed step of a job that has two", () => {
+    const [block] = renderFailureExcerpts([
+      actions("gate", [
+        { name: "Lint", earlier: 0, lines: ["lint failed"] },
+        { name: "Test", earlier: 0, lines: ["test failed"] },
+      ]),
+    ]);
+
+    expect(block).toContain("The step `Lint` failed. The end of its log:\n\n  ```text\n  lint failed\n  ```");
+    expect(block).toContain("The step `Test` failed. The end of its log:\n\n  ```text\n  test failed\n  ```");
+  });
+
+  it("says no step failed when none did, and gives the annotations alone", () => {
+    const [block] = renderFailureExcerpts([actions("gate", [], [{ path: ".github", line: 1, message: "Canceling since a higher priority waiting request for gate-447 exists" }])]);
+
+    expect(block).toContain("  No step failed. Its error annotations:");
+    expect(block).toContain("Canceling since a higher priority waiting request for gate-447 exists");
+  });
+
+  it("says why under the check's name when its failure couldn't be read, with the job link", () => {
+    const [block] = renderFailureExcerpts([{ kind: "unread", check: "gate", link: LINK, why: "the job hadn't finished when the Kit read it" }]);
+
+    expect(block).toBe(`- \`gate\` ([the job](${LINK}))\n\n  Its failure couldn't be read: the job hadn't finished when the Kit read it.`);
+  });
+
+  it("says why under a step whose log couldn't be read, and under annotations that couldn't", () => {
+    const [block] = renderFailureExcerpts([
+      { ...actions("gate", [{ name: "Test", earlier: 0, lines: [], why: "the runner left no log lines for this step" }]), annotationsUnread: "GitHub refused the read: 403" },
+    ]);
+
+    expect(block).toContain("The step `Test` failed, and its log couldn't be read: the runner left no log lines for this step.");
+    expect(block).toContain("Its annotations couldn't be read: GitHub refused the read: 403.");
+  });
+
+  it("fences the failure text in more backticks than it holds, so the text can't end its block", () => {
+    const [block] = renderFailureExcerpts([actions("gate", [{ name: "Test", earlier: 0, lines: ["```", "@octocat broke ````it````"] }])]);
+
+    expect(block).toContain("  `````text\n  ```\n  @octocat broke ````it````\n  `````");
+  });
+});
+
+describe("The cap on Failure excerpts' log lines", () => {
+  const link = (check: string) => `https://github.com/acme/shop/actions/runs/7/job/${check}`;
+  /** `count` lines of 100 characters, each 101 with its newline, numbered from 1. */
+  const lines = (count: number, width = 100) => Array.from({ length: count }, (_, i) => `${String(i + 1).padStart(5, "0")} `.padEnd(width, "x"));
+  const red = (check: string, logLines: string[], annotations: ExcerptAnnotation[] = []): FailureExcerpt => ({
+    kind: "actions",
+    check,
+    link: link(check),
+    steps: [{ name: "Run pnpm test", earlier: 0, lines: logLines }],
+    annotations,
+  });
+  /** The log lines a rendered block kept: the ones inside its first fenced block. */
+  const kept = (block: string) => block.split("```text\n")[1]!.split("\n  ```")[0]!.split("\n");
+  const keptChars = (block: string) => kept(block).reduce((sum, line) => sum + line.trim().length + 1, 0);
+
+  it("splits 40,000 characters equally between three red checks, each cut from the top, saying how many lines were left out and linking its job", () => {
+    const blocks = renderFailureExcerpts([red("a", lines(150)), red("b", lines(150)), red("c", lines(150))]);
+
+    for (const [i, check] of ["a", "b", "c"].entries()) {
+      const block = blocks[i]!;
+      // 40,000 / 3 = 13,333 characters each, so 132 lines of 101 characters, the last 132.
+      expect(keptChars(block)).toBe(132 * 101);
+      expect(kept(block)[0]!.trim()).toBe(lines(150)[18]);
+      expect(kept(block).at(-1)!.trim()).toBe(lines(150)[149]);
+      expect(block).toContain(`_18 earlier lines left out: [the whole log](${link(check)})._`);
+    }
+  });
+
+  it("counts the lines the 150-line cut left out with the ones the cap did", () => {
+    const [block] = renderFailureExcerpts([{ ...red("a", lines(150, 400)), steps: [{ name: "Run pnpm test", earlier: 600, lines: lines(150, 400) }] }]);
+
+    // 40,000 characters hold 99 lines of 401.
+    expect(kept(block!)).toHaveLength(99);
+    expect(block).toContain("_651 earlier lines left out");
+  });
+
+  it("hands no check another's unfilled share", () => {
+    const blocks = renderFailureExcerpts([red("short", lines(5)), red("b", lines(150, 400)), red("c", lines(150, 400))]);
+
+    expect(kept(blocks[0]!)).toHaveLength(5);
+    // 13,333 characters hold 33 lines of 401, though "short" left most of its share.
+    expect(kept(blocks[1]!)).toHaveLength(33);
+    expect(kept(blocks[2]!)).toHaveLength(33);
+  });
+
+  it("gives the whole 40,000 to the checks that have log lines, sharing nothing with one that has none", () => {
+    const blocks = renderFailureExcerpts([
+      { kind: "unread", check: "gone", link: link("gone"), why: "the job never started, so it left no log and no annotation" },
+      red("b", lines(150, 400)),
+      red("c", lines(150, 400)),
+    ]);
+
+    // 20,000 characters hold 49 lines of 401.
+    expect(kept(blocks[1]!)).toHaveLength(49);
+    expect(kept(blocks[2]!)).toHaveLength(49);
+  });
+
+  it("never cuts annotations for the cap", () => {
+    const long = "e".repeat(30_000);
+    const [block] = renderFailureExcerpts([red("a", lines(150, 400), [{ path: "src/a.test.ts", line: 3, message: long }])]);
+
+    expect(block).toContain(long);
+    expect(kept(block!)).toHaveLength(99);
+  });
+
+  it("cuts log lines further from the top, then shortens annotation messages, saying so, until every block fits the room it's given", () => {
+    const message = "m".repeat(20_000);
+    const excerpts = [
+      red("a", lines(150, 400), [{ path: "src/a.test.ts", line: 1, message }]),
+      red("b", lines(150, 400), [{ path: "src/b.test.ts", line: 2, message }]),
+    ];
+
+    const roomy = renderFailureExcerpts(excerpts, { room: 60_000 }).join("\n\n");
+    expect(roomy.length).toBeLessThanOrEqual(60_000);
+    expect(roomy).toContain(message);
+    expect(roomy).toMatch(/_\d+ earlier lines left out/);
+
+    const tight = renderFailureExcerpts(excerpts, { room: 30_000 }).join("\n\n");
+    expect(tight.length).toBeLessThanOrEqual(30_000);
+    expect(tight).not.toContain(message);
+    expect(tight).toContain("_Shortened to fit the comment._");
+    expect(tight).toContain("_150 earlier lines left out");
+  });
+
+  it("still names every check, with its job link, in a room too small for any of its excerpt", () => {
+    const blocks = renderFailureExcerpts([red("a", lines(150)), red("b", lines(150))], { room: 400 });
+
+    expect(blocks.join("\n\n").length).toBeLessThanOrEqual(400);
+    expect(blocks[0]).toContain(`- \`a\` ([the job](${link("a")}))`);
+    expect(blocks[1]).toContain(`- \`b\` ([the job](${link("b")}))`);
   });
 });
 

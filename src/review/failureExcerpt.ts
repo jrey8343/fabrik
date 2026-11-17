@@ -17,6 +17,8 @@
 //   step's log, if GitHub holds none, reads as a step that left none.
 // - A check run's error annotation has the level `failure`, not `error`.
 import { GitHubError, whyUnread } from "../github/client.ts";
+import { checkCode } from "../loop/flakyChecks.ts";
+import { withoutMentions } from "../loop/mentions.ts";
 
 /** A red check on a commit: its name, the link GitHub gives it, and the commit it failed on. */
 export interface RedCheck {
@@ -171,6 +173,135 @@ function gone(error: unknown): boolean {
 /** Why a read failed, in GitHub's own words where it gave some. */
 function refusal(error: unknown): string {
   return `GitHub refused the read: ${whyUnread(error, "the read")}`;
+}
+
+/** The characters the log lines of all the red checks rendered together share, each line counted with its newline. */
+export const LOG_CAP = 40_000;
+
+/** What a shortened annotation message ends with. */
+const SHORTENED = "_Shortened to fit the comment._";
+
+/**
+ * Each excerpt as a Markdown list item under its check's name, in the order
+ * given: the job link, each failed step's kept log lines, and its error
+ * annotations as file, line and message. The failure text sits in fenced
+ * blocks, as data a mention or a heading in it can't escape.
+ *
+ * The log lines share LOG_CAP equally between the excerpts that have any,
+ * and a share one doesn't fill goes to no other. Each excerpt's lines are cut
+ * from the top, and the cut says how many lines were left out and links the
+ * job. Annotations are outside the cap. `room` is what the blocks may take
+ * together, joined by blank lines, as what's left of a comment around them:
+ * past it, the log lines are cut further, then the annotation messages are
+ * shortened, each saying so, and last each block is only its check's name
+ * and job link. The text is posted as the runner masked it.
+ */
+export function renderFailureExcerpts(excerpts: readonly FailureExcerpt[], { room = Number.POSITIVE_INFINITY }: { readonly room?: number } = {}): string[] {
+  const withLines = excerpts.filter((excerpt) => excerpt.kind === "actions" && excerpt.steps.some((step) => step.lines.length > 0)).length;
+  const share = withLines === 0 ? 0 : Math.floor(LOG_CAP / withLines);
+  const render = (share: number, messageMax: number) => excerpts.map((excerpt) => rendered(excerpt, share, messageMax));
+  const fits = (blocks: readonly string[]) => blocks.join("\n\n").length <= room;
+  const whole = render(share, Number.POSITIVE_INFINITY);
+  if (fits(whole)) return whole;
+  // The largest share, then the longest message, that fits; each grows the blocks as it grows.
+  const most = (max: number, fitsAt: (n: number) => boolean): number | null => {
+    if (!fitsAt(0)) return null;
+    let [low, high] = [0, max];
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (fitsAt(mid)) low = mid;
+      else high = mid - 1;
+    }
+    return low;
+  };
+  const cutShare = most(share, (n) => fits(render(n, Number.POSITIVE_INFINITY)));
+  if (cutShare !== null) return render(cutShare, Number.POSITIVE_INFINITY);
+  const longest = Math.max(0, ...excerpts.flatMap((excerpt) => (excerpt.kind === "actions" ? excerpt.annotations.map(({ message }) => message.length) : [])));
+  const messageMax = most(longest, (n) => fits(render(0, n)));
+  if (messageMax !== null) return render(0, messageMax);
+  return excerpts.map((excerpt) => `${headOf(excerpt)}\n\n  Its Failure excerpt didn't fit the comment.`);
+}
+
+function headOf(excerpt: FailureExcerpt): string {
+  return `- ${checkCode(excerpt.check)} ([the job](${excerpt.link}))`;
+}
+
+/** One excerpt's block, its log lines held to `share` characters and each annotation message to `messageMax`. */
+function rendered(excerpt: FailureExcerpt, share: number, messageMax: number): string {
+  const head = headOf(excerpt);
+  if (excerpt.kind === "unread") return [head, "", indent(`Its failure couldn't be read: ${prose(excerpt.why)}.`, 2)].join("\n");
+  const kept = keptLines(excerpt.steps, share);
+  const parts: string[] = [];
+  for (const [i, step] of excerpt.steps.entries()) {
+    if (step.why !== undefined) {
+      parts.push(`The step ${checkCode(step.name)} failed, and its log couldn't be read: ${prose(step.why)}.`);
+      continue;
+    }
+    const lines = kept[i]!;
+    const leftOut = step.earlier + step.lines.length - lines.length;
+    parts.push(`The step ${checkCode(step.name)} failed. The end of its log:`);
+    if (leftOut > 0) parts.push(`_${leftOut} earlier lines left out: [the whole log](${excerpt.link})._`);
+    if (lines.length > 0) parts.push(fenced(lines));
+  }
+  const noStep = excerpt.steps.length === 0 ? "No step failed. " : "";
+  if (excerpt.annotationsUnread !== undefined) parts.push(`${noStep}Its annotations couldn't be read: ${prose(excerpt.annotationsUnread)}.`);
+  else if (excerpt.annotations.length === 0) parts.push(`${noStep}It has no error annotation.`);
+  else {
+    parts.push(`${noStep}Its error annotations:`);
+    parts.push(excerpt.annotations.map((annotation) => annotationItem(annotation, messageMax)).join("\n\n"));
+  }
+  return [head, "", ...parts.flatMap((part, i) => (i === 0 ? [indent(part, 2)] : ["", indent(part, 2)]))].join("\n");
+}
+
+function annotationItem({ path, line, message }: ExcerptAnnotation, messageMax: number): string {
+  const short = message.length > messageMax;
+  return [
+    `- ${checkCode(path)}${line === null ? "" : `, line ${line}`}:`,
+    "",
+    indent(fenced(message.slice(0, messageMax).split(/\r?\n/)), 2),
+    ...(short ? ["", indent(SHORTENED, 2)] : []),
+  ].join("\n");
+}
+
+/**
+ * The lines each step keeps under one check's share: the last lines of its
+ * failed steps taken together, cut from the top, so a later step keeps its
+ * lines before an earlier one does.
+ */
+function keptLines(steps: readonly FailedStep[], share: number): string[][] {
+  let left = share;
+  const kept: string[][] = steps.map(() => []);
+  for (let s = steps.length - 1; s >= 0; s--) {
+    const lines = steps[s]!.lines;
+    let from = lines.length;
+    while (from > 0 && lines[from - 1]!.length + 1 <= left) {
+      from -= 1;
+      left -= lines[from]!.length + 1;
+    }
+    kept[s] = lines.slice(from);
+    if (from > 0) left = 0;
+  }
+  return kept;
+}
+
+/** Text from CI in a fenced block, its fence longer than any run of backticks in it. */
+function fenced(lines: readonly string[]): string {
+  const longest = Math.max(0, ...lines.map((line) => Math.max(0, ...(line.match(/`+/g) ?? []).map((run) => run.length))));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return [`${fence}text`, ...lines, fence].join("\n");
+}
+
+function indent(text: string, by: number): string {
+  const pad = " ".repeat(by);
+  return text
+    .split("\n")
+    .map((line) => (line === "" ? line : `${pad}${line}`))
+    .join("\n");
+}
+
+/** A reason in prose: no mention in it notifies anyone, and it doesn't end in a full stop of its own. */
+function prose(text: string): string {
+  return withoutMentions(text.trim().replace(/\.$/, ""));
 }
 
 /** A runner's timestamp at a line's start, as `2026-11-08T05:14:12.6748036Z `. */
