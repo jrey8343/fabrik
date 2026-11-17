@@ -26,6 +26,7 @@ import type {
   Plan,
   PostedComment,
   PullRequestSnapshot,
+  ReviewKind,
   Snapshot,
   Verdict,
   VerdictRecord,
@@ -53,6 +54,7 @@ export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig)
         kind: "start-agent-run",
         role: "review",
         issue: number,
+        reviewKind: reviewKindOf(pullRequest),
         ...(uiEvidenceMarker === null ? {} : { evidence: uiEvidenceMarker }),
         model,
         effort,
@@ -60,6 +62,20 @@ export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig)
       },
     ],
   };
+}
+
+/**
+ * Which kind of Review starts on the PR now (#747), from its Verdict markers
+ * alone: a later Review, judged against the head of its latest Reviewer
+ * Verdict, or a Full Review when it has none, or that one has no change line
+ * under it to judge the change since against (it predates #643). A PR's
+ * Verdicts are its own, so a new PR after Back to design or from a Kept-branch
+ * start has none, and its first Review is Full.
+ */
+export function reviewKindOf({ verdicts }: Pick<PullRequestSnapshot, "verdicts">): ReviewKind {
+  const latest = verdicts.findLast((record) => record.source === "reviewer");
+  if (latest?.change === undefined) return { kind: "full" };
+  return { kind: "later", lastJudged: { headSha: latest.headSha, change: latest.change } };
 }
 
 /**

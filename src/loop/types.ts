@@ -1073,6 +1073,22 @@ export interface RerunReport {
   readonly refused: string | null;
 }
 
+/**
+ * Which kind of Review a Review run is (#747). A Full Review, when the
+ * Reviewer has judged none of the PR's earlier heads: its first Review, or one
+ * whose last judged head has no change line under its Verdict (written before
+ * #643). Otherwise a later Review, judged against the last judged head: the
+ * head of the PR's latest Reviewer Verdict. A Verdict from red required
+ * checks, an empty diff or a Broken run never makes a head judged.
+ */
+export type ReviewKind =
+  | { readonly kind: "full" }
+  | {
+      readonly kind: "later";
+      /** The latest Reviewer Verdict's head, and the fingerprint of the PR's own change there, from the change line under it. */
+      readonly lastJudged: { readonly headSha: string; readonly change: ChangeFingerprint };
+    };
+
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
   readonly verdict: Verdict;
@@ -1778,6 +1794,12 @@ export type Action =
       readonly commit?: string;
       /** For a Digest run: the head its pass was given on, which its job checks out and its Digest is written as of. */
       readonly headSha?: string;
+      /**
+       * For a Review: whether it is a Full Review or a later Review, and the
+       * last judged head a later one is judged against (#747), which the Kit
+       * works out from the PR's Verdict markers when it starts the Review.
+       */
+      readonly reviewKind?: ReviewKind;
       /**
        * For a Review of a UI PR: where its marker says the UI evidence is kept,
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.

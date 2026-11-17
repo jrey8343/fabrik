@@ -83,11 +83,11 @@ describe("The Spend read", () => {
   });
 
   it("reads a record of an earlier schema as the Weekly summary does, and counts one of a schema the Kit doesn't know unread, with its schema", async () => {
-    const { brokenRun: _left, landing: _landing, pushed: _pushed, ...schema7 } = aRunRecord({ runId: 1001 });
+    const { brokenRun: _left, landing: _landing, pushed: _pushed, fullReview: _fullReview, ...schema7 } = aRunRecord({ runId: 1001 });
     const { client } = storeOf({
       [`${SHOP}/1001-1-implement.json`]: JSON.stringify({ ...schema7, schema: 7 }),
-      [`${SHOP}/1002-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 1002 }), schema: 12 }),
-      [`${SHOP}/1003-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 1003 }), schema: 11 }),
+      [`${SHOP}/1002-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 1002 }), schema: 13 }),
+      [`${SHOP}/1003-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 1003 }), schema: 12 }),
       [`${SHOP}/1004-1-implement.json`]: "not JSON",
     });
 
@@ -96,7 +96,7 @@ describe("The Spend read", () => {
     expect(read).toMatchObject({
       kind: "read",
       records: { [`${SHOP}/1001-1-implement.json`]: aRunRecord({ runId: 1001, brokenRun: null }) },
-      unreadable: { count: 3, newestSchema: 12 },
+      unreadable: { count: 3, newestSchema: 13 },
     });
     expect(Object.keys(read.kind === "read" ? read.records : {})).toEqual([`${SHOP}/1001-1-implement.json`]);
   });

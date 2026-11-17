@@ -17,7 +17,8 @@
 // record, written before Broken runs were recorded, as no Broken run, and a
 // schema 1 to 8 record, written before landings were recorded, as one the
 // push job landed, and a schema 1 to 9 record, written before pushes were
-// recorded, as one that pushed nothing. Pure, no I/O.
+// recorded, as one that pushed nothing, and a schema 1 to 10 record, written
+// before Full Reviews were recorded, with a null `fullReview`. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import type { refusalOf } from "../github/client.ts";
 import { readAgentRunResult } from "../agent/result.ts";
@@ -143,9 +144,9 @@ export type RunRecordRole = AgentRole | "score";
  * The schema a Run record is written at: 2 added `subscription`, 3 added
  * `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`,
  * 7 added `keptBranch`, 8 added `brokenRun`, 9 added `landing`, 10 added
- * `pushed`.
+ * `pushed`, 11 added `fullReview`.
  */
-export const RUN_RECORD_SCHEMA = 10;
+export const RUN_RECORD_SCHEMA = 11;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -306,6 +307,14 @@ export interface RunRecord {
    * pushes were recorded, reads as null.
    */
   readonly pushed: Pushed | null;
+  /**
+   * Whether a Review was a Full Review (#747), as the Kit job that started it
+   * worked out from the PR's Verdict markers: true for a Full Review and a
+   * Replay arm's Review, which is a first run's, false for a later Review, and
+   * null for every other role. A schema 1 to 10 record, written before Full
+   * Reviews were recorded, reads as null.
+   */
+  readonly fullReview: boolean | null;
   /** A Review's Verdict, or null when it gave none (and for every other role). */
   readonly verdict: Verdict | null;
   readonly durationMs: number | null;
@@ -409,6 +418,8 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     landing,
     // Only work that landed was pushed: never an empty diff, a failed run or a failed landing.
     pushed: implement && !end.emptyDiff && ran.failure === null && ran.broken === null && landing === null ? pushedOf(end) : null,
+    // The Kit job passes out the kind of Review it started (#747).
+    fullReview: role === "review" ? fullReviewOf(kit["full-review"]) : null,
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -484,6 +495,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     brokenRun: null,
     landing: null,
     pushed: null,
+    fullReview: null,
     verdict: null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -555,6 +567,8 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     brokenRun: null,
     landing: null,
     pushed: null,
+    // An arm's Review is a first run's, so a Full Review (#747).
+    fullReview: role === "review" ? true : null,
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -608,6 +622,11 @@ function readLandingFailed(text: string): LandingFailed | null {
   }
 }
 
+/** Whether the Review the Kit job started was a Full Review (#747), from its output: null when it passed out neither. */
+function fullReviewOf(output: string | undefined): boolean | null {
+  return output === "true" ? true : output === "false" ? false : null;
+}
+
 /** Whether an Implement run Stepped up, and why, from the Kit job's outputs; never a reason without a Step-up. */
 function stepUpOf(kit: Readonly<Record<string, string>>): Pick<RunRecord, "stepUp" | "stepUpReason"> {
   if (kit["step-up"] !== "true") return { stepUp: false, stepUpReason: null };
@@ -637,7 +656,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
   const stream = transcript === null ? null : readStream(transcript);
   const last = stream?.result ?? null;
   const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
-  const { infrastructureFailure, brokenRun, landing, pushed, verdict, ...ran } = facts;
+  const { infrastructureFailure, brokenRun, landing, pushed, fullReview, verdict, ...ran } = facts;
   return {
     schema: RUN_RECORD_SCHEMA,
     ...ran,
@@ -648,6 +667,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
     brokenRun,
     landing,
     pushed,
+    fullReview,
     verdict,
     durationMs: numberOr(last?.["duration_ms"]),
     apiDurationMs: numberOr(last?.["duration_api_ms"]),
@@ -674,7 +694,9 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * to 7 record, written before Broken runs were recorded, as no Broken run, and
  * a schema 1 to 8 record, written before landings were recorded, as a run the
  * push job landed, and a schema 1 to 9 record, written before pushes were
- * recorded, as one that pushed nothing. An older record names the schema it
+ * recorded, as one that pushed nothing, and a schema 1 to 10 record, written
+ * before Full Reviews were recorded, with a null `fullReview`, a Review's
+ * included. An older record names the schema it
  * was stored at in `storedSchema`. Null for anything that isn't a record of a
  * schema the Kit knows.
  */
@@ -688,7 +710,17 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
 
 /** An older stored record at the current schema (readRunRecord), or null for a schema the Kit doesn't know. */
 function upgraded(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
-  type Schema9 = Omit<RunRecord, "schema" | "pushed">;
+  if (schema === 10) return { ...(stored as Schema10), schema: RUN_RECORD_SCHEMA, fullReview: null };
+  const older = upgradedToSchema10(stored, schema, subscriptions);
+  return older === null ? null : { ...older, fullReview: null };
+}
+
+/** A record as schema 10 held it, before Full Reviews were recorded (#747). */
+type Schema10 = Omit<RunRecord, "schema" | "fullReview">;
+
+/** A stored record older than schema 10 at schema 10's fields, or null for a schema the Kit doesn't know. */
+function upgradedToSchema10(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): (Schema10 & Pick<RunRecord, "schema">) | null {
+  type Schema9 = Omit<Schema10, "pushed">;
   if (schema === 9) return { ...(stored as Schema9), schema: RUN_RECORD_SCHEMA, pushed: null };
   type Schema8 = Omit<Schema9, "landing">;
   if (schema === 8) return { ...(stored as Schema8), schema: RUN_RECORD_SCHEMA, landing: null, pushed: null };
@@ -699,7 +731,7 @@ function upgraded(stored: object, schema: unknown, subscriptions: KitConfig["sub
   type Schema5 = Omit<Schema6, "emptyDiff">;
   if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false, brokenRun: null, landing: null, pushed: null };
   type Schema4 = Omit<Schema5, "stepUpReason">;
-  const record = (fields: Schema4): RunRecord => ({
+  const record = (fields: Schema4): Schema10 & Pick<RunRecord, "schema"> => ({
     ...fields,
     schema: RUN_RECORD_SCHEMA,
     stepUpReason: fields.stepUp ? "retry" : null,

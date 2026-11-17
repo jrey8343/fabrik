@@ -73,6 +73,34 @@ export async function reviewContext(
   };
 }
 
+/** The heading of prompts/review.md's section that only a Full Review is given (#747). */
+const FULL_REVIEW_HEADING = "## Full Review";
+
+/**
+ * The Reviewer's prompt from prompts/review.md for a Full Review or a later
+ * Review (#747): a later Review's leaves out the Full Review section, whose
+ * Verdict settles the code, and is otherwise the same. Each kind sees only its
+ * own section.
+ */
+export function reviewPromptFor(template: string, fullReview: boolean): string {
+  return fullReview ? template : withoutSection(template, FULL_REVIEW_HEADING);
+}
+
+/** A prompt without its `## ` section of this heading, up to the next `## ` heading or its end. */
+function withoutSection(template: string, heading: string): string {
+  const lines = template.split("\n");
+  const start = lines.indexOf(heading);
+  if (start === -1) return template;
+  const next = lines.findIndex((line, at) => at > start && line.startsWith("## "));
+  return [...lines.slice(0, start), ...(next === -1 ? [] : lines.slice(next))].join("\n");
+}
+
+/** Whether the Review is a Full Review, as the Kit job passed it out (src/kit/jobs.ts): "true" or "false", never left to guess. */
+export function fullReviewOf(text: string | undefined): boolean {
+  if (text === "true" || text === "false") return text === "true";
+  throw new Error(`FABRIK_FULL_REVIEW is ${JSON.stringify(text ?? null)}, not "true" or "false"`);
+}
+
 /** The Required checks that ran nothing, as the Review's checks job passed them out: a JSON list of names, none when it passed out nothing. */
 export function ranNothingOf(text: string | undefined): string[] {
   const value: unknown = JSON.parse(text === undefined || text === "" ? "[]" : text);

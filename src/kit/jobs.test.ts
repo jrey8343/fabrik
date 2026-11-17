@@ -178,6 +178,19 @@ describe("The Kit job's routing", () => {
 
     expect(kitJobOutputs(plan, 7, kitConfig())).toMatchObject({ route: "review", ...evidence });
   });
+
+  // The Review job gives a Full Review's Reviewer the Full Review section, and the push job records the kind (#747).
+  it("passes out whether the Review it routes to is a Full Review", () => {
+    const judged = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "1".repeat(40), change: { v: 1, all: "0".repeat(12), product: "0".repeat(12), files: {} } } as const;
+    const review = (pullRequest = aPullRequest()) => planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(pullRequest), kitConfig());
+
+    expect(kitJobOutputs(review(), 7, kitConfig())).toMatchObject({ route: "review", "full-review": "true" });
+    expect(kitJobOutputs(review(aPullRequest({ verdicts: [judged], pushedSinceVerdict: true })), 7, kitConfig())).toMatchObject({ route: "review", "full-review": "false" });
+  });
+
+  it("passes out no Review kind for any other run", () => {
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "full-review": "" });
+  });
 });
 
 describe("The Kit job's routing of a conflict-only run (#304)", () => {

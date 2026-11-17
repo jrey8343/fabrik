@@ -114,7 +114,7 @@ function runEnd(overrides: Partial<RunEnd> = {}): RunEnd {
 describe("The Run record a run's end yields", () => {
   it("a passing Triage run gets a record with its identity, what ran, its outcome, effort spent and cost", () => {
     expect(runRecordFor(runEnd())?.record).toEqual({
-      schema: 10,
+      schema: 11,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -143,6 +143,7 @@ describe("The Run record a run's end yields", () => {
       brokenRun: null,
       landing: null,
       pushed: null,
+      fullReview: null,
       verdict: null,
       durationMs: 90_000,
       apiDurationMs: 60_000,
@@ -418,8 +419,8 @@ describe("The Run record a run's end yields", () => {
         transcript: null,
       });
 
-      expect(passed?.record).toMatchObject({ schema: 10, role: "retro", subscription: "Claude token 2" });
-      expect(evidenceFailed?.record).toMatchObject({ schema: 10, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
+      expect(passed?.record).toMatchObject({ schema: 11, role: "retro", subscription: "Claude token 2" });
+      expect(evidenceFailed?.record).toMatchObject({ schema: 11, role: "retro", infrastructureFailure: "crash", subscription: "Claude token 2" });
     });
 
     it("a failed Retro run is recorded as the Infrastructure failure its report names", () => {
@@ -470,7 +471,7 @@ describe("The Run record a run's end yields", () => {
       const files = research("success");
 
       expect(files?.record).toMatchObject({
-        schema: 10,
+        schema: 11,
         role: "research",
         issue: 42,
         pullRequest: null,
@@ -723,6 +724,45 @@ describe("The Run record a run's end yields", () => {
     });
   });
 
+  // The Kit job works out the kind when it starts the Review, and passes it out (#747).
+  describe("a Review says whether it was a Full Review", () => {
+    const green = { result: "success", outputs: { checks: "green", "head-sha": HEAD_SHA, failed: "[]" } };
+    const review = (fullReview: string, reviewer = job("success")) =>
+      runRecordFor(
+        runEnd({
+          needs: needs("review", { "review-checks": green, review: reviewer }, { ticket: "7", "pull-request": "50", "full-review": fullReview }),
+          eventIssue: 50,
+          agentResult: agentResult("review", 50, "verdict: pass\n\nAll good."),
+        }),
+      )?.record;
+
+    it("a Full Review's record says so, at schema 11", () => {
+      expect(review("true")).toMatchObject({ schema: 11, role: "review", fullReview: true });
+    });
+
+    it("a later Review's record says it wasn't one", () => {
+      expect(review("false")).toMatchObject({ role: "review", fullReview: false });
+    });
+
+    it("a Review that failed still says which kind it was", () => {
+      const failed = runRecordFor(
+        runEnd({
+          needs: needs("review", { "review-checks": green, review: job("failure") }, { ticket: "7", "pull-request": "50", "full-review": "true" }),
+          eventIssue: 50,
+          failureReport: JSON.stringify({ failure: "missing-output", detail: "no Verdict line" }),
+        }),
+      )?.record;
+
+      expect(failed).toMatchObject({ role: "review", fullReview: true, verdict: null });
+    });
+
+    it("every other role's record has none", () => {
+      const triage = runRecordFor(runEnd({ needs: needs("triage", { triage: job("success") }) }))?.record;
+
+      expect(triage?.fullReview).toBeNull();
+    });
+  });
+
   describe("a Digest run's record is in role digest, on its Ticket, naming its pull request (ADR-0022)", () => {
     /** The Digest writer's job on PR #50, Ticket #7, ended as given. */
     const digestRun = (writer: Needs[string] | undefined, overrides: Partial<RunEnd> = {}) =>
@@ -739,7 +779,7 @@ describe("The Run record a run's end yields", () => {
       const files = digestRun(job("success", { "base-sha": HEAD_SHA }));
 
       expect(files?.record).toMatchObject({
-        schema: 10,
+        schema: 11,
         role: "digest",
         issue: 7,
         pullRequest: 50,
@@ -772,7 +812,7 @@ describe("The Run record a run's end yields", () => {
       const files = digestRun(writer, { agentResult: null, failureReport, transcript: [init] });
 
       expect(files?.record).toMatchObject({
-        schema: 10,
+        schema: 11,
         role: "digest",
         issue: 7,
         pullRequest: 50,
@@ -1012,7 +1052,7 @@ describe("The Run record a run's end yields", () => {
   });
 
   it("carries schema 5 and the Kit sha that wrote it", () => {
-    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 10, kitSha: "c".repeat(40) });
+    expect(runRecordFor(runEnd({ kitSha: "c".repeat(40) }))?.record).toMatchObject({ schema: 11, kitSha: "c".repeat(40) });
   });
 
   it.each([
@@ -1022,7 +1062,7 @@ describe("The Run record a run's end yields", () => {
   ])("a live %s run is no replay's, and its record and transcript paths name no arm", (role, ended, eventIssue) => {
     const files = runRecordFor(runEnd({ needs: ended, eventIssue }));
 
-    expect(files?.record).toMatchObject({ schema: 10, replay: null });
+    expect(files?.record).toMatchObject({ schema: 11, replay: null });
     expect(files?.recordPath).toBe(`runs/acme/widgets/2026-11/9001-1-${role}.json`);
     expect(files?.transcriptPath).toBe(`transcripts/acme/widgets/2026-11/9001-1-${role}.jsonl.gz`);
   });
@@ -1036,7 +1076,7 @@ describe("The Run record a run's end yields", () => {
         subscriptions: TWO_SUBSCRIPTIONS,
       });
 
-      expect(runRecordFor(end)?.record).toMatchObject({ schema: 10, subscription: "Claude token 2" });
+      expect(runRecordFor(end)?.record).toMatchObject({ schema: 11, subscription: "Claude token 2" });
     });
 
     it("the first listed Subscription when the Kit job gave the run none", () => {
@@ -1113,8 +1153,10 @@ describe("A Run record read back from the store", () => {
     runEnd({ needs: needs("triage", { triage: job("success") }, { subscription: "Claude token 2" }) }),
   )?.record;
 
+  /** The written record as a schema 10 one, written before Full Reviews were recorded, held it. */
+  const { fullReview: _fullReview, ...before11 } = written!;
   /** The written record as a schema 9 one, written before pushes were recorded, held it. */
-  const { pushed: _pushed, ...before10 } = written!;
+  const { pushed: _pushed, ...before10 } = before11;
   /** The written record as a schema 8 one, written before landings were recorded, held it. */
   const { landing: _landing, ...before9 } = before10;
 
@@ -1122,40 +1164,45 @@ describe("A Run record read back from the store", () => {
     expect(readRunRecord(JSON.parse(JSON.stringify(written)), ["Claude token", "Claude token 2"])).toEqual(written);
   });
 
+  it("of schema 10, written before Full Reviews were recorded, reads as no word on one, a Review's included, at the current schema", () => {
+    expect(readRunRecord({ ...before11, schema: 10 }, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 10, fullReview: null });
+    expect(readRunRecord({ ...before11, role: "review", schema: 10 }, ["Claude token"])).toEqual({ ...written, role: "review", schema: 11, storedSchema: 10, fullReview: null });
+  });
+
   it("of schema 9, written before pushes were recorded, reads as a run that pushed nothing, at the current schema", () => {
-    expect(readRunRecord({ ...before10, role: "implement", schema: 9 }, ["Claude token"])).toEqual({ ...written, role: "implement", schema: 10, storedSchema: 9, pushed: null });
+    expect(readRunRecord({ ...before10, role: "implement", schema: 9 }, ["Claude token"])).toEqual({ ...written, role: "implement", schema: 11, storedSchema: 9, pushed: null });
   });
 
   it("of schema 8, written before landings were recorded, reads as a run that landed, at the current schema", () => {
-    expect(readRunRecord({ ...before9, schema: 8 }, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 8, landing: null });
+    expect(readRunRecord({ ...before9, schema: 8 }, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 8, landing: null });
   });
 
   it("of schema 7, written before Broken runs were recorded, reads as no Broken run, at the current schema", () => {
     const { brokenRun: _, ...rest } = before9;
 
-    expect(readRunRecord({ ...rest, schema: 7 }, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 7, brokenRun: null });
+    expect(readRunRecord({ ...rest, schema: 7 }, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 7, brokenRun: null });
   });
 
   it("of schema 6, written before Kept-branch starts, reads as no Kept-branch start, at the current schema", () => {
     const { keptBranch: _, ...rest } = before9;
 
-    expect(readRunRecord({ ...rest, schema: 6 }, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 6, keptBranch: false });
+    expect(readRunRecord({ ...rest, schema: 6 }, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 6, keptBranch: false });
   });
 
   it("of schema 5, written before empty diffs were recorded, reads as no empty diff, at the current schema", () => {
     const { emptyDiff: _, ...rest } = before9;
 
-    expect(readRunRecord({ ...rest, schema: 5 }, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 5, emptyDiff: false });
+    expect(readRunRecord({ ...rest, schema: 5 }, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 5, emptyDiff: false });
   });
 
   it("of schema 4, written before Step-ups had reasons, reads with a null reason, or retry for one that Stepped up, at the current schema", () => {
     const { stepUpReason: _, ...rest } = before9;
     const older = { ...rest, schema: 4 };
 
-    expect(readRunRecord(older, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 4, stepUpReason: null });
+    expect(readRunRecord(older, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 4, stepUpReason: null });
     expect(readRunRecord({ ...older, role: "implement", retry: 2, stepUp: true }, ["Claude token"])).toEqual({
       ...written,
-      schema: 10, storedSchema: 4,
+      schema: 11, storedSchema: 4,
       role: "implement",
       retry: 2,
       stepUp: true,
@@ -1167,14 +1214,14 @@ describe("A Run record read back from the store", () => {
     const { replay: _, ...rest } = before9;
     const older = { ...rest, schema: 3 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 10, storedSchema: 3, replay: null });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 11, storedSchema: 3, replay: null });
   });
 
   it("of schema 2, written before prototype turns, reads as no prototype turn and no replay's, at the current schema", () => {
     const { prototype: _, replay: __, ...rest } = before9;
     const older = { ...rest, schema: 2 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 10, storedSchema: 2, prototype: false, replay: null });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 11, storedSchema: 2, prototype: false, replay: null });
   });
 
   it("of schema 1, which names no Subscription, reads as being on the first listed one, no prototype turn and no replay's, at the current schema", () => {
@@ -1183,7 +1230,7 @@ describe("A Run record read back from the store", () => {
 
     expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({
       ...written,
-      schema: 10, storedSchema: 1,
+      schema: 11, storedSchema: 1,
       subscription: "Work token",
       prototype: false,
       replay: null,
@@ -1191,7 +1238,7 @@ describe("A Run record read back from the store", () => {
   });
 
   it("of a schema the Kit doesn't know reads as no record", () => {
-    expect(readRunRecord({ ...written, schema: 11 }, ["Claude token"])).toBeNull();
+    expect(readRunRecord({ ...written, schema: 12 }, ["Claude token"])).toBeNull();
     expect(readRunRecord("not a record", ["Claude token"])).toBeNull();
   });
 
@@ -1232,7 +1279,7 @@ describe("A Replay arm's record", () => {
 
   it("is a first Implement run on the replayed Ticket and its merged PR, from the Ticket's base, at the pinned Kit, naming its Replay", () => {
     expect(replayRunRecordFor(replayRunEnd()).record).toMatchObject({
-      schema: 10,
+      schema: 11,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -1352,6 +1399,12 @@ describe("A Replay arm's record", () => {
       const record = replayRunRecordFor(replayRunEnd({ agentResult: agentResult("implement", TICKET, "verdict: pass") })).record;
 
       expect(record.verdict).toBeNull();
+    });
+
+    // An arm's Review is a first run's (#747).
+    it("is a Full Review, and an Implement arm's run is no Review of either kind", () => {
+      expect(review("pass").fullReview).toBe(true);
+      expect(replayRunRecordFor(replayRunEnd()).record.fullReview).toBeNull();
     });
   });
 
@@ -1486,7 +1539,7 @@ describe("A judge run's record", () => {
 
   it("is for the scored run's subject, in role score, with its own model, outcome, effort spent and cost", () => {
     expect(judgeRunRecordFor(judgeRunEnd()).record).toEqual({
-      schema: 10,
+      schema: 11,
       kitSha: KIT_SHA,
       repo: "acme/widgets",
       runId: 9001,
@@ -1515,6 +1568,7 @@ describe("A judge run's record", () => {
       brokenRun: null,
       landing: null,
       pushed: null,
+      fullReview: null,
       verdict: null,
       durationMs: 20_000,
       apiDurationMs: 18_000,

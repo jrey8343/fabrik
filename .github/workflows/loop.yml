@@ -143,6 +143,9 @@ jobs:
       ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}
       ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}
       ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}
+      # For a Review (#747): "true" for a Full Review, whose Reviewer is given the Full Review section, "false"
+      # for a later Review. Its Run record names it. Empty for any other run.
+      full-review: ${{ steps.route.outputs.full-review }}
       # "true" when the Design run is a Design session's prototype turn, else "false".
       prototype: ${{ steps.route.outputs.prototype }}
       # For a prototype turn, its request as one line of JSON (route, variants, brief, reply); else empty.
@@ -1302,6 +1305,8 @@ jobs:
           FABRIK_UI_EVIDENCE_FAILURE: ${{ needs.kit.outputs.ui-evidence-failure }}
           # The Required checks that passed on this head only by being skipped or reporting neutral (#456), from the wait that went green.
           FABRIK_RAN_NOTHING: ${{ needs.rerun-wait.outputs.checks == 'green' && needs.rerun-wait.outputs.ran-nothing || needs.review-checks.outputs.ran-nothing }}
+          # "true" on a Full Review (#747), whose prompt carries the Full Review section; a later Review's doesn't.
+          FABRIK_FULL_REVIEW: ${{ needs.kit.outputs.full-review }}
         run: node ../kit/src/agent/run.ts review
 
       - name: Pass the Verdict to the push job

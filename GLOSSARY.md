@@ -210,6 +210,10 @@ _Avoid_: approval, review result
 A Verdict that the right design was built wrongly, so the Implementer can fix it.
 _Avoid_: bug, failing review
 
+**Full Review**:
+A Review of an agent pull request with no settled code: its first Review, or the first Review to read a head after the Reviewer judged none of the pull request's earlier heads. It judges the whole pull request, and what it doesn't name becomes settled code.
+_Avoid_: first pass, initial review, complete review
+
 **Flaky check**:
 A Required check that has reported both failure and success on the same head commit, in any order and whoever re-ran it. A check red on one head and green on another is never flaky: the code changed. An Execution flaw from a check found flaky on the head it judged no longer counts toward a Ticket's Retries, and the Operator hears of each Flaky check so the Product's suite gets fixed.
 _Avoid_: flake, intermittent failure

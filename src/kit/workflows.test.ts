@@ -1354,6 +1354,17 @@ describe("loop.yml's Review job on a UI PR", () => {
   });
 });
 
+// A Full Review (#747): the Kit job works out the kind, the Review job's
+// Reviewer is told it, and the push job's Run record reads it from the Kit job.
+describe("loop.yml's Review job on a Full Review", () => {
+  const reviewer = (): string => stepsOf(job("review")).find((step) => step.includes("id: agent\n")) ?? "";
+
+  it("gets whether the Review is a Full Review from the Kit job, and tells the Reviewer", () => {
+    expect(job("kit")).toContain("full-review: ${{ steps.route.outputs.full-review }}");
+    expect(reviewer()).toContain("FABRIK_FULL_REVIEW: ${{ needs.kit.outputs.full-review }}\n");
+  });
+});
+
 describe("schedule.yml's tick, which opens the pending Audit and the pending Retro", () => {
   it("asks the run the Loop action to find the fabrik-runs store, which the retro gate weighs, and is the only job that does", () => {
     const tick = jobIn(schedule, "tick");

@@ -273,6 +273,8 @@ export function kitJobOutputs(
     "ui-evidence-artifact": String(run?.evidence?.artifact ?? ""),
     // Only ever one of the CAPTURE_FAILURES the marker reads as.
     "ui-evidence-failure": run?.evidence?.failure ?? "",
+    // For a Review (#747): "true" for a Full Review, whose Reviewer is given the Full Review section, else "false".
+    "full-review": run?.role === "review" && run.reviewKind !== undefined ? String(run.reviewKind.kind === "full") : "",
     // Whether the Design run is the session's prototype turn, which the prototype job runs in the design job's place.
     prototype: String(run?.prototype !== undefined),
     // The one output that holds agent text: the request's brief, written by the Design agent. One line of JSON,
