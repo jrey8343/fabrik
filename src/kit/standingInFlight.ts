@@ -31,7 +31,7 @@ import { addedAndStillOn, answerOf, lastAdded, passAtHeadOf } from "./standingOp
 import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts, WeeklyRunIssueFacts } from "./weeklySummary.ts";
 
 /** What a `running` Standing's `detail.run` names: the kind of run, as far as the facts tell it. */
-export type RunningRun = "implement" | "retry" | "request-changes" | "conflict-only" | "review" | "digest" | "triage" | "research" | "design" | "prototype";
+export type RunningRun = "implement" | "retry" | "touch-up" | "request-changes" | "conflict-only" | "review" | "digest" | "triage" | "research" | "design" | "prototype";
 
 /**
  * Every Standing of the repo's work that goes on without the Operator, or that
@@ -407,7 +407,8 @@ function runningOnIssue(
   const running = (work: StandingWork, place: StandingPlace | null, role: AwaitedRole, kind: RunningRun, retry: number | null = null, pullRequest: number | null = null) => ({
     ...inFlight(repo, issue.number, pullRequest, runningSince(run), work, place, { role, on: pullRequest === null ? "issue" : "pullRequest" }),
     name: "running" as const,
-    detail: { run: kind, retry, actionsRun: run.run },
+    // A Touch-up says which of the two it is (#750).
+    detail: { run: kind, retry, ...(kind === "touch-up" && run.touchUp != null ? { touchUp: run.touchUp } : {}), actionsRun: run.run },
   });
   switch (run.role) {
     case "implement": {

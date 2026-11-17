@@ -36,6 +36,10 @@ describe("The reader of a Kit job's closing step (#616)", () => {
       { fabrik: 1, route: "review", run: { role: "review", issue: null, pullRequest: 50, kind: null, retry: 0, model: "claude-opus-5-5" }, held: [], replay: null },
     ],
     [
+      "a Touch-up, with its number (#750)",
+      { fabrik: 1, route: "implement", run: { role: "implement", issue: 7, pullRequest: 50, kind: "touch-up", retry: 0, touchUp: 2, model: "claude-sonnet-5-5" }, held: [], replay: null },
+    ],
+    [
       "a Digest run, routed to the role with its Ticket and its pull request (#655)",
       { fabrik: 1, route: "digest", run: { role: "digest", issue: 7, pullRequest: 50, kind: null, retry: 0, model: "claude-opus-5-5" }, held: [{ role: "digest", issue: 51 }], replay: null },
     ],
@@ -67,6 +71,7 @@ describe("The reader of a Kit job's closing step (#616)", () => {
     ["with a run kind the Kit has none of", { ...SAID, run: { ...SAID.run, kind: "rerun" } }],
     ["with a run of no role", { ...SAID, run: { ...SAID.run, role: "operator" } }],
     ["with a Retry number that isn't one", { ...SAID, run: { ...SAID.run, retry: "2" } }],
+    ["with a Touch-up number that isn't one", { ...SAID, run: { ...SAID.run, touchUp: "1" } }],
     ["with a held run of no number", { ...SAID, held: [{ role: "review" }] }],
     ["with a replay of no Ticket", { ...SAID, replay: { issue: 140 } }],
     ["that isn't an object", [SAID]],

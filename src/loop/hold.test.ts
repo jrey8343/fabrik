@@ -691,6 +691,17 @@ describe("A note promising a run while every Subscription is used up says it's h
   };
   const heldNote = "Every Subscription is used up, so it's held on #41 until then.";
 
+  it("an all-tagged Execution flaw's Verdict says its Touch-up starts once the weekly limit resets (#750)", () => {
+    const pullRequest = aPullRequest({ headSha: "a".repeat(40) });
+    const tagged = { ...flaw, output: "verdict: execution-flaw\n\n- [small: comment] The doc comment on `total()` is stale." };
+    const note = commentsIn(planFor(tagged, snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS), 50);
+
+    expect(note).toContain(
+      `Touch-up 1 of 2 starts once the weekly limit resets, on the same model: the Implementer fixes these findings on the same branch. It uses none of the Ticket's two Retries. ${heldNote}`,
+    );
+    expect(note).not.toContain("starts now");
+  });
+
   it("an Execution flaw's Verdict says its Retry starts once the weekly limit resets, naming the issue it's held on", () => {
     const pullRequest = aPullRequest({ headSha: "a".repeat(40) });
     const note = commentsIn(planFor(flaw, snapshotOfPullRequest(pullRequest, { kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS), 50);
@@ -718,6 +729,15 @@ describe("A note promising a run while every Subscription is used up says it's h
     expect(heldLinesOn(plan, 7)).toEqual([]);
     expect(commentsIn(plan, 41)).toContain('<!-- fabrik:held {"issue":7,"role":"implement","label":"agent:implement","order":1,"line":50} -->');
     expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("a Touch-up held as it falls due gets a held line naming it (#750)", () => {
+    const touchUpFlaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 0 }, touchUp: 1, headSha: "a".repeat(40) } as const;
+    const flawed = aPullRequest({ verdicts: [touchUpFlaw], headSha: "a".repeat(40) });
+    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"], openPullRequests: [50] });
+    const plan = planFor({ kind: "label-added", issue: 7, label: "agent:implement" }, snapshotOf(ticket, { pullRequest: flawed, kitIssues: BOTH_USED_UP }), TWO_SUBSCRIPTIONS);
+
+    expect(heldLinesOn(plan, 50)).toEqual([expect.stringContaining("The Implement run (Touch-up 1 of 2) is held on #41")]);
   });
 
   it("an Execution flaw that gives way to the Operator's unbuilt Request changes says its run is held too", () => {

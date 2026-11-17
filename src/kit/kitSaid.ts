@@ -16,7 +16,7 @@ export const KIT_SAID_VERSION = 1;
 export type KitRoute = AgentRole | "replay" | "push" | "none";
 
 const ROUTES: readonly KitRoute[] = [...AGENT_ROLES, "replay", "push", "none"];
-const RUN_KINDS: readonly RunKind[] = ["first", "retry", "request-changes", "conflict-only", "prototype"];
+const RUN_KINDS: readonly RunKind[] = ["first", "retry", "touch-up", "request-changes", "conflict-only", "prototype"];
 
 /** What the Kit job routed, as its closing step's name says it. */
 export interface KitSaid {
@@ -33,6 +33,8 @@ export interface KitSaid {
     readonly kind: RunKind | null;
     /** 0 unless a Retry. */
     readonly retry: number;
+    /** A Touch-up's number (#750); absent on any other run, and on a line from before Touch-ups. */
+    readonly touchUp?: number;
     /** The Kit config's model for the run. */
     readonly model: string;
   } | null;
@@ -74,6 +76,7 @@ export function routeOf(plan: Plan | null): KitRoute {
 function kindOf(run: StartAgentRun): RunKind | null {
   if (run.requestChanges !== undefined) return "request-changes";
   if (run.conflict !== undefined) return "conflict-only";
+  if ((run.touchUp ?? 0) > 0) return "touch-up";
   if ((run.retry ?? 0) > 0) return "retry";
   if (run.role === "implement") return "first";
   if (run.prototype !== undefined) return "prototype";
@@ -104,6 +107,7 @@ export function kitSaidOf(plan: Plan | null, ticket: number | null): KitSaid {
             pullRequest: onPullRequest ? run.issue : run.role === "implement" ? (run.pullRequest ?? null) : null,
             kind: kindOf(run),
             retry: run.retry ?? 0,
+            ...(run.touchUp === undefined ? {} : { touchUp: run.touchUp }),
             model: run.model,
           },
     held: held.map(({ role, issue }) => ({ role, issue })),
@@ -169,11 +173,12 @@ function isRole(value: unknown): value is AgentRole {
 /** The run a line names, or undefined when it isn't one. */
 function runFrom(value: unknown): KitSaid["run"] | undefined {
   if (!isRecord(value)) return undefined;
-  const { role, issue, pullRequest, kind, retry, model } = value;
+  const { role, issue, pullRequest, kind, retry, touchUp, model } = value;
   if (!isRole(role) || !isNumber(retry) || typeof model !== "string") return undefined;
   if ((issue !== null && !isNumber(issue)) || (pullRequest !== null && !isNumber(pullRequest))) return undefined;
   if (kind !== null && !RUN_KINDS.includes(kind as RunKind)) return undefined;
-  return { role, issue, pullRequest, kind: kind as RunKind | null, retry, model };
+  if (touchUp !== undefined && !isNumber(touchUp)) return undefined;
+  return { role, issue, pullRequest, kind: kind as RunKind | null, retry, ...(touchUp === undefined ? {} : { touchUp }), model };
 }
 
 /** A held run a line names, or undefined when it isn't one. */

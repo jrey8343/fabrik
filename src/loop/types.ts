@@ -297,7 +297,9 @@ export type LoopEvent =
         readonly review?: number;
         /** For a Retry: its number, from the Kit job's plan, so a Retry left over from an earlier flaw never lands (#341). */
         readonly retry?: number;
-        /** For a Retry: the head of the Execution flaw it was started for, from the Kit job's plan (#341). */
+        /** For a Touch-up (#750), rather than a Retry: its number, from the Kit job's plan, so its push note says which it was. */
+        readonly touchUp?: number;
+        /** For a Retry or Touch-up: the head of the Execution flaw it was started for, from the Kit job's plan (#341). */
         readonly retryFlaw?: string;
         /**
          * For a conflict-only run (#304): the default branch's head it was
@@ -1157,6 +1159,12 @@ export interface VerdictRecord {
    * and on one from before tags, whatever its text says.
    */
   readonly tags?: VerdictTags;
+  /**
+   * On a Reviewer's Execution flaw whose findings were all tagged (#750), the
+   * Touch-up it called for, 1 or 2: it uses none of the Ticket's Retries.
+   * Absent on every other Verdict, a third such flaw's included.
+   */
+  readonly touchUp?: number;
   /** The head commit it was given on. */
   readonly headSha: string;
 }
@@ -1814,7 +1822,9 @@ export type Action =
       readonly conflict?: { readonly main: string };
       /** For an Implement run that is a Retry: its Retry number. */
       readonly retry?: number;
-      /** For a Retry on an agent PR: the head the Execution flaw it fixes was given on (#341). */
+      /** For an Implement run that is a Touch-up (#750): its Touch-up number. It isn't a Retry. */
+      readonly touchUp?: number;
+      /** For a Retry or Touch-up on an agent PR: the head the Execution flaw it fixes was given on (#341). */
       readonly retryFlaw?: string;
       /**
        * For an Implement run: whether it runs on the Step-up model, and why. A

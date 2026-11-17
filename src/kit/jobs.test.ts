@@ -319,6 +319,12 @@ describe("The Kit job's line of what it routed (#616)", () => {
       { role: "implement", issue: 7, pullRequest: 50, kind: "retry", retry: 2, model: "claude-opus-5-5" },
     ],
     [
+      "a Touch-up, which is no Retry, with its number (#750)",
+      starting({ pullRequest: 50, touchUp: 1, retryFlaw: "a".repeat(40), stepUp: false, stepUpReason: null }),
+      7,
+      { role: "implement", issue: 7, pullRequest: 50, kind: "touch-up", retry: 0, touchUp: 1, model: "claude-sonnet-5-5" },
+    ],
+    [
       "the Operator's Request-changes run, which is no Retry",
       starting({ pullRequest: 50, requestChanges: { review: 900 }, stepUp: true, stepUpReason: "request-changes", model: "claude-opus-5-5" }),
       7,
@@ -332,6 +338,13 @@ describe("The Kit job's line of what it routed (#616)", () => {
     ],
   ])("says %s", (_, plan, ticket, run) => {
     expect(said(plan, ticket)).toEqual({ fabrik: 1, route: (run as { role: string }).role, run, held: [], replay: null });
+  });
+
+  it("passes out a Touch-up's number, and Retry 0, for its push note and its Run record (#750)", () => {
+    const outputs = kitJobOutputs(starting({ pullRequest: 50, touchUp: 2, retryFlaw: "a".repeat(40) }), 7, kitConfig());
+
+    expect(outputs).toMatchObject({ "touch-up": "2", retry: "0", "retry-flaw": "a".repeat(40) });
+    expect(kitJobOutputs(starting({ pullRequest: 50, retry: 1 }), 7, kitConfig())).toMatchObject({ "touch-up": "0", retry: "1" });
   });
 
   it("says a conflict-only run's Ticket and pull request, as no Retry", () => {

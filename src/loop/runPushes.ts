@@ -3,16 +3,18 @@
 // numbered it, the head the note names, and the note itself, which carries the
 // `fix` comment the run wrote. A later Review is given them. Pure, no I/O.
 import { type DigestThread, noteRound } from "./digestFacts.ts";
-import { pushedHeadIn } from "./markers.ts";
+import { pushedHeadIn, touchUpPushIn } from "./markers.ts";
 
 /** The kind of Implement run that pushed to a pull request. */
-export type PushingRun = "retry" | "request-changes-run" | "conflict-only-run";
+export type PushingRun = "retry" | "touch-up" | "request-changes-run" | "conflict-only-run";
 
 /** One Implement run's push, as the Kit's note of it records it. */
 export interface RunPush {
   readonly run: PushingRun;
   /** On a Retry's push: which of the Ticket's Retries it was. */
   readonly retry?: number;
+  /** On a Touch-up's push (#750): which of the two it was, as its note names it. */
+  readonly touchUp?: number;
   /** The head the note names, or null when it names none, as every note from before #420. */
   readonly head: string | null;
   /** The Kit's whole note, which ends with the run's `fix` comment. */
@@ -27,8 +29,11 @@ export interface RunPush {
  */
 export function runPushesIn({ kitComments, landedNothing }: Pick<DigestThread, "kitComments" | "landedNothing">): RunPush[] {
   const bodies = kitComments.map(({ body }) => body);
-  return bodies.flatMap((note, at) =>
-    noteRound(note, bodies.slice(0, at), landedNothing).flatMap((round): RunPush[] => {
+  return bodies.flatMap((note, at): RunPush[] => {
+    // A Touch-up's note names which it was itself (#750).
+    const touchUp = touchUpPushIn(note);
+    if (touchUp !== null) return [{ run: "touch-up", touchUp, head: pushedHeadIn(note), note }];
+    return noteRound(note, bodies.slice(0, at), landedNothing).flatMap((round): RunPush[] => {
       const head = pushedHeadIn(note);
       switch (round.what) {
         case "retry":
@@ -39,8 +44,8 @@ export function runPushesIn({ kitComments, landedNothing }: Pick<DigestThread, "
         default:
           return [];
       }
-    }),
-  );
+    });
+  });
 }
 
 /**

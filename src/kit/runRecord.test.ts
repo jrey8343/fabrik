@@ -127,6 +127,7 @@ describe("The Run record a run's end yields", () => {
       effort: null,
       subscription: "Claude token",
       retry: 0,
+      touchUp: 0,
       stepUp: false,
       stepUpReason: null,
       requestChanges: false,
@@ -673,6 +674,14 @@ describe("The Run record a run's end yields", () => {
       expect(implement({ retry: "1", "pull-request": "50" })).toMatchObject({ retry: 1, stepUp: false, requestChanges: false, pullRequest: 50 });
     });
 
+    it("a Touch-up carries its number, and is no Retry (#750)", () => {
+      expect(implement({ retry: "0", "touch-up": "2", "pull-request": "50" })).toMatchObject({ touchUp: 2, retry: 0, pullRequest: 50 });
+    });
+
+    it("any other Implement run is no Touch-up", () => {
+      expect(implement({ retry: "1", "touch-up": "0", "pull-request": "50" })).toMatchObject({ touchUp: 0, retry: 1 });
+    });
+
     it("a Step-up carries its Retry number and that it Stepped up", () => {
       expect(implement({ retry: "2", "step-up": "true", "pull-request": "50" })).toMatchObject({ retry: 2, stepUp: true });
     });
@@ -1189,8 +1198,8 @@ describe("A Run record read back from the store", () => {
     runEnd({ needs: needs("triage", { triage: job("success") }, { subscription: "Claude token 2" }) }),
   )?.record;
 
-  /** The written record as a schema 10 one, written before Full Reviews were recorded, held it. */
-  const { fullReview: _fullReview, ...before11 } = written!;
+  /** The written record as a schema 10 one, written before Full Reviews and Touch-ups were recorded, held it. */
+  const { fullReview: _fullReview, touchUp: _touchUp, ...before11 } = written!;
   /** The written record as a schema 9 one, written before pushes were recorded, held it. */
   const { pushed: _pushed, ...before10 } = before11;
   /** The written record as a schema 8 one, written before landings were recorded, held it. */
@@ -1214,6 +1223,16 @@ describe("A Run record read back from the store", () => {
       verdict: "execution-flaw",
       findingTags: null,
     });
+  });
+
+  it("of schema 10, an Implement run's, reads as no Touch-up (#750)", () => {
+    expect(readRunRecord({ ...before11, role: "implement", retry: 1, schema: 10 }, ["Claude token"])).toMatchObject({ retry: 1, touchUp: 0 });
+  });
+
+  it("of schema 11, written before Touch-ups were recorded (#750), reads as none", () => {
+    const { touchUp: _touchUp, ...withoutTouchUp } = written!;
+
+    expect(readRunRecord({ ...withoutTouchUp, role: "implement" }, ["Claude token"])).toEqual({ ...written, role: "implement", touchUp: 0 });
   });
 
   it("of schema 9, written before pushes were recorded, reads as a run that pushed nothing, at the current schema", () => {
@@ -1599,6 +1618,7 @@ describe("A judge run's record", () => {
       effort: "medium",
       subscription: "Claude token",
       retry: 0,
+      touchUp: 0,
       stepUp: false,
       stepUpReason: null,
       requestChanges: false,

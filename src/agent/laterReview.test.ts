@@ -7,14 +7,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ChangeSince } from "../github/changeSince.ts";
 import { type ChangeFingerprint, changeLine } from "../loop/changeFingerprint.ts";
-import { CONFLICT_RUN_MARKER, pushedHeadMarker, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, verdictMarker } from "../loop/markers.ts";
+import { CONFLICT_RUN_MARKER, pushedHeadMarker, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, touchUpPushMarker, verdictMarker } from "../loop/markers.ts";
 import type { VerdictRecord } from "../loop/types.ts";
 import type { Reader } from "./inputs.ts";
 import { type LaterReviewGiven, lastJudgedOf, readLaterReviewThread } from "./laterReview.ts";
 import { reviewContext } from "./review.ts";
 
 const REPO = { owner: "acme", name: "shop" };
-const [B, C, D, E, F] = ["b", "c", "d", "e", "f"].map((sha) => sha.repeat(40)) as [string, string, string, string, string];
+const [B, C, D, E, F, G] = ["b", "c", "d", "e", "f", "1"].map((sha) => sha.repeat(40)) as [string, string, string, string, string, string];
 const CHANGE: ChangeFingerprint = { v: 1, all: "0".repeat(12), product: "1".repeat(12), files: { "src/cart.ts": "2".repeat(12) } };
 const bot = { login: "fabrik-app[bot]", type: "Bot" };
 const operator = { login: "operator", type: "User" };
@@ -136,6 +136,14 @@ describe("A later Review's prompt context (#748)", () => {
     expect(await pushedBy(F)).toContain(`A conflict-only run pushed \`${F.slice(0, 7)}\`, the head you judge.`);
     expect(await pushedBy(E)).toContain(`A Request-changes run pushed \`${E.slice(0, 7)}\`, the head you judge.`);
     expect(await pushedBy(D)).toContain(`A Retry pushed \`${D.slice(0, 7)}\`, the head you judge.`);
+  });
+
+  it("names a Touch-up's push by its number, and the Touch-up as the run that pushed its head (#750)", async () => {
+    const touchedUp = [...THREAD, { user: bot, body: pushNote(touchUpPushMarker(1), G, "**Fixed.** The stale comment on `parking()`.") }];
+    const text = await laterContext(gitHubWith(touchedUp), G);
+
+    expect(jsonUnder(text, FIX_COMMENTS)).toMatchObject([{ run: "Retry 1" }, { run: "Retry 2" }, { run: "Request-changes run" }, { run: "conflict-only run" }, { run: "Touch-up 1" }]);
+    expect(text.split(PUSHED_BY)[1]?.split("\n## ")[0]).toContain(`A Touch-up pushed \`${G.slice(0, 7)}\`, the head you judge.`);
   });
 
   it("names no run for the Operator's own push after a conflict-only run's, though the conflict-only run was the latest", async () => {

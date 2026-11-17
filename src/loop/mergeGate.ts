@@ -86,14 +86,16 @@ function deferredDuringRetry(pullRequest: PullRequestSnapshot, review: number): 
   const { number } = pullRequest;
   // Once the Retry has pushed, none is in flight, though its Review may still be working.
   const run = runInFlight(pullRequest);
-  const retry = run?.kind === "retry" ? runName(run) : "the Retry";
+  // A Touch-up (#750) defers it as a Retry does.
+  const retry = run?.kind === "retry" || run?.kind === "touch-up" ? runName(run) : "the Retry";
+  const noun = run?.kind === "touch-up" ? "Touch-up" : "Retry";
   return {
     kind: "act",
     actions: [
       {
         kind: "comment",
         issue: number,
-        body: `Your Request changes on #${number} (${reviewLinks(pullRequest, [review])}) came in while ${retry} was in flight, so the Kit defers it until the Verdict on that Retry's push. Its Review judges #${number} against the Ticket without it. On a pass or an Execution flaw, the Request-changes run for it starts then, on the Step-up model, using no retry; a Design flaw sends the Ticket back to design, closing #${number}.`,
+        body: `Your Request changes on #${number} (${reviewLinks(pullRequest, [review])}) came in while ${retry} was in flight, so the Kit defers it until the Verdict on that ${noun}'s push. Its Review judges #${number} against the Ticket without it. On a pass or an Execution flaw, the Request-changes run for it starts then, on the Step-up model, using no retry; a Design flaw sends the Ticket back to design, closing #${number}.`,
       },
     ],
   };

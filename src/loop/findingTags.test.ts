@@ -1,7 +1,7 @@
 // The tags on a Reviewer's findings (#749): the Kit reads them off the
 // Verdict, counts them into a Reviewer's Execution-flaw marker, and checks
-// nothing in code. A `[missed earlier]` on a Full Review counts. Every
-// Execution flaw still calls for a Retry; the tags only record.
+// nothing in code. A `[missed earlier]` on a Full Review counts. An
+// all-tagged Execution flaw calls for a Touch-up (#750, src/loop/touchUp.test.ts).
 import { describe, expect, it } from "vitest";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
@@ -82,12 +82,12 @@ describe("A Reviewer's Execution flaw records its findings' tags (#749)", () => 
     expect(body).toContain(FINDINGS);
   });
 
-  it("a flaw whose findings are all tagged still calls for a Retry", () => {
+  it("a flaw whose findings are all tagged calls for a Touch-up, not a Retry (#750)", () => {
     const allTagged = "- [small: body] The PR body still says the cart is cached.\n- [missed earlier] The empty cart throws in `checkout.ts`.";
     const plan = landed(`verdict: execution-flaw\n\n${allTagged}`, laterReviewed);
 
     expect(verdictsPostedIn(commentsOf(plan))).toMatchObject([{ tags: { small: 1, missedEarlier: 1, counted: 0, smallBody: 1 } }]);
-    expect(commentsOf(plan)[0]).toMatch(/Retry 2 of 2/);
+    expect(commentsOf(plan)[0]).toMatch(/Touch-up 1 of 2/);
     expect(plan.kind === "act" ? plan.actions : []).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
   });
 });

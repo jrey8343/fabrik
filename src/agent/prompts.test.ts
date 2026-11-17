@@ -79,6 +79,15 @@ describe("The prompts of the runs on a PR the Operator requested changes on (ADR
     expect(lines.indexOf(skills)).toBe(lines.findIndex((line) => line.startsWith(keepBullet)) + 1);
   });
 
+  it("implement has a Touch-up section (#750): it works as a retry, spends no Retry, fails on an empty commit, and outputs a retry's fields", async () => {
+    const touchUp = section(await prompt("implement"), "When you're touching up a PR");
+    expect(touchUp).toContain('"This run is a Touch-up"');
+    expect(touchUp).toContain('everything under "When you\'re fixing a PR" applies');
+    expect(touchUp).toContain("uses none of the Ticket's two Retries");
+    expect(touchUp).toContain("Committing nothing is a failed attempt");
+    expect(touchUp).toContain("Your output is a retry's: `summary` and `fix`, and the Kit keeps the PR's title.");
+  });
+
   it("implement no longer has a Request-changes run meet a criterion its requested changes conflict with, and has it name each criterion it amended", async () => {
     const run = section(await prompt("implement"), "When the Operator requested changes");
     expect(run).not.toContain("and still meet the Ticket's acceptance criteria");

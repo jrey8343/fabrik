@@ -18,7 +18,7 @@ import { AGENT_ROLES, type AgentRole, isStepUpReason, type StepUpReason, type St
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, tags, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, tags, touchUp, headSha } = record;
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
   const fields = {
@@ -32,6 +32,8 @@ export function verdictMarker(record: VerdictRecord): string {
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     // Only a Reviewer's Execution flaw counts its findings by tag (#749).
     ...(tags === undefined || verdict !== "execution-flaw" || source !== "reviewer" ? {} : { tags }),
+    // Only one that called for a Touch-up says which (#750).
+    ...(touchUp === undefined || verdict !== "execution-flaw" || source !== "reviewer" ? {} : { touchUp }),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
@@ -299,6 +301,23 @@ export function stepUpReasonIn(body: string): StepUpReason | null {
 
 /** The first line of the Kit's note on a PR that a Retry pushed to it: the Retry's outcome, which ends its time in flight. */
 export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";
+
+/**
+ * The first line of the Kit's note on a PR that a Touch-up pushed to it
+ * (#750), naming which of the two it was: the Touch-up's outcome, which ends
+ * its time in flight as a Retry's push note does.
+ */
+export function touchUpPushMarker(touchUp: number): string {
+  return `<!-- fabrik:touch-up-push ${touchUp} -->`;
+}
+
+const TOUCH_UP_PUSH_MARKER = /^<!-- fabrik:touch-up-push ([1-9]\d*) -->(?:\n|$)/;
+
+/** Which Touch-up a Touch-up's push note is of (#750), from its first line, or null for any other comment. Only a bot's comment should be passed in. */
+export function touchUpPushIn(body: string): number | null {
+  const touchUp = TOUCH_UP_PUSH_MARKER.exec(body)?.[1];
+  return touchUp === undefined ? null : Number(touchUp);
+}
 
 /**
  * The first line of the Kit's note that the Retry a PR's latest Verdict called

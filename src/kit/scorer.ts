@@ -100,9 +100,10 @@ export function inSample(key: string, share: number): boolean {
  * latest Verdict's findings; a Request-changes run, the Operator's review,
  * which amends the Ticket (ADR-0010); a conflict-only run, a rebase onto
  * `main` and nothing else; a Kept-branch start (#536), its first run or the
- * Retry after an empty diff, the Ticket on top of a closed PR's kept work.
+ * Retry after an empty diff, the Ticket on top of a closed PR's kept work; a
+ * Touch-up (#750), the latest Verdict's small or missed-earlier findings.
  */
-export type JudgedRunKind = "first" | "retry" | "request-changes" | "conflict-only" | "kept-branch";
+export type JudgedRunKind = "first" | "retry" | "touch-up" | "request-changes" | "conflict-only" | "kept-branch";
 
 /** The scored run as the judge is told of it: its kind, its Retry number (0 for none), and whether its timeout stopped it. */
 export interface JudgedRun {
@@ -117,7 +118,10 @@ export function judgedRunOf(record: RunRecord): JudgedRun {
     ? "kept-branch"
     : record.requestChanges
     ? "request-changes"
-    : record.stepUpReason === "conflict-only"
+    : // A Touch-up carries the Step-up reason of the run before it, a conflict-only run's included (#750).
+      record.touchUp > 0
+      ? "touch-up"
+      : record.stepUpReason === "conflict-only"
       ? "conflict-only"
       : record.retry > 0
         ? "retry"
@@ -133,7 +137,7 @@ export function judgedRunOf(record: RunRecord): JudgedRun {
 export function readJudgedRun(text: string): JudgedRun {
   if (text === "") return { kind: "first", retry: 0, timedOut: false };
   const value: unknown = JSON.parse(text);
-  const kinds: readonly unknown[] = ["first", "retry", "request-changes", "conflict-only", "kept-branch"] satisfies JudgedRunKind[];
+  const kinds: readonly unknown[] = ["first", "retry", "touch-up", "request-changes", "conflict-only", "kept-branch"] satisfies JudgedRunKind[];
   if (
     !isObject(value) ||
     !kinds.includes(value["kind"]) ||

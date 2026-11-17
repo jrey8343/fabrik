@@ -2570,8 +2570,8 @@ export function implementRunsWithoutPullRequestOf(
   return { count: onItsWay.length, tickets: [...new Set(tickets)].sort((a, b) => a - b) };
 }
 
-/** The kind of run a job's name says it is, where it says: a Retry, or a Design session's prototype turn. */
-export type RunKind = "first" | "retry" | "request-changes" | "conflict-only" | "prototype";
+/** The kind of run a job's name or the Kit job's closing line says it is, where it says: a Retry, a Touch-up (#750), or a Design session's prototype turn. */
+export type RunKind = "first" | "retry" | "touch-up" | "request-changes" | "conflict-only" | "prototype";
 
 /**
  * Where a run in flight is: behind its concurrency group (`blocked`), queued
@@ -2593,6 +2593,8 @@ export interface RunInFlightFact {
   readonly issue: number | null;
   readonly pullRequest: number | null;
   readonly retry: number | null;
+  /** A Touch-up's number (#750), from the Kit job's closing line; absent or null for any other run. */
+  readonly touchUp?: number | null;
   readonly kind: RunKind | null;
   readonly job: RunJob;
   /** When Actions created its workflow run, ISO 8601. */

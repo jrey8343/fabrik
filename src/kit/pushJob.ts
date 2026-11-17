@@ -54,7 +54,9 @@ export type PushJobInput =
       readonly mainAtStart?: string | null;
       /** For a Retry: its number, from the Kit job's plan (#341); null for any other run. */
       readonly retry?: number | null;
-      /** For a Retry: the head of the Execution flaw it fixes, from the Kit job's plan (#341); null for any other run. */
+      /** For a Touch-up (#750): its number, from the Kit job's plan; null for any other run. */
+      readonly touchUp?: number | null;
+      /** For a Retry or Touch-up: the head of the Execution flaw it fixes, from the Kit job's plan (#341); null for any other run. */
       readonly retryFlaw?: string | null;
       /** For an Implement run: why it Stepped up, from the Kit job's plan, which its push note records (#746); null when it didn't. */
       readonly stepUpReason?: StepUpReason | null;
@@ -199,6 +201,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
               conflict,
               mainAtStart: shaOr(kit.outputs["main-at-start"]),
               retry: numberOr(kit.outputs["retry"]),
+              touchUp: numberOr(kit.outputs["touch-up"]),
               retryFlaw: shaOr(kit.outputs["retry-flaw"]),
               stepUpReason: stepUpReasonOf(kit.outputs),
               keptBranch: keptBranchStartOf(kit.outputs),

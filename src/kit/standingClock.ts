@@ -147,8 +147,10 @@ function digestSilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFact
  * its Ticket no longer `ready-for-agent`, or gave way to the Operator's
  * Request changes, or once the Ticket's Retries are used up, counting its
  * runs that landed nothing; none is owed once a Retry pushed or the Kit ended
- * it, or once the pull request left draft. The Kit's note that it added
- * `agent:implement` again for it is a sign, so the clock restarts there.
+ * it, or once the pull request left draft. A Touch-up (#750) is read as a
+ * Retry is, but whatever Retries are left, and says which it is. The Kit's
+ * note that it added `agent:implement` again for it is a sign, so the clock
+ * restarts there.
  */
 function retrySilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts, runs: readonly RunInFlightFact[], bar: number): StandingNamed<"not-started">[] {
   const { ticket } = pullRequest;
@@ -162,12 +164,13 @@ function retrySilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts
   const open = facts.github.openIssues.find(({ number }) => number === ticket);
   if (open !== undefined && open.labels.length > 0 && !open.labels.includes(READY_FOR_AGENT)) return [];
   const landedNothing = countLandedNothing((open?.comments ?? []).map(({ body, author }) => ({ body, byApp: author === facts.appLogin })));
-  if (retryNumber(verdicts.slice(0, -1).map(({ record }) => record), landedNothing) > MAX_RETRIES) return [];
+  // A Touch-up (#750) is announced whatever Retries are left.
+  const { touchUp } = latest.record;
+  if (touchUp === undefined && retryNumber(verdicts.slice(0, -1).map(({ record }) => record), landedNothing) > MAX_RETRIES) return [];
   if (hasRunBehind(DISPATCH_LABEL, runs, ticket, pullRequest.number)) return [];
   const clock = clockOf(latest.at, ticket, pullRequestsOf(ticket, facts), facts);
-  return [
-    notStarted(facts.github.repo, ticket, pullRequest.number, "ticket", "implement", latest.at, stuckAtOf(clock, bar), { role: "implement", on: "pullRequest" }, { silence: "retry", label: null }),
-  ];
+  const detail = { silence: "retry" as const, label: null, ...(touchUp === undefined ? {} : { touchUp }) };
+  return [notStarted(facts.github.repo, ticket, pullRequest.number, "ticket", "implement", latest.at, stuckAtOf(clock, bar), { role: "implement", on: "pullRequest" }, detail)];
 }
 
 /**

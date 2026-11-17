@@ -50,7 +50,8 @@
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
 //   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
-//   retry-flaw               for a Retry on an agent PR, the head its Execution flaw was given on (#341); else empty
+//   touch-up                 for an Implement run, its Touch-up number (#750; 0 for any other run); else empty
+//   retry-flaw               for a Retry or Touch-up on an agent PR, the head its Execution flaw was given on (#341); else empty
 //   step-up, request-changes "true" when the run Steps up, or is the Operator's Request-changes run; else "false"
 //   step-up-reason           why the run Steps up: retry, marked, request-changes or conflict-only; else empty
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
@@ -261,6 +262,8 @@ export function kitJobOutputs(
     effort: run?.effort ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.
     retry: run?.role === "implement" ? String(run.retry ?? 0) : "",
+    // A Touch-up (#750) is no Retry: its own number, which its push note and its Run record carry.
+    "touch-up": run?.role === "implement" ? String(run.touchUp ?? 0) : "",
     // A Retry on an agent PR: the head of the Execution flaw it fixes, so its push lands only for that flaw (#341).
     "retry-flaw": run?.role === "implement" ? (run.retryFlaw ?? "") : "",
     "step-up": String(run?.stepUp === true),

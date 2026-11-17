@@ -247,7 +247,7 @@ export function verdictActions(
 ): Action[] {
   const first =
     verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator, held) : verdict === "pass" ? deferredFirst(pullRequest, held) : null;
-  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest, held);
+  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest, held, tags);
   const record: VerdictRecord = {
     verdict,
     source,
@@ -258,6 +258,7 @@ export function verdictActions(
     ...(checks === undefined ? {} : { checks }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     ...(tags === null ? {} : { tags }),
+    ...(next?.touchUp === undefined ? {} : { touchUp: next.touchUp }),
     headSha: event.headSha,
   };
   const by = BY[source];
@@ -345,10 +346,10 @@ function deferredFirst(pullRequest: PullRequestSnapshot, held: HeldOn | null): G
   };
 }
 
-/** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */
-function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot, held: HeldOn | null): VerdictNext | null {
+/** What a Verdict leads to beyond its comment: a Touch-up or retry, back to design, or (for a pass) nothing here. */
+function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot, held: HeldOn | null, tags: VerdictTags | null): VerdictNext | null {
   if (verdict === "pass") return null;
-  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest, held) : null;
+  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest, held, tags) : null;
   if (retry !== null) return retry;
   const reason = verdict === "design-flaw" ? "design-flaw" : "retries-used-up";
   return { line: backToDesignLine(pullRequest, reason), actions: backToDesignActions(pullRequest, reason, VERDICT_COMMENT) };

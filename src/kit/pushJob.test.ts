@@ -86,6 +86,12 @@ describe("What the push job applies", () => {
     expect(pushJobInput(needs("retro"), 120)).toEqual({ kind: "nothing", reason: "the retro job ended unknown" });
   });
 
+  it("applies a Touch-up's result with its number from the Kit job's plan, as no Retry (#750)", () => {
+    const outputs = { ticket: "7", "pull-request": "50", retry: "0", "touch-up": "1", "retry-flaw": "a".repeat(40) };
+
+    expect(pushJobInput(needs("implement", { implement: ok() }, outputs), 50)).toMatchObject({ retry: null, touchUp: 1, retryFlaw: "a".repeat(40) });
+  });
+
   it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
 
@@ -98,6 +104,7 @@ describe("What the push job applies", () => {
       conflict: null,
       mainAtStart: null,
       retry: null,
+      touchUp: null,
       retryFlaw: null,
       stepUpReason: null,
       keptBranch: null,

@@ -67,14 +67,16 @@ export async function readLaterReviewThread(
   };
 }
 
-function runName({ run, retry }: RunPush): string {
+function runName({ run, retry, touchUp }: RunPush): string {
   if (run === "retry") return retry === undefined ? "Retry" : `Retry ${retry}`;
+  if (run === "touch-up") return touchUp === undefined ? "Touch-up" : `Touch-up ${touchUp}`;
   return run === "request-changes-run" ? "Request-changes run" : "conflict-only run";
 }
 
 /** The kind of run that pushed the head, as the prompt names it. */
 const PUSHED_BY: Readonly<Record<PushingRun, string>> = {
   retry: "A Retry",
+  "touch-up": "A Touch-up",
   "request-changes-run": "A Request-changes run",
   "conflict-only-run": "A conflict-only run",
 };

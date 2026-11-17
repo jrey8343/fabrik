@@ -531,6 +531,20 @@ describe("the Weekly summary", () => {
     expect(result.body).toContain("| Stepped-up starts merged | 2 (1 with no Retry) | 1 (1 with no Retry) | +1 |");
   });
 
+  it("never takes a Touch-up, which is no Retry, for a Ticket's first run (#750)", () => {
+    const result = weeklySummary(
+      input({
+        records: [
+          aRunRecord({ issue: 11, pullRequest: null, endedAt: "2026-11-03T00:00:00Z" }),
+          // Marked after its first run: its Touch-up Stepped up, but the Ticket had no Stepped-up start.
+          aRunRecord({ issue: 11, pullRequest: 54, endedAt: "2026-11-04T00:00:00Z", touchUp: 1, stepUp: true, stepUpReason: "marked" }),
+        ],
+        facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-05T00:00:00Z", { number: 54, ticket: 11 })] })],
+      }),
+    );
+    expect(result).toMatchObject({ kind: "summary", summary: { counts: { steppedUpStarts: { thisWeek: { merged: 0 } } } } });
+  });
+
   describe("Waiting on you", () => {
     const HOUR = 60 * 60 * 1000;
     const head = "h".repeat(40);

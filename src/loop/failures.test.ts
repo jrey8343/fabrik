@@ -564,6 +564,17 @@ describe("A Broken run", () => {
       expect(plan).toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["needs-design"] }]) });
       expect(plan).not.toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]) });
     });
+
+    it("on a Touch-up (#750), posts today's Broken-run Verdict, which counts: it calls for Retry 1", () => {
+      const touchUpFlaw = { ...flaw, tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 0 }, touchUp: 1 };
+      const plan = onRetry({ verdicts: [touchUpFlaw] });
+
+      expect(verdictsPostedIn(commentsOf(plan).map((comment) => comment.body))).toEqual([{ verdict: "execution-flaw", source: "broken-run", requestChanges: false, headSha: HEAD_SHA }]);
+      const [comment] = commentsOf(plan);
+      expect(comment!.body).toContain("The Implementer's Touch-up 1 of 2 on #50 was a Broken run:");
+      expect(comment!.body).toContain("Retry 1 of 2 starts now");
+      expect(plan).toMatchObject({ actions: expect.arrayContaining([{ kind: "add-labels", issue: 7, labels: ["agent:implement"] }]) });
+    });
   });
 
   describe("on a run that uses no retry", () => {

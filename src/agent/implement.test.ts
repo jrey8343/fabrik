@@ -40,6 +40,37 @@ const pullRequest = {
   comments: [{ body: VERDICT, author: { __typename: "Bot" } }],
 };
 
+describe("A Touch-up's prompt says it is one (#750)", () => {
+  const touchUpVerdict = (touchUp: number) =>
+    [
+      verdictMarker({
+        verdict: "execution-flaw",
+        source: "reviewer",
+        requestChanges: false,
+        tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 0 },
+        touchUp,
+        headSha: "a".repeat(40),
+      }),
+      "- [small: comment] The doc comment on `total()` is stale.",
+    ].join("\n");
+
+  it.each([1, 2])("Touch-up %i gets the retry context and a block saying which of the two it is", async (touchUp) => {
+    const { parts } = await retryContext(await fileOf({ ...pullRequest, comments: [{ body: touchUpVerdict(touchUp), author: { __typename: "Bot" } }] }));
+
+    const text = parts.join("\n");
+    expect(text).toContain("## The pull request you're fixing");
+    expect(text).toContain("## The findings to fix");
+    expect(text).toContain("## This run is a Touch-up");
+    expect(text).toContain(`This run is Touch-up ${touchUp} of 2: every finding above is tagged small or missed earlier, so fixing them uses none of the Ticket's two Retries.`);
+  });
+
+  it("a Retry gets no such block", async () => {
+    const { parts } = await retryContext(await fileOf(pullRequest));
+
+    expect(parts.join("\n")).not.toContain("Touch-up");
+  });
+});
+
 describe("A run on an existing PR is shown the PR's current description, to rewrite", () => {
   it("a retry sees the body, without the Closes line the Kit adds itself", async () => {
     const { parts } = await retryContext(await fileOf(pullRequest));

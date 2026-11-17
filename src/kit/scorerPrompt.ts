@@ -112,6 +112,8 @@ function askOf({ kind, retry }: JudgedRun): string {
       return "A first run: it cut the Ticket's branch, and its prompt carried the Ticket alone, so the Ticket is the whole ask.";
     case "retry":
       return `Retry ${retry} on the Ticket's pull request: its prompt carried the latest Verdict's findings to fix, below, with any Request changes from the Operator, which amend the Ticket for that pull request. Its ask is the fix of those findings, against the Ticket as any Request changes amended it.`;
+    case "touch-up":
+      return "A Touch-up on the Ticket's pull request: its prompt carried the latest Verdict's findings to fix, below, every one tagged small (a stale comment, doc or body) or missed earlier (a behaviour bug in code an earlier Review passed over), with any Request changes from the Operator, which amend the Ticket for that pull request. Its ask is the fix of those findings, against the Ticket as any Request changes amended it.";
     case "request-changes":
       return "A Request-changes run: the Operator's Request changes review, below, amends the Ticket for this pull request, and wins over the Ticket where they differ, however much it changes or widens the scope. Its ask is the Ticket as that review amends it.";
     case "kept-branch":

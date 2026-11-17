@@ -20,7 +20,8 @@
 // recorded, as one that pushed nothing, and a schema 1 to 10 record, written
 // before Full Reviews were recorded, with a null `fullReview`, and a schema
 // 1 to 11 record written before findings were tagged, with null
-// `findingTags`. Pure, no I/O.
+// `findingTags`, and one written before Touch-ups were recorded, with
+// `touchUp` 0. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import type { refusalOf } from "../github/client.ts";
 import { readAgentRunResult } from "../agent/result.ts";
@@ -146,7 +147,7 @@ export type RunRecordRole = AgentRole | "score";
  * The schema a Run record is written at: 2 added `subscription`, 3 added
  * `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`,
  * 7 added `keptBranch`, 8 added `brokenRun`, 9 added `landing`, 10 added
- * `pushed`, 11 added `fullReview` and `findingTags`.
+ * `pushed`, 11 added `fullReview`, `findingTags` and `touchUp`.
  */
 export const RUN_RECORD_SCHEMA = 11;
 
@@ -203,11 +204,12 @@ export function isLive({ replay }: { readonly replay: ReplayRun | null }): boole
  * and checks out the default branch afresh. A first run is taken by its place
  * in the chain, so a marked Ticket's first run, a Stepped-up start, counts
  * (ADR-0014). Any other Step-up of a run with a PR isn't one: a record from
- * before Step-ups had reasons reads as a Retry's.
+ * before Step-ups had reasons reads as a Retry's. A Touch-up (#750) has
+ * `retry` 0 but runs on the PR's branch, so it's never one either.
  */
 export function firstRunOf(implementRuns: readonly RunRecord[]): RunRecord | undefined {
   const cutItsBranch = (record: RunRecord) =>
-    (record.retry === 0 && (record.stepUpReason === null || record.stepUpReason === "marked")) || record.pullRequest === null;
+    (record.retry === 0 && record.touchUp === 0 && (record.stepUpReason === null || record.stepUpReason === "marked")) || record.pullRequest === null;
   const first = implementRuns.filter((record) => !record.emptyDiff && !record.requestChanges && cutItsBranch(record));
   return first.toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)).at(-1);
 }
@@ -242,8 +244,14 @@ export interface RunRecord {
    * token came from, never the secret. A judge run's is the scored run's.
    */
   readonly subscription: string;
-  /** 0 for a first Implement run (and every other role), else its Retry number. */
+  /** 0 for a first Implement run, a Touch-up (and every other role), else its Retry number. */
   readonly retry: number;
+  /**
+   * 0 for every run but a Touch-up (#750), whose number it is: a Touch-up
+   * isn't a Retry, so its `retry` is 0. A record written before Touch-ups
+   * were recorded, schema 11's included, reads as 0.
+   */
+  readonly touchUp: number;
   /** Whether the run used the Step-up model. */
   readonly stepUp: boolean;
   /**
@@ -415,6 +423,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     ...whatRan(agent, kit, end.roles[role]),
     subscription: nonEmpty(kit["subscription"]) ?? firstSubscription({ subscriptions: end.subscriptions }),
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
+    touchUp: implement ? (countOf(kit["touch-up"]) ?? 0) : 0,
     ...stepUpOf(implement ? kit : {}),
     requestChanges: implement && kit["request-changes"] === "true",
     emptyDiff: implement && end.emptyDiff,
@@ -491,6 +500,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     // The Kit job gives the judge the Subscription it gave the run the judge scores.
     subscription: scored.subscription,
     retry: 0,
+    touchUp: 0,
     stepUp: false,
     stepUpReason: null,
     requestChanges: false,
@@ -564,6 +574,7 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     ...whatRan(job.outputs, {}, end.settings),
     subscription: end.subscription,
     retry: 0,
+    touchUp: 0,
     stepUp: false,
     stepUpReason: null,
     requestChanges: false,
@@ -708,7 +719,8 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * recorded, as one that pushed nothing, and a schema 1 to 10 record, written
  * before Full Reviews were recorded, with a null `fullReview`, a Review's
  * included, and a schema 1 to 11 record written before findings' tags were
- * recorded, with null `findingTags`. An older record names the schema it
+ * recorded, with null `findingTags`, and one written before Touch-ups were
+ * recorded, with `touchUp` 0. An older record names the schema it
  * was stored at in `storedSchema`. Null for anything that isn't a record of a
  * schema the Kit knows.
  */
@@ -721,14 +733,17 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
 }
 
 /** The fields schema 11 gained after its first records were written: a schema 11 record stored before them lacks them. */
-type AddedTo11 = "findingTags";
+type AddedTo11 = "findingTags" | "touchUp";
 
 /** A record as schema 11 holds it, whether or not it was stored before the fields added to it since. */
 type Schema11 = Omit<RunRecord, AddedTo11> & Partial<Pick<RunRecord, AddedTo11>>;
 
-/** A schema 11 record with the fields added to it since, as a record stored before them reads them: no findings' tags (#749). */
+/**
+ * A schema 11 record with the fields added to it since, as a record stored
+ * before them reads them: no findings' tags (#749), and no Touch-up (#750).
+ */
 function withAddedTo11(stored: Schema11): RunRecord {
-  return { ...stored, findingTags: stored.findingTags ?? null };
+  return { ...stored, findingTags: stored.findingTags ?? null, touchUp: stored.touchUp ?? 0 };
 }
 
 /** An older stored record at the current schema (readRunRecord), or null for a schema the Kit doesn't know. */

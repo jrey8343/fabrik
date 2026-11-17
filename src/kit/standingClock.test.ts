@@ -305,6 +305,31 @@ describe("a run that was asked for and never began", () => {
       expect(standingsIn(retryFacts(comments, overrides, ["ready-for-agent"])).filter(({ name }) => name === "not-started")).toEqual([]);
     });
 
+    describe("a Touch-up (#750)", () => {
+      const touchUpFlaw = aComment(
+        `${verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 0 }, touchUp: 1, headSha: HEAD })}\nVerdict`,
+        FLAW,
+      );
+      const usedUp = [aVerdictComment("execution-flaw", "a".repeat(40), "2026-11-08T15:00:00Z"), aVerdictComment("execution-flaw", "b".repeat(40), "2026-11-08T17:00:00Z")];
+
+      it("is announced as a Retry is, naming which it is, even once the Retries are used up", () => {
+        expect(standingsIn(retryFacts([...usedUp, touchUpFlaw]))).toMatchObject([{ name: "not-started", detail: { silence: "retry", label: null, touchUp: 1 } }]);
+      });
+
+      it("says it's the Touch-up that hasn't started", () => {
+        const [standing] = standingsIn(retryFacts([touchUpFlaw]), {}, "2026-11-08T20:00:00Z");
+        if (standing === undefined) throw new Error("expected a Standing");
+        expect(wordStanding(standing, "2026-11-08T20:00:00Z", "Australia/Sydney").sentence).toBe("An Execution flaw called for Touch-up 1 of 2 1 hour ago; nothing has started. The Kit adds `agent:implement` to #7 again once the Implement job's timeout has passed.");
+      });
+
+      it("is running once the Touch-up is in flight, named Touch-up 1 of 2", () => {
+        const [standing] = standingsIn(retryFacts([touchUpFlaw]), { kit: aKit([aRunInFlight({ issue: 7, kind: "touch-up", touchUp: 1 })]) });
+        expect(standing).toMatchObject({ name: "running", detail: { run: "touch-up", touchUp: 1 } });
+        if (standing === undefined) throw new Error("expected a Standing");
+        expect(wordStanding(standing, "2026-11-08T20:00:00Z", "Australia/Sydney").sentence).toMatch(/^Touch-up 1 of 2 has been running for /);
+      });
+    });
+
     it("counts the Ticket's runs that landed nothing among its Retries", () => {
       const ticket = anOpenIssue({
         number: 7,

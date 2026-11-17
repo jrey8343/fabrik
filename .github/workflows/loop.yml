@@ -125,7 +125,9 @@ jobs:
       # or "false" for whether it Steps up and whether it's the Operator's Request-changes run,
       # and why it Steps up (retry, marked, request-changes or conflict-only; empty for none).
       retry: ${{ steps.route.outputs.retry }}
-      # For a Retry on an agent PR (#341): the head its Execution flaw was given on, which the push job lands it for.
+      # Its Touch-up number (#750; 0 for none), which isn't a Retry.
+      touch-up: ${{ steps.route.outputs.touch-up }}
+      # For a Retry or Touch-up on an agent PR (#341): the head its Execution flaw was given on, which the push job lands it for.
       retry-flaw: ${{ steps.route.outputs.retry-flaw }}
       step-up: ${{ steps.route.outputs.step-up }}
       step-up-reason: ${{ steps.route.outputs.step-up-reason }}
