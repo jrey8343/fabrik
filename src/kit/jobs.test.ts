@@ -27,8 +27,8 @@ describe("The Kit job's routing of a replay Ticket (#156)", () => {
       "pull-request": "112",
       "base-sha": baseOf(12),
       "replay-arms": JSON.stringify({
-        baseline: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: "medium" }, candidateSha: null },
-        variant: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: "high" }, candidateSha: null },
+        baseline: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: "high" }, candidateSha: null },
+        variant: { implement: { model: "claude-sonnet-5-5", effort: "medium" }, review: { model: "claude-opus-5-5", effort: "xhigh" }, candidateSha: null },
       }),
       subscription: "Claude token",
       model: "",

@@ -220,7 +220,7 @@ describe("The scheduled tick's replay step, beside its gates", () => {
   });
 
   describe("on a waiting request, which needs no spare capacity", () => {
-    const waiting = aReplayIssue({ body: requestBody("review.effort: high", "12") });
+    const waiting = aReplayIssue({ body: requestBody("review.effort: xhigh", "12") });
     const acceptance = { candidates: [aCandidate(12)], baseConfigs: { [baseOf(12)]: { ok: true, config: DEFAULT_KIT_CONFIG } as const }, fabrikCommits: {} };
 
     it("accepts a valid one, writing its plan into the body, while Dispatch has a Ticket to start", () => {

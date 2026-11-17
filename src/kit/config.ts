@@ -37,7 +37,8 @@ export interface KitConfig {
     readonly research: AgentRole;
     /**
      * The Digest writer (ADR-0022); it takes no Extra skills (ADR-0008). Left
-     * out, its model and effort are this repo's own `roles.review`.
+     * out, its model is this repo's own `roles.review`, and its effort is the
+     * one `roles.review` sets, or `medium` when it sets none (#759).
      */
     readonly digest: AgentRole;
     readonly dispatch: { readonly timeoutMinutes: number };
@@ -437,11 +438,12 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     triage: { model: OPUS, effort: "medium", timeoutMinutes: 10 },
     design: { model: OPUS, effort: "medium", timeoutMinutes: 30 },
     implement: { model: SONNET, effort: "medium", timeoutMinutes: 60 },
-    review: { model: OPUS, effort: "medium", timeoutMinutes: 30 },
+    // High, from #755's reruns (#759).
+    review: { model: OPUS, effort: "high", timeoutMinutes: 30 },
     audit: { model: OPUS, effort: "medium", timeoutMinutes: 45 },
     retro: { model: OPUS, effort: "medium", timeoutMinutes: 45 },
     research: { model: OPUS, effort: "medium", timeoutMinutes: 30 },
-    // The Reviewer's model and effort, which a repo's own roles.review replaces (readConfig).
+    // Left out, the model is the repo's roles.review model, and the effort its roles.review effort when it sets one (readConfig).
     digest: { model: OPUS, effort: "medium", timeoutMinutes: 10 },
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: OPUS, effort: "medium" },
@@ -643,7 +645,15 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
   const defaults = DEFAULT_KIT_CONFIG;
   const sandbox = file.object("sandbox");
   const roles = file.object("roles");
-  const review = readPickingRole(roles.object("review"), defaults.roles.review, picks, "review");
+  // Read with no default effort, so a null effort here is one this repo didn't set.
+  const reviewAsSet = readPickingRole(roles.object("review"), { ...defaults.roles.review, effort: null }, picks, "review");
+  const review = { ...reviewAsSet, effort: reviewAsSet.effort ?? defaults.roles.review.effort };
+  // The Digest writer follows a Review effort this repo sets itself, but not the Kit's default for the Review (#759).
+  const digestDefaults = {
+    model: review.model,
+    effort: reviewAsSet.effort ?? defaults.roles.digest.effort,
+    timeoutMinutes: defaults.roles.digest.timeoutMinutes,
+  };
   const requiredChecks = sandbox.stringList("checks") ?? defaults.sandbox.checks;
   return {
     ...defaults,
@@ -663,8 +673,8 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
       audit: readAgentRole(roles.object("audit"), defaults.roles.audit),
       retro: readAgentRole(roles.object("retro"), defaults.roles.retro),
       research: readAgentRole(roles.object("research"), defaults.roles.research),
-      // The Digest writer runs on this repo's Reviewer's model and effort unless it sets its own, within its own time limit.
-      digest: readAgentRole(roles.object("digest"), { ...review, timeoutMinutes: defaults.roles.digest.timeoutMinutes }),
+      // The Digest writer runs on this repo's Reviewer's model and own effort unless it sets its own, within its own time limit.
+      digest: readAgentRole(roles.object("digest"), digestDefaults),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
       stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
     },

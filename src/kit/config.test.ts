@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { claudeArgs } from "../agent/launch.ts";
 import { captureIdentityOf, previewUrl, productionPageUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, timeZoneNote, type UiConfig, UI_VIEWPORTS, withRouteOn } from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -12,7 +13,7 @@ const DEFAULTS = {
     triage: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 10 },
     design: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 30 },
     implement: { model: "claude-sonnet-5-5", effort: "medium", timeoutMinutes: 60 },
-    review: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 30 },
+    review: { model: "claude-opus-5-5", effort: "high", timeoutMinutes: 30 },
     audit: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 45 },
     retro: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 45 },
     research: { model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 30 },
@@ -266,7 +267,7 @@ describe("Kit config", () => {
         triage: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 10 },
         design: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
         implement: { model: "claude-sonnet-5-5", effort: "medium", timeout_minutes: 60 },
-        review: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
+        review: { model: "claude-opus-5-5", effort: "high", timeout_minutes: 30 },
         audit: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 },
         retro: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 },
         research: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
@@ -318,12 +319,20 @@ describe("Kit config", () => {
     expect(timeZoneNote("{ not json")).toBeNull();
   });
 
-  it("names medium outright for every role's effort when the Product names none (#740)", () => {
+  it("names medium outright for every role's effort but the Review's high when the Product names none (#740, #759)", () => {
     const result = resolveKitConfig({ config: "{}" });
     const roles = result.ok ? result.config.roles : null;
-    const efforts = [roles?.triage, roles?.design, roles?.implement, roles?.review, roles?.audit, roles?.retro, roles?.research, roles?.digest, roles?.stepUp];
+    const efforts = [roles?.triage, roles?.design, roles?.implement, roles?.audit, roles?.retro, roles?.research, roles?.digest, roles?.stepUp];
 
-    expect(efforts.map((role) => role?.effort)).toEqual(Array(9).fill("medium"));
+    expect(roles?.review.effort).toBe("high");
+    expect(efforts.map((role) => role?.effort)).toEqual(Array(8).fill("medium"));
+  });
+
+  it("launches the Review with --effort high on an empty Kit config (#759)", () => {
+    const result = resolveKitConfig({ config: "{}" });
+    const review = result.ok ? result.config.roles.review : DEFAULTS.roles.review;
+
+    expect(claudeArgs(review.model, review.effort)).toEqual(expect.arrayContaining(["--effort", "high"]));
   });
 
   it("runs Implement at a Product's own implement.effort, with every other role still at medium", () => {
@@ -346,7 +355,7 @@ describe("Kit config", () => {
     const result = resolveKitConfig({ config: `{ "roles": { "implement": { "effort": "high" }, "review": { "effort": null } } }` });
 
     expect(result.ok && result.config.roles.implement.effort).toBe("high");
-    expect(result.ok && result.config.roles.review.effort).toBe("medium");
+    expect(result.ok && result.config.roles.review.effort).toBe("high");
   });
 
   it.each([`{ "roles": { "review": { "model": null } } }`, `{ "max_in_flight": null }`])(
@@ -837,11 +846,28 @@ describe("The Researcher's Kit config", () => {
 });
 
 describe("The Digest's Kit config (ADR-0022)", () => {
-  it("is valid with none of its keys: the Digest is on, and the Digest writer runs on the Reviewer's default model and effort for 10 minutes", () => {
+  it("is valid with none of its keys: the Digest is on, and the Digest writer runs on the Reviewer's default model at its own medium for 10 minutes", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 4 }` });
 
     expect(result.ok && result.config.digest).toEqual({ enabled: true });
     expect(result.ok && result.config.roles.digest).toEqual({ model: "claude-opus-5-5", effort: "medium", timeoutMinutes: 10 });
+  });
+
+  it.each([`{ "model": "claude-sonnet-5-5" }`, `{ "model": "claude-sonnet-5-5", "effort": null }`])(
+    "runs the Review at the Kit's high and the Digest writer at its own medium when roles.review is %s (#759)",
+    (review) => {
+      const result = resolveKitConfig({ config: `{ "roles": { "review": ${review} } }` });
+
+      expect(result.ok && result.config.roles.review.effort).toBe("high");
+      expect(result.ok && result.config.roles.digest).toEqual({ model: "claude-sonnet-5-5", effort: "medium", timeoutMinutes: 10 });
+    },
+  );
+
+  it("has the Digest writer follow a Product's own medium roles.review effort (#759)", () => {
+    const result = resolveKitConfig({ config: `{ "roles": { "review": { "effort": "medium" } } }` });
+
+    expect(result.ok && result.config.roles.review.effort).toBe("medium");
+    expect(result.ok && result.config.roles.digest.effort).toBe("medium");
   });
 
   it("defaults roles.digest's model and effort to the repo's own roles.review, and its time limit to 10, never the Reviewer's", () => {
@@ -937,11 +963,11 @@ describe("The Kit config template", () => {
     });
   });
 
-  it("names the Digest's switch and the Digest writer's time limit at their Kit defaults, and leaves its model to roles.review", () => {
+  it("names the Digest's switch and the Digest writer's effort and time limit at their Kit defaults, and leaves its model to roles.review", () => {
     const starter = JSON.parse(template) as { roles: { digest: unknown }; digest: unknown };
 
     expect(starter.digest).toEqual({ enabled: true });
-    expect(starter.roles.digest).toEqual({ timeout_minutes: 10 });
+    expect(starter.roles.digest).toEqual({ effort: "medium", timeout_minutes: 10 });
   });
 
   it("spells out subscriptions at its Kit default, the one V1 Subscription", () => {
