@@ -60,7 +60,7 @@ outputs:
     description: The model the judge ran.
     value: ${{ steps.judge.outputs.model }}
   effort:
-    description: The effort the judge ran at, empty for the model's default.
+    description: The effort the judge ran at, the Kit's fixed JUDGE_EFFORT.
     value: ${{ steps.judge.outputs.effort }}
 
 runs:
