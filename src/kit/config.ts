@@ -6,7 +6,11 @@ import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
 export interface AgentRole {
   readonly model: string;
-  /** null means pass no --effort, so the Claude Code CLI uses its default. */
+  /**
+   * null means pass no --effort, so the Claude Code CLI uses its default. A
+   * Product's own null reads as the default instead, so the Kit config never
+   * holds null here.
+   */
   readonly effort: string | null;
   readonly timeoutMinutes: number;
 }
@@ -696,6 +700,15 @@ function orDefault<T>(value: T | null | undefined, fallback: T | null): T | null
   return value === undefined ? fallback : value;
 }
 
+/**
+ * A role's effort. An explicit null, as the old starter wrote for every role,
+ * names no level, so it takes the default like a field left out (#740), and
+ * each Run record names the level the role ran at.
+ */
+function effortOf(role: Reader, fallback: string | null): string | null {
+  return role.nullableString("effort", checkEffort) ?? fallback;
+}
+
 /** A role that takes Extra skill picks (ADR-0008), collecting its `skills` into `picks`. */
 function readPickingRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
   const skills = role.stringList("skills");
@@ -708,7 +721,7 @@ function readPickingRole(role: Reader, defaults: AgentRole, picks: Picks, phase:
 function readAgentRole(role: Reader, defaults: AgentRole): AgentRole {
   return {
     model: role.string("model", refuseFable) ?? defaults.model,
-    effort: orDefault(role.nullableString("effort", checkEffort), defaults.effort),
+    effort: effortOf(role, defaults.effort),
     timeoutMinutes: role.positiveInteger("timeout_minutes") ?? defaults.timeoutMinutes,
   };
 }
@@ -971,7 +984,7 @@ function checkRetroDay(day: string): string | null {
 function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"]): KitConfig["roles"]["stepUp"] {
   return {
     model: role.string("model", refuseFable) ?? defaults.model,
-    effort: orDefault(role.nullableString("effort", checkEffort), defaults.effort),
+    effort: effortOf(role, defaults.effort),
   };
 }
 

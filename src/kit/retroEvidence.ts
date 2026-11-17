@@ -1015,7 +1015,7 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
       if (path === null) return null;
       if (!read.has(path)) {
         const lines = readTranscript(path);
-        read.set(path, lines === null ? null : trimmedTranscriptOf(lines));
+        read.set(path, lines === null ? null : trimmedTranscriptOf(lines, { skillsItHad: true }));
       }
       return read.get(path)?.(budget).text ?? null;
     };

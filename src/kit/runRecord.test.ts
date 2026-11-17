@@ -1123,39 +1123,39 @@ describe("A Run record read back from the store", () => {
   });
 
   it("of schema 9, written before pushes were recorded, reads as a run that pushed nothing, at the current schema", () => {
-    expect(readRunRecord({ ...before10, role: "implement", schema: 9 }, ["Claude token"])).toEqual({ ...written, role: "implement", schema: 10, pushed: null });
+    expect(readRunRecord({ ...before10, role: "implement", schema: 9 }, ["Claude token"])).toEqual({ ...written, role: "implement", schema: 10, storedSchema: 9, pushed: null });
   });
 
   it("of schema 8, written before landings were recorded, reads as a run that landed, at the current schema", () => {
-    expect(readRunRecord({ ...before9, schema: 8 }, ["Claude token"])).toEqual({ ...written, schema: 10, landing: null });
+    expect(readRunRecord({ ...before9, schema: 8 }, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 8, landing: null });
   });
 
   it("of schema 7, written before Broken runs were recorded, reads as no Broken run, at the current schema", () => {
     const { brokenRun: _, ...rest } = before9;
 
-    expect(readRunRecord({ ...rest, schema: 7 }, ["Claude token"])).toEqual({ ...written, schema: 10, brokenRun: null });
+    expect(readRunRecord({ ...rest, schema: 7 }, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 7, brokenRun: null });
   });
 
   it("of schema 6, written before Kept-branch starts, reads as no Kept-branch start, at the current schema", () => {
     const { keptBranch: _, ...rest } = before9;
 
-    expect(readRunRecord({ ...rest, schema: 6 }, ["Claude token"])).toEqual({ ...written, schema: 10, keptBranch: false });
+    expect(readRunRecord({ ...rest, schema: 6 }, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 6, keptBranch: false });
   });
 
   it("of schema 5, written before empty diffs were recorded, reads as no empty diff, at the current schema", () => {
     const { emptyDiff: _, ...rest } = before9;
 
-    expect(readRunRecord({ ...rest, schema: 5 }, ["Claude token"])).toEqual({ ...written, schema: 10, emptyDiff: false });
+    expect(readRunRecord({ ...rest, schema: 5 }, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 5, emptyDiff: false });
   });
 
   it("of schema 4, written before Step-ups had reasons, reads with a null reason, or retry for one that Stepped up, at the current schema", () => {
     const { stepUpReason: _, ...rest } = before9;
     const older = { ...rest, schema: 4 };
 
-    expect(readRunRecord(older, ["Claude token"])).toEqual({ ...written, schema: 10, stepUpReason: null });
+    expect(readRunRecord(older, ["Claude token"])).toEqual({ ...written, schema: 10, storedSchema: 4, stepUpReason: null });
     expect(readRunRecord({ ...older, role: "implement", retry: 2, stepUp: true }, ["Claude token"])).toEqual({
       ...written,
-      schema: 10,
+      schema: 10, storedSchema: 4,
       role: "implement",
       retry: 2,
       stepUp: true,
@@ -1167,14 +1167,14 @@ describe("A Run record read back from the store", () => {
     const { replay: _, ...rest } = before9;
     const older = { ...rest, schema: 3 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 10, replay: null });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 10, storedSchema: 3, replay: null });
   });
 
   it("of schema 2, written before prototype turns, reads as no prototype turn and no replay's, at the current schema", () => {
     const { prototype: _, replay: __, ...rest } = before9;
     const older = { ...rest, schema: 2 };
 
-    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 10, prototype: false, replay: null });
+    expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({ ...written, schema: 10, storedSchema: 2, prototype: false, replay: null });
   });
 
   it("of schema 1, which names no Subscription, reads as being on the first listed one, no prototype turn and no replay's, at the current schema", () => {
@@ -1183,7 +1183,7 @@ describe("A Run record read back from the store", () => {
 
     expect(readRunRecord(older, ["Work token", "Claude token 2"])).toEqual({
       ...written,
-      schema: 10,
+      schema: 10, storedSchema: 1,
       subscription: "Work token",
       prototype: false,
       replay: null,

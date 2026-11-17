@@ -4,6 +4,7 @@
 // fires its event (#417), since GitHub fires none for a label already on.
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
+import type { Pushed } from "../kit/runRecord.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { carriedDigest, placedFilesIn } from "../loop/digestCarry.ts";
 import type { DigestHead } from "../loop/digestPlaces.ts";
@@ -241,7 +242,7 @@ export function implementPushOf(
   plan: Plan,
   { opened }: Pick<AppliedPlan, "opened">,
   head: string | null,
-): { readonly pullRequest: number; readonly headSha: string } | null {
+): Pushed | null {
   if (event.kind !== "implement-run-finished" || plan.kind !== "act" || head === null) return null;
   if (!plan.actions.some((action) => action.kind === "push-branch" && action.branch === event.branch)) return null;
   const pullRequest = event.fixes?.pullRequest ?? opened;

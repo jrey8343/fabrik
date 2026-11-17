@@ -9,13 +9,31 @@ import { createHash } from "node:crypto";
 /** The Kit's Scorers, in the order the Kit lists them. */
 export const SCORERS = ["efficiency", "ticket-compliance", "test-first"] as const;
 
+/** Each Scorer the Kit has had, as its reports name it, the retired `skill-use` included. */
+const SCORER_NAMES: Readonly<Record<string, string>> = {
+  efficiency: "Efficiency",
+  "ticket-compliance": "Ticket compliance",
+  "skill-use": "Skill use",
+  "test-first": "Test-first",
+};
+
 /**
- * A Scorer as the Kit's reports name it: `ticket-compliance` is Ticket
- * compliance, `skill-use` Skill use, and `test-first` Test-first.
+ * A Scorer as the Kit's reports name it, such as Ticket compliance for
+ * `ticket-compliance`. One the Kit never had is named from itself: its first
+ * letter capitalised and its hyphens spaces.
  */
 export function scorerName(scorer: string): string {
-  if (scorer === "test-first") return "Test-first";
-  return `${scorer.charAt(0).toUpperCase()}${scorer.slice(1).replaceAll("-", " ")}`;
+  return SCORER_NAMES[scorer] ?? `${scorer.charAt(0).toUpperCase()}${scorer.slice(1).replaceAll("-", " ")}`;
+}
+
+/**
+ * A rubric id, as rubricId gives it, as the Kit's reports name it: Test-first
+ * v1 for `test-first@1`, or with `version: false`, its Scorer's name alone.
+ */
+export function rubricName(id: string, { version = true }: { readonly version?: boolean } = {}): string {
+  const at = id.lastIndexOf("@");
+  const scorer = scorerName(at === -1 ? id : id.slice(0, at));
+  return version && at !== -1 ? `${scorer} v${id.slice(at + 1)}` : scorer;
 }
 
 /** Where the Kit keeps the rubrics, relative to its own root: `<name>.md` for each Scorer. */

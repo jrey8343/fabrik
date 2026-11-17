@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { KIT_PROMPT_NAMES, kitPromptPath } from "../guard/trust-root.ts";
 import { type EvidenceBundle, readEvidenceBundle } from "../kit/retroEvidence.ts";
-import { RUBRICS_DIR, SCORERS, scorerName } from "../kit/rubrics.ts";
+import { RUBRICS_DIR, rubricName, SCORERS } from "../kit/rubrics.ts";
 
 /** The heading over the pending Retro's own issue in the Retro's prompt. */
 export const RETRO_ISSUE_HEADING = "The pending Retro";
@@ -48,11 +48,9 @@ function quoted(text: string): string[] {
  * v1, …: 2 runs in the window.`
  */
 function notApplicableLines(counts: EvidenceBundle["notApplicable"]): string[] {
-  return Object.entries(counts).map(([id, runs]) => {
-    const at = id.lastIndexOf("@");
-    const rubric = `${scorerName(id.slice(0, at))} v${id.slice(at + 1)}`;
-    return `Not applicable to ${rubric}, so unscored and never low-scoring: ${runs === 1 ? "1 run" : `${runs} runs`} in the window.`;
-  });
+  return Object.entries(counts).map(
+    ([id, runs]) => `Not applicable to ${rubricName(id)}, so unscored and never low-scoring: ${runs === 1 ? "1 run" : `${runs} runs`} in the window.`,
+  );
 }
 
 /**

@@ -41,12 +41,16 @@ import type { Verdict } from "../loop/types.ts";
 import type { RepoHealthFacts } from "./loopHealth.ts";
 import { RUN_RECORD_SCHEMA, readRunRecord, type RunRecord } from "./runRecord.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
+import { loadRubrics } from "./kitFiles.ts";
 import { type AgentPullRequestFacts, type CommentFacts, type GitHubFacts, type RepoKitFacts, type TicketFacts, type WeeklySummaryInput, weeklySummary } from "./weeklySummary.ts";
 
 // The filing: Monday 9 November 2026, 07:00 in Sydney (AEDT, UTC+11). The
 // week it covers runs from Monday 2 November 00:00 to Monday 9 November 00:00
 // Sydney time, that is 2026-11-01T13:00Z to 2026-11-08T13:00Z.
 const NOW = "2026-11-08T20:00:00Z";
+
+/** The Kit's rubrics, as weekly-main reads them from this checkout. */
+const KIT_RUBRICS = await loadRubrics();
 
 function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput {
   return {
@@ -57,6 +61,7 @@ function input(overrides: Partial<WeeklySummaryInput> = {}): WeeklySummaryInput 
     unread: [],
     health: [],
     kits: [],
+    rubrics: KIT_RUBRICS,
     operator: "operator",
     appLogin: "fabrik-app[bot]",
     timeZone: "Australia/Sydney",
@@ -1846,6 +1851,24 @@ describe("the Weekly summary", () => {
       expect(rows[0]).toBe("| First-pass yield | 50% (1 of 2) | 0% (0 of 1) | +50 pts |");
     });
 
+    it("shows – for last week in the first week on this release, since last week's records, written before pushes were, name no push", () => {
+      const before10 = (record: RunRecord) => {
+        const { pushed: _, ...rest } = record;
+        return readRunRecord({ ...rest, schema: 9 }, ["Claude token"]);
+      };
+      const rows = yieldRows(
+        [
+          before10(aRunRecord({ runId: 1001, pullRequest: null, emptyDiff: true, endedAt: "2026-10-28T00:00:00Z" })),
+          before10(aRunRecord({ runId: 1002, pullRequest: null, brokenRun: "missing-output", endedAt: "2026-10-29T00:00:00Z" })),
+          before10(aRunRecord({ runId: 1003, pullRequest: null, endedAt: "2026-10-30T00:00:00Z" })),
+          pushedRun(4, "2026-11-02T00:00:00Z"),
+        ].flatMap((record) => record ?? []),
+        [aVerdictComment("pass", head(4), "2026-11-02T01:00:00Z")],
+      );
+
+      expect(rows[0]).toBe("| First-pass yield | 100% (1 of 1) | no judged runs | – |");
+    });
+
     it("leaves out a run whose first Verdict was counted back as a Flaky check", () => {
       const redCheck = aComment(`${verdictMarker({ verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["test"], headSha: head(1) })}\nRequired checks failed: test`, "2026-11-02T00:30:00Z");
       const countedBack = aComment(`${flakyCheckMarker({ headSha: head(1), checks: ["test"], countedBack: true })}\nThe test check was flaky.`, "2026-11-02T03:00:00Z");
@@ -2041,7 +2064,7 @@ describe("the Weekly summary", () => {
           anEscapeMarkerIssue("<!-- fabrik:escape speculative #51 -->", { number: 81, createdAt: daysBeforeTheWeekEnds(2) }), // filed this week
         ],
       });
-      expect(summary.architecturalEscapes).toEqual({ thisWeek: { escapes: 1, audits: 1, merged: 3, undecided: 0 }, lastWeek: { escapes: 1, audits: 1, merged: 2, undecided: 0 } });
+      expect(summary.architecturalEscapes).toEqual({ thisWeek: { escapes: 1, audits: 1, merged: 3, undecided: 0 }, lastWeek: { escapes: 1, audits: 1, merged: 2, undecided: null } });
       expect(summary.escapesByStrength).toEqual({ thisWeek: { ...NO_ESCAPES, speculative: 1 }, lastWeek: { ...NO_ESCAPES, strong: 1 } });
     });
 
@@ -2120,6 +2143,20 @@ describe("the Weekly summary", () => {
           openAudits: [],
         });
         expect(summary.architecturalEscapes.thisWeek).toEqual({ escapes: 0, audits: 2, merged: 3, undecided: 0 });
+      });
+
+      it("are left out of last week's, since an Audit's facts don't say when it closed", () => {
+        // Audit #72, opened 10 days back and open still, traced two candidates before last week ended.
+        const lastWeeks = anAudit(daysBeforeTheWeekEnds(10), { number: 72, candidates: [[50], [51]] });
+        const facts = { pullRequests: [merged(50, 20), merged(51, 20)], audits: [lastWeeks], openAudits: [anOpenAudit({ number: 72 })] };
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [audited(facts)] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+
+        expect(result.summary.architecturalEscapes).toEqual({
+          thisWeek: { escapes: 0, audits: 1, merged: 2, undecided: 2 },
+          lastWeek: { escapes: 0, audits: 1, merged: 2, undecided: null },
+        });
+        expect(result.body).toContain("| Architectural escapes (90 days) | 0, from 1 Audit over 2 merged agent PRs, 2 candidates undecided | 0, from 1 Audit over 2 merged agent PRs | 0 |");
       });
     });
 
@@ -3767,6 +3804,19 @@ describe("the Weekly summary", () => {
           );
           expect(body).toContain(["| Skill use v1: runs scored | 1 | 0 | +1 |", "| Skill use v1: median score | 0.75 | – | – |"].join("\n"));
           expect(body).not.toContain("Skill use v1: not applicable");
+        });
+
+        it("gives any rubric whose labels list not-applicable the row, by its labels, never its name", () => {
+          const careful = { name: "careful", version: 2, labels: ["careful", "careless", "not-applicable"] };
+          const body = bodyOf(
+            input({
+              records: [aRunRecord({ runId: 1 })],
+              scoreFiles: [aScoreFile({ runId: 1, rubrics: ["careful@2"], entries: [aScoreEntry({ scorer: "careful", version: 2, score: 0.9, label: "careful" })] })],
+              rubrics: [careful],
+            }),
+          );
+
+          expect(body).toContain(["| Careful v2: runs scored | 1 | 0 | +1 |", "| Careful v2: not applicable | 0 | 0 | 0 |"].join("\n"));
         });
       });
 

@@ -34,7 +34,7 @@ import {
   varied,
 } from "./replayPick.ts";
 import { readReplayRequest, readReplayVariable, type ReplayRequest, type ReplayVariable, settingOf, variableLine } from "./replayRequest.ts";
-import { rubricId, SCORERS, scorerName } from "./rubrics.ts";
+import { rubricId, rubricName, SCORERS, scorerName } from "./rubrics.ts";
 import { firstRunOf, isLive, isReplayArm, REPLAY_ARMS, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
 import { storeFileUrl } from "./runStore.ts";
 import { NOT_APPLICABLE, type ScoreFile } from "./scorer.ts";
@@ -679,9 +679,11 @@ interface ArmResult {
   /**
    * Its Implement run's scores, each keyed by its rubric's id, such as
    * `efficiency@1`: a rubric it has no score for is missing, and one that
-   * doesn't apply to the run (#739) is null.
+   * doesn't apply to the run (#739) is null. Read from a positional results
+   * marker, written before scores were keyed (#738), they stay its list, so
+   * a rewrite of the marker keeps them as it was (readScores).
    */
-  readonly scores: Readonly<Record<string, number | null>>;
+  readonly scores: Readonly<Record<string, number | null>> | PositionalScores;
   /** What its Implement and Review runs spent together. */
   readonly costUsd: number | null;
   readonly turns: number | null;
@@ -826,14 +828,19 @@ function readArmResult(value: unknown): ArmResult | null {
 }
 
 /**
- * An arm's stored scores, keyed by rubric id. A results marker written before
- * they were (#738) holds them as a list, one per Scorer the Kit had then, in
+ * A positional results marker's scores, one per Scorer the Kit had then, in
  * POSITIONAL_RUBRICS' order, null for one with no score.
  */
-function readScores(value: unknown): Record<string, number | null> | null {
+type PositionalScores = readonly (number | null)[];
+
+/**
+ * An arm's stored scores, keyed by rubric id, or, from a results marker
+ * written before they were (#738), as its list, kept as it is so the report
+ * always shows its three columns (scoreColumns).
+ */
+function readScores(value: unknown): ArmResult["scores"] | null {
   if (Array.isArray(value)) {
-    if (value.length !== POSITIONAL_RUBRICS.length || !value.every((score) => score === null || isScore(score))) return null;
-    return Object.fromEntries(POSITIONAL_RUBRICS.flatMap((id, i) => (value[i] === null ? [] : [[id, value[i] as number]])));
+    return value.length === POSITIONAL_RUBRICS.length && value.every((score) => score === null || isScore(score)) ? (value as PositionalScores) : null;
   }
   if (!isObject(value)) return null;
   const entries = Object.entries(value);
@@ -855,19 +862,20 @@ interface ScoreColumn {
 
 /**
  * The results' score columns: one for each rubric any arm has a score under,
- * in the order the results first name them, so neither the Kit's Scorers nor
- * their order now ever moves a stored score. A rubric's heading is its name,
- * and its version too when the results hold another of the same name. With
- * no score to show, a column for each of the Kit's Scorers.
+ * and each of POSITIONAL_RUBRICS for an arm read from a positional marker,
+ * scored or not, in the order the results first name them, so neither the
+ * Kit's Scorers nor their order now ever moves a stored score. A rubric's
+ * heading is its name, and its version too when the results hold another of
+ * the same name. With no score to show, a column for each of the Kit's Scorers.
  */
 function scoreColumns(results: readonly TicketResult[]): ScoreColumn[] {
-  const ids = [...new Set(results.flatMap(({ arms }) => REPLAY_ARMS.flatMap((arm) => Object.keys(arms[arm].scores))))];
+  const rubricsOf = (scores: ArmResult["scores"]): readonly string[] => (isPositional(scores) ? POSITIONAL_RUBRICS : Object.keys(scores));
+  const ids = [...new Set(results.flatMap(({ arms }) => REPLAY_ARMS.flatMap((arm) => rubricsOf(arms[arm].scores))))];
   if (ids.length === 0) return SCORERS.map((scorer) => ({ id: scorer, heading: scorerName(scorer) }));
-  const nameOf = (id: string) => id.slice(0, id.indexOf("@"));
+  const nameOf = (id: string) => rubricName(id, { version: false });
   return ids.map((id) => {
-    const name = nameOf(id);
-    const shared = ids.filter((other) => nameOf(other) === name).length > 1;
-    return { id, heading: shared ? `${scorerName(name)} v${id.slice(name.length + 1)}` : scorerName(name) };
+    const shared = ids.some((other) => other !== id && nameOf(other) === nameOf(id));
+    return { id, heading: shared ? rubricName(id) : nameOf(id) };
   });
 }
 
@@ -896,8 +904,13 @@ function isKeyOf<K extends string>(words: Readonly<Record<K, string>>, value: un
 
 /** An arm's score under rubric `id`: a number, `not-applicable` when the rubric doesn't apply to its run, or null for none. */
 function scoreUnder(scores: ArmResult["scores"], id: string): number | typeof NOT_APPLICABLE | null {
+  if (isPositional(scores)) return scores[POSITIONAL_RUBRICS.indexOf(id as (typeof POSITIONAL_RUBRICS)[number])] ?? null;
   if (!Object.hasOwn(scores, id)) return null;
   return scores[id] ?? NOT_APPLICABLE;
+}
+
+function isPositional(scores: ArmResult["scores"]): scores is PositionalScores {
+  return Array.isArray(scores);
 }
 
 function isScore(value: unknown): value is number {

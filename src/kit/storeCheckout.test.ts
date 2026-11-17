@@ -74,7 +74,7 @@ describe("Reading the store's checkout", () => {
     const store = await aCheckoutWith({ [recordPathOf(record)]: JSON.stringify({ ...unnamed, schema: 1 }) });
 
     expect((await readStoreRunRecords(store, ["Claude token 2", "Claude token"])).records).toEqual({
-      [recordPathOf(record)]: { ...record, subscription: "Claude token 2" },
+      [recordPathOf(record)]: { ...record, subscription: "Claude token 2", storedSchema: 1 },
     });
   });
 

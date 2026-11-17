@@ -16,8 +16,8 @@ import {
 import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
-import { auditsIn, introducedByIn } from "../loop/audit.ts";
-import { flakyCheckMarksIn, fromAuditIn, weeklyRunName, weeklyRunWaitingNoted, type WeeklyRunKind } from "../loop/markers.ts";
+import { architecturalEscapesOf, type ArchitecturalEscapes, escapesCell, escapeWindowsOf } from "./architecturalEscapes.ts";
+import { flakyCheckMarksIn, weeklyRunName, weeklyRunWaitingNoted, type WeeklyRunKind } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { freeSubscriptions } from "../loop/subscriptions.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
@@ -28,8 +28,6 @@ import {
   type ArchitecturalEscape,
   type CommentFacts,
   dispatchOf,
-  ESCAPE_WINDOW_MS,
-  escapesIn,
   type LabelEvent,
   type MergedAgentPullRequest,
   mergedAgentPullRequestsIn,
@@ -43,7 +41,7 @@ import {
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { averageCostOf, BUILD_ROLES, costOf, costPerMergedPullRequestOf, endedBy } from "./mergedCost.ts";
-import { rubricId, SCORERS, scorerName } from "./rubrics.ts";
+import { type Rubric, rubricId, rubricName, SCORERS } from "./rubrics.ts";
 import { type PlainKind, type Standing, standingsOf, type StandingNamed } from "./standing.ts";
 import { givenUpWeeksOf, maxInFlightHoldOf, mergeGateHoldOf } from "./standingInFlight.ts";
 import { wordStanding } from "./standingWording.ts";
@@ -59,7 +57,7 @@ import {
   type UnreadableRunRecords,
   WEEKLY_LIMIT,
 } from "./runRecord.ts";
-import type { ScoreEntry, ScoreFile, ScoreSkip } from "./scorer.ts";
+import { NOT_APPLICABLE, type ScoreEntry, type ScoreFile, type ScoreSkip } from "./scorer.ts";
 import { YIELD_KINDS, type YieldKind, type Yields, type YieldShare, yieldsOf } from "./yield.ts";
 
 // The sums of records' costs live with the cost per merged pull request (./mergedCost.ts).
@@ -305,6 +303,12 @@ export interface WeeklySummaryInput {
    * repo with none is held to the Kit's default caps and gets no max_in_flight line.
    */
   readonly kits: readonly RepoKitFacts[];
+  /**
+   * The Kit's rubrics, as its checkout holds them (src/kit/kitFiles.ts): a
+   * rubric version whose labels list `not-applicable` gets a row in the Scores
+   * counting the runs it didn't apply to (#739).
+   */
+  readonly rubrics: readonly Pick<Rubric, "name" | "version" | "labels">[];
   /** The Operator's GitHub login, the owner of the store. */
   readonly operator: string;
   /** The Fabrik App's bot login, its slug with `[bot]`, as label events name it. */
@@ -773,26 +777,6 @@ export interface RevertRate {
   readonly merged: number;
 }
 
-/**
- * The Architectural escapes over each Product repo's escape window (the 90
- * days to the week's end, starting no earlier than 30 days before the repo's
- * first Audit), summed across repos, with what stands behind the count.
- */
-export interface ArchitecturalEscapes {
-  /** The escapes filed in the windows, each counted once however many merged agent PRs it names. */
-  readonly escapes: number;
-  /** The Audits opened in the windows that landed, filled or clean: never a pending or failed one. */
-  readonly audits: number;
-  /** The agent PRs merged in the windows. */
-  readonly merged: number;
-  /**
-   * On those Audits still open, the candidates whose card traces to a merged
-   * agent PR, less the escapes filed from each: never in `escapes`. A closed
-   * Audit's unfiled candidates were set aside, and count for nothing.
-   */
-  readonly undecided: number;
-}
-
 /** A count of escapes per Strength, with `none` for a marker whose Strength isn't one the Auditor gives, or is missing. */
 export type EscapesByStrength = Readonly<Record<Strength | "none", number>>;
 
@@ -859,8 +843,8 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   const input: WeeklySummaryInput = { ...everything, records: records.filter(isLive), scoreFiles: scoreFiles.filter(isLive) };
   const replays = records.filter((record) => !isLive(record));
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
-  const thisWeek = metricsOf(weeks.thisWeek, input);
-  const lastWeek = metricsOf(weeks.lastWeek, input);
+  const thisWeek = metricsOf(weeks.thisWeek, input, { latest: true });
+  const lastWeek = metricsOf(weeks.lastWeek, input, { latest: false });
   const replaySpend = { thisWeek: replaySpendOf(weeks.thisWeek, replays), lastWeek: replaySpendOf(weeks.lastWeek, replays) };
   const healthOf = (repo: string): LoopHealth | null => {
     const read = input.health.find((health) => health.repo === repo);
@@ -991,7 +975,7 @@ interface WeekMetrics {
   readonly scoringCost: ScoringCost;
 }
 
-function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
+function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly latest: boolean }): WeekMetrics {
   const records = input.records
     .filter((record) => within(week, record.endedAt))
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
@@ -1017,7 +1001,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput): WeekMetrics {
     operatorWaitMs: median(merged.flatMap((pullRequest) => operatorWaitOf(pullRequest, input.operator))),
     revertRate: revertRateOf(week, input),
     yields: yieldsOf(week, input.records, input.facts),
-    architecturalEscapes: architecturalEscapesOf(escapeWindows, input.operator),
+    architecturalEscapes: architecturalEscapesOf(escapeWindows, input.operator, { latest }),
     escapesByStrength: escapesByStrengthOf(escapes),
     requestChanges: requestChangesCountsOf(requestChanges),
     reviewMisses: reviewMissesOf(requestChanges),
@@ -1154,75 +1138,6 @@ function inKitOrder(a: RubricScores, b: RubricScores): number {
 function revertRateOf(week: Week, input: WeeklySummaryInput): RevertRate {
   const merged = mergedAgentPullRequestsIn({ start: week.end - REVERT_WINDOW_MS, end: week.end }, input);
   return { reverted: merged.filter((pullRequest) => pullRequest.reverted).length, merged: merged.length };
-}
-
-/** How long before a repo's first Audit its escape window may start: the work that Audit read. */
-const BEFORE_FIRST_AUDIT_MS = 30 * 24 * 60 * 60 * 1000;
-
-/** One Product repo's escape window to a week's end, and what it holds. */
-interface RepoEscapeWindow {
-  readonly facts: GitHubFacts;
-  readonly escapes: readonly ArchitecturalEscape[];
-  /** The Audits the Fabrik App opened in the window that landed, filled or clean. */
-  readonly audits: readonly { readonly number: number; readonly open: boolean; readonly body: string }[];
-  readonly merged: number;
-}
-
-/**
- * Each Product repo's escape window to the week's end: the 90 days slow decay
- * needs to show, starting no earlier than 30 days before the repo's first
- * Audit, so a new repo's count grows into them instead of counting work no
- * Audit read. A repo with no Audit opened by the week's end has an empty one.
- * The first Audit is the oldest the Fabrik App opened whose run didn't fail.
- */
-function escapeWindowsOf(week: Week, input: WeeklySummaryInput): RepoEscapeWindow[] {
-  return input.facts.map((facts) => {
-    const open = new Set(facts.openAudits.map(({ number }) => number));
-    const issues = [...new Map([...facts.firstAudits, ...facts.audits].map((issue) => [issue.number, issue])).values()];
-    const audits = auditsIn(
-      issues.map(({ number, title, author, createdAt, body }) => ({ number, title, open: open.has(number), stateReason: null, createdAt, byApp: author === input.appLogin, body })),
-    );
-    const first = audits.findLast((audit) => !audit.failed && Date.parse(audit.createdAt) < week.end) ?? null;
-    const start = first === null ? week.end : Math.max(week.end - ESCAPE_WINDOW_MS, Date.parse(first.createdAt) - BEFORE_FIRST_AUDIT_MS);
-    const window: Window = { start, end: week.end };
-    const onRepo = { ...input, facts: [facts] };
-    return {
-      facts,
-      escapes: escapesIn(window, onRepo),
-      audits: audits.flatMap((audit) => {
-        const landed = audit.commit !== null && !audit.pending && !audit.failed;
-        const body = issues.find(({ number }) => number === audit.number)?.body ?? "";
-        return landed && within(window, audit.createdAt) ? [{ number: audit.number, open: audit.open, body }] : [];
-      }),
-      merged: mergedAgentPullRequestsIn(window, onRepo).length,
-    };
-  });
-}
-
-/**
- * The escapes, Audits and merged agent PRs in each repo's escape window,
- * summed, with the candidates still undecided on its open Audits: those whose
- * card traces to a merged agent PR, less the issues the Operator filed from
- * that Audit with an escape marker. One rejected by comment stays undecided
- * until the Audit closes.
- */
-function architecturalEscapesOf(windows: readonly RepoEscapeWindow[], operator: string): ArchitecturalEscapes {
-  const undecided = windows.flatMap(({ facts, audits }) =>
-    audits
-      .filter(({ open }) => open)
-      .map(({ number, body }) => {
-        const traced = introducedByIn(body).filter((pullRequests) => pullRequests.length > 0).length;
-        const filed = facts.escapeMarkerIssues.filter((issue) => issue.author === operator && fromAuditIn(issue.body) === number).length;
-        return Math.max(0, traced - filed);
-      }),
-  );
-  const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
-  return {
-    escapes: sum(windows.map(({ escapes }) => escapes.length)),
-    audits: sum(windows.map(({ audits }) => audits.length)),
-    merged: sum(windows.map(({ merged }) => merged)),
-    undecided: sum(undecided),
-  };
 }
 
 function escapesByStrengthOf(escapes: readonly ArchitecturalEscape[]): EscapesByStrength {
@@ -1800,10 +1715,10 @@ function midnight(date: number, timeZone: string): number {
 // weekly-limit issue. A repo whose Kit config is invalid holds nothing: its
 // Waiting on you leads with the config's first error.
 
-function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords }: WeeklySummaryInput): string {
+function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords, rubrics }: WeeklySummaryInput): string {
   const { cost, unknownCost, replaySpend, costPerMergedPullRequest, costPerSpec, spendNeverMerged, weeklyLimit, humanTouches, retriesPerMergedPullRequest, cycleTimeMs, operatorWaitMs, revertRate, architecturalEscapes, counts } = summary;
-  const share = ({ reverted, merged }: RevertRate) => (merged === 0 ? null : reverted / merged);
-  const revertCell = (rate: RevertRate) => orNone(share(rate), (value) => `${percent(value)} (${rate.reverted} of ${rate.merged})`);
+  const share = ({ reverted, merged }: RevertRate) => shareOf(reverted, merged);
+  const revertCell = ({ reverted, merged }: RevertRate) => shareCell(reverted, merged, NONE);
   const revertChange = pointsChange({ thisWeek: share(revertRate.thisWeek), lastWeek: share(revertRate.lastWeek) });
   const escapeChange = signed(architecturalEscapes.thisWeek.escapes - architecturalEscapes.lastWeek.escapes, count);
   const costRow = (name: string, figure: WeekOverWeek<CostFigure>) => {
@@ -1867,7 +1782,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords 
     if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of ${name}.`, "");
   }
   lines.push(...subscriptionUsageLines(weeklyLimit, summary.subscriptions, timeZone), "");
-  lines.push(...scoresLines(summary.scores, summary.scoringCost));
+  lines.push(...scoresLines(summary.scores, summary.scoringCost, rubrics));
   lines.push(...heldLines(summary.repos, timeZone));
   for (const repo of summary.repos) {
     lines.push(
@@ -1895,22 +1810,6 @@ function unreadableLines({ count, newestSchema }: UnreadableRunRecords): string[
   return [line, ""];
 }
 
-/**
- * The escapes and what stands behind them, such as `3, from 4 Audits over 68
- * merged agent PRs, 2 candidates undecided`, naming the undecided only when
- * there are some; `no Audits yet` when no repo had an Audit in its window.
- */
-function escapesCell({ escapes, audits, merged, undecided }: ArchitecturalEscapes): string {
-  if (audits === 0) return "no Audits yet";
-  const behind = `${escapes}, from ${counted(audits, "Audit")} over ${counted(merged, "merged agent PR")}`;
-  return undecided === 0 ? behind : `${behind}, ${counted(undecided, "candidate")} undecided`;
-}
-
-/** `1 Audit`, or `2 Audits`. */
-function counted(value: number, noun: string): string {
-  return `${value} ${noun}${value === 1 ? "" : "s"}`;
-}
-
 /** The escapes opened in the 90 days by Strength, naming those with no known Strength only when there are some. */
 function escapesByStrengthLine(counts: EscapesByStrength): string {
   const known = STRENGTHS.map((strength) => `${counts[strength]} ${STRENGTH_LABELS[strength]}`);
@@ -1923,14 +1822,18 @@ function escapesByStrengthLine(counts: EscapesByStrength): string {
  * against the same version last week, and what scoring cost, or nothing at
  * all in a week with no score files.
  */
-function scoresLines({ thisWeek, lastWeek }: WeekOverWeek<WeekScores>, scoringCost: WeekOverWeek<ScoringCost>): string[] {
+function scoresLines({ thisWeek, lastWeek }: WeekOverWeek<WeekScores>, scoringCost: WeekOverWeek<ScoringCost>, kitRubrics: WeeklySummaryInput["rubrics"]): string[] {
   if (thisWeek.scoreFiles === 0) return [];
   const rows = thisWeek.rubrics.flatMap((rubric) => {
     const before = lastWeek.rubrics.find(({ scorer, version }) => scorer === rubric.scorer && version === rubric.version);
-    const name = `${scorerName(rubric.scorer)} v${rubric.version}`;
+    const id = rubricId({ name: rubric.scorer, version: rubric.version });
+    const name = rubricName(id);
+    const notApplicable = { thisWeek: rubric.notApplicable, lastWeek: before?.notApplicable ?? 0 };
+    // A rubric whose labels list not-applicable can leave runs unscored (#739), so it counts them; so does one the Kit no longer has, that left some.
+    const listed = kitRubrics.some((kit) => rubricId(kit) === id && kit.labels.includes(NOT_APPLICABLE));
     return [
       row(`${name}: runs scored`, { thisWeek: rubric.runsScored, lastWeek: before?.runsScored ?? 0 }, count),
-      ...(rubric.scorer === TEST_FIRST ? [row(`${name}: not applicable`, { thisWeek: rubric.notApplicable, lastWeek: before?.notApplicable ?? 0 }, count)] : []),
+      ...(listed || notApplicable.thisWeek > 0 || notApplicable.lastWeek > 0 ? [row(`${name}: not applicable`, notApplicable, count)] : []),
       row(`${name}: median score`, { thisWeek: rubric.medianScore, lastWeek: before?.medianScore ?? null }, (score) => score.toFixed(2)),
       shareRow(`${name}: passing`, { thisWeek: rubric.passing, lastWeek: before?.passing ?? null }),
     ];
@@ -1955,9 +1858,6 @@ function scoresLines({ thisWeek, lastWeek }: WeekOverWeek<WeekScores>, scoringCo
   if (leftOut > 0) lines.push(`${runsWithUnknownCost(leftOut)} left out of the scoring cost.`, "");
   return lines;
 }
-
-/** The Scorer that can say it doesn't apply to a run, so the Scores count those runs on a row of its own (#739). */
-const TEST_FIRST = "test-first";
 
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
 function heldLines(repos: readonly RepoSection[], timeZone: string): string[] {
@@ -2255,11 +2155,8 @@ const YIELD_NAMES: Readonly<Record<YieldKind, string>> = {
 
 /** A row for each kind's Yield, read like the Revert rate, with a week that judged none of them saying so. */
 function yieldRows(yields: WeekOverWeek<Yields>): string[] {
-  const share = ({ passed, judged }: YieldShare) => (judged === 0 ? null : passed / judged);
-  const cell = (figure: YieldShare) => {
-    const value = share(figure);
-    return value === null ? "no judged runs" : `${percent(value)} (${figure.passed} of ${figure.judged})`;
-  };
+  const share = ({ passed, judged }: YieldShare) => shareOf(passed, judged);
+  const cell = ({ passed, judged }: YieldShare) => shareCell(passed, judged, "no judged runs");
   return YIELD_KINDS.map((kind) => {
     const thisWeek = yields.thisWeek[kind];
     const lastWeek = yields.lastWeek[kind];
@@ -2320,6 +2217,17 @@ function runsWithUnknownCost(count: number): string {
 
 function orNone(value: number | null, format: (value: number) => string): string {
   return value === null ? NONE : format(value);
+}
+
+/** `part` of `whole` as a share from 0 to 1, or null when `whole` is 0. */
+function shareOf(part: number, whole: number): number | null {
+  return whole === 0 ? null : part / whole;
+}
+
+/** `part` of `whole` as a cell, such as `35% (24 of 69)`, or `none` when `whole` is 0. */
+function shareCell(part: number, whole: number, none: string): string {
+  const share = shareOf(part, whole);
+  return share === null ? none : `${percent(share)} (${part} of ${whole})`;
 }
 
 function hours(ms: number): string {

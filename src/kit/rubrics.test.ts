@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadRubrics } from "./kitFiles.ts";
-import { RUBRIC_HASHES, readRubric, rubricContentHash, rubricSet, rubricVersionErrors } from "./rubrics.ts";
+import { RUBRIC_HASHES, readRubric, rubricContentHash, rubricName, rubricSet, rubricVersionErrors } from "./rubrics.ts";
 
 /** A rubric file, with whatever front-matter lines the case changes. */
 function rubricFile(fields: Record<string, string> = {}, text = "Judge the run.\n\n- `clean`: nothing wasted.\n- `slow`: time wasted.\n"): string {
@@ -155,5 +155,22 @@ describe("The rubric version guard", () => {
 
   it("keeps the hash of a rubric the Kit no longer has, so no version of it is reused and its score files still read under its name", () => {
     expect(Object.keys(RUBRIC_HASHES)).toEqual(expect.arrayContaining(["skill-use@1", "test-first@1"]));
+  });
+});
+
+describe("A rubric's name in the Kit's reports", () => {
+  it.each([
+    ["efficiency@1", "Efficiency v1"],
+    ["ticket-compliance@2", "Ticket compliance v2"],
+    ["skill-use@1", "Skill use v1"],
+    ["test-first@1", "Test-first v1"],
+    ["retired-rubric@3", "Retired rubric v3"],
+  ])("names %s %s", (id, name) => {
+    expect(rubricName(id)).toBe(name);
+  });
+
+  it("leaves its version out when asked to", () => {
+    expect(rubricName("test-first@1", { version: false })).toBe("Test-first");
+    expect(rubricName("ticket-compliance@2", { version: false })).toBe("Ticket compliance");
   });
 });
