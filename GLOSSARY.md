@@ -385,12 +385,16 @@ Each time the Operator steps into a Ticket's path between Dispatch and merge: a 
 _Avoid_: intervention, manual fix
 
 **Architectural escape**:
-An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted against those pull requests, never against a candidate the Operator set aside.
+An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted once, however many pull requests it traces to, never for a candidate the Operator set aside or hasn't decided.
 _Avoid_: architecture regression, design debt
 
 **Review miss**:
 A point in a Request changes asking for what a pass should already have caught: something the Ticket as it then stood, its Spec or the Product repo's standards required. A point that amends the Ticket, or only asks for a rebase, is none, and unlike an Architectural escape it's caught at the Merge gate, before merge.
 _Avoid_: missed flaw, false pass, escape
+
+**Yield**:
+Of the Implement runs of one kind (first runs, Retry 1s or Retry 2s) whose push got its first Verdict in a week, the share where that Verdict was a pass. A Verdict later counted back as a Flaky check leaves its run out. The Yield of first runs is the **first-pass yield**.
+_Avoid_: pass rate, success rate, first-time-right
 
 **Replay**:
 An experiment the Operator starts that re-runs merged Tickets from their original base commit, once as before and once with one thing changed, to compare the two. A Ticket whose first run was a Kept-branch start can't be rebuilt from its base commit, so a Replay leaves it out, saying why.

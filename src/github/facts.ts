@@ -180,7 +180,7 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
   const github = leavingOutHeldLines(client);
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(reach).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, audits, retros, openMaps, openReplays, { kitIssues }, weekCarriers] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, audits, retros, firstAudits, openMaps, openReplays, { kitIssues }, weekCarriers] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
@@ -197,6 +197,8 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
     // The weekly gates' own read, so Stuck and the gates count the same failed runs.
     gatherWeeklyRunIssues(github, repo, AUDIT_LABEL),
     gatherWeeklyRunIssues(github, repo, RETRO_LABEL),
+    // The first Audit, which the newest 50 can leave out: the Architectural escapes' window starts from it (#737).
+    gatherWeeklyRunIssues(github, repo, AUDIT_LABEL, { oldest: true }),
     // The Map cap's own read, so Held and the cap can't disagree.
     gatherOpenMaps(github, repo),
     pagesOf<RawOpenReplay>(github, OPEN_REPLAYS_QUERY, repo, { replay: REPLAY_LABEL }, (data) => data.repository.issues),
@@ -227,6 +229,7 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
     openAudits: openAudits.map(openKitIssueOf),
     openRetros: openRetros.map(openKitIssueOf),
     audits,
+    firstAudits,
     retros,
     openReplays: openReplays.map(({ number, title, createdAt, lastEditedAt, body, author }) => ({ number, title, author: loginOf(author), createdAt, lastEditedAt, body })),
     openMaps: openMaps.map((map) => map.number),
@@ -266,9 +269,17 @@ export async function gatherRetroFacts(
   return { ...facts, pullRequests, openPullRequests };
 }
 
-/** The newest issues with a weekly gate's label, `fabrik:audit` or `fabrik:retro`, open and closed, read as the gate reads them (weeklyIssuesQuery). */
-export async function gatherWeeklyRunIssues(github: Pick<ReadClient, "graphql">, repo: Repo, label: string): Promise<WeeklyRunIssueFacts[]> {
-  const data = await github.graphql<WeeklyIssuesQueryResult>(weeklyIssuesQuery(), { owner: repo.owner, name: repo.name, label });
+/**
+ * The newest issues with a weekly gate's label, `fabrik:audit` or `fabrik:retro`, open and closed, read as the gate reads them (weeklyIssuesQuery),
+ * or with `oldest`, the oldest ones, oldest first.
+ */
+export async function gatherWeeklyRunIssues(
+  github: Pick<ReadClient, "graphql">,
+  repo: Repo,
+  label: string,
+  { oldest = false }: { readonly oldest?: boolean } = {},
+): Promise<WeeklyRunIssueFacts[]> {
+  const data = await github.graphql<WeeklyIssuesQueryResult>(weeklyIssuesQuery("", { oldest }), { owner: repo.owner, name: repo.name, label });
   return data.repository.issues.nodes.map(({ number, title, author, createdAt, body }) => ({ number, title, author: loginOf(author), createdAt, body }));
 }
 

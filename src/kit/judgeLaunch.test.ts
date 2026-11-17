@@ -1,8 +1,7 @@
-import { claudeCode } from "@ai-hero/sandcastle";
 import { describe, expect, it } from "vitest";
 import { cleanLaunch } from "../__fixtures__/preflight.ts";
 import { checkMeteredBilling } from "../preflight/meteredBilling.ts";
-import { judgeClaudeArgs, judgeOutput, withoutTools } from "./judgeLaunch.ts";
+import { judgeAgent, judgeClaudeArgs, judgeOutput } from "./judgeLaunch.ts";
 import type { Rubric } from "./rubrics.ts";
 import { JUDGE_OUTPUT_TAG } from "./scorerPrompt.ts";
 
@@ -47,9 +46,16 @@ describe("The judge's answer, read from its one reply", () => {
 });
 
 describe("The judge's launch", () => {
-  const judge = withoutTools(claudeCode("claude-sonnet-5-5"));
+  const judge = judgeAgent();
   /** A launch command's words, with Sandcastle's single quotes taken off. */
   const words = (command: string) => command.split(" ").map((word) => word.replace(/^'(.*)'$/, "$1"));
+
+  // Named outright, so the judge's Run record says the level and a Claude Code upgrade can't change it unseen (#740).
+  it("runs Sonnet 5.5 at medium effort", () => {
+    const { command } = judge.buildPrintCommand({ prompt: "Score this run.", dangerouslySkipPermissions: true });
+
+    expect(words(command)).toEqual(expect.arrayContaining(["--model", "claude-sonnet-5-5", "--effort", "medium"]));
+  });
 
   it("runs with no tools and no MCP server", () => {
     const { command } = judge.buildPrintCommand({ prompt: "Score this run.", dangerouslySkipPermissions: true });
@@ -64,10 +70,10 @@ describe("The judge's launch", () => {
 
   it("gives the metered-billing preflight the arguments it launches with, which it lets through", () => {
     const { command } = judge.buildPrintCommand({ prompt: "Score this run.", dangerouslySkipPermissions: true });
-    const args = judgeClaudeArgs("claude-sonnet-5-5");
+    const args = judgeClaudeArgs();
 
     expect(words(command)).toEqual(["claude", ...args]);
-    expect(args).toEqual(expect.arrayContaining(["--model", "claude-sonnet-5-5", "--tools", "", "--strict-mcp-config"]));
+    expect(args).toEqual(expect.arrayContaining(["--model", "claude-sonnet-5-5", "--effort", "medium", "--tools", "", "--strict-mcp-config"]));
     expect(checkMeteredBilling(cleanLaunch({ args }))).toEqual({ kind: "pass" });
   });
 });

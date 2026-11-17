@@ -24,7 +24,7 @@ import type { Needs } from "./pushJob.ts";
 import type { StoreApi } from "./recordWriter.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { judgeRunRecordFor, readRunRecord } from "./runRecord.ts";
-import { JUDGE_MODEL, RUN_STORE } from "./runStore.ts";
+import { JUDGE_EFFORT, JUDGE_MODEL, RUN_STORE } from "./runStore.ts";
 import { type ScoreRecordOutcome, scoreRecordSummary, writeScoreRecord } from "./scoreRecord.ts";
 import { scoreFileFor, scoringRubrics } from "./scorer.ts";
 
@@ -77,6 +77,7 @@ async function outcome(): Promise<ScoreRecordOutcome> {
     scored,
     judge,
     judgeModel: JUDGE_MODEL,
+    judgeEffort: JUDGE_EFFORT,
     kitSha,
     endedAt,
     failureReport: failure,

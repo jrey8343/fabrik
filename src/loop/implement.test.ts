@@ -23,7 +23,7 @@ describe("Starting an Implementer", () => {
           role: "implement",
           issue: 7,
           model: "claude-sonnet-5-5",
-          effort: null,
+          effort: "medium",
           timeoutMinutes: 60,
           subscription: "Claude token",
         },

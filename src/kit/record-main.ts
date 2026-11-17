@@ -15,6 +15,8 @@
 // FABRIK_LOOP_OUTCOME is how the push job's Loop step ended, and
 // FABRIK_LANDING_FAILED the path of the file it leaves when it says its
 // landing failed (#487); a file that can't be read is none, never a failure.
+// FABRIK_PUSHED_PULL_REQUEST and FABRIK_PUSHED_HEAD are the PR and head an
+// Implement run's landing pushed (#735), empty when it pushed nothing.
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -98,6 +100,8 @@ async function recordRun(): Promise<Recorded> {
     emptyDiff: process.env["FABRIK_EMPTY_DIFF"] === "true",
     loopOutcome: process.env["FABRIK_LOOP_OUTCOME"] ?? "",
     landingFailed: await landingFailedText(),
+    pushedPullRequest: process.env["FABRIK_PUSHED_PULL_REQUEST"] ?? "",
+    pushedHead: process.env["FABRIK_PUSHED_HEAD"] ?? "",
   });
   const store = new GitHub(storeToken, apiUrl);
   const write = await writeRunRecord(store, files, transcript?.gzip ?? null, (ms) => sleep(ms));

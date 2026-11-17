@@ -30,10 +30,15 @@ import type {
   ReviewFacts,
   SpecFacts,
   TicketFacts,
+  WeeklyRunIssueFacts,
 } from "../kit/weeklySummary.ts";
+import { INTRODUCED_BY, TOP_RECOMMENDATION_HEADING } from "../loop/audit.ts";
 import { rollInComment } from "../loop/design.ts";
 import { DIGEST_FOLDS_MARKER, type DigestData, digestDataMarker, digestMarker, digestTop, type NoDigestHow, noDigestLine } from "../loop/digestContract.ts";
 import {
+  AUDIT_FAILED_MARKER,
+  AUDIT_PENDING_MARKER,
+  auditMarker,
   DESIGN_TURN_FAILED_MARKER,
   designRoundMarker,
   fromPullRequestLine,
@@ -54,7 +59,7 @@ import type { RunInFlight, RunsRead } from "./runs.ts";
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
-    schema: 9,
+    schema: 10,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -82,6 +87,7 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     infrastructureFailure: null,
     brokenRun: null,
     landing: null,
+    pushed: null,
     verdict: null,
     durationMs: 90_000,
     apiDurationMs: 60_000,
@@ -185,6 +191,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     openAudits: [],
     openRetros: [],
     audits: [],
+    firstAudits: [],
     retros: [],
     openReplays: [],
     openMaps: [],
@@ -207,6 +214,37 @@ export function aFollowUpIssue(pullRequest: number, title: string, overrides: Pa
 /** Audit 90, which the Fabrik App opened on 2026-11-01 and nobody has closed. */
 export function anOpenAudit(overrides: Partial<OpenAuditFacts> = {}): OpenAuditFacts {
   return { number: 90, title: "Audit: week of 2026-10-26", author: "fabrik-app[bot]", createdAt: "2026-11-01T00:00:00Z", ...overrides };
+}
+
+/**
+ * Audit 90, which the Fabrik App opened at `createdAt`, as a weekly gate reads
+ * it: landed by default, filled with a card per candidate, each naming the PRs
+ * given under Introduced by, or clean with none; or still pending, or failed.
+ */
+export function anAudit(
+  createdAt: string,
+  { candidates = [], state = "landed", ...overrides }: Partial<WeeklyRunIssueFacts> & { readonly candidates?: readonly (readonly number[])[]; readonly state?: "landed" | "pending" | "failed" } = {},
+): WeeklyRunIssueFacts {
+  const marker = auditMarker("b".repeat(40));
+  const cards = candidates.flatMap((introducedBy, at) => [
+    `## Candidate ${at + 1}`,
+    "",
+    "`Strong`",
+    "",
+    `${INTRODUCED_BY} ${introducedBy.length === 0 ? "No merged agent PR" : introducedBy.map((n) => `#${n}`).join(", ")}`,
+    "",
+    "[Open as issue](https://github.com/owner/product/issues/new)",
+    "",
+  ]);
+  const body = {
+    landed:
+      candidates.length === 0
+        ? `The Auditor read the default branch up to \`bbbbbbb\`, and found nothing above Speculative: the repo is clean.\n\n${marker}`
+        : ["The Auditor read the default branch up to `bbbbbbb`.", "", ...cards, TOP_RECOMMENDATION_HEADING, "", "Candidate 1 first.", "", marker].join("\n"),
+    pending: `The Auditor is reading the default branch up to \`bbbbbbb\`.\n\n${marker}\n${AUDIT_PENDING_MARKER}`,
+    failed: `The Auditor's run failed: it timed out.\n\n${marker}\n${AUDIT_FAILED_MARKER}`,
+  }[state];
+  return { number: 90, title: "Audit: week of 2026-10-26", author: "fabrik-app[bot]", createdAt, body, ...overrides };
 }
 
 /** Retro 120, which the Fabrik App opened on Saturday 2026-11-07 and nobody has closed. */

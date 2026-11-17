@@ -31,7 +31,7 @@ This run replaces that skill's output. Ignore every step in either skill that pr
 
 ## Tracing a candidate
 
-For each candidate, find the pull requests that introduced the problem: run `git log` and `git blame` on its files over the window, and match the commits to "Agent PRs merged in the window" by merge commit, head branch or changed files. Name in `introducedBy` only PRs on that list, by number, and only those you traced the problem to. Never name a PR that isn't on the list, a person's commit, or a guess. Leave `introducedBy` empty when the problem came from elsewhere or from before the window. The Kit drops any number that isn't a merged agent PR.
+For each candidate, find the pull requests that introduced the problem: run `git log` and `git blame` on its files over the window, and match the commits to "Agent PRs merged in the window" by merge commit, head branch or changed files. Name in `introducedBy` only the merged agent PRs that introduced the structure or grew it into the problem, by number, from that list, and never one that only extended structure older than itself: a PR that added one more caller to a shallow module it found already there didn't make the module shallow. Never name a PR that isn't on the list, a person's commit, or a guess. A candidate whose problem predates every agent PR gets an empty `introducedBy`, so it is filed with no escape marker and isn't an Architectural escape; leave it empty too when the problem came from elsewhere or from before the window. The Kit drops any number that isn't a merged agent PR.
 
 ## Choosing candidates
 

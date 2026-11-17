@@ -2122,7 +2122,8 @@ jobs:
       # record in the store it then runs the scoring plan (#149): it writes a
       # skip's score file itself, and asks the judge job for a score. The record
       # says how the landing ended (#487), from the Loop step's outcome and the
-      # file it leaves when it says its landing failed.
+      # file it leaves when it says its landing failed, and the PR and head an
+      # Implement run's push left (#735).
       - name: Write the Run record
         id: record
         if: always()
@@ -2132,6 +2133,8 @@ jobs:
           op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
           role: ${{ needs.kit.outputs.route }}
           empty-diff: ${{ steps.loop.outputs.empty-diff }}
+          pushed-pull-request: ${{ steps.loop.outputs.pushed-pull-request }}
+          pushed-head: ${{ steps.loop.outputs.pushed-head }}
           loop-outcome: ${{ steps.loop.outcome }}
           landing-failed: ${{ env.FABRIK_LANDING_FAILED }}
 

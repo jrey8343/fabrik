@@ -743,14 +743,15 @@ function weeklyLabelOf(labels: readonly string[]): string | null {
  * since a week opens at most three. `fields` are read on each issue beside a
  * WeeklyIssueSnapshot's own (weeklyIssueOf), as a Retro's history reads its
  * comments (src/github/facts.ts), so the tick, an Auditor run's inputs and a
- * Retro's evidence read the same issues.
+ * Retro's evidence read the same issues. `oldest` reads the oldest ones
+ * instead, oldest first, as the Weekly summary finds a repo's first Audit.
  */
-export function weeklyIssuesQuery(fields = ""): string {
+export function weeklyIssuesQuery(fields = "", { oldest = false }: { readonly oldest?: boolean } = {}): string {
   return `
   query ($owner: String!, $name: String!, $label: String!) {
     repository(owner: $owner, name: $name) {
       defaultBranchRef { target { oid } }
-      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: DESC }) {
+      issues(labels: [$label], states: [OPEN, CLOSED], first: 50, orderBy: { field: CREATED_AT, direction: ${oldest ? "ASC" : "DESC"} }) {
         nodes { number title state stateReason createdAt body author { login __typename } ${fields} }
       }
     }

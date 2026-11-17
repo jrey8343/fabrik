@@ -16,7 +16,8 @@
 // before empty diffs were recorded, as no empty diff, and a schema 1 to 7
 // record, written before Broken runs were recorded, as no Broken run, and a
 // schema 1 to 8 record, written before landings were recorded, as one the
-// push job landed. Pure, no I/O.
+// push job landed, and a schema 1 to 9 record, written before pushes were
+// recorded, as one that pushed nothing. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import type { refusalOf } from "../github/client.ts";
 import { readAgentRunResult } from "../agent/result.ts";
@@ -58,6 +59,19 @@ export interface RunEnd {
   readonly loopOutcome: string;
   /** The text of the file the Loop step leaves when it says its landing failed (#487), or null when it left none. */
   readonly landingFailed: string | null;
+  /**
+   * The pull request an Implement run's landing pushed to, and the head it left
+   * there (#735), as the Loop step's outputs say: "" when it pushed nothing.
+   */
+  readonly pushedPullRequest: string;
+  readonly pushedHead: string;
+}
+
+/** The pull request an Implement run's push went to, and the head it left there (#735). */
+export interface Pushed {
+  /** The pull request the push went to: for a first run, the one it opened. */
+  readonly pullRequest: number;
+  readonly headSha: string;
 }
 
 /** One model's share of the run, as its result's `modelUsage` reports it. */
@@ -128,9 +142,10 @@ export type RunRecordRole = AgentRole | "score";
 /**
  * The schema a Run record is written at: 2 added `subscription`, 3 added
  * `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`,
- * 7 added `keptBranch`, 8 added `brokenRun`, 9 added `landing`.
+ * 7 added `keptBranch`, 8 added `brokenRun`, 9 added `landing`, 10 added
+ * `pushed`.
  */
-export const RUN_RECORD_SCHEMA = 9;
+export const RUN_RECORD_SCHEMA = 10;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -274,6 +289,16 @@ export interface RunRecord {
    * before landings were recorded, reads as null.
    */
   readonly landing: LandingFailed | null;
+  /**
+   * The pull request an Implement run's landing pushed its work to, and the
+   * head it left there (#735): for a first run, the pull request it opened,
+   * though its `pullRequest`, the one it was planned against, stays null.
+   * null when the run landed nothing: an empty diff, a Broken run, a failed
+   * landing, an Infrastructure failure or a run that pushed nothing; and for
+   * every other role and a Replay arm. A schema 1 to 9 record, written before
+   * pushes were recorded, reads as null.
+   */
+  readonly pushed: Pushed | null;
   /** A Review's Verdict, or null when it gave none (and for every other role). */
   readonly verdict: Verdict | null;
   readonly durationMs: number | null;
@@ -351,6 +376,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
   const agent = job?.outputs ?? {};
   const { recordPath, transcriptPath } = pathsFor({ ...end, role, replay: null }, end.transcript !== null);
   const implement = role === "implement";
+  const landing = landingOf(end.loopOutcome, end.landingFailed);
   const facts: RunFacts = {
     kitSha: end.kitSha,
     repo: end.repo,
@@ -373,10 +399,18 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
     brokenRun: ran.broken,
-    landing: landingOf(end.loopOutcome, end.landingFailed),
+    landing,
+    // Only work that landed was pushed: never an empty diff, a failed run or a failed landing.
+    pushed: implement && !end.emptyDiff && ran.failure === null && ran.broken === null && landing === null ? pushedOf(end) : null,
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
+}
+
+/** What the Loop step says an Implement run's landing pushed (#735), or null when it says nothing, or nothing that reads. */
+function pushedOf({ pushedPullRequest, pushedHead }: Pick<RunEnd, "pushedPullRequest" | "pushedHead">): Pushed | null {
+  const pullRequest = countOf(pushedPullRequest);
+  return pullRequest === null || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(pushedHead) ? null : { pullRequest, headSha: pushedHead };
 }
 
 /** What the score-record job knows when a judge run, scoring a finished run, ends. */
@@ -392,6 +426,8 @@ export interface JudgeRunEnd {
   readonly judge: NeededJob;
   /** The Kit's fixed judge model, which the record names when the judge job passed out none. */
   readonly judgeModel: string;
+  /** The Kit's fixed judge effort, which the record names with the judge model when the judge job passed out none. */
+  readonly judgeEffort: string;
   /** The Kit commit writing the record. */
   readonly kitSha: string;
   /** When the score-record job ran, as an ISO 8601 time. */
@@ -423,7 +459,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     issue: scored.issue,
     pullRequest: scored.pullRequest,
     endedAt: end.endedAt,
-    ...whatRan(judge.outputs, {}, { model: end.judgeModel, effort: null }),
+    ...whatRan(judge.outputs, {}, { model: end.judgeModel, effort: end.judgeEffort }),
     // The Kit job gives the judge the Subscription it gave the run the judge scores.
     subscription: scored.subscription,
     retry: 0,
@@ -440,6 +476,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
     brokenRun: null,
     landing: null,
+    pushed: null,
     verdict: null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -510,6 +547,7 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     // A Replay arm uses no Retries, and its Replay ends on any failure it can't land (src/kit/replayRecord.ts), so it's never a Broken run.
     brokenRun: null,
     landing: null,
+    pushed: null,
     verdict: role === "review" ? verdictOf(end.agentResult) : null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
@@ -592,7 +630,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
   const stream = transcript === null ? null : readStream(transcript);
   const last = stream?.result ?? null;
   const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
-  const { infrastructureFailure, brokenRun, landing, verdict, ...ran } = facts;
+  const { infrastructureFailure, brokenRun, landing, pushed, verdict, ...ran } = facts;
   return {
     schema: RUN_RECORD_SCHEMA,
     ...ran,
@@ -602,6 +640,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
     infrastructureFailure,
     brokenRun,
     landing,
+    pushed,
     verdict,
     durationMs: numberOr(last?.["duration_ms"]),
     apiDurationMs: numberOr(last?.["duration_api_ms"]),
@@ -627,21 +666,24 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * written before empty diffs were recorded, as no empty diff, and a schema 1
  * to 7 record, written before Broken runs were recorded, as no Broken run, and
  * a schema 1 to 8 record, written before landings were recorded, as a run the
- * push job landed. Null for anything that isn't a record of a schema the Kit
+ * push job landed, and a schema 1 to 9 record, written before pushes were
+ * recorded, as one that pushed nothing. Null for anything that isn't a record of a schema the Kit
  * knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
-  type Schema8 = Omit<RunRecord, "schema" | "landing">;
-  if (schema === 8) return { ...(stored as Schema8), schema: RUN_RECORD_SCHEMA, landing: null };
+  type Schema9 = Omit<RunRecord, "schema" | "pushed">;
+  if (schema === 9) return { ...(stored as Schema9), schema: RUN_RECORD_SCHEMA, pushed: null };
+  type Schema8 = Omit<Schema9, "landing">;
+  if (schema === 8) return { ...(stored as Schema8), schema: RUN_RECORD_SCHEMA, landing: null, pushed: null };
   type Schema7 = Omit<Schema8, "brokenRun">;
-  if (schema === 7) return { ...(stored as Schema7), schema: RUN_RECORD_SCHEMA, brokenRun: null, landing: null };
+  if (schema === 7) return { ...(stored as Schema7), schema: RUN_RECORD_SCHEMA, brokenRun: null, landing: null, pushed: null };
   type Schema6 = Omit<Schema7, "keptBranch">;
-  if (schema === 6) return { ...(stored as Schema6), schema: RUN_RECORD_SCHEMA, keptBranch: false, brokenRun: null, landing: null };
+  if (schema === 6) return { ...(stored as Schema6), schema: RUN_RECORD_SCHEMA, keptBranch: false, brokenRun: null, landing: null, pushed: null };
   type Schema5 = Omit<Schema6, "emptyDiff">;
-  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false, brokenRun: null, landing: null };
+  if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false, brokenRun: null, landing: null, pushed: null };
   type Schema4 = Omit<Schema5, "stepUpReason">;
   const record = (fields: Schema4): RunRecord => ({
     ...fields,
@@ -651,6 +693,7 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
     keptBranch: false,
     brokenRun: null,
     landing: null,
+    pushed: null,
   });
   if (schema === 4) return record(stored as Schema4);
   if (schema === 3) return record({ ...(stored as Omit<Schema4, "replay">), replay: null });
