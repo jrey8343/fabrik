@@ -65,11 +65,12 @@ function actionsOf(runs: readonly CannedRun[], ticks: readonly CannedTick[] = []
         };
       }
       if (refuse.runs === true) throw refusal(path);
-      const listed = new RegExp(`^${base}/runs\\?status=(\\w+)&per_page=100$`).exec(path);
+      // Every run here is in the runs read's window (#725), which keeps the unfinished ones by their status.
+      const listed = new RegExp(`^${base}/runs\\?created=[^&]+&exclude_pull_requests=true&per_page=100&page=(\\d+)$`).exec(path);
       if (listed !== null) {
         return {
           workflow_runs: runs
-            .filter((run) => run.status === listed[1])
+            .slice((Number(listed[1]) - 1) * 100, Number(listed[1]) * 100)
             .map((run) => ({
               id: run.id,
               run_attempt: run.attempt ?? 1,
@@ -590,14 +591,14 @@ describe("The runs read", () => {
     });
   });
 
-  it("makes 9 REST requests for a repo with three runs in flight: a listing per unfinished status, one of each run's jobs, and the Tick's", async () => {
+  it("makes 5 REST requests for a repo with three runs in flight: one listing of the window's runs (#725), one of each run's jobs, and the Tick's", async () => {
     const running = (id: number): CannedRun => ({ id, status: "in_progress", jobs: [kitJob(IMPLEMENT_ON_12), { name: "fabrik / Implement #12 (Retry 2)", status: "in_progress" }] });
     const actions = actionsOf([running(7), running(8), { ...running(9), status: "queued" }]);
 
     const read = await readRuns(actions, "owner/product", NOW);
 
     expect(read.runs).toHaveLength(3);
-    expect(actions.calls).toHaveLength(9);
+    expect(actions.calls).toHaveLength(5);
   });
 
   describe("unread", () => {

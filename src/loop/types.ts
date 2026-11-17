@@ -213,7 +213,16 @@ export interface GivenOperatorComment {
 /** Something that happened in a Product repo that the Loop may act on. */
 export type LoopEvent =
   | { readonly kind: "issue-opened"; readonly issue: number }
-  | { readonly kind: "label-added"; readonly issue: number; readonly label: string }
+  | {
+      readonly kind: "label-added";
+      readonly issue: number;
+      readonly label: string;
+      /**
+       * In the push job, when this run's Kit job routed no agent run (#725):
+       * a run the plan would start can't start, as no agent job runs.
+       */
+      readonly routedNoRun?: true;
+    }
   | {
       readonly kind: "issue-comment-created";
       readonly issue: number;
@@ -709,10 +718,37 @@ export interface IssueSnapshot {
    * branch is gone.
    */
   readonly keptBranch: KeptBranch | null;
+  /**
+   * The Implement runs that name it and haven't landed: each run's push job
+   * hasn't finished, as Dispatch counts it in flight (#725), lowest first.
+   * Null when the Actions runs weren't read, for want of a token that can
+   * read them or as the API failed, or, as for any event but agent:implement
+   * added, weren't asked for.
+   */
+  readonly unlandedImplementRuns: readonly UnlandedImplementRun[] | null;
+  /**
+   * The Actions runs whose outcome the Fabrik App's comments on it posted, an
+   * empty diff, a Broken run or a Kept-branch start-again, each of which adds
+   * agent:implement for the run after while its own push job is still running.
+   */
+  readonly runsWithOutcome: readonly number[];
   /** The open issues blocking it, by GitHub's native issue dependencies. */
   readonly openBlockers: readonly number[];
   /** The open issues it blocks. */
   readonly openBlocking: readonly number[];
+}
+
+/** An Implement run on a Ticket whose push job hasn't finished (#725). */
+export interface UnlandedImplementRun {
+  /** Its Actions run. */
+  readonly run: number;
+  /**
+   * Whether its Implement job ended without succeeding: failed, cancelled or
+   * timed out. Its push job then lands no work, only a failure notice, or a
+   * rerun on another Subscription, which re-adds agent:implement while that
+   * push job is still running and posts nothing on a Ticket with no PR.
+   */
+  readonly failed: boolean;
 }
 
 /**

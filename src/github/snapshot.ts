@@ -25,6 +25,7 @@ import {
   AUDIT_LABEL,
   DESIGN_LABEL,
   KEPT_BRANCH_LABEL,
+  DISPATCH_LABEL,
   FLAKY_CHECK_LABEL,
   KIT_ISSUE_LABELS,
   MAP_LABEL,
@@ -75,6 +76,7 @@ import type {
   TicketSnapshot,
   TicketState,
   TriggerSweepSnapshot,
+  UnlandedImplementRun,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { passedHeadAtGate, uncountedFlaws } from "../loop/flakyChecks.ts";
@@ -83,6 +85,7 @@ import { allPages, GitHubError, pagesOf, type ReadClient, type Repo, refusalOf }
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
   countLandedNothing,
+  runsWithOutcomeIn,
   designSessionOf,
   designTurnFailedIn,
   pendingPrototypeIn,
@@ -1273,7 +1276,11 @@ async function gatherEventPart(
       // agent:implement on a Ticket with an open PR resumes that PR's run, so the core weighs the PR too.
       const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
       const open = ticket.issue?.openPullRequests[0];
-      if (open === undefined) return ticket;
+      if (open === undefined) {
+        // Without one, it would start a first run, which the start check holds off while another run on it is landing (#725).
+        if (event.label !== DISPATCH_LABEL || ticket.issue === null) return ticket;
+        return { ...ticket, issue: { ...ticket.issue, unlandedImplementRuns: await readUnlandedImplementRuns(actions, repo, event.issue) } };
+      }
       const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);
       return { ...ticket, pullRequest };
     }
@@ -1912,6 +1919,9 @@ async function gatherIssue(github: ReadClient, repo: Repo, number: number, opera
       unansweredPrototypes: unansweredPrototypesIn(thisSession),
       landedNothing: countLandedNothing(comments),
       keptBranch,
+      // Read only for agent:implement on a Ticket with no open PR, where the start check weighs them (#725).
+      unlandedImplementRuns: null,
+      runsWithOutcome: runsWithOutcomeIn(comments),
       openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
       openBlocking: openIssueNumbersIn(repo, issue.blocking),
     },
@@ -2480,8 +2490,20 @@ function firstTurnClaimed(timeline: readonly LabelTimelineItem[]): boolean {
   return claimed;
 }
 
-/** Workflow-run statuses, short of completed, whose Implement job may still hold a slot. */
-const UNFINISHED_RUNS = ["in_progress", "queued", "waiting", "pending", "requested"] as const;
+/**
+ * How far back the runs read lists the repo's workflow runs, for the longest
+ * one can stay unfinished (#725). An Implement job's timeout is the Kit
+ * config's, with no ceiling of its own, but GitHub stops any job on a hosted
+ * runner at 6 hours, and the other jobs of its run take minutes. Its run may
+ * first wait behind another on the same Ticket in the job's concurrency group,
+ * up to another 6 hours, and then for a runner. A day leaves room for all of
+ * it. A run older than that is no longer counted in flight, which a run of
+ * that age stuck past every timeout would only wrongly hold a slot with.
+ * GitHub lists at most 1,000 runs for a `created` bound, as for a status
+ * one, newest first, so a repo with more runs than that in a day goes
+ * unread past them: its oldest, the least likely to be unfinished.
+ */
+const RUNS_IN_FLIGHT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** A job of a workflow run not yet completed, as Actions lists it, with what it says of its run. */
 export interface ActionsJob {
@@ -2743,6 +2765,27 @@ const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #([1-9][0-9]*
 const DIGEST_JOB = new RegExp(`^(?:.+ / )?${DIGEST_JOB_NAME} PR #([1-9][0-9]*)$`);
 
 /**
+ * The Implement runs naming `ticket` that haven't landed, as Dispatch counts
+ * them in flight (implementJobsUnderWay), lowest first, each with whether its
+ * Implement job ended without succeeding (#725). Null without a token that
+ * can read workflow runs, or when the Actions API couldn't be read, so a
+ * failed read never stalls the Ticket.
+ */
+async function readUnlandedImplementRuns(actions: Pick<ReadClient, "rest"> | null, repo: Repo, ticket: number): Promise<UnlandedImplementRun[] | null> {
+  if (actions === null) return null;
+  let jobs: Job[];
+  try {
+    jobs = await jobsOfUnfinishedRuns(actions, repo);
+  } catch {
+    return null;
+  }
+  return implementJobsUnderWay(jobs)
+    .filter(({ name }) => IMPLEMENT_JOB.exec(name)?.[1] === String(ticket))
+    .map(({ run, status, conclusion }) => ({ run, failed: status === "completed" && conclusion !== "success" }))
+    .sort((a, b) => a.run - b.run);
+}
+
+/**
  * Whether an Implement job is under way anywhere in the repo (#387), as
  * Dispatch reads it (implementJobsUnderWay). Null when the Actions API
  * couldn't be read, so a failed read only leaves a stalled run alone, never
@@ -2896,6 +2939,7 @@ function triggerHistoryOf(items: readonly TriggerTimelineItem[], appLogin: strin
 
 interface ListedWorkflowRun {
   readonly id: number;
+  readonly status: string;
   readonly created_at: string;
   readonly run_attempt?: number;
   readonly html_url?: string;
@@ -2912,17 +2956,23 @@ interface ListedJob {
 
 /**
  * Every job, finished or not, of every workflow run not yet completed, each
- * with its steps: one listing per unfinished status, then one of each run's
- * jobs. A job has a start only once it is in progress or done, since Actions
- * gives a queued job one too. Throws when the Actions API can't be read.
+ * with its steps: every run created within the window, paged, kept when its
+ * own status isn't completed, then one listing of each such run's jobs. It
+ * never asks GitHub to filter by status, whose listings seemed to miss a run
+ * between its jobs (#725), so one listing reads every run as it stands. A job
+ * has a start only once it is in progress or done, since Actions gives a
+ * queued job one too. Throws when the Actions API can't be read.
  */
 export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, repo: Repo): Promise<ActionsJob[]> {
   const base = `/repos/${repo.owner}/${repo.name}/actions`;
-  const runs = new Map<number, ListedWorkflowRun>();
-  for (const status of UNFINISHED_RUNS) {
-    const page = (await github.rest("GET", `${base}/runs?status=${status}&per_page=100`)) as { workflow_runs: ListedWorkflowRun[] };
-    for (const run of page.workflow_runs) runs.set(run.id, run);
-  }
+  const since = new Date(Date.now() - RUNS_IN_FLIGHT_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const listed = await allPages<ListedWorkflowRun>(
+    github,
+    `${base}/runs?created=${encodeURIComponent(`>=${since}`)}&exclude_pull_requests=true`,
+    (page) => (page as { workflow_runs: ListedWorkflowRun[] }).workflow_runs,
+  );
+  // A run listed on two pages, as one created while paging shifts the rest along, is read once.
+  const runs = new Map(listed.filter(({ status }) => status !== "completed").map((run) => [run.id, run]));
   const jobs: ActionsJob[] = [];
   for (const [id, run] of runs) {
     const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] };

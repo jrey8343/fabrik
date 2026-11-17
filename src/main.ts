@@ -92,7 +92,8 @@ async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise
   const agentDir = process.env["FABRIK_AGENT_DIR"] || join(required("RUNNER_TEMP"), "agent");
   switch (input.kind) {
     case "actions-event":
-      return actionsEvent;
+      // The Kit job routed no agent run, so a label's plan here can't start one: it says so rather than start nothing unsaid (#725).
+      return actionsEvent.event?.kind === "label-added" ? { ...actionsEvent, event: { ...actionsEvent.event, routedNoRun: true } } : actionsEvent;
     case "nothing":
       return { event: null, source: "the push job's input", branch: null, why: input.reason };
     case "agent-failure":
@@ -483,9 +484,10 @@ async function main(landing: Landing | null): Promise<void> {
     return;
   }
 
-  // Only the Dispatch jobs, loop.yml's Design queue job, a push to main's push job and the scheduled tick's own job
-  // set it: their GITHUB_TOKEN, scoped to actions: read. The scheduled tick's Design queue job has none, so its snapshot reads turns
-  // in progress from the issues. Without one, a conflict check can't tell whether an Implement job is under way (#387).
+  // Only the Dispatch jobs, loop.yml's Design queue job, a push to main's push job, agent:implement's push job and the
+  // scheduled tick's own job set it: their GITHUB_TOKEN, scoped to actions: read. The scheduled tick's Design queue job has
+  // none, so its snapshot reads turns in progress from the issues. Without one, a conflict check can't tell whether an
+  // Implement job is under way (#387), and agent:implement's start check reads no run landing on the Ticket (#725).
   const actionsToken = process.env["FABRIK_ACTIONS_TOKEN"];
   const actions =
     actionsToken === undefined || actionsToken === "" ? null : new GitHub(actionsToken, process.env["GITHUB_API_URL"]);

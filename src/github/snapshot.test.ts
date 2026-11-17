@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aRunInFlight } from "../read/builders.ts";
 import { type GitHub, GitHubError } from "./client.ts";
 import {
@@ -86,14 +86,15 @@ function gatherSnapshot(github: GitHub, ...rest: Parameters<typeof gatherFrom> e
 
 const repo = { owner: "acme", name: "shop" };
 
-/** A read-only Actions API holding these workflow runs, each with its jobs. */
+/** A read-only Actions API holding these workflow runs, each with its jobs, all of them in the runs read's window (#725). */
 function actionsWith(runs: { id: number; status: string; createdAt?: string; jobs: { name: string; status: string; conclusion?: string }[] }[]) {
   return {
     async rest(method: string, path: string): Promise<unknown> {
       expect(method).toBe("GET");
-      const listed = /^\/repos\/acme\/shop\/actions\/runs\?status=(\w+)&per_page=100$/.exec(path);
+      const listed = /^\/repos\/acme\/shop\/actions\/runs\?created=[^&]+&exclude_pull_requests=true&per_page=100&page=(\d+)$/.exec(path);
       if (listed !== null) {
-        return { workflow_runs: runs.filter((run) => run.status === listed[1]).map(({ id, createdAt = "2026-11-08T19:00:00Z" }) => ({ id, created_at: createdAt })) };
+        const page = runs.slice((Number(listed[1]) - 1) * 100, Number(listed[1]) * 100);
+        return { workflow_runs: page.map(({ id, status, createdAt = "2026-11-08T19:00:00Z" }) => ({ id, status, created_at: createdAt })) };
       }
       const jobs = /^\/repos\/acme\/shop\/actions\/runs\/(\d+)\/jobs\?filter=latest&per_page=100$/.exec(path);
       if (jobs !== null) return { jobs: runs.find((run) => run.id === Number(jobs[1]))?.jobs ?? [] };
@@ -101,6 +102,81 @@ function actionsWith(runs: { id: number; status: string; createdAt?: string; job
     },
   };
 }
+
+describe("Reading the runs not yet finished without GitHub's status filters (#725)", () => {
+  const NOW = Date.parse("2026-11-15T04:16:40Z");
+  const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString().replace(/\.000Z$/, "Z");
+
+  /**
+   * An Actions API whose repo-wide listing pages through these runs, newest first, as GitHub does, honouring
+   * its `created` bound; its status-filtered listings leave every run out, as one seemed to for #310.
+   */
+  function actionsListing(runs: { id: number; status: string; createdAt: string; jobs: { name: string; status: string; conclusion?: string }[] }[]) {
+    const listings: string[] = [];
+    const actions = {
+      async rest(method: string, path: string): Promise<unknown> {
+        expect(method).toBe("GET");
+        if (/\/actions\/runs\?status=/.test(path)) return { workflow_runs: [] };
+        const listed = /^\/repos\/acme\/shop\/actions\/runs\?created=([^&]+)&exclude_pull_requests=true&per_page=100&page=(\d+)$/.exec(path);
+        if (listed !== null) {
+          listings.push(path);
+          const since = Date.parse(decodeURIComponent(listed[1] ?? "").replace(/^>=/, ""));
+          const page = Number(listed[2]);
+          const inWindow = runs.filter(({ createdAt }) => Date.parse(createdAt) >= since);
+          return {
+            total_count: inWindow.length,
+            workflow_runs: inWindow.slice((page - 1) * 100, page * 100).map(({ id, status, createdAt }) => ({ id, status, created_at: createdAt })),
+          };
+        }
+        const jobs = /^\/repos\/acme\/shop\/actions\/runs\/(\d+)\/jobs\?filter=latest&per_page=100$/.exec(path);
+        if (jobs !== null) return { jobs: runs.find((run) => run.id === Number(jobs[1]))?.jobs ?? [] };
+        throw new Error(`Unexpected call: ${path}`);
+      },
+    };
+    return { actions, listings };
+  }
+
+  const finishedRun = (id: number) => ({ id, status: "completed", createdAt: hoursAgo(1), jobs: [{ name: "fabrik / Triage", status: "completed", conclusion: "success" }] });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads an unfinished run that a status-filtered listing leaves out", async () => {
+    const { actions } = actionsListing([
+      { id: 11, status: "in_progress", createdAt: hoursAgo(0.3), jobs: [{ name: "fabrik / Implement #310", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+    ]);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 0, implementTickets: [310] });
+  });
+
+  it("pages through every run in the window, and keeps only the unfinished ones by their status", async () => {
+    const runs = [
+      ...Array.from({ length: 150 }, (_, i) => finishedRun(1000 + i)),
+      { id: 11, status: "queued", createdAt: hoursAgo(2), jobs: [{ name: "fabrik / Implement #310", status: "queued" }] },
+      { id: 12, status: "completed", createdAt: hoursAgo(2), jobs: [{ name: "fabrik / Implement #312", status: "completed", conclusion: "success" }] },
+    ];
+    const { actions, listings } = actionsListing(runs);
+
+    expect(await countDispatchedRuns(actions, repo)).toEqual({ implement: 1, research: 0, implementTickets: [310] });
+    expect(listings).toHaveLength(2);
+  });
+
+  // GitHub stops any job at 6 hours, so an Implement job, however long its timeout, and the Ticket's run queued behind it fit in a day.
+  it("reads the runs created in the last 24 hours", async () => {
+    const { actions, listings } = actionsListing([
+      { id: 11, status: "in_progress", createdAt: hoursAgo(23), jobs: [{ name: "fabrik / Implement #310", status: "in_progress" }] },
+      { id: 12, status: "in_progress", createdAt: hoursAgo(25), jobs: [{ name: "fabrik / Implement #311", status: "in_progress" }] },
+    ]);
+
+    expect((await countDispatchedRuns(actions, repo)).implementTickets).toEqual([310]);
+    expect(decodeURIComponent(listings[0] ?? "")).toContain(`created=>=${hoursAgo(24)}`);
+  });
+});
 
 describe("The Implement runs on their way to the Merge gate (#459)", () => {
   const run = (issue: number | null, role: RunInFlightFact["role"] = "implement") => aRunInFlight({ role, issue });
@@ -964,6 +1040,88 @@ describe("Gathering a Ticket's Kept branch (#536)", () => {
 
     expect((await gatherSnapshot(github, repo, event, null, null)).issue?.keptBranch).toBeNull();
     expect(reads).toEqual([]);
+  });
+});
+
+describe("Gathering the Implement runs unlanded on a Ticket, for agent:implement (#725)", () => {
+  const event = { kind: "label-added", issue: 310, label: "agent:implement" } as const;
+  const run = (id: number) => `[The run](https://github.com/acme/shop/actions/runs/${id}/attempts/1)`;
+  const PERSON = { login: "operator", __typename: "User" };
+
+  /** Ticket #310, ready, with these comments, oldest first. */
+  function ticketWith(comments: { body: string; author: { login: string; __typename: string } }[]): GitHub {
+    return {
+      async graphql(query: string): Promise<unknown> {
+        if (!query.includes("issue(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
+        const data = issueData(310);
+        const nodes = comments.map((comment, at) => ({ fullDatabaseId: String(at + 1), createdAt: `2026-11-15T04:0${at}:00Z`, ...comment }));
+        return { repository: { ...data.repository, issue: { ...data.repository.issue, labels: { nodes: [{ name: "ready-for-agent" }] }, comments: { nodes } } } };
+      },
+    } as unknown as GitHub;
+  }
+
+  it("reads each run naming the Ticket until its push job finishes, whatever its Implement job's state, and no other Ticket's run", async () => {
+    const actions = actionsWith([
+      // gradually-core #310: its Implement job done, its push job opening the PR.
+      { id: 11, status: "in_progress", jobs: [{ name: "fabrik / Implement #310", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+      // penrith #94's shape: its Implement job still queued.
+      { id: 12, status: "in_progress", jobs: [{ name: "fabrik / Implement #310", status: "queued" }] },
+      { id: 13, status: "in_progress", jobs: [{ name: "fabrik / Implement #311", status: "in_progress" }] },
+      // Landed: its push job is done, its Dispatch job still running.
+      { id: 14, status: "in_progress", jobs: [{ name: "fabrik / Implement #310", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "completed", conclusion: "success" }, { name: "fabrik / Dispatch", status: "in_progress" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(ticketWith([]), repo, event, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.issue?.unlandedImplementRuns).toEqual([
+      { run: 11, failed: false },
+      { run: 12, failed: false },
+    ]);
+  });
+
+  // Its push job then lands no work: a failure notice, or a rerun on another Subscription that re-adds agent:implement.
+  it.each(["failure", "cancelled", "timed_out"])("reads a run whose Implement job ended %s as failed, its push job still running", async (conclusion) => {
+    const actions = actionsWith([
+      { id: 11, status: "in_progress", jobs: [{ name: "fabrik / Implement #310", status: "completed", conclusion }, { name: "fabrik / Push", status: "in_progress" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(ticketWith([]), repo, event, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.issue?.unlandedImplementRuns).toEqual([{ run: 11, failed: true }]);
+  });
+
+  it("reads the runs whose outcome the Fabrik App posted on the Ticket: an empty diff, a Broken run, a Kept-branch start-again", async () => {
+    const github = ticketWith([
+      { body: `<!-- fabrik:empty-diff -->\nThe Implementer's branch for #310 changed nothing.\n\n${run(21)}`, author: APP_BOT },
+      { body: `<!-- fabrik:broken-run -->\nThe Implement run on #310 was a Broken run.\n\n${run(22)}`, author: APP_BOT },
+      { body: `<!-- fabrik:kept-branch-start-again -->\nThe run starts again.\n\n${run(23)}`, author: APP_BOT },
+      // Neither an outcome nor the App's word.
+      { body: `agent:implement came off and nothing started.\n\n${run(24)}`, author: APP_BOT },
+      { body: `<!-- fabrik:empty-diff -->\n${run(25)}`, author: PERSON },
+    ]);
+
+    const snapshot = await gatherSnapshot(github, repo, event, null, APP_LOGIN, actionsWith([]) as unknown as GitHub);
+
+    expect(snapshot.issue?.runsWithOutcome).toEqual([21, 22, 23]);
+  });
+
+  it("reads them as unread, so the run starts as before, without a token that can read workflow runs or when the Actions API fails", async () => {
+    const failing = { async rest(): Promise<unknown> { throw new Error("Resource not accessible by integration"); } };
+
+    const withoutToken = await gatherSnapshot(ticketWith([]), repo, event, null, APP_LOGIN);
+    const failed = await gatherSnapshot(ticketWith([]), repo, event, null, APP_LOGIN, failing as unknown as GitHub);
+
+    expect([withoutToken.issue?.unlandedImplementRuns, failed.issue?.unlandedImplementRuns]).toEqual([null, null]);
+  });
+
+  it("doesn't read the Actions runs for any other label", async () => {
+    const calls: string[] = [];
+    const actions = { async rest(_method: string, path: string): Promise<unknown> { calls.push(path); return { workflow_runs: [] }; } };
+
+    const snapshot = await gatherSnapshot(ticketWith([]), repo, { ...event, label: "needs-design" }, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.issue?.unlandedImplementRuns).toBeNull();
+    expect(calls).toEqual([]);
   });
 });
 

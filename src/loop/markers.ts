@@ -310,6 +310,19 @@ export function isBrokenRunComment(body: string): boolean {
   return body.startsWith(BROKEN_RUN_MARKER);
 }
 
+/**
+ * The first line of the Kit's comment on a Ticket whose Kept-branch start's
+ * commits couldn't be rebased onto its moved Kept branch, so the run starts
+ * again (#536): it uses no retry, so nothing counts it, but it is the run's
+ * outcome, which the start check reads (#725).
+ */
+export const KEPT_BRANCH_START_AGAIN_MARKER = "<!-- fabrik:kept-branch-start-again -->";
+
+/** Whether a comment body is the Kit's Kept-branch start-again comment. */
+export function isKeptBranchStartAgainComment(body: string): boolean {
+  return body.startsWith(KEPT_BRANCH_START_AGAIN_MARKER);
+}
+
 /** A Design-session round's first line. */
 export const DESIGN_ROUND_MARKER = /^<!-- fabrik:design-round (\d+) -->/;
 

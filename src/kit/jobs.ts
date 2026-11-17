@@ -75,7 +75,7 @@
 //                            holds no text a person or an agent wrote. The job's last step takes it for its name
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
-// Env: GH_TOKEN, a read-only token for gathering the snapshot.
+// Env: GH_TOKEN, a read-only token for gathering the snapshot, which for agent:implement also reads the Actions runs (#725).
 import { appendFile, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { agentRunIn, replayRunIn } from "../github/apply.ts";
@@ -83,6 +83,7 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { loopEventFrom } from "../github/events.ts";
 import { defaultBranchOf, gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
+import { DISPATCH_LABEL } from "../loop/labels.ts";
 import { prototypeRequestJson } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import { type Action, isOfPullRequest, type Plan } from "../loop/types.ts";
@@ -166,7 +167,11 @@ async function main(productDir: string): Promise<void> {
     // This job only routes, with no Fabrik App token, so it doesn't know the App's login and takes any bot's
     // issue for the App's, so the App's pending Audit or Retro routes to its run: the push job's plan is the one applied.
     // Another bot's look-alike pending Audit or Retro so costs one run, whose result the push job drops (byAppOf).
-    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null);
+    // agent:implement's start check reads the Implement runs still landing on the Ticket (#725) with this job's token,
+    // which holds actions: read; no other event's snapshot reads the Actions runs here, so none plans other than before.
+    // A caller that grants no actions: read fails the read, and the run starts as before.
+    const actions = event.kind === "label-added" && event.label === DISPATCH_LABEL ? github : null;
+    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null, actions);
     plan = planFor(event, snapshot, config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
     summary = kitJobSummary(plan, config, snapshot.kitIssues);
