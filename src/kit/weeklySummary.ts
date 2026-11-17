@@ -388,6 +388,12 @@ export interface WeeklySummary {
    */
   readonly retriesPerMergedPullRequest: WeekOverWeek<number | null>;
   /**
+   * The Touch-ups on each agent PR merged in the week, averaged, or null in a
+   * week with none merged: every Touch-up on its Ticket's whole path, walked as
+   * Retries per merged PR walks it (#754).
+   */
+  readonly touchUpsPerMergedPullRequest: WeekOverWeek<number | null>;
+  /**
    * The findings tagged `[missed earlier]` on each agent PR merged in the
    * week, averaged, or null in a week with none merged: summed over the
    * Reviews on its Ticket's whole path, walked as Retries per merged PR walks
@@ -900,6 +906,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     })),
     humanTouches: change("humanTouches"),
     retriesPerMergedPullRequest: change("retriesPerMergedPullRequest"),
+    touchUpsPerMergedPullRequest: change("touchUpsPerMergedPullRequest"),
     missedEarlierPerMergedPullRequest: change("missedEarlierPerMergedPullRequest"),
     cycleTimeMs: change("cycleTimeMs"),
     operatorWaitMs: change("operatorWaitMs"),
@@ -962,6 +969,7 @@ interface WeekMetrics {
   readonly subscriptions: readonly { readonly subscription: string; readonly cost: number; readonly weeklyLimit: RateLimitReading | null }[];
   readonly humanTouches: number | null;
   readonly retriesPerMergedPullRequest: number | null;
+  readonly touchUpsPerMergedPullRequest: number | null;
   readonly missedEarlierPerMergedPullRequest: number | null;
   readonly cycleTimeMs: number | null;
   readonly operatorWaitMs: number | null;
@@ -1007,6 +1015,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly
     subscriptions: subscriptionsOf(records),
     humanTouches: mean(merged.map((pullRequest) => pullRequest.humanTouches)),
     retriesPerMergedPullRequest: mean(merged.map(({ repo, pullRequest }) => retriesOnPathOf(week, input.records, repo, pullRequest.ticket))),
+    touchUpsPerMergedPullRequest: mean(merged.map(({ repo, pullRequest }) => touchUpsOnPathOf(week, input.records, repo, pullRequest.ticket))),
     missedEarlierPerMergedPullRequest: mean(merged.map(({ repo, pullRequest }) => missedEarlierOnPathOf(week, input, repo, pullRequest.ticket))),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
     operatorWaitMs: median(merged.flatMap((pullRequest) => operatorWaitOf(pullRequest, input.operator))),
@@ -1042,6 +1051,15 @@ function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly
 function retriesOnPathOf(week: Week, records: readonly RunRecord[], repo: string, ticket: number | null): number {
   if (ticket === null) return 0;
   return retriesIn(endedBy(week, records).filter((record) => record.repo === repo && record.issue === ticket));
+}
+
+/**
+ * How many Touch-ups a merged agent PR's Ticket had, on its whole path, walked
+ * as retriesOnPathOf walks it. None for a PR that names no Ticket.
+ */
+function touchUpsOnPathOf(week: Week, records: readonly RunRecord[], repo: string, ticket: number | null): number {
+  if (ticket === null) return 0;
+  return touchUpsIn(endedBy(week, records).filter((record) => record.repo === repo && record.issue === ticket));
 }
 
 /**
@@ -1094,11 +1112,23 @@ const VERDICT_RUN_LINK = /^\[The run\]\(https?:\/\/[^)\s]*\/actions\/runs\/([0-9
  * How many Retries these records hold: Implement records with `retry > 0`
  * and no Infrastructure failure, so a Retry refused on the weekly limit and
  * then resumed counts once, and each (Ticket, PR, Retry number) once, so a
- * Retry started again after its landing failed counts once too.
+ * Retry started again after its landing failed counts once too. A Touch-up's
+ * record has `retry` 0, so it's none (#754).
  */
 function retriesIn(records: readonly RunRecord[]): number {
   const retries = records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null);
   return new Set(retries.map(({ repo, issue, pullRequest, retry }) => JSON.stringify([repo, issue, pullRequest, retry]))).size;
+}
+
+/**
+ * How many Touch-ups these records hold, counted as retriesIn counts Retries:
+ * Implement records with `touchUp > 0` and no Infrastructure failure, each
+ * (Ticket, PR, Touch-up number) once. A record stored before Touch-ups were
+ * recorded (schema 1 to 10) reads `touchUp` 0 (readRunRecord), so it holds none.
+ */
+function touchUpsIn(records: readonly RunRecord[]): number {
+  const touchUps = records.filter((record) => record.role === "implement" && record.touchUp > 0 && record.infrastructureFailure === null);
+  return new Set(touchUps.map(({ repo, issue, pullRequest, touchUp }) => JSON.stringify([repo, issue, pullRequest, touchUp]))).size;
 }
 
 /**
@@ -1809,6 +1839,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords,
     row("Tickets dispatched", counts.ticketsDispatched, count),
     ...yieldRows(summary.yields),
     row("Retries per merged PR", retriesPerMergedPullRequest, (value) => value.toFixed(1)),
+    row("Touch-ups per merged PR", summary.touchUpsPerMergedPullRequest, (value) => value.toFixed(1)),
     row("Missed earlier per merged PR", summary.missedEarlierPerMergedPullRequest, (value) => value.toFixed(1)),
     row("Retries", counts.retries, count),
     row("Broken runs", counts.brokenRuns, count),
