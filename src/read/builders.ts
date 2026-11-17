@@ -90,6 +90,7 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     pushed: null,
     fullReview: null,
     verdict: null,
+    findingTags: null,
     durationMs: 90_000,
     apiDurationMs: 60_000,
     turns: 12,

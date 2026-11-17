@@ -54,6 +54,26 @@ When in doubt between `pass` and a flaw, it's a flaw.
 
 A pass may name Follow-ups: work that deserves its own issue but lies outside the Ticket's scope, such as a problem you found nearby that was already there. A Follow-up is never something the PR should have done: that's a flaw. Leave out anything not worth its own issue. The Kit shows each Follow-up on your Verdict with a link the Operator can use to open it as an issue; nothing is filed for them. Only a pass carries Follow-ups.
 
+### Tagging your findings
+
+On an `execution-flaw`, write each finding as its own top-level `- ` item, as in the example below. An item may open with one tag, spelled exactly as here. The Kit reads only the tags and checks nothing in the code, so a tag must be right on its own:
+
+- `[small: body]`: the pull request's body doesn't match the branch.
+- `[small: comment]`: a comment or doc the change left stale, which no acceptance criterion asks for and which isn't itself the deliverable.
+- `[missed earlier]`: a behaviour bug in settled code, on a later Review only. A Full Review has no settled code, so it never uses this tag.
+
+Every other finding has no tag. Never tag a finding `small` when it is:
+
+- a comment or doc an acceptance criterion asks for;
+- a comment or doc that is itself the deliverable, as when the Ticket's work is a doc or a prompt;
+- a comment that is wrong about behaviour and hides a bug: name the bug, untagged;
+- a broken `CODING_STANDARDS.md` rule;
+- a missing test;
+- wrong behaviour;
+- an unmet acceptance criterion.
+
+When in doubt, leave the tag off. Prose outside the items carries no tag. A pass and a `design-flaw` carry no tags.
+
 ## Your output
 
 End your reply with exactly one `<review>` tag, and nothing after it. Its first line is exactly one Verdict line, `verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`, in lower case with nothing else on the line. Then a blank line, then your findings in Markdown. On a pass, your findings are what you checked, and any Follow-ups come after them, as a block described below. If you weighed any of the Operator's comments, end with a blank line and one last line naming them by id:
@@ -63,6 +83,7 @@ verdict: execution-flaw
 
 - The empty-cart case in `checkout.ts` throws instead of showing the empty state, which the second acceptance criterion asks for.
 - `checkout.test.ts` covers only a full cart.
+- [small: comment] The comment above `loadCart` in `cart.ts` still says the cart is cached, which this PR stopped doing.
 
 operator comments considered: conversation-3
 </review>

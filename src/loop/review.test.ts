@@ -171,7 +171,7 @@ describe("Review: the Verdict marker", () => {
     );
 
     expect(verdictsPostedIn(commentsOf(plan))).toEqual([
-      { verdict: "execution-flaw", source: "reviewer", requestChanges: true, headSha: HEAD_SHA },
+      { verdict: "execution-flaw", source: "reviewer", requestChanges: true, tags: { small: 0, missedEarlier: 0, counted: 0, smallBody: 0 }, headSha: HEAD_SHA },
     ]);
   });
 
@@ -230,7 +230,9 @@ describe("Review: the Reviewer's Verdict", () => {
     const plan = planFor(reviewed(output), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
     const [body] = commentsOf(plan);
-    expect(verdictsPostedIn([body!])).toEqual([{ verdict, source: "reviewer", requestChanges: false, headSha: HEAD_SHA }]);
+    // An Execution flaw's findings are counted by tag (#749); these are no items, so none of each.
+    const tags = verdict === "execution-flaw" ? { tags: { small: 0, missedEarlier: 0, counted: 0, smallBody: 0 } } : {};
+    expect(verdictsPostedIn([body!])).toEqual([{ verdict, source: "reviewer", requestChanges: false, ...tags, headSha: HEAD_SHA }]);
     expect(body).toContain(findings);
     expect(body).toContain(`[The run](${RUN})`);
   });

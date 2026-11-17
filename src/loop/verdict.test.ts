@@ -21,6 +21,7 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
       ok: true,
       verdict: "pass",
       findings: "Checked the empty-cart case and its test.",
+      findingTags: [],
       followUps: [
         {
           title: "The cart badge miscounts after a refresh",
@@ -56,6 +57,7 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
       ok: true,
       verdict: "pass",
       findings: "Checked it.",
+      findingTags: [],
       followUps: [{ title: "Tidy the footer", body: "It was crooked already." }],
       considered: ["conversation-3"],
     });
@@ -87,5 +89,58 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
     const output = "Checked it.\n\nfollow-ups:\n- Tidy the footer\n  Crooked.\n\nOne more thing.";
 
     expect(parseVerdict(`verdict: pass\n\n${output}`)).toMatchObject({ ok: true, findings: output, followUps: [] });
+  });
+});
+
+describe("Reading the tags on a Reviewer's findings", () => {
+  it("reads each top-level item's tag, and an item with none as untagged", () => {
+    const parsed = parseVerdict(
+      [
+        "verdict: execution-flaw",
+        "",
+        "- [small: body] The PR body still says the cart is cached.",
+        "- [small: comment] `cart.ts`'s header comment still names `loadCart`.",
+        "- [missed earlier] The empty cart throws in `checkout.ts`.",
+        "- `checkout.test.ts` covers only a full cart.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({ ok: true, findingTags: ["small-body", "small-comment", "missed-earlier", null] });
+  });
+
+  it("reads no tag from prose, an item's indented lines or a code block, and keeps the findings as written", () => {
+    const findings = [
+      "[small: body] Prose outside the items carries no tag.",
+      "",
+      "- [small: comment] The README still names `loadCart`.",
+      "  - [missed earlier] A nested line is part of the item above.",
+      "  ```diff",
+      "- [small: body] a removed line in a quoted diff",
+      "  ```",
+      "",
+      "```",
+      "- [missed earlier] nor in a code block of its own",
+      "```",
+    ].join("\n");
+
+    const parsed = parseVerdict(`verdict: execution-flaw\n\n${findings}\n\noperator comments considered: conversation-3`);
+
+    expect(parsed).toMatchObject({ ok: true, findings, findingTags: ["small-comment"] });
+  });
+
+  it.each([
+    ["a tag that doesn't open the item", "- The README is stale [small: comment]."],
+    ["a tag spelled otherwise", "- [small] The README is stale."],
+    ["a tag in other case", "- [Small: comment] The README is stale."],
+    ["a tag inside formatting", "- **[small: comment]** The README is stale."],
+    ["an item marked with another bullet", "* [small: comment] The README is stale."],
+  ])("reads %s as untagged, or as no item", (_, line) => {
+    const parsed = parseVerdict(`verdict: execution-flaw\n\n${line}`);
+
+    expect(parsed).toMatchObject({ ok: true, findingTags: line.startsWith("- ") ? [null] : [] });
+  });
+
+  it("reads findings with no items as having no tags", () => {
+    expect(parseVerdict("verdict: execution-flaw\n\nThe empty cart throws.")).toMatchObject({ ok: true, findingTags: [] });
   });
 });

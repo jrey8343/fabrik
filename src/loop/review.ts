@@ -18,7 +18,7 @@ import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
 import { changeLine } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
-import { parseVerdict } from "./verdict.ts";
+import { parseVerdict, verdictTagsOf } from "./verdict.ts";
 import type {
   Action,
   KitConfig,
@@ -30,6 +30,7 @@ import type {
   Snapshot,
   Verdict,
   VerdictRecord,
+  VerdictTags,
 } from "./types.ts";
 
 type RedChecks = Extract<LoopEvent, { kind: "required-checks-finished" }>;
@@ -145,6 +146,8 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
       followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
       ...(event.ranNothing === undefined ? {} : { ranNothing: event.ranNothing }),
+      // Counted as the Review that gave it was started (#749): the snapshot holds the Verdicts before this one.
+      tags: verdictTagsOf(parsed, reviewKindOf(pullRequest).kind === "full"),
     }, snapshot.operator, held);
     // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
     actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues));
@@ -225,10 +228,13 @@ export function verdictActions(
     considered = [],
     checks,
     ranNothing,
+    tags = null,
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
     readonly findings: string;
+    /** On a Reviewer's Execution flaw, its findings counted by tag (#749). */
+    readonly tags?: VerdictTags | null;
     /** On one from red required checks, the ones it names as failed (#462). */
     readonly checks?: readonly string[];
     /** On a Reviewer's Verdict, the Required checks that ran nothing on its head (#456). */
@@ -251,6 +257,7 @@ export function verdictActions(
     ...(next?.ticketNotReady === true ? { ticketNotReady: true as const } : {}),
     ...(checks === undefined ? {} : { checks }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
+    ...(tags === null ? {} : { tags }),
     headSha: event.headSha,
   };
   const by = BY[source];

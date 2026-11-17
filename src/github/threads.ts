@@ -40,7 +40,7 @@ import {
   flakyCheckMarksIn,
 } from "../loop/markers.ts";
 import type { TriggerLabel } from "../loop/labels.ts";
-import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, StepUpReason, UnbuiltChangesRequest, Verdict, VerdictRecord } from "../loop/types.ts";
+import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, StepUpReason, UnbuiltChangesRequest, Verdict, VerdictRecord, VerdictTags } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
 /**
@@ -68,7 +68,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, checks, ranNothing, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, checks, ranNothing, tags, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff" && source !== "broken-run") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
@@ -81,6 +81,8 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   const named = Array.isArray(checks) && checks.every((name) => typeof name === "string") ? { checks: checks as string[] } : {};
   // Likewise ranNothing (#456), which only a Reviewer's Verdict on a head with checks that ran nothing carries.
   const ranNothingNamed = Array.isArray(ranNothing) && ranNothing.length > 0 && ranNothing.every((name) => typeof name === "string") ? { ranNothing: ranNothing as string[] } : {};
+  // The counts of a Reviewer's Execution flaw's findings by tag (#749): ignored on any other Verdict, and dropped when unreadable, so it counts.
+  const counted = verdict === "execution-flaw" && source === "reviewer" ? verdictTagsIn(tags) : null;
   // The fingerprint of the PR's own change (#643), from the line under the marker; a Verdict from before it has none.
   const change = changeIn(body);
   return {
@@ -93,8 +95,18 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     ...named,
     ...ranNothingNamed,
     ...(change === null ? {} : { change }),
+    ...(counted === null ? {} : { tags: counted }),
     headSha,
   };
+}
+
+/** A marker's `tags`, or null when they don't read as counts; one written before `smallBody` has none about the body. */
+function verdictTagsIn(tags: unknown): VerdictTags | null {
+  if (typeof tags !== "object" || tags === null) return null;
+  const { small, missedEarlier, counted, smallBody = 0 } = tags as Record<string, unknown>;
+  const isCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+  if (!isCount(small) || !isCount(missedEarlier) || !isCount(counted) || !isCount(smallBody) || smallBody > small) return null;
+  return { small, missedEarlier, counted, smallBody };
 }
 
 /** Whether a marker's field is a non-empty list of review ids. */

@@ -18,7 +18,7 @@ import { AGENT_ROLES, type AgentRole, isStepUpReason, type StepUpReason, type St
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, tags, headSha } = record;
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
   const fields = {
@@ -30,6 +30,8 @@ export function verdictMarker(record: VerdictRecord): string {
     ...(ticketNotReady === true ? { ticketNotReady } : {}),
     ...(checks === undefined ? {} : { checks }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
+    // Only a Reviewer's Execution flaw counts its findings by tag (#749).
+    ...(tags === undefined || verdict !== "execution-flaw" || source !== "reviewer" ? {} : { tags }),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
