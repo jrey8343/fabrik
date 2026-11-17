@@ -90,7 +90,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         return weekly === null ? intake(event.issue, context.issue) : startWeekly(weekly, context, config);
       });
     case "label-added":
-      return withIssue(snapshot, (context) => labelAdded(event.issue, event.label, context, snapshot, config));
+      return withIssue(snapshot, (context) => labelAdded(event, context, snapshot, config));
     case "issue-comment-created":
       // A needs-design issue is in a Design session; a needs-info one waits on its author.
       return withIssue(snapshot, (context) =>
@@ -378,15 +378,14 @@ function missingFromSnapshot(what: string): Plan {
  * agent:review and agent:digest, which go on a PR, come off with one line saying so.
  */
 function labelAdded(
-  issueNumber: number,
-  label: string,
+  { issue: issueNumber, label, routedNoRun }: Extract<LoopEvent, { kind: "label-added" }>,
   context: IssueContext,
   { pullRequest, replay }: Pick<Snapshot, "pullRequest" | "replay">,
   config: KitConfig,
 ): Plan {
   if (label === NEEDS_DESIGN) return startSession(issueNumber, context);
   if (label === DESIGN_LABEL) return startQueuedSession(issueNumber, context, config);
-  if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config);
+  if (label === DISPATCH_LABEL) return startImplementer(issueNumber, context, pullRequest, config, routedNoRun === true);
   if (label === RESEARCH_LABEL) return startResearcher(issueNumber, context, config);
   if (label === REPLAY_TRIGGER_LABEL) return startReplay(issueNumber, context, replay?.issues ?? null);
   if (label === READY_FOR_AGENT) return checkDispatchWhenReady(issueNumber, context.issue);

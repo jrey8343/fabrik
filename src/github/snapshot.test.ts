@@ -1060,20 +1060,34 @@ describe("Gathering the Implement runs unlanded on a Ticket, for agent:implement
     } as unknown as GitHub;
   }
 
-  it("reads each run naming the Ticket until its Push job finishes, whatever its Implement job's state, and no other Ticket's run", async () => {
+  it("reads each run naming the Ticket until its push job finishes, whatever its Implement job's state, and no other Ticket's run", async () => {
     const actions = actionsWith([
-      // gradually-core #310: its Implement job done, its Push job opening the PR.
+      // gradually-core #310: its Implement job done, its push job opening the PR.
       { id: 11, status: "in_progress", jobs: [{ name: "fabrik / Implement #310", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
       // penrith #94's shape: its Implement job still queued.
       { id: 12, status: "in_progress", jobs: [{ name: "fabrik / Implement #310", status: "queued" }] },
       { id: 13, status: "in_progress", jobs: [{ name: "fabrik / Implement #311", status: "in_progress" }] },
-      // Landed: its Push job is done, its Dispatch job still running.
+      // Landed: its push job is done, its Dispatch job still running.
       { id: 14, status: "in_progress", jobs: [{ name: "fabrik / Implement #310", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "completed", conclusion: "success" }, { name: "fabrik / Dispatch", status: "in_progress" }] },
     ]);
 
     const snapshot = await gatherSnapshot(ticketWith([]), repo, event, null, APP_LOGIN, actions as unknown as GitHub);
 
-    expect(snapshot.issue?.unlandedImplementRuns).toEqual([11, 12]);
+    expect(snapshot.issue?.unlandedImplementRuns).toEqual([
+      { run: 11, failed: false },
+      { run: 12, failed: false },
+    ]);
+  });
+
+  // Its push job then lands no work: a failure notice, or a rerun on another Subscription that re-adds agent:implement.
+  it.each(["failure", "cancelled", "timed_out"])("reads a run whose Implement job ended %s as failed, its push job still running", async (conclusion) => {
+    const actions = actionsWith([
+      { id: 11, status: "in_progress", jobs: [{ name: "fabrik / Implement #310", status: "completed", conclusion }, { name: "fabrik / Push", status: "in_progress" }] },
+    ]);
+
+    const snapshot = await gatherSnapshot(ticketWith([]), repo, event, null, APP_LOGIN, actions as unknown as GitHub);
+
+    expect(snapshot.issue?.unlandedImplementRuns).toEqual([{ run: 11, failed: true }]);
   });
 
   it("reads the runs whose outcome the Fabrik App posted on the Ticket: an empty diff, a Broken run, a Kept-branch start-again", async () => {

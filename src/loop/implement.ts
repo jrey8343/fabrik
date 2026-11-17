@@ -57,14 +57,24 @@ const CHECK_DISPATCH: Action = { kind: "check-dispatch" };
  * conflict-only run the Kit started when main moved under the PR (#304), or
  * the retry an Execution flaw is owed. It never starts a second branch beside
  * an open PR. The label always comes off, so it never claims work that isn't
- * running.
+ * running. In a push job whose Kit job routed no agent run (`routedNoRun`),
+ * as when the Kit job declined it and this job's own read differs, a run it
+ * would start can't start, so it declines, saying so (#725).
  */
 export function startImplementer(
   issueNumber: number,
-  { issue, operator }: IssueContext,
+  context: IssueContext,
   pullRequest: PullRequestSnapshot | null,
   config: KitConfig,
+  routedNoRun = false,
 ): Plan {
+  const plan = implementerPlan(issueNumber, context, pullRequest, config);
+  if (!routedNoRun || plan.kind !== "act" || !plan.actions.some((action) => action.kind === "start-agent-run")) return plan;
+  const why = `this run's Kit job started no Implement run on #${issueNumber}. Re-add ${DISPATCH_LABEL} to start one`;
+  return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, why) };
+}
+
+function implementerPlan(issueNumber: number, { issue, operator }: IssueContext, pullRequest: PullRequestSnapshot | null, config: KitConfig): Plan {
   const removeLabel: Action = { kind: "remove-label", issue: issueNumber, label: DISPATCH_LABEL };
   // Its work landed though GitHub left it open, so no run starts on it, nor resumes an open PR of it (#543).
   if (issue.open && issue.mergedPullRequests.length > 0) {
@@ -85,7 +95,7 @@ export function startImplementer(
   const unbuildable = whyNotBuildable(issueNumber, issue);
   if (unbuildable !== null) return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, unbuildable) };
   // Another run on it is still landing, so this one would build the same Ticket twice (#725).
-  const underWay = unlandedRunOf(issue);
+  const underWay = implementRunUnderWayOn(issue);
   if (underWay !== null) {
     return { kind: "act", actions: declineTrigger(issueNumber, DISPATCH_LABEL, `#${issueNumber} has an Implement run under way (run ${underWay})`) };
   }
@@ -125,15 +135,18 @@ export function startImplementer(
 }
 
 /**
- * Another Implement run on the Ticket that hasn't landed and hasn't posted its
- * outcome there (#725), or null. An empty diff's, a Broken run's and a
- * Kept-branch start-again's push job each post the outcome, then add
- * agent:implement for the run after while that push job is still running, so
- * such a run is done with the Ticket. A Ticket whose runs weren't read has
- * none, so a failed read never stalls it.
+ * The Actions run of another Implement run under way on the Ticket (#725),
+ * or null: one that hasn't landed and isn't done with the Ticket. A run is
+ * done with it once it has posted its outcome there, as an empty diff's, a
+ * Broken run's and a Kept-branch start-again's push job do before adding
+ * agent:implement for the run after, or once its Implement job has failed,
+ * after which its push job lands no work, only a failure notice or a rerun
+ * on another Subscription, which re-adds agent:implement and posts nothing.
+ * A Ticket whose runs weren't read has none, so a failed read never stalls it.
  */
-function unlandedRunOf({ unlandedImplementRuns, runsWithOutcome }: IssueSnapshot): number | null {
-  return (unlandedImplementRuns ?? []).find((run) => !runsWithOutcome.includes(run)) ?? null;
+function implementRunUnderWayOn({ unlandedImplementRuns, runsWithOutcome }: IssueSnapshot): number | null {
+  const underWay = (unlandedImplementRuns ?? []).find(({ run, failed }) => !failed && !runsWithOutcome.includes(run));
+  return underWay?.run ?? null;
 }
 
 function listed(action: Action | null): Action[] | null {

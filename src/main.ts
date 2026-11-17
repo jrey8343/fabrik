@@ -92,7 +92,8 @@ async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise
   const agentDir = process.env["FABRIK_AGENT_DIR"] || join(required("RUNNER_TEMP"), "agent");
   switch (input.kind) {
     case "actions-event":
-      return actionsEvent;
+      // The Kit job routed no agent run, so a label's plan here can't start one: it says so rather than start nothing unsaid (#725).
+      return actionsEvent.event?.kind === "label-added" ? { ...actionsEvent, event: { ...actionsEvent.event, routedNoRun: true } } : actionsEvent;
     case "nothing":
       return { event: null, source: "the push job's input", branch: null, why: input.reason };
     case "agent-failure":

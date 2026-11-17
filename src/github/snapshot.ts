@@ -76,6 +76,7 @@ import type {
   TicketSnapshot,
   TicketState,
   TriggerSweepSnapshot,
+  UnlandedImplementRun,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { passedHeadAtGate, uncountedFlaws } from "../loop/flakyChecks.ts";
@@ -2498,6 +2499,9 @@ function firstTurnClaimed(timeline: readonly LabelTimelineItem[]): boolean {
  * up to another 6 hours, and then for a runner. A day leaves room for all of
  * it. A run older than that is no longer counted in flight, which a run of
  * that age stuck past every timeout would only wrongly hold a slot with.
+ * GitHub lists at most 1,000 runs for a `created` bound, as for a status
+ * one, newest first, so a repo with more runs than that in a day goes
+ * unread past them: its oldest, the least likely to be unfinished.
  */
 const RUNS_IN_FLIGHT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -2761,12 +2765,13 @@ const REVIEW_JOB = new RegExp(`^(?:.+ / )?${REVIEW_JOB_NAME}(?: PR #([1-9][0-9]*
 const DIGEST_JOB = new RegExp(`^(?:.+ / )?${DIGEST_JOB_NAME} PR #([1-9][0-9]*)$`);
 
 /**
- * The Actions runs of the Implement runs naming `ticket` that haven't landed,
- * as Dispatch counts them in flight (implementJobsUnderWay), lowest first
- * (#725). Null without a token that can read workflow runs, or when the
- * Actions API couldn't be read, so a failed read never stalls the Ticket.
+ * The Implement runs naming `ticket` that haven't landed, as Dispatch counts
+ * them in flight (implementJobsUnderWay), lowest first, each with whether its
+ * Implement job ended without succeeding (#725). Null without a token that
+ * can read workflow runs, or when the Actions API couldn't be read, so a
+ * failed read never stalls the Ticket.
  */
-async function readUnlandedImplementRuns(actions: Pick<ReadClient, "rest"> | null, repo: Repo, ticket: number): Promise<number[] | null> {
+async function readUnlandedImplementRuns(actions: Pick<ReadClient, "rest"> | null, repo: Repo, ticket: number): Promise<UnlandedImplementRun[] | null> {
   if (actions === null) return null;
   let jobs: Job[];
   try {
@@ -2774,8 +2779,10 @@ async function readUnlandedImplementRuns(actions: Pick<ReadClient, "rest"> | nul
   } catch {
     return null;
   }
-  const runs = implementJobsUnderWay(jobs).filter(({ name }) => IMPLEMENT_JOB.exec(name)?.[1] === String(ticket)).map(({ run }) => run);
-  return [...new Set(runs)].sort((a, b) => a - b);
+  return implementJobsUnderWay(jobs)
+    .filter(({ name }) => IMPLEMENT_JOB.exec(name)?.[1] === String(ticket))
+    .map(({ run, status, conclusion }) => ({ run, failed: status === "completed" && conclusion !== "success" }))
+    .sort((a, b) => a.run - b.run);
 }
 
 /**
