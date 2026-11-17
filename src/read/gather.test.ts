@@ -318,7 +318,8 @@ describe("a gather shaped for Home", () => {
         ]);
       });
 
-      it("make an issue shaped like gradually-core's three blocked ready-for-human issues and its blocked Map four blocked rows, none of them yours", async () => {
+      // Shaped like jrey8343/gradually-core's #457, #459, #10 and #9, which stood yours while blocked.
+      it("make three ready-for-human issues and a Map, each blocked by open issues of the repo, four blocked rows and none yours", async () => {
         const facts = await factsOf({
           issues: [
             labelled(457, "ready-for-human", [453]),

@@ -1051,6 +1051,37 @@ describe("the Weekly summary", () => {
         ]);
       });
 
+      it("lists no blocked Map, but each of its Decisions with no blockers of its own on a line of its own, and counts no blocked Decision on its Map's line (#770)", () => {
+        const decision = (number: number, title: string, blockers: readonly number[]) =>
+          anOpenIssue({ number, title, labels: ["wayfinder:grilling"], labelEvents: [aLabelAdded("wayfinder:grilling", "2026-11-04T20:00:00Z")], blockers });
+        const facts = factsOf({
+          openIssues: [
+            anOpenIssue({ number: 30, title: "Cutover", labels: ["wayfinder:map"], labelEvents: [aLabelAdded("wayfinder:map", "2026-11-03T20:00:00Z")], subIssues: [31, 32], blockers: [1] }),
+            decision(31, "Which night do we cut over?", []),
+            decision(32, "Who signs off?", [31]),
+            anOpenIssue({ number: 40, title: "Move intake online", labels: ["wayfinder:map"], createdAt: "2026-11-05T20:00:00Z", subIssues: [41, 42] }),
+            decision(41, "Which form first?", []),
+            decision(42, "Which form last?", [41]),
+          ],
+          openMaps: [30, 40],
+        });
+        const result = weeklySummary(input({ records: [aRunRecord()], facts: [facts] }));
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        expect(result.summary.repos[0]?.waitingOnYou).toEqual([
+          {
+            kind: "decision",
+            number: 31,
+            title: "Which night do we cut over?",
+            url: "https://github.com/owner/product/issues/31",
+            since: "2026-11-04T20:00:00Z",
+            age: 4 * 24 * HOUR,
+            map: 30,
+          },
+          expect.objectContaining({ kind: "map", number: 40, decisionsWaiting: 1 }),
+        ]);
+        expect(result.body).toContain("- [#31](https://github.com/owner/product/issues/31) Which night do we cut over?: Decision on blocked Map #30, waiting on you for 4 days\n");
+      });
+
       const failureNotice = (decision: number, at: string) =>
         aComment(`${RESEARCH_RUN_FAILED_MARKER}\n@operator The Research run on #${decision} failed: it timed out.`, at);
       const mapOf = (number: number, decisions: readonly number[]) =>

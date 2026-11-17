@@ -151,7 +151,7 @@ export interface StandingDetails {
   readonly "yours-to-do": { readonly handBack: HandBack | null; readonly role: AgentRole | null; readonly failure: string | null; readonly label: string | null };
   readonly "weekly-limit-reached": { readonly resetsAt: string | null };
   readonly "token-refused": { readonly anotherFree: boolean };
-  /** `map`: a Decision's Map; `decisions`: a Map's open Decisions that wait on the Operator. */
+  /** `map`: a Decision's Map; `decisions`: a Map's open Decisions that wait on the Operator, none of them blocked. */
   readonly "yours-to-read": { readonly map: number | null; readonly decisions: readonly number[] };
   /** Nothing yet, until the rule builds one. */
   readonly parked: Readonly<Record<never, never>>;

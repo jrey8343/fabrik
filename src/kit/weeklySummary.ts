@@ -740,9 +740,11 @@ export type WaitingItem =
   /** An open Map, whoever charted it, waiting since it got `wayfinder:map`. */
   | (ItemBase & {
       readonly kind: "map";
-      /** How many of its Decisions wait on the Operator: its open grilling, prototype and task Decisions. */
+      /** How many of its Decisions wait on the Operator: its open grilling, prototype and task Decisions with no blockers. */
       readonly decisionsWaiting: number;
     })
+  /** An open grilling, prototype or task Decision with no blockers on a Map that is blocked, so has no line to fold it into, waiting since it got its label (#770). */
+  | (ItemBase & { readonly kind: "decision"; readonly map: number })
   /** A research Decision on an open Map whose last run failed, waiting since the Kit's failure notice for the Operator to re-add agent:research. */
   | (ItemBase & { readonly kind: "research-failed" })
   /**
@@ -1381,7 +1383,7 @@ function repoSectionOf(facts: GitHubFacts, { operator, appLogin, now: filedAt, t
     invalidKitConfig: invalid,
     // Every Standing whose move is the Operator's: an open Audit, Retro, finished Replay or Map among them also keeps a quiet week from being skipped.
     waitingOnYou: oldestFirst(
-      standings.filter(listedInWaitingOnYou).flatMap((standing) => waitingItemOf(standing, facts, { repo: facts.repo, operator, appLogin, filedAt, timeZone }, items) ?? []),
+      standings.filter((standing) => listedInWaitingOnYou(standing, standings)).flatMap((standing) => waitingItemOf(standing, facts, { repo: facts.repo, operator, appLogin, filedAt, timeZone }, items) ?? []),
     ),
     // Every silence at the repo's bar, longest first.
     stuck: oldestFirst(standings.flatMap((standing) => (standing.name === "stuck" ? (stuckItemOf(standing, facts, items, filedAt, timeZone) ?? []) : []))),
@@ -1628,15 +1630,20 @@ function oldestFirst<T extends ItemBase>(items: readonly T[]): T[] {
 }
 
 /**
- * Whether Waiting on you lists a Standing: every one whose move is the
- * Operator's, but a weekly-limit issue, which stays under Held, and a Map's
- * own Decisions, folded into the Map's line. Of the Plain pull requests only
- * one ready to merge is listed, whatever else is the Operator's.
+ * Whether Waiting on you lists a Standing, among `standings`: every one whose
+ * move is the Operator's, but a weekly-limit issue, which stays under Held,
+ * and a Map's own Decisions, folded into the Map's line. A Decision on a Map
+ * that is blocked, and so has no line, is listed by itself (#770). Of the
+ * Plain pull requests only one ready to merge is listed, whatever else is the
+ * Operator's.
  */
-function listedInWaitingOnYou(standing: Standing): boolean {
+function listedInWaitingOnYou(standing: Standing, standings: readonly Standing[]): boolean {
   if (standing.work === "plain") return standing.name === "yours-to-merge";
   if (standing.move !== "operator" || standing.work === "weekly-limit") return false;
-  if (standing.name === "yours-to-read") return standing.detail.map === null;
+  if (standing.name === "yours-to-read" && standing.detail.map !== null) {
+    const { map } = standing.detail;
+    return !standings.some(({ name, work, issue }) => name === "yours-to-read" && work === "map" && issue === map);
+  }
   return true;
 }
 
@@ -1744,6 +1751,8 @@ function waitingItemOf(standing: Standing, facts: GitHubFacts, listedWith: Liste
           return { kind: "replay", ...onIssue };
         case "map":
           return { kind: "map", ...onIssue, decisionsWaiting: standing.detail.decisions.length };
+        case "operator-decision":
+          return standing.detail.map === null ? null : { kind: "decision", ...onIssue, map: standing.detail.map };
         default:
           return null;
       }
@@ -2114,6 +2123,8 @@ function waitingLine(item: WaitingItem): string {
       return itemLine(item, `Replay results in for ${duration(item.age)}`);
     case "map":
       return itemLine(item, `Map open for ${duration(item.age)}, ${decisions(item.decisionsWaiting)} waiting on you`);
+    case "decision":
+      return itemLine(item, `Decision on blocked Map #${item.map}, waiting on you for ${duration(item.age)}`);
     case "research-failed":
       return itemLine(item, `research run failed ${duration(item.age)} ago, waiting for you to re-add ${RESEARCH_LABEL}`);
     case "merge-gate":

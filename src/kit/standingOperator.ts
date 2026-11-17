@@ -95,9 +95,9 @@ const OPERATOR_DECISION_LABELS: readonly DecisionLabel[] = DECISION_TYPES.filter
  * read as the Map cap reads them, since it got `wayfinder:map`, carrying its
  * open grilling, prototype and task Decisions; and each of those Decisions,
  * carrying its Map, for a reader to fold under it. A Map or a Decision with
- * blockers is blocked instead, nobody's move, since the same time (#770). A
- * Decision follows its own blockers, never its Map's, as it can be resolved
- * early.
+ * blockers is blocked instead, nobody's move, since the same time (#770), and
+ * a blocked Decision is none of the Decisions its Map carries. A Decision
+ * follows its own blockers, never its Map's, as it can be resolved early.
  */
 function readingMatterOf({ repo, openAudits, openRetros, openReplays, openIssues, openMaps }: GitHubFacts, operator: string, appLogin: string): StandingNamed<"yours-to-read" | "blocked">[] {
   const reading = (issue: number, work: "audit" | "retro" | "replay" | "map" | "operator-decision", since: string, map: number | null, decisions: readonly number[]) =>
@@ -116,7 +116,9 @@ function readingMatterOf({ repo, openAudits, openRetros, openReplays, openIssues
       });
       const mapSince = lastAdded(map.labelEvents, MAP_LABEL) ?? map.createdAt;
       return [
-        map.blockers.length > 0 ? blockedStandingOf(map, repo, "map", mapSince) : reading(map.number, "map", mapSince, null, decisions.map(({ issue }) => issue.number)),
+        map.blockers.length > 0
+          ? blockedStandingOf(map, repo, "map", mapSince)
+          : reading(map.number, "map", mapSince, null, decisions.filter(({ issue }) => issue.blockers.length === 0).map(({ issue }) => issue.number)),
         ...decisions.map(({ issue, label }) => {
           const since = lastAdded(issue.labelEvents, label) ?? issue.createdAt;
           return issue.blockers.length > 0 ? blockedStandingOf(issue, repo, "operator-decision", since) : reading(issue.number, "operator-decision", since, map.number, []);
@@ -250,7 +252,7 @@ export function answerOf(issue: OpenIssueFacts): string | null {
 /**
  * An open issue labelled `ready-for-human`: the Operator's to do, with no
  * place on the Loop, since it got the label, or was opened with it; or, while
- * anything blocks it, blocked since then, nobody's move (#770).
+ * an issue of its repo blocks it, blocked since then, nobody's move (#770).
  */
 export function readyForHumanStandingOf(issue: OpenIssueFacts, repo: string, _now: string): StandingNamed<"yours-to-do" | "blocked"> {
   const since = lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt;
@@ -265,10 +267,10 @@ export function readyForHumanStandingOf(issue: OpenIssueFacts, repo: string, _no
 }
 
 /**
- * The Operator's own work on `issue` while its blockers are open, or closed
- * as not planned: nothing can be done on it until they close, so the move is
- * nobody's and it stops no work, since it would otherwise stand the
- * Operator's. Its blockers once each, lowest first, as a Ticket's are.
+ * The Operator's own work on `issue` while it has blockers: nothing can be
+ * done on it until they close, so the move is nobody's and it stops no work.
+ * It stands so since `since`, the time it would stand the Operator's without
+ * them, carrying its blockers once each, lowest first, as a Ticket's are.
  */
 function blockedStandingOf(issue: OpenIssueFacts, repo: string, work: "ready-for-human" | "map" | "operator-decision", since: string): StandingNamed<"blocked"> {
   return {

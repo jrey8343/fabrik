@@ -742,6 +742,11 @@ describe("the Standing rule", () => {
           expect(standings.find(({ issue }) => issue === 31)).toEqual(blocked(31, "operator-decision", "2026-11-04T20:00:00Z", [32]));
         }
       });
+
+      it("leaves a blocked Decision out of the Decisions its unblocked Map carries, as it waits on no one", () => {
+        const standings = standingsIn({ openIssues: [map([]), grilling(31, [32]), grilling(32, [])], openMaps: [30] });
+        expect(standings.find(({ issue }) => issue === 30)).toEqual(reading(30, "map", "2026-11-03T20:00:00Z", { map: null, decisions: [32] }));
+      });
     });
 
     it("gives an open issue labelled wayfinder:map that the Map cap's read doesn't count no Standing as a Map", () => {

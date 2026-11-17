@@ -196,6 +196,11 @@ describe("work the Kit hands back", () => {
       expect(standingsIn({ openIssues: [{ ...ticket, labels: ["ready-for-agent"] }] }).filter(({ name }) => name === "yours-to-do")).toEqual([]);
     });
 
+    it("a Ticket handed back with ready-for-human stays the Operator's, naming its hand-back, though it has blockers: the Kit's notice asks a move of them (#770)", () => {
+      const ticket = anOpenIssue({ number: 7, labels: ["ready-for-human"], comments: [said(stopTicketOf({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: false }, aPullRequest({ number: 50, ticket: 7, open: false, ticketLabels: ["ready-for-agent"] }), "operator"))], labelEvents: [readyForHuman], blockers: [3] });
+      expect(standingsIn({ openIssues: [ticket] })).toEqual([expect.objectContaining({ issue: 7, name: "yours-to-do", yours: true, detail: expect.objectContaining({ handBack: "closed-by-hand" }) })]);
+    });
+
     it("a Ticket marked for a Kept-branch start whose Kept branch is gone", () => {
       const ticket = anOpenIssue({ number: 7, labels: ["ready-for-human", "fabrik:kept-branch"], comments: [said(stopForGoneKeptBranch(7, "operator"))], labelEvents: [readyForHuman] });
       expect(handedBackIn(standingsIn({ openIssues: [ticket] }))[0]?.detail).toEqual({ handBack: "kept-branch-gone", role: "implement", failure: null, label: "ready-for-agent" });

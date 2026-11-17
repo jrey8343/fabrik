@@ -4,7 +4,9 @@
 // and the same facts for a Retro's evidence, with the patches its Operator
 // feedback reads, and its history: the repo's Retros with their comments and
 // the open issues with their bodies. Read-only. It holds no summary, metric or evidence rules;
-// those all live in those two modules.
+// those all live in those two modules. It reads which of an open issue's
+// blockers still block it as Dispatch does (ADR-0001), as every reader of the
+// open issues maps them through it.
 import { fabrikRefsIn } from "../kit/caller.ts";
 import type { FromRetroIssueFacts, RetroIssueFacts, TicketTextFacts } from "../kit/retroEvidence.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
@@ -655,7 +657,7 @@ export interface RawIssue {
   labels: { nodes: { name: string }[] };
   comments: { nodes: RawComment[] };
   timelineItems: { nodes: RawLabelEvent[] };
-  blockedBy: { nodes: (RawBlocker & { labels: { nodes: { name: string }[] } })[] };
+  blockedBy: RawBlockedBy<RawBlocker & { labels: { nodes: { name: string }[] } }>;
   subIssues: { nodes: { number: number }[] };
 }
 
@@ -666,6 +668,11 @@ export interface RawBlocker {
   /** Why it is in its state, as GitHub's GraphQL names it; null when GitHub records no reason. */
   stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
   repository: { nameWithOwner: string };
+}
+
+/** An issue's blocked-by edges, as an open-issue read gets them: each blocker as BLOCKER reads it, and whatever more that read asks. */
+export interface RawBlockedBy<B extends RawBlocker = RawBlocker> {
+  nodes: B[];
 }
 
 /** A `fabrik:retro` issue as a Retro's history reads it: as the tick does, with its comments on top. */
@@ -850,7 +857,7 @@ function specOf(issue: RawIssue): SpecFacts {
 }
 
 /** Open issue `issue` of `repo`, `owner/name`, as the Standing rule reads it, from any read that asks for what OpenIssueFacts holds. */
-export function openIssueOf(issue: Omit<RawIssue, "blockedBy"> & { blockedBy: { nodes: readonly RawBlocker[] } }, repo: string): OpenIssueFacts {
+export function openIssueOf(issue: Omit<RawIssue, "blockedBy"> & { blockedBy: RawBlockedBy }, repo: string): OpenIssueFacts {
   return {
     number: issue.number,
     title: issue.title,
