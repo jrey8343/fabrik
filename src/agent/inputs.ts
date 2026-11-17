@@ -281,7 +281,7 @@ async function verdictsOn(github: Reader, repo: Repo, pullRequest: number): Prom
 }
 
 /** The Verdicts among a PR's conversation, as verdictsOn gives them. */
-function verdictsAmong(conversation: readonly Pick<WrittenComment, "body" | "user">[]): GivenVerdict[] {
+export function verdictsAmong(conversation: readonly Pick<WrittenComment, "body" | "user">[]): GivenVerdict[] {
   // Only a bot's markers count, as in the core's snapshot, so nobody can plant a Verdict by quoting one.
   return conversation.flatMap(({ body, user }) => {
     if (user?.type !== "Bot" || body === null) return [];
@@ -427,8 +427,9 @@ interface PullRequestQueryResult {
 }
 
 /**
- * The PR: for a Review, what it judges (never its other comments, so earlier
- * Verdicts don't steer it); for a retry, its number, title, body and comments with
+ * The PR: for a Review, what it judges (never its other comments: only a later
+ * Review is given its earlier Verdicts and fix comments, apart, by src/agent/laterReview.ts);
+ * for a retry, its number, title, body and comments with
  * their authors' kind, so only the Fabrik App's Verdicts count as findings.
  * Either way, the Operator's comments on it come apart, in `operatorComments`,
  * and, on a PR the Operator requested changes on, its Request changes reviews

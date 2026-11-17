@@ -1365,6 +1365,42 @@ describe("loop.yml's Review job on a Full Review", () => {
   });
 });
 
+// A later Review (#748): a Kit step of the Review job reads what its Reviewer is given, with the job's read-only token,
+// from the last judged head the Kit job passed out, before any secret loads; the Reviewer never holds the token.
+describe("loop.yml's Review job on a later Review", () => {
+  const steps = (): readonly string[] => stepsOf(job("review"));
+  const stepAt = (marker: string): number => steps().findIndex((step) => step.includes(marker));
+  const read = (): string => steps().find((step) => step.includes("run: node kit/src/agent/laterReview.ts")) ?? "";
+  const reviewer = (): string => steps().find((step) => step.includes("id: agent\n")) ?? "";
+
+  it("gets the last judged head and its fingerprint from the Kit job", () => {
+    expect(job("kit")).toContain("last-judged-head: ${{ steps.route.outputs.last-judged-head }}");
+    expect(job("kit")).toContain("last-judged-change: ${{ steps.route.outputs.last-judged-change }}");
+  });
+
+  it("reads what the Reviewer is given only on a later Review, after the Kit is installed and before any secret loads", () => {
+    expect(read()).toContain("if: needs.kit.outputs.full-review == 'false'\n");
+    expect(read()).toContain('run: node kit/src/agent/laterReview.ts "$RUNNER_TEMP"');
+    expect(stepAt("run: node kit/src/agent/laterReview.ts")).toBeGreaterThan(stepAt("uses: ./kit/.github/actions/prepare-agent"));
+    expect(stepAt("run: node kit/src/agent/laterReview.ts")).toBeLessThan(stepAt("id: op\n"));
+  });
+
+  it("reads it at the head the Reviewer judges, against the last judged head, through env and the job's read-only token", () => {
+    expect(read()).toContain("GH_TOKEN: ${{ github.token }}\n");
+    expect(read()).toContain("FABRIK_PULL_REQUEST: ${{ needs.kit.outputs.pull-request }}\n");
+    expect(read()).toContain("FABRIK_HEAD_SHA: ${{ needs.review-checks.outputs.head-sha }}\n");
+    expect(read()).toContain("FABRIK_LAST_JUDGED_HEAD: ${{ needs.kit.outputs.last-judged-head }}\n");
+    expect(read()).toContain("FABRIK_LAST_JUDGED_CHANGE: ${{ needs.kit.outputs.last-judged-change }}\n");
+    expect(read()).toContain("FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out\n");
+  });
+
+  it("tells the Reviewer where it is only on a later Review, and gives the Reviewer no token", () => {
+    expect(reviewer()).toContain("FABRIK_LATER_REVIEW_FILE: ${{ needs.kit.outputs.full-review == 'false' && format('{0}/later-review.json', runner.temp) || '' }}\n");
+    expect(reviewer()).not.toContain("GH_TOKEN");
+    expect(reviewer()).not.toContain("github.token");
+  });
+});
+
 describe("schedule.yml's tick, which opens the pending Audit and the pending Retro", () => {
   it("asks the run the Loop action to find the fabrik-runs store, which the retro gate weighs, and is the only job that does", () => {
     const tick = jobIn(schedule, "tick");

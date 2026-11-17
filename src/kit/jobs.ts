@@ -63,6 +63,10 @@
 //   ui-evidence-failure      for that Review, why the run's capture failed, as the marker records it, which
 //                            the Reviewer hears when it has no capture result to read; empty when it captured,
 //                            when the marker records no outcome, or for any other run
+//   full-review              for a Review, "true" on a Full Review (#747), else "false"; empty for any other run
+//   last-judged-head         for a later Review (#748), the head the Reviewer last judged; else empty
+//   last-judged-change       for that Review, the change fingerprint its Verdict recorded, as one line of JSON,
+//                            whose paths are the PR's file names, so a job reads it through `env:`; else empty
 //   prototype                "true" when the Design run is a Design session's prototype turn (#155), which
 //                            routes to design like any Design run; else "false"
 //   prototype_request        for that prototype turn, its request as one line of JSON: route, variants, brief
@@ -275,6 +279,11 @@ export function kitJobOutputs(
     "ui-evidence-failure": run?.evidence?.failure ?? "",
     // For a Review (#747): "true" for a Full Review, whose Reviewer is given the Full Review section, else "false".
     "full-review": run?.role === "review" && run.reviewKind !== undefined ? String(run.reviewKind.kind === "full") : "",
+    // For a later Review (#748): the head the Reviewer last judged, and the fingerprint its Verdict recorded, as one line
+    // of JSON, which the Review job works out the change since from. The fingerprint's paths are the PR's file names, so
+    // a job reads it through `env:` only.
+    "last-judged-head": run?.reviewKind?.kind === "later" ? run.reviewKind.lastJudged.headSha : "",
+    "last-judged-change": run?.reviewKind?.kind === "later" ? JSON.stringify(run.reviewKind.lastJudged.change) : "",
     // Whether the Design run is the session's prototype turn, which the prototype job runs in the design job's place.
     prototype: String(run?.prototype !== undefined),
     // The one output that holds agent text: the request's brief, written by the Design agent. One line of JSON,

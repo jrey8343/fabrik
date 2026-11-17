@@ -218,6 +218,10 @@ _Avoid_: nit, minor flaw, cosmetic finding
 A Review of an agent pull request with no settled code: its first Review, or the first Review to read a head after the Reviewer judged none of the pull request's earlier heads. It judges the whole pull request, and what it doesn't name becomes settled code.
 _Avoid_: first pass, initial review, complete review
 
+**Settled code**:
+What an agent pull request held at a head the Reviewer judged, for everything its Verdict didn't name. A later Review of that pull request judges what the pull request's own change gained since, whether the Verdict before's findings were fixed, and whether every acceptance criterion, as amended by any Request changes, is met and the body is current. In settled code it names only a behaviour bug, as missed earlier. Nothing is settled by a head the Reviewer never judged, across pull requests, or in the Ticket.
+_Avoid_: approved code, reviewed code, prior pass
+
 **Flaky check**:
 A Required check that has reported both failure and success on the same head commit, in any order and whoever re-ran it. A check red on one head and green on another is never flaky: the code changed. An Execution flaw from a check found flaky on the head it judged no longer counts toward a Ticket's Retries, and the Operator hears of each Flaky check so the Product's suite gets fixed.
 _Avoid_: flake, intermittent failure

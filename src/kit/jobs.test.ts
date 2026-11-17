@@ -189,7 +189,22 @@ describe("The Kit job's routing", () => {
   });
 
   it("passes out no Review kind for any other run", () => {
-    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "full-review": "" });
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "full-review": "", "last-judged-head": "", "last-judged-change": "" });
+  });
+
+  // A later Review is given the pull request's own change since the head the Reviewer last judged (#748), which its job
+  // works out with git: from that head, or, when it can't be fetched, from the fingerprint its Verdict recorded.
+  it("passes out a later Review's last judged head and the fingerprint its Verdict recorded, and none for a Full Review", () => {
+    const change = { v: 1, all: "0".repeat(12), product: "1".repeat(12), files: { "src/cart.ts": "2".repeat(12) } } as const;
+    const judged = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "1".repeat(40), change } as const;
+    const review = (pullRequest = aPullRequest()) => planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(pullRequest), kitConfig());
+
+    const later = kitJobOutputs(review(aPullRequest({ verdicts: [judged], pushedSinceVerdict: true })), 7, kitConfig());
+
+    expect(later["last-judged-head"]).toBe("1".repeat(40));
+    expect(JSON.parse(later["last-judged-change"] ?? "")).toEqual(change);
+    expect(later["last-judged-change"]).not.toContain("\n");
+    expect(kitJobOutputs(review(), 7, kitConfig())).toMatchObject({ "last-judged-head": "", "last-judged-change": "" });
   });
 });
 
