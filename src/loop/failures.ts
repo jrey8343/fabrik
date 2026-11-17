@@ -30,7 +30,7 @@ import { conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
 import { noDigestAfter } from "./digest.ts";
 import { heldLineOn, heldRunName } from "./heldLine.ts";
-import { heldInOrder, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
+import { heldInOrder, heldLineIssue, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
 import { heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
@@ -228,10 +228,12 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const failure = infrastructureFailureOf(run);
   const ranOn = ranOnOf(run, config);
   const open = issue.openPullRequests[0];
+  // The notice goes on the Ticket's PR if it has one, else the issue.
   const target = open ?? run.issue;
-  // Named by the number its notice is posted on, so one on the PR never names its Ticket instead (#772): a Digest run's line is on the PR it digests.
-  const postedOn = run.digest?.pullRequest ?? target;
-  const failedRun = run.prototype === true ? `The prototype turn on #${postedOn}` : `The ${runNamed(run.role)} on #${postedOn}`;
+  // The run, named by the number its notice or line is on, so one on the PR never names its Ticket instead (#772).
+  const named = (on: number) => (run.prototype === true ? `The prototype turn on #${on}` : `The ${runNamed(run.role)} on #${on}`);
+  // A Digest run's only notice is its no-Digest line, on the PR it digests.
+  const failedRun = named(run.digest?.pullRequest ?? target);
   if (run.role === "digest") {
     // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again on another Subscription. The gate opens all the same.
     const landed = noDigestAfter(run, failure, pullRequest, operator);
@@ -246,7 +248,8 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     // A kill or a dead token says nothing of when a limit resets: the held run waits on its carrier (src/loop/hold.ts).
     const noResetOfItsOwn = failure !== "weekly-limit";
     const repoWide = repoWideNotice(failure, context, {
-      run: failedRun,
+      // It has no notice, only its held line.
+      run: named(heldLineIssue(held)),
       runUrl: run.runUrl,
       resetsAt: noResetOfItsOwn ? null : (run.report?.resetsAt ?? null),
       ...ranOn,

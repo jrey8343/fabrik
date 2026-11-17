@@ -109,6 +109,7 @@ describe("The Rotate the Claude token issue", () => {
 
     expect(notificationsOf(later)).toEqual([]);
   });
+
   // #772: an Implement run on a Ticket with an open PR posts its notice there, and the issue names the same number.
   it("names a later run whose notice goes to the Ticket's PR by the PR's number", () => {
     const rotation = kitIssueOpenedBy(planFor(deadToken(7), snapshotOf(anIssue({ number: 7 })), kitConfig()), 40);
@@ -258,7 +259,7 @@ describe("The weekly-limit issue", () => {
         { kind: "open-issue", body: expect.stringMatching(/^@operator The Review run on #12 hit the weekly usage limit\. It resets at 2026-11-09 04:00 UTC\./) },
       ],
     });
-    expect(JSON.stringify(plan)).not.toContain("#7");
+    expect(JSON.stringify(plan)).not.toMatch(/#7\b/);
   });
 
   it("the first run to hit the weekly limit opens an issue saying when it resets, @-mentioning the Operator", () => {

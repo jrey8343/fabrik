@@ -6,7 +6,7 @@ import { conflictRunEnded, requestChangesRunEnded } from "../loop/conflicts.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import { stopTicketOf } from "../loop/handClosing.ts";
 import { stopForGoneKeptBranch } from "../loop/keptBranch.ts";
-import { handBackMarker } from "../loop/markers.ts";
+import { handBackMarker, handBackMarkIn } from "../loop/markers.ts";
 import { unstartedRetry } from "../loop/retry.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Action, AgentRole } from "../loop/types.ts";
@@ -38,7 +38,7 @@ describe("reading which hand-back a notice is", () => {
 
     expect(notice).toMatchObject({ issue: 12, body: expect.stringContaining("The Review run on #12 failed:") });
     expect(handBackOfNotice(notice.body)).toEqual({ kind: "infrastructure-failure", role: "review", failure: "missing-output" });
-    const unmarked = notice.body.split("\n").filter((line) => !line.startsWith("<!-- fabrik:hand-back ")).join("\n");
+    const unmarked = notice.body.split("\n").filter((line) => handBackMarkIn(line) === null).join("\n");
     expect(handBackOfNotice(unmarked)).toEqual({ kind: "infrastructure-failure", role: "review" });
   });
 
