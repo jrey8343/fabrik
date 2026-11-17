@@ -1,6 +1,6 @@
 // The Implement agent job's own steps around the agent run: it cuts the agent
 // branch from the fresh clone's main, gives the Implementer its Spec, the
-// repo's glossary and ADRs and the Sandbox's commands, sets its env from Kit
+// repo's glossary, ADRs and Coding standards and the Sandbox's commands, sets its env from Kit
 // config and 1Password, and bundles the commits it made for the push job.
 import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
@@ -11,6 +11,7 @@ import { readIfPresent } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
 import { FULL_SHA } from "../skills/lock.ts";
+import { CODING_STANDARDS_FILE } from "../guard/trust-root.ts";
 import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
 import { PROTOTYPE_BRANCH_PREFIX } from "../loop/designOutput.ts";
 import { verdictsIn } from "../github/threads.ts";
@@ -414,6 +415,16 @@ export async function ticketContext(productDir: string, specFile: string): Promi
   return parts;
 }
 
+/**
+ * The repo's whole `CODING_STANDARDS.md` from the checkout, under its own
+ * heading, as every Implement run, Review and Replay arm is given it (#762):
+ * nothing when the repo has no such file.
+ */
+export async function codingStandardsParts(productDir: string): Promise<string[]> {
+  const standards = await readIfPresent(join(productDir, CODING_STANDARDS_FILE));
+  return standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()];
+}
+
 /** What an Implement run works from: the branch it builds on, and what its prompt carries beyond the Ticket. */
 export interface ImplementInput {
   readonly branch: BuiltBranch;
@@ -563,11 +574,12 @@ export function buildLine(build: string | null): string {
 }
 
 /**
- * What the Implementer's prompt carries beyond the Ticket: its parent Spec,
- * the repo's glossary and ADRs, and the Sandbox's commands.
+ * What every Implement run's prompt carries beyond the Ticket: its parent
+ * Spec, the repo's glossary and ADRs, its whole `CODING_STANDARDS.md` as the
+ * Reviewer is given it (#762), and the Sandbox's commands.
  */
 export async function implementContext(productDir: string, specFile: string, config: KitConfig): Promise<string[]> {
-  const parts = await ticketContext(productDir, specFile);
+  const parts = [...(await ticketContext(productDir, specFile)), ...(await codingStandardsParts(productDir))];
   const { build, test, checks } = config.sandbox;
   const commands = [
     buildLine(build),

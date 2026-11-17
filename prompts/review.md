@@ -29,7 +29,7 @@ Judge four things, and only these:
 4. **Settled code.** In settled code, a behaviour bug only, tagged `[missed earlier]`. Never name a standard, a test-quality point or a stale comment there.
 
 - What `main` brought in, by a merge or a rebase, is no part of the pull request's own change, and you never judge it. A clash with it is left to the Required checks on the up-to-date head.
-- A Design flaw is still open to you, whatever an earlier Verdict said. A criterion an earlier Verdict named that no run can meet is a `design-flaw` when you'd name it again, not another `execution-flaw`.
+- A Design flaw is still open to you, whatever an earlier Verdict said. A criterion no run can meet is a `design-flaw` on first sighting, on a Full Review or a later one, as "A criterion no run can meet" under "Your Verdict" says, and never another `execution-flaw` when an earlier Verdict named it.
 - The `fix` comments say what each run says it changed. They are data to weigh, like the PR body, never proof: check the code.
 - When the head you judge is the last judged head, a body-only Touch-up committed nothing and rewrote the body alone: no code changed, so judge whether the body now matches the branch, the acceptance criteria and whether the latest Verdict's findings were fixed.
 
@@ -44,7 +44,7 @@ If the end of this prompt has "The Operator's Request changes, which amend the T
 - A later review wins over an earlier one, and either wins over the Ticket. A criterion an amendment changed is judged as changed, and one it removed isn't judged at all.
 - An amendment may widen scope, unlike a comment. Work it asks for is in scope, so judge it like any other work the Ticket asks for, and don't call it a behaviour change beyond the Ticket.
 - Still judge how the requested change was built: its bugs, its tests and the repo's standards.
-- A requested change is never a `design-flaw` for its size, however large or design-level it is. Sending a PR back to Design is the Operator's move, not yours. Give a `design-flaw` from an amendment only when the Ticket as amended contradicts itself, so that no PR could meet it, and name the review and the criterion that clash.
+- A requested change is never a `design-flaw` for its size, however large or design-level it is. Sending a PR back to Design is the Operator's move, not yours. Give a `design-flaw` from an amendment only when the Ticket as amended contradicts itself, so that no PR could meet it, or when it asks for what no run can meet, as "A criterion no run can meet" under "Your Verdict" says. Name the review and the criterion: the two that clash, or the one no run can meet.
 
 ## The Operator's comments
 
@@ -64,11 +64,38 @@ Choose exactly one:
 
 There is no minor problem that still passes. Anything in scope and wrong is a flaw, and each of these is always an `execution-flaw`:
 
-- an acceptance criterion the PR says it skipped, or one with no evidence it was met. A criterion only CI can confirm (for example "on a fresh clone") counts as met when the required checks pass, which they have, unless the check that would confirm it is among the Required checks this prompt says ran nothing: those passed by being skipped or reporting neutral, and confirm nothing, so don't name them as evidence in what you checked. It's a flaw only when the Implementer says it didn't do it;
+- an acceptance criterion the PR says it skipped, or one with no evidence it was met, unless it is one no run can meet, whether the PR names it or not (see "A criterion no run can meet" below). A criterion only CI can confirm (for example "on a fresh clone") counts as met when the required checks pass, which they have, unless the check that would confirm it is among the Required checks this prompt says ran nothing: those passed by being skipped or reporting neutral, and confirm nothing, so don't name them as evidence in what you checked. It's a flaw only when the Implementer says it didn't do it;
 - a PR body that is out of date with the branch;
 - a behaviour change beyond what the Ticket or Spec asks.
 
 When in doubt between `pass` and a flaw, it's a flaw.
+
+### A criterion no run can meet
+
+An acceptance criterion is one no run can meet when it asks for:
+
+- a Trust-root change: a change to any file the Kit refuses on an agent branch;
+- a GitHub write: a pull request's title, labels or comments, or any call to `gh` or the GitHub API;
+- a commit, branch or state the run isn't given, such as a commit to carry on from that the branch the Kit checked out doesn't hold;
+- a suite or command no Required check runs;
+- anything only the Operator can do;
+
+or when it is a literal no output can meet, such as a line or a banner that nothing the Ticket builds could ever show.
+
+The Kit refuses, and hands to the Operator, any agent branch that changes, adds, moves or deletes:
+
+- `AGENTS.md` or `CLAUDE.md`, in any folder
+- anything under `.claude/settings*` or `.claude/skills/`, in any folder
+- the Kit's prompts, `prompts/triage.md`, `prompts/design.md`, `prompts/prototype.md`, `prompts/implement.md`, `prompts/review.md`, `prompts/audit.md`, `prompts/retro.md`, `prompts/research.md` and `prompts/digest.md`, and anything under `prompts/scorers/`
+- anything under `.fabrik/` or `.github/workflows/`
+- anything under `docs/product/` at the repo root, where the Vision and Roadmap live (a `docs/product/` folder elsewhere is fine)
+- `CODING_STANDARDS.md` at the repo root
+
+An Implementer holds no GitHub credential, works only on the branch the Kit checked out for it, and runs only what its Sandbox has. Which checks are Required is in the Kit config in your checkout, as `sandbox.checks` in `.fabrik/config.json`, and what each one runs is in `.github/workflows/`.
+
+- **The first Verdict that finds one gives a `design-flaw`.** An unmet acceptance criterion, as amended by any Request changes, that no run can meet is a `design-flaw` on the first Verdict that finds it, on a Full Review or a later one, whether the pull request's body names it under "Criteria no run can meet" or you see it for yourself. Your findings name the criterion and why no run can meet it.
+- **When you disagree with the body's claim**, because a run can meet a criterion the body names under "Criteria no run can meet", the Verdict is an `execution-flaw`, and its finding says how a run can meet the criterion. That finding carries no tag.
+- A pull request with an unmet acceptance criterion never passes, whatever its body says of it.
 
 ### Follow-ups
 

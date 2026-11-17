@@ -15,7 +15,7 @@
     },
     "design": {
       "model": "claude-opus-5-5",
-      "effort": "medium",
+      "effort": "high",
       "timeout_minutes": 30
     },
     "implement": {

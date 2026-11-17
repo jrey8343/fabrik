@@ -16,9 +16,9 @@ import {
 } from "../loop/retroOutput.ts";
 import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
-import { CONSIDERED_PREFIX, FINDING_TAG_TEXT, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
+import { CONSIDERED_PREFIX, FINDING_TAG_TEXT, FOLLOW_UPS_PREFIX, parseVerdict, VERDICTS } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
-import { FILED_FROM_HEADING, filedFromContext, LANDED_NOTHING_HEADING, MAP_CAP_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
+import { FILED_FROM_HEADING, filedFromContext, LANDED_NOTHING_HEADING, MAP_CAP_HEADING, REQUIRED_CHECKS_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
@@ -40,6 +40,21 @@ const part = (text: string, heading: string) => text.split(`\n### ${heading}\n`)
 
 /** The line Triage's comment carries on an idea too foggy for one Design session, which a Design session looks for. */
 const FOG_LINE = "This looks too foggy for one Design session.";
+
+/** The heading an Implementer names a criterion no run can meet under in its summary (#764), which the Reviewer reads in the body (#765). */
+const CRITERIA_NO_RUN_CAN_MEET_HEADING = "Criteria no run can meet";
+
+/** The five kinds of criterion no run can meet, in the one wording every prompt that lists them gives (#763, #764, #765). */
+const KINDS_NO_RUN_CAN_MEET = [
+  "a Trust-root change: a change to any file the Kit refuses on an agent branch",
+  "a GitHub write: a pull request's title, labels or comments, or any call to `gh` or the GitHub API",
+  "a commit, branch or state the run isn't given, such as a commit to carry on from that the branch the Kit checked out doesn't hold",
+  "a suite or command no Required check runs",
+  "anything only the Operator can do",
+];
+
+/** What the prompts count beside the five kinds as a criterion no run can meet (#761). */
+const LITERAL_NO_OUTPUT_CAN_MEET = "a literal no output can meet, such as a line or a banner that nothing the Ticket builds could ever show";
 
 describe("The prompts of the runs on a PR the Operator requested changes on (ADR-0010)", () => {
   it.each(["review", "implement"])("%s names the section the Request changes arrive under, as amendments to the Ticket", async (role) => {
@@ -214,6 +229,27 @@ describe("The Coding standards", () => {
     const turn = section(await prompt("design"), "Your turn");
     const list = turn.split("the trust-root files, which are ")[1]?.split(" The Kit refuses")[0] ?? "";
     expect(list).toContain("`CODING_STANDARDS.md` at the repo root");
+  });
+
+  // #762: every Implement run is given the file, as the Reviewer is.
+  it("implement names CODING_STANDARDS.md, if the repo has one, among what is at the end of the prompt", async () => {
+    const opening = (await prompt("implement")).split("\n## ")[0] ?? "";
+    const atTheEnd = opening.split(". ").find((sentence) => sentence.endsWith("are at the end of this prompt")) ?? "";
+    expect(atTheEnd).toContain("its `CODING_STANDARDS.md` if it has one");
+  });
+
+  it("implement builds to CODING_STANDARDS.md, the text the Reviewer judges against, and names older code that breaks it instead of fixing it", async () => {
+    const bullet = lineStarting(section(await prompt("implement"), "How to work"), "- Build to `CODING_STANDARDS.md`");
+    expect(bullet).toContain("when the end of this prompt has it");
+    expect(bullet).toContain("the code you write or change");
+    expect(bullet).toContain("the Reviewer judges your pull request against the same text");
+    expect(bullet).toContain("name it in your summary instead of fixing it");
+  });
+
+  it("retro no longer says only the Reviewer reads CODING_STANDARDS.md", async () => {
+    const text = await prompt("retro");
+    expect(text).not.toContain("which only the Reviewer reads");
+    expect(text).toContain("A lesson about how this repo's code should look is a line for `CODING_STANDARDS.md` (`product-trust-root`).");
   });
 });
 
@@ -424,6 +460,48 @@ describe("The Map question in the Design prompt", () => {
   });
 });
 
+// What an acceptance criterion may ask (#763): only the prompt holds the rule, and the section it points at is built in ./design.ts.
+describe("Acceptance criteria in the Design prompt", () => {
+  const yourTurn = async () => section(await prompt("design"), "Your turn");
+
+  it("says what an acceptance criterion is", async () => {
+    expect(await yourTurn()).toContain(
+      "**An acceptance criterion** is one check on a Ticket that a test the Required checks run, or the diff itself, shows is met. A criterion may never ask for:",
+    );
+  });
+
+  it("says the five kinds, and a literal no output can meet, are what the prompts mean by a criterion no run can meet", async () => {
+    expect(await yourTurn()).toContain(
+      "These five kinds, and a literal no output can meet, are what the prompts mean by a criterion no run can meet.",
+    );
+  });
+
+  it("says a test must be one a Required check runs, put where one already runs it or dropped, and that a workflow change to bring it in is an Operator step that blocks the Ticket", async () => {
+    const text = await yourTurn();
+    expect(text).toContain("A test you want proved must be one a Required check runs: put it where a Required check already runs it, or drop the criterion.");
+    expect(text).toContain("When bringing it into one needs a change under `.github/workflows/`, that change is an Operator step that blocks the Ticket.");
+  });
+
+  it("holds every criterion the session writes to the rule: an agent brief's, each Ticket's in a Spec or a split, and a Roll-in's", async () => {
+    expect(await yourTurn()).toContain(
+      "The rule holds for every criterion this session writes: an agent brief's, each Ticket's in a Spec or a split, and a Roll-in's.",
+    );
+  });
+
+  it("names the Required checks section by the heading the context uses, and tells the turn to read `.github/workflows/` for what each runs", async () => {
+    expect(await yourTurn()).toContain(
+      `"${REQUIRED_CHECKS_HEADING}", which follows the issue at the end of this prompt, names the checks the Kit config lists. Read \`.github/workflows/\` to see what each one runs.`,
+    );
+  });
+
+  it("says in one line what the session does with a Ticket back from a Design flaw for a criterion no run can meet", async () => {
+    const line = lineStarting(await yourTurn(), "A Ticket back from a Design flaw for a criterion no run can meet");
+    expect(line.trim()).toBe(
+      "A Ticket back from a Design flaw for a criterion no run can meet takes the usual path: rewrite the criterion, drop it or make it an Operator step, and decide on the Kept branch as for any Ticket back from its pull request. When nothing is left to build, it finishes as an Operator brief and the Operator reopens the pull request.",
+    );
+  });
+});
+
 // The Roll-in (#595): the section the prompt points at is built in ./design.ts, and the finish it shows is the contract's.
 describe("The Roll-in in the Design prompt", () => {
   const rollIns = async () => section(await prompt("design"), "Roll-ins");
@@ -565,6 +643,180 @@ describe("Trust roots in the Implement prompt", () => {
   });
 });
 
+// #761: the Design session writes no criterion no run can meet, the Implementer names one and the Reviewer
+// gives a Design flaw for one, and each holds the same list, so what one counts out of reach the others do too.
+describe("The kinds of criterion no run can meet, the same wherever they're listed", () => {
+  /** The list items straight after the line ending in `lead`, and the next paragraph after them. */
+  const listAfter = (text: string, lead: string) => {
+    const lines = text.split("\n").map((line) => line.trim());
+    const at = lines.findIndex((line) => line.endsWith(lead));
+    if (at === -1) return { kinds: [], after: "" };
+    const start = lines.findIndex((line, index) => index > at && line !== "");
+    const end = lines.findIndex((line, index) => index > start && !line.startsWith("- "));
+    return { kinds: lines.slice(start, end).map((line) => line.slice(2)), after: lines.slice(end).find((line) => line !== "") ?? "" };
+  };
+  const skill = () => readFile(join(import.meta.dirname, "..", "..", "skills", "fabrik-live-design", "SKILL.md"), "utf8");
+  const asListed = KINDS_NO_RUN_CAN_MEET.map((kind) => `${kind};`);
+
+  it.each([
+    ["the Implement prompt", async () => section(await prompt("implement"), "When a criterion is one no run can meet"), "An acceptance criterion is one no run can meet when it asks for:", "or when it is "],
+    ["the Review prompt", async () => part(section(await prompt("review"), "Your Verdict"), "A criterion no run can meet"), "An acceptance criterion is one no run can meet when it asks for:", "or when it is "],
+    ["the Design prompt", async () => section(await prompt("design"), "Your turn"), "A criterion may never ask for:", "or be "],
+    ["the live Design skill", skill, "A criterion may never ask for:", "or be "],
+  ])("%s lists the five kinds, then a literal no output can meet", async (_, text, lead, literalLead) => {
+    const listed = listAfter(await text(), lead);
+    expect(listed.kinds).toEqual(asListed);
+    expect(listed.after.startsWith(`${literalLead}${LITERAL_NO_OUTPUT_CAN_MEET}.`)).toBe(true);
+  });
+
+  it("the live Design skill says what the prompts mean by a criterion no run can meet in the Design prompt's words", async () => {
+    const sentence = "These five kinds, and a literal no output can meet, are what the prompts mean by a criterion no run can meet.";
+    expect(await skill()).toContain(sentence);
+    expect(await prompt("design")).toContain(sentence);
+  });
+
+  it.each(["implement", "review", "design"])("%s calls the literal one no output can meet, never one it can satisfy", async (role) => {
+    const text = await prompt(role);
+    expect(text).toContain("no output can meet");
+    expect(text).not.toContain("no output can satisfy");
+  });
+});
+
+// #764: a criterion no run can meet costs the rest of the Ticket nothing; the run builds the rest and names it.
+describe("A criterion no run can meet in the Implement prompt", () => {
+  const IMPLEMENT_SECTION_HEADING = "When a criterion is one no run can meet";
+
+  it("no longer tells a run to make no commits because one criterion needs a Trust-root file changed", async () => {
+    const roots = section(await prompt("implement"), "What you must not change");
+    expect(roots).not.toContain("make no commits");
+    expect(roots).not.toContain("When you can't build the Ticket at all, as when it needs one of the files above changed");
+    expect(roots).toContain(`"${IMPLEMENT_SECTION_HEADING}"`);
+  });
+
+  it("tells a run whose other criteria can be built to build them, commit them, and name each out-of-reach one, quoted, with its reason, under the heading", async () => {
+    const rule = lineStarting(section(await prompt("implement"), IMPLEMENT_SECTION_HEADING), "- When one or more acceptance criteria");
+    expect(rule).toContain("the rest of the Ticket can be built, build the rest, commit it");
+    expect(rule).toContain(`name each such criterion in your \`summary\` under the heading "${CRITERIA_NO_RUN_CAN_MEET_HEADING}": the criterion quoted, and the reason`);
+  });
+
+  it("gives, among the reasons a run names, why no output can meet a literal", async () => {
+    const rule = lineStarting(section(await prompt("implement"), IMPLEMENT_SECTION_HEADING), "- When one or more acceptance criteria");
+    expect(rule).toContain("or why no output can meet it)");
+  });
+
+  it("tells a run never to work around such a criterion", async () => {
+    const line = lineStarting(section(await prompt("implement"), IMPLEMENT_SECTION_HEADING), "- Never work around one");
+    expect(line).toContain("no Trust-root edit, no `gh` or API call, and no result claimed for a command you didn't run");
+  });
+
+  it("tells a run that can build nothing in the Ticket without one to commit nothing and say why in its summary", async () => {
+    const line = lineStarting(section(await prompt("implement"), IMPLEMENT_SECTION_HEADING), "- When nothing in the Ticket");
+    expect(line).toContain("When nothing in the Ticket can be built without one, commit nothing and say why in your `summary`");
+  });
+
+  it("holds the rule on every run that builds toward criteria, and keeps the heading in a pull request's body while the criterion is unmet", async () => {
+    const text = section(await prompt("implement"), IMPLEMENT_SECTION_HEADING);
+    expect(lineStarting(text, "- The rule holds")).toContain(
+      "on every run that builds toward criteria: a first run, a Kept-branch start, a retry, a Touch-up and a Request-changes run",
+    );
+    const onPullRequest = lineStarting(text, "- On a run on a pull request");
+    expect(onPullRequest).toContain("your `summary` becomes its body");
+    expect(onPullRequest).toContain(`keep "${CRITERIA_NO_RUN_CAN_MEET_HEADING}" in it, with each criterion under it, for as long as the criterion stands unmet`);
+  });
+
+  it('keeps "Questions for the Operator" as the one heading for questions, apart from the new heading', async () => {
+    const text = await prompt("implement");
+    expect(lineStarting(section(text, "Your output"), "- If you need the Operator's input")).toContain(
+      'put every question for them in `summary` under one heading, "Questions for the Operator", and nowhere else in it',
+    );
+    expect(lineStarting(section(text, IMPLEMENT_SECTION_HEADING), `- "${CRITERIA_NO_RUN_CAN_MEET_HEADING}" is apart from`)).toContain(
+      '"Questions for the Operator", which stays the one heading for questions',
+    );
+  });
+});
+
+// #765: a criterion no run can meet costs its Ticket one Verdict, a Design flaw, instead of its Retries.
+describe("A criterion no run can meet in the Review prompt", () => {
+  const VERDICT_PART_HEADING = "A criterion no run can meet";
+  const rule = async () => part(section(await prompt("review"), "Your Verdict"), VERDICT_PART_HEADING);
+
+  it("lists every Trust-root file the guard refuses, as the Implement prompt lists them", async () => {
+    const text = await rule();
+    for (const name of KIT_PROMPT_NAMES) expect(text).toContain(`\`${kitPromptPath(name)}\``);
+    expect(text).toContain(`- \`${CODING_STANDARDS_FILE}\` at the repo root`);
+    const listed = (text: string) => text.split("\n").filter((line) => /^- (`|anything under|the Kit's prompts)/.test(line));
+    const implementRoots = listed(section(await prompt("implement"), "What you must not change"));
+    expect(implementRoots).toHaveLength(6);
+    expect(listed(text)).toEqual(implementRoots);
+  });
+
+  it("says an Implementer holds no GitHub credential, works only on the branch the Kit checked out, and runs only what its Sandbox has", async () => {
+    expect(await rule()).toContain(
+      "An Implementer holds no GitHub credential, works only on the branch the Kit checked out for it, and runs only what its Sandbox has.",
+    );
+  });
+
+  it("says the Required checks, and what they run, can be read from the Kit config and .github/workflows/ in the checkout", async () => {
+    const text = await rule();
+    expect(text).toContain("Which checks are Required is in the Kit config in your checkout, as `sandbox.checks` in `.fabrik/config.json`");
+    expect(text).toContain("what each one runs is in `.github/workflows/`");
+  });
+
+  it("gives a design-flaw on the first Verdict that finds an unmet criterion no run can meet, whether or not the body names it, and names the criterion and why", async () => {
+    const line = lineStarting(await rule(), "- **The first Verdict that finds one gives a `design-flaw`.**");
+    expect(line).toContain(
+      "An unmet acceptance criterion, as amended by any Request changes, that no run can meet is a `design-flaw` on the first Verdict that finds it",
+    );
+    expect(line).toContain(`whether the pull request's body names it under "${CRITERIA_NO_RUN_CAN_MEET_HEADING}" or you see it for yourself`);
+    expect(line).toContain("Your findings name the criterion and why no run can meet it.");
+  });
+
+  it("gives an untagged execution-flaw that says how a run can meet the criterion when the Reviewer disagrees with the body's claim", async () => {
+    const line = lineStarting(await rule(), "- **When you disagree with the body's claim**");
+    expect(line).toContain("the Verdict is an `execution-flaw`, and its finding says how a run can meet the criterion");
+    expect(line).toContain("That finding carries no tag.");
+  });
+
+  it("never passes a pull request with an unmet criterion, whatever its body says of it", async () => {
+    expect(await rule()).toContain("- A pull request with an unmet acceptance criterion never passes, whatever its body says of it.");
+  });
+
+  it("makes a criterion the PR says it skipped, or one with no evidence it was met, an execution-flaw unless it is one no run can meet, named or not", async () => {
+    const always = section(await prompt("review"), "Your Verdict").split("each of these is always an `execution-flaw`:")[1] ?? "";
+    expect(lineStarting(always, "- ")).toContain(
+      `- an acceptance criterion the PR says it skipped, or one with no evidence it was met, unless it is one no run can meet, whether the PR names it or not (see "${VERDICT_PART_HEADING}" below).`,
+    );
+  });
+
+  it("names an amendment that asks for what no run can meet as a second ground for a design-flaw from a Request changes", async () => {
+    const line = lineStarting(section(await prompt("review"), "The Operator's Request changes"), "- A requested change is never a `design-flaw` for its size");
+    expect(line).toContain("Give a `design-flaw` from an amendment only when the Ticket as amended contradicts itself, so that no PR could meet it");
+    expect(line).toContain(`or when it asks for what no run can meet, as "${VERDICT_PART_HEADING}" under "Your Verdict" says`);
+  });
+
+  it("makes such a criterion a design-flaw on first sighting in a later Review", async () => {
+    const line = lineStarting(section(await prompt("review"), "Later Review"), "- A Design flaw is still open to you");
+    expect(line).toContain(
+      `A criterion no run can meet is a \`design-flaw\` on first sighting, on a Full Review or a later one, as "${VERDICT_PART_HEADING}" under "Your Verdict" says`,
+    );
+    expect(line).not.toContain("when you'd name it again");
+  });
+
+  it("leaves the Full Review section as it was, so a Full Review that gives this Design flaw still names every other flaw", async () => {
+    const full = section(await prompt("review"), "Full Review");
+    expect(full).toContain("Name every flaw you find, of every kind, in this Verdict.");
+    expect(full).not.toContain("no run can meet");
+  });
+
+  it("adds no Verdict and no finding tag: the Kit reads the same three of each", async () => {
+    expect(VERDICTS).toEqual(["pass", "execution-flaw", "design-flaw"]);
+    expect(FINDING_TAG_TEXT).toEqual({ "small-body": "[small: body]", "small-comment": "[small: comment]", "missed-earlier": "[missed earlier]" });
+    const output = section(await prompt("review"), "Your output");
+    expect(output).toContain("`verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`");
+    expect(await rule()).not.toMatch(/\[[^\]]+\]/);
+  });
+});
+
 describe("Routes in the Implement prompt", () => {
   it("asks a run that touched the UI to name the routes its change shows on, which its example carries", async () => {
     const text = await prompt("implement");
@@ -586,7 +838,8 @@ describe("Prototypes in the prompts", () => {
   });
 
   it("review says nothing of a Prototype: the Reviewer judges a PR against its Ticket alone", async () => {
-    expect(await prompt("review")).not.toMatch(/prototype/i);
+    // Its Trust-root list names the prototype turn's prompt as a file the guard refuses (#765), which is no Prototype.
+    expect((await prompt("review")).replaceAll(`\`${kitPromptPath("prototype")}\``, "")).not.toMatch(/prototype/i);
   });
 
   it("design says nothing of a Prototype itself: only the Kit's context on a repo that can prototype does", async () => {

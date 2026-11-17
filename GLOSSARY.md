@@ -166,6 +166,10 @@ _Avoid_: PRD, plan
 One issue an Implementer can turn into a single pull request.
 _Avoid_: task, story
 
+**Acceptance criterion**:
+One check on a Ticket that a test the Required checks run, or the diff itself, shows is met.
+_Avoid_: requirement, AC
+
 **Map**:
 An issue charting the way to a destination still in fog, whose children are Decisions rather than Tickets.
 _Avoid_: epic, roadmap
@@ -307,7 +311,7 @@ A file in a Product repo that steers how agents behave or how their work is judg
 _Avoid_: config file, protected file
 
 **Coding standards**:
-A Product repo's written rules for how its code should look, which the Reviewer judges against and only the Operator changes.
+A Product repo's written rules for how its code should look, which the Implementer builds to and the Reviewer judges against, and only the Operator changes.
 _Avoid_: style guide, conventions, review instructions
 
 **Merge gate**:

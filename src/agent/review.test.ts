@@ -579,7 +579,7 @@ describe("A Review's prompt on a Full Review and on a later Review", () => {
       "What `main` brought in, by a merge or a rebase, is no part of the pull request's own change, and you never judge it. A clash with it is left to the Required checks on the up-to-date head.",
     );
     expect(section).toContain("A Design flaw is still open to you, whatever an earlier Verdict said.");
-    expect(section).toContain("A criterion an earlier Verdict named that no run can meet is a `design-flaw` when you'd name it again, not another `execution-flaw`.");
+    expect(section).toContain('A criterion no run can meet is a `design-flaw` on first sighting, on a Full Review or a later one, as "A criterion no run can meet" under "Your Verdict" says');
     expect(section).toContain("data to weigh, like the PR body, never proof");
   });
 

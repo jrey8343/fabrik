@@ -152,6 +152,7 @@ describe("A replay arm's Implement input", () => {
     await write(seed, {
       "GLOSSARY.md": "# Shop\n\n**Cart**:\nWhat a shopper means to buy.\n",
       "docs/adr/0001-carts-live-in-the-browser.md": "# Carts live in the browser\n",
+      "CODING_STANDARDS.md": "# Coding standards\n\n- Name a test for the behaviour it checks.\n",
       "src/cart.ts": "export const items: string[] = [];\n",
     });
     await git(seed, "add", "-A");
@@ -165,6 +166,7 @@ describe("A replay arm's Implement input", () => {
     await write(seed, {
       "GLOSSARY.md": "# Shop\n\n**Basket**:\nWhat the cart came to be called.\n",
       "docs/adr/0002-baskets-live-on-the-server.md": "# Baskets live on the server\n",
+      "CODING_STANDARDS.md": "# Coding standards\n\n- Say Basket, never Cart.\n",
     });
     await git(seed, "add", "-A");
     await git(seed, "commit", "--quiet", "-m", "The shop moves on");
@@ -189,6 +191,8 @@ describe("A replay arm's Implement input", () => {
     expect(replay.parts).toEqual(first.parts);
     expect(replay.parts.join("\n")).toContain("**Cart**:\nWhat a shopper means to buy.");
     expect(replay.parts.join("\n")).not.toContain("Basket");
+    // The Coding standards as baseSha holds them (#762), as the arm's Review is given them.
+    expect(replay.parts.join("\n")).toContain("## CODING_STANDARDS.md\n# Coding standards\n\n- Name a test for the behaviour it checks.");
     expect(replay.branch).toMatchObject({ name: first.branch.name, base: { sha: baseSha }, head: null });
     expect(await git(replayed, "rev-parse", "--abbrev-ref", "HEAD")).toBe("fabrik/ticket-7");
     expect(replay.operatorComments).toBeNull();

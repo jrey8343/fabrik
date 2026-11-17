@@ -10,6 +10,7 @@ import { UI } from "../__fixtures__/uiEvidence.ts";
 import { rebuildAgentBranch } from "../github/branch.ts";
 import { bundleAgentBranch, setSandboxEnv } from "./implement.ts";
 import { prototypeRole } from "../loop/design.ts";
+import { REQUIRED_CHECKS_HEADING } from "./design.ts";
 import { PROTOTYPE_AUTHOR, PROTOTYPE_SECTIONS, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE, readAgentRunResult, type BuiltBranch } from "./result.ts";
 
@@ -53,6 +54,20 @@ describe("A prototype turn's context", () => {
     expect(prototypeTurnContext(kitConfig({ ui: UI }), 7, REQUEST).parts[5]).toBe(
       ["- Build: none configured", "- Serve: `npm run preview`, which answers at `http://127.0.0.1:4321`"].join("\n"),
     );
+  });
+
+  it("carries no Coding standards, which hold code that merges, not throwaway variants (#762)", () => {
+    const text = prototypeTurnContext(withUi, 7, REQUEST).parts.join("\n");
+
+    expect(text).not.toContain("CODING_STANDARDS.md");
+    expect(text).not.toContain("Coding standards");
+  });
+
+  it("names no Required checks, even when the Kit config lists some, since a prototype turn writes no acceptance criteria (#763)", () => {
+    const { parts } = prototypeTurnContext(kitConfig({ ui: UI, sandbox: { ...kitConfig().sandbox, checks: ["test"] } }), 7, REQUEST);
+
+    expect(parts).not.toContain(`## ${REQUIRED_CHECKS_HEADING}`);
+    expect(parts.join("\n\n")).not.toContain("Required check");
   });
 
   it("fences the brief so no run of backticks in it can close the fence", () => {
