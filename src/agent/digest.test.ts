@@ -48,9 +48,10 @@ const FACTS: DigestFacts = {
     { id: "inline-9", what: "line-comment", url: "https://github.com/acme/shop/pull/50#discussion_r9", path: "src/cart.ts", line: 12 },
   ],
   retriesLeft: 1,
+  touchUpsLeft: 2,
   productCode: { kind: "not-established" },
   requiredChecksRanNothing: [],
-  counts: { passes: 1, executionFlaws: 1, designFlaws: 0, retries: 1, conflictOnlyRuns: 0, requestChanges: 1, infrastructureFailures: 0 },
+  counts: { passes: 1, executionFlaws: 1, designFlaws: 0, retries: 1, touchUps: 0, conflictOnlyRuns: 0, requestChanges: 1, infrastructureFailures: 0 },
 };
 
 describe("What the Digest writer is given of the pull request", () => {
@@ -453,7 +454,7 @@ describe("The Digest writer's prompt", () => {
     const given = section(text, "What you are given");
 
     expect(given).toContain(`"${DIGEST_SECTIONS.facts}"`);
-    for (const field of ["`rounds`", "`counts`", "`retriesLeft`", "`followUps`", "`asks`", "`productCode`"]) expect(given).toContain(field);
+    for (const field of ["`rounds`", "`counts`", "`retriesLeft`", "`touchUpsLeft`", "`followUps`", "`asks`", "`productCode`"]) expect(given).toContain(field);
     expect(given).toContain("Word them, and never contradict them or count anything again yourself");
   });
 
@@ -550,10 +551,10 @@ describe("The Digest writer's prompt", () => {
     expect(example.items.map(({ suggestedRequest }) => suggestedRequest === null)).toEqual([false, true, false]);
   });
 
-  it("has How it got here fold every Verdict, Retry, conflict-only run, Request changes and Infrastructure failure into counts and order, never a list of rounds, commit hashes, run links or times of day", async () => {
+  it("has How it got here fold every Verdict, Retry, Touch-up, conflict-only run, Request changes and Infrastructure failure into counts and order, never a list of rounds, commit hashes, run links or times of day", async () => {
     const how = part(await prompt(), "How it got here");
 
-    expect(how).toContain("Fold every Verdict, Retry, conflict-only run, Request changes and Infrastructure failure into counts and order");
+    expect(how).toContain("Fold every Verdict, Retry, Touch-up, conflict-only run, Request changes and Infrastructure failure into counts and order");
     expect(how).toContain("Never a list of rounds, and no commit hashes, run links or times of day");
   });
 
@@ -565,6 +566,12 @@ describe("The Digest writer's prompt", () => {
     expect(how).toContain("`changed`: say so, with a few words on what changed in the `files` it names");
     expect(how).toContain('`not-established`: say it "could not be established"');
     expect(how).toContain("When `retriesLeft` is 0, say that no Retries are left");
+  });
+
+  it("has How it got here count a Touch-up apart from the Retries, never as one", async () => {
+    const how = part(await prompt(), "How it got here");
+
+    expect(how).toContain("A Touch-up is never a Retry: count each apart, as `counts` does");
   });
 
   it("asks which of the listed Follow-ups to show, each once: one that repeats another is left out, and one an existing Ticket covers is left out and named in the second fold with that Ticket", async () => {

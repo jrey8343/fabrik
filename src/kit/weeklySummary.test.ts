@@ -1658,8 +1658,81 @@ describe("the Weekly summary", () => {
     });
   });
 
+  describe("Touch-ups per merged PR", () => {
+    const touchUpsPerMergedPullRequest = (records: RunRecord[], pullRequests: AgentPullRequestFacts[] = [aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 7 })]) => {
+      const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-03T00:00:00Z" }), ...records], facts: [factsOf({ pullRequests })] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.summary.touchUpsPerMergedPullRequest.thisWeek;
+    };
+
+    it("averages the Touch-ups on each merged PR's Ticket path: two on one and none on another give 1.0", () => {
+      const records = [
+        aRunRecord({ issue: 7, pullRequest: 51, touchUp: 1, endedAt: "2026-11-04T00:00:00Z" }),
+        aRunRecord({ issue: 7, pullRequest: 51, touchUp: 2, endedAt: "2026-11-05T00:00:00Z" }),
+        aRunRecord({ issue: 9, pullRequest: 70, touchUp: 1, endedAt: "2026-11-05T00:00:00Z" }), // a Ticket not merged this week
+      ];
+      const pullRequests = [aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 7 }), aMergedPullRequest("2026-11-06T00:00:00Z", { number: 60, ticket: 8 })];
+      expect(touchUpsPerMergedPullRequest(records, pullRequests)).toBe(1);
+    });
+
+    it("walks the Ticket's whole path as Retries per merged PR does: its earlier PR, an earlier week, and nothing ended after the week", () => {
+      const records = [
+        aRunRecord({ issue: 7, pullRequest: 50, touchUp: 1, endedAt: "2026-11-03T06:00:00Z" }), // on #50, later closed by Back to design
+        aRunRecord({ issue: 7, pullRequest: 51, touchUp: 1, endedAt: "2026-10-20T00:00:00Z" }), // two weeks back
+        aRunRecord({ issue: 7, pullRequest: 51, touchUp: 2, endedAt: "2026-11-10T00:00:00Z" }), // after the week's end
+      ];
+      expect(touchUpsPerMergedPullRequest(records)).toBe(2);
+    });
+
+    it("counts a Touch-up started again after its landing failed once, and none whose run was an Infrastructure failure", () => {
+      const landing = {
+        loopOutcome: "failure",
+        action: { kind: "mark-ready-for-review", description: "take #51 out of draft" },
+        request: "PATCH /repos/owner/product/pulls/51",
+        status: 502,
+        requestId: "C0DE:51",
+        class: "github",
+        refusal: null,
+        reason: null,
+      } as const;
+      const records = [
+        aRunRecord({ issue: 7, pullRequest: 51, touchUp: 1, endedAt: "2026-11-03T00:00:00Z", landing }),
+        aRunRecord({ issue: 7, pullRequest: 51, touchUp: 1, endedAt: "2026-11-04T00:00:00Z" }),
+        aRunRecord({ issue: 7, pullRequest: 51, touchUp: 2, endedAt: "2026-11-05T00:00:00Z", infrastructureFailure: "timeout" }),
+      ];
+      expect(touchUpsPerMergedPullRequest(records)).toBe(1);
+    });
+
+    it("counts a record stored before Touch-ups were recorded as none", () => {
+      const stored = { ...aRunRecord({ issue: 7, pullRequest: 51, endedAt: "2026-11-04T00:00:00Z" }), schema: 10 } as Record<string, unknown>;
+      delete stored["fullReview"];
+      delete stored["findingTags"];
+      delete stored["touchUp"];
+      const record = readRunRecord(stored, ["Claude token"]);
+      if (record === null) throw new Error("expected a record");
+      expect(touchUpsPerMergedPullRequest([record])).toBe(0);
+    });
+
+    it("counts a Touch-up in neither the Retries row nor Retries per merged PR", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ issue: 7, pullRequest: 51, retry: 1, endedAt: "2026-11-03T00:00:00Z" }), aRunRecord({ issue: 7, pullRequest: 51, touchUp: 1, endedAt: "2026-11-04T00:00:00Z" })],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 7 })] })],
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "summary",
+        summary: { retriesPerMergedPullRequest: { thisWeek: 1 }, touchUpsPerMergedPullRequest: { thisWeek: 1 }, counts: { retries: { thisWeek: 1 } } },
+      });
+    });
+
+    it("is none in a week with no merged agent PRs", () => {
+      expect(touchUpsPerMergedPullRequest([aRunRecord({ pullRequest: 51, touchUp: 1, endedAt: "2026-11-04T00:00:00Z" })], [])).toBeNull();
+    });
+  });
+
   describe("Missed earlier per merged PR", () => {
-    const missedEarlierPerMergedPullRequest = (records: RunRecord[], pullRequests: AgentPullRequestFacts[]) => {
+    const missedEarlierPerMergedPullRequest =(records: RunRecord[], pullRequests: AgentPullRequestFacts[]) => {
       const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-03T00:00:00Z" }), ...records], facts: [factsOf({ pullRequests })] }));
       if (result.kind !== "summary") throw new Error("expected a summary");
       return result.summary.missedEarlierPerMergedPullRequest.thisWeek;
@@ -2040,6 +2113,23 @@ describe("the Weekly summary", () => {
 
       expect(rows).toEqual([
         "| First-pass yield | 50% (1 of 2) | no judged runs | – |",
+        "| Retry 1 yield | no judged runs | no judged runs | – |",
+        "| Retry 2 yield | no judged runs | no judged runs | – |",
+      ]);
+    });
+
+    it("counts a first run whose Verdict called for a Touch-up as not passing, and the Touch-up in no Yield row", () => {
+      const calledForTouchUp = aComment(
+        `${verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags: { small: 2, missedEarlier: 0, counted: 0, smallBody: 0 }, touchUp: 1, headSha: head(1) })}\n## Verdict: Execution flaw`,
+        "2026-11-02T01:00:00Z",
+      );
+      const rows = yieldRows(
+        [pushedRun(1, "2026-11-02T00:00:00Z"), pushedRun(2, "2026-11-03T00:00:00Z", { pullRequest: 50, touchUp: 1 })],
+        [calledForTouchUp, aVerdictComment("pass", head(2), "2026-11-03T01:00:00Z")],
+      );
+
+      expect(rows).toEqual([
+        "| First-pass yield | 0% (0 of 1) | no judged runs | – |",
         "| Retry 1 yield | no judged runs | no judged runs | – |",
         "| Retry 2 yield | no judged runs | no judged runs | – |",
       ]);
@@ -2912,10 +3002,23 @@ describe("the Weekly summary", () => {
       const body = result.kind === "summary" ? result.body : "";
       expect(body).toContain("| Human touches per merged PR | – | – | – |");
       expect(body).toContain("| Retries per merged PR | – | – | – |");
+      expect(body).toContain("| Touch-ups per merged PR | – | – | – |");
       expect(body).toContain("| Missed earlier per merged PR | – | – | – |");
     });
 
-    it("shows Missed earlier per merged PR to one decimal straight after Retries per merged PR", () => {
+    it("shows Touch-ups per merged PR to one decimal straight after Retries per merged PR", () => {
+      const result = weeklySummary(
+        input({
+          records: [aRunRecord({ issue: 7, pullRequest: 51, touchUp: 1, endedAt: "2026-11-04T00:00:00Z" })],
+          facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-06T00:00:00Z", { number: 51, ticket: 7 }), aMergedPullRequest("2026-11-06T00:00:00Z", { number: 60, ticket: 8 })] })],
+        }),
+      );
+      const rows = result.kind === "summary" ? result.body.split("\n") : [];
+      const after = rows.findIndex((row) => row.startsWith("| Retries per merged PR |")) + 1;
+      expect(rows[after]).toBe("| Touch-ups per merged PR | 0.5 | – | – |");
+    });
+
+    it("shows Missed earlier per merged PR to one decimal straight after Touch-ups per merged PR", () => {
       const result = weeklySummary(
         input({
           records: [
@@ -2949,7 +3052,7 @@ describe("the Weekly summary", () => {
         }),
       );
       const rows = result.kind === "summary" ? result.body.split("\n") : [];
-      const after = rows.findIndex((row) => row.startsWith("| Retries per merged PR |")) + 1;
+      const after = rows.findIndex((row) => row.startsWith("| Touch-ups per merged PR |")) + 1;
       expect(rows[after]).toBe("| Missed earlier per merged PR | 1.5 | – | – |");
     });
 

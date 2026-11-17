@@ -3,7 +3,7 @@
 // numbered it, the head the note names, and the note itself, which carries the
 // `fix` comment the run wrote. A later Review is given them. Pure, no I/O.
 import { type DigestThread, noteRound } from "./digestFacts.ts";
-import { pushedHeadIn, touchUpPushIn } from "./markers.ts";
+import { pushedHeadIn } from "./markers.ts";
 
 /** The kind of Implement run that pushed to a pull request. */
 export type PushingRun = "retry" | "touch-up" | "request-changes-run" | "conflict-only-run";
@@ -29,23 +29,22 @@ export interface RunPush {
  */
 export function runPushesIn({ kitComments, landedNothing }: Pick<DigestThread, "kitComments" | "landedNothing">): RunPush[] {
   const bodies = kitComments.map(({ body }) => body);
-  return bodies.flatMap((note, at): RunPush[] => {
-    // A Touch-up's note names which it was itself (#750).
-    const touchUp = touchUpPushIn(note);
-    if (touchUp !== null) return [{ run: "touch-up", touchUp, head: pushedHeadIn(note), note }];
-    return noteRound(note, bodies.slice(0, at), landedNothing).flatMap((round): RunPush[] => {
+  return bodies.flatMap((note, at): RunPush[] =>
+    noteRound(note, bodies.slice(0, at), landedNothing).flatMap((round): RunPush[] => {
       const head = pushedHeadIn(note);
       switch (round.what) {
         case "retry":
           return [{ run: "retry", ...(round.retry === undefined ? {} : { retry: round.retry }), head, note }];
+        case "touch-up":
+          return [{ run: "touch-up", ...(round.touchUp === undefined ? {} : { touchUp: round.touchUp }), head, note }];
         case "request-changes-run":
         case "conflict-only-run":
           return [{ run: round.what, head, note }];
         default:
           return [];
       }
-    });
-  });
+    }),
+  );
 }
 
 /**

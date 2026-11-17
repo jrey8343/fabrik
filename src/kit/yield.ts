@@ -50,11 +50,13 @@ export function yieldsOf(window: Window, records: readonly RunRecord[], facts: r
  * does: a first run is Retry 0 with no PR it was planned against, a Kept-branch
  * start, a Stepped-up start and the first run after a Back to design included;
  * a Retry 1 or Retry 2 goes by its Retry number. A Request-changes run, a
- * conflict-only run (Retry 0, planned against its PR), a Replay arm and a
- * record of an Infrastructure failure are none.
+ * conflict-only run (Retry 0, planned against its PR), a Touch-up (#754), a
+ * Replay arm and a record of an Infrastructure failure are none. The first run
+ * whose Verdict called for a Touch-up still counts, as not passing: that
+ * Verdict is an Execution flaw.
  */
 function yieldKindOf(record: RunRecord): YieldKind | null {
-  if (record.role !== "implement" || !isLive(record) || record.infrastructureFailure !== null || record.requestChanges) return null;
+  if (record.role !== "implement" || !isLive(record) || record.infrastructureFailure !== null || record.requestChanges || record.touchUp > 0) return null;
   if (record.retry === 0) return record.pullRequest === null ? "first" : null;
   if (record.retry === 1) return "retry1";
   if (record.retry === 2) return "retry2";

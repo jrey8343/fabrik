@@ -19,6 +19,7 @@ import {
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
   RETRY_PUSH_MARKER,
+  touchUpPushMarker,
   verdictMarker,
 } from "./markers.ts";
 import type { VerdictRecord } from "./types.ts";
@@ -42,6 +43,9 @@ const aNote = (minute: number, ...lines: string[]) => ({ at: at(minute), body: l
 
 const aRetryPush = (minute: number, head: string) =>
   aNote(minute, RETRY_PUSH_MARKER, pushedHeadMarker(head), "The Implementer pushed a fix for the Execution flaw to `fabrik/ticket-7`; Review runs again on it.");
+
+const aTouchUpPush = (minute: number, touchUp: number, head: string) =>
+  aNote(minute, touchUpPushMarker(touchUp), pushedHeadMarker(head), "The Implementer pushed a Touch-up for the Execution flaw to `fabrik/ticket-7`; Review runs again on it.");
 
 const aRequestChangesPush = (minute: number, head: string) =>
   aNote(minute, REQUEST_CHANGES_RUN_MARKER, pushedHeadMarker(head), "The Implementer pushed the Operator's requested changes to `fabrik/ticket-7`; Review runs again on it.");
@@ -122,6 +126,7 @@ describe("The rounds Kit code builds from a pull request's thread", () => {
       executionFlaws: 1,
       designFlaws: 0,
       retries: 1,
+      touchUps: 0,
       conflictOnlyRuns: 0,
       requestChanges: 1,
       infrastructureFailures: 1,
@@ -394,6 +399,10 @@ describe("How many Retries are left", () => {
     expect(digestFactsOf(thread).retriesLeft).toBe(left);
   });
 
+  it.each(THREADS)("leaves both Touch-ups on a path with no Touch-up: %s", (_name, thread) => {
+    expect(digestFactsOf(thread).touchUpsLeft).toBe(2);
+  });
+
   it.each(THREADS)("is what the Retry rules give the next Execution flaw on the same thread: %s", (_name, thread, left) => {
     const snapshot = aPullRequest({ verdicts: verdictsIn(thread.kitComments.map(({ body }) => body)), ticketLandedNothing: thread.landedNothing });
 
@@ -401,6 +410,57 @@ describe("How many Retries are left", () => {
 
     // The rules give the next flaw Retry 1 of 2 with both left, Retry 2 of 2 with one, and none with none.
     expect(next?.line.slice(0, "Retry 1 of 2".length) ?? null).toBe(left === 0 ? null : `Retry ${3 - left} of 2`);
+  });
+});
+
+describe("Touch-ups, counted apart from Retries", () => {
+  // An all-tagged flaw that called for Touch-up 1, its push, a flaw that called for Retry 1, its push, and a pass.
+  const ONE_OF_EACH = aThread({
+    kitComments: [
+      aVerdict(5, { verdict: "execution-flaw", headSha: sha("a"), touchUp: 1 }),
+      aTouchUpPush(10, 1, sha("b")),
+      aVerdict(15, { verdict: "execution-flaw", headSha: sha("b") }),
+      aRetryPush(20, sha("c")),
+      aVerdict(25, { verdict: "pass", headSha: sha("c") }),
+    ],
+  });
+
+  it("give one Touch-up pushed, one Touch-up left and one Retry left on a path with one of each", () => {
+    const facts = digestFactsOf(ONE_OF_EACH);
+
+    expect(facts.counts.touchUps).toBe(1);
+    expect(facts.touchUpsLeft).toBe(1);
+    expect(facts.retriesLeft).toBe(1);
+  });
+
+  it("give the Touch-up its own row, numbered as its note names it, and never count it among the Retries that pushed", () => {
+    const facts = digestFactsOf(ONE_OF_EACH);
+
+    expect(facts.rounds.map(({ who, what, retry, touchUp }) => [who, what, retry ?? touchUp ?? null])).toEqual([
+      ["implementer", "first-run", null],
+      ["reviewer", "execution-flaw", null],
+      ["implementer", "touch-up", 1],
+      ["reviewer", "execution-flaw", null],
+      ["implementer", "retry", 1],
+      ["reviewer", "pass", null],
+    ]);
+    expect(facts.counts.retries).toBe(1);
+  });
+
+  it("give none left after two, never fewer, while the Retries stay the Retry rules' own", () => {
+    const facts = digestFactsOf(
+      aThread({
+        kitComments: [
+          aVerdict(5, { verdict: "execution-flaw", headSha: sha("a"), touchUp: 1 }),
+          aTouchUpPush(10, 1, sha("b")),
+          aVerdict(15, { verdict: "execution-flaw", headSha: sha("b"), touchUp: 2 }),
+          aTouchUpPush(20, 2, sha("c")),
+          aVerdict(25, { verdict: "pass", headSha: sha("c") }),
+        ],
+      }),
+    );
+
+    expect([facts.counts.touchUps, facts.touchUpsLeft, facts.counts.retries, facts.retriesLeft]).toEqual([2, 0, 0, 2]);
   });
 });
 
@@ -571,7 +631,7 @@ describe("The rounds fold", () => {
     expect(body.endsWith(`</details>\n\n[The run](${aDigestGiven().runUrl})`)).toBe(true);
   });
 
-  it("words every kind of round: the Kit's own Verdicts with what they were for, a Design flaw, a conflict-only run, a Broken run, and an effect that is tests only or not known", () => {
+  it("words every kind of round: the Kit's own Verdicts with what they were for, a Design flaw, a Touch-up with its number, a conflict-only run, a Broken run, and an effect that is tests only or not known", () => {
     const facts = aDigestFacts({
       rounds: [
         { who: "implementer", what: "first-run", effect: null },
@@ -580,18 +640,20 @@ describe("The rounds fold", () => {
         { who: "implementer", what: "retry", retry: 2, effect: null },
         { who: "kit", what: "broken-run", effect: null },
         { who: "kit", what: "execution-flaw", why: "broken-run", effect: "not-known" },
+        { who: "implementer", what: "touch-up", touchUp: 1, effect: null },
         { who: "implementer", what: "conflict-only-run", effect: null },
         { who: "reviewer", what: "design-flaw", effect: "tests-only" },
       ],
     });
 
-    expect(roundsFoldOf(bodyOf(aDigestReply(), aDigestGiven({ facts }))).split("\n").slice(5, 13)).toEqual([
+    expect(roundsFoldOf(bodyOf(aDigestReply(), aDigestGiven({ facts }))).split("\n").slice(5, 14)).toEqual([
       "| The Implementer | The first run | |",
       "| The Reviewer | Execution flaw | |",
       "| The Kit, for a Retry that changed nothing | Execution flaw | None |",
       "| The Implementer | Retry 2 | |",
       "| The Kit | A Broken run | |",
       "| The Kit, for a Broken run | Execution flaw | Not known |",
+      "| The Implementer | Touch-up 1 | |",
       "| The Implementer | A conflict-only run | |",
       "| The Reviewer | Design flaw | Tests only |",
     ]);
