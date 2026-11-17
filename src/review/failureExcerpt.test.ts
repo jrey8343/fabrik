@@ -9,6 +9,7 @@ import {
   type FailureExcerpt,
   type FailureReader,
   excerptsPassedOut,
+  failureReaderOf,
   readFailureExcerpt,
   renderFailureExcerpts,
 } from "./failureExcerpt.ts";
@@ -396,6 +397,35 @@ describe("The cap on Failure excerpts' log lines", () => {
     expect(blocks.join("\n\n").length).toBeLessThanOrEqual(400);
     expect(blocks[0]).toContain(`- \`a\` ([the job](${link("a")}))`);
     expect(blocks[1]).toContain(`- \`b\` ([the job](${link("b")}))`);
+  });
+});
+
+describe("The FailureReader on a job's GitHub clients", () => {
+  it("reads the job and its step's log on the Actions client, and the annotations on the Checks client, every page of them", async () => {
+    const calls: string[] = [];
+    const actions = {
+      rest: async (_method: string, path: string) => (calls.push(`actions ${path}`), SAMPLE_JOB),
+      logText: async (path: string) => (calls.push(`log ${path}`), SAMPLE_STEP_LOG),
+    };
+    const checks = { rest: async (_method: string, path: string) => (calls.push(`checks ${path}`), path.includes("page=1") ? SAMPLE_ANNOTATIONS : []) };
+
+    const excerpt = await readFailureExcerpt({ name: "Typecheck and test", link: SAMPLE_JOB_LINK, sha: SHA }, failureReaderOf("jrey8343/fabrik", { actions, checks }));
+
+    expect(calls).toEqual([
+      "actions /repos/jrey8343/fabrik/actions/jobs/128636834592",
+      "log /repos/jrey8343/fabrik/actions/jobs/128636834592/steps/5/logs",
+      "checks /repos/jrey8343/fabrik/check-runs/128636834592/annotations?per_page=100&page=1",
+    ]);
+    expect(excerpt).toMatchObject({ kind: "actions", steps: [{ name: "Typecheck" }], annotations: [{ line: 10 }, { line: 211 }] });
+  });
+
+  it("reads the annotations on the Actions client when given no other", async () => {
+    const paths: string[] = [];
+    const actions = { rest: async (_method: string, path: string) => (paths.push(path), path.includes("annotations") ? [] : SAMPLE_JOB), logText: async () => SAMPLE_STEP_LOG };
+
+    await readFailureExcerpt({ name: "Typecheck and test", link: SAMPLE_JOB_LINK, sha: SHA }, failureReaderOf("jrey8343/fabrik", { actions }));
+
+    expect(paths.at(-1)).toBe("/repos/jrey8343/fabrik/check-runs/128636834592/annotations?per_page=100&page=1");
   });
 });
 

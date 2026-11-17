@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { FailureReader } from "./failureExcerpt.ts";
 import type { CheckDetail } from "./rerun.ts";
-import { type ChecksWaitGitHub, errorReport, gaveUpReport, type PullRequestState, ranNothingLine, requiredChecksToWaitOn, waitForRequiredChecks } from "./wait.ts";
+import {
+  type ChecksWaitGitHub,
+  errorReport,
+  gaveUpReport,
+  type PullRequestState,
+  ranNothingLine,
+  redExcerpts,
+  requiredChecksToWaitOn,
+  waitForRequiredChecks,
+} from "./wait.ts";
 
 const HEAD = "a".repeat(40);
 const MINUTE = 60_000;
@@ -226,5 +236,38 @@ describe("The Review's step summary line on checks that ran nothing", () => {
 
   it("is left out when every check ran", () => {
     expect(ranNothingLine([])).toBeNull();
+  });
+});
+
+describe("The Failure excerpts a red wait passes out (#775)", () => {
+  const job = (n: number) => `https://github.com/acme/shop/actions/runs/7/job/${n}`;
+  const read: string[] = [];
+  const reader: FailureReader = {
+    job: async (id) => (read.push(`job ${id}`), { status: "completed", conclusion: "failure", steps: [{ name: "Test", number: 3, conclusion: "failure" }] }),
+    stepLog: async () => "##[error]boom\n",
+    annotations: async () => [],
+  };
+
+  it("reads each red GitHub Actions check the wait names, by the job its link gives, and no outside check", async () => {
+    read.length = 0;
+    const checks: CheckDetail[] = [
+      { name: "unit", bucket: "fail", link: job(11), workflow: "CI" },
+      { name: "lint", bucket: "pass", link: job(12), workflow: "CI" },
+      { name: "Vercel", bucket: "fail", link: "https://vercel.com/acme/shop/1", workflow: "" },
+    ];
+
+    const excerpts = await redExcerpts(checks, ["unit", "Vercel"], HEAD, reader);
+
+    expect(read).toEqual(["job 11"]);
+    expect(excerpts).toEqual([{ kind: "actions", check: "unit", link: job(11), steps: [{ name: "Test", earlier: 0, lines: ["##[error]boom"] }], annotations: [] }]);
+  });
+
+  it("reads the re-run's job for a check that failed again, as the checks on the head now link it", async () => {
+    read.length = 0;
+    const checks: CheckDetail[] = [{ name: "unit", bucket: "fail", link: job(21), workflow: "CI", startedAt: "2026-11-18T01:00:00Z" }];
+
+    await redExcerpts(checks, ["unit"], HEAD, reader);
+
+    expect(read).toEqual(["job 21"]);
   });
 });

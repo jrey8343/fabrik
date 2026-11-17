@@ -1094,6 +1094,17 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # On red, each red GitHub Actions check's Failure excerpt, read before anything is re-run (#775),
+      # for the push job's Verdict. A file, never a job output; none missing fails nothing.
+      - name: Pass the Failure excerpts to the push job
+        if: steps.wait.outputs.checks == 'red'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure-excerpts
+          path: ${{ runner.temp }}/fabrik-out/failure-excerpts.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Re-running red checks (#462, ADR-0018): the failed jobs of the workflow runs
   # behind the red GitHub Actions checks, once on the same head. The one job on
   # the Review path that holds a write credential: `actions: write` on the
@@ -1201,6 +1212,17 @@ jobs:
         with:
           name: fabrik-agent-failure
           path: ${{ runner.temp }}/fabrik-out/agent-failure.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # On red, the Failure excerpt of each re-run check that failed again (#775), which the push job's
+      # Verdict carries over the first wait's.
+      - name: Pass the Failure excerpts to the push job
+        if: steps.wait.outputs.checks == 'red'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fabrik-agent-failure-excerpts-rerun
+          path: ${{ runner.temp }}/fabrik-out/failure-excerpts-rerun.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -2059,7 +2081,7 @@ jobs:
     permissions:
       # Only for a push to the default branch's conflict check, which reads whether an Implement job is under way
       # before restarting a stalled Request-changes run (#387), and for agent:implement's start check, which reads
-      # the Implement runs still landing on the Ticket (#725); the Fabrik App has no Actions permission.
+      # the Implement runs still landing on the Ticket (#725); the Loop reads workflow runs on its job's own token, never the Fabrik App's, whose Actions: read is the Weekly summary's (ADR-0002's addendum).
       actions: read
     outputs:
       # "true" when the plan asked for a Dispatch check.
@@ -2087,8 +2109,9 @@ jobs:
           persist-credentials: false
 
       # Whatever the agent job left: its result (and bundle), or its failure report,
-      # or the Review checks job's failure report. Red checks and a timeout leave
-      # nothing, and src/main.ts expects that.
+      # or the Review checks job's failure report. Red checks leave their Failure
+      # excerpts (#775), and a timeout leaves nothing; src/main.ts reads any of them
+      # missing as none.
       - name: Take the agent job's artifacts
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -2186,7 +2209,7 @@ jobs:
       group: fabrik-dispatch
       cancel-in-progress: false
     permissions:
-      # Only to count Implement and Research runs in flight; the Fabrik App has no Actions permission.
+      # Only to count Implement and Research runs in flight; the Loop reads workflow runs on its job's own token, never the Fabrik App's, whose Actions: read is the Weekly summary's (ADR-0002's addendum).
       actions: read
     env:
       FABRIK_DISPATCH_CHECK: "true"
@@ -2222,7 +2245,7 @@ jobs:
       group: fabrik-design-queue
       cancel-in-progress: false
     permissions:
-      # Only to read Design-session turns in progress; the Fabrik App has no Actions permission.
+      # Only to read Design-session turns in progress; the Loop reads workflow runs on its job's own token, never the Fabrik App's, whose Actions: read is the Weekly summary's (ADR-0002's addendum).
       actions: read
     env:
       FABRIK_DESIGN_QUEUE_CHECK: "true"

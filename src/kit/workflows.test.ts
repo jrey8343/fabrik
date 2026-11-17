@@ -16,6 +16,7 @@ import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EV
 import { FILED_FROM_FILE, MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
+import { FAILURE_EXCERPTS_FILE, RERUN_FAILURE_EXCERPTS_FILE } from "../review/failureExcerpt.ts";
 import { RUN_BRIEF_FILE } from "../agent/transcript.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 
@@ -1013,6 +1014,28 @@ describe("The Review checks job, when its wait fails", () => {
   });
 });
 
+// #775: a wait that ends red passes out each red check's Failure excerpt as a
+// file artifact the push job takes with the agent jobs', never as a job output.
+describe("The Review's waits, when they end red", () => {
+  it.each([
+    ["review-checks", FAILURE_EXCERPTS_FILE, "fabrik-agent-failure-excerpts"],
+    ["rerun-wait", RERUN_FAILURE_EXCERPTS_FILE, "fabrik-agent-failure-excerpts-rerun"],
+  ])("the %s job uploads its Failure excerpts, on red, where the push job takes them from", (name, file, artifact) => {
+    const upload = stepsOf(job(name)).find((step) => step.includes(`name: ${artifact}\n`)) ?? "";
+
+    expect(upload).toContain("uses: actions/upload-artifact@");
+    expect(upload).toContain("if: steps.wait.outputs.checks == 'red'\n");
+    expect(upload).toContain(`path: \${{ runner.temp }}/fabrik-out/${file}\n`);
+    expect(upload).toContain("if-no-files-found: ignore");
+    expect(job(name)).not.toMatch(/excerpt.*: \$\{\{ steps\.wait\.outputs/);
+  });
+
+  it.each(["review-checks", "rerun-wait"])("the %s job reads them on the token it held already", (name) => {
+    expect(job(name)).toContain("    permissions:\n      contents: read\n      pull-requests: read\n      checks: read\n      statuses: read\n");
+    expect(job(name)).toMatch(/\n      actions: read\n/);
+  });
+});
+
 // #431: run.ts bundles a run's commits before checking its reply, so a reply that
 // breaks its contract leaves them; the failure report's upload keeps the bundle, as
 // the notice says (src/loop/failures.ts), though the push job never pushes it.
@@ -1711,7 +1734,7 @@ describe("The conflict check's turns (#341)", () => {
 });
 
 // #387: before restarting a stalled Request-changes run on a draft, the conflict check reads whether an Implement
-// job is under way, which the Fabrik App can't: it has no Actions permission (ADR-0002).
+// job is under way, on its job's own token: the Loop's reads of workflow runs never use the Fabrik App's (ADR-0002's addendum).
 describe("The conflict check's read of the Implement jobs under way (#387)", () => {
   const tick = jobIn(schedule, "tick");
   const callerTick = jobIn(readFileSync(new URL("templates/fabrik.yml", root), "utf8"), "tick");

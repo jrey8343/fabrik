@@ -283,6 +283,16 @@ export class GitHub implements ReadClient {
   }
 
   /**
+   * A log's plain text, such as a job step's (#775). GitHub answers a log's
+   * REST path with a redirect to a file that expires in a minute; the read
+   * follows it at once, and fetch leaves the token behind on the way.
+   */
+  async logText(path: string): Promise<string> {
+    const response = await this.#answered(`GET ${path}`, `${this.#apiUrl}${path}`, { write: false, notFoundIsNull: false, init: { headers: this.#headers() } });
+    return response!.text();
+  }
+
+  /**
    * GitHub's answer to a call, once it answers with success, trying a
    * failure worth it again; null for a 404 when `notFoundIsNull`. `write`
    * says whether the call changes anything (see worthRetrying).

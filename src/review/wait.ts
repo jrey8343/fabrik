@@ -9,7 +9,7 @@
 // notice: a Required check that never reported is named, as no re-run fixes it.
 //   node src/review/wait.ts <product checkout>
 // Env: GH_TOKEN (read-only, `contents: read` enough for the branch), GITHUB_REPOSITORY, FABRIK_PULL_REQUEST, GITHUB_OUTPUT,
-//   FABRIK_REVIEW_TIMEOUT_MINUTES (the job's timeout), FABRIK_OUT_DIR (where the failure report goes).
+//   FABRIK_REVIEW_TIMEOUT_MINUTES (the job's timeout), FABRIK_OUT_DIR (where the failure report and the Failure excerpts go).
 // Writes step outputs:
 //   checks   "green", "red", or "stale" when the PR moved on, closed or left draft while waiting
 //   head-sha the commit the checks ran on
@@ -24,6 +24,11 @@
 // have reported again on that head, and then for every check it waits on, and also writes
 //   failed-again the re-run checks that failed again, as a JSON list
 //   flaky        the re-run checks that passed, with their red and green runs, as JSON
+// A wait that ends red also leaves, in FABRIK_OUT_DIR, the Failure excerpt of
+// each red GitHub Actions check (src/review/failureExcerpt.ts, #775) for the
+// push job's Verdict: the first wait every red one's, before anything is
+// re-run, and the Re-run checks' wait those that failed again. It reads them
+// with the same token, whose `actions: read` and `checks: read` its job holds.
 import { execFile } from "node:child_process";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -36,6 +41,14 @@ import { checkCode } from "../loop/flakyChecks.ts";
 import type { FailureReport } from "../loop/types.ts";
 import { type BranchRequiredChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type ChecksOutcome, checksFromGh, requiredChecksOutcome } from "./checks.ts";
+import {
+  FAILURE_EXCERPTS_FILE,
+  type FailureExcerpt,
+  type FailureReader,
+  failureReaderOf,
+  readFailureExcerpt,
+  RERUN_FAILURE_EXCERPTS_FILE,
+} from "./failureExcerpt.ts";
 import { type CheckDetail, type RerunnableCheck, redChecksOf, rerunOutcome, settledChecksOutcome } from "./rerun.ts";
 
 const run = promisify(execFile);
@@ -246,16 +259,52 @@ async function main(productDir: string): Promise<void> {
     const stepSummary = process.env["GITHUB_STEP_SUMMARY"] ?? "";
     if (stepSummary !== "") await appendFile(stepSummary, `${summary}\n`);
   }
+  const reader = failureReaderOf(repo, { actions: client });
   if (rerun === null && outcome.checks === "red") {
     const red = redChecksOf(last, failed);
     console.log(`The Kit can re-run ${red.rerun.length === 0 ? "none of them" : red.rerun.map(({ name }) => name).join(", ")}`);
     lines.push(`red=${JSON.stringify(red)}`);
+    // Before anything is re-run (#775): the re-run may leave the first attempt's job readable only by its own id.
+    await leaveExcerpts(FAILURE_EXCERPTS_FILE, () => redExcerpts(last, failed, outcome.headSha, reader));
   }
   if (rerun !== null && outcome.checks !== "stale") {
     const { failedAgain, flaky } = rerunOutcome(rerun, last);
     lines.push(`failed-again=${JSON.stringify(failedAgain)}`, `flaky=${JSON.stringify(flaky)}`);
+    if (outcome.checks === "red") await leaveExcerpts(RERUN_FAILURE_EXCERPTS_FILE, () => redExcerpts(last, failedAgain, outcome.headSha, reader));
   }
   await appendFile(required("GITHUB_OUTPUT"), `${lines.join("\n")}\n`);
+}
+
+/**
+ * The Failure excerpts a wait that ended red passes out (#775): one for each
+ * of `names` that is a red GitHub Actions check on the head, read from the
+ * job its link names now. The first wait reads every red check before
+ * anything is re-run, as a re-run may replace what its link reads; the wait
+ * after the re-run reads those that failed again, whose links are the
+ * re-run's jobs. An outside check is named in the Verdict alone.
+ */
+export async function redExcerpts(checks: readonly CheckDetail[], names: readonly string[], sha: string, reader: FailureReader): Promise<FailureExcerpt[]> {
+  const excerpts: FailureExcerpt[] = [];
+  for (const { name, link } of redChecksOf(checks, names).rerun) excerpts.push(await readFailureExcerpt({ name, link, sha }, reader));
+  return excerpts;
+}
+
+/**
+ * Passes out the excerpts in FABRIK_OUT_DIR, which the job uploads for the
+ * push job. Never fails the wait: a Verdict whose excerpts are missing says
+ * under each check that its failure couldn't be read.
+ */
+async function leaveExcerpts(file: string, read: () => Promise<FailureExcerpt[]>): Promise<void> {
+  const outDir = process.env["FABRIK_OUT_DIR"] ?? "";
+  if (outDir === "") return;
+  try {
+    const excerpts = await read();
+    await mkdir(outDir, { recursive: true });
+    await writeFile(join(outDir, file), JSON.stringify(excerpts));
+    console.log(`Read the Failure excerpt of ${excerpts.length === 0 ? "no check" : excerpts.map(({ check }) => check).join(", ")}`);
+  } catch (error) {
+    console.log(`Couldn't pass out the Failure excerpts: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /**

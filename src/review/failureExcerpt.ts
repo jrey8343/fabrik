@@ -16,7 +16,7 @@
 //   up in 370 failed jobs read across the Kit's and two Product repos; its
 //   step's log, if GitHub holds none, reads as a step that left none.
 // - A check run's error annotation has the level `failure`, not `error`.
-import { GitHubError, whyUnread } from "../github/client.ts";
+import { allPages, GitHubError, type ReadClient, whyUnread } from "../github/client.ts";
 import { checkCode } from "../loop/flakyChecks.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 
@@ -58,6 +58,27 @@ export interface FailureReader {
   /** One step's log, as plain text. */
   stepLog(jobId: number, step: number): Promise<string>;
   annotations(checkRunId: number): Promise<readonly CheckAnnotation[]>;
+}
+
+/** A client that reads a log's plain text, as the GitHub class does, beside its REST calls. */
+export interface LogClient extends Pick<ReadClient, "rest"> {
+  logText(path: string): Promise<string>;
+}
+
+/**
+ * The FailureReader on a job's own GitHub clients for `repo` (`owner/name`):
+ * the job and its logs on `actions`, which needs Actions: read, and the
+ * annotations on `checks`, which needs Checks: read, the same client when
+ * not given. The Review's waits hand in their workflow token for both; the
+ * Tick can hand in the Fabrik App's for `checks`.
+ */
+export function failureReaderOf(repo: string, clients: { readonly actions: LogClient; readonly checks?: Pick<ReadClient, "rest"> }): FailureReader {
+  const { actions, checks = actions } = clients;
+  return {
+    job: async (jobId) => (await actions.rest("GET", `/repos/${repo}/actions/jobs/${jobId}`)) as ActionsJob,
+    stepLog: (jobId, step) => actions.logText(`/repos/${repo}/actions/jobs/${jobId}/steps/${step}/logs`),
+    annotations: (checkRunId) => allPages<CheckAnnotation>(checks, `/repos/${repo}/check-runs/${checkRunId}/annotations`),
+  };
 }
 
 /**
