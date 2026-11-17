@@ -137,7 +137,7 @@ const TRIMMED = `The transcript was too long to give whole, so it is trimmed: it
 
 /** The judge prompt for one run: the Ticket and the run's trimmed transcript as data, then the rubrics and the answer it owes. */
 export function judgePrompt({ transcript, ticket, run, brief, rubrics }: JudgePromptInput): JudgePrompt {
-  const { text, trimmed } = trimmedTranscriptOf(transcript)(TRIMMED_TRANSCRIPT_BUDGET);
+  const { text, trimmed } = trimmedTranscriptOf(transcript, { skillsItHad: false })(TRIMMED_TRANSCRIPT_BUDGET);
   const parts = [
     OPENING,
     "## The Ticket",

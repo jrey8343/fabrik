@@ -332,10 +332,21 @@ describe("Kit config", () => {
     expect(result).toEqual({ ok: true, config: { ...DEFAULTS, roles: { ...DEFAULTS.roles, implement: { ...DEFAULTS.roles.implement, effort: "high" } } } });
   });
 
-  it("lets null reset an effort back to the CLI default", () => {
-    const result = resolveKitConfig({ config: `{ "roles": { "step_up": { "effort": null } } }` });
+  it("reads every role's explicit null effort, as the old starter wrote it, as medium, so each Run record names the level", () => {
+    const nulls = { model: undefined, effort: null };
+    const config = JSON.stringify({
+      roles: { triage: nulls, design: nulls, implement: nulls, review: nulls, audit: nulls, retro: nulls, research: nulls, digest: nulls, step_up: nulls },
+    });
+    const result = resolveKitConfig({ config });
 
-    expect(result.ok && result.config.roles.stepUp.effort).toBeNull();
+    expect(result).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("still runs a role at a Product's own effort beside another role's null", () => {
+    const result = resolveKitConfig({ config: `{ "roles": { "implement": { "effort": "high" }, "review": { "effort": null } } }` });
+
+    expect(result.ok && result.config.roles.implement.effort).toBe("high");
+    expect(result.ok && result.config.roles.review.effort).toBe("medium");
   });
 
   it.each([`{ "roles": { "review": { "model": null } } }`, `{ "max_in_flight": null }`])(
@@ -829,10 +840,16 @@ describe("The Digest's Kit config (ADR-0022)", () => {
     expect(result.ok && result.config.roles.review).toEqual({ model: "claude-sonnet-5-5", effort: "high", timeoutMinutes: 30 });
   });
 
-  it("lets a null effort on roles.digest pass none, though roles.review sets one", () => {
+  it("reads a null effort on roles.digest as naming none, so the Digest follows roles.review's", () => {
     const result = resolveKitConfig({ config: `{ "roles": { "review": { "effort": "high" }, "digest": { "effort": null } } }` });
 
-    expect(result.ok && result.config.roles.digest.effort).toBeNull();
+    expect(result.ok && result.config.roles.digest.effort).toBe("high");
+  });
+
+  it("reads a null roles.review effort as naming none, so the Digest that names none runs at medium", () => {
+    const result = resolveKitConfig({ config: `{ "roles": { "review": { "effort": null }, "digest": { "effort": null } } }` });
+
+    expect(result.ok && result.config.roles.digest.effort).toBe("medium");
   });
 
   it.each([true, false])("reads digest.enabled %j as written", (enabled) => {

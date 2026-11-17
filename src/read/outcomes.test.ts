@@ -466,6 +466,7 @@ describe("what a merged pull request cost, from the outcomes reads", () => {
       unread: [],
       health: [],
       kits: [],
+      rubrics: [],
       operator: "jrey8343",
       appLogin: "fabrik-app[bot]",
       timeZone,

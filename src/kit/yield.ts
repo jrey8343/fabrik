@@ -18,6 +18,9 @@ export interface YieldShare {
 
 export type Yields = Readonly<Record<YieldKind, YieldShare>>;
 
+/** The Run-record schema that added `pushed`. */
+const PUSHED_SCHEMA = 10;
+
 /** A run that counts toward its kind's Yield: whether it passed, and when it counts, the week it falls in. */
 interface JudgedRun {
   readonly kind: YieldKind;
@@ -65,11 +68,13 @@ function yieldKindOf(record: RunRecord): YieldKind | null {
  * Required check, on the head it pushed: a pass passes, though a later Request
  * changes find a Review miss in it, and a flaw fails. A run that pushed
  * nothing, whose head never got a Verdict, or whose first Verdict was counted
- * back as a Flaky check is left out.
+ * back as a Flaky check is left out. So is every run whose record was stored
+ * before pushes were recorded (schema 1 to 9): its passing runs name no push,
+ * so counting only its failures would read as a Yield of none.
  */
 function judgedRunOf(record: RunRecord, facts: readonly MetricFacts[]): JudgedRun | null {
   const kind = yieldKindOf(record);
-  if (kind === null) return null;
+  if (kind === null || (record.storedSchema !== undefined && record.storedSchema < PUSHED_SCHEMA)) return null;
   if (record.emptyDiff || record.brokenRun !== null) return { kind, passed: false, at: record.endedAt };
   const { pushed } = record;
   if (pushed === null) return null;

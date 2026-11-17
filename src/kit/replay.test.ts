@@ -1543,6 +1543,31 @@ describe("A Replay's results", () => {
       });
     });
 
+    it("showing a positional results marker's three columns, though no Arm has a score for one, and keeping them through every rewrite", () => {
+      const positional = withMarker(twelveDone(), storedTwelve([0.8, 0.9, null], [0.6, null, null]));
+      const once = started({ ...aReplayIssue(140), body: positional }, 7, 9002);
+      const twice = finished(once, 7, 9002, { kind: "weekly-limit" }).body;
+
+      for (const body of [once.body, twice]) {
+        expect(visible(body).find((line) => line.startsWith("| Ticket |"))).toBe(
+          "| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |",
+        );
+        expect(rowsOf(body)[0]).toContain("| passed | 0.80 | 0.90 | – | $2.00 |");
+        expect(rowsOf(body)[1]).toContain("| passed | 0.60 | – | – | $2.00 |");
+      }
+      expect(markerOf(twice)).toContain('"scores":[0.8,0.9,null]');
+    });
+
+    it("showing a positional results marker with no score at all under its three columns, never the Kit's Scorers now", () => {
+      const positional = withMarker(twelveDone(), storedTwelve([null, null, null], [null, null, null]));
+
+      const { heading, rows, totals } = readBack(positional);
+
+      expect(heading).toBe("| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |");
+      expect(rows[0]).toContain("| passed | – | – | – | $2.00 |");
+      expect(totals).toContain("| Arm | Gates | Pass Verdicts | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration |");
+    });
+
     it("showing – in the column of a rubric an Arm has no score for", () => {
       const keyed = withMarker(
         twelveDone(),

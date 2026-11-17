@@ -212,6 +212,13 @@ export function firstRunOf(implementRuns: readonly RunRecord[]): RunRecord | und
 /** One AFK agent run, at RUN_RECORD_SCHEMA. */
 export interface RunRecord {
   readonly schema: typeof RUN_RECORD_SCHEMA;
+  /**
+   * The schema an older record was stored at, which readRunRecord reads at the
+   * current one, so a figure can leave out what such a record never said: a
+   * schema 1 to 9 record's null `pushed` is no push recorded, not none made
+   * (#735). Absent on a record stored at the current schema, and never written.
+   */
+  readonly storedSchema?: number;
   readonly kitSha: string;
   readonly repo: string;
   readonly runId: number;
@@ -623,7 +630,7 @@ type StreamField =
   | "rateLimit";
 
 /** What a record says that its run's stream doesn't: which run it was, for what, and how its job ended. */
-type RunFacts = Omit<RunRecord, "schema" | "transcript" | StreamField>;
+type RunFacts = Omit<RunRecord, "schema" | "storedSchema" | "transcript" | StreamField>;
 
 /** The record of a run from its facts and its own stream, with no stream fields when no transcript survived it. */
 function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcriptPath: string | null): RunRecord {
@@ -667,13 +674,20 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * to 7 record, written before Broken runs were recorded, as no Broken run, and
  * a schema 1 to 8 record, written before landings were recorded, as a run the
  * push job landed, and a schema 1 to 9 record, written before pushes were
- * recorded, as one that pushed nothing. Null for anything that isn't a record of a schema the Kit
- * knows.
+ * recorded, as one that pushed nothing. An older record names the schema it
+ * was stored at in `storedSchema`. Null for anything that isn't a record of a
+ * schema the Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
   if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
+  const record = upgraded(stored, schema, subscriptions);
+  return record === null ? null : { ...record, storedSchema: schema as number };
+}
+
+/** An older stored record at the current schema (readRunRecord), or null for a schema the Kit doesn't know. */
+function upgraded(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   type Schema9 = Omit<RunRecord, "schema" | "pushed">;
   if (schema === 9) return { ...(stored as Schema9), schema: RUN_RECORD_SCHEMA, pushed: null };
   type Schema8 = Omit<Schema9, "landing">;

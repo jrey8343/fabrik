@@ -53,6 +53,11 @@ function asTheJudgeReads(transcript: readonly string[]): string {
   return block[2];
 }
 
+/** The trimmed transcript the Retro reads of one of aTranscript's runs, whose init says it had `tdd`: the judge's, with the skills the run had (#739). */
+function asTheRetroReads(transcript: readonly string[]): string {
+  return asTheJudgeReads(transcript).replace(/^(Model: .*)$/m, "$1\nSkills it had: `tdd`");
+}
+
 // A week in UTC: Monday 2 November 2026 00:00 to Monday 9 November 00:00.
 const WINDOW = { start: Date.parse("2026-11-02T00:00:00Z"), end: Date.parse("2026-11-09T00:00:00Z") };
 
@@ -481,7 +486,24 @@ describe("the evidence bundle", () => {
       expect(evidenceTicketsOf(input).toSorted((a, b) => a - b)).toEqual([7, 10]);
     });
 
-    it("carries the last passing Review record's trimmed transcript, the one the judge reads, or none when the store has no transcript", () => {
+    // #739: only the judge's trimmed transcript leaves out the skills the run had.
+    it("lists in a run's trimmed transcript the skills its init says it had, which the judge's leaves out", () => {
+      const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
+      const review = aRecordWithTranscript({ runId: 1001, role: "review", pullRequest: 50, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
+      const { escapes } = evidenceBundle(
+        aRetroEvidenceInput({
+          records: [review],
+          readTranscript: transcriptsOf([review, transcript]),
+          facts: factsOf({ pullRequests: [aMergedPullRequest("2026-11-02T00:00:00Z", { number: 50 })], escapeMarkerIssues: [anEscapeMarkerIssue("<!-- fabrik:escape strong #50 -->")] }),
+        }),
+      );
+
+      const retros = escapes[0]?.pullRequests[0]?.lastPassingReview?.trimmedTranscript ?? "";
+      expect(retros).toMatch(/^Model: claude-opus-5-5\nSkills it had: `tdd`\nSkills it loaded, in order: none$/m);
+      expect(asTheJudgeReads(transcript)).not.toContain("Skills it had");
+    });
+
+    it("carries the last passing Review record's trimmed transcript, the judge's with the skills the run had, or none when the store has no transcript", () => {
       const transcript = aTranscript({ "src/cart.ts": "export const cart = [];" });
       const review = aRecordWithTranscript({ runId: 1001, role: "review", pullRequest: 50, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
       const untranscribed = aRunRecord({ runId: 1002, role: "review", pullRequest: 51, verdict: "pass", endedAt: "2026-11-01T00:00:00Z" });
@@ -497,7 +519,7 @@ describe("the evidence bundle", () => {
         }),
       );
       const [withTranscript, withNone, withLost] = escapes[0]?.pullRequests ?? [];
-      expect(withTranscript?.lastPassingReview?.trimmedTranscript).toBe(asTheJudgeReads(transcript));
+      expect(withTranscript?.lastPassingReview?.trimmedTranscript).toBe(asTheRetroReads(transcript));
       expect(withTranscript?.lastPassingReview?.trimmedTranscript).toContain('#1 Read {"file_path":"src/cart.ts"}\n#1 result: export const cart = [];');
       expect(withNone?.lastPassingReview?.trimmedTranscript).toBeNull();
       expect(withLost?.lastPassingReview?.trimmedTranscript).toBeNull();
@@ -787,7 +809,7 @@ describe("the evidence bundle", () => {
       expect(lowScores).toEqual([
         {
           ref: "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json",
-          run: { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: flailed, trimmedTranscript: asTheJudgeReads(transcript) },
+          run: { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: flailed, trimmedTranscript: asTheRetroReads(transcript) },
           entries: [
             { scorer: "efficiency", score: 0.4, pass: false, label: "re-reads", rationale: "Read src/cart.ts four times (#2, #5, #9, #12)." },
             { scorer: "ticket-compliance", score: 0.9, pass: true, label: "compliant", rationale: "Built what was asked." },
@@ -928,8 +950,8 @@ describe("the evidence bundle", () => {
           verdicts: [{ verdict: "pass", source: "reviewer", at: "2026-11-02T00:00:00Z", body: verdict.body }],
           records: [
             { ref: "runs/owner/product/2026-10/999-1-implement.json", record: untranscribed, trimmedTranscript: null },
-            { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: implement, trimmedTranscript: asTheJudgeReads(transcript) },
-            { ref: "runs/owner/product/2026-11/1001-1-review.json", record: review, trimmedTranscript: asTheJudgeReads(transcript) },
+            { ref: "runs/owner/product/2026-11/1000-1-implement.json", record: implement, trimmedTranscript: asTheRetroReads(transcript) },
+            { ref: "runs/owner/product/2026-11/1001-1-review.json", record: review, trimmedTranscript: asTheRetroReads(transcript) },
           ],
         },
       ]);
