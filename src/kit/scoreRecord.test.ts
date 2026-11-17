@@ -50,8 +50,9 @@ const judged: ScoringOutcome = {
 function files(outcome: ScoringOutcome = judged, transcript: readonly string[] | null = JUDGE_LINES, jobResult = "success", attempt = "1"): ScoreRecordFiles {
   const judge = judgeRunRecordFor({
     scored,
-    judge: { result: jobResult, outputs: { "secrets-step": "success", model: "claude-sonnet-5-5", effort: "", attempt } },
+    judge: { result: jobResult, outputs: { "secrets-step": "success", model: "claude-sonnet-5-5", effort: "medium", attempt } },
     judgeModel: "claude-sonnet-5-5",
+    judgeEffort: "medium",
     kitSha: "k".repeat(40),
     endedAt: "2026-11-04T12:06:00Z",
     failureReport: null,

@@ -1402,8 +1402,9 @@ describe("A Replay arm's record", () => {
     const judged = (replay: ReplayRun) =>
       judgeRunRecordFor({
         scored: replayRunRecordFor(replayRunEnd({ replay })).record,
-        judge: { result: "success", outputs: { "secrets-step": "success", model: "claude-sonnet-5-5", effort: "" } },
+        judge: { result: "success", outputs: { "secrets-step": "success", model: "claude-sonnet-5-5", effort: "medium" } },
         judgeModel: "claude-sonnet-5-5",
+        judgeEffort: "medium",
         kitSha: KIT_SHA,
         endedAt: "2026-11-05T10:04:00Z",
         failureReport: null,
@@ -1463,8 +1464,9 @@ describe("A judge run's record", () => {
   function judgeRunEnd(overrides: Partial<JudgeRunEnd> = {}): JudgeRunEnd {
     return {
       scored: scoredRun().record,
-      judge: { result: "success", outputs: { "secrets-step": "success", model: JUDGE_MODEL, effort: "" } },
+      judge: { result: "success", outputs: { "secrets-step": "success", model: JUDGE_MODEL, effort: "medium" } },
       judgeModel: JUDGE_MODEL,
+      judgeEffort: "medium",
       kitSha: KIT_SHA,
       endedAt: "2026-11-05T10:04:00Z",
       failureReport: null,
@@ -1485,7 +1487,7 @@ describe("A judge run's record", () => {
       pullRequest: 50,
       endedAt: "2026-11-05T10:04:00Z",
       model: JUDGE_MODEL,
-      effort: null,
+      effort: "medium",
       subscription: "Claude token",
       retry: 0,
       stepUp: false,
@@ -1539,7 +1541,7 @@ describe("A judge run's record", () => {
 
   it("a judge re-run in a later attempt of the workflow run gets a record of its own, under the attempt its job ran in (#451)", () => {
     const files = judgeRunRecordFor(
-      judgeRunEnd({ judge: { result: "success", outputs: { "secrets-step": "success", model: JUDGE_MODEL, effort: "", attempt: "2" } } }),
+      judgeRunEnd({ judge: { result: "success", outputs: { "secrets-step": "success", model: JUDGE_MODEL, effort: "medium", attempt: "2" } } }),
     );
 
     expect(files.recordPath).toBe("runs/acme/widgets/2026-11/9001-2-score.json");
@@ -1547,7 +1549,7 @@ describe("A judge run's record", () => {
     expect(files.record).toMatchObject({ runId: 9001, runAttempt: 2, issue: 7, totalCostUsd: 0.04 });
   });
 
-  it("a judge timed out with no transcript, its job passing out no model, gets a record on the Kit's judge model with no transcript", () => {
+  it("a judge timed out with no transcript, its job passing out no model, gets a record on the Kit's judge model and effort with no transcript", () => {
     const files = judgeRunRecordFor(judgeRunEnd({ judge: { result: "cancelled", outputs: {} }, transcript: null }));
 
     expect(files.record).toMatchObject({
@@ -1555,7 +1557,7 @@ describe("A judge run's record", () => {
       issue: 7,
       pullRequest: 50,
       model: JUDGE_MODEL,
-      effort: null,
+      effort: "medium",
       jobResult: "cancelled",
       infrastructureFailure: "timeout",
       subtype: null,

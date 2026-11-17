@@ -15,7 +15,7 @@ import { readReplayArmGates, readReplayArms, type ReplayArms, type ReplayTicketE
 import { type StoreApi, type StoreFile, type StoreWrite, storeCommitMessage, storeJson, writeStoreFiles } from "./recordWriter.ts";
 import { RUN_NAMES } from "../loop/heldRun.ts";
 import { judgeRunRecordFor, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, replayGatesPath, replayPatchPath, type ReplayRole, replayRunRecordFor, type RunRecordFiles } from "./runRecord.ts";
-import { JUDGE_MODEL } from "./runStore.ts";
+import { JUDGE_EFFORT, JUDGE_MODEL } from "./runStore.ts";
 import { judgeOutcome } from "./judge.ts";
 import { type KitRubrics, scoreFileFor, scoringPlan, scoringRubrics } from "./scorer.ts";
 
@@ -288,6 +288,7 @@ function scoringFiles(
     scored: scored.record,
     judge: ran.job,
     judgeModel: JUDGE_MODEL,
+    judgeEffort: JUDGE_EFFORT,
     kitSha: kit.sha,
     endedAt: scoredAt,
     failureReport: judge.failure,

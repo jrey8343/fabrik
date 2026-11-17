@@ -1,5 +1,5 @@
 // The judge job's program (#149): the Kit's fixed judge model (JUDGE_MODEL),
-// at its default effort, scores one finished Implementer run on the Kit's
+// at the Kit's judge effort (JUDGE_EFFORT), scores one finished Implementer run on the Kit's
 // rubrics from its transcript and its Ticket, in one read. It runs with no
 // tools (src/kit/judgeLaunch.ts) through the same Sandcastle runner,
 // metered-billing preflight and init check as the agent roles
@@ -23,7 +23,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { claudeCode, run } from "@ai-hero/sandcastle";
+import { run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { leaveFailureReport, readyHook, setAgentEnv, streamWatch } from "../agent/launch.ts";
 import { runSummary } from "../agent/summary.ts";
@@ -32,9 +32,9 @@ import type { FailureReport } from "../loop/types.ts";
 import { readBytesIfPresent, readIfPresent } from "./checkout.ts";
 import { writeOutputs, writeSummary } from "./stepFiles.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
-import { judgeClaudeArgs, judgeOutput, withoutTools } from "./judgeLaunch.ts";
+import { judgeAgent, judgeClaudeArgs, judgeOutput } from "./judgeLaunch.ts";
 import { loadRubrics } from "./kitFiles.ts";
-import { JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
+import { JUDGE_EFFORT, JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { readJudgedRun } from "./scorer.ts";
 import { type JudgedTicket, judgePrompt } from "./scorerPrompt.ts";
 
@@ -60,8 +60,8 @@ async function emptyWorkingDir(): Promise<string> {
 async function main(): Promise<void> {
   const outDir = resolve(required("FABRIK_OUT_DIR"));
   await mkdir(outDir, { recursive: true });
-  // For the judge's Run record (src/kit/runRecord.ts): the model passed to the CLI, at its default effort.
-  await writeOutputs({ model: JUDGE_MODEL, effort: "" });
+  // For the judge's Run record (src/kit/runRecord.ts): the model and effort passed to the CLI.
+  await writeOutputs({ model: JUDGE_MODEL, effort: JUDGE_EFFORT });
 
   const abort = new AbortController();
   // With rotation on, a judge whose stream shows overage is stopped, as an agent run is.
@@ -82,10 +82,10 @@ async function main(): Promise<void> {
     transcriptTrimmed = trimmed;
 
     // The agent inherits this process's env (noSandbox), so set what it needs here.
-    setAgentEnv(judgeClaudeArgs(JUDGE_MODEL));
+    setAgentEnv(judgeClaudeArgs());
     const result = await run({
       name: JUDGE_JOB,
-      agent: withoutTools(claudeCode(JUDGE_MODEL)),
+      agent: judgeAgent(),
       sandbox: noSandbox(),
       cwd: await emptyWorkingDir(),
       prompt,
@@ -106,7 +106,7 @@ async function main(): Promise<void> {
     await leaveFailureReport(error, watch, { path: join(outDir, JUDGE_FAILURE_FILE), title: "The judge failed", text });
     throw error;
   } finally {
-    await writeSummary(runSummary({ role: JUDGE_JOB, effort: null, lines: watch.lines }));
+    await writeSummary(runSummary({ role: JUDGE_JOB, effort: JUDGE_EFFORT, lines: watch.lines }));
   }
 }
 
