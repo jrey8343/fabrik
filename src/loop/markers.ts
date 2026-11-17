@@ -17,8 +17,17 @@ import { AGENT_ROLES, type AgentRole, isStepUpReason, type StepUpReason, type St
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
+/**
+ * Whether a Verdict is a Reviewer's Execution flaw: the only one whose marker
+ * counts its findings by tag (#749) and names the Touch-up it called for (#750).
+ */
+export function isReviewerFlaw({ verdict, source }: Pick<VerdictRecord, "verdict" | "source">): boolean {
+  return verdict === "execution-flaw" && source === "reviewer";
+}
+
 export function verdictMarker(record: VerdictRecord): string {
   const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, tags, touchUp, headSha } = record;
+  const reviewerFlaw = isReviewerFlaw(record);
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
   const fields = {
@@ -31,9 +40,9 @@ export function verdictMarker(record: VerdictRecord): string {
     ...(checks === undefined ? {} : { checks }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     // Only a Reviewer's Execution flaw counts its findings by tag (#749).
-    ...(tags === undefined || verdict !== "execution-flaw" || source !== "reviewer" ? {} : { tags }),
+    ...(tags === undefined || !reviewerFlaw ? {} : { tags }),
     // Only one that called for a Touch-up says which (#750).
-    ...(touchUp === undefined || verdict !== "execution-flaw" || source !== "reviewer" ? {} : { touchUp }),
+    ...(touchUp === undefined || !reviewerFlaw ? {} : { touchUp }),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;

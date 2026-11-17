@@ -9,7 +9,7 @@
 // own, never HELD_MARKER, so no reader of held markers takes it for one. Pure, no I/O.
 import { heldLineIssue, type HoldableRun, roleOf, runNamed } from "./heldRun.ts";
 import { readable } from "./readable.ts";
-import { MAX_RETRIES, MAX_TOUCH_UPS } from "./retry.ts";
+import { fixRunName } from "./retry.ts";
 import type { Action, AgentRole, CreatedIssue } from "./types.ts";
 
 /** How a held line opens, while its run is held and once its hold ended alike. */
@@ -60,8 +60,8 @@ export function heldRunName(role: AgentRole, kind: HeldRunKind = {}): string {
   if (kind.prototype !== undefined && kind.prototype !== false) return "The prototype turn";
   if (kind.conflict !== undefined) return "The conflict-only run";
   if (kind.requestChanges !== undefined) return "The Request-changes run";
-  if (kind.touchUp !== undefined) return `The ${runNamed(role)} (Touch-up ${kind.touchUp} of ${MAX_TOUCH_UPS})`;
-  if (kind.retry !== undefined) return `The ${runNamed(role)} (Retry ${kind.retry} of ${MAX_RETRIES})`;
+  if (kind.touchUp !== undefined) return `The ${runNamed(role)} (${fixRunName("touch-up", kind.touchUp)})`;
+  if (kind.retry !== undefined) return `The ${runNamed(role)} (${fixRunName("retry", kind.retry)})`;
   return `The ${runNamed(role)}`;
 }
 

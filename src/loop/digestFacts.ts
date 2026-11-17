@@ -132,8 +132,9 @@ export interface RoundCounts {
   /** The Retries that pushed. One that changed nothing, or was a Broken run, is the Execution flaw the Kit gave for it. */
   readonly retries: number;
   /**
-   * The Touch-ups that pushed (#750), or committed nothing and rewrote the
-   * body alone (#751), which draw on their own pool, so are never among the Retries.
+   * The Touch-ups that pushed (#750), which draw on their own pool, so are
+   * never among the Retries. A body-only Touch-up (#751) pushed nothing, so it
+   * is a round of its own but not one of these, though it uses one up.
    */
   readonly touchUps: number;
   readonly conflictOnlyRuns: number;
@@ -239,7 +240,7 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
       executionFlaws: count("execution-flaw"),
       designFlaws: count("design-flaw"),
       retries: count("retry"),
-      touchUps: count("touch-up") + count("body-only-touch-up"),
+      touchUps: count("touch-up"),
       conflictOnlyRuns: count("conflict-only-run"),
       requestChanges: count("request-changes"),
       infrastructureFailures: count("infrastructure-failure"),

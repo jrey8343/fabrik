@@ -115,8 +115,8 @@ function withoutSection(template: string, heading: string): string {
   return [...lines.slice(0, start), ...(next === -1 ? [] : lines.slice(next))].join("\n");
 }
 
-/** Whether the Review is a Full Review, as the Kit job passed it out (src/kit/jobs.ts): "true" or "false", never left to guess. */
-export function fullReviewOf(text: string | undefined): boolean {
+/** Whether the Review is a Full Review, as the Kit job passed it out (src/kit/jobs.ts): "true" or "false", never left to guess, so anything else throws. */
+export function isFullReview(text: string | undefined): boolean {
   if (text === "true" || text === "false") return text === "true";
   throw new Error(`FABRIK_FULL_REVIEW is ${JSON.stringify(text ?? null)}, not "true" or "false"`);
 }

@@ -5,7 +5,7 @@
 import type { HandBack } from "../loop/handBacks.ts";
 import { RUN_NAMES, runNamed } from "../loop/heldRun.ts";
 import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
-import { MAX_TOUCH_UPS } from "../loop/retry.ts";
+import { fixRunName } from "../loop/retry.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
@@ -90,9 +90,9 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       }
       const named =
         run === "retry" && retry !== null
-          ? `Retry ${retry}`
+          ? fixRunName("retry", retry, false)
           : run === "touch-up" && touchUp !== undefined
-            ? `Touch-up ${touchUp} of ${MAX_TOUCH_UPS}`
+            ? fixRunName("touch-up", touchUp)
             : (RUNNING_RUNS[run as keyof typeof RUNNING_RUNS] ?? "A run");
       return { pill: "Running", sentence: `${named} has been running for ${age}.`, remedy: null };
     }
@@ -253,7 +253,7 @@ function notStartedWords({ repo, issue, pullRequest, detail }: StandingNamed<"no
   }
   if (detail.silence === "retry") {
     // A Touch-up (#750) is named by its number.
-    const run = detail.touchUp === undefined ? "Retry" : `Touch-up ${detail.touchUp} of ${MAX_TOUCH_UPS}`;
+    const run = detail.touchUp === undefined ? fixRunName("retry") : fixRunName("touch-up", detail.touchUp);
     return {
       sentence: stuck
         ? `No ${run} has started since the Execution flaw ${age} ago.`

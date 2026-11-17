@@ -31,7 +31,7 @@ import {
 } from "./markers.ts";
 import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
 import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
-import { bodyOnly, implementSettings, MAX_RETRIES, MAX_TOUCH_UPS, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
+import { bodyOnly, fixRunName, implementSettings, isRetryOrTouchUp, MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { type AnswerLines, verdictActions } from "./review.ts";
 import type {
@@ -266,7 +266,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     };
   }
   // Nor does a Retry or Touch-up while a Request-changes or conflict-only run is in flight, which it would push over.
-  if (!requestChanges && inFlight !== null && inFlight.kind !== "retry" && inFlight.kind !== "touch-up") {
+  if (!requestChanges && inFlight !== null && !isRetryOrTouchUp(inFlight)) {
     return { kind: "nothing", reason: `#${pullRequest.number} has a ${inFlight.kind === "request-changes" ? "Request-changes" : "conflict-only"} run in flight, so the retry's branch isn't pushed` };
   }
   // A Retry lands only while it's the Retry in flight: one the Operator took the PR back from, or left over from an
@@ -279,7 +279,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         (fixes.retry !== undefined && inFlight.retry !== fixes.retry) ||
         (fixes.retryFlaw !== undefined && inFlight.flaw !== fixes.retryFlaw);
   if (!requestChanges && (touchUp || fixes.retry !== undefined || fixes.retryFlaw !== undefined) && otherRun) {
-    const run = touchUp ? `Touch-up ${fixes.touchUp} of ${MAX_TOUCH_UPS}` : `Retry ${fixes.retry} of ${MAX_RETRIES}`;
+    const run = touchUp ? fixRunName("touch-up", fixes.touchUp) : fixRunName("retry", fixes.retry);
     return {
       kind: "nothing",
       reason: `${run} on #${pullRequest.number} isn't the run in flight, so the retry's branch isn't pushed`,
@@ -379,7 +379,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           requestChanges
             ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
             : fixes.touchUp !== undefined
-              ? `The Implementer pushed Touch-up ${fixes.touchUp} of ${MAX_TOUCH_UPS} to \`${branch}\`, fixing the Execution flaw's findings without using a Retry; Review runs again on it.`
+              ? `The Implementer pushed ${fixRunName("touch-up", fixes.touchUp)} to \`${branch}\`, fixing the Execution flaw's findings without using a Retry; Review runs again on it.`
               : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
           "",
           ...(recorded === null ? [] : [...recorded.lines, ""]),
@@ -421,7 +421,7 @@ function bodyOnlyTouchUpLanded(
       issue: number,
       body: [
         touchUpBodyOnlyMarker(touchUp, headSha),
-        `The Implementer's Touch-up ${touchUp} of ${MAX_TOUCH_UPS} on \`${branch}\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${headSha.slice(0, 7)}. Review runs again on ${headSha.slice(0, 7)}, and no Retry was used.`,
+        `The Implementer's ${fixRunName("touch-up", touchUp)} on \`${branch}\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${headSha.slice(0, 7)}. Review runs again on ${headSha.slice(0, 7)}, and no Retry was used.`,
         "",
         // Present: the on-a-PR contract requires it.
         withoutMentions(output.fix ?? ""),

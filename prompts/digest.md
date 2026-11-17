@@ -106,7 +106,7 @@ What an item holds:
 `howItGotHere`. One or two sentences, in at most 40 words, on how the pull request reached this head.
 
 - Fold every Verdict, Retry, Touch-up, conflict-only run, Request changes and Infrastructure failure into counts and order. Take each number from the `counts` in "Kit code's facts" and the order from its `rounds`, and what the flaws were about from the Verdicts. Leave out a kind there was none of.
-- A Touch-up is never a Retry: count each apart, as `counts` does.
+- A Touch-up is never a Retry: count each apart, as `counts` does. `counts.touchUps` is the Touch-ups that pushed. A body-only Touch-up, which rewrote the body alone and pushed nothing, is a round of its own in `rounds` and isn't among them: say it rewrote the body, in its place in the order.
 - Always end by saying whether the product code changed since the first Verdict, as `productCode` has it. `unchanged`: say it is unchanged. `changed`: say so, with a few words on what changed in the `files` it names. `not-established`: say it "could not be established". Never say anything else of it, whatever the commits suggest.
 - When `retriesLeft` is 0, say that no Retries are left.
 - Never a list of rounds, and no commit hashes, run links or times of day.

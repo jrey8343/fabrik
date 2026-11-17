@@ -37,7 +37,7 @@ import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, type HandBackMark, handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { readable } from "./readable.ts";
 import { withoutMentions } from "./mentions.ts";
-import { MAX_RETRIES, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
+import { isRetryOrTouchUp, MAX_RETRIES, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import {
@@ -419,7 +419,7 @@ function brokenRetry(
 ): Plan | null {
   if (pullRequest === null || pullRequest.ticket !== run.issue || issue.openPullRequests[0] !== pullRequest.number) return null;
   const inFlight = runInFlight(pullRequest);
-  if (inFlight?.kind !== "retry" && inFlight?.kind !== "touch-up") return null;
+  if (!isRetryOrTouchUp(inFlight)) return null;
   const which = inFlight.kind === "touch-up" ? runName(inFlight) : "retry";
   // Off now, so the next Retry's label is a fresh event.
   const staleOff: Action[] = issue.labels.includes(DISPATCH_LABEL) ? [{ kind: "remove-label", issue: run.issue, label: DISPATCH_LABEL }] : [];

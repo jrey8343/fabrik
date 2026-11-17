@@ -26,6 +26,7 @@ import {
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunEndedIn,
   IMPLEMENT_RUN_FAILED_MARKER,
+  isReviewerFlaw,
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_ENDED_MARKER,
   RETRY_PUSH_MARKER,
@@ -60,6 +61,24 @@ export function verdictsIn(commentBodies: readonly string[]): VerdictRecord[] {
   });
 }
 
+/**
+ * The Actions run attempt that posted a Verdict comment, from the
+ * `[The run](…/actions/runs/<id>/attempts/<n>)` line the Kit writes under its
+ * findings (src/loop/review.ts), or null without one. The last such line is
+ * the Kit's: the findings above it are the Reviewer's text, which could carry
+ * a look-alike.
+ */
+export function verdictPostedByIn(body: string): { readonly runId: number; readonly runAttempt: number } | null {
+  const linked = body
+    .split("\n")
+    .map((line) => VERDICT_RUN_LINK.exec(line))
+    .findLast((match) => match !== null);
+  return linked === undefined || linked === null ? null : { runId: Number(linked[1]), runAttempt: Number(linked[2]) };
+}
+
+/** A Verdict comment's line linking the run attempt that posted it, on whichever GitHub server. */
+const VERDICT_RUN_LINK = /^\[The run\]\(https?:\/\/[^)\s]*\/actions\/runs\/([0-9]+)\/attempts\/([0-9]+)\)$/;
+
 function readVerdictMarker(body: string): VerdictRecord | null {
   const json = VERDICT_MARKER.exec(body)?.[1];
   if (json === undefined) return null;
@@ -84,10 +103,11 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   // Likewise ranNothing (#456), which only a Reviewer's Verdict on a head with checks that ran nothing carries.
   const ranNothingNamed = Array.isArray(ranNothing) && ranNothing.length > 0 && ranNothing.every((name) => typeof name === "string") ? { ranNothing: ranNothing as string[] } : {};
   // The counts of a Reviewer's Execution flaw's findings by tag (#749): ignored on any other Verdict, and dropped when unreadable, so it counts.
-  const counted = verdict === "execution-flaw" && source === "reviewer" ? verdictTagsIn(tags) : null;
+  const reviewerFlaw = isReviewerFlaw({ verdict: verdict as Verdict, source });
+  const counted = reviewerFlaw ? verdictTagsIn(tags) : null;
   // The Touch-up a Reviewer's Execution flaw called for (#750): ignored on any other Verdict, and dropped when it isn't
   // a positive whole number, so the flaw counts as one that called for a Retry.
-  const touchedUp = verdict === "execution-flaw" && source === "reviewer" && Number.isSafeInteger(touchUp) && (touchUp as number) > 0 ? { touchUp: touchUp as number } : {};
+  const touchedUp = reviewerFlaw && Number.isSafeInteger(touchUp) && (touchUp as number) > 0 ? { touchUp: touchUp as number } : {};
   // The fingerprint of the PR's own change (#643), from the line under the marker; a Verdict from before it has none.
   const change = changeIn(body);
   return {
@@ -244,7 +264,7 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
  * or the Kit's push notes reads it. A Review may land a second Verdict on
  * the head it names.
  */
-export function bodyOnlyNoteSinceVerdictIn(commentBodies: readonly string[]): string | null {
+export function bodyOnlyTouchUpHeadIn(commentBodies: readonly string[]): string | null {
   let head: string | null = null;
   for (const body of commentBodies) {
     const note = touchUpBodyOnlyIn(body);

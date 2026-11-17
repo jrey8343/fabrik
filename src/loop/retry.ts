@@ -7,7 +7,7 @@
 // flight, no other head gets a Verdict, so each flaw starts exactly one
 // Implementer attempt (ADR-0006). A Reviewer's flaw whose findings are all
 // tagged small or missed earlier calls for a Touch-up instead, from a pool of
-// two of its own, which lives exactly as a Retry does (ADR-0026).
+// two of its own, which lives exactly as a Retry does (ADR-0027).
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_AGENT, STEP_UP_LABEL } from "./labels.ts";
@@ -28,20 +28,19 @@ function stepsUp(retry: number): boolean {
 /** A stepped-up run that isn't a Retry, whose push a flaw can call for one on: conflict-only (#304) or Request-changes (#393). */
 type PrecedingRun = Extract<StepUpReason, "conflict-only" | "request-changes">;
 
+/** A Step-up reason a run can carry from the run before it (#464): any but `marked`, which is read from the label alone. */
+type CarriedReason = Exclude<StepUpReason, "marked">;
+
 /**
  * Why a first run or a Retry on a Ticket with these labels Steps up, or null
  * when it runs on the Implementer's model. The label is read as the run
  * starts, so adding it mid-chain steps up the next run and removing it drops
  * back (ADR-0014). On a marked Ticket the second Retry says `marked`. A Retry
- * called for by a flaw on a conflict-only or Request-changes run's push,
- * `after`, keeps that run's Step-up and its reason, so it never drops to a
- * cheaper model on the same PR (#464); the last Retry still says `retry`.
+ * that follows a stepped-up run, `after` (retryFollows), keeps that run's
+ * Step-up and its reason, so it never drops to a cheaper model on the same PR
+ * (#464); the last Retry still says `retry`.
  */
-export function stepUpReasonFor(
-  retry: number,
-  ticketLabels: readonly string[],
-  after: PrecedingRun | null = null,
-): Extract<StepUpReason, "retry" | "marked" | PrecedingRun> | null {
+export function stepUpReasonFor(retry: number, ticketLabels: readonly string[], after: CarriedReason | null = null): StepUpReason | null {
   if (ticketLabels.includes(STEP_UP_LABEL)) return "marked";
   if (stepsUp(retry)) return "retry";
   return after;
@@ -155,29 +154,30 @@ export function retryAfterFlaw(pullRequest: PullRequestSnapshot, held: HeldOn | 
   // The flaw being given now isn't in the Verdicts yet: the run that pushed the head it judges is on the snapshot.
   const judged = { requestChanges: pullRequest.requestChangesRun, ...(pullRequest.conflictRun ? { conflictRun: true as const } : {}) };
   const touchUp = allTagged(tags) ? touchUpNumber(pullRequest.verdicts) : null;
-  const free = touchUp !== null && touchUp <= MAX_TOUCH_UPS ? touchUp : null;
+  const calledTouchUp = touchUp !== null && touchUp <= MAX_TOUCH_UPS ? touchUp : null;
   const retry = retryNumber(pullRequest.verdicts, pullRequest.ticketLandedNothing);
-  if ((free === null && retry > MAX_RETRIES) || ticket === null) return null;
+  if ((calledTouchUp === null && retry > MAX_RETRIES) || ticket === null) return null;
   if (ticketNotReady(pullRequest)) {
-    return { line: ticketNotReadyLine(pullRequest.number, ticket, free === null ? "Retry" : "Touch-up"), actions: [], ticketNotReady: true };
+    return { line: ticketNotReadyLine(pullRequest.number, ticket, fixRunName(calledTouchUp === null ? "retry" : "touch-up")), actions: [], ticketNotReady: true };
   }
-  if (free !== null) {
+  if (calledTouchUp !== null) {
     return {
-      line: `Touch-up ${free} of ${MAX_TOUCH_UPS} ${startsWhen(held)}, on the same model: the Implementer fixes these findings on the same branch. It uses none of the Ticket's two Retries.${heldUntilThen(held)}`,
+      line: `${fixRunName("touch-up", calledTouchUp)} ${startsWhen(held)}, on the same model: the Implementer fixes these findings on the same branch. It uses none of the Ticket's two Retries.${heldUntilThen(held)}`,
       // As for a Retry, a fresh agent:implement on the Ticket resumes the PR's Implement run. It notifies nobody.
       actions: [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }],
-      touchUp: free,
+      touchUp: calledTouchUp,
     };
   }
+  const after = retryFollows(pullRequest, judged, pullRequest.verdicts);
   return {
-    line: `Retry ${retry} of ${MAX_RETRIES} ${startsWhen(held)}${stepUpReasonFor(retry, pullRequest.ticketLabels, precedingRun(judged)) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.${heldUntilThen(held)}`,
+    line: `${fixRunName("retry", retry)} ${startsWhen(held)}${stepUpReasonFor(retry, pullRequest.ticketLabels, after) === null ? "" : ", stepped up"}: the Implementer fixes these findings on the same branch.${heldUntilThen(held)}`,
     // A fresh agent:implement on the Ticket resumes the PR's Implement run (src/loop/implement.ts). It notifies nobody.
     actions: [{ kind: "add-labels", issue: ticket, labels: [DISPATCH_LABEL] }],
   };
 }
 
-/** What the Kit says when a Retry or Touch-up can't start because the Ticket is no longer `ready-for-agent` (#416), and how the Operator goes on. */
-function ticketNotReadyLine(pullRequest: number, ticket: number, run: "Retry" | "Touch-up"): string {
+/** What the Kit says when a Retry or Touch-up, `run` as fixRunName names its kind, can't start because the Ticket is no longer `ready-for-agent` (#416), and how the Operator goes on. */
+function ticketNotReadyLine(pullRequest: number, ticket: number, run: string): string {
   return `#${ticket} is no longer \`ready-for-agent\`, so no ${run} starts. #${pullRequest} stays in draft: push to it to have it reviewed again, or take it out of draft to take it over.`;
 }
 
@@ -216,7 +216,7 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   const latest = pullRequest.verdicts.at(-1);
   if (latest === undefined || pullRequest.pushedSinceVerdict || latest.verdict !== "execution-flaw") return null;
   // A body-only Touch-up's note is its outcome, though it pushed nothing (#751).
-  if (pullRequest.bodyOnlyNoteSinceVerdict !== null) return null;
+  if (pullRequest.bodyOnlyTouchUpHead !== null) return null;
   // One on a Ticket no longer ready-for-agent called for no Retry, and one the Kit has since ended for that reason has none in flight (#416).
   if (latest.ticketNotReady === true || pullRequest.retryNoteSinceVerdict === "ended") return null;
   // A Retry works on a draft: once the PR has left draft since the flaw, as when the Operator took it back or the Kit
@@ -231,13 +231,33 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   return retry > MAX_RETRIES ? null : { kind: "retry", retry, flaw: latest.headSha };
 }
 
+/** A Retry or a Touch-up in flight (#750): the runs that fix an Execution flaw on the PR's branch. */
+export type FlawFixInFlight = Extract<RunInFlight, { kind: "retry" | "touch-up" }>;
+
+/** Whether the run in flight is a Retry or a Touch-up, which everything that waits on, restarts or names a run in flight treats alike (#750). */
+export function isRetryOrTouchUp(run: RunInFlight | null): run is FlawFixInFlight {
+  return run?.kind === "retry" || run?.kind === "touch-up";
+}
+
+/**
+ * How the Kit names a Retry or a Touch-up (#750): by its number and its
+ * pool's size, as `Retry 1 of 2` or `Touch-up 2 of 2`; by its number alone
+ * when `ofPool` is false, as `Retry 1`; and by its kind alone when its number
+ * isn't known, as `Retry`.
+ */
+export function fixRunName(kind: FlawFixInFlight["kind"], number?: number, ofPool = true): string {
+  const noun = kind === "touch-up" ? "Touch-up" : "Retry";
+  if (number === undefined) return noun;
+  return ofPool ? `${noun} ${number} of ${kind === "touch-up" ? MAX_TOUCH_UPS : MAX_RETRIES}` : `${noun} ${number}`;
+}
+
 /** How the Kit's comments name a run in flight, at the start of a sentence. */
 export function runName(run: RunInFlight): string {
   switch (run.kind) {
     case "retry":
-      return `Retry ${run.retry} of ${MAX_RETRIES}`;
+      return fixRunName(run.kind, run.retry);
     case "touch-up":
-      return `Touch-up ${run.touchUp} of ${MAX_TOUCH_UPS}`;
+      return fixRunName(run.kind, run.touchUp);
     case "request-changes":
       return "The Operator's Request-changes run";
     case "conflict":
@@ -252,7 +272,7 @@ export function runName(run: RunInFlight): string {
  * Touch-up wrote, with nothing in the code changed since the head it judged.
  */
 export function hasVerdictOn(pullRequest: PullRequestSnapshot, headSha: string): boolean {
-  return pullRequest.verdicts.some((record) => record.headSha === headSha) && pullRequest.bodyOnlyNoteSinceVerdict !== headSha;
+  return pullRequest.verdicts.some((record) => record.headSha === headSha) && pullRequest.bodyOnlyTouchUpHead !== headSha;
 }
 
 /** Why a Review on this PR posts no Verdict, while a run is in flight on it; otherwise null. */
@@ -280,16 +300,18 @@ export function owedRetry(
 ): Extract<Action, { kind: "start-agent-run" }> | null {
   if (whyNotReviewable(pullRequest) !== null || pullRequest.ticket === null) return null;
   const run = runInFlight(pullRequest);
-  if (run?.kind !== "retry" && run?.kind !== "touch-up") return null;
+  if (!isRetryOrTouchUp(run)) return null;
   const { implement } = config.roles;
   // Never a cheaper model, and never a skipped Step-up, whatever the weekly pool says. The one
   // deliberate exception is the Operator taking fabrik:step-up off the Ticket (ADR-0014).
-  // A Retry in flight is called for by the PR's latest Verdict, so that flaw says which run it followed (#464).
+  // A run in flight is called for by the PR's latest Verdict, so that flaw and the ones before it say which run it follows (#464).
   const flaw = pullRequest.verdicts.at(-1);
+  if (flaw === undefined) return null;
+  const before = pullRequest.verdicts.slice(0, -1);
   const stepUpReason =
     run.kind === "touch-up"
-      ? touchUpStepUpReason(pullRequest, ticketLabels, flaw)
-      : stepUpReasonFor(run.retry, ticketLabels, flaw === undefined ? null : precedingRun(flaw));
+      ? touchUpStepUpReason(pullRequest, ticketLabels, flaw, before)
+      : stepUpReasonFor(run.retry, ticketLabels, retryFollows(pullRequest, flaw, before));
   const { model, effort } = implementSettings(stepUpReason, config);
   return {
     kind: "start-agent-run",
@@ -307,29 +329,65 @@ export function owedRetry(
 }
 
 /**
- * Why a Touch-up Steps up (#750), or null when it runs on the Implementer's
- * model: it carries the Step-up reason of the last Kit run that pushed to the
- * PR, as that run's push note records it (#746), so it runs on the model of
- * the run whose push its flaw judged and never takes a reason of its own. An
- * Operator's push is no run and changes nothing. The run that opened the PR
- * posted no push note, so with none recorded the reason is the one the Retry
- * rules gave that run: `retry` for a Retry 2 that opened it after the Ticket's
- * empty diffs or Broken runs (#464), as every run on such a PR Steps up. A
- * note from before #746 records none, so a flaw on a conflict-only or
- * Request-changes run's push still says which run that was. `fabrik:step-up`
- * on the Ticket reads as `marked` as the run starts; a run that Stepped up for
- * the label alone gives none once it's off, so taking it off drops the
- * Touch-up back (ADR-0014).
+ * Why a Touch-up for `flaw` Steps up (#750), or null when it runs on the
+ * Implementer's model: `fabrik:step-up` on the Ticket reads as `marked` as the
+ * run starts; otherwise it carries the Step-up reason of the run whose push
+ * its flaw judged (carriedStepUpReason) and never takes one of its own.
+ * `before` are the Verdicts posted on the PR before `flaw`.
  */
 export function touchUpStepUpReason(
   pullRequest: Pick<PullRequestSnapshot, "lastPushStepUpReason" | "ticketLandedNothing">,
   ticketLabels: readonly string[],
-  flaw: Pick<VerdictRecord, "requestChanges" | "conflictRun"> | undefined,
+  flaw: VerdictRecord,
+  before: readonly VerdictRecord[],
 ): StepUpReason | null {
   if (ticketLabels.includes(STEP_UP_LABEL)) return "marked";
+  return carriedStepUpReason(pullRequest, flaw, before);
+}
+
+/**
+ * The Step-up reason, `fabrik:step-up` aside, of the last Kit run that pushed
+ * to the PR before `flaw`, so the run the flaw calls for never drops to a
+ * cheaper model (#464). It is what that run's push note records (#746): an
+ * Operator's push is no run and changes nothing. A note that records
+ * `marked`, now the label is off, or none, gives the reason the Retry rules
+ * give that run without the label, so taking the label off drops back to it
+ * (ADR-0014): a conflict-only or Request-changes run's own, as the flaw says
+ * which run pushed its head; `retry` for a Retry 2, the latest Retry called
+ * for before the flaw, or the run that opened the PR after the Ticket's empty
+ * diffs or Broken runs, which posted no push note; and none for a first run
+ * or a Retry 1. A note from before #746 records none, and reads the same way.
+ * `before` are the Verdicts posted on the PR before `flaw`.
+ */
+function carriedStepUpReason(
+  pullRequest: Pick<PullRequestSnapshot, "lastPushStepUpReason" | "ticketLandedNothing">,
+  flaw: Pick<VerdictRecord, "requestChanges" | "conflictRun">,
+  before: readonly VerdictRecord[],
+): CarriedReason | null {
   const pushed = pullRequest.lastPushStepUpReason;
   if (pushed !== null && pushed !== "marked") return pushed;
-  return (flaw === undefined ? null : precedingRun(flaw)) ?? stepUpReasonFor(pullRequest.ticketLandedNothing, []);
+  // One less than the Retry the next flaw would call for: the latest Retry called for, or the run that opened the PR.
+  const latestRetry = retryNumber(before, pullRequest.ticketLandedNothing) - 1;
+  return precedingRun(flaw) ?? (stepsUp(latestRetry) ? "retry" : null);
+}
+
+/**
+ * Which stepped-up run a Retry for `flaw` follows, so it keeps that run's
+ * Step-up (#464), or null: the conflict-only or Request-changes run whose push
+ * the flaw judged, or, when the Verdict before it called for a Touch-up, so
+ * the flaw judged that Touch-up's push or is its empty-diff or Broken-run
+ * Verdict, the run that Touch-up carried its model from. A Retry never runs on
+ * a cheaper model than the Touch-up before it did. `before` are the Verdicts
+ * posted on the PR before `flaw`.
+ */
+function retryFollows(
+  pullRequest: Pick<PullRequestSnapshot, "lastPushStepUpReason" | "ticketLandedNothing">,
+  flaw: Pick<VerdictRecord, "requestChanges" | "conflictRun">,
+  before: readonly VerdictRecord[],
+): CarriedReason | null {
+  const previous = before.at(-1);
+  const afterTouchUp = previous !== undefined && previous.touchUp !== undefined && calledForRun(previous);
+  return precedingRun(flaw) ?? (afterTouchUp ? carriedStepUpReason(pullRequest, previous, before.slice(0, -1)) : null);
 }
 
 /**
@@ -359,9 +417,9 @@ export function unstartedRetry(
   if (pullRequest.retryNoteSinceVerdict !== null) return null;
   const run = runInFlight(pullRequest);
   // A Touch-up (#750) that never started is restarted once, as a Retry is.
-  if (run?.kind !== "retry" && run?.kind !== "touch-up") return null;
+  if (!isRetryOrTouchUp(run)) return null;
   if (Date.parse(now) - Date.parse(verdictPostedAt) < runMinutes * 60_000) return null;
-  const noun = run.kind === "touch-up" ? "Touch-up" : "Retry";
+  const noun = fixRunName(run.kind);
   if (ticketNotReady(pullRequest)) {
     return [{ kind: "comment", issue: number, body: [RETRY_ENDED_MARKER, `@${operator} ${runName(run)} on #${number} never started. ${ticketNotReadyLine(number, ticket, noun)}`, handBackMarker({ kind: "retry-never-started", role: "implement" })].join("\n") }];
   }

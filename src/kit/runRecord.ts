@@ -248,8 +248,8 @@ export interface RunRecord {
   readonly retry: number;
   /**
    * 0 for every run but a Touch-up (#750), whose number it is: a Touch-up
-   * isn't a Retry, so its `retry` is 0. A record written before Touch-ups
-   * were recorded, schema 11's included, reads as 0.
+   * isn't a Retry, so its `retry` is 0. A schema 1 to 10 record, written
+   * before Touch-ups were recorded, reads as 0.
    */
   readonly touchUp: number;
   /** Whether the run used the Step-up model. */
@@ -331,8 +331,8 @@ export interface RunRecord {
    * On a Review's Execution flaw, its findings counted by tag (#749), as its
    * Verdict marker counts them: a `[missed earlier]` on a Full Review counts.
    * Null on a pass, a Design flaw, a Review that gave no Verdict and every
-   * other role. A record written before tags were recorded, schema 11's
-   * included, reads as null.
+   * other role. A schema 1 to 10 record, written before tags were recorded,
+   * reads as null.
    */
   readonly findingTags: FindingTagCounts | null;
   readonly durationMs: number | null;
@@ -438,8 +438,8 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     // Only work that landed was pushed: never an empty diff, a failed run or a failed landing.
     pushed: implement && !end.emptyDiff && ran.failure === null && ran.broken === null && landing === null ? pushedOf(end) : null,
     // The Kit job passes out the kind of Review it started (#747).
-    fullReview: role === "review" ? fullReviewOf(kit["full-review"]) : null,
-    ...verdictOf(role === "review" ? end.agentResult : null, fullReviewOf(kit["full-review"])),
+    fullReview: role === "review" ? fullReviewIn(kit["full-review"]) : null,
+    ...verdictOf(role === "review" ? end.agentResult : null, fullReviewIn(kit["full-review"])),
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
 }
@@ -645,7 +645,7 @@ function readLandingFailed(text: string): LandingFailed | null {
 }
 
 /** Whether the Review the Kit job started was a Full Review (#747), from its output: null when it passed out neither. */
-function fullReviewOf(output: string | undefined): boolean | null {
+function fullReviewIn(output: string | undefined): boolean | null {
   return output === "true" ? true : output === "false" ? false : null;
 }
 
@@ -717,44 +717,35 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * a schema 1 to 8 record, written before landings were recorded, as a run the
  * push job landed, and a schema 1 to 9 record, written before pushes were
  * recorded, as one that pushed nothing, and a schema 1 to 10 record, written
- * before Full Reviews were recorded, with a null `fullReview`, a Review's
- * included, and a schema 1 to 11 record written before findings' tags were
- * recorded, with null `findingTags`, and one written before Touch-ups were
- * recorded, with `touchUp` 0. An older record names the schema it
+ * before Full Reviews, findings' tags and Touch-ups were recorded, with a
+ * null `fullReview`, a Review's included, null `findingTags` and `touchUp` 0.
+ * An older record names the schema it
  * was stored at in `storedSchema`. Null for anything that isn't a record of a
  * schema the Kit knows.
  */
 export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
   if (typeof stored !== "object" || stored === null) return null;
   const { schema } = stored as { schema?: unknown };
-  if (schema === RUN_RECORD_SCHEMA) return withAddedTo11(stored as Schema11);
+  if (schema === RUN_RECORD_SCHEMA) return stored as RunRecord;
   const record = upgraded(stored, schema, subscriptions);
   return record === null ? null : { ...record, storedSchema: schema as number };
 }
 
-/** The fields schema 11 gained after its first records were written: a schema 11 record stored before them lacks them. */
-type AddedTo11 = "findingTags" | "touchUp";
+/** The fields schema 11 added: Full Reviews (#747), findings' tags (#749) and Touch-ups (#750). */
+type AddedIn11 = "fullReview" | "findingTags" | "touchUp";
 
-/** A record as schema 11 holds it, whether or not it was stored before the fields added to it since. */
-type Schema11 = Omit<RunRecord, AddedTo11> & Partial<Pick<RunRecord, AddedTo11>>;
-
-/**
- * A schema 11 record with the fields added to it since, as a record stored
- * before them reads them: no findings' tags (#749), and no Touch-up (#750).
- */
-function withAddedTo11(stored: Schema11): RunRecord {
-  return { ...stored, findingTags: stored.findingTags ?? null, touchUp: stored.touchUp ?? 0 };
-}
+/** Schema 11's fields as a schema 1 to 10 record reads them: no word on a Full Review, no tags, and no Touch-up. */
+const NOT_IN_10: Pick<RunRecord, AddedIn11> = { fullReview: null, findingTags: null, touchUp: 0 };
 
 /** An older stored record at the current schema (readRunRecord), or null for a schema the Kit doesn't know. */
 function upgraded(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
-  if (schema === 10) return withAddedTo11({ ...(stored as Schema10), schema: RUN_RECORD_SCHEMA, fullReview: null });
+  if (schema === 10) return { ...(stored as Schema10), schema: RUN_RECORD_SCHEMA, ...NOT_IN_10 };
   const older = upgradedToSchema10(stored, schema, subscriptions);
-  return older === null ? null : withAddedTo11({ ...older, fullReview: null });
+  return older === null ? null : { ...older, ...NOT_IN_10 };
 }
 
-/** A record as schema 10 held it, before Full Reviews were recorded (#747). */
-type Schema10 = Omit<RunRecord, "schema" | "fullReview" | AddedTo11>;
+/** A record as schema 10 held it, before schema 11's fields were recorded. */
+type Schema10 = Omit<RunRecord, "schema" | AddedIn11>;
 
 /** A stored record older than schema 10 at schema 10's fields, or null for a schema the Kit doesn't know. */
 function upgradedToSchema10(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): (Schema10 & Pick<RunRecord, "schema">) | null {
@@ -837,7 +828,7 @@ function failureOf(jobResult: string, secretsStep: string | undefined, failureRe
  * The Reviewer's Verdict, and on an Execution flaw its findings counted by
  * tag (#749), or nulls when it gave none. A Review whose kind the Kit job
  * didn't pass out is counted as a Full Review: a `[missed earlier]` there
- * counts, as it can never be read as free.
+ * counts, so it can never be read as calling for a Touch-up.
  */
 function verdictOf(agentResult: string | null, fullReview: boolean | null): Pick<RunRecord, "verdict" | "findingTags"> {
   const none = { verdict: null, findingTags: null };

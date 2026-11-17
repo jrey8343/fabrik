@@ -1,4 +1,4 @@
-// What a later Review is given (#748, ADR-0025), read from its pull request's
+// What a later Review is given (#748, ADR-0026), read from its pull request's
 // thread as the Review job's step reads it, and set out in the Reviewer's
 // prompt context. A Full Review is given none of it.
 import { mkdtemp, writeFile } from "node:fs/promises";

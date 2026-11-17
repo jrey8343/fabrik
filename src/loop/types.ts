@@ -890,7 +890,7 @@ export interface PullRequestSnapshot {
    * rewrote the body, so it is no longer in flight, though nothing was
    * pushed, and a Verdict may land on that head again.
    */
-  readonly bodyOnlyNoteSinceVerdict: string | null;
+  readonly bodyOnlyTouchUpHead: string | null;
   /**
    * The Kit's note since its latest Verdict on the Retry that Verdict called
    * for, which never started (#416), or null: `restarted` when the Kit re-added

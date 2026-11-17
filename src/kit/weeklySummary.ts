@@ -24,7 +24,7 @@ import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type Dispatch
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "./config.ts";
-import { verdictsIn } from "../github/threads.ts";
+import { verdictPostedByIn, verdictsIn } from "../github/threads.ts";
 import {
   type ArchitecturalEscape,
   type CommentFacts,
@@ -1086,27 +1086,10 @@ function verdictLanded({ repo, pullRequest, baseSha, runId, runAttempt }: RunRec
   const comments = [...(onRepo?.pullRequests ?? []), ...(onRepo?.openPullRequests ?? [])].find(({ number }) => number === pullRequest)?.comments ?? [];
   return comments.some(({ byBot, body }) => {
     if (!byBot || !verdictsIn([body]).some((verdict) => verdict.source === "reviewer" && verdict.headSha === baseSha)) return false;
-    const run = postedByOf(body);
+    const run = verdictPostedByIn(body);
     return run !== null && run.runId === runId && run.runAttempt === runAttempt;
   });
 }
-
-/**
- * The Actions run attempt that posted a Verdict comment, from its
- * `[The run](…/actions/runs/<id>/attempts/<n>)` line, or null without one. The
- * last such line is the Kit's: the findings above it are the Reviewer's text,
- * which could carry a look-alike.
- */
-function postedByOf(body: string): { readonly runId: number; readonly runAttempt: number } | null {
-  const linked = body
-    .split("\n")
-    .map((line) => VERDICT_RUN_LINK.exec(line))
-    .findLast((match) => match !== null);
-  return linked === undefined || linked === null ? null : { runId: Number(linked[1]), runAttempt: Number(linked[2]) };
-}
-
-/** A Verdict comment's line linking the run attempt that posted it, on whichever GitHub server. */
-const VERDICT_RUN_LINK = /^\[The run\]\(https?:\/\/[^)\s]*\/actions\/runs\/([0-9]+)\/attempts\/([0-9]+)\)$/;
 
 /**
  * How many Retries these records hold: Implement records with `retry > 0`

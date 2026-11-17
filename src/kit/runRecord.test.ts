@@ -1198,8 +1198,8 @@ describe("A Run record read back from the store", () => {
     runEnd({ needs: needs("triage", { triage: job("success") }, { subscription: "Claude token 2" }) }),
   )?.record;
 
-  /** The written record as a schema 10 one, written before Full Reviews and Touch-ups were recorded, held it. */
-  const { fullReview: _fullReview, touchUp: _touchUp, ...before11 } = written!;
+  /** The written record as a schema 10 one, written before Full Reviews, findings' tags and Touch-ups were recorded, held it. */
+  const { fullReview: _fullReview, findingTags: _findingTags, touchUp: _touchUp, ...before11 } = written!;
   /** The written record as a schema 9 one, written before pushes were recorded, held it. */
   const { pushed: _pushed, ...before10 } = before11;
   /** The written record as a schema 8 one, written before landings were recorded, held it. */
@@ -1209,30 +1209,13 @@ describe("A Run record read back from the store", () => {
     expect(readRunRecord(JSON.parse(JSON.stringify(written)), ["Claude token", "Claude token 2"])).toEqual(written);
   });
 
-  it("of schema 10, written before Full Reviews were recorded, reads as no word on one, a Review's included, at the current schema", () => {
+  it("of schema 10, written before Full Reviews and findings' tags were recorded, reads as no word on either, a Review's included, at the current schema", () => {
     expect(readRunRecord({ ...before11, schema: 10 }, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 10, fullReview: null, findingTags: null });
     expect(readRunRecord({ ...before11, role: "review", schema: 10 }, ["Claude token"])).toEqual({ ...written, role: "review", schema: 11, storedSchema: 10, fullReview: null, findingTags: null });
   });
 
-  it("of schema 11, written before findings' tags were recorded (#749), reads as none", () => {
-    const { findingTags: _findingTags, ...withoutTags } = written!;
-
-    expect(readRunRecord({ ...withoutTags, role: "review", verdict: "execution-flaw" }, ["Claude token"])).toEqual({
-      ...written,
-      role: "review",
-      verdict: "execution-flaw",
-      findingTags: null,
-    });
-  });
-
   it("of schema 10, an Implement run's, reads as no Touch-up (#750)", () => {
     expect(readRunRecord({ ...before11, role: "implement", retry: 1, schema: 10 }, ["Claude token"])).toMatchObject({ retry: 1, touchUp: 0 });
-  });
-
-  it("of schema 11, written before Touch-ups were recorded (#750), reads as none", () => {
-    const { touchUp: _touchUp, ...withoutTouchUp } = written!;
-
-    expect(readRunRecord({ ...withoutTouchUp, role: "implement" }, ["Claude token"])).toEqual({ ...written, role: "implement", touchUp: 0 });
   });
 
   it("of schema 9, written before pushes were recorded, reads as a run that pushed nothing, at the current schema", () => {

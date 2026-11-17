@@ -464,7 +464,7 @@ describe("Touch-ups, counted apart from Retries", () => {
     expect([facts.counts.touchUps, facts.touchUpsLeft, facts.counts.retries, facts.retriesLeft]).toEqual([2, 0, 0, 2]);
   });
 
-  it("give a body-only Touch-up (#751), which pushed nothing, its own row and count it among the Touch-ups, before the second Verdict on the same head", () => {
+  it("give a body-only Touch-up (#751), which pushed nothing, its own row before the second Verdict on the same head, and leave it out of the Touch-ups that pushed, though it uses one up", () => {
     const facts = digestFactsOf(
       aThread({
         kitComments: [
@@ -481,7 +481,7 @@ describe("Touch-ups, counted apart from Retries", () => {
       ["implementer", "body-only-touch-up", 1],
       ["reviewer", "pass", null],
     ]);
-    expect([facts.counts.touchUps, facts.touchUpsLeft, facts.counts.retries]).toEqual([1, 1, 0]);
+    expect([facts.counts.touchUps, facts.touchUpsLeft, facts.counts.retries]).toEqual([0, 1, 0]);
   });
 });
 

@@ -123,7 +123,7 @@ import {
   streamWatch,
 } from "./launch.ts";
 import { type LaterReviewGiven, readLaterReviewFile } from "./laterReview.ts";
-import { fullReviewOf, ranNothingOf, reviewContext, reviewPromptFor } from "./review.ts";
+import { isFullReview, ranNothingOf, reviewContext, reviewPromptFor } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
 import { missingSkills, runSummary } from "./summary.ts";
@@ -515,7 +515,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   let reviewKind: { readonly later: LaterReviewGiven | null } | null = spec.replay === "review" ? { later: null } : null;
   if (spec.reviewsPullRequest === true) {
     reviewKind = {
-      later: fullReviewOf(process.env["FABRIK_FULL_REVIEW"]) ? null : await readLaterReviewFile(required("FABRIK_LATER_REVIEW_FILE")),
+      later: isFullReview(process.env["FABRIK_FULL_REVIEW"]) ? null : await readLaterReviewFile(required("FABRIK_LATER_REVIEW_FILE")),
     };
     // Set only for a UI PR: where its Review job downloaded the UI evidence, whether or not that worked,
     // and why its capture failed, as the PR's marker records it.

@@ -1,4 +1,4 @@
-// What a later Review is given beyond what every Review is (#748, ADR-0025):
+// What a later Review is given beyond what every Review is (#748, ADR-0026):
 // the Reviewer's earlier Verdicts on the pull request, the Kit's note of each
 // Implement run's push with the `fix` comment the run wrote, the kind of run
 // that pushed the head it judges, and the pull request's own change since the
@@ -13,6 +13,7 @@ import { GitHub, type Repo } from "../github/client.ts";
 import { readDigestThread } from "../github/digestGiven.ts";
 import { readWrittenOn } from "../github/writtenOn.ts";
 import { changeFingerprintIn } from "../loop/changeFingerprint.ts";
+import { fixRunName } from "../loop/retry.ts";
 import { pushedByIn, type PushingRun, type RunPush, runPushesIn } from "../loop/runPushes.ts";
 import { fenced } from "./design.ts";
 import { agentInputsClient, type GivenVerdict, type Reader, reportFailure, verdictsAmong } from "./inputs.ts";
@@ -21,7 +22,7 @@ export type { PushingRun } from "../loop/runPushes.ts";
 
 /** One Implement run's `fix` comment, in the Kit's note of its push, as a later Review is given it. */
 export interface FixComment {
-  /** Which run it was: `Retry <n>`, `Request-changes run` or `conflict-only run`. */
+  /** Which run it was: `Retry <n>`, `Touch-up <n>`, `Touch-up <n>, body only`, `Request-changes run` or `conflict-only run`. */
   readonly run: string;
   /** The Kit's whole note of the push, which ends with what the run wrote. */
   readonly comment: string;
@@ -62,14 +63,15 @@ export async function readLaterReviewThread(
   const pushes = runPushesIn(await readDigestThread(github, repo, pullRequest, repo.owner, [], written));
   return {
     verdicts: verdictsAmong(written.conversation).filter(({ source }) => source === "reviewer"),
-    fixComments: pushes.map((push) => ({ run: runName(push), comment: push.note })),
+    fixComments: pushes.map((push) => ({ run: pushingRunName(push), comment: push.note })),
     pushedBy: pushedByIn(pushes, headSha),
   };
 }
 
-function runName({ run, retry, touchUp, bodyOnly }: RunPush): string {
-  if (run === "retry") return retry === undefined ? "Retry" : `Retry ${retry}`;
-  if (run === "touch-up") return `${touchUp === undefined ? "Touch-up" : `Touch-up ${touchUp}`}${bodyOnly === true ? ", body only" : ""}`;
+/** How a fix comment names the run whose note it is (FixComment.run). */
+function pushingRunName({ run, retry, touchUp, bodyOnly }: RunPush): string {
+  if (run === "retry") return fixRunName("retry", retry, false);
+  if (run === "touch-up") return `${fixRunName("touch-up", touchUp, false)}${bodyOnly === true ? ", body only" : ""}`;
   return run === "request-changes-run" ? "Request-changes run" : "conflict-only run";
 }
 

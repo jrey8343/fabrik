@@ -7,7 +7,7 @@ import { gateUnopened } from "./digest.ts";
 import { heldOn, heldUntilReset } from "./hold.ts";
 import { DIGEST_LABEL, REVIEW_LABEL } from "./labels.ts";
 import { requestChangesRunStartedMarker } from "./markers.ts";
-import { runInFlight, runName } from "./retry.ts";
+import { fixRunName, isRetryOrTouchUp, runInFlight, runName } from "./retry.ts";
 import { reviewLinks, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, KitConfig, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
@@ -87,8 +87,8 @@ function deferredDuringRetry(pullRequest: PullRequestSnapshot, review: number): 
   // Once the Retry has pushed, none is in flight, though its Review may still be working.
   const run = runInFlight(pullRequest);
   // A Touch-up (#750) defers it as a Retry does.
-  const retry = run?.kind === "retry" || run?.kind === "touch-up" ? runName(run) : "the Retry";
-  const noun = run?.kind === "touch-up" ? "Touch-up" : "Retry";
+  const retry = isRetryOrTouchUp(run) ? runName(run) : "the Retry";
+  const noun = fixRunName(run?.kind === "touch-up" ? "touch-up" : "retry");
   return {
     kind: "act",
     actions: [

@@ -5,7 +5,7 @@
 // (`blocked`). Each is read by the Loop's own rule for it, so the Standing and
 // the Loop can't disagree, and none can turn Stuck.
 import { dispatchedRunsOf, implementRunsWithoutPullRequestOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
-import { bodyOnlyNoteSinceVerdictIn, conflictRunInFlightIn } from "../github/threads.ts";
+import { bodyOnlyTouchUpHeadIn, conflictRunInFlightIn } from "../github/threads.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { agentPullRequestsByGate, inFlightOf, mergeGateLoadOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
@@ -471,7 +471,7 @@ function waitsOnReview(pullRequest: OpenPullRequestFacts, appLogin: string): boo
  * Touch-up's note on that head since (#751) leaves room for a second.
  */
 export function hasVerdictOnHead(pullRequest: OpenPullRequestFacts): boolean {
-  const bodyOnly = bodyOnlyNoteSinceVerdictIn(pullRequest.comments.filter(({ byBot }) => byBot).map(({ body }) => body));
+  const bodyOnly = bodyOnlyTouchUpHeadIn(pullRequest.comments.filter(({ byBot }) => byBot).map(({ body }) => body));
   return bodyOnly !== pullRequest.headSha && verdictsOn(pullRequest.comments).some(({ record }) => record.headSha === pullRequest.headSha);
 }
 

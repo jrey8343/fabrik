@@ -574,6 +574,12 @@ describe("The Digest writer's prompt", () => {
     expect(how).toContain("A Touch-up is never a Retry: count each apart, as `counts` does");
   });
 
+  it("has How it got here take a body-only Touch-up from the rounds, as `counts.touchUps` counts only the Touch-ups that pushed", async () => {
+    const how = part(await prompt(), "How it got here");
+
+    expect(how).toContain("`counts.touchUps` is the Touch-ups that pushed. A body-only Touch-up, which rewrote the body alone and pushed nothing, is a round of its own in `rounds` and isn't among them");
+  });
+
   it("asks which of the listed Follow-ups to show, each once: one that repeats another is left out, and one an existing Ticket covers is left out and named in the second fold with that Ticket", async () => {
     const text = await prompt();
     const followUps = part(text, "Follow-ups");

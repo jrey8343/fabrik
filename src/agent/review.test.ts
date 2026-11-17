@@ -13,7 +13,7 @@ import { planFor } from "../loop/rules.ts";
 import { readPullRequest, type Reader } from "./inputs.ts";
 import { readAgentRunResult } from "./result.ts";
 import type { PushingRun } from "./laterReview.ts";
-import { fullReviewOf, ranNothingOf, reviewContext, reviewPromptFor } from "./review.ts";
+import { isFullReview, ranNothingOf, reviewContext, reviewPromptFor } from "./review.ts";
 
 async function inputs(pullRequest: unknown): Promise<{ productDir: string; pullRequestFile: string; specFile: string }> {
   const dir = await mkdtemp(join(tmpdir(), "fabrik-review-"));
@@ -615,12 +615,12 @@ describe("A Review's prompt on a Full Review and on a later Review", () => {
 
 describe("Whether a Review is a Full Review, as the Review job passes it in", () => {
   it("reads the Kit job's output: true for a Full Review, false for a later Review", () => {
-    expect(fullReviewOf("true")).toBe(true);
-    expect(fullReviewOf("false")).toBe(false);
+    expect(isFullReview("true")).toBe(true);
+    expect(isFullReview("false")).toBe(false);
   });
 
   it("fails loudly on anything else, so a Review is never started on a kind the Kit didn't choose", () => {
-    expect(() => fullReviewOf("")).toThrow(/FABRIK_FULL_REVIEW/);
-    expect(() => fullReviewOf(undefined)).toThrow(/FABRIK_FULL_REVIEW/);
+    expect(() => isFullReview("")).toThrow(/FABRIK_FULL_REVIEW/);
+    expect(() => isFullReview(undefined)).toThrow(/FABRIK_FULL_REVIEW/);
   });
 });

@@ -2,16 +2,12 @@
 // small or missed earlier calls for a Touch-up instead of a Retry, from its own
 // pool of two, on the same model as the run whose push it judged.
 import { describe, expect, it } from "vitest";
+import { A, B, C, D, type Fixes, finished, PullRequestOnGitHub, requestedChanges, RUN } from "../__fixtures__/pullRequestThread.ts";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { emptyDiffIn, implementPushOf } from "../github/apply.ts";
-import { bodyOnlyNoteSinceVerdictIn, lastPushStepUpReasonIn, pushedSinceVerdictIn, verdictsIn } from "../github/threads.ts";
+import { verdictsIn } from "../github/threads.ts";
 import { planFor } from "./rules.ts";
 import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
-
-const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
-const B = "b".repeat(40);
-const C = "c".repeat(40);
-const D = "d".repeat(40);
 
 function reviewed(output: string): LoopEvent {
   return { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output, runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
@@ -268,9 +264,25 @@ describe("Starting a Touch-up", () => {
     });
   });
 
-  it("taking fabrik:step-up off drops it back, though the run whose push it fixes was marked (ADR-0014)", () => {
-    expect(startedFor(touchUpOwed({ lastPushStepUpReason: "marked" }))).toMatchObject({ model: kitConfig().roles.implement.model, stepUp: false, stepUpReason: null });
-  });
+  it.each([
+    ["a Retry 1", [earlier("execution-flaw")], {}, null],
+    ["a Retry 2", [earlier("execution-flaw"), earlier("execution-flaw")], {}, "retry"],
+    ["a Request-changes run", [], { requestChanges: true }, "request-changes"],
+    ["a conflict-only run", [], { conflictRun: true as const }, "conflict-only"],
+  ] as const)(
+    "taking fabrik:step-up off after %s whose push was marked drops it back to what that run had without the label (ADR-0014)",
+    (_, before, judged, reason) => {
+      const pullRequest = touchUpOwed({ lastPushStepUpReason: "marked" }, before);
+      const flawed = { ...pullRequest, verdicts: [...pullRequest.verdicts.slice(0, -1), { ...pullRequest.verdicts.at(-1)!, ...judged }] };
+      const config = kitConfig();
+
+      expect(startedFor(flawed)).toMatchObject({
+        model: reason === null ? config.roles.implement.model : config.roles.stepUp.model,
+        stepUp: reason !== null,
+        stepUpReason: reason,
+      });
+    },
+  );
 
   it("a Touch-up after Retry 2 starts, though the Retries are used up", () => {
     expect(startedFor(touchUpOwed({ lastPushStepUpReason: "retry" }, [earlier("execution-flaw"), earlier("execution-flaw")]))).toMatchObject({
@@ -308,70 +320,69 @@ describe("A Touch-up in flight", () => {
   });
 });
 
-/** The Ticket's agent PR #50, whose thread grows as plans post comments on it, read back as the adapter reads them. */
-class Thread {
-  readonly comments: string[] = [];
-  headSha = HEAD_SHA;
+/** The labels on Ticket #7 as agent:implement starts a run on its PR. */
+const READY = ["enhancement", "ready-for-agent", "agent:implement"];
 
-  pullRequest(): PullRequestSnapshot {
-    return aPullRequest({
-      headSha: this.headSha,
-      ticketLabels: ["enhancement", "ready-for-agent"],
-      verdicts: verdictsIn(this.comments),
-      pushedSinceVerdict: pushedSinceVerdictIn(this.comments),
-      bodyOnlyNoteSinceVerdict: bodyOnlyNoteSinceVerdictIn(this.comments),
-      lastPushStepUpReason: lastPushStepUpReasonIn(this.comments),
-      change: CHANGE,
-    });
+/**
+ * The Ticket's agent PR #50 on the fake GitHub (src/__fixtures__/pullRequestThread.ts): each plan's comments are
+ * posted on it, its push lands, and the next snapshot reads it all back through the adapter.
+ */
+class Thread {
+  readonly onGitHub: PullRequestOnGitHub;
+
+  constructor(onGitHub = new PullRequestOnGitHub()) {
+    this.onGitHub = onGitHub;
   }
 
-  plan(event: LoopEvent, snapshot: Snapshot = snapshotOfPullRequest(this.pullRequest())): Plan {
-    const plan = planFor(event, snapshot, kitConfig());
-    for (const action of plan.kind === "act" ? plan.actions : []) {
-      if (action.kind === "comment" && action.issue === 50) this.comments.push(action.body);
-    }
+  get headSha(): string {
+    return this.onGitHub.commits.at(-1) ?? A;
+  }
+
+  /** The Kit's comments on the PR, oldest first. */
+  get comments(): string[] {
+    return this.onGitHub.comments.map((comment) => comment.body);
+  }
+
+  /** The PR as the adapter reads it, with the fingerprint the Review job reads, so a Reviewer's Verdict records its change. */
+  async pullRequest(): Promise<PullRequestSnapshot> {
+    return { ...(await this.onGitHub.pullRequest()), change: CHANGE };
+  }
+
+  /** Plans for the event, posting the plan's comments and landing its push as `tip`. */
+  async plan(event: LoopEvent, snapshot?: Snapshot, tip = this.headSha): Promise<Plan> {
+    const plan = planFor(event, snapshot ?? snapshotOfPullRequest(await this.pullRequest()), kitConfig());
+    if (plan.kind === "act") this.onGitHub.apply(plan, { pushLands: true, tip });
     return plan;
   }
 
   /** The Reviewer's Verdict on the PR's head. */
-  reviewed(output: string): Plan {
+  reviewed(output: string): Promise<Plan> {
     return this.plan({ kind: "review-run-finished", pullRequest: 50, headSha: this.headSha, output, runUrl: RUN, repoUrl: "https://github.com/acme/shop" });
   }
 
-  /** agent:implement on the Ticket: the run it starts. */
-  implement(): Extract<Action, { kind: "start-agent-run" }> {
-    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent", "agent:implement"], openPullRequests: [50] });
-    const started = actionsOf(this.plan(IMPLEMENT_LABELED, snapshotOf(ticket, { pullRequest: this.pullRequest() }))).find((action) => action.kind === "start-agent-run");
+  /** agent:implement on the Ticket, with these labels on it: the run it starts. */
+  async implement(labels: readonly string[] = READY): Promise<StartAgentRun> {
+    const ticket = anIssue({ number: 7, labels: [...labels], openPullRequests: [50] });
+    const plan = await this.plan(IMPLEMENT_LABELED, snapshotOf(ticket, { pullRequest: await this.pullRequest() }));
+    const started = actionsOf(plan).find((action) => action.kind === "start-agent-run");
     if (started?.kind !== "start-agent-run") throw new Error("expected agent:implement to start a run");
     return started;
   }
 
   /** The run `started` finishes with these changes; if its plan pushes, the PR is at `to`. */
-  finished(started: Extract<Action, { kind: "start-agent-run" }>, changes: BranchChanges, to: string): Plan {
-    const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] });
-    const event: LoopEvent = {
-      kind: "implement-run-finished",
-      runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
-      issue: 7,
-      output: JSON.stringify({ title: "Handle the empty cart", summary: "Handles the empty cart.", fix: "Fixed the stale comment." }),
-      branch: "fabrik/ticket-7",
-      base: "fabrik/ticket-7",
-      changes,
-      fixes: {
-        pullRequest: 50,
-        headSha: this.headSha,
-        runUrl: RUN,
-        ...(started.retry === undefined ? {} : { retry: started.retry }),
-        ...(started.touchUp === undefined ? {} : { touchUp: started.touchUp }),
-        ...(started.retryFlaw === undefined ? {} : { retryFlaw: started.retryFlaw }),
-        ...(started.stepUpReason == null ? {} : { stepUpReason: started.stepUpReason }),
-      },
+  async finished(started: StartAgentRun, changes: BranchChanges, to: string): Promise<Plan> {
+    const fixes: Partial<Fixes> = {
+      ...(started.retry === undefined ? {} : { retry: started.retry }),
+      ...(started.touchUp === undefined ? {} : { touchUp: started.touchUp }),
+      ...(started.requestChanges === undefined ? {} : { review: started.requestChanges.review }),
+      ...(started.retryFlaw === undefined ? {} : { retryFlaw: started.retryFlaw }),
+      ...(started.stepUpReason == null ? {} : { stepUpReason: started.stepUpReason }),
     };
-    const plan = this.plan(event, snapshotOf(ticket, { pullRequest: this.pullRequest() }));
-    if (plan.kind === "act" && plan.actions.some((action) => action.kind === "push-branch")) this.headSha = to;
-    return plan;
+    return this.plan({ ...finished(to, fixes, this.headSha), changes }, await this.onGitHub.pushJobSnapshot(), to);
   }
 }
+
+type StartAgentRun = Extract<Action, { kind: "start-agent-run" }>;
 
 const BUILT: BranchChanges = { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] };
 const NOTHING: BranchChanges = { net: [], commits: [] };
@@ -379,11 +390,11 @@ const UNTAGGED = "verdict: execution-flaw\n\n- The empty-cart case throws.";
 const SMALL = "verdict: execution-flaw\n\n- [small: comment] The doc comment on `total()` is stale.";
 
 describe("A Touch-up's landing", () => {
-  it("one that commits lands as a Retry's push does, its note saying which Touch-up it was", () => {
+  it("one that commits lands as a Retry's push does, its note saying which Touch-up it was", async () => {
     const thread = new Thread();
-    thread.reviewed(SMALL);
+    await thread.reviewed(SMALL);
 
-    const plan = thread.finished(thread.implement(), BUILT, B);
+    const plan = await thread.finished(await thread.implement(), BUILT, B);
 
     expect(actionsOf(plan)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
     expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "edit-issue-body", issue: 50 }));
@@ -392,40 +403,80 @@ describe("A Touch-up's landing", () => {
     expect(note).toContain("The Implementer pushed Touch-up 1 of 2 to `fabrik/ticket-7`");
   });
 
-  it("its push gets a later Review, whose Verdict lands", () => {
+  it("its push gets a later Review, whose Verdict lands", async () => {
     const thread = new Thread();
-    thread.reviewed(SMALL);
-    thread.finished(thread.implement(), BUILT, B);
+    await thread.reviewed(SMALL);
+    await thread.finished(await thread.implement(), BUILT, B);
 
-    const review = actionsOf(thread.plan({ kind: "pull-request-pushed", pullRequest: 50 })).find((action) => action.kind === "start-agent-run");
+    const review = actionsOf(await thread.plan({ kind: "pull-request-pushed", pullRequest: 50 })).find((action) => action.kind === "start-agent-run");
 
     expect(review).toMatchObject({ role: "review", reviewKind: { kind: "later" } });
-    expect(commentOf(thread.reviewed("verdict: pass\n\nIt handles the empty cart."))).toContain("## Verdict: Pass");
+    expect(commentOf(await thread.reviewed("verdict: pass\n\nIt handles the empty cart."))).toContain("## Verdict: Pass");
   });
 
-  it("a Touch-up after a stepped-up Touch-up keeps its Step-up reason, read from that one's push note", () => {
+  it("a Touch-up after a stepped-up Touch-up keeps its Step-up reason, read from that one's push note", async () => {
     const thread = new Thread();
     // Two flaws spend both Retries; Retry 2 pushes on the Step-up model.
-    thread.reviewed(UNTAGGED);
-    thread.finished(thread.implement(), BUILT, B);
-    thread.reviewed(UNTAGGED);
-    expect(thread.finished(thread.implement(), BUILT, C)).toMatchObject({ kind: "act" });
-    thread.reviewed(SMALL);
-    const first = thread.implement();
+    await thread.reviewed(UNTAGGED);
+    await thread.finished(await thread.implement(), BUILT, B);
+    await thread.reviewed(UNTAGGED);
+    expect(await thread.finished(await thread.implement(), BUILT, C)).toMatchObject({ kind: "act" });
+    await thread.reviewed(SMALL);
+    const first = await thread.implement();
     expect(first).toMatchObject({ touchUp: 1, stepUpReason: "retry" });
-    thread.finished(first, BUILT, D);
+    await thread.finished(first, BUILT, D);
     expect(thread.comments.at(-1)).toContain("<!-- fabrik:step-up-reason retry -->");
 
-    thread.reviewed(SMALL);
+    await thread.reviewed(SMALL);
 
-    expect(thread.implement()).toMatchObject({ touchUp: 2, stepUpReason: "retry", model: kitConfig().roles.stepUp.model });
+    expect(await thread.implement()).toMatchObject({ touchUp: 2, stepUpReason: "retry", model: kitConfig().roles.stepUp.model });
   });
 
-  it("one that commits nothing gets today's empty-diff Verdict, which counts", () => {
+  it("a Touch-up after a marked Retry 2, with fabrik:step-up since taken off, runs on the Step-up model for `retry` (ADR-0014)", async () => {
     const thread = new Thread();
-    thread.reviewed(SMALL);
+    const marked = [...READY, "fabrik:step-up"];
+    await thread.reviewed(UNTAGGED);
+    await thread.finished(await thread.implement(marked), BUILT, B);
+    await thread.reviewed(UNTAGGED);
+    await thread.finished(await thread.implement(marked), BUILT, C);
+    expect(thread.comments.at(-1)).toContain("<!-- fabrik:step-up-reason marked -->");
 
-    const plan = thread.finished(thread.implement(), NOTHING, B);
+    await thread.reviewed(SMALL);
+
+    expect(await thread.implement()).toMatchObject({ touchUp: 1, stepUp: true, stepUpReason: "retry", model: kitConfig().roles.stepUp.model });
+  });
+
+  describe("a Retry after a Touch-up stepped up for a Request-changes run's push keeps that Step-up (#464)", () => {
+    /** The Operator's Request-changes run pushes B, a Touch-up on it, stepped up the same way, ends with `changes`. */
+    async function touchedUpAfterRequestChanges(changes: BranchChanges): Promise<{ thread: Thread; plan: Plan }> {
+      const thread = new Thread(requestedChanges());
+      await thread.finished(await thread.implement(), BUILT, B);
+      await thread.reviewed(SMALL);
+      const touchUp = await thread.implement();
+      expect(touchUp).toMatchObject({ touchUp: 1, stepUpReason: "request-changes" });
+      return { thread, plan: await thread.finished(touchUp, changes, C) };
+    }
+
+    it("after the Touch-up's push", async () => {
+      const { thread } = await touchedUpAfterRequestChanges(BUILT);
+
+      expect(commentOf(await thread.reviewed(UNTAGGED))).toContain("Retry 1 of 2 starts now, stepped up:");
+      expect(await thread.implement()).toMatchObject({ retry: 1, stepUp: true, stepUpReason: "request-changes", model: kitConfig().roles.stepUp.model });
+    });
+
+    it("after the Touch-up's empty diff", async () => {
+      const { thread, plan } = await touchedUpAfterRequestChanges(NOTHING);
+
+      expect(commentOf(plan)).toContain("Retry 1 of 2 starts now, stepped up:");
+      expect(await thread.implement()).toMatchObject({ retry: 1, stepUp: true, stepUpReason: "request-changes", model: kitConfig().roles.stepUp.model });
+    });
+  });
+
+  it("one that commits nothing gets today's empty-diff Verdict, which counts", async () => {
+    const thread = new Thread();
+    await thread.reviewed(SMALL);
+
+    const plan = await thread.finished(await thread.implement(), NOTHING, B);
 
     expect(commentOf(plan)).toContain("The Implementer's Touch-up 1 of 2 on `fabrik/ticket-7` committed no change");
     expect(commentOf(plan)).toContain("Retry 1 of 2 starts now");
@@ -433,26 +484,26 @@ describe("A Touch-up's landing", () => {
     expect(postedBy(plan).at(-1)).not.toHaveProperty("touchUp");
   });
 
-  it("a Touch-up left over from an earlier flaw pushes nothing over the one in flight", () => {
+  it("a Touch-up left over from an earlier flaw pushes nothing over the one in flight", async () => {
     const thread = new Thread();
-    thread.reviewed(SMALL);
-    const first = thread.implement();
-    thread.finished(first, BUILT, B);
-    thread.reviewed(SMALL);
+    await thread.reviewed(SMALL);
+    const first = await thread.implement();
+    await thread.finished(first, BUILT, B);
+    await thread.reviewed(SMALL);
 
-    const plan = thread.finished(first, BUILT, C);
+    const plan = await thread.finished(first, BUILT, C);
 
     expect(plan).toEqual({ kind: "nothing", reason: "Touch-up 1 of 2 on #50 isn't the run in flight, so the retry's branch isn't pushed" });
   });
 
-  it("a Retry left over pushes nothing over a Touch-up in flight", () => {
+  it("a Retry left over pushes nothing over a Touch-up in flight", async () => {
     const thread = new Thread();
-    thread.reviewed(UNTAGGED);
-    const retry = thread.implement();
-    thread.finished(retry, BUILT, B);
-    thread.reviewed(SMALL);
+    await thread.reviewed(UNTAGGED);
+    const retry = await thread.implement();
+    await thread.finished(retry, BUILT, B);
+    await thread.reviewed(SMALL);
 
-    expect(thread.finished(retry, BUILT, C)).toEqual({ kind: "nothing", reason: "Retry 1 of 2 on #50 isn't the run in flight, so the retry's branch isn't pushed" });
+    expect(await thread.finished(retry, BUILT, C)).toEqual({ kind: "nothing", reason: "Retry 1 of 2 on #50 isn't the run in flight, so the retry's branch isn't pushed" });
   });
 });
 
@@ -462,75 +513,72 @@ describe("A body-only Touch-up (#751)", () => {
   const PASS = "verdict: pass\n\nThe body now matches the branch.";
 
   /** A thread whose body-only Touch-up committed nothing, and that run's plan. */
-  function bodyOnlyLanded(): { thread: Thread; plan: Plan } {
+  async function bodyOnlyLanded(): Promise<{ thread: Thread; plan: Plan }> {
     const thread = new Thread();
-    thread.reviewed(BODY_ONLY);
-    return { thread, plan: thread.finished(thread.implement(), NOTHING, B) };
+    await thread.reviewed(BODY_ONLY);
+    return { thread, plan: await thread.finished(await thread.implement(), NOTHING, B) };
   }
 
-  it("that commits nothing replaces the body with its summary, posts its fix under a body-only note on the head, and starts the Review of that head", () => {
-    const { thread, plan } = bodyOnlyLanded();
+  it("that commits nothing replaces the body with its summary, posts its fix under a body-only note on the head, and starts the Review of that head", async () => {
+    const { thread, plan } = await bodyOnlyLanded();
 
-    expect(actionsOf(plan)).toContainEqual({ kind: "edit-issue-body", issue: 50, body: expect.stringContaining("Handles the empty cart.") });
+    expect(actionsOf(plan)).toContainEqual({ kind: "edit-issue-body", issue: 50, body: expect.stringContaining("Shows the empty state for an empty cart.") });
     const note = thread.comments.at(-1) ?? "";
-    expect(note.split("\n")[0]).toBe(`<!-- fabrik:touch-up-body-only 1 ${HEAD_SHA} -->`);
-    expect(note).toContain("Fixed the stale comment.");
+    expect(note.split("\n")[0]).toBe(`<!-- fabrik:touch-up-body-only 1 ${A} -->`);
+    expect(note).toContain("Guards the empty-cart case.");
     expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:review"] });
     expect(postedBy(plan)).toEqual([]);
     expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "push-branch" }));
     expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "mark-ready-for-review" }));
   });
 
-  it("is no empty diff and pushes no head, so its Run record says neither", () => {
-    const thread = new Thread();
-    thread.reviewed(BODY_ONLY);
-    const started = thread.implement();
-    const plan = thread.finished(started, NOTHING, B);
-    const event: LoopEvent = { kind: "implement-run-finished", runUrl: RUN, issue: 7, output: "{}", branch: "fabrik/ticket-7", base: "fabrik/ticket-7", changes: NOTHING, fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, touchUp: 1 } };
+  it("is no empty diff and pushes no head, so its Run record says neither", async () => {
+    const { plan } = await bodyOnlyLanded();
+    const event: LoopEvent = { ...finished(B, { touchUp: 1 }), output: "{}", changes: NOTHING };
 
     expect(emptyDiffIn(plan)).toBe(false);
-    expect(implementPushOf(event, plan, { opened: null }, HEAD_SHA)).toBeNull();
+    expect(implementPushOf(event, plan, { opened: null }, A)).toBeNull();
   });
 
-  it("is no longer in flight at its note: agent:review starts a later Review of the same head", () => {
-    const { thread } = bodyOnlyLanded();
+  it("is no longer in flight at its note: agent:review starts a later Review of the same head", async () => {
+    const { thread } = await bodyOnlyLanded();
 
-    const review = actionsOf(thread.plan(REVIEW_LABELED)).find((action) => action.kind === "start-agent-run");
+    const review = actionsOf(await thread.plan(REVIEW_LABELED)).find((action) => action.kind === "start-agent-run");
 
-    expect(review).toMatchObject({ role: "review", reviewKind: { kind: "later", lastJudged: { headSha: HEAD_SHA } } });
+    expect(review).toMatchObject({ role: "review", reviewKind: { kind: "later", lastJudged: { headSha: A } } });
   });
 
-  it("the Review of that head lands a second Verdict on it, and only then does the PR leave draft", () => {
-    const { thread } = bodyOnlyLanded();
+  it("the Review of that head lands a second Verdict on it, and only then does the PR leave draft", async () => {
+    const { thread } = await bodyOnlyLanded();
 
-    const pass = thread.reviewed(PASS);
+    const pass = await thread.reviewed(PASS);
 
     expect(commentOf(pass)).toContain("## Verdict: Pass");
-    expect(verdictsIn(thread.comments).map((record) => record.headSha)).toEqual([HEAD_SHA, HEAD_SHA]);
+    expect(verdictsIn(thread.comments).map((record) => record.headSha)).toEqual([A, A]);
     // The pass starts the Digest writer, whose landing opens the Merge gate (ADR-0022).
     expect(actionsOf(pass)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:digest"] });
   });
 
-  it("a Review re-run on that head after its second Verdict lands nothing", () => {
-    const { thread } = bodyOnlyLanded();
-    thread.reviewed(PASS);
+  it("a Review re-run on that head after its second Verdict lands nothing", async () => {
+    const { thread } = await bodyOnlyLanded();
+    await thread.reviewed(PASS);
 
-    expect(thread.reviewed("verdict: pass\n\nStill fine.")).toEqual({ kind: "nothing", reason: `#50 already has a Verdict on ${HEAD_SHA.slice(0, 7)}` });
+    expect(await thread.reviewed("verdict: pass\n\nStill fine.")).toEqual({ kind: "nothing", reason: `#50 already has a Verdict on ${A.slice(0, 7)}` });
   });
 
-  it("a Review on a judged head with no body-only note since its Verdict lands nothing, as before", () => {
+  it("a Review on a judged head with no body-only note since its Verdict lands nothing, as before", async () => {
     const thread = new Thread();
-    thread.reviewed(BODY_ONLY);
-    thread.implement();
+    await thread.reviewed(BODY_ONLY);
+    await thread.implement();
 
-    expect(thread.reviewed(PASS)).toEqual({ kind: "nothing", reason: `#50 already has a Verdict on ${HEAD_SHA.slice(0, 7)}` });
+    expect(await thread.reviewed(PASS)).toEqual({ kind: "nothing", reason: `#50 already has a Verdict on ${A.slice(0, 7)}` });
   });
 
-  it("one with a [small: comment] finding beside the body's that commits nothing gets the empty-diff Verdict, which counts", () => {
+  it("one with a [small: comment] finding beside the body's that commits nothing gets the empty-diff Verdict, which counts", async () => {
     const thread = new Thread();
-    thread.reviewed("verdict: execution-flaw\n\n- [small: body] The body is stale.\n- [small: comment] So is the doc comment on `total()`.");
+    await thread.reviewed("verdict: execution-flaw\n\n- [small: body] The body is stale.\n- [small: comment] So is the doc comment on `total()`.");
 
-    const plan = thread.finished(thread.implement(), NOTHING, B);
+    const plan = await thread.finished(await thread.implement(), NOTHING, B);
 
     expect(commentOf(plan)).toContain("The Implementer's Touch-up 1 of 2 on `fabrik/ticket-7` committed no change");
     expect(postedBy(plan).at(-1)).toMatchObject({ source: "empty-diff", verdict: "execution-flaw" });
