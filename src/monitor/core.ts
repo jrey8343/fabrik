@@ -81,12 +81,12 @@ export interface SentryGroupsRead {
 export function monitorPlanFor(input: MonitorInput): MonitorPlan {
   const errors = productionErrors(input);
   const red = redMainPlan(input);
-  const main = mainChecksPlan(input);
+  const named = mainChecksPlan(input);
   return {
-    open: [...errors.open, ...red.open, ...main.open],
-    rewrite: [...errors.rewrite, ...red.rewrite, ...main.rewrite],
-    close: [...errors.close, ...red.close, ...main.close],
-    summary: [...errors.summary, ...red.summary, ...main.summary],
+    open: [...errors.open, ...red.open, ...named.open],
+    rewrite: [...errors.rewrite, ...red.rewrite, ...named.rewrite],
+    close: [...errors.close, ...red.close, ...named.close],
+    summary: [...errors.summary, ...red.summary, ...named.summary],
   };
 }
 

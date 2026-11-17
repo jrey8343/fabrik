@@ -129,18 +129,27 @@ function undecidedNote(commits: number, listedChecks: readonly string[]): string
  */
 function heldClosed(issue: MonitorIssue, decided: readonly Decided[]): boolean {
   if (issue.closedByMonitor || issue.closedAt === null) return false;
-  const closedAt = Date.parse(issue.closedAt);
-  return !decided.some((commit, i) => commit.kind === "green" && commit.decidedAt > closedAt && decidedFirst(commit, decided.slice(0, i)));
+  return !seenGreenSince(Date.parse(issue.closedAt), decided);
+}
+
+/** A decided commit as seenGreenSince reads it: red or green, and when, in milliseconds since the epoch. */
+export interface DecidedAt {
+  readonly kind: "red" | "green";
+  readonly decidedAt: number;
 }
 
 /**
- * Whether the commit was decided before every one newer than it in branch
- * order, so it was the newest decided commit, the default branch's state,
- * when it was decided. A green re-run of an older commit while a newer one
- * stays red never makes the default branch green.
+ * Whether what these decided commits, newest first in branch order, decide
+ * was seen green after this time: some green commit decided since, before
+ * every commit newer than it, so it was the newest decided commit, the
+ * state, when it was decided. A green re-run of an older commit while a newer
+ * one stays red is never seen green. Red main and each Main check hold a
+ * not-planned close by it (./mainChecks.ts).
  */
-function decidedFirst(commit: Decided, newer: readonly Decided[]): boolean {
-  return newer.every((other) => other.decidedAt > commit.decidedAt);
+export function seenGreenSince(since: number, decided: readonly DecidedAt[]): boolean {
+  return decided.some(
+    (commit, i) => commit.kind === "green" && commit.decidedAt > since && decided.slice(0, i).every((other) => other.decidedAt > commit.decidedAt),
+  );
 }
 
 /**

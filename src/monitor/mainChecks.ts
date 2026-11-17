@@ -6,8 +6,21 @@
 // (src/monitor/main.ts) reads the runs and who closed each issue.
 import { MONITOR_LABEL } from "../loop/labels.ts";
 import { monitorMarkerLine, RED_MAIN_GREEN_MARKER } from "../loop/markers.ts";
-import { bodyCode, type BodyRewrite, type IssueToClose, type IssueToOpen, monitorBlock, monitorBlockIn, type MonitorIssue, type MonitorPlan, newestByMarker, oneLine, truncated, withMonitorBlock } from "./issues.ts";
-import { CHECK_NAME_MAX, type CheckRun, detailsOf, FAILING, type MainCommit, newestRunOfEach, type RedMainInput, shortSha } from "./redMain.ts";
+import {
+  bodyCode,
+  type BodyRewrite,
+  type IssueToClose,
+  type IssueToOpen,
+  monitorBlock,
+  monitorBlockIn,
+  type MonitorIssue,
+  type MonitorPlan,
+  newestByMarker,
+  oneLine,
+  truncated,
+  withMonitorBlock,
+} from "./issues.ts";
+import { CHECK_NAME_MAX, type CheckRun, detailsOf, FAILING, type MainCommit, newestRunOfEach, type RedMainInput, seenGreenSince, shortSha } from "./redMain.ts";
 
 /**
  * Each Main check's part of the plan, in the order `monitor.main_checks`
@@ -109,11 +122,7 @@ function holdOf(issue: MonitorIssue, decided: readonly Decided[], commits: reado
     if (state !== undefined && (at === -1 || state.index < at)) return { held: false, after: issue.number };
     return { held: true, why: "it was closed as completed, and the check hasn't failed on a commit newer than the one it names" };
   }
-  const closedAt = Date.parse(issue.closedAt);
-  const greenSince = decided.some(
-    (each, i) => each.kind === "green" && each.decidedAt > closedAt && decided.slice(0, i).every((other) => other.decidedAt > each.decidedAt),
-  );
-  return greenSince ? { held: false, after: null } : { held: true, why: "it's held until the check is seen green, as someone other than the Monitor closed it" };
+  return seenGreenSince(Date.parse(issue.closedAt), decided) ? { held: false, after: null } : { held: true, why: "it's held until the check is seen green, as someone other than the Monitor closed it" };
 }
 
 /** The short sha of the commit the body's Monitor block says the check is red at, or null when it names none. */
