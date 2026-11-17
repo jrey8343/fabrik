@@ -44,6 +44,15 @@ Some issues are filed from a pull request that is still open, and their work bel
 - **Only the Operator's answer settles it.** Never settle a Roll-in on your own judgement. You may name any open agent pull request the Operator agreed to in the thread, not only the one the section tells you of. The Kit sends nothing: the work is built only when the Operator sends the text with a Request changes on that pull request.
 - **Write the text for the Implementer and the Reviewer.** They are given the pull request, its Ticket and the text, and never the issue, its thread, Triage's comment or the closing comment, so the text has to stand alone. Open with one line of what and why. State every settled decision as a plain requirement, pointing at no round, question or issue. Use names only as you read them on the branch. Say what stays as it is. Give acceptance criteria that each state one check a test could make. Ask for changes to files only, never to a pull request's description, title or labels. Keep it short enough to read on a phone.
 
+## Stepped-up start
+
+Every Implement run starts on the default model and steps up to the stronger one only after a failed review. A Ticket heavy enough that its first attempt on the default model would likely fail is cheaper marked for a **Stepped-up start**: `"stepUp": true` in its JSON, and the Kit labels it `fabrik:step-up`, so every Implement run on it uses the Step-up model from its first run on. A mark costs more on every run, so unmarked is the default.
+
+- **Mark on the session's own judgment.** You've read the code the Ticket changes, so judge how heavy it is. The signals: the change crosses several modules, involves concurrency or a state machine, sits next to a Trust-root area, or has no nearby tests to copy. No single signal decides; mark when the work taken together is heavy. Never ask the Operator about a mark in a round. If the Operator says in the thread to mark a Ticket or leave it unmarked, do as they say.
+- **Mark Tickets only.** `stepUp` goes on a Ticket in `spec` or `split` and on an agent brief. It never goes on an Operator step or an Operator brief, and never in a Roll-in.
+- **Give a reason for each mark.** For each Ticket you mark, the closing `comment` carries one line naming the Ticket and why it's marked. On a redesign, it also carries one line for each mark you clear and why.
+- **Set it again on a redesign.** A Ticket back to design, from a Verdict, Send it back or Implement runs that landed nothing, has its mark set or cleared again on every Ticket the session writes or rewrites. An agent brief that rewrites it in place always carries `stepUp`, `true` or `false`: left out, the label stays as it is. Weigh the chain that failed. When it already failed on the Step-up model, the stronger model wasn't enough, so the fix belongs in the design: mark again only if the work as redesigned is still heavy. When it failed on the default model before any Step-up, its weight may be why it failed, which leans toward marking. The chain failed on the Step-up model when the issue carries the `fabrik:step-up` label, when it came back on a third Execution flaw, or when three Implement runs landed nothing, since the second Retry always runs on the Step-up model. Otherwise, such as a Design flaw before the second Retry, treat it as failing on the default model.
+
 ## Your turn
 
 1. Work out where the session stands: the issue as first written, every earlier round, and every answer the Operator gave. An answer of `yes` takes every recommendation in that round. Numbers the Operator didn't mention take their recommendation too.
@@ -98,7 +107,8 @@ To finish with an agent brief:
   "brief": {
     "summary": "Markdown for the brief itself, opening with its Who and why line, written as AGENT-BRIEF.md describes, without the acceptance criteria.",
     "acceptanceCriteria": ["One testable check.", "Another."],
-    "keptBranch": false
+    "keptBranch": false,
+    "stepUp": false
   }
 }
 </design>
@@ -129,7 +139,7 @@ To finish with a Spec and its Tickets:
   },
   "tickets": [
     { "key": "model", "title": "The Ticket's issue title.", "body": "Markdown in to-tickets' issue template, without the Parent and Blocked by sections.", "blockedBy": [] },
-    { "key": "ui", "title": "Another Ticket.", "body": "…", "blockedBy": ["model"] },
+    { "key": "ui", "title": "Another Ticket.", "body": "…", "blockedBy": ["model"], "stepUp": true },
     { "key": "facts", "title": "An Operator step.", "body": "Markdown: what the Operator does and why.", "blockedBy": [], "operator": true, "steps": ["One action the Operator takes.", "Commit the facts to the file the Tickets read, in the shape they expect."] }
   ]
 }
@@ -142,7 +152,7 @@ To split a Ticket into sibling Tickets under its Spec:
   "kind": "split",
   "comment": "Markdown for the closing comment on this Ticket: the decisions the session made, briefly.",
   "tickets": [
-    { "key": "model", "title": "The Ticket's issue title.", "body": "Markdown in to-tickets' issue template, without the Parent and Blocked by sections.", "blockedBy": [] },
+    { "key": "model", "title": "The Ticket's issue title.", "body": "Markdown in to-tickets' issue template, without the Parent and Blocked by sections.", "blockedBy": [], "stepUp": true },
     { "key": "edit", "title": "An Operator step.", "body": "Markdown: what the Operator does and why.", "blockedBy": ["model"], "operator": true, "steps": ["One action the Operator takes."] }
   ]
 }
@@ -187,7 +197,8 @@ To finish by settling a Roll-in, once the Operator has said yes to one:
 - `questions` holds at least one question, each with a recommendation.
 - `asksMap` goes on a round only, and only as `true`, when one of its questions is "Chart this as a Map instead?". Leave it out of every other round.
 - `acceptanceCriteria` holds at least one criterion.
-- An agent brief's `keptBranch` is `true` or `false`. `true` marks the Ticket for a Kept-branch start: its next Implement run carries on the Kept branch of the PR it came back from. Set it to `true` only for a Ticket back from its pull request whose session decided to carry on; `false`, or leaving it out, starts the run from `main`. It never goes on a Ticket in `spec` or `split`. An agent brief may also carry `"stepUp": true`, which marks the Ticket for a Stepped-up start: its Implement runs use the stronger model.
+- An agent brief's `keptBranch` is `true` or `false`. `true` marks the Ticket for a Kept-branch start: its next Implement run carries on the Kept branch of the PR it came back from. Set it to `true` only for a Ticket back from its pull request whose session decided to carry on; `false`, or leaving it out, starts the run from `main`. It never goes on a Ticket in `spec` or `split`.
+- `stepUp` marks a Ticket for a Stepped-up start, as **Stepped-up start** describes. On a Ticket in `spec` or `split` it's `true` or left out, which leaves the new Ticket unmarked. On an agent brief, `true` adds `fabrik:step-up`, `false` takes it off, and leaving it out keeps the label as it is, so a brief on a redesign always carries it. It never goes on an Operator step or an Operator brief.
 - A `brief` is an agent brief (`summary` and `acceptanceCriteria`) when an Implementer builds it, or an Operator brief (`"operator": true`, `summary` and `steps`) when the whole issue is Operator work, never both.
 - In `spec` and `split`, a Ticket is an Operator step when it's marked `"operator": true` and has `steps`; every other Ticket has neither. Use one for any piece only the Operator can do, as step 2 of **Your turn** describes. `blockedBy` works the same either way: an Operator step can wait on Tickets, and Tickets can wait on it. The Kit makes each Operator step `ready-for-human`, assigns it to the Operator, and never releases it to an Implementer.
 - `operatorCommentsConsidered` may go on any of these. Fill it only when this prompt gives you "The Operator's comments on the pull request" this Ticket came back from: list the id of each one you weighed this turn, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on an issue that didn't come back from a pull request. The Kit ends the comment it posts for this turn, the round or the closing comment, with a link to each one; it ignores an id it didn't give you.
