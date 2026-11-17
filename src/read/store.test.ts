@@ -205,6 +205,7 @@ function aRawIssue(overrides: Record<string, unknown> = {}): Record<string, unkn
     labels: { nodes: [] },
     comments: { nodes: [] },
     timelineItems: { nodes: [] },
+    blockedBy: { nodes: [] },
     ...overrides,
   };
 }
@@ -326,8 +327,25 @@ describe("the gather of the store", () => {
         comments: [{ url: `https://github.com/${RUN_STORE_REPO}/issues/12#issuecomment-1`, author: "fabrik-app[bot]", byBot: true, body: "The Fabrik App can't reach jrey8343/shop.", at: "2026-11-08T10:00:00Z" }],
         labelEvents: [{ label: "ready-for-human", action: "labeled", actor: "fabrik-app[bot]", at: "2026-11-08T10:00:00Z" }],
         subIssues: [],
+        blockers: [],
       },
     ]);
+  });
+
+  it("makes a ready-for-human issue there with an open blocker in the store blocked, nobody's move and not yours, until its blocker closes as completed (#770)", async () => {
+    const blockedBy = (state: string, stateReason: string | null) => ({ nodes: [{ number: 11, state, stateReason, repository: { nameWithOwner: RUN_STORE_REPO } }] });
+    const issue = (blockers: ReturnType<typeof blockedBy>) =>
+      aRawIssue({
+        labels: { nodes: [{ name: "ready-for-human" }] },
+        timelineItems: { nodes: [{ __typename: "LabeledEvent", createdAt: "2026-11-08T10:00:00Z", actor: APP, label: { name: "ready-for-human" } }] },
+        blockedBy: blockers,
+      });
+    const standingOf = async (blockers: ReturnType<typeof blockedBy>) => rowsOf(await storeFactsFrom({ issues: [issue(blockers)] }), null, null, null, NOW).map(({ standing }) => standing);
+
+    expect(await standingOf(blockedBy("OPEN", null))).toEqual([
+      expect.objectContaining({ repo: RUN_STORE_REPO, issue: 12, work: "ready-for-human", name: "blocked", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T10:00:00Z", detail: { blockers: [11] } }),
+    ]);
+    expect(await standingOf(blockedBy("CLOSED", "COMPLETED"))).toEqual([expect.objectContaining({ issue: 12, name: "yours-to-do", yours: true, since: "2026-11-08T10:00:00Z" })]);
   });
 
   it("gives a row for an open \"Weekly summary failed\" issue until it is closed", async () => {

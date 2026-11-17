@@ -7,7 +7,7 @@
 // App's last word, as a Product repo's row carries them (./rows.ts). No
 // history, no Run record and no transcript is read here.
 import { pagesOf, type ReadClient, whyUnread } from "../github/client.ts";
-import { ACTOR, COMMENTS, LABEL_EVENTS, openIssueOf, PAGE_INFO, type RawIssue } from "../github/facts.ts";
+import { ACTOR, BLOCKED_BY, COMMENTS, LABEL_EVENTS, openIssueOf, PAGE_INFO, type RawBlockedBy, type RawIssue } from "../github/facts.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { loginOf } from "../github/snapshot.ts";
 import { checkCallerWorkflow } from "../kit/caller.ts";
@@ -84,7 +84,7 @@ const SUMMARIES_QUERY = `
   }
 `;
 
-/** The store's open issues, among them its "Weekly summary failed" and `ready-for-human` issues: each with what the Standing rule reads of an open issue but its sub-issues, which no store Standing reads. */
+/** The store's open issues, among them its "Weekly summary failed" and `ready-for-human` issues: each with what the Standing rule reads of an open issue, its blockers among it (#770), but its sub-issues, which no store Standing reads. */
 const OPEN_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
     repository(owner: $owner, name: $name) {
@@ -96,6 +96,7 @@ const OPEN_ISSUES_QUERY = `
           labels(first: 50) { nodes { name } }
           ${COMMENTS}
           ${LABEL_EVENTS}
+          ${BLOCKED_BY}
         }
       }
     }
@@ -106,7 +107,7 @@ const OPEN_ISSUES_QUERY = `
 type RawSummary = Pick<RawIssue, "number" | "title" | "state" | "createdAt" | "comments"> & { lastEditedAt: string | null };
 
 /** An open issue as OPEN_ISSUES_QUERY reads it. */
-type RawStoreIssue = Pick<RawIssue, "number" | "title" | "state" | "createdAt" | "author" | "labels" | "comments" | "timelineItems">;
+type RawStoreIssue = Pick<RawIssue, "number" | "title" | "state" | "createdAt" | "author" | "labels" | "comments" | "timelineItems"> & { blockedBy: RawBlockedBy };
 
 /**
  * The store read at `now`, ISO 8601, with `client`: the release its caller
@@ -155,7 +156,7 @@ async function gatherStoreFacts(client: ReadClient, appLogin: string | null): Pr
       .map(({ number, title, createdAt, comments }) => ({ number, title, createdAt, appComments: appCommentsOf(comments) })),
     readyForHuman: stillOpen
       .filter(({ labels }) => labels.nodes.some(({ name }) => name === READY_FOR_HUMAN))
-      .map((issue) => openIssueOf({ ...issue, closedAt: null, blockedBy: { nodes: [] }, subIssues: { nodes: [] } })),
+      .map((issue) => openIssueOf({ ...issue, closedAt: null, subIssues: { nodes: [] } }, RUN_STORE_REPO)),
   };
 }
 

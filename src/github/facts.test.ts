@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "./client.ts";
 import { gatherEveryRepoFacts, gatherGitHubFacts, gatherHeadChecks, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
+import { standingsOf } from "../kit/standing.ts";
+import { standingFactsOf } from "../read/builders.ts";
 
 const CALLER = "jobs:\n  fabrik:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v1.2.0\n";
 
@@ -371,6 +373,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
         ],
         labelEvents: [],
         subIssues: [],
+        blockers: [],
       },
     ]);
   });
@@ -389,6 +392,73 @@ describe("Gathering a Product repo's GitHub facts", () => {
       [30, [31, 32]],
       [31, []],
     ]);
+  });
+
+  describe("an open issue's blockers (#770)", () => {
+    /** A blocked-by edge to issue `number` in `repo`, as GitHub answers it. */
+    const edge = (number: number, state: string, stateReason: string | null, nameWithOwner = "jrey8343/shop") => ({
+      number,
+      state,
+      stateReason,
+      repository: { nameWithOwner },
+      labels: { nodes: [] },
+    });
+    const readyForHuman = (number: number, blockers: unknown[]) =>
+      aRawIssue({
+        number,
+        labels: { nodes: [{ name: "ready-for-human" }] },
+        timelineItems: { nodes: [aRawLabelEvent("ready-for-human", "2026-11-01T00:00:00Z", OPERATOR)] },
+        blockedBy: { nodes: blockers },
+      });
+
+    it("asks for each blocker's state, why it is in that state and its repo", async () => {
+      const queries: string[] = [];
+      const github = repoWith({});
+      await gatherGitHubFacts({ graphql: (query, variables) => (queries.push(query), github.graphql(query, variables)) }, repo, NOW, OPERATOR.login);
+
+      const openIssues = queries.find((query) => query.includes("issues(states: OPEN, first: 25"));
+      expect(openIssues).toMatch(/blockedBy\(first: \d+\) \{ nodes \{ number state stateReason repository \{ nameWithOwner \}/);
+    });
+
+    it("keeps the ones in its repo that are open or closed as not planned, and none closed as completed or duplicate or in another repo", async () => {
+      const github = repoWith({
+        openIssues: [
+          readyForHuman(20, [
+            edge(9, "OPEN", null),
+            edge(4, "CLOSED", "NOT_PLANNED"),
+            edge(5, "CLOSED", "COMPLETED"),
+            edge(6, "CLOSED", "DUPLICATE"),
+            edge(7, "OPEN", null, "jrey8343/elsewhere"),
+            edge(8, "OPEN", null, "JRey8343/Shop"),
+          ]),
+        ],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+      expect(facts.openIssues.map(({ number, blockers }) => [number, blockers])).toEqual([[20, [9, 4, 8]]]);
+    });
+
+    it("makes the Kit's own Standing of a ready-for-human issue blocked while a blocker is open or closed as not planned, and yours to do once none is", async () => {
+      const github = repoWith({
+        openIssues: [
+          readyForHuman(20, [edge(9, "OPEN", null)]),
+          readyForHuman(21, [edge(4, "CLOSED", "NOT_PLANNED")]),
+          readyForHuman(22, [edge(5, "CLOSED", "COMPLETED"), edge(6, "CLOSED", "DUPLICATE")]),
+          readyForHuman(23, [edge(7, "OPEN", null, "jrey8343/elsewhere")]),
+        ],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+      const standings = standingsOf(standingFactsOf({ github: facts }), "2026-11-08T20:00:00Z");
+
+      expect(standings.map(({ issue, name, yours, since }) => ({ issue, name, yours, since }))).toEqual([
+        { issue: 20, name: "blocked", yours: false, since: "2026-11-01T00:00:00Z" },
+        { issue: 21, name: "blocked", yours: false, since: "2026-11-01T00:00:00Z" },
+        { issue: 22, name: "yours-to-do", yours: true, since: "2026-11-01T00:00:00Z" },
+        { issue: 23, name: "yours-to-do", yours: true, since: "2026-11-01T00:00:00Z" },
+      ]);
+    });
   });
 
   describe("an open Plain pull request", () => {

@@ -262,6 +262,21 @@ describe("the wording of reading matter", () => {
       { pill: "Yours to read", sentence: "A Decision on Map #40 that is yours to resolve.", remedy: null },
     ]);
   });
+
+  it("says a blocked ready-for-human issue and a blocked Map are blocked by their blockers, as a Ticket is", () => {
+    expect(
+      words({
+        openIssues: [
+          anOpenIssue({ number: 10, labels: ["ready-for-human"], createdAt: SINCE, blockers: [9] }),
+          anOpenIssue({ number: 9, labels: ["wayfinder:map"], createdAt: minutesAfter(1), blockers: [8, 1, 7] }),
+        ],
+        openMaps: [9],
+      }),
+    ).toEqual([
+      { pill: "Blocked", sentence: "Blocked by #9.", remedy: null },
+      { pill: "Blocked", sentence: "Blocked by #1, #7 and #8.", remedy: null },
+    ]);
+  });
 });
 
 describe("the wording of a Standing in needs-info", () => {

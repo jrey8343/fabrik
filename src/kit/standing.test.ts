@@ -364,6 +364,47 @@ describe("the Standing rule", () => {
         expect.objectContaining({ issue: 14, name: "yours-to-do", since: "2026-11-02T20:00:00Z" }),
       ]);
     });
+
+    it("gives an open issue labelled ready-for-human with blockers one Standing, blocked and nobody's move, its blockers in order, since the label", () => {
+      const standings = standingsIn({
+        openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-01T20:00:00Z")], blockers: [9, 5, 9] })],
+      });
+      expect(standings).toEqual([
+        {
+          schema: 1,
+          repo: "owner/product",
+          issue: 13,
+          pullRequest: null,
+          work: "ready-for-human",
+          place: null,
+          name: "blocked",
+          move: "nobody",
+          yours: false,
+          stopsWork: false,
+          since: "2026-11-01T20:00:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: { blockers: [5, 9] },
+        },
+      ]);
+    });
+
+    it("gives a weekly-limit, token-rotation or usage-credits issue the Standing it has with no blockers, whatever blocks it", () => {
+      const kitIssue = (number: number, labels: readonly string[]) => ({
+        open: anOpenIssue({ number, labels, createdAt: "2026-11-05T20:00:00Z", labelEvents: labels.map((label) => aLabelAdded(label, "2026-11-05T20:00:00Z")) }),
+        kit: { number, labels, body: "", comments: [] },
+      });
+      const issues = [kitIssue(20, ["fabrik:weekly-limit"]), kitIssue(21, ["ready-for-human", "fabrik:token-rotation"]), kitIssue(22, ["ready-for-human", "fabrik:usage-credits"])];
+      const blocked = standingsIn({ openIssues: issues.map(({ open }) => ({ ...open, blockers: [5] })), kitIssues: issues.map(({ kit }) => kit) });
+      const unblocked = standingsIn({ openIssues: issues.map(({ open }) => open), kitIssues: issues.map(({ kit }) => kit) });
+      expect(blocked.map(({ issue, name }) => [issue, name])).toEqual([
+        [20, "weekly-limit-reached"],
+        [21, "token-refused"],
+        [22, "yours-to-do"],
+      ]);
+      expect(blocked).toEqual(unblocked);
+    });
   });
 
   describe("in a Design session", () => {
@@ -675,6 +716,37 @@ describe("the Standing rule", () => {
         reading(32, "operator-decision", "2026-11-05T20:00:00Z", { map: 30, decisions: [] }),
         reading(33, "operator-decision", "2026-11-05T20:00:00Z", { map: 30, decisions: [] }),
       ]);
+    });
+
+    describe("blocked", () => {
+      const blocked = (issue: number, work: Standing["work"], since: string, blockers: readonly number[]) => ({
+        ...reading(issue, work, since),
+        name: "blocked",
+        move: "nobody",
+        yours: false,
+        detail: { blockers },
+      });
+      const map = (blockers: readonly number[]) =>
+        anOpenIssue({ number: 30, labels: ["wayfinder:map"], labelEvents: [aLabelAdded("wayfinder:map", "2026-11-03T20:00:00Z")], subIssues: [31, 32], blockers });
+      const grilling = (number: number, blockers: readonly number[]) =>
+        anOpenIssue({ number, labels: ["wayfinder:grilling"], labelEvents: [aLabelAdded("wayfinder:grilling", "2026-11-04T20:00:00Z")], blockers });
+
+      it("gives an open Map with blockers a blocked Standing, nobody's move, since it got wayfinder:map, still a Map, and its unblocked Decision stays yours to read, carrying it", () => {
+        const standings = standingsIn({ openIssues: [map([8, 1, 7]), grilling(31, [])], openMaps: [30] });
+        expect(standings).toEqual([blocked(30, "map", "2026-11-03T20:00:00Z", [1, 7, 8]), reading(31, "operator-decision", "2026-11-04T20:00:00Z", { map: 30, decisions: [] })]);
+      });
+
+      it("gives a grilling Decision with a blocker of its own a blocked Standing, since it got its label, whether or not its Map is blocked", () => {
+        for (const mapBlockers of [[], [1]]) {
+          const standings = standingsIn({ openIssues: [map(mapBlockers), grilling(31, [32]), grilling(32, [])], openMaps: [30] });
+          expect(standings.find(({ issue }) => issue === 31)).toEqual(blocked(31, "operator-decision", "2026-11-04T20:00:00Z", [32]));
+        }
+      });
+
+      it("leaves a blocked Decision out of the Decisions its unblocked Map carries, as it waits on no one", () => {
+        const standings = standingsIn({ openIssues: [map([]), grilling(31, [32]), grilling(32, [])], openMaps: [30] });
+        expect(standings.find(({ issue }) => issue === 30)).toEqual(reading(30, "map", "2026-11-03T20:00:00Z", { map: null, decisions: [32] }));
+      });
     });
 
     it("gives an open issue labelled wayfinder:map that the Map cap's read doesn't count no Standing as a Map", () => {
