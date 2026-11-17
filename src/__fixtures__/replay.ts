@@ -9,33 +9,33 @@ import type { ReplayIssueSnapshot, ReplaySnapshot } from "../loop/types.ts";
 export const baseOf = (ticket: number): string => `${ticket.toString(16).padStart(7, "0")}${"0".repeat(33)}`;
 
 /** The variable every accepted replay here changes. */
-export const REVIEW_HIGH: ReplayVariable = { kind: "effort", role: "review", effort: "high" };
+export const REVIEW_XHIGH: ReplayVariable = { kind: "effort", role: "review", effort: "xhigh" };
 
 /** A replay issue's body as the Operator files it: a line of their own, then the request block. */
-export function requestBody(variable = "review.effort: high", tickets = "12, 7"): string {
+export function requestBody(variable = "review.effort: xhigh", tickets = "12, 7"): string {
   return ["Does Review hold up at a higher effort?", "", "```replay", variable, `tickets: ${tickets}`, "```", ""].join("\n");
 }
 
 /**
  * A replay issue's body once the tick accepted its request: review.effort:
- * high on these Tickets, each merged in PR `ticket + 100` from baseOf(ticket),
+ * xhigh, above the Review's high default, on these Tickets, each merged in PR `ticket + 100` from baseOf(ticket),
  * with the v1 default roles at its base, and each one's progress as given,
  * pending by default.
  */
 export function acceptedBody(tickets: readonly number[] = [12, 7], progress: readonly TicketProgress[] = []): string {
   const plan: ReplayPlan = {
-    variable: REVIEW_HIGH,
+    variable: REVIEW_XHIGH,
     tickets: tickets.map((ticket) => ({
       ticket,
       pullRequest: ticket + 100,
       baseSha: baseOf(ticket),
       flags: [],
-      arms: replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH),
+      arms: replayArms(DEFAULT_KIT_CONFIG, REVIEW_XHIGH),
     })),
     leftOut: [],
   };
   const each = tickets.map((ticket): TicketProgress => progress.find((one) => one.ticket === ticket) ?? { ticket, state: "pending" });
-  return replayBody(requestBody("review.effort: high", tickets.join(", ")), { plan, progress: each });
+  return replayBody(requestBody("review.effort: xhigh", tickets.join(", ")), { plan, progress: each });
 }
 
 /** Replay issue #140, open, filed by the Operator (`operator`) and accepted, with both its Tickets pending, and never given up on. */

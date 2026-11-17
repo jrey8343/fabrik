@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { REVIEW_HIGH } from "../__fixtures__/replay.ts";
+import { REVIEW_XHIGH } from "../__fixtures__/replay.ts";
 import { noWait, storeWith } from "../__fixtures__/store.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { replayArms } from "./replay.ts";
@@ -23,7 +23,7 @@ const CONTEXT = replayRunContextOf(
     ticket: "12",
     "pull-request": "112",
     "base-sha": BASE_SHA,
-    "replay-arms": JSON.stringify(replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH)),
+    "replay-arms": JSON.stringify(replayArms(DEFAULT_KIT_CONFIG, REVIEW_XHIGH)),
     subscription: "Claude token",
     sha: KIT_SHA,
   },
@@ -253,8 +253,8 @@ describe("A replay Ticket's run, read from the Kit job's outputs", () => {
 
   it.each([
     ["don't read as each arm's", '{"baseline":{}}'],
-    ["name a model Kit config refuses", JSON.stringify({ ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH), variant: { ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH).variant, review: { model: "best", effort: null } } })],
-    ["name a candidate Kit that isn't a full sha", JSON.stringify({ ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH), variant: { ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_HIGH).variant, candidateSha: "abc1234" } })],
+    ["name a model Kit config refuses", JSON.stringify({ ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_XHIGH), variant: { ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_XHIGH).variant, review: { model: "best", effort: null } } })],
+    ["name a candidate Kit that isn't a full sha", JSON.stringify({ ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_XHIGH), variant: { ...replayArms(DEFAULT_KIT_CONFIG, REVIEW_XHIGH).variant, candidateSha: "abc1234" } })],
   ])("refuses arms' settings that %s, as the replay issue's plan does", (_, arms) => {
     const outputs = { "replay-issue": "140", ticket: "12", "pull-request": "112", "base-sha": BASE_SHA, "replay-arms": arms, subscription: "Claude token", sha: KIT_SHA };
 

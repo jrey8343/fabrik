@@ -733,12 +733,12 @@ describe("The starters the Product repo then owns", () => {
         triage: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 10 },
         design: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
         implement: { model: "claude-sonnet-5-5", effort: "medium", timeout_minutes: 60 },
-        review: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
+        review: { model: "claude-opus-5-5", effort: "high", timeout_minutes: 30 },
         audit: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 },
         retro: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 },
         research: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
-        // The Digest writer's model is left to roles.review.
-        digest: { timeout_minutes: 10 },
+        // The Digest writer's model is left to roles.review; its effort is its own medium (#759).
+        digest: { effort: "medium", timeout_minutes: 10 },
         dispatch: { timeout_minutes: 10 },
         step_up: { model: "claude-opus-5-5", effort: "medium" },
       },
