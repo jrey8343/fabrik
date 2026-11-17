@@ -59,7 +59,7 @@ import type { RunInFlight, RunsRead } from "./runs.ts";
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
 export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
-    schema: 10,
+    schema: 11,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,
@@ -88,7 +88,10 @@ export function aRunRecord(overrides: Partial<RunRecord> = {}): RunRecord {
     brokenRun: null,
     landing: null,
     pushed: null,
+    fullReview: null,
     verdict: null,
+    findingTags: null,
+    touchUp: 0,
     durationMs: 90_000,
     apiDurationMs: 60_000,
     turns: 12,

@@ -90,11 +90,12 @@ export type StandingName = (typeof STANDING_NAMES)[number];
  * What a `not-started` Standing's wording is made of: which run was asked for
  * and how (src/kit/standingClock.ts), and the trigger label that asked, null
  * for a Retry a Verdict announced. `passed` is on a passed draft's alone, one
- * waiting on its Digest, and true: the Reviewer's pass is given.
+ * waiting on its Digest, and true: the Reviewer's pass is given. `touchUp` is
+ * on one a Verdict announced as a Touch-up (#750) alone, its number.
  */
 type NotStartedDetail =
   | { readonly silence: Exclude<NotStartedSilence, "retry">; readonly label: TriggerLabel; readonly passed?: true }
-  | { readonly silence: Extract<NotStartedSilence, "retry">; readonly label: null };
+  | { readonly silence: Extract<NotStartedSilence, "retry">; readonly label: null; readonly touchUp?: number };
 
 /**
  * What a `waiting-on-kit` Standing's wording is made of: which silence it is
@@ -108,8 +109,9 @@ export interface StandingDetails {
    * `run` is the kind of run and `retry` its Retry number; `actionsRun` is its
    * Actions run's number (#621). `passed` is on a Digest run's alone, and true:
    * the Reviewer's pass is given, and the run is what the Merge gate waits on.
+   * `touchUp` is a Touch-up's number (#750), on a Touch-up's alone.
    */
-  readonly running: { readonly run: string; readonly retry: number | null; readonly actionsRun: number; readonly passed?: true };
+  readonly running: { readonly run: string; readonly retry: number | null; readonly touchUp?: number; readonly actionsRun: number; readonly passed?: true };
   /**
    * `plain` is null for an agent pull request: an agent draft whose Review
    * waits on its checks, or one at the Merge gate whose Required check is

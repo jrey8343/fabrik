@@ -173,7 +173,11 @@ async function agentResultEvent(
           // A Request-changes run's review, which its answers are about (#369).
           ...(input.review === null ? {} : { review: input.review }),
           ...(input.retry === undefined || input.retry === null ? {} : { retry: input.retry }),
+          // A Touch-up's number (#750), which its push note names.
+          ...(input.touchUp === undefined || input.touchUp === null ? {} : { touchUp: input.touchUp }),
           ...(input.retryFlaw === undefined || input.retryFlaw === null ? {} : { retryFlaw: input.retryFlaw }),
+          // Why it Stepped up, which its push note records (#746).
+          ...(input.stepUpReason === undefined || input.stepUpReason === null ? {} : { stepUpReason: input.stepUpReason }),
           ...(input.conflict === null || input.conflict === undefined ? {} : { conflict: input.conflict }),
         };
   // A Kept-branch start (#536), too, comes from the Kit job's plan: only then may a first run carry on its own branch.

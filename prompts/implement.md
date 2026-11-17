@@ -36,6 +36,16 @@ If the end of this prompt has "The pull request you're fixing", this run is a re
 - Run the build and the tests again before you finish. A retry that commits nothing counts as another failed attempt.
 - Your output's `summary` describes the PR as a whole as it now stands, not just this fix: the Kit replaces the PR body with it, and the next review reads only the body. Start from "The pull request's current description" and drop anything that no longer holds, such as a check that now passes. Your output's `fix` describes this fix: what the findings said and what you changed. The Kit keeps the PR's title, so `title` is only checked, never used.
 
+## When you're touching up a PR
+
+If the end of this prompt has "This run is a Touch-up", the Execution flaw you're fixing found only small things: every finding is tagged `[small: body]`, `[small: comment]` or `[missed earlier]`. The Kit worked that out from the tags, so you needn't judge it. Fixing them uses none of the Ticket's two Retries.
+
+- A Touch-up works as a retry does: everything under "When you're fixing a PR" applies. Keep the sound work, add commits, write the failing test for each behaviour finding before its fix, and run the build and the tests before you finish.
+- Fix exactly what the findings name. A stale comment or doc is fixed where it is; a `[small: body]` finding is fixed in your `summary`, which becomes the PR body.
+- When the end of this prompt says every finding is about the body, the branch is sound and only the PR's body is wrong: commit nothing, and write a `summary` that matches the branch, which replaces the body, and a `fix` saying what you corrected. Review then judges the new body on the same head.
+- Otherwise, committing nothing is a failed attempt, as on a retry.
+- Your output is a retry's: `summary` and `fix`, and the Kit keeps the PR's title.
+
 ## When the Operator requested changes
 
 If the end of this prompt has "The pull request the Operator requested changes on", this run is a Request-changes run: the Operator asked for changes on the PR, at the Merge gate or while it was under review. The branch checked out is that PR's branch. "The Operator's requested changes" and "The Operator's comments on the code" are the Operator's own words, and they amend the Ticket for this PR: make those changes, on top of the earlier commits, however large they are. Wherever they conflict with an acceptance criterion, the requested changes win; meet every criterion they leave as it was.

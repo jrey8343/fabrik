@@ -125,7 +125,9 @@ jobs:
       # or "false" for whether it Steps up and whether it's the Operator's Request-changes run,
       # and why it Steps up (retry, marked, request-changes or conflict-only; empty for none).
       retry: ${{ steps.route.outputs.retry }}
-      # For a Retry on an agent PR (#341): the head its Execution flaw was given on, which the push job lands it for.
+      # Its Touch-up number (#750; 0 for none), which isn't a Retry.
+      touch-up: ${{ steps.route.outputs.touch-up }}
+      # For a Retry or Touch-up on an agent PR (#341): the head its Execution flaw was given on, which the push job lands it for.
       retry-flaw: ${{ steps.route.outputs.retry-flaw }}
       step-up: ${{ steps.route.outputs.step-up }}
       step-up-reason: ${{ steps.route.outputs.step-up-reason }}
@@ -143,6 +145,13 @@ jobs:
       ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}
       ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}
       ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}
+      # For a Review (#747): "true" for a Full Review, whose Reviewer is given the Full Review section, "false"
+      # for a later Review. Its Run record names it. Empty for any other run.
+      full-review: ${{ steps.route.outputs.full-review }}
+      # For a later Review (#748): the head the Reviewer last judged, and the change fingerprint its Verdict recorded,
+      # as one line of JSON whose paths are the PR's file names, read only through `env:`. Empty for any other run.
+      last-judged-head: ${{ steps.route.outputs.last-judged-head }}
+      last-judged-change: ${{ steps.route.outputs.last-judged-change }}
       # "true" when the Design run is a Design session's prototype turn, else "false".
       prototype: ${{ steps.route.outputs.prototype }}
       # For a prototype turn, its request as one line of JSON (route, variants, brief, reply); else empty.
@@ -1252,7 +1261,7 @@ jobs:
           persist-credentials: false
 
       # The PR, its Ticket and the Ticket's Spec, and the Operator's comments on the PR;
-      # never its other comments, so earlier Verdicts don't steer it.
+      # never its other comments: what a later Review is given of them is read next.
       - name: Prepare the agent job
         uses: ./kit/.github/actions/prepare-agent
         with:
@@ -1260,6 +1269,23 @@ jobs:
           github-token: ${{ github.token }}
           issue: ${{ needs.kit.outputs.ticket }}
           pull-request: ${{ needs.kit.outputs.pull-request }}
+
+      # Only on a later Review (#748): the Reviewer's earlier Verdicts, the Kit's
+      # notes of each Implement run's push with its fix comment, the run that pushed
+      # this head, and the PR's own change since the last judged head, worked out
+      # with git against main (src/agent/laterReview.ts). Kit code, with the job's
+      # read-only token, which reaches git only through env; the Reviewer never
+      # holds it. A failed read leaves its failure report for the push job.
+      - name: Read what a later Review is given
+        if: needs.kit.outputs.full-review == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FABRIK_PULL_REQUEST: ${{ needs.kit.outputs.pull-request }}
+          FABRIK_HEAD_SHA: ${{ needs.review-checks.outputs.head-sha }}
+          FABRIK_LAST_JUDGED_HEAD: ${{ needs.kit.outputs.last-judged-head }}
+          FABRIK_LAST_JUDGED_CHANGE: ${{ needs.kit.outputs.last-judged-change }}
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+        run: node kit/src/agent/laterReview.ts "$RUNNER_TEMP"
 
       # A UI PR's UI evidence (#153): the screenshots and capture result its marker
       # names, from the Implement run that kept them, read as data and never run.
@@ -1302,6 +1328,10 @@ jobs:
           FABRIK_UI_EVIDENCE_FAILURE: ${{ needs.kit.outputs.ui-evidence-failure }}
           # The Required checks that passed on this head only by being skipped or reporting neutral (#456), from the wait that went green.
           FABRIK_RAN_NOTHING: ${{ needs.rerun-wait.outputs.checks == 'green' && needs.rerun-wait.outputs.ran-nothing || needs.review-checks.outputs.ran-nothing }}
+          # "true" on a Full Review (#747), whose prompt carries the Full Review section; a later Review's doesn't.
+          FABRIK_FULL_REVIEW: ${{ needs.kit.outputs.full-review }}
+          # Only on a later Review (#748): what the step above read for it.
+          FABRIK_LATER_REVIEW_FILE: ${{ needs.kit.outputs.full-review == 'false' && format('{0}/later-review.json', runner.temp) || '' }}
         run: node ../kit/src/agent/run.ts review
 
       - name: Pass the Verdict to the push job

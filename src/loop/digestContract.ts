@@ -424,10 +424,12 @@ const KIT_VERDICT_FOR: Readonly<Record<NonNullable<Round["why"]>, string>> = {
   "broken-run": "a Broken run",
 };
 
-/** What a round was, as the rounds table says it. A Retry's row adds its number. */
+/** What a round was, as the rounds table says it. A Retry's row and a Touch-up's add its number. */
 const WHAT: Readonly<Record<Round["what"], string>> = {
   "first-run": "The first run",
   retry: "Retry",
+  "touch-up": "Touch-up",
+  "body-only-touch-up": "Body-only Touch-up",
   "request-changes-run": "A Request-changes run",
   "conflict-only-run": "A conflict-only run",
   rebase: "A rebase onto `main`",
@@ -457,9 +459,10 @@ function roundsTable(rounds: readonly Round[]): string[] {
   return [
     "| Who | What | Effect on the code |",
     "| --- | --- | --- |",
-    ...rounds.map(({ who, what, retry, why, effect }) => {
+    ...rounds.map(({ who, what, retry, touchUp, why, effect }) => {
       const by = why === undefined ? WHO[who] : `${WHO[who]}, for ${KIT_VERDICT_FOR[why]}`;
-      const was = retry === undefined ? WHAT[what] : `${WHAT[what]} ${retry}`;
+      const number = retry ?? touchUp;
+      const was = number === undefined ? WHAT[what] : `${WHAT[what]} ${number}`;
       return `| ${by} | ${was} |${effect === null ? "" : ` ${EFFECT[effect]}`} |`;
     }),
   ];

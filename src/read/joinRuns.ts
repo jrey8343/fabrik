@@ -170,7 +170,15 @@ function runningOn(standing: Standing, run: RunInFlightFact): StandingNamed<"run
     name: "running",
     since: runningSince(run),
     awaits: { role, on: onIssue ? "issue" : "pullRequest" },
-    detail: { run: kind, retry: role === "implement" ? run.retry : null, actionsRun: run.run, ...passed, ...keptKeysOf(standing) },
+    detail: {
+      run: kind,
+      retry: role === "implement" ? run.retry : null,
+      // A Touch-up says which of the two it is (#750).
+      ...(kind === "touch-up" && run.touchUp != null ? { touchUp: run.touchUp } : {}),
+      actionsRun: run.run,
+      ...passed,
+      ...keptKeysOf(standing),
+    },
   };
 }
 

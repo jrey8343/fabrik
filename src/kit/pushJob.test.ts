@@ -86,6 +86,12 @@ describe("What the push job applies", () => {
     expect(pushJobInput(needs("retro"), 120)).toEqual({ kind: "nothing", reason: "the retro job ended unknown" });
   });
 
+  it("applies a Touch-up's result with its number from the Kit job's plan, as no Retry (#750)", () => {
+    const outputs = { ticket: "7", "pull-request": "50", retry: "0", "touch-up": "1", "retry-flaw": "a".repeat(40) };
+
+    expect(pushJobInput(needs("implement", { implement: ok() }, outputs), 50)).toMatchObject({ retry: null, touchUp: 1, retryFlaw: "a".repeat(40) });
+  });
+
   it("applies an Implement run's result for the Ticket the Kit job's plan named, with a retry's PR and a Request-changes run's review", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", review: "900" }), 50);
 
@@ -98,7 +104,9 @@ describe("What the push job applies", () => {
       conflict: null,
       mainAtStart: null,
       retry: null,
+      touchUp: null,
       retryFlaw: null,
+      stepUpReason: null,
       keptBranch: null,
       startedBy: null,
       capture: { result: null, artifact: null, evidencePageArtifact: null, timedOut: false },
@@ -122,6 +130,20 @@ describe("What the push job applies", () => {
     const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", retry: "2" }), 50);
 
     expect(input).toMatchObject({ kind: "agent-result", retry: 2 });
+  });
+
+  it("carries why a stepped-up run Stepped up from the Kit job's plan, which its push note records (#746)", () => {
+    const input = pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", "step-up": "true", "step-up-reason": "retry" }), 50);
+
+    expect(input).toMatchObject({ kind: "agent-result", stepUpReason: "retry" });
+  });
+
+  it.each([
+    ["it didn't Step up", { "step-up": "false", "step-up-reason": "" }],
+    ["the plan named no reason", { "step-up": "true", "step-up-reason": "" }],
+    ["the reason isn't one of the Kit's", { "step-up": "true", "step-up-reason": "opus" }],
+  ])("carries no Step-up reason when %s", (_, kit) => {
+    expect(pushJobInput(needs("implement", { implement: ok() }, { ticket: "7", "pull-request": "50", ...kit }), 50)).toMatchObject({ stepUpReason: null });
   });
 
   it("carries main's head as the Kit job read it before the run, never anything from the agent job (#341)", () => {

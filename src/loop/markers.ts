@@ -12,13 +12,22 @@ import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { RequestChangesAnswers } from "./implementOutput.ts";
 import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
-import { AGENT_ROLES, type AgentRole, type Strength, type VerdictRecord } from "./types.ts";
+import { AGENT_ROLES, type AgentRole, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
 
+/**
+ * Whether a Verdict is a Reviewer's Execution flaw: the only one whose marker
+ * counts its findings by tag (#749) and names the Touch-up it called for (#750).
+ */
+export function isReviewerFlaw({ verdict, source }: Pick<VerdictRecord, "verdict" | "source">): boolean {
+  return verdict === "execution-flaw" && source === "reviewer";
+}
+
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, tags, touchUp, headSha } = record;
+  const reviewerFlaw = isReviewerFlaw(record);
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
   const fields = {
@@ -30,6 +39,10 @@ export function verdictMarker(record: VerdictRecord): string {
     ...(ticketNotReady === true ? { ticketNotReady } : {}),
     ...(checks === undefined ? {} : { checks }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
+    // Only a Reviewer's Execution flaw counts its findings by tag (#749).
+    ...(tags === undefined || !reviewerFlaw ? {} : { tags }),
+    // Only one that called for a Touch-up says which (#750).
+    ...(touchUp === undefined || !reviewerFlaw ? {} : { touchUp }),
     headSha,
   };
   return `<!-- fabrik:verdict ${JSON.stringify(fields)} -->`;
@@ -269,8 +282,70 @@ export function pushedHeadIn(body: string): string | null {
   return null;
 }
 
+/**
+ * The marker line recording why the run whose push note it's on Stepped up
+ * (#746), so a later run's model can be read from the PR alone. It goes among
+ * the note's other marker lines, after any the note's first line is read with,
+ * and only on the note of a run that Stepped up.
+ */
+export function stepUpReasonMarker(reason: StepUpReason): string {
+  return `<!-- fabrik:step-up-reason ${reason} -->`;
+}
+
+const STEP_UP_REASON_MARKER = /^<!-- fabrik:step-up-reason (\S+) -->$/;
+
+/**
+ * The Step-up reason a push note records, read from the marker lines it opens
+ * with, or null when it records none: a run that didn't Step up, and every
+ * note from before #746. Only a bot's comment should be passed in.
+ */
+export function stepUpReasonIn(body: string): StepUpReason | null {
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("<!-- fabrik:")) return null;
+    const reason = STEP_UP_REASON_MARKER.exec(line)?.[1];
+    if (reason !== undefined) return isStepUpReason(reason) ? reason : null;
+  }
+  return null;
+}
+
 /** The first line of the Kit's note on a PR that a Retry pushed to it: the Retry's outcome, which ends its time in flight. */
 export const RETRY_PUSH_MARKER = "<!-- fabrik:retry-push -->";
+
+/**
+ * The first line of the Kit's note on a PR that a Touch-up pushed to it
+ * (#750), naming which of the two it was: the Touch-up's outcome, which ends
+ * its time in flight as a Retry's push note does.
+ */
+export function touchUpPushMarker(touchUp: number): string {
+  return `<!-- fabrik:touch-up-push ${touchUp} -->`;
+}
+
+const TOUCH_UP_PUSH_MARKER = /^<!-- fabrik:touch-up-push ([1-9]\d*) -->(?:\n|$)/;
+
+/** Which Touch-up a Touch-up's push note is of (#750), from its first line, or null for any other comment. Only a bot's comment should be passed in. */
+export function touchUpPushIn(body: string): number | null {
+  const touchUp = TOUCH_UP_PUSH_MARKER.exec(body)?.[1];
+  return touchUp === undefined ? null : Number(touchUp);
+}
+
+/**
+ * The first line of the Kit's note on a PR that a body-only Touch-up (#751)
+ * committed nothing and rewrote its body, naming which Touch-up it was and
+ * the head it left the PR at. It is that Touch-up's outcome, which ends its
+ * time in flight, but no push: the head didn't move. Its Review may land a
+ * second Verdict on that head.
+ */
+export function touchUpBodyOnlyMarker(touchUp: number, headSha: string): string {
+  return `<!-- fabrik:touch-up-body-only ${touchUp} ${headSha} -->`;
+}
+
+const TOUCH_UP_BODY_ONLY_MARKER = /^<!-- fabrik:touch-up-body-only ([1-9]\d*) ([0-9a-f]{40}|[0-9a-f]{64}) -->(?:\n|$)/;
+
+/** A body-only Touch-up's note (#751): which Touch-up it was and the head it names, from its first line, or null for any other comment. Only a bot's comment should be passed in. */
+export function touchUpBodyOnlyIn(body: string): { readonly touchUp: number; readonly headSha: string } | null {
+  const match = TOUCH_UP_BODY_ONLY_MARKER.exec(body);
+  return match === null ? null : { touchUp: Number(match[1]), headSha: match[2]! };
+}
 
 /**
  * The first line of the Kit's note that the Retry a PR's latest Verdict called

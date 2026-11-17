@@ -16,7 +16,7 @@ import {
 } from "../loop/retroOutput.ts";
 import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
-import { CONSIDERED_PREFIX, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
+import { CONSIDERED_PREFIX, FINDING_TAG_TEXT, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
 import { FILED_FROM_HEADING, filedFromContext, LANDED_NOTHING_HEADING, MAP_CAP_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
@@ -79,6 +79,24 @@ describe("The prompts of the runs on a PR the Operator requested changes on (ADR
     expect(lines.indexOf(skills)).toBe(lines.findIndex((line) => line.startsWith(keepBullet)) + 1);
   });
 
+  it("implement has a Touch-up section (#750): it works as a retry, spends no Retry, fails on an empty commit, and outputs a retry's fields", async () => {
+    const touchUp = section(await prompt("implement"), "When you're touching up a PR");
+    expect(touchUp).toContain('"This run is a Touch-up"');
+    expect(touchUp).toContain('everything under "When you\'re fixing a PR" applies');
+    expect(touchUp).toContain("uses none of the Ticket's two Retries");
+    expect(touchUp).toContain("committing nothing is a failed attempt");
+    expect(touchUp).toContain("Your output is a retry's: `summary` and `fix`, and the Kit keeps the PR's title.");
+  });
+
+  it("implement's Touch-up section has a body-only one (#751) commit nothing, with a summary that matches the branch and a fix, and only it", async () => {
+    const touchUp = section(await prompt("implement"), "When you're touching up a PR");
+    const bodyOnly = lineStarting(touchUp, "- When the end of this prompt says every finding is about the body");
+    expect(bodyOnly).toContain("commit nothing");
+    expect(bodyOnly).toContain("a `summary` that matches the branch");
+    expect(bodyOnly).toContain("a `fix` saying what you corrected");
+    expect(lineStarting(touchUp, "- Otherwise, committing nothing is a failed attempt")).not.toBe("");
+  });
+
   it("implement no longer has a Request-changes run meet a criterion its requested changes conflict with, and has it name each criterion it amended", async () => {
     const run = section(await prompt("implement"), "When the Operator requested changes");
     expect(run).not.toContain("and still meet the Ticket's acceptance criteria");
@@ -118,6 +136,30 @@ describe("The prompts of the runs that read an agent PR", () => {
     expect(examples).toContainEqual(
       expect.objectContaining({ ok: true, verdict: "pass", followUps: [expect.objectContaining({ title: expect.any(String) })] }),
     );
+  });
+
+  // #749: the Kit reads the tags as written and checks nothing in code, so the prompt keeps them narrow.
+  it("review defines the three tags on a flaw's findings as the Kit reads them, what is never small, and to leave the tag off when in doubt", async () => {
+    const text = await prompt("review");
+    const tagging = part(section(text, "Your Verdict"), "Tagging your findings");
+    for (const tag of Object.values(FINDING_TAG_TEXT)) expect(tagging).toContain(`\`${tag}\``);
+    expect(tagging).toContain("on a later Review only");
+    expect(tagging).toContain("When in doubt, leave the tag off.");
+    const never = tagging.split("Never tag a finding `small` when it is:")[1] ?? "";
+    for (const what of [
+      "a comment or doc an acceptance criterion asks for",
+      "itself the deliverable",
+      "wrong about behaviour",
+      "`CODING_STANDARDS.md`",
+      "a missing test",
+      "wrong behaviour",
+      "an unmet acceptance criterion",
+    ]) {
+      expect(never).toContain(what);
+    }
+    // Its example flaw carries a tag the Kit reads.
+    const flaw = [...text.matchAll(/<review>\n([\s\S]*?)\n<\/review>/g)].map((match) => parseVerdict(match[1] ?? "")).find((parsed) => parsed.ok && parsed.verdict === "execution-flaw");
+    expect(flaw).toMatchObject({ findingTags: expect.arrayContaining(["small-comment", null]) });
   });
 
   it("review leaves a rebased PR unflagged without pointing at the Kit's conflict-run note, which its input never carries", async () => {

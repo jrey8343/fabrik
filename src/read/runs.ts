@@ -46,6 +46,8 @@ export interface RunInFlight {
   readonly kind: RunKind | null;
   /** The Retry number; null unless a Retry. */
   readonly retry: number | null;
+  /** The Touch-up number (#750); absent or null unless a Touch-up. */
+  readonly touchUp?: number | null;
   readonly model: string | null;
   readonly job: RunJob;
   /** When Actions created the run, ISO 8601. */
@@ -109,6 +111,7 @@ export function runsInFlightFactOf(read: RunsRead): readonly RunInFlightFact[] |
     issue: run.issue,
     pullRequest: run.pullRequest,
     retry: run.retry,
+    ...(run.touchUp == null ? {} : { touchUp: run.touchUp }),
     kind: run.kind,
     job: run.job,
     createdAt: run.createdAt,
@@ -201,6 +204,7 @@ function exactRunOf(said: NonNullable<KitSaid["run"]>, jobs: readonly ActionsJob
     pullRequest: said.pullRequest,
     kind: said.kind,
     retry: said.retry === 0 ? null : said.retry,
+    ...(said.touchUp === undefined || said.touchUp === 0 ? {} : { touchUp: said.touchUp }),
     model: said.model,
     createdAt: first.createdAt,
   };

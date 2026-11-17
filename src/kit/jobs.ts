@@ -50,7 +50,8 @@
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
 //   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
-//   retry-flaw               for a Retry on an agent PR, the head its Execution flaw was given on (#341); else empty
+//   touch-up                 for an Implement run, its Touch-up number (#750; 0 for any other run); else empty
+//   retry-flaw               for a Retry or Touch-up on an agent PR, the head its Execution flaw was given on (#341); else empty
 //   step-up, request-changes "true" when the run Steps up, or is the Operator's Request-changes run; else "false"
 //   step-up-reason           why the run Steps up: retry, marked, request-changes or conflict-only; else empty
 //   dispatch-timeout-minutes the Dispatch job's Kit config timeout
@@ -63,6 +64,10 @@
 //   ui-evidence-failure      for that Review, why the run's capture failed, as the marker records it, which
 //                            the Reviewer hears when it has no capture result to read; empty when it captured,
 //                            when the marker records no outcome, or for any other run
+//   full-review              for a Review, "true" on a Full Review (#747), else "false"; empty for any other run
+//   last-judged-head         for a later Review (#748), the head the Reviewer last judged; else empty
+//   last-judged-change       for that Review, the change fingerprint its Verdict recorded, as one line of JSON,
+//                            whose paths are the PR's file names, so a job reads it through `env:`; else empty
 //   prototype                "true" when the Design run is a Design session's prototype turn (#155), which
 //                            routes to design like any Design run; else "false"
 //   prototype_request        for that prototype turn, its request as one line of JSON: route, variants, brief
@@ -257,6 +262,8 @@ export function kitJobOutputs(
     effort: run?.effort ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.
     retry: run?.role === "implement" ? String(run.retry ?? 0) : "",
+    // A Touch-up (#750) is no Retry: its own number, which its push note and its Run record carry.
+    "touch-up": run?.role === "implement" ? String(run.touchUp ?? 0) : "",
     // A Retry on an agent PR: the head of the Execution flaw it fixes, so its push lands only for that flaw (#341).
     "retry-flaw": run?.role === "implement" ? (run.retryFlaw ?? "") : "",
     "step-up": String(run?.stepUp === true),
@@ -273,6 +280,13 @@ export function kitJobOutputs(
     "ui-evidence-artifact": String(run?.evidence?.artifact ?? ""),
     // Only ever one of the CAPTURE_FAILURES the marker reads as.
     "ui-evidence-failure": run?.evidence?.failure ?? "",
+    // For a Review (#747): "true" for a Full Review, whose Reviewer is given the Full Review section, else "false".
+    "full-review": run?.role === "review" && run.reviewKind !== undefined ? String(run.reviewKind.kind === "full") : "",
+    // For a later Review (#748): the head the Reviewer last judged, and the fingerprint its Verdict recorded, as one line
+    // of JSON, which the Review job works out the change since from. The fingerprint's paths are the PR's file names, so
+    // a job reads it through `env:` only.
+    "last-judged-head": run?.reviewKind?.kind === "later" ? run.reviewKind.lastJudged.headSha : "",
+    "last-judged-change": run?.reviewKind?.kind === "later" ? JSON.stringify(run.reviewKind.lastJudged.change) : "",
     // Whether the Design run is the session's prototype turn, which the prototype job runs in the design job's place.
     prototype: String(run?.prototype !== undefined),
     // The one output that holds agent text: the request's brief, written by the Design agent. One line of JSON,

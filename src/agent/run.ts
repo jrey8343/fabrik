@@ -44,7 +44,12 @@
 // downloaded into, if it was, and FABRIK_UI_EVIDENCE_FAILURE, why its capture
 // failed, when the PR's marker records that (src/agent/review.ts). Every
 // Review takes FABRIK_RAN_NOTHING, the Required checks that passed on its head
-// only by being skipped or reporting neutral, as a JSON list (#456).
+// only by being skipped or reporting neutral, as a JSON list (#456), and
+// FABRIK_FULL_REVIEW, "true" on a Full Review, whose prompt alone carries the
+// Full Review section, else "false" (#747). A later Review takes
+// FABRIK_LATER_REVIEW_FILE, what its job's step read for it: its earlier
+// Verdicts, the fix comments, the run that pushed its head and the change
+// since the last judged head (src/agent/laterReview.ts, #748).
 // An Auditor run is in a checkout of the default branch at its pending Audit's
 // marked commit: FABRIK_ISSUE_FILE is the Audit and FABRIK_AUDIT_FILE what the
 // agent-inputs step gathered for it (src/agent/inputs.ts), and its result
@@ -71,7 +76,8 @@
 // commits out as replay.patch, its diff from baseSha, beside agent-result.json.
 // `replay-review` is a Review in a checkout of that patch as a commit on
 // baseSha: FABRIK_ISSUE_FILE is the Ticket and FABRIK_SPEC_FILE its Spec, it
-// takes no PR file, and its result is the Reviewer's reply for the Ticket.
+// takes no PR file, and its result is the Reviewer's reply for the Ticket. It
+// is a first run's Review, so always a Full Review.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { claudeCode, Output, run } from "@ai-hero/sandcastle";
@@ -116,7 +122,8 @@ import {
   settleReply,
   streamWatch,
 } from "./launch.ts";
-import { ranNothingOf, reviewContext } from "./review.ts";
+import { type LaterReviewGiven, readLaterReviewFile } from "./laterReview.ts";
+import { isFullReview, ranNothingOf, reviewContext, reviewPromptFor } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
 import { missingSkills, runSummary } from "./summary.ts";
@@ -383,6 +390,16 @@ function modelFor(role: { model: string; effort: string | null }): { model: stri
   return { model, effort: effort === undefined || effort === "" ? null : effort };
 }
 
+/**
+ * The Kit's prompt for the run, a Review's for its kind: the Full Review
+ * section only on a Full Review (#747), the later-Review section only on a
+ * later one (#748). `review` is null for every other role.
+ */
+async function promptTemplate(prompt: KitPrompt, review: { readonly later: LaterReviewGiven | null } | null): Promise<string> {
+  const template = await readFile(join(KIT_DIR, kitPromptPath(prompt)), "utf8");
+  return review === null ? template : reviewPromptFor(template, review.later);
+}
+
 async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const name = spec.role;
   const prompt = spec.prompt ?? name;
@@ -493,7 +510,13 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   }
   // The Reviewer's result is for the PR it judged, which its push job checks against the event.
   let subject = issueNumber;
+  // A Review's kind: a Full Review (#747), whose `later` is null, or a later Review with what it is given (#748); null
+  // for every other role. A replay arm's Review is a first run's, so it is always a Full Review.
+  let reviewKind: { readonly later: LaterReviewGiven | null } | null = spec.replay === "review" ? { later: null } : null;
   if (spec.reviewsPullRequest === true) {
+    reviewKind = {
+      later: isFullReview(process.env["FABRIK_FULL_REVIEW"]) ? null : await readLaterReviewFile(required("FABRIK_LATER_REVIEW_FILE")),
+    };
     // Set only for a UI PR: where its Review job downloaded the UI evidence, whether or not that worked,
     // and why its capture failed, as the PR's marker records it.
     const evidenceDir = process.env["FABRIK_UI_EVIDENCE_DIR"] ?? "";
@@ -505,6 +528,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       captureFailureOf(process.env["FABRIK_UI_EVIDENCE_FAILURE"]),
       // The Required checks that passed on this head only by being skipped or reporting neutral (#456).
       ranNothingOf(process.env["FABRIK_RAN_NOTHING"]),
+      reviewKind.later,
     );
     subject = review.pullRequest;
     extra.push(...review.parts);
@@ -548,7 +572,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       sandbox: noSandbox(),
       cwd: productDir,
       prompt: promptFor({
-        template: await readFile(join(KIT_DIR, kitPromptPath(prompt)), "utf8"),
+        template: await promptTemplate(prompt, reviewKind),
         role: name,
         note: spec.instructionsNote,
         config,

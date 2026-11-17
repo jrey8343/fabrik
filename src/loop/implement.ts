@@ -24,11 +24,14 @@ import {
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
   RETRY_PUSH_MARKER,
+  stepUpReasonMarker,
+  touchUpBodyOnlyMarker,
+  touchUpPushMarker,
   UNMARKED_RETRY_PUSH,
 } from "./markers.ts";
 import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
 import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
-import { implementSettings, MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
+import { bodyOnly, fixRunName, implementSettings, isRetryOrTouchUp, MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { type AnswerLines, verdictActions } from "./review.ts";
 import type {
@@ -262,20 +265,24 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       reason: `#${pullRequest.number}'s Request-changes run in flight isn't the one for review ${fixes.review}, so the run's branch isn't pushed`,
     };
   }
-  // Nor does a Retry while a Request-changes or conflict-only run is in flight, which it would push over.
-  if (!requestChanges && inFlight !== null && inFlight.kind !== "retry") {
+  // Nor does a Retry or Touch-up while a Request-changes or conflict-only run is in flight, which it would push over.
+  if (!requestChanges && inFlight !== null && !isRetryOrTouchUp(inFlight)) {
     return { kind: "nothing", reason: `#${pullRequest.number} has a ${inFlight.kind === "request-changes" ? "Request-changes" : "conflict-only"} run in flight, so the retry's branch isn't pushed` };
   }
   // A Retry lands only while it's the Retry in flight: one the Operator took the PR back from, or left over from an
-  // earlier flaw, never lands as a later one's outcome (#341).
-  const otherRetry =
-    inFlight?.kind !== "retry" ||
-    (fixes.retry !== undefined && inFlight.retry !== fixes.retry) ||
-    (fixes.retryFlaw !== undefined && inFlight.flaw !== fixes.retryFlaw);
-  if (!requestChanges && (fixes.retry !== undefined || fixes.retryFlaw !== undefined) && otherRetry) {
+  // earlier flaw, never lands as a later one's outcome (#341). A Touch-up likewise (#750), and neither as the other.
+  const touchUp = fixes.touchUp !== undefined;
+  const otherRun =
+    touchUp
+      ? inFlight?.kind !== "touch-up" || inFlight.touchUp !== fixes.touchUp || (fixes.retryFlaw !== undefined && inFlight.flaw !== fixes.retryFlaw)
+      : inFlight?.kind !== "retry" ||
+        (fixes.retry !== undefined && inFlight.retry !== fixes.retry) ||
+        (fixes.retryFlaw !== undefined && inFlight.flaw !== fixes.retryFlaw);
+  if (!requestChanges && (touchUp || fixes.retry !== undefined || fixes.retryFlaw !== undefined) && otherRun) {
+    const run = touchUp ? fixRunName("touch-up", fixes.touchUp) : fixRunName("retry", fixes.retry);
     return {
       kind: "nothing",
-      reason: `Retry ${fixes.retry} of ${MAX_RETRIES} on #${pullRequest.number} isn't the run in flight, so the retry's branch isn't pushed`,
+      reason: `${run} on #${pullRequest.number} isn't the run in flight, so the retry's branch isn't pushed`,
     };
   }
   // The push job rebased the run's own commits if the branch moved (ADR-0006). If the branch moves again,
@@ -322,6 +329,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
     if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded, parsed.output.summary) };
+    // A Touch-up whose findings were all about the body is told to commit nothing (#751): that's no empty diff.
+    if (inFlight?.kind === "touch-up" && bodyOnly(pullRequest.verdicts.at(-1)?.tags)) {
+      const evidence = evidenceFor(event, config, pullRequest.uiEvidenceMarker !== null);
+      return { kind: "act", actions: bodyOnlyTouchUpLanded(pullRequest, inFlight.touchUp, issueNumber, branch, parsed.output, evidence, changedTestsOf(pullRequest, changes), fixes.operatorComments) };
+    }
     return {
       kind: "act",
       actions: verdictActions(
@@ -332,7 +344,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           source: "empty-diff",
           // The run's summary says why, if it gave a reason; the Verdict links the run itself (#429).
           findings: [
-            `The Implementer's retry on \`${branch}\` committed no change, so there was nothing to review.`,
+            `The Implementer's ${inFlight?.kind === "touch-up" ? runName(inFlight) : "retry"} on \`${branch}\` committed no change, so there was nothing to review.`,
             ...implementerSaid(parsed.output.summary),
           ].join("\n"),
         },
@@ -359,12 +371,16 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         issue: pullRequest.number,
         body: [
           // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
-          requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
+          // A Touch-up's says which it is (#750).
+          requestChanges ? REQUEST_CHANGES_RUN_MARKER : fixes.touchUp !== undefined ? touchUpPushMarker(fixes.touchUp) : RETRY_PUSH_MARKER,
           ...(recorded === null ? [] : [recorded.marker]),
+          ...stepUpReasonLine(fixes),
           ...pushedHead(changes),
           requestChanges
             ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
-            : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
+            : fixes.touchUp !== undefined
+              ? `The Implementer pushed ${fixRunName("touch-up", fixes.touchUp)} to \`${branch}\`, fixing the Execution flaw's findings without using a Retry; Review runs again on it.`
+              : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
           "",
           ...(recorded === null ? [] : [...recorded.lines, ""]),
           // Present: the on-a-PR contract above requires it.
@@ -376,6 +392,45 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
   };
+}
+
+/**
+ * A body-only Touch-up that committed nothing, as its prompt told it to
+ * (#751): every finding was `[small: body]`. The Kit replaces the PR's body
+ * with its `summary`, posts its `fix` under a note naming the head, which
+ * ends its time in flight but is no push, and adds agent:review, which starts
+ * the Review of that head. That Review may land a second Verdict on it, and
+ * the PR stays in draft until it does. Like the rest of a retry, it's silent.
+ */
+function bodyOnlyTouchUpLanded(
+  pullRequest: PullRequestSnapshot,
+  touchUp: number,
+  issueNumber: number,
+  branch: string,
+  output: { readonly summary: string; readonly fix?: string; readonly operatorCommentsConsidered?: readonly string[] },
+  evidence: string | null,
+  changedTests: readonly string[],
+  operatorComments: NonNullable<ImplementRunFinished["fixes"]>["operatorComments"],
+): Action[] {
+  const { number, headSha } = pullRequest;
+  return [
+    // The body goes first, so the Review its label starts reads the new one.
+    { kind: "edit-issue-body", issue: number, body: pullRequestBody(output.summary, issueNumber, evidence, changedTests) },
+    {
+      kind: "comment",
+      issue: number,
+      body: [
+        touchUpBodyOnlyMarker(touchUp, headSha),
+        `The Implementer's ${fixRunName("touch-up", touchUp)} on \`${branch}\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${headSha.slice(0, 7)}. Review runs again on ${headSha.slice(0, 7)}, and no Retry was used.`,
+        "",
+        // Present: the on-a-PR contract requires it.
+        withoutMentions(output.fix ?? ""),
+        ...consideredSection(output.operatorCommentsConsidered ?? [], operatorComments),
+      ].join("\n"),
+    },
+    // It notifies nobody, and takes itself off as the Review starts.
+    { kind: "add-labels", issue: number, labels: [REVIEW_LABEL] },
+  ];
 }
 
 /**
@@ -484,6 +539,7 @@ function applyConflictRun(
           // whose Execution flaw calls for one and counts (#415), unless the run was on a draft whose push GitHub never
           // reviewed (#389): that Verdict is the push's own, unmarked.
           CONFLICT_RUN_MARKER,
+          ...stepUpReasonLine(fixes),
           ...pushedHead(changes),
           pullRequest.conflictRunOnUnreviewedDraft
             ? `The Implementer rebased \`${branch}\` onto \`main\` at ${main.slice(0, 7)} and resolved its conflicts; Review runs on it, and its Verdict counts as one on the push GitHub never reviewed would have.`
@@ -498,6 +554,11 @@ function applyConflictRun(
       ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
   };
+}
+
+/** The marker line recording why the run Stepped up (#746), or none when it didn't. */
+function stepUpReasonLine({ stepUpReason }: NonNullable<ImplementRunFinished["fixes"]>): string[] {
+  return stepUpReason === undefined ? [] : [stepUpReasonMarker(stepUpReason)];
 }
 
 /** The marker line naming the head a run's push lands (pushedHeadMarker), or none when the push job named none. */

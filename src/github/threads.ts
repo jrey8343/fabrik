@@ -26,20 +26,24 @@ import {
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunEndedIn,
   IMPLEMENT_RUN_FAILED_MARKER,
+  isReviewerFlaw,
   RESEARCH_RUN_FAILED_MARKER,
   RETRY_ENDED_MARKER,
   RETRY_PUSH_MARKER,
   RETRY_RESTARTED_MARKER,
   sessionFinishedIn,
   startedReviewsIn,
+  stepUpReasonIn,
   stuckTriggerGaveUpMarker,
   stuckTriggerReaddedMarker,
+  touchUpBodyOnlyIn,
+  touchUpPushIn,
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
   flakyCheckMarksIn,
 } from "../loop/markers.ts";
 import type { TriggerLabel } from "../loop/labels.ts";
-import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, UnbuiltChangesRequest, Verdict, VerdictRecord } from "../loop/types.ts";
+import type { IssueSnapshot, PendingPrototype, PullRequestSnapshot, StepUpReason, UnbuiltChangesRequest, Verdict, VerdictRecord, VerdictTags } from "../loop/types.ts";
 import { VERDICTS } from "../loop/verdict.ts";
 
 /**
@@ -57,6 +61,24 @@ export function verdictsIn(commentBodies: readonly string[]): VerdictRecord[] {
   });
 }
 
+/**
+ * The Actions run attempt that posted a Verdict comment, from the
+ * `[The run](…/actions/runs/<id>/attempts/<n>)` line the Kit writes under its
+ * findings (src/loop/review.ts), or null without one. The last such line is
+ * the Kit's: the findings above it are the Reviewer's text, which could carry
+ * a look-alike.
+ */
+export function verdictPostedByIn(body: string): { readonly runId: number; readonly runAttempt: number } | null {
+  const linked = body
+    .split("\n")
+    .map((line) => VERDICT_RUN_LINK.exec(line))
+    .findLast((match) => match !== null);
+  return linked === undefined || linked === null ? null : { runId: Number(linked[1]), runAttempt: Number(linked[2]) };
+}
+
+/** A Verdict comment's line linking the run attempt that posted it, on whichever GitHub server. */
+const VERDICT_RUN_LINK = /^\[The run\]\(https?:\/\/[^)\s]*\/actions\/runs\/([0-9]+)\/attempts\/([0-9]+)\)$/;
+
 function readVerdictMarker(body: string): VerdictRecord | null {
   const json = VERDICT_MARKER.exec(body)?.[1];
   if (json === undefined) return null;
@@ -67,7 +89,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, checks, ranNothing, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, checks, ranNothing, tags, touchUp, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff" && source !== "broken-run") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
@@ -80,6 +102,12 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   const named = Array.isArray(checks) && checks.every((name) => typeof name === "string") ? { checks: checks as string[] } : {};
   // Likewise ranNothing (#456), which only a Reviewer's Verdict on a head with checks that ran nothing carries.
   const ranNothingNamed = Array.isArray(ranNothing) && ranNothing.length > 0 && ranNothing.every((name) => typeof name === "string") ? { ranNothing: ranNothing as string[] } : {};
+  // The counts of a Reviewer's Execution flaw's findings by tag (#749): ignored on any other Verdict, and dropped when unreadable, so it counts.
+  const reviewerFlaw = isReviewerFlaw({ verdict: verdict as Verdict, source });
+  const counted = reviewerFlaw ? verdictTagsIn(tags) : null;
+  // The Touch-up a Reviewer's Execution flaw called for (#750): ignored on any other Verdict, and dropped when it isn't
+  // a positive whole number, so the flaw counts as one that called for a Retry.
+  const touchedUp = reviewerFlaw && Number.isSafeInteger(touchUp) && (touchUp as number) > 0 ? { touchUp: touchUp as number } : {};
   // The fingerprint of the PR's own change (#643), from the line under the marker; a Verdict from before it has none.
   const change = changeIn(body);
   return {
@@ -92,8 +120,19 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     ...named,
     ...ranNothingNamed,
     ...(change === null ? {} : { change }),
+    ...(counted === null ? {} : { tags: counted }),
+    ...touchedUp,
     headSha,
   };
+}
+
+/** A marker's `tags`, or null when they don't read as counts; one written before `smallBody` has none about the body. */
+function verdictTagsIn(tags: unknown): VerdictTags | null {
+  if (typeof tags !== "object" || tags === null) return null;
+  const { small, missedEarlier, counted, smallBody = 0 } = tags as Record<string, unknown>;
+  const isCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+  if (!isCount(small) || !isCount(missedEarlier) || !isCount(counted) || !isCount(smallBody) || smallBody > small) return null;
+  return { small, missedEarlier, counted, smallBody };
 }
 
 /** Whether a marker's field is a non-empty list of review ids. */
@@ -131,6 +170,17 @@ export function conflictRunIn(commentBodies: readonly string[]): boolean {
     else if (verdictsIn([body]).length > 0) latest = false;
   });
   return latest;
+}
+
+/**
+ * The Step-up reason the latest run's push note in a PR's Fabrik App comments,
+ * oldest first, records (#746), or null when there is no such note or it
+ * records none. Only a run's push note counts: an Operator's push posts none,
+ * and the Kit's clean rebase onto main is no run.
+ */
+export function lastPushStepUpReasonIn(commentBodies: readonly string[]): StepUpReason | null {
+  const latest = commentBodies.findLast(isPushNote);
+  return latest === undefined ? null : stepUpReasonIn(latest);
 }
 
 /** Whether the latest attempt note in these comments that started a conflict-only run was on a draft whose push GitHub never reviewed (#389). */
@@ -204,6 +254,24 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
     else if (verdictsIn([body]).length > 0) pushed = false;
   }
   return pushed;
+}
+
+/**
+ * The head a body-only Touch-up's note (#751) since a PR's latest Verdict
+ * names, or null when none came since, from the Fabrik App's comments on it,
+ * oldest first. The note ends the Touch-up's time in flight, as a push note
+ * does, but it is no push: nothing in pushedSinceVerdictIn, landedPushNotes
+ * or the Kit's push notes reads it. A Review may land a second Verdict on
+ * the head it names.
+ */
+export function bodyOnlyTouchUpHeadIn(commentBodies: readonly string[]): string | null {
+  let head: string | null = null;
+  for (const body of commentBodies) {
+    const note = touchUpBodyOnlyIn(body);
+    if (note !== null) head = note.headSha;
+    else if (isVerdict(body)) head = null;
+  }
+  return head;
 }
 
 /** Whether a comment is a Verdict: it carries a valid Verdict marker. */
@@ -284,10 +352,11 @@ function isRequestChangesRunOutcome(body: string): boolean {
   return body.startsWith(REQUEST_CHANGES_RUN_MARKER) || body.startsWith(REQUEST_CHANGES_RUN_EMPTY_MARKER);
 }
 
-/** Whether a comment is the Kit's note of a Retry's or Request-changes run's push: that run's outcome. */
+/** Whether a comment is the Kit's note of a Retry's, Touch-up's (#750), Request-changes run's or conflict-only run's push: that run's outcome. */
 function isPushNote(body: string): boolean {
   return (
     body.startsWith(RETRY_PUSH_MARKER) ||
+    touchUpPushIn(body) !== null ||
     body.startsWith(REQUEST_CHANGES_RUN_MARKER) ||
     body.startsWith(CONFLICT_RUN_MARKER) ||
     body.startsWith(UNMARKED_RETRY_PUSH)

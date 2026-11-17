@@ -17,16 +17,20 @@
 // record, written before Broken runs were recorded, as no Broken run, and a
 // schema 1 to 8 record, written before landings were recorded, as one the
 // push job landed, and a schema 1 to 9 record, written before pushes were
-// recorded, as one that pushed nothing. Pure, no I/O.
+// recorded, as one that pushed nothing, and a schema 1 to 10 record, written
+// before Full Reviews were recorded, with a null `fullReview`, and a schema
+// 1 to 11 record written before findings were tagged, with null
+// `findingTags`, and one written before Touch-ups were recorded, with
+// `touchUp` 0. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
 import type { refusalOf } from "../github/client.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
 import { brokenRunOf, infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
-import { type AgentRole, type BrokenRun, type InfrastructureFailure, isStepUpReason, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
-import { parseVerdict } from "../loop/verdict.ts";
-import { DIGEST_JOB, isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RERUN_WAIT_JOB, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
+import { type AgentRole, type BrokenRun, type FindingTagCounts, type InfrastructureFailure, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
+import { parseVerdict, verdictTagsOf } from "../loop/verdict.ts";
+import { DIGEST_JOB, isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RERUN_WAIT_JOB, RETRO_EVIDENCE_JOB, routedJob, stepUpReasonOf } from "./pushJob.ts";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
@@ -143,9 +147,9 @@ export type RunRecordRole = AgentRole | "score";
  * The schema a Run record is written at: 2 added `subscription`, 3 added
  * `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`,
  * 7 added `keptBranch`, 8 added `brokenRun`, 9 added `landing`, 10 added
- * `pushed`.
+ * `pushed`, 11 added `fullReview`, `findingTags` and `touchUp`.
  */
-export const RUN_RECORD_SCHEMA = 10;
+export const RUN_RECORD_SCHEMA = 11;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -200,11 +204,12 @@ export function isLive({ replay }: { readonly replay: ReplayRun | null }): boole
  * and checks out the default branch afresh. A first run is taken by its place
  * in the chain, so a marked Ticket's first run, a Stepped-up start, counts
  * (ADR-0014). Any other Step-up of a run with a PR isn't one: a record from
- * before Step-ups had reasons reads as a Retry's.
+ * before Step-ups had reasons reads as a Retry's. A Touch-up (#750) has
+ * `retry` 0 but runs on the PR's branch, so it's never one either.
  */
 export function firstRunOf(implementRuns: readonly RunRecord[]): RunRecord | undefined {
   const cutItsBranch = (record: RunRecord) =>
-    (record.retry === 0 && (record.stepUpReason === null || record.stepUpReason === "marked")) || record.pullRequest === null;
+    (record.retry === 0 && record.touchUp === 0 && (record.stepUpReason === null || record.stepUpReason === "marked")) || record.pullRequest === null;
   const first = implementRuns.filter((record) => !record.emptyDiff && !record.requestChanges && cutItsBranch(record));
   return first.toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)).at(-1);
 }
@@ -239,8 +244,14 @@ export interface RunRecord {
    * token came from, never the secret. A judge run's is the scored run's.
    */
   readonly subscription: string;
-  /** 0 for a first Implement run (and every other role), else its Retry number. */
+  /** 0 for a first Implement run, a Touch-up (and every other role), else its Retry number. */
   readonly retry: number;
+  /**
+   * 0 for every run but a Touch-up (#750), whose number it is: a Touch-up
+   * isn't a Retry, so its `retry` is 0. A schema 1 to 10 record, written
+   * before Touch-ups were recorded, reads as 0.
+   */
+  readonly touchUp: number;
   /** Whether the run used the Step-up model. */
   readonly stepUp: boolean;
   /**
@@ -306,8 +317,24 @@ export interface RunRecord {
    * pushes were recorded, reads as null.
    */
   readonly pushed: Pushed | null;
+  /**
+   * Whether a Review was a Full Review (#747), as the Kit job that started it
+   * worked out from the PR's Verdict markers: true for a Full Review and a
+   * Replay arm's Review, which is a first run's, false for a later Review, and
+   * null for every other role. A schema 1 to 10 record, written before Full
+   * Reviews were recorded, reads as null.
+   */
+  readonly fullReview: boolean | null;
   /** A Review's Verdict, or null when it gave none (and for every other role). */
   readonly verdict: Verdict | null;
+  /**
+   * On a Review's Execution flaw, its findings counted by tag (#749), as its
+   * Verdict marker counts them: a `[missed earlier]` on a Full Review counts.
+   * Null on a pass, a Design flaw, a Review that gave no Verdict and every
+   * other role. A schema 1 to 10 record, written before tags were recorded,
+   * reads as null.
+   */
+  readonly findingTags: FindingTagCounts | null;
   readonly durationMs: number | null;
   readonly apiDurationMs: number | null;
   readonly turns: number | null;
@@ -396,6 +423,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     ...whatRan(agent, kit, end.roles[role]),
     subscription: nonEmpty(kit["subscription"]) ?? firstSubscription({ subscriptions: end.subscriptions }),
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
+    touchUp: implement ? (countOf(kit["touch-up"]) ?? 0) : 0,
     ...stepUpOf(implement ? kit : {}),
     requestChanges: implement && kit["request-changes"] === "true",
     emptyDiff: implement && end.emptyDiff,
@@ -409,7 +437,9 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     landing,
     // Only work that landed was pushed: never an empty diff, a failed run or a failed landing.
     pushed: implement && !end.emptyDiff && ran.failure === null && ran.broken === null && landing === null ? pushedOf(end) : null,
-    verdict: role === "review" ? verdictOf(end.agentResult) : null,
+    // The Kit job passes out the kind of Review it started (#747).
+    fullReview: role === "review" ? fullReviewIn(kit["full-review"]) : null,
+    ...verdictOf(role === "review" ? end.agentResult : null, fullReviewIn(kit["full-review"])),
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
 }
@@ -470,6 +500,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     // The Kit job gives the judge the Subscription it gave the run the judge scores.
     subscription: scored.subscription,
     retry: 0,
+    touchUp: 0,
     stepUp: false,
     stepUpReason: null,
     requestChanges: false,
@@ -484,7 +515,9 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     brokenRun: null,
     landing: null,
     pushed: null,
+    fullReview: null,
     verdict: null,
+    findingTags: null,
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
 }
@@ -541,6 +574,7 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     ...whatRan(job.outputs, {}, end.settings),
     subscription: end.subscription,
     retry: 0,
+    touchUp: 0,
     stepUp: false,
     stepUpReason: null,
     requestChanges: false,
@@ -555,7 +589,9 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     brokenRun: null,
     landing: null,
     pushed: null,
-    verdict: role === "review" ? verdictOf(end.agentResult) : null,
+    // An arm's Review is a first run's, so a Full Review (#747).
+    fullReview: role === "review" ? true : null,
+    ...verdictOf(role === "review" ? end.agentResult : null, true),
   };
   return { record: recordOf(facts, end.transcript, transcriptPath), recordPath, transcriptPath };
 }
@@ -608,11 +644,15 @@ function readLandingFailed(text: string): LandingFailed | null {
   }
 }
 
+/** Whether the Review the Kit job started was a Full Review (#747), from its output: null when it passed out neither. */
+function fullReviewIn(output: string | undefined): boolean | null {
+  return output === "true" ? true : output === "false" ? false : null;
+}
+
 /** Whether an Implement run Stepped up, and why, from the Kit job's outputs; never a reason without a Step-up. */
 function stepUpOf(kit: Readonly<Record<string, string>>): Pick<RunRecord, "stepUp" | "stepUpReason"> {
   if (kit["step-up"] !== "true") return { stepUp: false, stepUpReason: null };
-  const reason = kit["step-up-reason"];
-  return { stepUp: true, stepUpReason: isStepUpReason(reason) ? reason : null };
+  return { stepUp: true, stepUpReason: stepUpReasonOf(kit) };
 }
 
 /** The fields a run's own stream gives its record, whatever its role. */
@@ -637,7 +677,7 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
   const stream = transcript === null ? null : readStream(transcript);
   const last = stream?.result ?? null;
   const modelUsage = Object.fromEntries(Object.entries(stream?.modelUsage ?? {}).map(([model, usage]) => [model, costOf(usage)]));
-  const { infrastructureFailure, brokenRun, landing, pushed, verdict, ...ran } = facts;
+  const { infrastructureFailure, brokenRun, landing, pushed, fullReview, verdict, findingTags, ...ran } = facts;
   return {
     schema: RUN_RECORD_SCHEMA,
     ...ran,
@@ -648,7 +688,9 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
     brokenRun,
     landing,
     pushed,
+    fullReview,
     verdict,
+    findingTags,
     durationMs: numberOr(last?.["duration_ms"]),
     apiDurationMs: numberOr(last?.["duration_api_ms"]),
     turns: numberOr(last?.["num_turns"]),
@@ -674,7 +716,10 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
  * to 7 record, written before Broken runs were recorded, as no Broken run, and
  * a schema 1 to 8 record, written before landings were recorded, as a run the
  * push job landed, and a schema 1 to 9 record, written before pushes were
- * recorded, as one that pushed nothing. An older record names the schema it
+ * recorded, as one that pushed nothing, and a schema 1 to 10 record, written
+ * before Full Reviews, findings' tags and Touch-ups were recorded, with a
+ * null `fullReview`, a Review's included, null `findingTags` and `touchUp` 0.
+ * An older record names the schema it
  * was stored at in `storedSchema`. Null for anything that isn't a record of a
  * schema the Kit knows.
  */
@@ -686,9 +731,25 @@ export function readRunRecord(stored: unknown, subscriptions: KitConfig["subscri
   return record === null ? null : { ...record, storedSchema: schema as number };
 }
 
+/** The fields schema 11 added: Full Reviews (#747), findings' tags (#749) and Touch-ups (#750). */
+type AddedIn11 = "fullReview" | "findingTags" | "touchUp";
+
+/** Schema 11's fields as a schema 1 to 10 record reads them: no word on a Full Review, no tags, and no Touch-up. */
+const NOT_IN_10: Pick<RunRecord, AddedIn11> = { fullReview: null, findingTags: null, touchUp: 0 };
+
 /** An older stored record at the current schema (readRunRecord), or null for a schema the Kit doesn't know. */
 function upgraded(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
-  type Schema9 = Omit<RunRecord, "schema" | "pushed">;
+  if (schema === 10) return { ...(stored as Schema10), schema: RUN_RECORD_SCHEMA, ...NOT_IN_10 };
+  const older = upgradedToSchema10(stored, schema, subscriptions);
+  return older === null ? null : { ...older, ...NOT_IN_10 };
+}
+
+/** A record as schema 10 held it, before schema 11's fields were recorded. */
+type Schema10 = Omit<RunRecord, "schema" | AddedIn11>;
+
+/** A stored record older than schema 10 at schema 10's fields, or null for a schema the Kit doesn't know. */
+function upgradedToSchema10(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): (Schema10 & Pick<RunRecord, "schema">) | null {
+  type Schema9 = Omit<Schema10, "pushed">;
   if (schema === 9) return { ...(stored as Schema9), schema: RUN_RECORD_SCHEMA, pushed: null };
   type Schema8 = Omit<Schema9, "landing">;
   if (schema === 8) return { ...(stored as Schema8), schema: RUN_RECORD_SCHEMA, landing: null, pushed: null };
@@ -699,7 +760,7 @@ function upgraded(stored: object, schema: unknown, subscriptions: KitConfig["sub
   type Schema5 = Omit<Schema6, "emptyDiff">;
   if (schema === 5) return { ...(stored as Schema5), schema: RUN_RECORD_SCHEMA, emptyDiff: false, keptBranch: false, brokenRun: null, landing: null, pushed: null };
   type Schema4 = Omit<Schema5, "stepUpReason">;
-  const record = (fields: Schema4): RunRecord => ({
+  const record = (fields: Schema4): Schema10 & Pick<RunRecord, "schema"> => ({
     ...fields,
     schema: RUN_RECORD_SCHEMA,
     stepUpReason: fields.stepUp ? "retry" : null,
@@ -763,14 +824,25 @@ function failureOf(jobResult: string, secretsStep: string | undefined, failureRe
   });
 }
 
-/** The Reviewer's Verdict, or null when it gave none. */
-function verdictOf(agentResult: string | null): Verdict | null {
-  if (agentResult === null) return null;
+/**
+ * The Reviewer's Verdict, and on an Execution flaw its findings counted by
+ * tag (#749), or nulls when it gave none. A Review whose kind the Kit job
+ * didn't pass out is counted as a Full Review: a `[missed earlier]` there
+ * counts, so it can never be read as calling for a Touch-up.
+ */
+function verdictOf(agentResult: string | null, fullReview: boolean | null): Pick<RunRecord, "verdict" | "findingTags"> {
+  const none = { verdict: null, findingTags: null };
+  if (agentResult === null) return none;
   try {
     const parsed = parseVerdict(readAgentRunResult(agentResult).output);
-    return parsed.ok ? parsed.verdict : null;
+    if (!parsed.ok) return none;
+    const tags = verdictTagsOf(parsed, fullReview !== false);
+    if (tags === null) return { verdict: parsed.verdict, findingTags: null };
+    // The marker's body split is for the Touch-up to read; the record keeps the counts by tag.
+    const { smallBody: _smallBody, ...findingTags } = tags;
+    return { verdict: parsed.verdict, findingTags };
   } catch {
-    return null;
+    return none;
   }
 }
 

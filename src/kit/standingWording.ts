@@ -5,6 +5,7 @@
 import type { HandBack } from "../loop/handBacks.ts";
 import { RUN_NAMES, runNamed } from "../loop/heldRun.ts";
 import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
+import { fixRunName } from "../loop/retry.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
@@ -24,6 +25,7 @@ export interface StandingWords {
 const RUNNING_RUNS: Readonly<Record<Exclude<RunningRun, "digest">, string>> = {
   implement: "An Implement run",
   retry: "A Retry",
+  "touch-up": "A Touch-up",
   "request-changes": "A Request-changes run",
   "conflict-only": "A conflict-only run",
   review: "A Review",
@@ -80,13 +82,18 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
   const age = ageSince(standing.since, now);
   switch (standing.name) {
     case "running": {
-      const { run, retry } = standing.detail;
+      const { run, retry, touchUp } = standing.detail;
       // A passed draft's Digest run (#654): the pass is given, and the Merge gate waits on nothing but the run's end.
       if (run === "digest") {
         const sentence = `The Reviewer passed #${standing.pullRequest}, and the Digest writer is writing its Digest. The Merge gate opens when it ends, with a Digest or without.`;
         return { pill: "Running", sentence, remedy: null };
       }
-      const named = run === "retry" && retry !== null ? `Retry ${retry}` : (RUNNING_RUNS[run as keyof typeof RUNNING_RUNS] ?? "A run");
+      const named =
+        run === "retry" && retry !== null
+          ? fixRunName("retry", retry, false)
+          : run === "touch-up" && touchUp !== undefined
+            ? fixRunName("touch-up", touchUp)
+            : (RUNNING_RUNS[run as keyof typeof RUNNING_RUNS] ?? "A run");
       return { pill: "Running", sentence: `${named} has been running for ${age}.`, remedy: null };
     }
     case "waiting-on-checks": {
@@ -245,10 +252,12 @@ function notStartedWords({ repo, issue, pullRequest, detail }: StandingNamed<"no
     return { sentence: `${asked} At its next hourly check the Kit opens the Merge gate without one.`, remedy: null };
   }
   if (detail.silence === "retry") {
+    // A Touch-up (#750) is named by its number.
+    const run = detail.touchUp === undefined ? fixRunName("retry") : fixRunName("touch-up", detail.touchUp);
     return {
       sentence: stuck
-        ? `No Retry has started since the Execution flaw ${age} ago.`
-        : `An Execution flaw called for a Retry ${age} ago; nothing has started. The Kit adds \`${DISPATCH_LABEL}\` to #${issue} again once the Implement job's timeout has passed.`,
+        ? `No ${run} has started since the Execution flaw ${age} ago.`
+        : `An Execution flaw called for ${detail.touchUp === undefined ? "a Retry" : run} ${age} ago; nothing has started. The Kit adds \`${DISPATCH_LABEL}\` to #${issue} again once the Implement job's timeout has passed.`,
       remedy: `${runs}, then add \`${DISPATCH_LABEL}\` to #${issue}.`,
     };
   }

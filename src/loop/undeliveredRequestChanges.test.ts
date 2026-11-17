@@ -222,10 +222,10 @@ class Thread {
     return this.plan({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(this.pullRequest()));
   }
 
-  /** The Reviewer's Verdict on the head the PR is at, at `minutes`. */
-  reviewed(verdict: "pass" | "execution-flaw", minutes: number): Plan {
+  /** The Reviewer's Verdict on the head the PR is at, at `minutes`, an Execution flaw's with these findings. */
+  reviewed(verdict: "pass" | "execution-flaw", minutes: number, findings = "The free-shipping banner is missing."): Plan {
     this.now = at(minutes);
-    const output = verdict === "pass" ? "verdict: pass\n\nIt totals the cart." : "verdict: execution-flaw\n\nThe free-shipping banner is missing.";
+    const output = verdict === "pass" ? "verdict: pass\n\nIt totals the cart." : `verdict: execution-flaw\n\n${findings}`;
     return this.plan(
       { kind: "review-run-finished", pullRequest: 50, headSha: this.headSha, runUrl: RUN, output, repoUrl: "https://github.com/acme/shop" },
       snapshotOfPullRequest(this.pullRequest()),
@@ -806,6 +806,25 @@ describe("The Operator's Request changes on the draft while a Retry is in flight
     return thread;
   }
 
+  it("during a Touch-up (#750) is deferred as during a Retry, and the Touch-up's flaw gives way to it", () => {
+    const thread = new Thread();
+    thread.draft = true;
+    thread.history.push({ kind: "draft", at: at(1) });
+    thread.headSha = B;
+    expect(commentsOn(thread.reviewed("execution-flaw", 5, "- [small: comment] The doc comment on `total()` is stale."), 50)[0]).toContain("Touch-up 1 of 2 starts now");
+    thread.implement();
+    thread.review(9000, 7);
+
+    const plan = thread.delivered(9000, 7);
+
+    const [note] = commentsOn(plan, 50);
+    expect(note).toContain("came in while Touch-up 1 of 2 was in flight, so the Kit defers it until the Verdict on that Touch-up's push");
+    expect(startsOn(plan)).toBeUndefined();
+    expect(addsImplement(plan)).toBe(false);
+    thread.retryFinishes(BUILT, C, 10);
+    expect(commentsOn(thread.reviewed("execution-flaw", 20), 50)[0]).toContain("goes first");
+  });
+
   it("is acknowledged as deferred until the Retry's Verdict, mentioning nobody, and starts nothing yet", () => {
     const thread = deferredDuringRetry();
 
@@ -1226,7 +1245,7 @@ describe("A Request-changes run that commits nothing on a PR that doesn't confli
 
     const verdict = thread.reviewed("execution-flaw", 50);
 
-    expect(verdictsIn(commentsOn(verdict, 50))).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: true, headSha: B }]);
+    expect(verdictsIn(commentsOn(verdict, 50))).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: true, tags: { small: 0, missedEarlier: 0, counted: 0, smallBody: 0 }, headSha: B }]);
     expect(commentsOn(verdict, 50)[0]).toContain("Retry 1 of 2 starts now, stepped up:");
     expect(startsOn(thread.implement())).toMatchObject({ retry: 1, stepUp: true, stepUpReason: "request-changes" });
     for (const check of [thread.tick(120), thread.mainPushed(130, MAIN_2)]) {

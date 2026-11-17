@@ -13,12 +13,12 @@ import { followUpsSection } from "./followUps.ts";
 import { type HeldOn, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
-import { retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
+import { hasVerdictOn, retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
 import { changeLine } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
-import { parseVerdict } from "./verdict.ts";
+import { parseVerdict, verdictTagsOf } from "./verdict.ts";
 import type {
   Action,
   KitConfig,
@@ -26,9 +26,11 @@ import type {
   Plan,
   PostedComment,
   PullRequestSnapshot,
+  ReviewKind,
   Snapshot,
   Verdict,
   VerdictRecord,
+  VerdictTags,
 } from "./types.ts";
 
 type RedChecks = Extract<LoopEvent, { kind: "required-checks-finished" }>;
@@ -53,6 +55,7 @@ export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig)
         kind: "start-agent-run",
         role: "review",
         issue: number,
+        reviewKind: reviewKindOf(pullRequest),
         ...(uiEvidenceMarker === null ? {} : { evidence: uiEvidenceMarker }),
         model,
         effort,
@@ -60,6 +63,20 @@ export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig)
       },
     ],
   };
+}
+
+/**
+ * Which kind of Review starts on the PR now (#747), from its Verdict markers
+ * alone: a later Review, judged against the head of its latest Reviewer
+ * Verdict, or a Full Review when it has none, or that one has no change line
+ * under it to judge the change since against (it predates #643). A PR's
+ * Verdicts are its own, so a new PR after Back to design or from a Kept-branch
+ * start has none, and its first Review is Full.
+ */
+export function reviewKindOf({ verdicts }: Pick<PullRequestSnapshot, "verdicts">): ReviewKind {
+  const latest = verdicts.findLast((record) => record.source === "reviewer");
+  if (latest?.change === undefined) return { kind: "full" };
+  return { kind: "later", lastJudged: { headSha: latest.headSha, change: latest.change } };
 }
 
 /**
@@ -129,6 +146,8 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
       followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
       considered: consideredSection(parsed.considered, event.operatorComments),
       ...(event.ranNothing === undefined ? {} : { ranNothing: event.ranNothing }),
+      // Counted as the Review that gave it was started (#749): the snapshot holds the Verdicts before this one.
+      tags: verdictTagsOf(parsed, reviewKindOf(pullRequest).kind === "full"),
     }, snapshot.operator, held);
     // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
     actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues));
@@ -142,7 +161,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
   });
 }
 
-/** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once. */
+/** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once, or once more after a body-only Touch-up (#751). */
 function landVerdict(
   event: RedChecks | Reviewed,
   { pullRequest }: Snapshot,
@@ -156,7 +175,7 @@ function landVerdict(
   if (pullRequest.headSha !== event.headSha) {
     return { kind: "nothing", reason: `#${pullRequest.number} has moved on from ${event.headSha.slice(0, 7)}, so the Verdict is stale` };
   }
-  if (pullRequest.verdicts.some((record) => record.headSha === event.headSha)) {
+  if (hasVerdictOn(pullRequest, event.headSha)) {
     return { kind: "nothing", reason: `#${pullRequest.number} already has a Verdict on ${event.headSha.slice(0, 7)}` };
   }
   // A Review that started before the run was called for lands nothing either.
@@ -209,10 +228,13 @@ export function verdictActions(
     considered = [],
     checks,
     ranNothing,
+    tags = null,
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
     readonly findings: string;
+    /** On a Reviewer's Execution flaw, its findings counted by tag (#749). */
+    readonly tags?: VerdictTags | null;
     /** On one from red required checks, the ones it names as failed (#462). */
     readonly checks?: readonly string[];
     /** On a Reviewer's Verdict, the Required checks that ran nothing on its head (#456). */
@@ -225,7 +247,7 @@ export function verdictActions(
 ): Action[] {
   const first =
     verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator, held) : verdict === "pass" ? deferredFirst(pullRequest, held) : null;
-  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest, held);
+  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest, held, tags);
   const record: VerdictRecord = {
     verdict,
     source,
@@ -235,6 +257,8 @@ export function verdictActions(
     ...(next?.ticketNotReady === true ? { ticketNotReady: true as const } : {}),
     ...(checks === undefined ? {} : { checks }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
+    ...(tags === null ? {} : { tags }),
+    ...(next?.touchUp === undefined ? {} : { touchUp: next.touchUp }),
     headSha: event.headSha,
   };
   const by = BY[source];
@@ -322,10 +346,10 @@ function deferredFirst(pullRequest: PullRequestSnapshot, held: HeldOn | null): G
   };
 }
 
-/** What a Verdict leads to beyond its comment: a retry, back to design, or (for a pass) nothing here. */
-function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot, held: HeldOn | null): VerdictNext | null {
+/** What a Verdict leads to beyond its comment: a Touch-up or retry, back to design, or (for a pass) nothing here. */
+function nextAfter(verdict: Verdict, pullRequest: PullRequestSnapshot, held: HeldOn | null, tags: VerdictTags | null): VerdictNext | null {
   if (verdict === "pass") return null;
-  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest, held) : null;
+  const retry = verdict === "execution-flaw" ? retryAfterFlaw(pullRequest, held, tags) : null;
   if (retry !== null) return retry;
   const reason = verdict === "design-flaw" ? "design-flaw" : "retries-used-up";
   return { line: backToDesignLine(pullRequest, reason), actions: backToDesignActions(pullRequest, reason, VERDICT_COMMENT) };

@@ -186,6 +186,8 @@ describe("The scored run as the judge is told of it (#450)", () => {
     ["a run its timeout stopped", { retry: 1, infrastructureFailure: "timeout" }, { kind: "retry", retry: 1, timedOut: true }],
     ["a Kept-branch start, which carried on a branch (#536)", { keptBranch: true }, { kind: "kept-branch", retry: 0, timedOut: false }],
     ["a Kept-branch start's Retry after an empty diff", { keptBranch: true, retry: 1 }, { kind: "kept-branch", retry: 1, timedOut: false }],
+    ["a Touch-up after a first run, never a first run (#750)", { pullRequest: 50, touchUp: 1 }, { kind: "touch-up", retry: 0, timedOut: false }],
+    ["a Touch-up after a conflict-only run, never a conflict-only run", { pullRequest: 50, touchUp: 2, stepUp: true, stepUpReason: "conflict-only" }, { kind: "touch-up", retry: 0, timedOut: false }],
   ] as const)("names %s", (_, run, judged) => {
     expect(judgedRunOf(implementRun(run))).toEqual(judged);
   });

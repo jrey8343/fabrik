@@ -210,13 +210,29 @@ _Avoid_: approval, review result
 A Verdict that the right design was built wrongly, so the Implementer can fix it.
 _Avoid_: bug, failing review
 
+**Small finding**:
+A Reviewer's finding that a comment or doc the change left stale, and no acceptance criterion asks for, or the pull request's body, doesn't match the branch.
+_Avoid_: nit, minor flaw, cosmetic finding
+
+**Full Review**:
+A Review of an agent pull request with no settled code: its first Review, or the first Review to read a head after the Reviewer judged none of the pull request's earlier heads. It judges the whole pull request, and what it doesn't name becomes settled code.
+_Avoid_: first pass, initial review, complete review
+
+**Settled code**:
+What an agent pull request held at a head the Reviewer judged, for everything its Verdict didn't name. A later Review of that pull request judges what the pull request's own change gained since, whether the Verdict before's findings were fixed, and whether every acceptance criterion, as amended by any Request changes, is met and the body is current. In settled code it names only a behaviour bug, as missed earlier. Nothing is settled by a head the Reviewer never judged, across pull requests, or in the Ticket.
+_Avoid_: approved code, reviewed code, prior pass
+
 **Flaky check**:
 A Required check that has reported both failure and success on the same head commit, in any order and whoever re-ran it. A check red on one head and green on another is never flaky: the code changed. An Execution flaw from a check found flaky on the head it judged no longer counts toward a Ticket's Retries, and the Operator hears of each Flaky check so the Product's suite gets fixed.
 _Avoid_: flake, intermittent failure
 
 **Retry**:
-An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff or a Broken run before its pull request opened uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. Nor does one from a Flaky check. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff or a Broken run has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start.
+An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff or a Broken run before its pull request opened uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. Nor does one from a Flaky check. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff or a Broken run has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start. An Execution flaw whose findings are all Small findings or marked missed earlier calls for a Touch-up instead, and counts toward the two only once the Ticket's two Touch-ups are used.
 _Avoid_: rerun, attempt
+
+**Touch-up**:
+An Implementer run that fixes an Execution flaw whose findings are all Small findings or marked missed earlier, on the same model as the run whose push it judged. It isn't a Retry and uses none of a Ticket's two; a Ticket gets two Touch-ups, and a third such flaw counts like any other. A Touch-up whose findings are all about the body may commit nothing: the Kit replaces the body with its summary, and the Review of the same head may give it a second Verdict.
+_Avoid_: free retry, nit fix, polish run
 
 **Design flaw**:
 A Verdict that the Ticket itself, as any Request changes amended it, is wrong, so it needs a Design session. A Request changes that leaves the Ticket contradicting itself can ground one; its size alone never does.

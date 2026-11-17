@@ -22,6 +22,7 @@ import {
   stuckTriggerReaddedMarker,
   UNMARKED_RETRY_PUSH,
   verdictMarker,
+  touchUpBodyOnlyMarker,
 } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
@@ -303,6 +304,44 @@ describe("a run that was asked for and never began", () => {
       ["the latest Verdict is a pass", [flaw, aVerdictComment("pass", HEAD, "2026-11-08T19:30:00Z")], { draft: false }],
     ] as const)("calls for no Retry once %s", (_, comments, overrides) => {
       expect(standingsIn(retryFacts(comments, overrides, ["ready-for-agent"])).filter(({ name }) => name === "not-started")).toEqual([]);
+    });
+
+    describe("a Touch-up (#750)", () => {
+      const touchUpFlaw = aComment(
+        `${verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 0 }, touchUp: 1, headSha: HEAD })}\nVerdict`,
+        FLAW,
+      );
+      const usedUp = [aVerdictComment("execution-flaw", "a".repeat(40), "2026-11-08T15:00:00Z"), aVerdictComment("execution-flaw", "b".repeat(40), "2026-11-08T17:00:00Z")];
+
+      it("is announced as a Retry is, naming which it is, even once the Retries are used up", () => {
+        expect(standingsIn(retryFacts([...usedUp, touchUpFlaw]))).toMatchObject([{ name: "not-started", detail: { silence: "retry", label: null, touchUp: 1 } }]);
+      });
+
+      it("says it's the Touch-up that hasn't started", () => {
+        const [standing] = standingsIn(retryFacts([touchUpFlaw]), {}, "2026-11-08T20:00:00Z");
+        if (standing === undefined) throw new Error("expected a Standing");
+        expect(wordStanding(standing, "2026-11-08T20:00:00Z", "Australia/Sydney").sentence).toBe("An Execution flaw called for Touch-up 1 of 2 1 hour ago; nothing has started. The Kit adds `agent:implement` to #7 again once the Implement job's timeout has passed.");
+      });
+
+      it("a body-only one's note (#751) ends it, though it pushed nothing, and the draft waits on the Review of the same head", () => {
+        const JUDGED = "e".repeat(40);
+        const bodyOnlyFlaw = aComment(
+          `${verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 1 }, touchUp: 1, headSha: JUDGED })}\nVerdict`,
+          FLAW,
+        );
+        const note = aComment(`${touchUpBodyOnlyMarker(1, JUDGED)}\nThe Implementer's Touch-up 1 of 2 committed nothing, as every finding was about the PR's body.`, "2026-11-08T19:30:00Z");
+
+        const standings = standingsIn(retryFacts([bodyOnlyFlaw, note], { headSha: JUDGED }, ["ready-for-agent"]));
+
+        expect(standings).toMatchObject([{ place: "review", detail: { silence: "quiet-draft" } }]);
+      });
+
+      it("is running once the Touch-up is in flight, named Touch-up 1 of 2", () => {
+        const [standing] = standingsIn(retryFacts([touchUpFlaw]), { kit: aKit([aRunInFlight({ issue: 7, kind: "touch-up", touchUp: 1 })]) });
+        expect(standing).toMatchObject({ name: "running", detail: { run: "touch-up", touchUp: 1 } });
+        if (standing === undefined) throw new Error("expected a Standing");
+        expect(wordStanding(standing, "2026-11-08T20:00:00Z", "Australia/Sydney").sentence).toMatch(/^Touch-up 1 of 2 has been running for /);
+      });
     });
 
     it("counts the Ticket's runs that landed nothing among its Retries", () => {

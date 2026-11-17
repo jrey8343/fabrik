@@ -37,7 +37,7 @@ import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, type HandBackMark, handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
 import { readable } from "./readable.ts";
 import { withoutMentions } from "./mentions.ts";
-import { MAX_RETRIES, runInFlight, stepUpReasonFor } from "./retry.ts";
+import { isRetryOrTouchUp, MAX_RETRIES, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { verdictActions } from "./review.ts";
 import { type RanOn, ranOnOf, rotationIsOn, subscriptionOfRun } from "./subscriptions.ts";
 import {
@@ -407,7 +407,8 @@ function brokenBeforePullRequest(run: FailedRun, failure: InfrastructureFailure,
  * A Broken run (#434) on a Retry: an Execution flaw Verdict on the PR, from
  * the Broken run, which counts toward the Ticket's two Retries like any other,
  * so it starts the next Retry, on the PR's head as it is, or sends the Ticket
- * back to design. Null for any run on the PR but a Retry.
+ * back to design. A Broken Touch-up (#750) is the same: its Verdict counts,
+ * as a Broken Retry's does. Null for any run on the PR but a Retry or Touch-up.
  */
 function brokenRetry(
   run: FailedRun,
@@ -417,7 +418,9 @@ function brokenRetry(
   pullRequest: PullRequestSnapshot | null,
 ): Plan | null {
   if (pullRequest === null || pullRequest.ticket !== run.issue || issue.openPullRequests[0] !== pullRequest.number) return null;
-  if (runInFlight(pullRequest)?.kind !== "retry") return null;
+  const inFlight = runInFlight(pullRequest);
+  if (!isRetryOrTouchUp(inFlight)) return null;
+  const which = inFlight.kind === "touch-up" ? runName(inFlight) : "retry";
   // Off now, so the next Retry's label is a fresh event.
   const staleOff: Action[] = issue.labels.includes(DISPATCH_LABEL) ? [{ kind: "remove-label", issue: run.issue, label: DISPATCH_LABEL }] : [];
   return {
@@ -430,7 +433,7 @@ function brokenRetry(
         {
           verdict: "execution-flaw",
           source: "broken-run",
-          findings: [`The Implementer's retry on #${pullRequest.number} was a Broken run: ${howItFailed(failure, run, config)}.`, ...brokenRunDetail(run)].join("\n"),
+          findings: [`The Implementer's ${which} on #${pullRequest.number} was a Broken run: ${howItFailed(failure, run, config)}.`, ...brokenRunDetail(run)].join("\n"),
         },
         operator,
         heldOn(kitIssues, config),

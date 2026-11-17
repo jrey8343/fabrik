@@ -1,10 +1,12 @@
 // The Review agent job's own context around the Reviewer: the PR it judges,
 // checked out at the head its required checks passed on, the Operator's
 // Request changes reviews on it, which amend the Ticket (ADR-0010), and its
-// comments on it (never earlier Verdicts or fix comments), with the Ticket's
-// Spec, the repo's glossary and ADRs, its Coding standards, the existing
-// tests its Implement runs changed (#463), and on a UI PR its UI evidence. The Reviewer holds no GitHub credential and runs none of the
-// PR's code.
+// comments on it, with the Ticket's Spec, the repo's glossary and ADRs, its
+// Coding standards, the existing tests its Implement runs changed (#463), and
+// on a UI PR its UI evidence. Only a later Review is given the Reviewer's
+// earlier Verdicts, the fix comments and the change since the last judged
+// head (src/agent/laterReview.ts, #748); a Full Review is given none of them.
+// The Reviewer holds no GitHub credential and runs none of the PR's code.
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -23,6 +25,7 @@ import { readIfPresent } from "../kit/checkout.ts";
 import { changedTestsIn, reviewerChangedTestsBlock } from "../loop/changedTests.ts";
 import { checkCode } from "../loop/flakyChecks.ts";
 import { ticketContext, type PullRequestRunContext } from "./implement.ts";
+import { type LaterReviewGiven, laterReviewParts, type PushingRun } from "./laterReview.ts";
 import { operatorInputSections } from "./operatorComments.ts";
 
 /**
@@ -40,6 +43,7 @@ export async function reviewContext(
   evidenceDir: string | null = null,
   recordedFailure: CaptureFailure | null = null,
   ranNothing: readonly string[] = [],
+  later: LaterReviewGiven | null = null,
 ): Promise<PullRequestRunContext> {
   const { operatorComments, requestedChanges, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
@@ -62,6 +66,8 @@ export async function reviewContext(
       // The Kit's own list in the body (#463), which no agent can forge: the Kit strips any from the Implementer's summary.
       ...reviewerChangedTestsBlock(typeof pullRequest.body === "string" ? changedTestsIn(pullRequest.body) : []),
       ...fromOperator.parts,
+      // Only a later Review is given what it judges against: its earlier Verdicts, the fix comments and the change since (#748).
+      ...(later === null ? [] : laterReviewParts(later)),
       ...(await ticketContext(productDir, specFile)),
       ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),
       ...ranNothingBlock(ranNothing),
@@ -71,6 +77,48 @@ export async function reviewContext(
     ],
     operatorComments: fromOperator.given,
   };
+}
+
+/** The heading of prompts/review.md's section that only a Full Review is given (#747). */
+const FULL_REVIEW_HEADING = "## Full Review";
+
+/** The heading of prompts/review.md's section that only a later Review is given (#748). */
+const LATER_REVIEW_HEADING = "## Later Review";
+
+/** The heading of the later-Review section's part that only the Review of a conflict-only run's push is given (#748). */
+const CONFLICT_ONLY_HEADING = "### A conflict-only run's push";
+
+/**
+ * The Reviewer's prompt from prompts/review.md for a Full Review, when
+ * `later` is null, or for a later Review. A Full Review's carries the Full
+ * Review section, whose Verdict settles the code (#747); a later Review's
+ * carries the later-Review section instead, with its conflict-only part only
+ * when a conflict-only run pushed the head (#748). Each kind sees only its own
+ * section, and the prompt is otherwise the same.
+ */
+export function reviewPromptFor(template: string, later: { readonly pushedBy: PushingRun | null } | null): string {
+  if (later === null) return withoutSection(template, LATER_REVIEW_HEADING);
+  const prompt = withoutSection(template, FULL_REVIEW_HEADING);
+  return later.pushedBy === "conflict-only-run" ? prompt : withoutSection(prompt, CONFLICT_ONLY_HEADING);
+}
+
+/**
+ * A prompt without its section of this heading, up to the next heading of
+ * its level or higher, or its end.
+ */
+function withoutSection(template: string, heading: string): string {
+  const lines = template.split("\n");
+  const start = lines.indexOf(heading);
+  if (start === -1) return template;
+  const level = heading.indexOf(" ");
+  const next = lines.findIndex((line, at) => at > start && /^#+ /.test(line) && line.indexOf(" ") <= level);
+  return [...lines.slice(0, start), ...(next === -1 ? [] : lines.slice(next))].join("\n");
+}
+
+/** Whether the Review is a Full Review, as the Kit job passed it out (src/kit/jobs.ts): "true" or "false", never left to guess, so anything else throws. */
+export function isFullReview(text: string | undefined): boolean {
+  if (text === "true" || text === "false") return text === "true";
+  throw new Error(`FABRIK_FULL_REVIEW is ${JSON.stringify(text ?? null)}, not "true" or "false"`);
 }
 
 /** The Required checks that ran nothing, as the Review's checks job passed them out: a JSON list of names, none when it passed out nothing. */

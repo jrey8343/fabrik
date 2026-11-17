@@ -297,7 +297,9 @@ export type LoopEvent =
         readonly review?: number;
         /** For a Retry: its number, from the Kit job's plan, so a Retry left over from an earlier flaw never lands (#341). */
         readonly retry?: number;
-        /** For a Retry: the head of the Execution flaw it was started for, from the Kit job's plan (#341). */
+        /** For a Touch-up (#750), rather than a Retry: its number, from the Kit job's plan, so its push note says which it was. */
+        readonly touchUp?: number;
+        /** For a Retry or Touch-up: the head of the Execution flaw it was started for, from the Kit job's plan (#341). */
         readonly retryFlaw?: string;
         /**
          * For a conflict-only run (#304): the default branch's head it was
@@ -306,6 +308,8 @@ export type LoopEvent =
         readonly conflict?: string;
         /** The Operator comments on the PR the run was given; none when left out. */
         readonly operatorComments?: readonly GivenOperatorComment[];
+        /** Why the run Stepped up, from the Kit job's plan, which its push note records (#746); none when it didn't. */
+        readonly stepUpReason?: StepUpReason;
       };
     }
   | {
@@ -849,6 +853,13 @@ export interface PullRequestSnapshot {
   /** Whether its latest push came from a conflict-only run (#304), so a Verdict on it is marked as one. */
   readonly conflictRun: boolean;
   /**
+   * The Step-up reason the push note of the latest Implement run that pushed
+   * to it records (#746), or null: a run that didn't Step up, a note from
+   * before the reason was recorded, or no run's push yet. An Operator's push,
+   * or the Kit's own clean rebase onto main, is no run, so it leaves this as it was.
+   */
+  readonly lastPushStepUpReason: StepUpReason | null;
+  /**
    * The default branch heads the Kit has tried to bring it up to date with
    * (#304), read from the Kit's attempt notes on it, oldest first: one attempt
    * per head, whether its mechanical rebase was clean or started a conflict-only run.
@@ -873,6 +884,13 @@ export interface PullRequestSnapshot {
    * that Verdict called for is still in flight (src/loop/retry.ts).
    */
   readonly pushedSinceVerdict: boolean;
+  /**
+   * The head a body-only Touch-up's note since its latest Verdict names
+   * (#751), or null when none came since. That Touch-up committed nothing and
+   * rewrote the body, so it is no longer in flight, though nothing was
+   * pushed, and a Verdict may land on that head again.
+   */
+  readonly bodyOnlyTouchUpHead: string | null;
   /**
    * The Kit's note since its latest Verdict on the Retry that Verdict called
    * for, which never started (#416), or null: `restarted` when the Kit re-added
@@ -1073,6 +1091,22 @@ export interface RerunReport {
   readonly refused: string | null;
 }
 
+/**
+ * Which kind of Review a Review run is (#747). A Full Review, when the
+ * Reviewer has judged none of the PR's earlier heads: its first Review, or one
+ * whose last judged head has no change line under its Verdict (written before
+ * #643). Otherwise a later Review, judged against the last judged head: the
+ * head of the PR's latest Reviewer Verdict. A Verdict from red required
+ * checks, an empty diff or a Broken run never makes a head judged.
+ */
+export type ReviewKind =
+  | { readonly kind: "full" }
+  | {
+      readonly kind: "later";
+      /** The latest Reviewer Verdict's head, and the fingerprint of the PR's own change there, from the change line under it. */
+      readonly lastJudged: { readonly headSha: string; readonly change: ChangeFingerprint };
+    };
+
 /** What a Verdict comment's marker records, so the core can read a PR's review history from its comments alone. */
 export interface VerdictRecord {
   readonly verdict: Verdict;
@@ -1126,8 +1160,43 @@ export interface VerdictRecord {
    * absent on a Verdict with no such line, as every one from before it.
    */
   readonly change?: ChangeFingerprint;
+  /**
+   * On a Reviewer's Execution flaw, the counts of its findings by tag (#749),
+   * read from the Verdict's top-level items; absent on every other Verdict,
+   * and on one from before tags, whatever its text says.
+   */
+  readonly tags?: VerdictTags;
+  /**
+   * On a Reviewer's Execution flaw whose findings were all tagged (#750), the
+   * Touch-up it called for, 1 or 2: it uses none of the Ticket's Retries.
+   * Absent on every other Verdict, a third such flaw's included.
+   */
+  readonly touchUp?: number;
   /** The head commit it was given on. */
   readonly headSha: string;
+}
+
+/**
+ * The counts of a Reviewer's findings by tag (#749): `small` counts every
+ * `[small: body]` and `[small: comment]`, `missedEarlier` every
+ * `[missed earlier]` on a later Review, and `counted` every other finding,
+ * a `[missed earlier]` on a Full Review included. Findings with no items
+ * have all three at 0.
+ */
+export interface FindingTagCounts {
+  readonly small: number;
+  readonly missedEarlier: number;
+  readonly counted: number;
+}
+
+/**
+ * A Verdict marker's `tags`: the counts by tag, and `smallBody`, how many of
+ * the `small` are `[small: body]`, so a flaw whose findings are all about the
+ * pull request's body can be read from the marker. A marker from before
+ * `smallBody` reads as 0.
+ */
+export interface VerdictTags extends FindingTagCounts {
+  readonly smallBody: number;
 }
 
 /** A `ready-for-agent` issue that a Dispatch check weighs. */
@@ -1760,7 +1829,9 @@ export type Action =
       readonly conflict?: { readonly main: string };
       /** For an Implement run that is a Retry: its Retry number. */
       readonly retry?: number;
-      /** For a Retry on an agent PR: the head the Execution flaw it fixes was given on (#341). */
+      /** For an Implement run that is a Touch-up (#750): its Touch-up number. It isn't a Retry. */
+      readonly touchUp?: number;
+      /** For a Retry or Touch-up on an agent PR: the head the Execution flaw it fixes was given on (#341). */
       readonly retryFlaw?: string;
       /**
        * For an Implement run: whether it runs on the Step-up model, and why. A
@@ -1778,6 +1849,12 @@ export type Action =
       readonly commit?: string;
       /** For a Digest run: the head its pass was given on, which its job checks out and its Digest is written as of. */
       readonly headSha?: string;
+      /**
+       * For a Review: whether it is a Full Review or a later Review, and the
+       * last judged head a later one is judged against (#747), which the Kit
+       * works out from the PR's Verdict markers when it starts the Review.
+       */
+      readonly reviewKind?: ReviewKind;
       /**
        * For a Review of a UI PR: where its marker says the UI evidence is kept,
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.

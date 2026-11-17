@@ -24,6 +24,7 @@ import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type Dispatch
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "./config.ts";
+import { verdictPostedByIn, verdictsIn } from "../github/threads.ts";
 import {
   type ArchitecturalEscape,
   type CommentFacts,
@@ -386,6 +387,19 @@ export interface WeeklySummary {
    * before the week did, on any of its PRs (#736).
    */
   readonly retriesPerMergedPullRequest: WeekOverWeek<number | null>;
+  /**
+   * The Touch-ups on each agent PR merged in the week, averaged, or null in a
+   * week with none merged: every Touch-up on its Ticket's whole path, walked as
+   * Retries per merged PR walks it (#754).
+   */
+  readonly touchUpsPerMergedPullRequest: WeekOverWeek<number | null>;
+  /**
+   * The findings tagged `[missed earlier]` on each agent PR merged in the
+   * week, averaged, or null in a week with none merged: summed over the
+   * Reviews on its Ticket's whole path, walked as Retries per merged PR walks
+   * it, whose Verdict landed (#753).
+   */
+  readonly missedEarlierPerMergedPullRequest: WeekOverWeek<number | null>;
   /** The median time from Dispatch to merge of the week's merged agent PRs, in ms, or null with none. */
   readonly cycleTimeMs: WeekOverWeek<number | null>;
   /**
@@ -892,6 +906,8 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     })),
     humanTouches: change("humanTouches"),
     retriesPerMergedPullRequest: change("retriesPerMergedPullRequest"),
+    touchUpsPerMergedPullRequest: change("touchUpsPerMergedPullRequest"),
+    missedEarlierPerMergedPullRequest: change("missedEarlierPerMergedPullRequest"),
     cycleTimeMs: change("cycleTimeMs"),
     operatorWaitMs: change("operatorWaitMs"),
     revertRate: change("revertRate"),
@@ -953,6 +969,8 @@ interface WeekMetrics {
   readonly subscriptions: readonly { readonly subscription: string; readonly cost: number; readonly weeklyLimit: RateLimitReading | null }[];
   readonly humanTouches: number | null;
   readonly retriesPerMergedPullRequest: number | null;
+  readonly touchUpsPerMergedPullRequest: number | null;
+  readonly missedEarlierPerMergedPullRequest: number | null;
   readonly cycleTimeMs: number | null;
   readonly operatorWaitMs: number | null;
   readonly revertRate: RevertRate;
@@ -997,6 +1015,8 @@ function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly
     subscriptions: subscriptionsOf(records),
     humanTouches: mean(merged.map((pullRequest) => pullRequest.humanTouches)),
     retriesPerMergedPullRequest: mean(merged.map(({ repo, pullRequest }) => retriesOnPathOf(week, input.records, repo, pullRequest.ticket))),
+    touchUpsPerMergedPullRequest: mean(merged.map(({ repo, pullRequest }) => touchUpsOnPathOf(week, input.records, repo, pullRequest.ticket))),
+    missedEarlierPerMergedPullRequest: mean(merged.map(({ repo, pullRequest }) => missedEarlierOnPathOf(week, input, repo, pullRequest.ticket))),
     cycleTimeMs: median(merged.flatMap(({ dispatch, mergedAt }) => (dispatch === null ? [] : [Date.parse(mergedAt) - Date.parse(dispatch)]))),
     operatorWaitMs: median(merged.flatMap((pullRequest) => operatorWaitOf(pullRequest, input.operator))),
     revertRate: revertRateOf(week, input),
@@ -1034,14 +1054,64 @@ function retriesOnPathOf(week: Week, records: readonly RunRecord[], repo: string
 }
 
 /**
+ * How many Touch-ups a merged agent PR's Ticket had, on its whole path, walked
+ * as retriesOnPathOf walks it. None for a PR that names no Ticket.
+ */
+function touchUpsOnPathOf(week: Week, records: readonly RunRecord[], repo: string, ticket: number | null): number {
+  if (ticket === null) return 0;
+  return touchUpsIn(endedBy(week, records).filter((record) => record.repo === repo && record.issue === ticket));
+}
+
+/**
+ * How many findings tagged `[missed earlier]` a merged agent PR's Ticket had,
+ * on its whole path, walked as retriesOnPathOf walks it: summed from its
+ * Review records whose Verdict landed, so a stale Review counts nothing. A
+ * record stored before tags were recorded (schema 1 to 10) reads as none
+ * (readRunRecord), and so does a Full Review's, whose `[missed earlier]`
+ * counts as untagged. None for a PR that names no Ticket.
+ */
+function missedEarlierOnPathOf(week: Week, { records, facts }: WeeklySummaryInput, repo: string, ticket: number | null): number {
+  if (ticket === null) return 0;
+  const reviews = endedBy(week, records).filter((record) => record.role === "review" && record.repo === repo && record.issue === ticket);
+  return reviews.reduce((sum, record) => sum + (record.findingTags !== null && verdictLanded(record, facts) ? record.findingTags.missedEarlier : 0), 0);
+}
+
+/**
+ * Whether a Review record's Verdict landed: its PR has the Fabrik App's
+ * comment with a Reviewer's Verdict marker on the record's head, posted by
+ * the record's own run attempt, as the comment's `[The run](…)` line names it.
+ */
+function verdictLanded({ repo, pullRequest, baseSha, runId, runAttempt }: RunRecord, facts: readonly MetricFacts[]): boolean {
+  const onRepo = facts.find((each) => each.repo === repo);
+  const comments = [...(onRepo?.pullRequests ?? []), ...(onRepo?.openPullRequests ?? [])].find(({ number }) => number === pullRequest)?.comments ?? [];
+  return comments.some(({ byBot, body }) => {
+    if (!byBot || !verdictsIn([body]).some((verdict) => verdict.source === "reviewer" && verdict.headSha === baseSha)) return false;
+    const run = verdictPostedByIn(body);
+    return run !== null && run.runId === runId && run.runAttempt === runAttempt;
+  });
+}
+
+/**
  * How many Retries these records hold: Implement records with `retry > 0`
  * and no Infrastructure failure, so a Retry refused on the weekly limit and
  * then resumed counts once, and each (Ticket, PR, Retry number) once, so a
- * Retry started again after its landing failed counts once too.
+ * Retry started again after its landing failed counts once too. A Touch-up's
+ * record has `retry` 0, so it's none (#754).
  */
 function retriesIn(records: readonly RunRecord[]): number {
   const retries = records.filter((record) => record.role === "implement" && record.retry > 0 && record.infrastructureFailure === null);
   return new Set(retries.map(({ repo, issue, pullRequest, retry }) => JSON.stringify([repo, issue, pullRequest, retry]))).size;
+}
+
+/**
+ * How many Touch-ups these records hold, counted as retriesIn counts Retries:
+ * Implement records with `touchUp > 0` and no Infrastructure failure, each
+ * (Ticket, PR, Touch-up number) once. A record stored before Touch-ups were
+ * recorded (schema 1 to 10) reads `touchUp` 0 (readRunRecord), so it holds none.
+ */
+function touchUpsIn(records: readonly RunRecord[]): number {
+  const touchUps = records.filter((record) => record.role === "implement" && record.touchUp > 0 && record.infrastructureFailure === null);
+  return new Set(touchUps.map(({ repo, issue, pullRequest, touchUp }) => JSON.stringify([repo, issue, pullRequest, touchUp]))).size;
 }
 
 /**
@@ -1752,6 +1822,8 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords,
     row("Tickets dispatched", counts.ticketsDispatched, count),
     ...yieldRows(summary.yields),
     row("Retries per merged PR", retriesPerMergedPullRequest, (value) => value.toFixed(1)),
+    row("Touch-ups per merged PR", summary.touchUpsPerMergedPullRequest, (value) => value.toFixed(1)),
+    row("Missed earlier per merged PR", summary.missedEarlierPerMergedPullRequest, (value) => value.toFixed(1)),
     row("Retries", counts.retries, count),
     row("Broken runs", counts.brokenRuns, count),
     row("Landings failed", counts.landingsFailed, count),

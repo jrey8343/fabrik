@@ -11,8 +11,8 @@ import { operatorCommentId } from "../agent/operatorComments.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEffect } from "./changeFingerprint.ts";
 import { listedFollowUpsIn } from "./followUps.ts";
-import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
-import { MAX_RETRIES, retryNumber } from "./retry.ts";
+import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import { MAX_RETRIES, MAX_TOUCH_UPS, retryNumber, touchUpNumber } from "./retry.ts";
 import { isBrokenRun, type Verdict, type VerdictRecord } from "./types.ts";
 
 /** A pull request's thread, as much of it as the facts are worked out from. */
@@ -87,6 +87,8 @@ export type RoundWho = "implementer" | "reviewer" | "required-checks" | "kit" | 
 export type RoundWhat =
   | "first-run"
   | "retry"
+  | "touch-up"
+  | "body-only-touch-up"
   | "request-changes-run"
   | "conflict-only-run"
   | "rebase"
@@ -101,6 +103,8 @@ export interface Round {
   readonly what: RoundWhat;
   /** On a Retry's push: which of the Ticket's Retries it was. */
   readonly retry?: number;
+  /** On a Touch-up's push (#750), or a body-only Touch-up's note (#751): which of the pull request's Touch-ups it was, as its note names it. */
+  readonly touchUp?: number;
   /** On a Verdict the Kit gave itself: what for. */
   readonly why?: "retry-changed-nothing" | "broken-run";
   /**
@@ -127,6 +131,12 @@ export interface RoundCounts {
   readonly designFlaws: number;
   /** The Retries that pushed. One that changed nothing, or was a Broken run, is the Execution flaw the Kit gave for it. */
   readonly retries: number;
+  /**
+   * The Touch-ups that pushed (#750), which draw on their own pool, so are
+   * never among the Retries. A body-only Touch-up (#751) pushed nothing, so it
+   * is a round of its own but not one of these, though it uses one up.
+   */
+  readonly touchUps: number;
   readonly conflictOnlyRuns: number;
   readonly requestChanges: number;
   readonly infrastructureFailures: number;
@@ -149,6 +159,8 @@ export interface DigestFacts {
   readonly asks: readonly DigestAsk[];
   /** How many of the Ticket's Retries are left, by the Retry rules' own count (src/loop/retry.ts): what the next Execution flaw would find. */
   readonly retriesLeft: number;
+  /** How many of the pull request's Touch-ups are left, by the Touch-up rules' own count (src/loop/retry.ts): what the next all-tagged Execution flaw would find. */
+  readonly touchUpsLeft: number;
   /**
    * The product code since the first Verdict: unchanged; changed, with the
    * files that differ; or not established. The first Verdict is the first
@@ -219,6 +231,8 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
     asks: asksIn(thread.requestChanges),
     // The next flaw would call for Retry `retryNumber`, so the ones before it are used.
     retriesLeft: Math.max(0, MAX_RETRIES + 1 - retryNumber(verdicts, thread.landedNothing)),
+    // Likewise the next all-tagged flaw would call for Touch-up `touchUpNumber`.
+    touchUpsLeft: Math.max(0, MAX_TOUCH_UPS + 1 - touchUpNumber(verdicts)),
     productCode: latest?.verdict === "pass" ? productChangeBetween(first?.change, latest.change) : { kind: "not-established" },
     requiredChecksRanNothing: latest?.verdict === "pass" ? (latest.ranNothing ?? []) : [],
     counts: {
@@ -226,6 +240,7 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
       executionFlaws: count("execution-flaw"),
       designFlaws: count("design-flaw"),
       retries: count("retry"),
+      touchUps: count("touch-up"),
       conflictOnlyRuns: count("conflict-only-run"),
       requestChanges: count("request-changes"),
       infrastructureFailures: count("infrastructure-failure"),
@@ -261,7 +276,13 @@ function row(who: RoundWho, what: RoundWhat): Round {
 }
 
 /** The round a note of the Kit's records, if it records one: a push, or a failure notice. */
-function noteRound(body: string, sofar: readonly string[], landedNothing: number): Round[] {
+export function noteRound(body: string, sofar: readonly string[], landedNothing: number): Round[] {
+  // A Touch-up's note names which it was itself (#750).
+  const touchUp = touchUpPushIn(body);
+  if (touchUp !== null) return [{ ...row("implementer", "touch-up"), touchUp }];
+  // A body-only Touch-up's note (#751) is its outcome, though it pushed nothing.
+  const bodyOnly = touchUpBodyOnlyIn(body);
+  if (bodyOnly !== null) return [{ ...row("implementer", "body-only-touch-up"), touchUp: bodyOnly.touchUp }];
   if (body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH)) {
     // The Retry the latest Verdict called for, numbered as the Retry rules numbered it then.
     return [{ ...row("implementer", "retry"), retry: retryNumber(verdictsIn(sofar).slice(0, -1), landedNothing) }];

@@ -88,8 +88,8 @@ class Thread {
     this.history.push({ kind: "bot-comment", at: at(minutes), body });
   }
 
-  /** The Reviewer's Execution flaw on the PR's head, at `minutes`. */
-  flaw(minutes: number): Plan {
+  /** The Reviewer's Execution flaw on the PR's head, at `minutes`, with these findings. */
+  flaw(minutes: number, findings = "The empty-cart case throws."): Plan {
     this.now = at(minutes);
     return this.plan(
       {
@@ -97,7 +97,7 @@ class Thread {
         pullRequest: 50,
         headSha: this.headSha,
         runUrl: RUN,
-        output: "verdict: execution-flaw\n\nThe empty-cart case throws.",
+        output: `verdict: execution-flaw\n\n${findings}`,
         repoUrl: "https://github.com/acme/shop",
       },
       snapshotOfPullRequest(this.pullRequest()),
@@ -210,6 +210,38 @@ describe("A Retry announced by its Verdict that never started", () => {
     expect(addsImplement(later)).toBe(false);
     expect(commentsOn(later, 50)).toEqual([]);
     expect(actionsOf(thread.implement())).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "implement", retry: 1 }));
+  });
+
+  describe("a Touch-up (#750)", () => {
+    /** A Verdict at 05:10 calling for Touch-up 1, whose agent:implement never reached the Ticket. */
+    function unstartedTouchUp(): Thread {
+      const thread = new Thread();
+      thread.failsAt = "add-labels";
+      expect(commentsOn(thread.flaw(10, "- [small: comment] The doc comment on `total()` is stale."), 50)[0]).toContain("Touch-up 1 of 2 starts now");
+      thread.failsAt = null;
+      return thread;
+    }
+
+    it("is restarted once, as a Retry is, and agent:implement then resumes the Touch-up", () => {
+      const thread = unstartedTouchUp();
+
+      const plan = thread.tick(10 + RUN_MINUTES + 1);
+
+      expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
+      expect(commentsOn(plan, 50)[0]).toContain("Touch-up 1 of 2 on #50 never started, so the Kit has added `agent:implement` to #7 again");
+      expect(commentsOn(plan, 50)[0]).toContain("if the Touch-up doesn't push this time");
+      expect(addsImplement(thread.tick(10 + 3 * RUN_MINUTES))).toBe(false);
+      expect(actionsOf(thread.implement())).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "implement", touchUp: 1, retryFlaw: A }));
+    });
+
+    it("on a Ticket that has since left ready-for-agent, says no Touch-up starts", () => {
+      const thread = unstartedTouchUp();
+      thread.ticketLabels = ["enhancement", "ready-for-human"];
+
+      const [note] = commentsOn(thread.tick(10 + RUN_MINUTES + 1), 50);
+
+      expect(note).toContain("Touch-up 1 of 2 on #50 never started. #7 is no longer `ready-for-agent`, so no Touch-up starts.");
+    });
   });
 
   it("isn't restarted within the Implement job's timeout of its Verdict", () => {

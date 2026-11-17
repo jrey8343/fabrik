@@ -5,7 +5,7 @@
 // (`blocked`). Each is read by the Loop's own rule for it, so the Standing and
 // the Loop can't disagree, and none can turn Stuck.
 import { dispatchedRunsOf, implementRunsWithoutPullRequestOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
-import { conflictRunInFlightIn } from "../github/threads.ts";
+import { bodyOnlyTouchUpHeadIn, conflictRunInFlightIn } from "../github/threads.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { agentPullRequestsByGate, inFlightOf, mergeGateLoadOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
@@ -31,7 +31,7 @@ import { addedAndStillOn, answerOf, lastAdded, passAtHeadOf } from "./standingOp
 import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts, WeeklyRunIssueFacts } from "./weeklySummary.ts";
 
 /** What a `running` Standing's `detail.run` names: the kind of run, as far as the facts tell it. */
-export type RunningRun = "implement" | "retry" | "request-changes" | "conflict-only" | "review" | "digest" | "triage" | "research" | "design" | "prototype";
+export type RunningRun = "implement" | "retry" | "touch-up" | "request-changes" | "conflict-only" | "review" | "digest" | "triage" | "research" | "design" | "prototype";
 
 /**
  * Every Standing of the repo's work that goes on without the Operator, or that
@@ -407,7 +407,8 @@ function runningOnIssue(
   const running = (work: StandingWork, place: StandingPlace | null, role: AwaitedRole, kind: RunningRun, retry: number | null = null, pullRequest: number | null = null) => ({
     ...inFlight(repo, issue.number, pullRequest, runningSince(run), work, place, { role, on: pullRequest === null ? "issue" : "pullRequest" }),
     name: "running" as const,
-    detail: { run: kind, retry, actionsRun: run.run },
+    // A Touch-up says which of the two it is (#750).
+    detail: { run: kind, retry, ...(kind === "touch-up" && run.touchUp != null ? { touchUp: run.touchUp } : {}), actionsRun: run.run },
   });
   switch (run.role) {
     case "implement": {
@@ -465,9 +466,13 @@ function waitsOnReview(pullRequest: OpenPullRequestFacts, appLogin: string): boo
   return pullRequest.draft && !hasVerdictOnHead(pullRequest);
 }
 
-/** Whether a pull request's head has a Verdict. */
+/**
+ * Whether a pull request's head has its Verdict: one that no body-only
+ * Touch-up's note on that head since (#751) leaves room for a second.
+ */
 export function hasVerdictOnHead(pullRequest: OpenPullRequestFacts): boolean {
-  return verdictsOn(pullRequest.comments).some(({ record }) => record.headSha === pullRequest.headSha);
+  const bodyOnly = bodyOnlyTouchUpHeadIn(pullRequest.comments.filter(({ byBot }) => byBot).map(({ body }) => body));
+  return bodyOnly !== pullRequest.headSha && verdictsOn(pullRequest.comments).some(({ record }) => record.headSha === pullRequest.headSha);
 }
 
 /** Whether the Fabrik App took `label` off last, and has commented nothing since. */

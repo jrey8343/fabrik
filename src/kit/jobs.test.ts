@@ -178,6 +178,34 @@ describe("The Kit job's routing", () => {
 
     expect(kitJobOutputs(plan, 7, kitConfig())).toMatchObject({ route: "review", ...evidence });
   });
+
+  // The Review job gives a Full Review's Reviewer the Full Review section, and the push job records the kind (#747).
+  it("passes out whether the Review it routes to is a Full Review", () => {
+    const judged = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "1".repeat(40), change: { v: 1, all: "0".repeat(12), product: "0".repeat(12), files: {} } } as const;
+    const review = (pullRequest = aPullRequest()) => planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(pullRequest), kitConfig());
+
+    expect(kitJobOutputs(review(), 7, kitConfig())).toMatchObject({ route: "review", "full-review": "true" });
+    expect(kitJobOutputs(review(aPullRequest({ verdicts: [judged], pushedSinceVerdict: true })), 7, kitConfig())).toMatchObject({ route: "review", "full-review": "false" });
+  });
+
+  it("passes out no Review kind for any other run", () => {
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "full-review": "", "last-judged-head": "", "last-judged-change": "" });
+  });
+
+  // A later Review is given the pull request's own change since the head the Reviewer last judged (#748), which its job
+  // works out with git: from that head, or, when it can't be fetched, from the fingerprint its Verdict recorded.
+  it("passes out a later Review's last judged head and the fingerprint its Verdict recorded, and none for a Full Review", () => {
+    const change = { v: 1, all: "0".repeat(12), product: "1".repeat(12), files: { "src/cart.ts": "2".repeat(12) } } as const;
+    const judged = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "1".repeat(40), change } as const;
+    const review = (pullRequest = aPullRequest()) => planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(pullRequest), kitConfig());
+
+    const later = kitJobOutputs(review(aPullRequest({ verdicts: [judged], pushedSinceVerdict: true })), 7, kitConfig());
+
+    expect(later["last-judged-head"]).toBe("1".repeat(40));
+    expect(JSON.parse(later["last-judged-change"] ?? "")).toEqual(change);
+    expect(later["last-judged-change"]).not.toContain("\n");
+    expect(kitJobOutputs(review(), 7, kitConfig())).toMatchObject({ "last-judged-head": "", "last-judged-change": "" });
+  });
 });
 
 describe("The Kit job's routing of a conflict-only run (#304)", () => {
@@ -291,6 +319,12 @@ describe("The Kit job's line of what it routed (#616)", () => {
       { role: "implement", issue: 7, pullRequest: 50, kind: "retry", retry: 2, model: "claude-opus-5-5" },
     ],
     [
+      "a Touch-up, which is no Retry, with its number (#750)",
+      starting({ pullRequest: 50, touchUp: 1, retryFlaw: "a".repeat(40), stepUp: false, stepUpReason: null }),
+      7,
+      { role: "implement", issue: 7, pullRequest: 50, kind: "touch-up", retry: 0, touchUp: 1, model: "claude-sonnet-5-5" },
+    ],
+    [
       "the Operator's Request-changes run, which is no Retry",
       starting({ pullRequest: 50, requestChanges: { review: 900 }, stepUp: true, stepUpReason: "request-changes", model: "claude-opus-5-5" }),
       7,
@@ -304,6 +338,13 @@ describe("The Kit job's line of what it routed (#616)", () => {
     ],
   ])("says %s", (_, plan, ticket, run) => {
     expect(said(plan, ticket)).toEqual({ fabrik: 1, route: (run as { role: string }).role, run, held: [], replay: null });
+  });
+
+  it("passes out a Touch-up's number, and Retry 0, for its push note and its Run record (#750)", () => {
+    const outputs = kitJobOutputs(starting({ pullRequest: 50, touchUp: 2, retryFlaw: "a".repeat(40) }), 7, kitConfig());
+
+    expect(outputs).toMatchObject({ "touch-up": "2", retry: "0", "retry-flaw": "a".repeat(40) });
+    expect(kitJobOutputs(starting({ pullRequest: 50, retry: 1 }), 7, kitConfig())).toMatchObject({ "touch-up": "0", retry: "1" });
   });
 
   it("says a conflict-only run's Ticket and pull request, as no Retry", () => {

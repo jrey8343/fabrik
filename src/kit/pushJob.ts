@@ -5,7 +5,7 @@
 // its failure notice, or for a Digest run its no-Digest line. Pure, no I/O.
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
-import type { AgentRole, FlakyCheck, KeptBranchStart, RerunReport } from "../loop/types.ts";
+import { type AgentRole, type FlakyCheck, isStepUpReason, type KeptBranchStart, type RerunReport, type StepUpReason } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 
 /** One job's `needs.<job>`: its result and its outputs. */
@@ -54,8 +54,12 @@ export type PushJobInput =
       readonly mainAtStart?: string | null;
       /** For a Retry: its number, from the Kit job's plan (#341); null for any other run. */
       readonly retry?: number | null;
-      /** For a Retry: the head of the Execution flaw it fixes, from the Kit job's plan (#341); null for any other run. */
+      /** For a Touch-up (#750): its number, from the Kit job's plan; null for any other run. */
+      readonly touchUp?: number | null;
+      /** For a Retry or Touch-up: the head of the Execution flaw it fixes, from the Kit job's plan (#341); null for any other run. */
       readonly retryFlaw?: string | null;
+      /** For an Implement run: why it Stepped up, from the Kit job's plan, which its push note records (#746); null when it didn't. */
+      readonly stepUpReason?: StepUpReason | null;
       /**
        * For a Kept-branch start (#536), from the Kit job's plan: the closed PR
        * its branch came from, if known, and the default branch its PR opens
@@ -197,7 +201,9 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
               conflict,
               mainAtStart: shaOr(kit.outputs["main-at-start"]),
               retry: numberOr(kit.outputs["retry"]),
+              touchUp: numberOr(kit.outputs["touch-up"]),
               retryFlaw: shaOr(kit.outputs["retry-flaw"]),
+              stepUpReason: stepUpReasonOf(kit.outputs),
               keptBranch: keptBranchStartOf(kit.outputs),
             }
           : {}),
@@ -309,6 +315,12 @@ function keptBranchStartOf(outputs: NeededJob["outputs"]): PlannedKeptBranchStar
   const base = outputs["default-branch"] ?? "";
   if (outputs["kept-branch"] !== "true" || !/^[A-Za-z0-9._/-]+$/.test(base)) return null;
   return { pullRequest: numberOr(outputs["kept-pull-request"]), base };
+}
+
+/** Why the Kit job's planned run Stepped up, from its outputs, or null: never a reason without a Step-up, nor one that isn't the Kit's. */
+export function stepUpReasonOf(kitOutputs: Readonly<Record<string, string>>): StepUpReason | null {
+  const reason = kitOutputs["step-up-reason"];
+  return kitOutputs["step-up"] === "true" && isStepUpReason(reason) ? reason : null;
 }
 
 /** A full commit sha, as the Kit job passes one out, or null for anything else. */
