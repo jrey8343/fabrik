@@ -565,6 +565,69 @@ describe("Trust roots in the Implement prompt", () => {
   });
 });
 
+// #764: a criterion no run can meet costs the rest of the Ticket nothing; the run builds the rest and names it.
+describe("A criterion no run can meet in the Implement prompt", () => {
+  const SECTION = "When a criterion is one no run can meet";
+  const HEADING = "Criteria no run can meet";
+
+  it("no longer tells a run to make no commits because one criterion needs a Trust-root file changed", async () => {
+    const roots = section(await prompt("implement"), "What you must not change");
+    expect(roots).not.toContain("make no commits");
+    expect(roots).not.toContain("When you can't build the Ticket at all, as when it needs one of the files above changed");
+    expect(roots).toContain(`"${SECTION}"`);
+  });
+
+  it("tells a run whose other criteria can be built to build them, commit them, and name each out-of-reach one, quoted, with its reason, under the heading", async () => {
+    const rule = lineStarting(section(await prompt("implement"), SECTION), "- When one or more acceptance criteria");
+    expect(rule).toContain("the rest of the Ticket can be built, build the rest, commit it");
+    expect(rule).toContain(`name each such criterion in your \`summary\` under the heading "${HEADING}": the criterion quoted, and the reason`);
+  });
+
+  it("names the five kinds a criterion may never ask for, and a literal no output can satisfy", async () => {
+    const kinds = section(await prompt("implement"), SECTION).split("\n\n- When ")[0] ?? "";
+    expect(kinds).toContain("An acceptance criterion is one no run can meet when it asks for:");
+    for (const kind of [
+      "- a Trust-root change: a change to any file under \"What you must not change\";",
+      "- a GitHub write: a pull request's title, labels or comments, or any call to `gh` or the GitHub API;",
+      "- a commit, branch or state this run wasn't given",
+      "- a suite or command no Required check runs;",
+      "- anything only the Operator can do;",
+    ])
+      expect(kinds).toContain(kind);
+    expect(kinds).toContain("or when it is a literal no output can satisfy");
+  });
+
+  it("tells a run never to work around such a criterion", async () => {
+    const line = lineStarting(section(await prompt("implement"), SECTION), "- Never work around one");
+    expect(line).toContain("no Trust-root edit, no `gh` or API call, and no result claimed for a command you didn't run");
+  });
+
+  it("tells a run that can build nothing in the Ticket without one to commit nothing and say why in its summary", async () => {
+    const line = lineStarting(section(await prompt("implement"), SECTION), "- When nothing in the Ticket");
+    expect(line).toContain("When nothing in the Ticket can be built without one, commit nothing and say why in your `summary`");
+  });
+
+  it("holds the rule on every run that builds toward criteria, and keeps the heading in a pull request's body while the criterion is unmet", async () => {
+    const text = section(await prompt("implement"), SECTION);
+    expect(lineStarting(text, "- The rule holds")).toContain(
+      "on every run that builds toward criteria: a first run, a Kept-branch start, a retry, a Touch-up and a Request-changes run",
+    );
+    const onPullRequest = lineStarting(text, "- On a run on a pull request");
+    expect(onPullRequest).toContain("your `summary` becomes its body");
+    expect(onPullRequest).toContain(`keep "${HEADING}" in it, with each criterion under it, for as long as the criterion stands unmet`);
+  });
+
+  it('keeps "Questions for the Operator" as the one heading for questions, apart from the new heading', async () => {
+    const text = await prompt("implement");
+    expect(lineStarting(section(text, "Your output"), "- If you need the Operator's input")).toContain(
+      'put every question for them in `summary` under one heading, "Questions for the Operator", and nowhere else in it',
+    );
+    expect(lineStarting(section(text, SECTION), `- "${HEADING}" is apart from`)).toContain(
+      '"Questions for the Operator", which stays the one heading for questions',
+    );
+  });
+});
+
 describe("Routes in the Implement prompt", () => {
   it("asks a run that touched the UI to name the routes its change shows on, which its example carries", async () => {
     const text = await prompt("implement");
