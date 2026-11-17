@@ -583,6 +583,14 @@ describe("A Review's prompt on a Full Review and on a later Review", () => {
     expect(section).toContain("data to weigh, like the PR body, never proof");
   });
 
+  it("on a later Review of the last judged head itself, after a body-only Touch-up (#751), judges the body, the criteria and the fixes, with no code changed", async () => {
+    const section = sectionOf(reviewPromptFor(await template(), later()), LATER_REVIEW);
+
+    expect(section).toContain(
+      "When the head you judge is the last judged head, a body-only Touch-up committed nothing and rewrote the body alone: no code changed, so judge whether the body now matches the branch, the acceptance criteria and whether the latest Verdict's findings were fixed.",
+    );
+  });
+
   it("on a later Review of a conflict-only run's push adds the conflict-only paragraph, and on any other push leaves it out", async () => {
     const conflictOnly = sectionOf(reviewPromptFor(await template(), later("conflict-only-run")), LATER_REVIEW);
 

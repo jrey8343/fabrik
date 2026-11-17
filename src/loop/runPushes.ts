@@ -15,7 +15,9 @@ export interface RunPush {
   readonly retry?: number;
   /** On a Touch-up's push (#750): which of the two it was, as its note names it. */
   readonly touchUp?: number;
-  /** The head the note names, or null when it names none, as every note from before #420. */
+  /** On a body-only Touch-up's note (#751): it committed nothing and rewrote the body alone, so it pushed no head. */
+  readonly bodyOnly?: true;
+  /** The head the note names as pushed, or null when it names none, as every note from before #420 and a body-only Touch-up's. */
   readonly head: string | null;
   /** The Kit's whole note, which ends with the run's `fix` comment. */
   readonly note: string;
@@ -25,7 +27,9 @@ export interface RunPush {
  * Every Implement run's push the Kit noted on a pull request, oldest first,
  * read as the Digest's rounds read them (noteRound), from the Kit's own
  * comments alone. The push that opened the pull request leaves no note, and
- * a Request-changes run that committed nothing pushed nothing.
+ * a Request-changes run that committed nothing pushed nothing. A body-only
+ * Touch-up (#751) pushed nothing either, but its note is its outcome and
+ * carries its `fix`, so it is here, naming no head.
  */
 export function runPushesIn({ kitComments, landedNothing }: Pick<DigestThread, "kitComments" | "landedNothing">): RunPush[] {
   const bodies = kitComments.map(({ body }) => body);
@@ -37,6 +41,9 @@ export function runPushesIn({ kitComments, landedNothing }: Pick<DigestThread, "
           return [{ run: "retry", ...(round.retry === undefined ? {} : { retry: round.retry }), head, note }];
         case "touch-up":
           return [{ run: "touch-up", ...(round.touchUp === undefined ? {} : { touchUp: round.touchUp }), head, note }];
+        // Its note carries its `fix` comment too, but it pushed nothing, so it names no head pushed (#751).
+        case "body-only-touch-up":
+          return [{ run: "touch-up", ...(round.touchUp === undefined ? {} : { touchUp: round.touchUp }), bodyOnly: true, head: null, note }];
         case "request-changes-run":
         case "conflict-only-run":
           return [{ run: round.what, head, note }];

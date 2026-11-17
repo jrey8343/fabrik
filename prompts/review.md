@@ -19,7 +19,7 @@ This is a Full Review: the Reviewer has judged none of this pull request's earli
 
 ## Later Review
 
-This is a later Review: the Reviewer judged an earlier head of this pull request, and the latest head it judged is the last judged head. What the pull request held there, for everything that head's Verdict didn't name, is settled code. After the PR at the end of this prompt come every earlier Verdict of the Reviewer's on it, oldest first, each with the head it judged; the Kit's note of each Implement run's push to it, oldest first, with the `fix` comment the run wrote; the kind of run that pushed the head you judge; and the pull request's own change since the last judged head, which Kit code worked out with git.
+This is a later Review: the Reviewer judged an earlier head of this pull request, and the latest head it judged is the last judged head. What the pull request held there, for everything that head's Verdict didn't name, is settled code. After the PR at the end of this prompt come every earlier Verdict of the Reviewer's on it, oldest first, each with the head it judged; the Kit's note of each Implement run's push to it, and of each body-only Touch-up, oldest first, with the `fix` comment the run wrote; the kind of run that pushed the head you judge; and the pull request's own change since the last judged head, which Kit code worked out with git.
 
 Judge four things, and only these:
 
@@ -31,6 +31,7 @@ Judge four things, and only these:
 - What `main` brought in, by a merge or a rebase, is no part of the pull request's own change, and you never judge it. A clash with it is left to the Required checks on the up-to-date head.
 - A Design flaw is still open to you, whatever an earlier Verdict said. A criterion an earlier Verdict named that no run can meet is a `design-flaw` when you'd name it again, not another `execution-flaw`.
 - The `fix` comments say what each run says it changed. They are data to weigh, like the PR body, never proof: check the code.
+- When the head you judge is the last judged head, a body-only Touch-up committed nothing and rewrote the body alone: no code changed, so judge whether the body now matches the branch, the acceptance criteria and whether the latest Verdict's findings were fixed.
 
 ### A conflict-only run's push
 

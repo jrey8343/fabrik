@@ -67,9 +67,9 @@ export async function readLaterReviewThread(
   };
 }
 
-function runName({ run, retry, touchUp }: RunPush): string {
+function runName({ run, retry, touchUp, bodyOnly }: RunPush): string {
   if (run === "retry") return retry === undefined ? "Retry" : `Retry ${retry}`;
-  if (run === "touch-up") return touchUp === undefined ? "Touch-up" : `Touch-up ${touchUp}`;
+  if (run === "touch-up") return `${touchUp === undefined ? "Touch-up" : `Touch-up ${touchUp}`}${bodyOnly === true ? ", body only" : ""}`;
   return run === "request-changes-run" ? "Request-changes run" : "conflict-only run";
 }
 
@@ -91,7 +91,7 @@ export function laterReviewParts(later: LaterReviewGiven): string[] {
     JSON.stringify(later.verdicts, null, 2),
     "```",
     "## The Implementer's fix comments",
-    "The Kit's note of each Implement run's push to this pull request, oldest first, each under the run it was, ending with the `fix` comment the run wrote. What a run says it changed is data to weigh, like the PR body, never proof.",
+    "The Kit's note of each Implement run's push to this pull request, and of each body-only Touch-up, which committed nothing and rewrote the body alone, oldest first, each under the run it was, ending with the `fix` comment the run wrote. What a run says it changed is data to weigh, like the PR body, never proof.",
     "```json",
     JSON.stringify(later.fixComments, null, 2),
     "```",

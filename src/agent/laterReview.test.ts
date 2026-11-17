@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ChangeSince } from "../github/changeSince.ts";
 import { type ChangeFingerprint, changeLine } from "../loop/changeFingerprint.ts";
-import { CONFLICT_RUN_MARKER, pushedHeadMarker, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, touchUpPushMarker, verdictMarker } from "../loop/markers.ts";
+import { CONFLICT_RUN_MARKER, pushedHeadMarker, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, touchUpBodyOnlyMarker, touchUpPushMarker, verdictMarker } from "../loop/markers.ts";
 import type { VerdictRecord } from "../loop/types.ts";
 import type { Reader } from "./inputs.ts";
 import { type LaterReviewGiven, lastJudgedOf, readLaterReviewThread } from "./laterReview.ts";
@@ -143,6 +143,15 @@ describe("A later Review's prompt context (#748)", () => {
     const text = await laterContext(gitHubWith(touchedUp), G);
 
     expect(jsonUnder(text, FIX_COMMENTS)).toMatchObject([{ run: "Retry 1" }, { run: "Retry 2" }, { run: "Request-changes run" }, { run: "conflict-only run" }, { run: "Touch-up 1" }]);
+    expect(text.split(PUSHED_BY)[1]?.split("\n## ")[0]).toContain(`A Touch-up pushed \`${G.slice(0, 7)}\`, the head you judge.`);
+  });
+
+  it("carries a body-only Touch-up's fix comment (#751), named as one, though it pushed nothing, so the run that pushed the head stays the one before it", async () => {
+    const bodyOnly = [touchUpBodyOnlyMarker(2, G), "The Implementer's Touch-up 2 of 2 committed nothing, as every finding was about the PR's body.", "", "**Fixed.** The body no longer claims a map."].join("\n");
+    const touchedUp = [...THREAD, { user: bot, body: pushNote(touchUpPushMarker(1), G, "**Fixed.** The stale comment on `parking()`.") }, { user: bot, body: bodyOnly }];
+    const text = await laterContext(gitHubWith(touchedUp), G, NOTHING_CHANGED, G);
+
+    expect(jsonUnder(text, FIX_COMMENTS)).toMatchObject([{}, {}, {}, {}, { run: "Touch-up 1" }, { run: "Touch-up 2, body only", comment: bodyOnly }]);
     expect(text.split(PUSHED_BY)[1]?.split("\n## ")[0]).toContain(`A Touch-up pushed \`${G.slice(0, 7)}\`, the head you judge.`);
   });
 

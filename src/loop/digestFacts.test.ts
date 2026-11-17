@@ -19,6 +19,7 @@ import {
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
   RETRY_PUSH_MARKER,
+  touchUpBodyOnlyMarker,
   touchUpPushMarker,
   verdictMarker,
 } from "./markers.ts";
@@ -462,6 +463,26 @@ describe("Touch-ups, counted apart from Retries", () => {
 
     expect([facts.counts.touchUps, facts.touchUpsLeft, facts.counts.retries, facts.retriesLeft]).toEqual([2, 0, 0, 2]);
   });
+
+  it("give a body-only Touch-up (#751), which pushed nothing, its own row and count it among the Touch-ups, before the second Verdict on the same head", () => {
+    const facts = digestFactsOf(
+      aThread({
+        kitComments: [
+          aVerdict(5, { verdict: "execution-flaw", headSha: sha("a"), touchUp: 1 }),
+          aNote(10, touchUpBodyOnlyMarker(1, sha("a")), "The Implementer's Touch-up 1 of 2 committed nothing, as every finding was about the PR's body."),
+          aVerdict(15, { verdict: "pass", headSha: sha("a") }),
+        ],
+      }),
+    );
+
+    expect(facts.rounds.map(({ who, what, touchUp }) => [who, what, touchUp ?? null])).toEqual([
+      ["implementer", "first-run", null],
+      ["reviewer", "execution-flaw", null],
+      ["implementer", "body-only-touch-up", 1],
+      ["reviewer", "pass", null],
+    ]);
+    expect([facts.counts.touchUps, facts.touchUpsLeft, facts.counts.retries]).toEqual([1, 1, 0]);
+  });
 });
 
 describe("The Follow-ups of every pass on the pull request", () => {
@@ -631,7 +652,7 @@ describe("The rounds fold", () => {
     expect(body.endsWith(`</details>\n\n[The run](${aDigestGiven().runUrl})`)).toBe(true);
   });
 
-  it("words every kind of round: the Kit's own Verdicts with what they were for, a Design flaw, a Touch-up with its number, a conflict-only run, a Broken run, and an effect that is tests only or not known", () => {
+  it("words every kind of round: the Kit's own Verdicts with what they were for, a Design flaw, a Touch-up and a body-only one with their numbers, a conflict-only run, a Broken run, and an effect that is tests only or not known", () => {
     const facts = aDigestFacts({
       rounds: [
         { who: "implementer", what: "first-run", effect: null },
@@ -641,12 +662,13 @@ describe("The rounds fold", () => {
         { who: "kit", what: "broken-run", effect: null },
         { who: "kit", what: "execution-flaw", why: "broken-run", effect: "not-known" },
         { who: "implementer", what: "touch-up", touchUp: 1, effect: null },
+        { who: "implementer", what: "body-only-touch-up", touchUp: 2, effect: null },
         { who: "implementer", what: "conflict-only-run", effect: null },
         { who: "reviewer", what: "design-flaw", effect: "tests-only" },
       ],
     });
 
-    expect(roundsFoldOf(bodyOf(aDigestReply(), aDigestGiven({ facts }))).split("\n").slice(5, 14)).toEqual([
+    expect(roundsFoldOf(bodyOf(aDigestReply(), aDigestGiven({ facts }))).split("\n").slice(5, 15)).toEqual([
       "| The Implementer | The first run | |",
       "| The Reviewer | Execution flaw | |",
       "| The Kit, for a Retry that changed nothing | Execution flaw | None |",
@@ -654,6 +676,7 @@ describe("The rounds fold", () => {
       "| The Kit | A Broken run | |",
       "| The Kit, for a Broken run | Execution flaw | Not known |",
       "| The Implementer | Touch-up 1 | |",
+      "| The Implementer | Body-only Touch-up 2 | |",
       "| The Implementer | A conflict-only run | |",
       "| The Reviewer | Design flaw | Tests only |",
     ]);
