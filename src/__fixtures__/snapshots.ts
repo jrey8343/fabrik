@@ -94,6 +94,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     flakyCheckMarks: [],
     requestChangesRun: false,
     conflictRun: false,
+    lastPushStepUpReason: null,
     conflictAttempts: [],
     conflictRunInFlight: null,
     conflictRunOnUnreviewedDraft: false,

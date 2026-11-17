@@ -174,6 +174,8 @@ async function agentResultEvent(
           ...(input.review === null ? {} : { review: input.review }),
           ...(input.retry === undefined || input.retry === null ? {} : { retry: input.retry }),
           ...(input.retryFlaw === undefined || input.retryFlaw === null ? {} : { retryFlaw: input.retryFlaw }),
+          // Why it Stepped up, which its push note records (#746).
+          ...(input.stepUpReason === undefined || input.stepUpReason === null ? {} : { stepUpReason: input.stepUpReason }),
           ...(input.conflict === null || input.conflict === undefined ? {} : { conflict: input.conflict }),
         };
   // A Kept-branch start (#536), too, comes from the Kit job's plan: only then may a first run carry on its own branch.

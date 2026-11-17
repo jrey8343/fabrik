@@ -25,9 +25,9 @@ import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
 import { brokenRunOf, infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
-import { type AgentRole, type BrokenRun, type InfrastructureFailure, isStepUpReason, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
+import { type AgentRole, type BrokenRun, type InfrastructureFailure, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
 import { parseVerdict } from "../loop/verdict.ts";
-import { DIGEST_JOB, isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RERUN_WAIT_JOB, RETRO_EVIDENCE_JOB, routedJob } from "./pushJob.ts";
+import { DIGEST_JOB, isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RERUN_WAIT_JOB, RETRO_EVIDENCE_JOB, routedJob, stepUpReasonOf } from "./pushJob.ts";
 
 /** What the push job knows when the run ends. */
 export interface RunEnd {
@@ -630,8 +630,7 @@ function fullReviewOf(output: string | undefined): boolean | null {
 /** Whether an Implement run Stepped up, and why, from the Kit job's outputs; never a reason without a Step-up. */
 function stepUpOf(kit: Readonly<Record<string, string>>): Pick<RunRecord, "stepUp" | "stepUpReason"> {
   if (kit["step-up"] !== "true") return { stepUp: false, stepUpReason: null };
-  const reason = kit["step-up-reason"];
-  return { stepUp: true, stepUpReason: isStepUpReason(reason) ? reason : null };
+  return { stepUp: true, stepUpReason: stepUpReasonOf(kit) };
 }
 
 /** The fields a run's own stream gives its record, whatever its role. */

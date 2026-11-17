@@ -18,6 +18,7 @@ import type {
   LoopEvent,
   RerunReport,
   PullRequestCommentPlace,
+  StepUpReason,
 } from "../loop/types.ts";
 
 /**
@@ -183,6 +184,7 @@ export function agentRunEventFrom(
     readonly retry?: number;
     readonly retryFlaw?: string;
     readonly conflict?: string;
+    readonly stepUpReason?: StepUpReason;
   } | null = null,
   startedBy: number | null = null,
   evidence: PushJobEvidence | null = null,

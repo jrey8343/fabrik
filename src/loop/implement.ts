@@ -24,6 +24,7 @@ import {
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
   RETRY_PUSH_MARKER,
+  stepUpReasonMarker,
   UNMARKED_RETRY_PUSH,
 } from "./markers.ts";
 import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
@@ -361,6 +362,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
           requestChanges ? REQUEST_CHANGES_RUN_MARKER : RETRY_PUSH_MARKER,
           ...(recorded === null ? [] : [recorded.marker]),
+          ...stepUpReasonLine(fixes),
           ...pushedHead(changes),
           requestChanges
             ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
@@ -484,6 +486,7 @@ function applyConflictRun(
           // whose Execution flaw calls for one and counts (#415), unless the run was on a draft whose push GitHub never
           // reviewed (#389): that Verdict is the push's own, unmarked.
           CONFLICT_RUN_MARKER,
+          ...stepUpReasonLine(fixes),
           ...pushedHead(changes),
           pullRequest.conflictRunOnUnreviewedDraft
             ? `The Implementer rebased \`${branch}\` onto \`main\` at ${main.slice(0, 7)} and resolved its conflicts; Review runs on it, and its Verdict counts as one on the push GitHub never reviewed would have.`
@@ -498,6 +501,11 @@ function applyConflictRun(
       ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
   };
+}
+
+/** The marker line recording why the run Stepped up (#746), or none when it didn't. */
+function stepUpReasonLine({ stepUpReason }: NonNullable<ImplementRunFinished["fixes"]>): string[] {
+  return stepUpReason === undefined ? [] : [stepUpReasonMarker(stepUpReason)];
 }
 
 /** The marker line naming the head a run's push lands (pushedHeadMarker), or none when the push job named none. */
