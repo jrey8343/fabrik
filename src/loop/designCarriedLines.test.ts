@@ -401,6 +401,13 @@ describe("A Design session taken live is held to the async session's rule for an
     expect(kinds(skill)).toEqual(kinds(prompt));
   });
 
+  // A live session has no Kept-branch decision to make, so its line stops short of the async prompt's on that.
+  it("says what the session does with a Ticket back from a Design flaw for a criterion no run can meet, an Operator brief when nothing is left to build", () => {
+    expect(skill).toContain(
+      "A Ticket back from a Design flaw for a criterion no run can meet takes the usual path: rewrite the criterion, drop it or make it an Operator step. When nothing is left to build, it finishes as an Operator brief and the Operator reopens the pull request.",
+    );
+  });
+
   it("tells the session to read the Required checks from the Kit config in its checkout, and `.github/workflows/` for what they run", () => {
     expect(skill).toContain(
       "Read the Required checks from `sandbox.checks` in `.fabrik/config.json`, as you read the Map cap there, and read `.github/workflows/` to see what each one runs.",

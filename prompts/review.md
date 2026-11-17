@@ -64,7 +64,7 @@ Choose exactly one:
 
 There is no minor problem that still passes. Anything in scope and wrong is a flaw, and each of these is always an `execution-flaw`:
 
-- an acceptance criterion the PR says it skipped, unless it is one no run can meet (see "A criterion no run can meet" below), or one with no evidence it was met. A criterion only CI can confirm (for example "on a fresh clone") counts as met when the required checks pass, which they have, unless the check that would confirm it is among the Required checks this prompt says ran nothing: those passed by being skipped or reporting neutral, and confirm nothing, so don't name them as evidence in what you checked. It's a flaw only when the Implementer says it didn't do it;
+- an acceptance criterion the PR says it skipped, or one with no evidence it was met, unless it is one no run can meet, whether the PR names it or not (see "A criterion no run can meet" below). A criterion only CI can confirm (for example "on a fresh clone") counts as met when the required checks pass, which they have, unless the check that would confirm it is among the Required checks this prompt says ran nothing: those passed by being skipped or reporting neutral, and confirm nothing, so don't name them as evidence in what you checked. It's a flaw only when the Implementer says it didn't do it;
 - a PR body that is out of date with the branch;
 - a behaviour change beyond what the Ticket or Spec asks.
 
@@ -74,7 +74,7 @@ When in doubt between `pass` and a flaw, it's a flaw.
 
 An acceptance criterion is one no run can meet when it asks for:
 
-- a Trust-root change: a change to any file the Kit refuses on an agent branch, listed below;
+- a Trust-root change: a change to any file the Kit refuses on an agent branch;
 - a GitHub write: a pull request's title, labels or comments, or any call to `gh` or the GitHub API;
 - a commit, branch or state the run isn't given, such as a commit to carry on from that the branch the Kit checked out doesn't hold;
 - a suite or command no Required check runs;

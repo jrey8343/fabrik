@@ -101,15 +101,15 @@ You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes
 
 An acceptance criterion is one no run can meet when it asks for:
 
-- a Trust-root change: a change to any file under "What you must not change";
+- a Trust-root change: a change to any file the Kit refuses on an agent branch;
 - a GitHub write: a pull request's title, labels or comments, or any call to `gh` or the GitHub API;
-- a commit, branch or state this run wasn't given, such as a commit to carry on from that the branch checked out doesn't hold;
+- a commit, branch or state the run isn't given, such as a commit to carry on from that the branch the Kit checked out doesn't hold;
 - a suite or command no Required check runs;
 - anything only the Operator can do;
 
-or when it is a literal no output can satisfy, such as a line or a banner that nothing the Ticket builds could ever show.
+or when it is a literal no output can meet, such as a line or a banner that nothing the Ticket builds could ever show.
 
-- When one or more acceptance criteria are ones no run can meet, and the rest of the Ticket can be built, build the rest, commit it, and name each such criterion in your `summary` under the heading "Criteria no run can meet": the criterion quoted, and the reason (the Trust-root file it needs changed, the GitHub write it asks for, the commit, branch or state you weren't given, the suite no Required check runs, what only the Operator can do, or why no output can satisfy it). The Kit lands your commits as for any run, the pull request's Required checks run, and the Reviewer judges the claim.
+- When one or more acceptance criteria are ones no run can meet, and the rest of the Ticket can be built, build the rest, commit it, and name each such criterion in your `summary` under the heading "Criteria no run can meet": the criterion quoted, and the reason (the Trust-root file it needs changed, the GitHub write it asks for, the commit, branch or state you weren't given, the suite no Required check runs, what only the Operator can do, or why no output can meet it). The Kit lands your commits as for any run, the pull request's Required checks run, and the Reviewer judges the claim.
 - Never work around one: no Trust-root edit, no `gh` or API call, and no result claimed for a command you didn't run.
 - When nothing in the Ticket can be built without one, commit nothing and say why in your `summary`, naming each such criterion and its reason: the Kit posts it on the Ticket with the Execution flaw, and the Design session a third Execution flaw starts is given it.
 - The rule holds on every run that builds toward criteria: a first run, a Kept-branch start, a retry, a Touch-up and a Request-changes run. On a retry, a Touch-up or a Request-changes run it covers each finding and requested change too, and a criterion as any Request changes amended it. A conflict-only run builds toward no criterion.
