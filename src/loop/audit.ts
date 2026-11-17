@@ -28,6 +28,22 @@ export interface Audit {
  */
 export const TOP_RECOMMENDATION_HEADING = "## Top recommendation";
 
+/** What each candidate's card on a filled Audit opens its line of traced PRs with (src/loop/auditLanding.ts). */
+export const INTRODUCED_BY = "**Introduced by:**";
+
+/**
+ * The PRs each candidate's card in a filled Audit's body names under
+ * Introduced by, card by card, Strongest first as the cards stand: none for a
+ * card that traces to no merged agent PR.
+ */
+export function introducedByIn(body: string): number[][] {
+  return body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith(INTRODUCED_BY))
+    .map((line) => [...line.slice(INTRODUCED_BY.length).matchAll(/#([1-9][0-9]*)/g)].map((match) => Number(match[1])));
+}
+
 /**
  * The Audits among these `fabrik:audit` issues, newest first. Only an issue
  * the Fabrik App opened is one: a person's issue with the label or a quoted

@@ -271,6 +271,8 @@ async function gatherFacts(
       openAudits: labelled(AUDIT_LABEL).map(openKitIssueOf),
       openRetros: labelled(RETRO_LABEL).map(openKitIssueOf),
       audits,
+      // Only the Weekly summary's Architectural escapes read the first Audit: no Standing does.
+      firstAudits: [],
       retros,
       openReplays: labelled(REPLAY_LABEL).map(({ number, title, createdAt, lastEditedAt, body, author }) => ({ number, title, author: loginOf(author), createdAt, lastEditedAt, body })),
       // Oldest first, as the Map cap reads them.

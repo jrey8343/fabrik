@@ -91,6 +91,8 @@ interface RawRepo {
   audits?: unknown[];
   /** The newest fabrik:retro issues, open and closed, as the retro gate reads them. */
   retros?: unknown[];
+  /** The oldest fabrik:audit issues, open and closed, read oldest first. */
+  firstAudits?: unknown[];
   /** The open issues with the wayfinder:map label. */
   openMaps?: unknown[];
   /** The open issues with the fabrik:replay label. */
@@ -139,7 +141,7 @@ function repoWith(raw: RawRepo) {
       }
       if (query.includes("issues(labels: [$label], states: [OPEN, CLOSED]")) {
         const weekly = (nodes: unknown[] = []) => answer({ repository: { defaultBranchRef: null, issues: { nodes } } });
-        if (variables["label"] === "fabrik:audit") return weekly(raw.audits);
+        if (variables["label"] === "fabrik:audit") return weekly(query.includes("direction: ASC") ? raw.firstAudits : raw.audits);
         if (variables["label"] === "fabrik:retro") return weekly(raw.retros);
         throw new Error(`Unexpected label: ${String(variables["label"])}`);
       }
@@ -795,6 +797,25 @@ describe("Gathering a Product repo's GitHub facts", () => {
       ],
       [{ number: 120, title: "Retro: week of 2026-11-02", author: "ghost", createdAt: "2026-11-07T00:05:00Z", body: "pending" }],
     ]);
+  });
+
+  // The newest 50 Audits the gate reads can leave the first one out (#737).
+  it("holds the oldest fabrik:audit issues, open and closed, read oldest first by their own query, apart from the newest the gate reads", async () => {
+    const github = repoWith({
+      audits: [{ number: 160, title: "Audit: week of 2026-11-02", state: "OPEN", stateReason: null, createdAt: "2026-11-08T00:05:00Z", body: "newest", author: APP }],
+      firstAudits: [
+        { number: 9, title: "Audit: week of 2026-04-27", state: "CLOSED", stateReason: "COMPLETED", createdAt: "2026-05-03T00:05:00Z", body: "first", author: APP },
+        { number: 12, title: "Audit: week of 2026-05-04", state: "CLOSED", stateReason: "COMPLETED", createdAt: "2026-05-10T00:05:00Z", body: "second", author: APP },
+      ],
+    });
+
+    const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+    expect(facts.firstAudits).toEqual([
+      { number: 9, title: "Audit: week of 2026-04-27", author: "fabrik-app[bot]", createdAt: "2026-05-03T00:05:00Z", body: "first" },
+      { number: 12, title: "Audit: week of 2026-05-04", author: "fabrik-app[bot]", createdAt: "2026-05-10T00:05:00Z", body: "second" },
+    ]);
+    expect(facts.audits.map(({ number }) => number)).toEqual([160]);
   });
 
   it("holds the open fabrik:replay issues, with who filed them, when, when their body was last edited, and the body", async () => {
