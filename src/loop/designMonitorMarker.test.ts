@@ -144,17 +144,21 @@ describe("A Design session keeps a Monitor issue's marker", () => {
     ]);
   });
 
-  it("leaves fabrik:monitor off a Spec that keeps red main's marker, so the Monitor never closes a Spec when main goes green", () => {
-    const redMain = anIssue({
+  it.each([
+    ["red main's", "<!-- fabrik:monitor red-main -->"],
+    ["a Main check's", "<!-- fabrik:monitor main-check:image%20(clinic) -->"],
+  ])("leaves fabrik:monitor off a Spec that keeps %s marker, keeping the line, so the Monitor never closes a Spec when the check goes green", (_whose, marker) => {
+    const kept = anIssue({
       number: 7,
       labels: ["bug", "needs-design", "fabrik:monitor"],
       byApp: true,
-      body: "<!-- fabrik:monitor red-main -->\n## Red main",
+      body: `${marker}\n## Red main`,
     });
 
-    const plan = planFor(turnFinished(spec), snapshotOf(redMain), kitConfig());
+    const plan = planFor(turnFinished(spec), snapshotOf(kept), kitConfig());
 
     expect(created(plan).find((action) => action.key === "spec")?.labels).toEqual(["bug", "ready-for-agent"]);
+    expect(createdBody(plan, "spec")?.split("\n")[0]).toBe(marker);
   });
 
   it.each([

@@ -326,6 +326,10 @@ _Avoid_: review queue, backlog
 A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any GitHub already requires on the main branch, through its protection or a ruleset. It has passed when it succeeded, was skipped or reported neutral, as GitHub judges a merge; cancelled or any other result is failing.
 _Avoid_: gating check, status check
 
+**Main check**:
+A check a Product repo names for the Monitor to read on the default branch that is not a Required check, such as a deploy or the smoke check after it. No pull request waits on one, and each is red or green by itself.
+_Avoid_: deploy check, post-merge check, health check
+
 **Plain pull request**:
 A pull request in a Product repo with no Ticket behind it: a Kit bump, Setup's, a Skills bump's, a Pairing session's or the Operator's own. It gets no Review, Verdict or Digest, and Request changes and Send it back mean nothing on it; the Merge gate holds it like any other.
 _Avoid_: non-agent pull request, off-Loop pull request, manual pull request

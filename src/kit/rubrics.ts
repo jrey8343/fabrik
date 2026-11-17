@@ -129,6 +129,8 @@ export const RUBRIC_HASHES: Readonly<Record<string, string>> = {
   // Skill use's: the Kit no longer has it (#739), but its score files still read as skill-use@1.
   "skill-use@1": "37ff8befe470d3c5604614d0ace707540792184811232ac5580680166fbfdf80",
   "test-first@1": "9be3fd931b95136ef79bf1efa2d81428f609a17cd2646cf86c4f25a116bcc7ea",
+  // #741: scores only 1, 0.5 or 0, and one failing test per change or finding is enough.
+  "test-first@2": "2458597948fb47d183df34a1d133ec215937f0ea1924563625cfb4695f59118a",
 };
 
 /** A rubric's content hash: everything the rubric says, but not its version. */

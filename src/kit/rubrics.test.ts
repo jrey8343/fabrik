@@ -81,9 +81,17 @@ describe("The Kit's Scorer rubrics", () => {
     expect(compliance?.text).not.toContain("judge that work against the Ticket,");
   });
 
-  it("give Test-first version 1 a pass line of 0.8, and the labels test-first, test-after, no test, fix before cause and not applicable", async () => {
+  it("give Test-first version 2 a pass line of 0.8, and the labels test-first, test-after, no test, fix before cause and not applicable", async () => {
     const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
-    expect(testFirst).toMatchObject({ version: 1, threshold: 0.8, labels: ["test-first", "test-after", "no-test", "fix-before-cause", "not-applicable"] });
+    expect(testFirst).toMatchObject({ version: 2, threshold: 0.8, labels: ["test-first", "test-after", "no-test", "fix-before-cause", "not-applicable"] });
+  });
+
+  // #741: under version 1 the judge gave 0.9 and 0.1, and took 0.1 off a run whose one finding had its failing test first for a case its tests didn't cover.
+  it("score Test-first only 1, 0.5 or 0, on the order of the work, never on how many cases its tests cover", async () => {
+    const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
+    expect(testFirst?.text).toMatch(/exactly 1, 0\.5 or 0, never a score between them/);
+    expect(testFirst?.text).toMatch(/One failing test for a behaviour change or a finding is enough/);
+    expect(testFirst?.text).toMatch(/how many cases .* is the Reviewer's to judge/);
   });
 
   // #739: it scores the practice, never the Skill call, and the rubric alone names the practices, the same in every Product repo.

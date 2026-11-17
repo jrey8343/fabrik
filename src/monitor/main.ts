@@ -12,7 +12,7 @@
 // monitor.errors is set, FABRIK_SENTRY_TOKEN is the Sentry token, empty when
 // its 1Password item is missing or couldn't be read. A Sentry API error is a
 // warning in the step summary, never a failed run, and red main still runs.
-// Red main reads check runs through the App's Checks: read; while the App
+// Red main and the Main checks read check runs through the App's Checks: read; while the App
 // lacks it, GitHub refuses them and red main is a quiet dormant note. GitHub's
 // rate limit on either read is a warning. Any other error fails the run with
 // an ::error, and the step summary still says what this tick applied before it.
@@ -120,12 +120,12 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const { errors, redMain } = config.monitor;
+  const { errors, redMain, mainChecks: namedMainChecks } = config.monitor;
   const listedChecks = config.sandbox.checks;
   const sentryToken = process.env["FABRIK_SENTRY_TOKEN"] ?? "";
   const appLogin = `${required("FABRIK_APP_SLUG")}[bot]`;
   const [gitHubFacts, sentryAsListed] = await Promise.all([
-    gatherMonitorFacts(github, repo, { appLogin, redMain, listedChecks }),
+    gatherMonitorFacts(github, repo, { appLogin, redMain, listedChecks, namedMainChecks }),
     readSentry(errors, sentryToken),
   ]);
   if (gitHubFacts.kind === "rate-limited") {

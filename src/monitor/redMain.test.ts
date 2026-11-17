@@ -157,7 +157,7 @@ describe("The red-main issue", () => {
 
 describe("Red main at caps.monitor_issues 0", () => {
   /** Error filings paused, with a qualifying Sentry group that would otherwise be filed. */
-  const paused = { cap: 0, monitor: { errors: SENTRY_ON, redMain: true }, sentry: sentryRead([aGroup()]) };
+  const paused = { cap: 0, monitor: { errors: SENTRY_ON, redMain: true, mainChecks: [] }, sentry: sentryRead([aGroup()]) };
 
   it("still files the red-main issue while new error filings are paused", () => {
     const plan = monitorPlanFor(redMainInput([aCommit(RED, [aCheckRun({ id: 901, name: "test", conclusion: "failure" })])], paused));
@@ -506,7 +506,7 @@ describe("Red main turned off", () => {
     ["red with an open issue", [aCommit(STILL_RED, [aCheckRun({ id: 930, name: "lint", conclusion: "failure" })])], [aRedMainIssue()]],
     ["green with an open issue", [aCommit(GREEN, [aCheckRun({ id: 920, name: "test", conclusion: "success" })])], [aRedMainIssue()]],
   ])("files, rewrites and closes nothing with monitor.red_main false, %s", (_state, commits, issues) => {
-    const plan = monitorPlanFor(redMainInput(commits, { monitor: { errors: null, redMain: false }, issues }));
+    const plan = monitorPlanFor(redMainInput(commits, { monitor: { errors: null, redMain: false, mainChecks: [] }, issues }));
 
     expect(plan.open).toEqual([]);
     expect(plan.rewrite).toEqual([]);

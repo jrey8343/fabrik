@@ -807,7 +807,7 @@ function supersedeBySpec(
   const tickets = ticketActions(output.tickets, issue, SPEC, operator);
   const marker = keptMarker(issue);
   // The Monitor finds its issues by their label, so a Spec that keeps a Sentry group's marker is the
-  // group's open issue to it. One that keeps red main's goes without, so the Monitor never closes it once main is green.
+  // group's open issue to it. One that keeps red main's or a Main check's goes without, so the Monitor never closes it once the check is green.
   const monitorLabel: Label[] = marker?.kind === "sentry" ? [MONITOR_LABEL] : [];
   return [
     {
