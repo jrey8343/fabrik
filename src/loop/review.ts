@@ -19,6 +19,7 @@ import { verdictMarker } from "./markers.ts";
 import { changeLine } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import { parseVerdict, verdictTagsOf } from "./verdict.ts";
+import { type FailureExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
 import type {
   Action,
   KitConfig,
@@ -90,7 +91,14 @@ export function startReviewOnLabel(pullRequest: PullRequestSnapshot, config: Kit
   return { kind: "act", actions: declineTrigger(pullRequest.number, REVIEW_LABEL, plan.reason) };
 }
 
-/** Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be counted from the PR alone. */
+/** Why a red GitHub Actions check has no Failure excerpt: the Review's jobs passed out none for it, as when their artifact is missing. */
+const NO_EXCERPT = "the Review checks job passed out no Failure excerpt for it";
+
+/**
+ * Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be
+ * counted from the PR alone. Each red GitHub Actions check carries its Failure
+ * excerpt under its name, so the Retry starts from why it failed (#775).
+ */
 export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: KitConfig): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
     if (event.failed.length === 0) {
@@ -102,17 +110,31 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
     const again = red.filter((name) => rerun?.failedAgain.includes(name) === true);
     const outside = red.filter((name) => rerun?.outside.includes(name) === true && !again.includes(name));
     const plain = red.filter((name) => !again.includes(name) && !outside.includes(name));
-    const listed = (heading: string, names: readonly string[], after: string[] = []) =>
-      names.length === 0 ? [] : [[heading, "", ...names.map((name) => `- ${checkCode(name)}`), ...after].join("\n")];
-    const findings = [
-      ...listed("These required checks failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:", again),
-      ...listed("These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:", outside),
-      ...listed(
-        "These required checks didn't pass, so the Reviewer didn't run:",
-        plain,
-        rerun?.refused == null ? [] : ["", `The Kit couldn't re-run them: ${rerun.refused}.`],
-      ),
-    ].join("\n\n");
+    // Each GitHub Actions check carries its Failure excerpt under its name (#775); an outside one is named alone.
+    const excerpts = [...again, ...plain].map(
+      (name): FailureExcerpt => event.excerpts?.find(({ check }) => check === name) ?? { kind: "unread", check: name, link: "", why: NO_EXCERPT },
+    );
+    const findings = (room: number): string => {
+      const text = (blocks: readonly string[]) => {
+        const blockOf = (name: string) => blocks[excerpts.findIndex(({ check }) => check === name)]!;
+        // A check with an excerpt is a list item of paragraphs, so a blank line parts them; outside checks are one line each.
+        const listed = (heading: string, items: readonly string[], between: string, after: string[] = []) =>
+          items.length === 0 ? [] : [[heading, "", items.join(between), ...after].join("\n")];
+        return [
+          ...listed("These required checks failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:", again.map(blockOf), "\n\n"),
+          ...listed("These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:", outside.map((name) => `- ${checkCode(name)}`), "\n"),
+          ...listed(
+            "These required checks didn't pass, so the Reviewer didn't run:",
+            plain.map(blockOf),
+            "\n\n",
+            rerun?.refused == null ? [] : ["", `The Kit couldn't re-run them: ${rerun.refused}.`],
+          ),
+        ].join("\n\n");
+      };
+      // The excerpts take what's left of the comment's room around them, the blank lines between them counted.
+      const around = text(excerpts.map(() => "")).length;
+      return text(renderFailureExcerpts(excerpts, { room: room - around + 2 * Math.max(excerpts.length - 1, 0) }));
+    };
     const held = heldOn(snapshot.kitIssues, config);
     const flaky = flakyCheckActions(pullRequest.number, event.headSha, rerun?.flaky ?? [], snapshot.flakyCheckIssues);
     const verdict = verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings, checks: red }, snapshot.operator, held);
@@ -232,7 +254,8 @@ export function verdictActions(
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
-    readonly findings: string;
+    /** The findings, or, for findings that fit themselves to a room, them given what the comment has left around them (#775). */
+    readonly findings: string | ((room: number) => string);
     /** On a Reviewer's Execution flaw, its findings counted by tag (#749). */
     readonly tags?: VerdictTags | null;
     /** On one from red required checks, the ones it names as failed (#462). */
@@ -262,7 +285,7 @@ export function verdictActions(
     headSha: event.headSha,
   };
   const by = BY[source];
-  const lines = [
+  const linesWith = (findings: string) => [
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run" : ""}.`,
@@ -277,6 +300,9 @@ export function verdictActions(
   // the PR's own head, or the head a Retry that changed nothing started at, which the PR may have moved on from.
   const read = pullRequest.headSha === event.headSha ? pullRequest.change : pullRequest.changeAt?.headSha === event.headSha ? pullRequest.changeAt.change : undefined;
   const change = read === undefined ? [] : [changeLine(read)];
+  // Findings that fit themselves are given the room the rest of the comment leaves, less the blank line before them.
+  const room = GITHUB_COMMENT_LIMIT - [verdictMarker(record), ...change, ...linesWith("")].join("\n").length - 2;
+  const lines = linesWith(typeof findings === "string" ? findings : findings(room));
   const withChange = [verdictMarker(record), ...change, ...lines].join("\n");
   // A Verdict never fails for want of one: a line that would take the comment past GitHub's limit is left out.
   const body = withChange.length <= GITHUB_COMMENT_LIMIT ? withChange : [verdictMarker(record), ...lines].join("\n");

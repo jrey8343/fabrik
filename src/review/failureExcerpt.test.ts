@@ -218,7 +218,7 @@ describe("A red check's failure that can't be read", () => {
 
 describe("Rendering Failure excerpts", () => {
   const LINK = "https://github.com/acme/shop/actions/runs/7/job/8";
-  const actions = (check: string, steps: FailedStep[], annotations: ExcerptAnnotation[] = []): FailureExcerpt => ({
+  const actions = (check: string, steps: FailedStep[], annotations: ExcerptAnnotation[] = []): Extract<FailureExcerpt, { kind: "actions" }> => ({
     kind: "actions",
     check,
     link: LINK,
@@ -309,7 +309,7 @@ describe("The cap on Failure excerpts' log lines", () => {
   const link = (check: string) => `https://github.com/acme/shop/actions/runs/7/job/${check}`;
   /** `count` lines of 100 characters, each 101 with its newline, numbered from 1. */
   const lines = (count: number, width = 100) => Array.from({ length: count }, (_, i) => `${String(i + 1).padStart(5, "0")} `.padEnd(width, "x"));
-  const red = (check: string, logLines: string[], annotations: ExcerptAnnotation[] = []): FailureExcerpt => ({
+  const red = (check: string, logLines: string[], annotations: ExcerptAnnotation[] = []): Extract<FailureExcerpt, { kind: "actions" }> => ({
     kind: "actions",
     check,
     link: link(check),

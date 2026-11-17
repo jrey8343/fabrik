@@ -222,8 +222,9 @@ export function renderFailureExcerpts(excerpts: readonly FailureExcerpt[], { roo
   return excerpts.map((excerpt) => `${headOf(excerpt)}\n\n  Its Failure excerpt didn't fit the comment.`);
 }
 
+/** The check's name, and its job link when the excerpt has one. */
 function headOf(excerpt: FailureExcerpt): string {
-  return `- ${checkCode(excerpt.check)} ([the job](${excerpt.link}))`;
+  return `- ${checkCode(excerpt.check)}${excerpt.link === "" ? "" : ` ([the job](${excerpt.link}))`}`;
 }
 
 /** One excerpt's block, its log lines held to `share` characters and each annotation message to `messageMax`. */
