@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { aRecordWithTranscript } from "../__fixtures__/retroEvidence.ts";
-import { aScoreFile } from "../__fixtures__/weeklySummary.ts";
+import { aScoreEntry, aScoreFile } from "../__fixtures__/weeklySummary.ts";
 import { RUN_RECORD_SCHEMA, recordPathOf, replayGatesPath } from "./runRecord.ts";
 import { readStoreReplayGates, readStoreReplayPatches, readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
 
@@ -67,6 +67,23 @@ describe("Reading the store's checkout", () => {
     const store = await aCheckoutWith({ [scorePath]: JSON.stringify({ ...older, schema: 2 }) });
 
     expect(await readStoreScoreFiles(store)).toEqual({ [scorePath]: { ...older, schema: 3 } });
+  });
+
+  // #766: Ticket compliance moved to version 3, and the scores version 2 gave keep their meaning.
+  it("reads a score file written under Ticket compliance version 2 as it was, beside one written under version 3", async () => {
+    const underVersion = (version: number) =>
+      aScoreFile({
+        rubrics: ["efficiency@1", `ticket-compliance@${version}`, "test-first@2"],
+        entries: [
+          aScoreEntry(),
+          { scorer: "ticket-compliance", version, threshold: 0.8, score: 0.5, pass: false, label: "missed-criteria", rationale: "Left a criterion unmet." },
+          { scorer: "test-first", version: 2, threshold: 0.8, score: 1, pass: true, label: "test-first", rationale: "Wrote the failing test first." },
+        ],
+      });
+    const v3Path = "scores/owner/product/2026-11/1002-1-implement-def456.json";
+    const store = await aCheckoutWith({ [scorePath]: JSON.stringify(underVersion(2)), [v3Path]: JSON.stringify(underVersion(3)) });
+
+    expect(await readStoreScoreFiles(store)).toEqual({ [scorePath]: underVersion(2), [v3Path]: underVersion(3) });
   });
 
   it("reads a schema 1 Run record, written before runs were given a Subscription, as on the first listed one", async () => {

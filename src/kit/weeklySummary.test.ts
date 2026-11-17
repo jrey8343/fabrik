@@ -4041,6 +4041,31 @@ describe("the Weekly summary", () => {
         );
       });
 
+      // #766: a week either side of the bump holds score files under both versions, whose scores don't mean the same.
+      it("shows a week's Ticket compliance scores under version 2 apart from those under version 3", () => {
+        const compliance = (version: number, score: number) => aScoreEntry({ scorer: "ticket-compliance", version, threshold: 0.8, score, pass: score >= 0.8, label: "compliant" });
+        const body = bodyOf(
+          input({
+            records: [aRunRecord({ runId: 1 }), aRunRecord({ runId: 2 })],
+            scoreFiles: [
+              aScoreFile({ runId: 1, rubrics: ["ticket-compliance@2"], entries: [compliance(2, 0.5)] }),
+              aScoreFile({ runId: 2, rubrics: ["ticket-compliance@3"], entries: [compliance(3, 1)] }),
+            ],
+          }),
+        );
+
+        expect(body).toContain(
+          [
+            "| Ticket compliance v2: runs scored | 1 | 0 | +1 |",
+            "| Ticket compliance v2: median score | 0.50 | – | – |",
+            "| Ticket compliance v2: passing | 0% | – | – |",
+            "| Ticket compliance v3: runs scored | 1 | 0 | +1 |",
+            "| Ticket compliance v3: median score | 1.00 | – | – |",
+            "| Ticket compliance v3: passing | 100% | – | – |",
+          ].join("\n"),
+        );
+      });
+
       // #739: a run Test-first doesn't apply to goes unscored, so it never sits in the median or the share passing.
       describe("with Test-first runs it doesn't apply to", () => {
         const testFirst = (score: number | null) =>
