@@ -10,6 +10,8 @@ import {
   mapCapContext,
   PROTOTYPES_HEADING,
   prototypeContext,
+  REQUIRED_CHECKS_HEADING,
+  requiredChecksContext,
   SPEC_TICKETS_HEADING,
   sentBackContext,
   specTicketsContext,
@@ -291,6 +293,31 @@ describe("What a Design-session turn's prompt says of the Map cap", () => {
       expect(() => mapCapContext(offer)).toThrow("map.json doesn't say whether this turn may offer a Map");
     },
   );
+});
+
+describe("What a Design-session turn's prompt says of the Required checks (#763)", () => {
+  const withChecks = (checks: string[]) => kitConfig({ sandbox: { ...kitConfig().sandbox, checks } });
+
+  it("names each Required check the Kit config lists, under its own heading", () => {
+    const parts = requiredChecksContext(withChecks(["test", "lint"]));
+
+    expect(parts[0]).toBe(`## ${REQUIRED_CHECKS_HEADING}`);
+    expect(parts.join("\n\n")).toContain("The Kit config lists these Required checks: `test` and `lint`.");
+  });
+
+  it("says so when the Kit config lists no Required checks, so no criterion leans on a check", () => {
+    const text = requiredChecksContext(withChecks([])).join("\n\n");
+
+    expect(text).toContain("The Kit config lists no Required checks, so no test is known to run on a pull request");
+    expect(text).not.toContain("lists these Required checks");
+  });
+
+  it.each([[["test"]], [[]]])("says GitHub may require more checks on the main branch than the Kit config lists (%j), and where to read what each runs", (checks) => {
+    const text = requiredChecksContext(withChecks(checks)).join("\n\n");
+
+    expect(text).toContain("GitHub may require more checks on the main branch than the Kit config lists, which this turn can't see.");
+    expect(text).toContain("Read `.github/workflows/` to see what each Required check runs.");
+  });
 });
 
 describe("What a Design-session turn on a Ticket under a Spec is told of the Spec's other Tickets (#475)", () => {

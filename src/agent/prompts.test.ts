@@ -18,7 +18,7 @@ import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FINDING_TAG_TEXT, FOLLOW_UPS_PREFIX, parseVerdict } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
-import { FILED_FROM_HEADING, filedFromContext, LANDED_NOTHING_HEADING, MAP_CAP_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
+import { FILED_FROM_HEADING, filedFromContext, LANDED_NOTHING_HEADING, MAP_CAP_HEADING, REQUIRED_CHECKS_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
@@ -421,6 +421,52 @@ describe("The Map question in the Design prompt", () => {
     const examples = [...text.matchAll(/<design>\n([\s\S]*?)\n<\/design>/g)].map((match) => readDesignTurnOutput(JSON.parse(match[1] ?? "null"), EXAMPLE_ISSUE));
     expect(examples).toContainEqual(expect.objectContaining({ ok: true, output: expect.objectContaining({ kind: "map" }) }));
     expect(lineStarting(section(text, "Your output"), "- In `map`")).toContain("`research`, `prototype`, `grilling` or `task`");
+  });
+});
+
+// What an acceptance criterion may ask (#763): only the prompt holds the rule, and the section it points at is built in ./design.ts.
+describe("Acceptance criteria in the Design prompt", () => {
+  const yourTurn = async () => section(await prompt("design"), "Your turn");
+
+  it("says what an acceptance criterion is and names the five things one may never ask", async () => {
+    const text = await yourTurn();
+    expect(text).toContain(
+      "**An acceptance criterion** is one check on a Ticket that a test the Required checks run, or the diff itself, shows is met. A criterion may never ask for:",
+    );
+    for (const kind of [
+      "- a Trust-root change;",
+      "- a GitHub write: a pull request's title, labels or comments, or any API call;",
+      "- a commit, branch or state the run isn't given;",
+      "- a suite or command no Required check runs;",
+      "- anything only the Operator can do.",
+    ]) {
+      expect(lineStarting(text, kind).trim()).toBe(kind);
+    }
+  });
+
+  it("says a test must be one a Required check runs, put where one already runs it or dropped, and that a workflow change to bring it in is an Operator step that blocks the Ticket", async () => {
+    const text = await yourTurn();
+    expect(text).toContain("A test you want proved must be one a Required check runs: put it where a Required check already runs it, or drop the criterion.");
+    expect(text).toContain("When bringing it into one needs a change under `.github/workflows/`, that change is an Operator step that blocks the Ticket.");
+  });
+
+  it("holds every criterion the session writes to the rule: an agent brief's, each Ticket's in a Spec or a split, and a Roll-in's", async () => {
+    expect(await yourTurn()).toContain(
+      "The rule holds for every criterion this session writes: an agent brief's, each Ticket's in a Spec or a split, and a Roll-in's.",
+    );
+  });
+
+  it("names the Required checks section by the heading the context uses, and tells the turn to read `.github/workflows/` for what each runs", async () => {
+    expect(await yourTurn()).toContain(
+      `"${REQUIRED_CHECKS_HEADING}", which follows the issue at the end of this prompt, names the checks the Kit config lists. Read \`.github/workflows/\` to see what each one runs.`,
+    );
+  });
+
+  it("says in one line what the session does with a Ticket back from a Design flaw for a criterion no run can meet", async () => {
+    const line = lineStarting(await yourTurn(), "A Ticket back from a Design flaw for a criterion no run can meet");
+    expect(line.trim()).toBe(
+      "A Ticket back from a Design flaw for a criterion no run can meet takes the usual path: rewrite the criterion, drop it or make it an Operator step, and decide on the Kept branch as for any Ticket back from its pull request.",
+    );
   });
 });
 

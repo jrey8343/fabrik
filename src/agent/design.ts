@@ -5,7 +5,8 @@
 // what the inputs say of the Map cap; for a Ticket under a Spec, the Spec's
 // other Tickets; for an issue filed from a pull request, where that pull
 // request stands, its description and, while it is an open agent pull
-// request, where its branch can be read; and, on a repo the Kit can prototype,
+// request, where its branch can be read; the Required checks the Kit config
+// lists, which its acceptance criteria lean on; and, on a repo the Kit can prototype,
 // that Prototypes are available.
 import type { KitConfig } from "../kit/config.ts";
 import { whyNoPrototype } from "../loop/design.ts";
@@ -63,6 +64,28 @@ function readOffer(value: unknown): MapOffer {
     return { kind: "cap-full", cap, openMaps: openMaps.map((map: { number?: unknown; title?: unknown }) => ({ number: Number(map.number), title: text(map.title) })) };
   }
   throw new Error(`${MAP_INPUTS_FILE} doesn't say whether this turn may offer a Map`);
+}
+
+/** The heading a Design-session turn is told the Required checks under, which prompts/design.md names. */
+export const REQUIRED_CHECKS_HEADING = "The Required checks";
+
+/**
+ * What a Design-session turn is told of the Product repo's Required checks,
+ * as the Kit config's `sandbox.checks` lists them, so every acceptance
+ * criterion it writes leans only on a test one of them runs (#763).
+ */
+export function requiredChecksContext(config: Pick<KitConfig, "sandbox">): string[] {
+  const { checks } = config.sandbox;
+  return [
+    `## ${REQUIRED_CHECKS_HEADING}`,
+    checks.length === 0
+      ? "The Kit config lists no Required checks, so no test is known to run on a pull request: an acceptance criterion can lean only on what the diff itself shows."
+      : `The Kit config lists these Required checks: ${spelled(checks.map((check) => `\`${check}\``), "and")}.`,
+    [
+      "GitHub may require more checks on the main branch than the Kit config lists, which this turn can't see.",
+      "Read `.github/workflows/` to see what each Required check runs.",
+    ].join(" "),
+  ];
 }
 
 /** The heading a Ticket's siblings under its Spec are set out under, which prompts/design.md names. */

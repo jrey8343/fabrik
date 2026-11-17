@@ -109,7 +109,7 @@ import { digestContext } from "./digest.ts";
 import { triageContext } from "./triage.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
-import { filedFromContext, landedNothingContext, mapCapContext, prototypeContext, sentBackContext, specTicketsContext } from "./design.ts";
+import { filedFromContext, landedNothingContext, mapCapContext, prototypeContext, requiredChecksContext, sentBackContext, specTicketsContext } from "./design.ts";
 import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import {
   claudeArgs,
@@ -491,6 +491,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     // Where the pull request the issue's `From PR` line names stands, read afresh this turn; nothing when it names none (#659).
     extra.push(...filedFromContext(JSON.parse(await readFile(required("FABRIK_FILED_FROM_FILE"), "utf8"))));
     extra.push(...mapCapContext(JSON.parse(await readFile(required("FABRIK_MAP_FILE"), "utf8"))));
+    // The Required checks the Kit config lists, which every acceptance criterion the turn writes leans on (#763).
+    extra.push(...requiredChecksContext(config));
     extra.push(...prototypeContext(config, issueNumber));
   }
   if (spec.comparesIssues === true) extra.push(...(await triageContext(required("FABRIK_RECENT_ISSUES_FILE"))));
