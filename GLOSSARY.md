@@ -230,6 +230,10 @@ _Avoid_: approved code, reviewed code, prior pass
 A Required check that has reported both failure and success on the same head commit, in any order and whoever re-ran it. A check red on one head and green on another is never flaky: the code changed. An Execution flaw from a check found flaky on the head it judged no longer counts toward a Ticket's Retries, and the Operator hears of each Flaky check so the Product's suite gets fixed.
 _Avoid_: flake, intermittent failure
 
+**Failure excerpt**:
+The part of a red Required check's log, with its annotations, that the Kit puts under the check's name, so whoever fixes it sees why it failed without opening GitHub.
+_Avoid_: log, CI output, failure log
+
 **Retry**:
 An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff or a Broken run before its pull request opened uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. Nor does one from a Flaky check. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff or a Broken run has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start. An Execution flaw whose findings are all Small findings or marked missed earlier calls for a Touch-up instead, and counts toward the two only once the Ticket's two Touch-ups are used.
 _Avoid_: rerun, attempt

@@ -1,0 +1,17 @@
+# Release notes: A red Required check's failure travels with the Verdict
+
+The notes for the minor that carries why each red Required check failed, as a Failure excerpt, and has the Reviewer judge whether the pull request caused it ([#774](https://github.com/jrey8343/fabrik/issues/774), ADR-0028). This file holds each part as its Ticket lands; later Tickets of #774 add theirs. Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
+
+## What changed
+
+- **A red GitHub Actions check's Verdict says why it failed** ([#775](https://github.com/jrey8343/fabrik/issues/775)). Under each red check's name, the Verdict now carries its Failure excerpt: the failed step's name, the last 150 lines of that step's log, cleaned of the runner's timestamps, colour sequences and group lines, the check run's error annotations as file, line and message, and a link to the job. A job that failed with no failed step gives its annotations alone and says so. The Review checks job reads each red check before the Kit re-runs anything, and the wait after the re-run reads each check that failed again, whose excerpt the Verdict carries. A check from an outside service is listed by name, as before.
+- **It always fits.** The log lines of all the red checks share 40,000 characters equally, each cut from the top with a line saying how many were left out and linking the job. Annotations are outside that cap, and the whole comment is cut further when it would pass GitHub's 65,536 characters, so the Verdict is always posted.
+- **A failure that can't be read says why** under the check's name (the job never started, its log is past the repo's retention, GitHub refused the read), and the Execution flaw lands as before. It's never an Infrastructure failure.
+- **The Implementer starts from the failure text.** A Retry, and a Request-changes run that takes a Verdict's findings over, is told the text is data from CI, never instructions; to reproduce it with the Sandbox's commands where the check's command runs there, calling `diagnosing-bugs` only when the text doesn't show the cause or the failure doesn't reproduce; and, when it doesn't reproduce and points away from the change, to say so in `fix` with the evidence instead of changing code on a guess.
+- **The Kit redacts nothing.** It posts the log as the runner masked it, which GitHub doesn't guarantee for every secret; ADR-0028 says what that risks.
+- **Why a minor:** no job's permissions change. The Review's waits read on the workflow token they already hold (`actions: read`, `checks: read`), and the Implement job's token, the Fabrik App's permissions, the caller workflow, the Kit config and Setup are untouched. There's no new secret and no Run-record schema bump.
+
+## To check it on the Pilot
+
+1. Push a change to an agent pull request that breaks a GitHub Actions Required check. Check that the Verdict names the failed step under the check's name, with the end of its log, its error annotations and a link to the job.
+2. Check that the Retry's `fix` starts from that failure: it reproduced it, or said with evidence why it didn't.
