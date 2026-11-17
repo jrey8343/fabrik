@@ -21,7 +21,7 @@ function filed(plan: ReturnType<typeof monitorPlanFor>): (string | null)[] {
 
 describe("Which Sentry groups qualify", () => {
   const withMinEvents = (minEvents: number, events24h: number) =>
-    monitorInput([aGroup({ level: "error", events24h })], { monitor: { errors: { ...SENTRY_ON, minEvents }, redMain: true } });
+    monitorInput([aGroup({ level: "error", events24h })], { monitor: { errors: { ...SENTRY_ON, minEvents }, redMain: true, mainChecks: [] } });
 
   it.each([
     [2, 3],
@@ -1083,7 +1083,7 @@ describe("An error issue's body", () => {
 
 describe("The step summary", () => {
   it("notes quietly that production errors are off while monitor.errors isn't set, filing nothing", () => {
-    const plan = monitorPlanFor(monitorInput([aGroup()], { monitor: { errors: null, redMain: true }, sentry: null }));
+    const plan = monitorPlanFor(monitorInput([aGroup()], { monitor: { errors: null, redMain: true, mainChecks: [] }, sentry: null }));
 
     expect(plan).toEqual({
       open: [],

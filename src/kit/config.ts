@@ -66,6 +66,12 @@ export interface KitConfig {
     readonly errors: MonitorErrors | null;
     /** Whether the Monitor files an issue while the default branch's CI is red. */
     readonly redMain: boolean;
+    /**
+     * The Main checks (#744): checks the Monitor reads on the default branch
+     * that aren't Required checks, such as a deploy, each with an issue of its
+     * own while it's red. None is in `sandbox.checks`; `redMain` off turns them off too.
+     */
+    readonly mainChecks: readonly string[];
   };
   readonly audit: {
     /** The UTC day of the week the Audit runs; null turns the Audit off. */
@@ -442,7 +448,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   },
   maxInFlight: 2,
   caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
-  monitor: { errors: null, redMain: true },
+  monitor: { errors: null, redMain: true, mainChecks: [] },
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
   // Saturday, a day before the Audit's Sunday, so the two frontier runs never share an
@@ -638,13 +644,14 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
   const sandbox = file.object("sandbox");
   const roles = file.object("roles");
   const review = readPickingRole(roles.object("review"), defaults.roles.review, picks, "review");
+  const requiredChecks = sandbox.stringList("checks") ?? defaults.sandbox.checks;
   return {
     ...defaults,
     sandbox: {
       setup: orDefault(sandbox.nullableString("setup"), defaults.sandbox.setup),
       build: orDefault(sandbox.nullableString("build"), defaults.sandbox.build),
       test: orDefault(sandbox.nullableString("test"), defaults.sandbox.test),
-      checks: sandbox.stringList("checks") ?? defaults.sandbox.checks,
+      checks: requiredChecks,
       env: sandbox.envMap("env") ?? defaults.sandbox.env,
       secrets: sandbox.envMap("secrets", requireOpReference) ?? defaults.sandbox.secrets,
     },
@@ -663,7 +670,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     },
     maxInFlight: file.wholeNumber("max_in_flight", 0) ?? defaults.maxInFlight,
     caps: readCaps(file.object("caps"), defaults.caps),
-    monitor: readMonitor(file.object("monitor"), defaults.monitor),
+    monitor: readMonitor(file.object("monitor"), defaults.monitor, requiredChecks),
     audit: readAudit(file.object("audit"), defaults.audit),
     retro: readRetro(file.object("retro"), defaults.retro),
     digest: { enabled: file.object("digest").boolean("enabled") ?? defaults.digest.enabled },
@@ -744,11 +751,17 @@ function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] 
   };
 }
 
-function readMonitor(monitor: Reader, defaults: KitConfig["monitor"]): KitConfig["monitor"] {
+/** `requiredChecks` are the Required checks `sandbox.checks` lists, which no Main check may be. */
+function readMonitor(monitor: Reader, defaults: KitConfig["monitor"], requiredChecks: readonly string[]): KitConfig["monitor"] {
   const errors = monitor.nullableObject("errors");
+  const notRequired = (name: string): string | null =>
+    requiredChecks.includes(name) ? "sandbox.checks lists it as a Required check, and a Main check is never one" : null;
+  const mainChecks = monitor.stringList("main_checks", notRequired);
   return {
     errors: errors === undefined ? defaults.errors : errors === null ? null : readMonitorErrors(errors),
     redMain: monitor.boolean("red_main") ?? defaults.redMain,
+    // A name listed twice is one Main check, with one issue.
+    mainChecks: mainChecks === undefined ? defaults.mainChecks : [...new Set(mainChecks)],
   };
 }
 

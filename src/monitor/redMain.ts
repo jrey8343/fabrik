@@ -11,7 +11,7 @@ import { ascending, bodyCode, monitorBlock, type MonitorIssue, type MonitorPlan,
 
 /** What red main's part of the plan reads of the Monitor core's input (./core.ts). */
 export interface RedMainInput {
-  readonly monitor: Pick<KitConfig["monitor"], "redMain">;
+  readonly monitor: Pick<KitConfig["monitor"], "redMain" | "mainChecks">;
   /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
   readonly mainChecks: MainChecksRead | null;
   /** The Required checks the Kit config's `sandbox.checks` lists: when it lists any, the only checks that decide whether the default branch is red. */
@@ -77,7 +77,7 @@ export function redMainPlan({ monitor, mainChecks, listedChecks, issues }: RedMa
       ],
     };
   }
-  const decided = mainChecks.commits.flatMap((commit) => decisionOf(commit, listedChecks) ?? []);
+  const decided = mainChecks.commits.flatMap((commit) => decisionOf(commit, listedChecks, monitor.mainChecks) ?? []);
   const state = decided[0];
   if (state === undefined) return { ...nothing, summary: [undecidedNote(mainChecks.commits.length, listedChecks)] };
   const { commit } = state;
@@ -129,18 +129,27 @@ function undecidedNote(commits: number, listedChecks: readonly string[]): string
  */
 function heldClosed(issue: MonitorIssue, decided: readonly Decided[]): boolean {
   if (issue.closedByMonitor || issue.closedAt === null) return false;
-  const closedAt = Date.parse(issue.closedAt);
-  return !decided.some((commit, i) => commit.kind === "green" && commit.decidedAt > closedAt && decidedFirst(commit, decided.slice(0, i)));
+  return !seenGreenSince(Date.parse(issue.closedAt), decided);
+}
+
+/** A decided commit as seenGreenSince reads it: red or green, and when, in milliseconds since the epoch. */
+export interface DecidedAt {
+  readonly kind: "red" | "green";
+  readonly decidedAt: number;
 }
 
 /**
- * Whether the commit was decided before every one newer than it in branch
- * order, so it was the newest decided commit, the default branch's state,
- * when it was decided. A green re-run of an older commit while a newer one
- * stays red never makes the default branch green.
+ * Whether what these decided commits, newest first in branch order, decide
+ * was seen green after this time: some green commit decided since, before
+ * every commit newer than it, so it was the newest decided commit, the
+ * state, when it was decided. A green re-run of an older commit while a newer
+ * one stays red is never seen green. Red main and each Main check hold a
+ * not-planned close by it (./mainChecks.ts).
  */
-function decidedFirst(commit: Decided, newer: readonly Decided[]): boolean {
-  return newer.every((other) => other.decidedAt > commit.decidedAt);
+export function seenGreenSince(since: number, decided: readonly DecidedAt[]): boolean {
+  return decided.some(
+    (commit, i) => commit.kind === "green" && commit.decidedAt > since && decided.slice(0, i).every((other) => other.decidedAt > commit.decidedAt),
+  );
 }
 
 /**
@@ -153,7 +162,7 @@ type Decided =
   | { readonly kind: "green"; readonly commit: MainCommit; readonly decidedAt: number };
 
 /** What failed or timed out makes a commit red; nothing else does. */
-const FAILING = ["failure", "timed_out"];
+export const FAILING = ["failure", "timed_out"];
 
 /**
  * How the commit's checks decided it, or null while they haven't: once
@@ -162,8 +171,8 @@ const FAILING = ["failure", "timed_out"];
  * checks decide nothing, so a commit whose checks all ended that way, or that
  * carries none of them, is undecided.
  */
-function decisionOf(commit: MainCommit, listedChecks: readonly string[]): Decided | null {
-  const runs = newestRunOfEach(commit.checkRuns).filter((run) => decides(run.name, listedChecks));
+function decisionOf(commit: MainCommit, listedChecks: readonly string[], namedMainChecks: readonly string[]): Decided | null {
+  const runs = newestRunOfEach(commit.checkRuns).filter((run) => decides(run.name, listedChecks, namedMainChecks));
   if (runs.some((run) => run.status !== "completed")) return null;
   const failed = runs.filter((run) => run.conclusion !== null && FAILING.includes(run.conclusion));
   const decidedAt = lastCompleted(runs);
@@ -179,7 +188,7 @@ function lastCompleted(runs: readonly CheckRun[]): number {
 const RED_MAIN_TITLE = "Red main: the default branch's CI is failing";
 
 /** The longest check name the red-main issue quotes. */
-const CHECK_NAME_MAX = 100;
+export const CHECK_NAME_MAX = 100;
 
 /** The red-main issue's body: what it tracks, then the red commit's details in its Monitor block. */
 function redMainBodyOf(commit: MainCommit, failed: readonly CheckRun[]): string {
@@ -193,8 +202,8 @@ function redMainBodyOf(commit: MainCommit, failed: readonly CheckRun[]): string 
   ].join("\n");
 }
 
-/** The red commit and its failed checks, by name, each linked to its run. */
-function detailsOf(commit: MainCommit, failed: readonly CheckRun[]): string[] {
+/** The red commit and its failed checks, by name, each linked to its run: the details a red-main or Main check issue's Monitor block holds. */
+export function detailsOf(commit: MainCommit, failed: readonly CheckRun[]): string[] {
   return [
     `- Red at: [${shortSha(commit)}](${commit.url})`,
     "- Failed checks:",
@@ -208,10 +217,12 @@ function detailsOf(commit: MainCommit, failed: readonly CheckRun[]): string[] {
  * Whether a check decides whether the default branch is red: it's a Required
  * check `sandbox.checks` lists, when it lists any, else any check but the ones
  * Fabrik's own jobs report, which run on the default branch's head for every
- * Loop event and tick.
+ * Loop event and tick, and the Main checks `monitor.main_checks` names, each
+ * reported in its own issue (./mainChecks.ts).
  */
-function decides(name: string, listedChecks: readonly string[]): boolean {
+function decides(name: string, listedChecks: readonly string[], namedMainChecks: readonly string[]): boolean {
   if (listedChecks.length > 0) return listedChecks.includes(name);
+  if (namedMainChecks.includes(name)) return false;
   return !CALLER_JOBS.some((job) => name === job || name.startsWith(`${job} / `));
 }
 
@@ -219,7 +230,7 @@ function decides(name: string, listedChecks: readonly string[]): boolean {
  * The newest run of each check, by id: a re-run replaces the run before it,
  * and GitHub lists every suite's runs, not just the newest of each name.
  */
-function newestRunOfEach(runs: readonly CheckRun[]): CheckRun[] {
+export function newestRunOfEach(runs: readonly CheckRun[]): CheckRun[] {
   const newest = new Map<string, CheckRun>();
   for (const run of runs) {
     const seen = newest.get(run.name);
@@ -237,6 +248,6 @@ function greenNoteFor(commit: MainCommit): string {
 }
 
 /** The commit's short sha, as code. */
-function shortSha(commit: MainCommit): string {
+export function shortSha(commit: MainCommit): string {
   return `\`${commit.sha.slice(0, 7)}\``;
 }

@@ -1,7 +1,7 @@
 // The Monitor's GitHub side (#148), beside the Weekly summary's (./facts.ts):
 // every fabrik:monitor issue in the Product repo, the default branch's newest
 // commits with their check runs, and whether the Monitor itself made the last
-// close of the newest red-main issue, as the facts the Monitor core plans from
+// close of the newest red-main issue and of each Main check's, as the facts the Monitor core plans from
 // (src/monitor/core.ts); and whether a closing note is already on an issue.
 // Read-only. Its program is src/monitor/main.ts.
 import { MONITOR_LABEL } from "../loop/labels.ts";
@@ -24,7 +24,9 @@ export type MonitorGitHubFacts =
 /**
  * Reads the Monitor's GitHub facts: the issues, and with red main on the
  * default branch's commits and their check runs, through the Required checks
- * `sandbox.checks` lists (every check when it lists none), and who last closed the newest red-main issue.
+ * `sandbox.checks` lists and the Main checks `monitor.main_checks` names
+ * (every check when `sandbox.checks` lists none), and who last closed the
+ * newest red-main issue and each Main check's newest issue.
  * `appLogin` is the Fabrik App's bot login, which names its issues and its own close.
  * When GitHub's rate limit stops the read of the issues, the Monitor can plan
  * nothing, so it's rate-limited, with a warning, rather than a failed run.
@@ -32,7 +34,12 @@ export type MonitorGitHubFacts =
 export async function gatherMonitorFacts(
   github: Pick<GitHub, "rest">,
   repo: Repo,
-  { appLogin, redMain, listedChecks }: { readonly appLogin: string; readonly redMain: boolean; readonly listedChecks: readonly string[] },
+  {
+    appLogin,
+    redMain,
+    listedChecks,
+    namedMainChecks,
+  }: { readonly appLogin: string; readonly redMain: boolean; readonly listedChecks: readonly string[]; readonly namedMainChecks: readonly string[] },
 ): Promise<MonitorGitHubFacts> {
   const [issuesRead, mainChecks] = await Promise.all([
     monitorIssues(github, repo, appLogin).then(
@@ -42,14 +49,14 @@ export async function gatherMonitorFacts(
         throw error;
       },
     ),
-    redMain ? mainChecksOf(github, repo, listedChecks) : null,
+    redMain ? mainChecksOf(github, repo, listedChecks.length === 0 ? [] : [...listedChecks, ...namedMainChecks]) : null,
   ]);
   if (issuesRead.kind === "rate-limited") {
     console.log(`::warning title=GitHub rate limit::${issuesRead.error}`);
     return issuesRead;
   }
   const { issues } = issuesRead;
-  return { kind: "read", issues: mainChecks?.kind === "read" ? await withRedMainCloser(github, repo, issues, appLogin) : issues, mainChecks };
+  return { kind: "read", issues: mainChecks?.kind === "read" ? await withMonitorCloser(github, repo, issues, appLogin, namedMainChecks) : issues, mainChecks };
 }
 
 /** An issue in GitHub's REST listing; pull requests come in it too. */
@@ -106,13 +113,13 @@ interface RawCheckRun {
  * App hasn't been granted Checks: read, and rate-limited, with a warning,
  * when GitHub's rate limit stops the read. Every other error fails the run.
  */
-async function mainChecksOf(github: Pick<GitHub, "rest">, repo: Repo, listedChecks: readonly string[]): Promise<MainChecksRead> {
+async function mainChecksOf(github: Pick<GitHub, "rest">, repo: Repo, byName: readonly string[]): Promise<MainChecksRead> {
   try {
     // With no sha, GitHub lists the default branch's commits.
     const listed = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/commits?per_page=${MAIN_COMMITS}`)) as RawCommit[];
     const commits: MainCommit[] = [];
     for (const commit of listed) {
-      commits.push({ sha: commit.sha, url: commit.html_url, checkRuns: await checkRunsOf(github, repo, commit, listedChecks) });
+      commits.push({ sha: commit.sha, url: commit.html_url, checkRuns: await checkRunsOf(github, repo, commit, byName) });
     }
     return { kind: "read", commits };
   } catch (error) {
@@ -130,13 +137,14 @@ async function mainChecksOf(github: Pick<GitHub, "rest">, repo: Repo, listedChec
 }
 
 /**
- * A commit's check runs: those named in `sandbox.checks`, asked for by name,
- * when it lists any, else every one. Fabrik's own jobs add runs to the
- * default branch's head every hour, so asking by name keeps the read short.
+ * A commit's check runs: these, asked for by name, the Required checks
+ * `sandbox.checks` lists and the Main checks, when it lists any; else every
+ * one. Fabrik's own jobs add runs to the default branch's head every hour,
+ * so asking by name keeps the read short.
  */
-async function checkRunsOf(github: Pick<GitHub, "rest">, repo: Repo, commit: RawCommit, listedChecks: readonly string[]): Promise<CheckRun[]> {
+async function checkRunsOf(github: Pick<GitHub, "rest">, repo: Repo, commit: RawCommit, byName: readonly string[]): Promise<CheckRun[]> {
   const path = `/repos/${repo.owner}/${repo.name}/commits/${commit.sha}/check-runs`;
-  const paths = listedChecks.length === 0 ? [path] : listedChecks.map((name) => `${path}?check_name=${encodeURIComponent(name)}`);
+  const paths = byName.length === 0 ? [path] : byName.map((name) => `${path}?check_name=${encodeURIComponent(name)}`);
   const runs: CheckRun[] = [];
   for (const named of paths) {
     for (const run of await allPages<RawCheckRun>(github, named, (page) => (page as { check_runs: RawCheckRun[] }).check_runs)) {
@@ -163,22 +171,34 @@ interface RawTimelineEvent {
 
 /**
  * The issues, with whether the Monitor itself made the last close of the
- * newest red-main issue, read from its timeline: a close by the Fabrik App
- * that came after the App's green-at note, with no reopen between. The
- * Operator's close, or the Loop's (Triage closing it as wontfix, say, also as
- * the App), comes after no such note.
+ * newest red-main issue and of each named Main check's newest issue, read
+ * from its timeline: a close by the Fabrik App that came after the App's
+ * green-at note, with no reopen between. The Operator's close, or the Loop's
+ * (Triage closing it as wontfix, say, also as the App), comes after no such note.
  */
-async function withRedMainCloser(
+async function withMonitorCloser(
   github: Pick<GitHub, "rest">,
   repo: Repo,
   issues: readonly MonitorIssue[],
   appLogin: string,
+  namedMainChecks: readonly string[],
 ): Promise<MonitorIssue[]> {
-  const newest = newestByMarker(issues).redMain;
-  if (newest === null || newest.open) return [...issues];
+  const newest = newestByMarker(issues);
+  const closed = [newest.redMain, ...namedMainChecks.map((check) => newest.byMainCheck.get(check) ?? null)].filter(
+    (issue): issue is MonitorIssue => issue !== null && !issue.open,
+  );
+  const byMonitor = new Set<MonitorIssue>();
+  for (const issue of closed) {
+    if (await closedByMonitor(github, repo, issue.number, appLogin)) byMonitor.add(issue);
+  }
+  return issues.map((issue) => (byMonitor.has(issue) ? { ...issue, closedByMonitor: true } : issue));
+}
+
+/** Whether the issue's last close, in its timeline, came from the Fabrik App right after its green-at note. */
+async function closedByMonitor(github: Pick<GitHub, "rest">, repo: Repo, issue: number, appLogin: string): Promise<boolean> {
   let noted = false;
   let byMonitor = false;
-  for (const entry of await allPages<RawTimelineEvent>(github, `/repos/${repo.owner}/${repo.name}/issues/${newest.number}/timeline`)) {
+  for (const entry of await allPages<RawTimelineEvent>(github, `/repos/${repo.owner}/${repo.name}/issues/${issue}/timeline`)) {
     if (entry.event === "commented") {
       if (entry.user?.login === appLogin && (entry.body ?? "").startsWith(RED_MAIN_GREEN_MARKER)) noted = true;
     } else if (entry.event === "reopened") {
@@ -188,7 +208,7 @@ async function withRedMainCloser(
       noted = false;
     }
   }
-  return issues.map((issue) => (issue === newest ? { ...issue, closedByMonitor: byMonitor } : issue));
+  return byMonitor;
 }
 
 /**
