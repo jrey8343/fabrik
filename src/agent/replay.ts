@@ -35,8 +35,8 @@ async function builtOn(productDir: string, baseSha: string): Promise<void> {
 /**
  * A replay arm's Implement input, in a checkout of the Ticket's `baseSha`:
  * what a first Implement run's would be (implementInput), with the Ticket and
- * its Spec as GitHub holds them now and the glossary, ADRs and Kit config at
- * `baseSha`. It cuts the Ticket's agent branch there, which is never pushed.
+ * its Spec as GitHub holds them now and the glossary, ADRs, Coding standards
+ * and Kit config at `baseSha`. It cuts the Ticket's agent branch there, which is never pushed.
  * Throws unless the checkout is at `baseSha`.
  */
 export async function replayImplementInput(

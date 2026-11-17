@@ -215,6 +215,27 @@ describe("The Coding standards", () => {
     const list = turn.split("the trust-root files, which are ")[1]?.split(" The Kit refuses")[0] ?? "";
     expect(list).toContain("`CODING_STANDARDS.md` at the repo root");
   });
+
+  // #762: every Implement run is given the file, as the Reviewer is.
+  it("implement names CODING_STANDARDS.md, if the repo has one, among what is at the end of the prompt", async () => {
+    const opening = (await prompt("implement")).split("\n## ")[0] ?? "";
+    const atTheEnd = opening.split(". ").find((sentence) => sentence.endsWith("are at the end of this prompt")) ?? "";
+    expect(atTheEnd).toContain("its `CODING_STANDARDS.md` if it has one");
+  });
+
+  it("implement builds to CODING_STANDARDS.md, the text the Reviewer judges against, and names older code that breaks it instead of fixing it", async () => {
+    const bullet = lineStarting(section(await prompt("implement"), "How to work"), "- Build to `CODING_STANDARDS.md`");
+    expect(bullet).toContain("when the end of this prompt has it");
+    expect(bullet).toContain("the code you write or change");
+    expect(bullet).toContain("the Reviewer judges your pull request against the same text");
+    expect(bullet).toContain("name it in your summary instead of fixing it");
+  });
+
+  it("retro no longer says only the Reviewer reads CODING_STANDARDS.md", async () => {
+    const text = await prompt("retro");
+    expect(text).not.toContain("which only the Reviewer reads");
+    expect(text).toContain("A lesson about how this repo's code should look is a line for `CODING_STANDARDS.md` (`product-trust-root`).");
+  });
 });
 
 describe("Product intent in the Triage prompt", () => {

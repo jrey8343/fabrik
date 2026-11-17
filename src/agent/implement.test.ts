@@ -244,16 +244,80 @@ describe("A run on an existing PR is shown the Operator's comments on it, apart 
 });
 
 describe("The Implementer's context", () => {
-  it("never carries the repo's CODING_STANDARDS.md, which only the Reviewer reads", async () => {
+  it("carries the repo's whole CODING_STANDARDS.md under the Reviewer's heading when it has one at its root (#762)", async () => {
     const productDir = await mkdtemp(join(tmpdir(), "fabrik-implement-"));
     await writeFile(join(productDir, "GLOSSARY.md"), "**Waitlist**:\nPatients waiting for a cancelled slot.\n");
-    await writeFile(join(productDir, "CODING_STANDARDS.md"), "# Coding standards\n\n- Name a test for the behaviour it checks.\n");
+    await writeFile(
+      join(productDir, "CODING_STANDARDS.md"),
+      "# Coding standards\n\n- [hard] Name a test for the behaviour it checks.\n- [judgement] Keep a module to one job.\n",
+    );
 
     const text = (await implementContext(productDir, await fileOf(null), kitConfig())).join("\n");
 
     expect(text).toContain("Patients waiting for a cancelled slot.");
+    expect(text).toContain("## CODING_STANDARDS.md\n# Coding standards\n\n- [hard] Name a test for the behaviour it checks.\n- [judgement] Keep a module to one job.");
+  });
+
+  it("carries no Coding standards when the repo has no CODING_STANDARDS.md at its root", async () => {
+    const productDir = await mkdtemp(join(tmpdir(), "fabrik-implement-"));
+    await mkdir(join(productDir, "docs"));
+    await writeFile(join(productDir, "docs", "CODING_STANDARDS.md"), "# Coding standards\n\n- Name a test for the behaviour it checks.\n");
+
+    const text = (await implementContext(productDir, await fileOf(null), kitConfig())).join("\n");
+
     expect(text).not.toContain("CODING_STANDARDS.md");
     expect(text).not.toContain("Name a test for the behaviour it checks.");
+  });
+
+  describe("on every kind of Implement run (#762)", () => {
+    const STANDARDS = "# Coding standards\n\n- Name a test for the behaviour it checks.\n";
+    const touchUpVerdict = [
+      verdictMarker({
+        verdict: "execution-flaw",
+        source: "reviewer",
+        requestChanges: false,
+        tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 0 },
+        touchUp: 1,
+        headSha: "a".repeat(40),
+      }),
+      "- [small: comment] The doc comment on `total()` is stale.",
+    ].join("\n");
+    const changesRequested = { review: { id: 102, state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] };
+
+    /** A checkout whose one commit has the repo's CODING_STANDARDS.md at its root, as each run's Implement job clones it. */
+    async function checkout(): Promise<string> {
+      const productDir = await mkdtemp(join(tmpdir(), "fabrik-implement-standards-"));
+      const git = (...args: string[]) => promisify(execFile)("git", args, { cwd: productDir });
+      await git("init", "--quiet", "--initial-branch=main");
+      await writeFile(join(productDir, "CODING_STANDARDS.md"), STANDARDS);
+      await git("add", "-A");
+      await git("-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "The shop");
+      return productDir;
+    }
+
+    it.each([
+      ["a first run", async () => ({ pullRequest: "", review: "" })],
+      ["a Kept-branch start", async () => ({ pullRequest: "", review: "", keptBranch: { pullRequest: 230 } })],
+      ["a Retry", async () => ({ pullRequest: await fileOf({ ...pullRequest, operatorComments: [] }), review: "" })],
+      [
+        "a Touch-up",
+        async () => ({
+          pullRequest: await fileOf({ ...pullRequest, comments: [{ body: touchUpVerdict, author: { __typename: "Bot" } }], operatorComments: [] }),
+          review: "",
+        }),
+      ],
+      [
+        "a Request-changes run",
+        async () => ({ pullRequest: await fileOf({ ...pullRequest, operatorComments: [] }), review: await fileOf(changesRequested) }),
+      ],
+      ["a conflict-only run", async () => ({ pullRequest: await fileOf(pullRequest), review: "", conflict: "9".repeat(40) })],
+    ])("%s's input carries the whole file under its heading", async (_kind, files) => {
+      const productDir = await checkout();
+
+      const { parts } = await implementInput(productDir, 7, kitConfig(), { spec: await fileOf(null), ...(await files()) });
+
+      expect(parts.join("\n")).toContain(`## CODING_STANDARDS.md\n${STANDARDS.trimEnd()}`);
+    });
   });
 
   it("names the Required checks on its PR under the Sandbox's commands", async () => {

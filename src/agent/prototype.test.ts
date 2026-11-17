@@ -56,6 +56,13 @@ describe("A prototype turn's context", () => {
     );
   });
 
+  it("carries no Coding standards, which hold code that merges, not throwaway variants (#762)", () => {
+    const text = prototypeTurnContext(withUi, 7, REQUEST).parts.join("\n");
+
+    expect(text).not.toContain("CODING_STANDARDS.md");
+    expect(text).not.toContain("Coding standards");
+  });
+
   it("names no Required checks, even when the Kit config lists some, since a prototype turn writes no acceptance criteria (#763)", () => {
     const { parts } = prototypeTurnContext(kitConfig({ ui: UI, sandbox: { ...kitConfig().sandbox, checks: ["test"] } }), 7, REQUEST);
 
