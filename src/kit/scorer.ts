@@ -168,12 +168,18 @@ export function scoringRubrics(scored: RunRecord, kit: KitRubrics): readonly Rub
   throw new Error(`${run}, not those read at ${kit.sha}`);
 }
 
+/**
+ * The label that says a rubric doesn't apply to a run (#739): the one answer
+ * that may come with no score, and only for a rubric whose labels list it.
+ */
+export const NOT_APPLICABLE = "not-applicable";
+
 /** One rubric's answer in the judge's structured output. */
 export interface JudgeAnswer {
   /** The rubric's name, such as `efficiency`. */
   readonly scorer: string;
-  /** How the run did on the rubric, from 0 to 1. */
-  readonly score: number;
+  /** How the run did on the rubric, from 0 to 1, or null with the label `not-applicable`, for a rubric whose labels list it. */
+  readonly score: number | null;
   /** One of the rubric's labels. */
   readonly label: string;
   /** One line on why. */
@@ -228,17 +234,18 @@ export interface ScoreEntry {
   readonly scorer: string;
   readonly version: number;
   readonly threshold: number;
-  readonly score: number;
-  /** Whether the score is at or above the rubric's threshold: the Kit's call, never the judge's. */
-  readonly pass: boolean;
+  /** Null when the rubric doesn't apply to the run: its label is `not-applicable`. */
+  readonly score: number | null;
+  /** Whether the score is at or above the rubric's threshold: the Kit's call, never the judge's. Null with no score. */
+  readonly pass: boolean | null;
   readonly label: string;
   readonly rationale: string;
 }
 
-/** The schema a score file is written at: 2 added `replay`. */
-export const SCORE_FILE_SCHEMA = 2;
+/** The schema a score file is written at: 2 added `replay`, 3 a not-applicable entry's null `score` and `pass`. */
+export const SCORE_FILE_SCHEMA = 3;
 
-/** The scores of one picked run under one rubric set, or why it has none; schema 2. */
+/** The scores of one picked run under one rubric set, or why it has none; schema 3. */
 export interface ScoreFile {
   readonly schema: typeof SCORE_FILE_SCHEMA;
   readonly kitSha: string;
@@ -274,13 +281,15 @@ export interface ScoreFile {
 }
 
 /**
- * A score file as read back from the store, at the current schema: a schema 1
- * file, written before there were Replays, as no replay's. Null for anything
- * that isn't a score file of a schema the Kit knows.
+ * A score file as read back from the store, at the current schema: a schema 2
+ * file, whose every entry has a score, as it is; a schema 1 file, written
+ * before there were Replays, as no replay's too. Null for anything that isn't
+ * a score file of a schema the Kit knows.
  */
 export function readScoreFile(stored: unknown): ScoreFile | null {
   if (!isObject(stored)) return null;
   if (stored["schema"] === SCORE_FILE_SCHEMA) return stored as unknown as ScoreFile;
+  if (stored["schema"] === 2) return { ...(stored as unknown as Omit<ScoreFile, "schema">), schema: SCORE_FILE_SCHEMA };
   if (stored["schema"] === 1) return { ...(stored as unknown as Omit<ScoreFile, "schema" | "replay">), schema: SCORE_FILE_SCHEMA, replay: null };
   return null;
 }
@@ -340,7 +349,9 @@ function resultOf(rubrics: readonly Rubric[], outcome: ScoringOutcome): Pick<Sco
  * Each rubric's score from the judge's output, in the rubrics' order, with
  * its pass from the rubric's threshold. Null, so the output is invalid as a
  * whole, unless it's a JudgeOutput answering each rubric exactly once with a
- * score from 0 to 1 and one of that rubric's labels. The judge's run checks
+ * score from 0 to 1 and one of that rubric's labels, or, for a rubric whose
+ * labels list `not-applicable`, with that label and no score, which is an
+ * entry with no score and no pass. The judge's run checks
  * its answer with this too (src/kit/judgeLaunch.ts), so an answer the score
  * file would refuse fails the judge, with the reasons in its failure report.
  */
@@ -352,9 +363,10 @@ export function scoreEntries(rubrics: readonly Rubric[], output: unknown): reado
     const [answer, ...others] = answers.filter((a) => a.scorer === rubric.name);
     if (answer === undefined || others.length > 0) return null;
     const { score, label, rationale } = answer;
-    if (score < 0 || score > 1 || !rubric.labels.includes(label)) return null;
+    if (!rubric.labels.includes(label) || (score === null) !== (label === NOT_APPLICABLE)) return null;
+    if (score !== null && (score < 0 || score > 1)) return null;
     const { name, version, threshold } = rubric;
-    entries.push({ scorer: name, version, threshold, score, pass: score >= threshold, label, rationale });
+    entries.push({ scorer: name, version, threshold, score, pass: score === null ? null : score >= threshold, label, rationale });
   }
   return entries;
 }
@@ -370,8 +382,7 @@ function isAnswer(value: unknown): value is JudgeAnswer {
   return (
     isObject(value) &&
     typeof value["scorer"] === "string" &&
-    typeof value["score"] === "number" &&
-    Number.isFinite(value["score"]) &&
+    (value["score"] === null || (typeof value["score"] === "number" && Number.isFinite(value["score"]))) &&
     typeof value["label"] === "string" &&
     typeof value["rationale"] === "string"
   );

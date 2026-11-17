@@ -822,6 +822,37 @@ describe("the evidence bundle", () => {
       expect(lowScores.map(({ ref }) => ref)).toEqual(["scores/owner/product/2026-11/1000-1-implement-a1b2c3.json"]);
     });
 
+    // #739: a rubric that doesn't apply to a run gives it no score, so it never fails the run.
+    describe("with runs Test-first doesn't apply to", () => {
+      const notApplicable = aScoreEntry({ scorer: "test-first", threshold: 0.8, score: null, pass: null, label: "not-applicable", rationale: "A rebase alone." });
+      const testAfter = aScoreEntry({ scorer: "test-first", threshold: 0.8, score: 0, pass: false, label: "test-after", rationale: "Tests after the fix." });
+      const ranOn = (runId: number, endedAt = "2026-11-03T00:00:00Z") => aRecordWithTranscript({ runId, endedAt });
+      const scoreFiles = {
+        "scores/owner/product/2026-11/1000-1-implement-a1b2c3.json": aScoreFile({ runId: 1000, entries: [passing, notApplicable] }),
+        "scores/owner/product/2026-11/1001-1-implement-a1b2c3.json": aScoreFile({ runId: 1001, entries: [passing, notApplicable] }),
+        "scores/owner/product/2026-11/1002-1-implement-a1b2c3.json": aScoreFile({ runId: 1002, entries: [passing, testAfter] }),
+        // Last week's, a Replay arm's and another repo's runs aren't this window's.
+        "scores/owner/product/2026-10/1003-1-implement-a1b2c3.json": aScoreFile({ runId: 1003, entries: [notApplicable] }),
+        "scores/owner/product/2026-11/2000-1-implement-replay-baseline-a1b2c3.json": aScoreFile({ runId: 2000, replay: A_REPLAY, entries: [notApplicable] }),
+        "scores/owner/other/2026-11/1004-1-implement-a1b2c3.json": aScoreFile({ repo: "owner/other", runId: 1004, entries: [notApplicable] }),
+      };
+      const bundle = () =>
+        evidenceBundle(
+          aRetroEvidenceInput({
+            records: [ranOn(1000), ranOn(1001), ranOn(1002), ranOn(1003, "2026-10-30T23:00:00Z"), aReplayRunRecord({ endedAt: "2026-11-03T00:00:00Z" })],
+            scoreFiles,
+          }),
+        );
+
+      it("never holds a run whose only score that didn't pass is one that doesn't apply", () => {
+        expect(bundle().lowScores.map(({ ref }) => ref)).toEqual(["scores/owner/product/2026-11/1002-1-implement-a1b2c3.json"]);
+      });
+
+      it("says how many of the window's runs each rubric didn't apply to", () => {
+        expect(bundle().notApplicable).toEqual({ "test-first@1": 2 });
+      });
+    });
+
     it("holds none when the repo has no score files", () => {
       const run = aRecordWithTranscript({ runId: 1000, endedAt: "2026-11-03T00:00:00Z" });
       const { lowScores } = evidenceBundle(aRetroEvidenceInput({ records: [run], readTranscript: transcriptsOf([run, aTranscript()]), scoreFiles: {} }));

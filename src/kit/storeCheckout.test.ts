@@ -27,7 +27,7 @@ describe("Reading the store's checkout", () => {
       [recordPathOf(record)]: JSON.stringify(record),
       "runs/owner/product/2026-11/1002-1-triage.json": JSON.stringify({ ...record, schema: RUN_RECORD_SCHEMA + 1 }),
       [scorePath]: JSON.stringify(aScoreFile()),
-      "scores/owner/product/2026-11/1003-1-implement-def456.json": JSON.stringify({ ...aScoreFile(), schema: 3 }),
+      "scores/owner/product/2026-11/1003-1-implement-def456.json": JSON.stringify({ ...aScoreFile(), schema: 4 }),
     });
 
     expect((await readStoreRunRecords(store, ["Claude token", "Claude token 2"])).records).toEqual({ [recordPathOf(record)]: record });
@@ -58,7 +58,15 @@ describe("Reading the store's checkout", () => {
     const { replay: _, ...older } = aScoreFile();
     const store = await aCheckoutWith({ [scorePath]: JSON.stringify({ ...older, schema: 1 }) });
 
-    expect(await readStoreScoreFiles(store)).toEqual({ [scorePath]: { ...aScoreFile(), schema: 2, replay: null } });
+    expect(await readStoreScoreFiles(store)).toEqual({ [scorePath]: { ...aScoreFile(), schema: 3, replay: null } });
+  });
+
+  it("reads a schema 2 score file, written before a rubric could be not applicable, as it was, at the current schema", async () => {
+    const skillUse = { scorer: "skill-use", version: 1, threshold: 0.7, score: 0.75, pass: true, label: "followed", rationale: "Loaded tdd." };
+    const older = { ...aScoreFile({ rubrics: ["efficiency@1", "ticket-compliance@2", "skill-use@1"] }), entries: [...aScoreFile().entries!.slice(0, 2), skillUse] };
+    const store = await aCheckoutWith({ [scorePath]: JSON.stringify({ ...older, schema: 2 }) });
+
+    expect(await readStoreScoreFiles(store)).toEqual({ [scorePath]: { ...older, schema: 3 } });
   });
 
   it("reads a schema 1 Run record, written before runs were given a Subscription, as on the first listed one", async () => {

@@ -9,7 +9,7 @@ import { recordedRunScoringSummary, type ScoreRecordFiles, scoreRecordedRun, sco
 
 const RUBRICS: readonly Rubric[] = [
   { name: "efficiency", version: 1, threshold: 0.7, labels: ["clean", "repeated-calls"], text: "How directly the run worked." },
-  { name: "skill-use", version: 1, threshold: 0.7, labels: ["followed", "missed-skill"], text: "Whether it used its skills." },
+  { name: "test-first", version: 1, threshold: 0.8, labels: ["test-first", "test-after", "not-applicable"], text: "Whether it wrote its failing tests first." },
 ];
 
 /** The rubrics as the push job reads them, from its checkout of the Kit commit that ran the run (aRunRecord's kitSha). */
@@ -34,7 +34,7 @@ const JUDGE_LINES = [
 
 const ANSWERS = [
   { scorer: "efficiency", score: 0.8, label: "clean", rationale: "Each call moved the work on." },
-  { scorer: "skill-use", score: 0.5, label: "missed-skill", rationale: "Never loaded tdd." },
+  { scorer: "test-first", score: 0.5, label: "test-after", rationale: "Wrote the fix before its test." },
 ] as const;
 
 const judged: ScoringOutcome = {
@@ -119,7 +119,7 @@ describe("Writing a judge run's files to the store", () => {
     expect(decoded(store.held.get(rerun.score.path))).toMatchObject({
       judge: { record: JUDGE_RECORD_2 },
       skip: null,
-      entries: [{ scorer: "efficiency", score: 0.8 }, { scorer: "skill-use", score: 0.5 }],
+      entries: [{ scorer: "efficiency", score: 0.8 }, { scorer: "test-first", score: 0.5 }],
     });
     // The failed judge's record stays, so what both judges cost counts.
     expect(store.held.get(JUDGE_RECORD)).toBe(first.held.get(JUDGE_RECORD));
@@ -210,9 +210,15 @@ describe("The score-record job's step-summary line", () => {
     const run = files();
 
     expect(scoreRecordSummary(written(run))).toBe(
-      "Scored run 1007-1 on #7: efficiency@1 0.80, passed (clean); skill-use@1 0.50, failed (missed-skill). " +
+      "Scored run 1007-1 on #7: efficiency@1 0.80, passed (clean); test-first@1 0.50, failed (test-after). " +
         `Written to jrey8343/fabrik-runs: ${JUDGE_RECORD}, ${run.score.path}.`,
     );
+  });
+
+  it("names a rubric that doesn't apply to the run as not applicable, with no score and no pass (#739)", () => {
+    const run = files({ ...judged, output: { answers: [ANSWERS[0], { scorer: "test-first", score: null, label: "not-applicable", rationale: "A rebase alone." }] } });
+
+    expect(scoreRecordSummary(written(run))).toMatch(/^Scored run 1007-1 on #7: efficiency@1 0\.80, passed \(clean\); test-first@1 not applicable\. /);
   });
 
   it("says when the judge read a trimmed transcript", () => {
@@ -242,7 +248,7 @@ describe("The score-record job's step-summary line", () => {
     const again = { ...kept(run, stored.score.file), written: [], existing: [run.judge.recordPath, run.score.path] };
 
     expect(scoreRecordSummary(again)).toBe(
-      "Run 1007-1 on #7 was already scored, and the store keeps its score file: efficiency@1 0.80, passed (clean); skill-use@1 0.50, failed (missed-skill). " +
+      "Run 1007-1 on #7 was already scored, and the store keeps its score file: efficiency@1 0.80, passed (clean); test-first@1 0.50, failed (test-after). " +
         `Already there, left as it was: ${JUDGE_RECORD}, ${run.score.path}.`,
     );
   });
@@ -252,7 +258,7 @@ describe("The score-record job's step-summary line", () => {
     const replaced = { ...written(run), scoreFile: { kind: "replaced", skip: { reason: "judge-output-invalid" } } } as const;
 
     expect(scoreRecordSummary(replaced)).toBe(
-      "Scored run 1007-1 on #7: efficiency@1 0.80, passed (clean); skill-use@1 0.50, failed (missed-skill). " +
+      "Scored run 1007-1 on #7: efficiency@1 0.80, passed (clean); test-first@1 0.50, failed (test-after). " +
         "They replace the judge-output-invalid score file an earlier judge left. " +
         `Written to jrey8343/fabrik-runs: ${JUDGE_RECORD_2}, ${run.score.path}.`,
     );

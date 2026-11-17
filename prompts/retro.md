@@ -17,7 +17,7 @@ You work in a read-only checkout of this repo's default branch. "The pending Ret
 - "Architectural escapes": each Audit candidate the Operator filed as an issue in the window that traces back to merged agent PRs, structural decay that passed Review. Each has its kept PRs, each PR's Ticket, with its title and body as it stands now, and its Run records, and the last passing Review run on the PR with its trimmed transcript.
 - "Operator feedback": for each agent PR with activity in the window, merged, closed or still open, the Operator's Request changes reviews with their inline comments, each with its own run's two answers (`reviewMiss`: whether it asked for what the pass should already have caught; `amendsTicket`: whether it changed what the Ticket asked for; each `null` when unanswered), each run of the Operator's own commits to the agent branch with their messages and patch, and the Operator's comments.
 - "Follow-ups on passing Verdicts": each Follow-up the Reviewer named on a passing Verdict of a PR merged in the window, and whether the Operator opened it as an issue.
-- "Low-scoring runs": each run in the window a Scorer failed, with every entry's scorer, score, label and rationale, and the run's trimmed transcript. It's empty when the repo has no scores yet.
+- "Low-scoring runs": each run in the window a Scorer failed, with every entry's scorer, score, label and rationale, and the run's trimmed transcript. It's empty when the repo has no scores yet. A rubric that doesn't apply to a run, such as Test-first on a conflict-only run or a doc fix, gives it no score and label `not-applicable`, which is never a failure: a line after the list says how many of the window's runs each rubric didn't apply to.
 - "The sample": a fixed one-in-ten sample of the window's merged agent PRs, each with its Ticket, with its title and body as it stands now, its Verdicts, Run records and trimmed transcripts, so ordinary runs get read too. A Verdict marked `flaky` came from required checks that have since passed on the head it was given on: a Flaky check, the suite's and not the Implementer's, which no longer counts toward its Ticket's Retries.
 - "The streak table": every agent PR merged in the last 90 days, with the paths it changed and three flags: named in an escape, reverted, and sent back with Request changes. A loosening counts its streak from it.
 - "The last closed Retros" and "Open issues filed from Retros": see **Earlier Retros**.
@@ -31,7 +31,7 @@ Weigh the evidence in this order, and rank your proposals the same way:
 
 1. "Architectural escapes": each is a structural miss that passed Review, the costliest thing the factory gets wrong.
 2. Patterns repeated across "Operator feedback": what the Operator keeps having to ask for or fix by hand, on more than one PR. Follow-ups that recur in "Follow-ups on passing Verdicts" weigh with them.
-3. "Low-scoring runs": runs that flailed, strayed from their Ticket or missed the skills they had.
+3. "Low-scoring runs": runs that flailed, strayed from their Ticket or didn't work test-first.
 4. "The sample": ordinary runs that show a pattern nothing above caught.
 
 Never propose a pattern you saw once outside an escape. One escape is enough on its own; anything else needs the same pattern on at least two distinct PRs. The Kit drops a proposal whose evidence holds neither an escape nor two distinct PRs.

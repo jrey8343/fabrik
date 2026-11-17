@@ -66,7 +66,7 @@ export async function readStoreRunRecords(storeDir: string, subscriptions: KitCo
 
 /**
  * Every score file under `scores/`, by its path in the store, at the current
- * schema: a schema 1 file as no replay's (readScoreFile). A file of a schema
+ * schema: a schema 2 file as it was, a schema 1 file as no replay's too (readScoreFile). A file of a schema
  * the Kit doesn't know is left out.
  */
 export async function readStoreScoreFiles(storeDir: string): Promise<Record<string, ScoreFile>> {

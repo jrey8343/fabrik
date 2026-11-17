@@ -42,7 +42,7 @@ import {
 } from "./retroEvidence.ts";
 import { type LoopHealth, loopHealthLines, loopHealthOf, loopIsUnhealthy, type RepoHealthFacts } from "./loopHealth.ts";
 import { averageCostOf, BUILD_ROLES, costOf, costPerMergedPullRequestOf, endedBy } from "./mergedCost.ts";
-import { rubricId, SCORERS } from "./rubrics.ts";
+import { rubricId, SCORERS, scorerName } from "./rubrics.ts";
 import { type PlainKind, type Standing, standingsOf, type StandingNamed } from "./standing.ts";
 import { givenUpWeeksOf, maxInFlightHoldOf, mergeGateHoldOf } from "./standingInFlight.ts";
 import { wordStanding } from "./standingWording.ts";
@@ -490,10 +490,14 @@ export interface WeekScores {
 export interface RubricScores {
   readonly scorer: string;
   readonly version: number;
+  /** The runs it gave a score, never one it didn't apply to. */
   readonly runsScored: number;
-  readonly medianScore: number;
-  /** The share of the runs scored that passed, from 0 to 1. */
-  readonly passing: number;
+  /** The runs the judge said it doesn't apply to (#739), which have no score. */
+  readonly notApplicable: number;
+  /** Null when it scored no run. */
+  readonly medianScore: number | null;
+  /** The share of the runs scored that passed, from 0 to 1; null when it scored no run. */
+  readonly passing: number | null;
 }
 
 /** What one Product repo has waiting on the Operator, as of the filing. */
@@ -1084,15 +1088,17 @@ function scoresOf(week: Week, input: WeeklySummaryInput): WeekScores {
     rubric.entries.push(entry);
     byRubric.set(id, rubric);
   }
-  const rubrics = [...byRubric.values()].map(
-    ({ scorer, version, entries }): RubricScores => ({
+  const rubrics = [...byRubric.values()].map(({ scorer, version, entries }): RubricScores => {
+    const scores = entries.flatMap(({ score }) => (score === null ? [] : [score]));
+    return {
       scorer,
       version,
-      runsScored: entries.length,
-      medianScore: median(entries.map((entry) => entry.score)) ?? 0,
-      passing: entries.filter((entry) => entry.pass).length / entries.length,
-    }),
-  );
+      runsScored: scores.length,
+      notApplicable: entries.length - scores.length,
+      medianScore: median(scores),
+      passing: scores.length === 0 ? null : entries.filter((entry) => entry.pass === true).length / scores.length,
+    };
+  });
   // The scoring plan's reasons, then the judge's: the order the section lists them in.
   const skips: Record<ScoreSkip["reason"], number> = {
     "weekly-limit": 0,
@@ -1823,6 +1829,7 @@ function scoresLines({ thisWeek, lastWeek }: WeekOverWeek<WeekScores>, scoringCo
     const name = `${scorerName(rubric.scorer)} v${rubric.version}`;
     return [
       row(`${name}: runs scored`, { thisWeek: rubric.runsScored, lastWeek: before?.runsScored ?? 0 }, count),
+      ...(rubric.scorer === TEST_FIRST ? [row(`${name}: not applicable`, { thisWeek: rubric.notApplicable, lastWeek: before?.notApplicable ?? 0 }, count)] : []),
       row(`${name}: median score`, { thisWeek: rubric.medianScore, lastWeek: before?.medianScore ?? null }, (score) => score.toFixed(2)),
       shareRow(`${name}: passing`, { thisWeek: rubric.passing, lastWeek: before?.passing ?? null }),
     ];
@@ -1848,10 +1855,8 @@ function scoresLines({ thisWeek, lastWeek }: WeekOverWeek<WeekScores>, scoringCo
   return lines;
 }
 
-/** A Scorer as the summary names it: `ticket-compliance` is Ticket compliance. */
-function scorerName(scorer: string): string {
-  return `${scorer.charAt(0).toUpperCase()}${scorer.slice(1).replaceAll("-", " ")}`;
-}
+/** The Scorer that can say it doesn't apply to a run, so the Scores count those runs on a row of its own (#739). */
+const TEST_FIRST = "test-first";
 
 /** The Held section: a line per repo and source with work held, or nothing at all when no repo has any. */
 function heldLines(repos: readonly RepoSection[], timeZone: string): string[] {

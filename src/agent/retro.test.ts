@@ -34,7 +34,7 @@ const KIT_FILES: Readonly<Record<string, string>> = {
   "prompts/prototype.md": "You take a Design session's prototype turn.\n",
   "prompts/scorers/efficiency.md": "---\nname: efficiency\n---\nScore how directly the run worked.\n",
   "prompts/scorers/ticket-compliance.md": "---\nname: ticket-compliance\n---\nScore how closely it kept to its Ticket.\n",
-  "prompts/scorers/skill-use.md": "---\nname: skill-use\n---\nScore how it used its skills.\n",
+  "prompts/scorers/test-first.md": "---\nname: test-first\n---\nScore whether it wrote its failing tests first.\n",
 };
 
 async function aKitWith(files: Readonly<Record<string, string>>): Promise<string> {
@@ -122,8 +122,33 @@ describe("A Retro run's context", () => {
   });
 
   it("fails when the Kit checkout is missing a role prompt or rubric it quotes", async () => {
-    const { "prompts/scorers/skill-use.md": _, ...rest } = KIT_FILES;
+    const { "prompts/scorers/test-first.md": _, ...rest } = KIT_FILES;
 
-    await expect(retroContext(await evidenceFileOf(JSON.stringify(bundle)), await aKitWith(rest))).rejects.toThrow(/skill-use\.md/);
+    await expect(retroContext(await evidenceFileOf(JSON.stringify(bundle)), await aKitWith(rest))).rejects.toThrow(/test-first\.md/);
+  });
+
+  // #739: so the Retro knows how many runs went unscored, and isn't left to read their absence as health.
+  it("says under the low-scoring runs how many runs each rubric didn't apply to, and nothing when none", async () => {
+    const withNotApplicable = { ...bundle, notApplicable: { "test-first@1": 2 } };
+    const parts = await retroContext(await evidenceFileOf(JSON.stringify(withNotApplicable)), await aKitWith(KIT_FILES));
+
+    const at = parts.indexOf(`## ${RETRO_SECTIONS.lowScores}`);
+    expect(parts.slice(at, at + 5)).toEqual([
+      `## ${RETRO_SECTIONS.lowScores}`,
+      "```json",
+      "[]",
+      "```",
+      "Not applicable to Test-first v1, so unscored and never low-scoring: 2 runs in the window.",
+    ]);
+    const none = await retroContext(await evidenceFileOf(JSON.stringify(bundle)), await aKitWith(KIT_FILES));
+    expect(none.some((part) => part.startsWith("Not applicable"))).toBe(false);
+  });
+
+  it("reads evidence gathered before a rubric could be not applicable as none not applicable", async () => {
+    const { notApplicable: _, ...older } = bundle;
+
+    expect(await retroContext(await evidenceFileOf(JSON.stringify(older)), await aKitWith(KIT_FILES))).toEqual(
+      await retroContext(await evidenceFileOf(JSON.stringify(bundle)), await aKitWith(KIT_FILES)),
+    );
   });
 });

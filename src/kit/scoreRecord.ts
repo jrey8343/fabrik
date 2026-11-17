@@ -176,10 +176,12 @@ function scoredLine(score: ScoreFile, judge: RunRecord | null): string {
   return `Scored ${run}${score.digestTrimmed === true ? " from a trimmed transcript" : ""}: ${entriesOf(score)}.`;
 }
 
-/** Each rubric's score in a score file, whether it passed and its label. */
+/** Each rubric's score in a score file, whether it passed and its label, or that the rubric doesn't apply to the run. */
 function entriesOf(score: ScoreFile): string {
   return (score.entries ?? [])
-    .map((entry) => `${entry.scorer}@${entry.version} ${entry.score.toFixed(2)}, ${entry.pass ? "passed" : "failed"} (${entry.label})`)
+    .map(({ scorer, version, score, pass, label }) =>
+      score === null ? `${scorer}@${version} not applicable` : `${scorer}@${version} ${score.toFixed(2)}, ${pass === true ? "passed" : "failed"} (${label})`,
+    )
     .join("; ");
 }
 

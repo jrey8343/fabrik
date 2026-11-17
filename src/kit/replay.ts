@@ -34,10 +34,10 @@ import {
   varied,
 } from "./replayPick.ts";
 import { readReplayRequest, readReplayVariable, type ReplayRequest, type ReplayVariable, settingOf, variableLine } from "./replayRequest.ts";
-import { rubricId, SCORERS } from "./rubrics.ts";
+import { rubricId, SCORERS, scorerName } from "./rubrics.ts";
 import { firstRunOf, isLive, isReplayArm, REPLAY_ARMS, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
 import { storeFileUrl } from "./runStore.ts";
-import type { ScoreFile } from "./scorer.ts";
+import { NOT_APPLICABLE, type ScoreFile } from "./scorer.ts";
 
 export {
   MAX_LISTED_TICKETS,
@@ -678,9 +678,10 @@ interface ArmResult {
   readonly verdict: Verdict | "none" | null;
   /**
    * Its Implement run's scores, each keyed by its rubric's id, such as
-   * `efficiency@1`: a rubric it has no score for is missing.
+   * `efficiency@1`: a rubric it has no score for is missing, and one that
+   * doesn't apply to the run (#739) is null.
    */
-  readonly scores: Readonly<Record<string, number>>;
+  readonly scores: Readonly<Record<string, number | null>>;
   /** What its Implement and Review runs spent together. */
   readonly costUsd: number | null;
   readonly turns: number | null;
@@ -829,14 +830,15 @@ function readArmResult(value: unknown): ArmResult | null {
  * they were (#738) holds them as a list, one per Scorer the Kit had then, in
  * POSITIONAL_RUBRICS' order, null for one with no score.
  */
-function readScores(value: unknown): Record<string, number> | null {
+function readScores(value: unknown): Record<string, number | null> | null {
   if (Array.isArray(value)) {
     if (value.length !== POSITIONAL_RUBRICS.length || !value.every((score) => score === null || isScore(score))) return null;
     return Object.fromEntries(POSITIONAL_RUBRICS.flatMap((id, i) => (value[i] === null ? [] : [[id, value[i] as number]])));
   }
   if (!isObject(value)) return null;
   const entries = Object.entries(value);
-  return entries.every((entry): entry is [string, number] => RUBRIC_ID.test(entry[0]) && isScore(entry[1])) ? Object.fromEntries(entries) : null;
+  const read = entries.every((entry): entry is [string, number | null] => RUBRIC_ID.test(entry[0]) && (entry[1] === null || isScore(entry[1])));
+  return read ? Object.fromEntries(entries) : null;
 }
 
 /** The rubrics a positional results marker's scores are under, in its order: the Kit's Scorers at their versions when it was last written. */
@@ -860,12 +862,12 @@ interface ScoreColumn {
  */
 function scoreColumns(results: readonly TicketResult[]): ScoreColumn[] {
   const ids = [...new Set(results.flatMap(({ arms }) => REPLAY_ARMS.flatMap((arm) => Object.keys(arms[arm].scores))))];
-  if (ids.length === 0) return SCORERS.map((scorer) => ({ id: scorer, heading: scorerWords(scorer) }));
+  if (ids.length === 0) return SCORERS.map((scorer) => ({ id: scorer, heading: scorerName(scorer) }));
   const nameOf = (id: string) => id.slice(0, id.indexOf("@"));
   return ids.map((id) => {
     const name = nameOf(id);
     const shared = ids.filter((other) => nameOf(other) === name).length > 1;
-    return { id, heading: shared ? `${scorerWords(name)} v${id.slice(name.length + 1)}` : scorerWords(name) };
+    return { id, heading: shared ? `${scorerName(name)} v${id.slice(name.length + 1)}` : scorerName(name) };
   });
 }
 
@@ -892,9 +894,10 @@ function isKeyOf<K extends string>(words: Readonly<Record<K, string>>, value: un
   return typeof value === "string" && Object.hasOwn(words, value);
 }
 
-/** An arm's score under rubric `id`, or null for none. */
-function scoreUnder(scores: ArmResult["scores"], id: string): number | null {
-  return Object.hasOwn(scores, id) ? (scores[id] ?? null) : null;
+/** An arm's score under rubric `id`: a number, `not-applicable` when the rubric doesn't apply to its run, or null for none. */
+function scoreUnder(scores: ArmResult["scores"], id: string): number | typeof NOT_APPLICABLE | null {
+  if (!Object.hasOwn(scores, id)) return null;
+  return scores[id] ?? NOT_APPLICABLE;
 }
 
 function isScore(value: unknown): value is number {
@@ -935,10 +938,12 @@ function resultsLines({ plan, progress }: ReplayMarks, results: readonly TicketR
   ];
 }
 
-/** A mean score over the runs a Scorer scored, `scored` of the `of` Tickets done. */
+/** A mean score over the runs a Scorer scored, `scored` of the `of` Tickets done, leaving out the `notApplicable` it doesn't apply to. */
 interface MeanScore {
-  readonly mean: number;
+  /** Null when it scored none. */
+  readonly mean: number | null;
   readonly scored: number;
+  readonly notApplicable: number;
   readonly of: number;
 }
 
@@ -1000,7 +1005,7 @@ function totalsOf(done: readonly TicketResult[], columns: readonly ScoreColumn[]
       gates: tally(arms.map(({ gates }) => gates), ["passed"], ["no-test-command"]),
       verdicts: verdicts(arms),
       hiddenTests: tally(arms.map(({ hiddenTests }) => hiddenTests), ["passed"], ["no-hidden-tests", "no-test-command"]),
-      scores: new Map(columns.map(({ id }) => [id, meanScoreOf(arms.flatMap(({ scores }) => scoreUnder(scores, id) ?? []), arms.length)])),
+      scores: new Map(columns.map(({ id }) => [id, meanScoreOf(arms.map(({ scores }) => scoreUnder(scores, id)), arms.length)])),
       ...spent(arms),
     };
   };
@@ -1027,9 +1032,17 @@ function sumOf(figures: readonly (number | null)[]): number | null {
   return figures.reduce<number | null>((total, figure) => (total === null || figure === null ? null : total + figure), 0);
 }
 
-/** The mean of the scores of `of` Tickets done, with how many it was scored over, or null when none was scored. */
-function meanScoreOf(scores: readonly number[], of: number): MeanScore | null {
-  return scores.length === 0 ? null : { mean: scores.reduce((sum, score) => sum + score, 0) / scores.length, scored: scores.length, of };
+/**
+ * The mean of the scores of `of` Tickets done, with how many it was scored
+ * over, leaving out and counting those the rubric doesn't apply to; null when
+ * none has a score or is not applicable.
+ */
+function meanScoreOf(given: readonly (number | typeof NOT_APPLICABLE | null)[], of: number): MeanScore | null {
+  const scores = given.filter((score) => typeof score === "number");
+  const notApplicable = given.filter((score) => score === NOT_APPLICABLE).length;
+  if (scores.length === 0 && notApplicable === 0) return null;
+  const mean = scores.length === 0 ? null : scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  return { mean, scored: scores.length, notApplicable, of };
 }
 
 /** The Totals section: a row for each arm and the original runs, then any original left out and the baseline's gap from the original. */
@@ -1070,9 +1083,12 @@ function totalsLines(totals: ReplayTotals, columns: readonly ScoreColumn[]): str
   ];
 }
 
-/** A mean score with the Tickets it was scored over, of those done: `0.95 (2/5)`. */
+/** A mean score with the Tickets it was scored over, of those done, and any it doesn't apply to: `0.95 (2/5)`, `1.00 (1/2, 1 not applicable)`. */
 function meanScoreWords(score: MeanScore | null): string {
-  return score === null ? NONE : `${score.mean.toFixed(2)} (${score.scored}/${score.of})`;
+  if (score === null) return NONE;
+  const leftOut = `${score.notApplicable} not applicable`;
+  if (score.mean === null) return `${NONE} (${leftOut})`;
+  return `${score.mean.toFixed(2)} (${score.scored}/${score.of}${score.notApplicable === 0 ? "" : `, ${leftOut}`})`;
 }
 
 function tallyWords(tally: Tally | null): string {
@@ -1132,7 +1148,7 @@ function armRow(
     result.gates === null ? NONE : GATES_WORDS[result.gates],
     result.verdict === null ? NONE : VERDICT_WORDS[result.verdict],
     result.hiddenTests === null ? NONE : HIDDEN_TESTS_WORDS[result.hiddenTests],
-    ...columns.map(({ id }) => orNone(scoreUnder(result.scores, id), (value) => value.toFixed(2))),
+    ...columns.map(({ id }) => scoreWords(scoreUnder(result.scores, id))),
     orNone(result.costUsd, dollars),
     orNone(result.turns, String),
     orNone(result.durationMs, minutes),
@@ -1166,10 +1182,10 @@ function minutes(ms: number): string {
   return ms < 60_000 ? "under 1 min" : `${Math.round(ms / 60_000)} min`;
 }
 
-/** A Scorer's name as a column heading: `ticket-compliance` as Ticket compliance. */
-function scorerWords(scorer: string): string {
-  const words = scorer.replaceAll("-", " ");
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+/** An Arm's score as its row shows it: to two places, `not applicable`, or – for none. */
+function scoreWords(score: number | typeof NOT_APPLICABLE | null): string {
+  if (score === NOT_APPLICABLE) return "not applicable";
+  return orNone(score, (value) => value.toFixed(2));
 }
 
 /** An arm, with how it runs what the variable changes: a candidate Kit's baseline is always the pinned release. */

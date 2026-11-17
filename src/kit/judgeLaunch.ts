@@ -7,7 +7,7 @@
 import { type AgentProvider, Output, type OutputObjectDefinition } from "@ai-hero/sandcastle";
 import { type Checked, claudeArgs, schemaOf } from "../agent/launch.ts";
 import type { Rubric } from "./rubrics.ts";
-import { type JudgeOutput, scoreEntries } from "./scorer.ts";
+import { type JudgeOutput, NOT_APPLICABLE, scoreEntries } from "./scorer.ts";
 import { JUDGE_OUTPUT_TAG } from "./scorerPrompt.ts";
 
 /**
@@ -60,7 +60,10 @@ function readJudgeOutput(rubrics: readonly Rubric[]): (value: unknown) => Checke
       ok: false,
       errors: [
         `The answer must be a JSON object whose \`answers\` hold exactly one answer per rubric, each with the rubric's name as \`scorer\`, a \`score\` from 0 to 1, a \`rationale\`, and a \`label\` from that rubric's list:`,
-        ...rubrics.map((rubric) => `- \`${rubric.name}\`: one of ${rubric.labels.map((label) => `\`${label}\``).join(", ")}`),
+        ...rubrics.map((rubric) => {
+          const labels = `- \`${rubric.name}\`: one of ${rubric.labels.map((label) => `\`${label}\``).join(", ")}`;
+          return rubric.labels.includes(NOT_APPLICABLE) ? `${labels}, with a \`score\` of null for \`${NOT_APPLICABLE}\` alone` : labels;
+        }),
       ],
     };
   };
