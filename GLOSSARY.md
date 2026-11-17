@@ -210,6 +210,10 @@ _Avoid_: approval, review result
 A Verdict that the right design was built wrongly, so the Implementer can fix it.
 _Avoid_: bug, failing review
 
+**Small finding**:
+A Reviewer's finding that a comment or doc the change left stale, and no acceptance criterion asks for, or the pull request's body, doesn't match the branch.
+_Avoid_: nit, minor flaw, cosmetic finding
+
 **Full Review**:
 A Review of an agent pull request with no settled code: its first Review, or the first Review to read a head after the Reviewer judged none of the pull request's earlier heads. It judges the whole pull request, and what it doesn't name becomes settled code.
 _Avoid_: first pass, initial review, complete review

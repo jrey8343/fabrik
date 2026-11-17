@@ -1151,8 +1151,37 @@ export interface VerdictRecord {
    * absent on a Verdict with no such line, as every one from before it.
    */
   readonly change?: ChangeFingerprint;
+  /**
+   * On a Reviewer's Execution flaw, the counts of its findings by tag (#749),
+   * read from the Verdict's top-level items; absent on every other Verdict,
+   * and on one from before tags, whatever its text says.
+   */
+  readonly tags?: VerdictTags;
   /** The head commit it was given on. */
   readonly headSha: string;
+}
+
+/**
+ * The counts of a Reviewer's findings by tag (#749): `small` counts every
+ * `[small: body]` and `[small: comment]`, `missedEarlier` every
+ * `[missed earlier]` on a later Review, and `counted` every other finding,
+ * a `[missed earlier]` on a Full Review included. Findings with no items
+ * have all three at 0.
+ */
+export interface FindingTagCounts {
+  readonly small: number;
+  readonly missedEarlier: number;
+  readonly counted: number;
+}
+
+/**
+ * A Verdict marker's `tags`: the counts by tag, and `smallBody`, how many of
+ * the `small` are `[small: body]`, so a flaw whose findings are all about the
+ * pull request's body can be read from the marker. A marker from before
+ * `smallBody` reads as 0.
+ */
+export interface VerdictTags extends FindingTagCounts {
+  readonly smallBody: number;
 }
 
 /** A `ready-for-agent` issue that a Dispatch check weighs. */

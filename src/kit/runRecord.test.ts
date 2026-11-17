@@ -145,6 +145,7 @@ describe("The Run record a run's end yields", () => {
       pushed: null,
       fullReview: null,
       verdict: null,
+      findingTags: null,
       durationMs: 90_000,
       apiDurationMs: 60_000,
       turns: 12,
@@ -763,6 +764,41 @@ describe("The Run record a run's end yields", () => {
     });
   });
 
+  // The counts of a Reviewer's findings by tag (#749), as its Verdict marker has them, without the body split.
+  describe("a Review's Execution flaw carries its findings' tags", () => {
+    const green = { result: "success", outputs: { checks: "green", "head-sha": HEAD_SHA, failed: "[]" } };
+    const FINDINGS = "- [small: body] The body is stale.\n- [small: comment] The README is stale.\n- [missed earlier] The empty cart throws.\n- No test for it.";
+    const review = (reply: string | null, fullReview = "false", reviewer = job("success")) =>
+      runRecordFor(
+        runEnd({
+          needs: needs("review", { "review-checks": green, review: reviewer }, { ticket: "7", "pull-request": "50", "full-review": fullReview }),
+          eventIssue: 50,
+          agentResult: reply === null ? null : agentResult("review", 50, reply),
+          failureReport: reply === null ? JSON.stringify({ failure: "missing-output", detail: "no Verdict line" }) : null,
+        }),
+      )?.record;
+
+    it("a later Review's Execution flaw counts them by tag", () => {
+      expect(review(`verdict: execution-flaw\n\n${FINDINGS}`)?.findingTags).toEqual({ small: 2, missedEarlier: 1, counted: 1 });
+    });
+
+    it("a Full Review's counts a [missed earlier] finding as untagged", () => {
+      expect(review(`verdict: execution-flaw\n\n${FINDINGS}`, "true")?.findingTags).toEqual({ small: 2, missedEarlier: 0, counted: 2 });
+    });
+
+    it.each(["pass", "design-flaw"])("a %s carries none, whatever its text says", (verdict) => {
+      expect(review(`verdict: ${verdict}\n\n${FINDINGS}`)?.findingTags).toBeNull();
+    });
+
+    it("a Review that gave no Verdict carries none", () => {
+      expect(review(null, "false", job("failure"))).toMatchObject({ verdict: null, findingTags: null });
+    });
+
+    it("every other role's record has none", () => {
+      expect(runRecordFor(runEnd({ needs: needs("triage", { triage: job("success") }) }))?.record.findingTags).toBeNull();
+    });
+  });
+
   describe("a Digest run's record is in role digest, on its Ticket, naming its pull request (ADR-0022)", () => {
     /** The Digest writer's job on PR #50, Ticket #7, ended as given. */
     const digestRun = (writer: Needs[string] | undefined, overrides: Partial<RunEnd> = {}) =>
@@ -1165,8 +1201,19 @@ describe("A Run record read back from the store", () => {
   });
 
   it("of schema 10, written before Full Reviews were recorded, reads as no word on one, a Review's included, at the current schema", () => {
-    expect(readRunRecord({ ...before11, schema: 10 }, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 10, fullReview: null });
-    expect(readRunRecord({ ...before11, role: "review", schema: 10 }, ["Claude token"])).toEqual({ ...written, role: "review", schema: 11, storedSchema: 10, fullReview: null });
+    expect(readRunRecord({ ...before11, schema: 10 }, ["Claude token"])).toEqual({ ...written, schema: 11, storedSchema: 10, fullReview: null, findingTags: null });
+    expect(readRunRecord({ ...before11, role: "review", schema: 10 }, ["Claude token"])).toEqual({ ...written, role: "review", schema: 11, storedSchema: 10, fullReview: null, findingTags: null });
+  });
+
+  it("of schema 11, written before findings' tags were recorded (#749), reads as none", () => {
+    const { findingTags: _findingTags, ...withoutTags } = written!;
+
+    expect(readRunRecord({ ...withoutTags, role: "review", verdict: "execution-flaw" }, ["Claude token"])).toEqual({
+      ...written,
+      role: "review",
+      verdict: "execution-flaw",
+      findingTags: null,
+    });
   });
 
   it("of schema 9, written before pushes were recorded, reads as a run that pushed nothing, at the current schema", () => {
@@ -1570,6 +1617,7 @@ describe("A judge run's record", () => {
       pushed: null,
       fullReview: null,
       verdict: null,
+      findingTags: null,
       durationMs: 20_000,
       apiDurationMs: 18_000,
       turns: 1,

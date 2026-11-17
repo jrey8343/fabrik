@@ -60,6 +60,47 @@ describe("Reading a PR's Verdicts", () => {
       { verdict: "pass", source: "reviewer", requestChanges: false, headSha: "2".repeat(40) },
     ]);
   });
+
+  // #749: the counts of a Reviewer's Execution flaw's findings by tag.
+  it("reads back a Reviewer's Execution flaw's tags", () => {
+    const flaw = planFor(
+      reviewed("verdict: execution-flaw\n\n- [small: body] The body is stale.\n- [small: comment] The README is stale.\n- The empty cart throws."),
+      snapshotOfPullRequest(aPullRequest()),
+      kitConfig(),
+    );
+
+    expect(verdictsIn(commentsOf(flaw))).toEqual([
+      { verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags: { small: 2, missedEarlier: 0, counted: 1, smallBody: 1 }, headSha: HEAD_SHA },
+    ]);
+  });
+
+  it.each([
+    ["a pass", { verdict: "pass", source: "reviewer" }],
+    ["a Design flaw", { verdict: "design-flaw", source: "reviewer" }],
+    ["an Execution flaw from red checks", { verdict: "execution-flaw", source: "ci" }],
+  ])("ignores tags written on %s", (_, written) => {
+    const marker = `<!-- fabrik:verdict ${JSON.stringify({ ...written, requestChanges: false, tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 1 }, headSha: HEAD_SHA })} -->`;
+
+    expect(verdictsIn([marker])).toEqual([{ ...written, requestChanges: false, headSha: HEAD_SHA }]);
+  });
+
+  it("reads tags written without smallBody as having none about the body", () => {
+    const marker = `<!-- fabrik:verdict ${JSON.stringify({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags: { small: 1, missedEarlier: 2, counted: 0 }, headSha: HEAD_SHA })} -->`;
+
+    expect(verdictsIn([marker])).toMatchObject([{ tags: { small: 1, missedEarlier: 2, counted: 0, smallBody: 0 } }]);
+  });
+
+  it.each([
+    ["a count that isn't a whole number", { small: 1.5, missedEarlier: 0, counted: 0 }],
+    ["a missing count", { small: 1, counted: 0 }],
+    ["a negative count", { small: 1, missedEarlier: 0, counted: -1 }],
+    ["more about the body than small", { small: 1, missedEarlier: 0, counted: 0, smallBody: 2 }],
+    ["no object", "small"],
+  ])("reads an Execution flaw with tags it can't read, %s, as one with none, which counts", (_, tags) => {
+    const marker = `<!-- fabrik:verdict ${JSON.stringify({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags, headSha: HEAD_SHA })} -->`;
+
+    expect(verdictsIn([marker])).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }]);
+  });
 });
 
 // #434: a Retry that was a Broken run posts an Execution flaw Verdict, which counts like any other.
