@@ -26,7 +26,7 @@ Judge four things, and only these:
 1. **The Verdict before.** Whether each finding of the latest Verdict before this one was fixed.
 2. **What changed.** Everything the pull request's own change gained since the last judged head, in full: its bugs, its tests, the repo's standards and its comments. Changes the Operator requested are part of what changed.
 3. **The whole pull request.** Across the whole pull request, settled code included, whether every acceptance criterion, as amended by any Request changes, is met, and whether the body matches the branch.
-4. **Settled code.** In settled code, a behaviour bug only. Never name a standard, a test-quality point or a stale comment there.
+4. **Settled code.** In settled code, a behaviour bug only, tagged `[missed earlier]`. Never name a standard, a test-quality point or a stale comment there.
 
 - What `main` brought in, by a merge or a rebase, is no part of the pull request's own change, and you never judge it. A clash with it is left to the Required checks on the up-to-date head.
 - A Design flaw is still open to you, whatever an earlier Verdict said. A criterion an earlier Verdict named that no run can meet is a `design-flaw` when you'd name it again, not another `execution-flaw`.

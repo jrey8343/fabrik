@@ -567,7 +567,9 @@ describe("A Review's prompt on a Full Review and on a later Review", () => {
     expect(section).toContain(
       "3. **The whole pull request.** Across the whole pull request, settled code included, whether every acceptance criterion, as amended by any Request changes, is met, and whether the body matches the branch.",
     );
-    expect(section).toContain("4. **Settled code.** In settled code, a behaviour bug only. Never name a standard, a test-quality point or a stale comment there.");
+    expect(section).toContain(
+      "4. **Settled code.** In settled code, a behaviour bug only, tagged `[missed earlier]`. Never name a standard, a test-quality point or a stale comment there.",
+    );
   });
 
   it("on a later Review leaves what main brought in to the Required checks, keeps a Design flaw open, and takes the fix comments as data", async () => {
