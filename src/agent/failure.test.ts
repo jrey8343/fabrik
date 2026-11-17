@@ -212,6 +212,20 @@ describe("Reading the failure report in the push job", () => {
     expect(readFailureReport(JSON.stringify({ ...unreported, checks: ["e2e", 3] }))).toEqual({ failure: "unreported-checks", detail: "" });
   });
 
+  it("reads back a Review that stopped on a conflict, and the head, minutes waited and mergeable state a Review's wait recorded (#704)", () => {
+    const conflict = { failure: "merge-conflict", detail: "", checks: ["e2e", "gate"], headSha: "a".repeat(40), waitedMinutes: 1, mergeable: false };
+    const unknown = { failure: "unreported-checks", detail: "", checks: ["e2e"], headSha: "a".repeat(40), waitedMinutes: 27, mergeable: null };
+
+    expect(readFailureReport(JSON.stringify(conflict))).toEqual(conflict);
+    expect(readFailureReport(JSON.stringify(unknown))).toEqual(unknown);
+  });
+
+  it("drops a recorded head, minutes waited or mergeable state that doesn't read, keeping the rest", () => {
+    const report = { failure: "unreported-checks", detail: "", checks: ["e2e"], headSha: "not a commit", waitedMinutes: -2, mergeable: "dirty" };
+
+    expect(readFailureReport(JSON.stringify(report))).toEqual({ failure: "unreported-checks", detail: "", checks: ["e2e"] });
+  });
+
   it("reads back a GitHub request that failed while a Review waited for its checks (#454)", () => {
     const report = { failure: "unread-checks", detail: "gh pr checks failed: HTTP 502: Bad Gateway" };
 

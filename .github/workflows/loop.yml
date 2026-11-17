@@ -1021,13 +1021,16 @@ jobs:
   # A Review starts by waiting for the agent PR's Required checks on its head:
   # those the Kit config lists plus any the default branch requires (#565).
   # check_suite events don't fire for Actions CI, so it polls, logging what it
-  # waits on, and gives up a few minutes short of the Review timeout. It holds
+  # waits on, and gives up a few minutes short of the Review timeout, or at once
+  # when the PR conflicts with its base and a Required check hasn't reported,
+  # which GitHub then never starts (#704, ADR-0028). It holds
   # only a read-only token and no secrets, and reads the Kit config as data.
   # Red checks the Kit can re-run go to the Re-run red checks job (#462); the
   # rest go straight to the push job as an Execution flaw, and the Reviewer
-  # never runs. Giving up, or an error, fails the job with a failure report
-  # naming why: a Required check that never reported, the
-  # checks still running, or the GitHub request that failed (src/review/wait.ts).
+  # never runs. Giving up, stopping on a conflict, or an error, fails the job
+  # with a failure report naming why: a Required check that never reported, a
+  # conflict with the base, the checks still running, or the GitHub request
+  # that failed (src/review/wait.ts).
   review-checks:
     name: Review checks
     needs: kit

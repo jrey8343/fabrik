@@ -49,6 +49,7 @@ const HAND_BACK_SENTENCES: Partial<Record<HandBack, (standing: StandingNamed<"yo
   "landing-failed": (_, age) => `The Kit couldn't land a finished run ${age} ago. Open the run and re-run its failed jobs.`,
   "request-changes-empty": () => "The Request-changes run committed nothing, so your changes aren't built. It's yours from here.",
   "conflict-run-unlanded": ({ pullRequest }) => `The conflict-only run didn't bring #${pullRequest} up to date with \`main\`.`,
+  "conflicted-review": ({ pullRequest }) => `Review couldn't start on #${pullRequest}: GitHub won't run its Required checks until something is pushed to its branch.`,
   "request-changes-unlanded": ({ pullRequest }) => `The Request-changes run on #${pullRequest} didn't land.`,
   "closed-by-hand": () => "Its agent pull request was closed by hand, so the Ticket stopped.",
   "kept-branch-gone": () => "Marked for a Kept-branch start, but the Kept branch is gone.",
