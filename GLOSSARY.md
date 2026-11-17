@@ -373,20 +373,28 @@ The durable account of one AFK agent run in one role: its model, cost, outcome a
 _Avoid_: run log, telemetry, step summary
 
 **Scorer**:
-A Kit-owned rubric that a judge model applies to one finished run's transcript, scoring 0–1 how the run worked, never what it built.
+A Kit-owned rubric that a judge model applies to one finished run's transcript, scoring 0–1 how the run worked, or saying the rubric doesn't apply to it, never what it built.
 _Avoid_: eval, grader, judge
+
+**Test-first**:
+The Scorer that judges whether a run wrote a failing test before the code that passes it, one for each finding before its fix on a Retry or Request-changes run, and found the cause of a red check it didn't understand before fixing it. A run neither practice applies to is not applicable and goes unscored. Calling a skill counts neither way.
+_Avoid_: skill use, TDD score
 
 **Human touch**:
 Each time the Operator steps into a Ticket's path between Dispatch and merge: a push to its branch, a Request changes, a Retry or Step-up they asked for, or a Pairing session or Operator step on it. The merge, Design-session answers and Operator comments are not touches.
 _Avoid_: intervention, manual fix
 
 **Architectural escape**:
-An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted against those pull requests, never against a candidate the Operator set aside.
+An Audit candidate the Operator files as an issue that traces back to merged agent pull requests: structural decay that passed Review. Counted once, however many pull requests it traces to, never for a candidate the Operator set aside or hasn't decided.
 _Avoid_: architecture regression, design debt
 
 **Review miss**:
 A point in a Request changes asking for what a pass should already have caught: something the Ticket as it then stood, its Spec or the Product repo's standards required. A point that amends the Ticket, or only asks for a rebase, is none, and unlike an Architectural escape it's caught at the Merge gate, before merge.
 _Avoid_: missed flaw, false pass, escape
+
+**Yield**:
+Of the Implement runs of one kind (first runs, Retry 1s or Retry 2s) whose push got its first Verdict in a week, the share where that Verdict was a pass. A Verdict later counted back as a Flaky check leaves its run out. The Yield of first runs is the **first-pass yield**.
+_Avoid_: pass rate, success rate, first-time-right
 
 **Replay**:
 An experiment the Operator starts that re-runs merged Tickets from their original base commit, once as before and once with one thing changed, to compare the two. A Ticket whose first run was a Kept-branch start can't be rebuilt from its base commit, so a Replay leaves it out, saying why.

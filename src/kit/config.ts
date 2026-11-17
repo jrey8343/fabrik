@@ -6,7 +6,11 @@ import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
 
 export interface AgentRole {
   readonly model: string;
-  /** null means pass no --effort, so the Claude Code CLI uses its default. */
+  /**
+   * null means pass no --effort, so the Claude Code CLI uses its default. A
+   * Product's own null reads as the default instead, so the Kit config never
+   * holds null here.
+   */
   readonly effort: string | null;
   readonly timeoutMinutes: number;
 }
@@ -424,17 +428,17 @@ const SONNET = "claude-sonnet-5-5";
 export const DEFAULT_KIT_CONFIG: KitConfig = {
   sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
   roles: {
-    triage: { model: OPUS, effort: null, timeoutMinutes: 10 },
-    design: { model: OPUS, effort: null, timeoutMinutes: 30 },
-    implement: { model: SONNET, effort: null, timeoutMinutes: 60 },
-    review: { model: OPUS, effort: null, timeoutMinutes: 30 },
-    audit: { model: OPUS, effort: null, timeoutMinutes: 45 },
-    retro: { model: OPUS, effort: null, timeoutMinutes: 45 },
-    research: { model: OPUS, effort: null, timeoutMinutes: 30 },
+    triage: { model: OPUS, effort: "medium", timeoutMinutes: 10 },
+    design: { model: OPUS, effort: "medium", timeoutMinutes: 30 },
+    implement: { model: SONNET, effort: "medium", timeoutMinutes: 60 },
+    review: { model: OPUS, effort: "medium", timeoutMinutes: 30 },
+    audit: { model: OPUS, effort: "medium", timeoutMinutes: 45 },
+    retro: { model: OPUS, effort: "medium", timeoutMinutes: 45 },
+    research: { model: OPUS, effort: "medium", timeoutMinutes: 30 },
     // The Reviewer's model and effort, which a repo's own roles.review replaces (readConfig).
-    digest: { model: OPUS, effort: null, timeoutMinutes: 10 },
+    digest: { model: OPUS, effort: "medium", timeoutMinutes: 10 },
     dispatch: { timeoutMinutes: 10 },
-    stepUp: { model: OPUS, effort: null },
+    stepUp: { model: OPUS, effort: "medium" },
   },
   maxInFlight: 2,
   caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
@@ -696,6 +700,15 @@ function orDefault<T>(value: T | null | undefined, fallback: T | null): T | null
   return value === undefined ? fallback : value;
 }
 
+/**
+ * A role's effort. An explicit null, as the old starter wrote for every role,
+ * names no level, so it takes the default like a field left out (#740), and
+ * each Run record names the level the role ran at.
+ */
+function effortOf(role: Reader, fallback: string | null): string | null {
+  return role.nullableString("effort", checkEffort) ?? fallback;
+}
+
 /** A role that takes Extra skill picks (ADR-0008), collecting its `skills` into `picks`. */
 function readPickingRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
   const skills = role.stringList("skills");
@@ -708,7 +721,7 @@ function readPickingRole(role: Reader, defaults: AgentRole, picks: Picks, phase:
 function readAgentRole(role: Reader, defaults: AgentRole): AgentRole {
   return {
     model: role.string("model", refuseFable) ?? defaults.model,
-    effort: orDefault(role.nullableString("effort", checkEffort), defaults.effort),
+    effort: effortOf(role, defaults.effort),
     timeoutMinutes: role.positiveInteger("timeout_minutes") ?? defaults.timeoutMinutes,
   };
 }
@@ -971,7 +984,7 @@ function checkRetroDay(day: string): string | null {
 function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"]): KitConfig["roles"]["stepUp"] {
   return {
     model: role.string("model", refuseFable) ?? defaults.model,
-    effort: orDefault(role.nullableString("effort", checkEffort), defaults.effort),
+    effort: effortOf(role, defaults.effort),
   };
 }
 

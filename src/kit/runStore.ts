@@ -15,11 +15,18 @@ export function storeFileUrl(path: string): string {
 }
 
 /**
- * The model the judge scores runs with (#149): Sonnet, at its default effort.
+ * The model the judge scores runs with (#149): Sonnet, at JUDGE_EFFORT.
  * A Kit constant, like the store, so scores stay comparable across Product
  * repos: Kit config can't change it, and it moves only with a Kit release.
  */
 export const JUDGE_MODEL = "claude-sonnet-5-5";
+
+/**
+ * The judge's effort, a Kit constant like its model: named outright, so the
+ * judge's Run record says the level and a Claude Code upgrade can't change it
+ * unseen (#740). `medium` is the CLI's own default for Sonnet 5.5 (#712).
+ */
+export const JUDGE_EFFORT = "medium";
 
 /**
  * How long the judge job may run, in minutes: a Kit constant, not Kit config.

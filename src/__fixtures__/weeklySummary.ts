@@ -9,10 +9,10 @@ export function aScoreEntry(overrides: Partial<ScoreEntry> = {}): ScoreEntry {
   return { scorer: "efficiency", version: 1, threshold: 0.7, score: 0.8, pass: true, label: "clean", rationale: "No call was wasted.", ...overrides };
 }
 
-/** The score file of aRunRecord()'s run, scored five minutes after it ended: passing Efficiency, Ticket compliance and Skill use. */
+/** The score file of aRunRecord()'s run, scored five minutes after it ended: passing Efficiency, Ticket compliance and Skill use, as a run scored before Test-first was. */
 export function aScoreFile(overrides: Partial<ScoreFile> = {}): ScoreFile {
   return {
-    schema: 2,
+    schema: 3,
     kitSha: "f".repeat(40),
     repo: "owner/product",
     runId: 1000,

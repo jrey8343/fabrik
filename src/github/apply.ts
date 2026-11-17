@@ -4,6 +4,7 @@
 // fires its event (#417), since GitHub fires none for a label already on.
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
+import type { Pushed } from "../kit/runRecord.ts";
 import { withDecisionLine } from "../loop/decisionsSoFar.ts";
 import { carriedDigest, placedFilesIn } from "../loop/digestCarry.ts";
 import type { DigestHead } from "../loop/digestPlaces.ts";
@@ -11,7 +12,7 @@ import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
 import { isEmptyDiffComment, withPrototypeStarted } from "../loop/markers.ts";
-import type { Action, CreatedIssue, Plan, PostedComment } from "../loop/types.ts";
+import type { Action, CreatedIssue, LoopEvent, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
 import { allPages, type GitHub, GitHubError, gitHubMessageOf, type Repo } from "./client.ts";
 import type { WrittenReview } from "./writtenOn.ts";
@@ -97,12 +98,15 @@ export interface RefusedCollapse {
  * What the push job hands on from applying a plan: the preview deployment to
  * link, a UI PR's or a prototype round's, when the plan asked for one; and,
  * for the step summary, each trigger label it re-added and each older Digest
- * GitHub refused to collapse.
+ * GitHub refused to collapse; and the PR it opened, for the Run record's push
+ * (implementPushOf).
  */
 export interface AppliedPlan {
   readonly preview: PreviewToLink | PrototypePreviewToLink | null;
   readonly readded: readonly ReaddedLabel[];
   readonly refusedCollapses: readonly RefusedCollapse[];
+  /** The number of the PR the plan opened, or null when it opened none. */
+  readonly opened: number | null;
 }
 
 /** The Actions run applying a plan, by its id, and when it applies it, as an ISO 8601 time. */
@@ -168,7 +172,7 @@ export async function applyPlan(
   rebaser: MainRebaser | null = null,
   heads: DigestHeadReader | null = null,
 ): Promise<AppliedPlan> {
-  if (plan.kind !== "act") return { preview: null, readded: [], refusedCollapses: [] };
+  if (plan.kind !== "act") return { preview: null, readded: [], refusedCollapses: [], opened: null };
   const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [], refusedCollapses: [] };
   const applyEach = async (actions: readonly Action[]): Promise<void> => {
     for (const action of actions) {
@@ -223,7 +227,26 @@ export async function applyPlan(
       throw new PlanNotApplied(action, plan.actions.slice(0, i), plan.actions.slice(i + 1), error);
     }
   }
-  return { preview: made.preview, readded: made.readded, refusedCollapses: made.refusedCollapses };
+  return { preview: made.preview, readded: made.readded, refusedCollapses: made.refusedCollapses, opened: made.opened };
+}
+
+/**
+ * The pull request an Implement run's landing pushed its work to, and the head
+ * its push left there (#735), which the push job's Run record names, once the
+ * plan has applied: a first run's the PR its plan opened, any other's the PR
+ * it fixes. None when the plan pushed no branch of the run's, or there was
+ * nothing to push, and for any other event.
+ */
+export function implementPushOf(
+  event: LoopEvent,
+  plan: Plan,
+  { opened }: Pick<AppliedPlan, "opened">,
+  head: string | null,
+): Pushed | null {
+  if (event.kind !== "implement-run-finished" || plan.kind !== "act" || head === null) return null;
+  if (!plan.actions.some((action) => action.kind === "push-branch" && action.branch === event.branch)) return null;
+  const pullRequest = event.fixes?.pullRequest ?? opened;
+  return pullRequest === null ? null : { pullRequest, headSha: head };
 }
 
 /** What earlier actions in the plan made, for later ones to refer to. */

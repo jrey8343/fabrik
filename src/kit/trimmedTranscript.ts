@@ -17,13 +17,14 @@ export interface TrimmedTranscript {
  * transcript held to whatever budget it's asked for: whole if it fits, else
  * trimmed, its tool results first, then its long assistant text, never its
  * tool calls. Even a budget of 0 keeps every tool call, so a trimmed
- * transcript can come out longer than its budget.
+ * transcript can come out longer than its budget. With `skillsItHad`, as the
+ * Retro reads it, it lists the skills the run had too; the judge's doesn't.
  */
-export function trimmedTranscriptOf(transcript: readonly string[]): (budget: number) => TrimmedTranscript {
+export function trimmedTranscriptOf(transcript: readonly string[], { skillsItHad }: { readonly skillsItHad: boolean }): (budget: number) => TrimmedTranscript {
   const stream = readStream(transcript);
   const fixed = (lines: readonly string[]): TranscriptLine[] => lines.map((head) => ({ head }));
   const lines = [
-    ...fixed(headerLines(stream.init, stream.steps)),
+    ...fixed(headerLines(stream.init, stream.steps, skillsItHad)),
     { head: "" },
     ...stepLines(stream.steps),
     { head: "" },
@@ -129,14 +130,20 @@ function skillLoads(steps: readonly StreamStep[]): string[] {
   });
 }
 
-function headerLines(init: StreamMessage | null, steps: readonly StreamStep[]): string[] {
+/**
+ * The run's model, with `skillsItHad` the skills its init message says it
+ * had, and the skills it loaded. The judge's leaves out the skills it had
+ * (#739): a judge given that list picked the practices that "fit" from it,
+ * where the rubric alone names them.
+ */
+function headerLines(init: StreamMessage | null, steps: readonly StreamStep[], skillsItHad: boolean): string[] {
   const model = init?.["model"];
   const had = init?.["skills"];
   const skills = Array.isArray(had) ? had.filter((skill): skill is string => typeof skill === "string") : [];
   const loaded = skillLoads(steps);
   return [
     `Model: ${typeof model === "string" ? model : init === null ? "unknown (no init message)" : "unknown"}`,
-    `Skills it had: ${skills.length === 0 ? "none reported" : quoted(skills)}`,
+    ...(skillsItHad ? [`Skills it had: ${skills.length === 0 ? "none reported" : quoted(skills)}`] : []),
     `Skills it loaded, in order: ${loaded.length === 0 ? "none" : quoted(loaded)}`,
   ];
 }

@@ -7,7 +7,34 @@
 import { createHash } from "node:crypto";
 
 /** The Kit's Scorers, in the order the Kit lists them. */
-export const SCORERS = ["efficiency", "ticket-compliance", "skill-use"] as const;
+export const SCORERS = ["efficiency", "ticket-compliance", "test-first"] as const;
+
+/** Each Scorer the Kit has had, as its reports name it, the retired `skill-use` included. */
+const SCORER_NAMES: Readonly<Record<string, string>> = {
+  efficiency: "Efficiency",
+  "ticket-compliance": "Ticket compliance",
+  "skill-use": "Skill use",
+  "test-first": "Test-first",
+};
+
+/**
+ * A Scorer as the Kit's reports name it, such as Ticket compliance for
+ * `ticket-compliance`. One the Kit never had is named from itself: its first
+ * letter capitalised and its hyphens spaces.
+ */
+export function scorerName(scorer: string): string {
+  return SCORER_NAMES[scorer] ?? `${scorer.charAt(0).toUpperCase()}${scorer.slice(1).replaceAll("-", " ")}`;
+}
+
+/**
+ * A rubric id, as rubricId gives it, as the Kit's reports name it: Test-first
+ * v1 for `test-first@1`, or with `version: false`, its Scorer's name alone.
+ */
+export function rubricName(id: string, { version = true }: { readonly version?: boolean } = {}): string {
+  const at = id.lastIndexOf("@");
+  const scorer = scorerName(at === -1 ? id : id.slice(0, at));
+  return version && at !== -1 ? `${scorer} v${id.slice(at + 1)}` : scorer;
+}
 
 /** Where the Kit keeps the rubrics, relative to its own root: `<name>.md` for each Scorer. */
 export const RUBRICS_DIR = "prompts/scorers";
@@ -99,7 +126,9 @@ export const RUBRIC_HASHES: Readonly<Record<string, string>> = {
   "efficiency@1": "b7e376564bd8fa6675f191d09348691cb20447cec6bb213ec22d66c6f6904c54",
   "ticket-compliance@1": "a3a94ba735f65ac3fd5a21985be041a4fca34878d71bfff10c2a741a80f8b1bd",
   "ticket-compliance@2": "329daa807c4f255c1fa88eb69a635e324050befb95afae3f7da053f8b89800c1",
+  // Skill use's: the Kit no longer has it (#739), but its score files still read as skill-use@1.
   "skill-use@1": "37ff8befe470d3c5604614d0ace707540792184811232ac5580680166fbfdf80",
+  "test-first@1": "9be3fd931b95136ef79bf1efa2d81428f609a17cd2646cf86c4f25a116bcc7ea",
 };
 
 /** A rubric's content hash: everything the rubric says, but not its version. */

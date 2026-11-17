@@ -26,6 +26,7 @@ import { readRuns, runsInFlightFactOf } from "../read/runs.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "./config.ts";
+import { loadRubrics } from "./kitFiles.ts";
 import { passedMoveOf } from "./standingOperator.ts";
 import { type RepoHealthFacts, tickHealthOf } from "./loopHealth.ts";
 import { RUN_STORE } from "./runStore.ts";
@@ -290,6 +291,7 @@ async function main(): Promise<string> {
     unread,
     health: await readLoopHealth(repos, appLogin, now),
     kits,
+    rubrics: await loadRubrics(),
     operator: RUN_STORE.owner,
     appLogin,
     timeZone,

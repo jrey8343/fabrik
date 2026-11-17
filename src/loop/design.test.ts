@@ -11,7 +11,7 @@ const startsDesignTurn = {
       role: "design",
       issue: 7,
       model: "claude-opus-5-5",
-      effort: null,
+      effort: "medium",
       timeoutMinutes: 30,
       subscription: "Claude token",
     },

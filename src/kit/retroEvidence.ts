@@ -20,6 +20,7 @@ import { followUpsIn } from "../loop/followUps.ts";
 import { escapeMarkerIn, fromPullRequestIn, fromRetroIn, requestChangesAnswersIn } from "../loop/markers.ts";
 import { retrosIn, retroWindowStart } from "../loop/retro.ts";
 import { type RetroEvidence, type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
+import { rubricId } from "./rubrics.ts";
 import { isLive, recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
 import { inSample, type ScoreFile } from "./scorer.ts";
 import { cutMarker, cutTo, largestCap, type TrimmedTranscript, trimmedTranscriptOf } from "./trimmedTranscript.ts";
@@ -580,6 +581,12 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
       readonly followUps: readonly FollowUpEvidence[];
       /** The runs that ended in the window that a Scorer failed, oldest first: none until the repo has score files. */
       readonly lowScores: readonly LowScoreEvidence[];
+      /**
+       * How many of the runs that ended in the window each rubric said it
+       * doesn't apply to (#739), by rubric id, such as `test-first@1`: unscored,
+       * so never among the low scores. A rubric that applied to every run isn't listed.
+       */
+      readonly notApplicable: Readonly<Record<string, number>>;
       /** The sample of the agent PRs merged in the window, oldest first: ordinary runs, read in depth. */
       readonly sample: readonly SampledPullRequestEvidence[];
       /** Every agent PR merged in the 90 days to the window's end, oldest first: the counts a loosening's streak rests on. */
@@ -702,9 +709,10 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
   /** One rubric's score of a run, as its score file gives it. */
   export interface ScoreEvidence {
     readonly scorer: string;
-    readonly score: number;
-    /** Whether the score is at or above the rubric's threshold: the Kit's call, never the judge's. */
-    readonly pass: boolean;
+    /** Null when the rubric doesn't apply to the run: its label is `not-applicable`. */
+    readonly score: number | null;
+    /** Whether the score is at or above the rubric's threshold: the Kit's call, never the judge's. Null with no score. */
+    readonly pass: boolean | null;
     readonly label: string;
     readonly rationale: string;
   }
@@ -822,6 +830,7 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
       feedback: feedbackOf(window, input),
       followUps: followUpsOf(window, input),
       lowScores: lowScoresOf(window, metrics.records, input, withTranscript),
+      notApplicable: notApplicableOf(window, metrics.records, input),
       sample: sampleOf(window, metrics, withTranscript, ticketOf),
       streakTable: streakTableOf({ start: window.end - STREAK_WINDOW_MS, end: window.end }, metrics),
       history: historyOf(earlier, input),
@@ -968,7 +977,12 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
     }
     if (!Array.isArray(streakTable) || !streakTable.every(isStreakRow)) return fail("has no streak table of PRs, each with its ref, number and flags");
     if (!isObject(history) || !Array.isArray(history["retros"]) || !Array.isArray(history["filed"])) return fail("has no history of earlier Retros");
-    return value as unknown as EvidenceBundle;
+    // Evidence gathered before a rubric could be not applicable (#739) has none.
+    const { notApplicable = {} } = value;
+    if (!isObject(notApplicable) || !Object.values(notApplicable).every((runs) => Number.isSafeInteger(runs) && (runs as number) > 0)) {
+      return fail("has no count of runs not applicable, by rubric");
+    }
+    return { ...(value as unknown as EvidenceBundle), notApplicable: notApplicable as Record<string, number> };
   }
   
   function isObject(value: unknown): value is Record<string, unknown> {
@@ -1001,7 +1015,7 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
       if (path === null) return null;
       if (!read.has(path)) {
         const lines = readTranscript(path);
-        read.set(path, lines === null ? null : trimmedTranscriptOf(lines));
+        read.set(path, lines === null ? null : trimmedTranscriptOf(lines, { skillsItHad: true }));
       }
       return read.get(path)?.(budget).text ?? null;
     };
@@ -1131,25 +1145,49 @@ function followUpsOf(window: Window, { facts, operator }: RetroEvidenceInput): F
 }
 
 /**
- * The repo's live score files with a failing entry whose run ended in the
- * window, oldest first: never a Replay arm's, as the Weekly summary's Scores
- * leave them out. A score file whose record the store doesn't hold goes by
- * when it was scored, minutes after its run ended, as the Weekly summary does.
+ * The repo's live score files whose run ended in the window, by their refs,
+ * with that run's record if the store holds it, and when it ended: never a
+ * Replay arm's, as the Weekly summary's Scores leave them out. A score file
+ * whose record the store doesn't hold goes by when it was scored, minutes
+ * after its run ended, as the Weekly summary does.
  */
-function lowScoresOf(window: Window, records: readonly RunRecord[], { facts, scoreFiles }: RetroEvidenceInput, withTranscript: WithTranscript): LowScoreEvidence[] {
+function windowScoreFilesOf(window: Window, records: readonly RunRecord[], { facts, scoreFiles }: RetroEvidenceInput) {
   const byRun = new Map(records.map((record) => [runKey(record), record]));
-  return Object.entries(scoreFiles)
-    .flatMap(([ref, file]) => {
+  return Object.entries(scoreFiles).flatMap(([ref, file]) => {
+    if (file.repo !== facts.repo || !isLive(file)) return [];
+    const record = byRun.get(runKey(file));
+    const endedAt = record?.endedAt ?? file.scoredAt;
+    return within(window, endedAt) ? [{ ref, file, record, endedAt }] : [];
+  });
+}
+
+/**
+ * The window's score files with a failing entry, oldest first. An entry for a
+ * rubric that doesn't apply to the run (#739) has no pass, so it never fails one.
+ */
+function lowScoresOf(window: Window, records: readonly RunRecord[], input: RetroEvidenceInput, withTranscript: WithTranscript): LowScoreEvidence[] {
+  return windowScoreFilesOf(window, records, input)
+    .flatMap(({ ref, file, record, endedAt }) => {
       const entries = file.entries ?? [];
-      if (file.repo !== facts.repo || !isLive(file) || entries.every((entry) => entry.pass)) return [];
-      const record = byRun.get(runKey(file));
-      const endedAt = record?.endedAt ?? file.scoredAt;
-      if (!within(window, endedAt)) return [];
+      if (!entries.some((entry) => entry.pass === false)) return [];
       const scores = entries.map(({ scorer, score, pass, label, rationale }) => ({ scorer, score, pass, label, rationale }));
       return [{ endedAt, evidence: { ref, run: record === undefined ? null : withTranscript(record), entries: scores } }];
     })
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt) || a.evidence.ref.localeCompare(b.evidence.ref))
     .map(({ evidence }) => evidence);
+}
+
+/** How many of the window's scored runs each rubric didn't apply to, by rubric id, listing only rubrics with some. */
+function notApplicableOf(window: Window, records: readonly RunRecord[], input: RetroEvidenceInput): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const { file } of windowScoreFilesOf(window, records, input)) {
+    for (const entry of file.entries ?? []) {
+      if (entry.score !== null) continue;
+      const id = rubricId({ name: entry.scorer, version: entry.version });
+      counts[id] = (counts[id] ?? 0) + 1;
+    }
+  }
+  return counts;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadRubrics } from "./kitFiles.ts";
-import { RUBRIC_HASHES, readRubric, rubricContentHash, rubricSet, rubricVersionErrors } from "./rubrics.ts";
+import { RUBRIC_HASHES, readRubric, rubricContentHash, rubricName, rubricSet, rubricVersionErrors } from "./rubrics.ts";
 
 /** A rubric file, with whatever front-matter lines the case changes. */
 function rubricFile(fields: Record<string, string> = {}, text = "Judge the run.\n\n- `clean`: nothing wasted.\n- `slow`: time wasted.\n"): string {
@@ -47,9 +47,9 @@ describe("A rubric file", () => {
 });
 
 describe("The Kit's Scorer rubrics", () => {
-  it("are Efficiency, Ticket compliance and Skill use, each with a version, a pass threshold, its labels and its text", async () => {
+  it("are Efficiency, Ticket compliance and Test-first, each with a version, a pass threshold, its labels and its text", async () => {
     const rubrics = await loadRubrics();
-    expect(rubrics.map((rubric) => rubric.name)).toEqual(["efficiency", "ticket-compliance", "skill-use"]);
+    expect(rubrics.map((rubric) => rubric.name)).toEqual(["efficiency", "ticket-compliance", "test-first"]);
     for (const rubric of rubrics) {
       expect(Number.isInteger(rubric.version) && rubric.version >= 1).toBe(true);
       expect(rubric.threshold).toBeGreaterThanOrEqual(0);
@@ -79,6 +79,23 @@ describe("The Kit's Scorer rubrics", () => {
     expect(compliance?.text).toMatch(/never scope creep/);
     expect(compliance?.text).toMatch(/conflict-only run .*rebase/);
     expect(compliance?.text).not.toContain("judge that work against the Ticket,");
+  });
+
+  it("give Test-first version 1 a pass line of 0.8, and the labels test-first, test-after, no test, fix before cause and not applicable", async () => {
+    const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
+    expect(testFirst).toMatchObject({ version: 1, threshold: 0.8, labels: ["test-first", "test-after", "no-test", "fix-before-cause", "not-applicable"] });
+  });
+
+  // #739: it scores the practice, never the Skill call, and the rubric alone names the practices, the same in every Product repo.
+  it("judge Test-first on the practice, never on a Skill call or the skills the run had, and say when no practice applies", async () => {
+    const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
+    expect(testFirst?.text).toMatch(/failing test before the code that passes it/);
+    expect(testFirst?.text).toMatch(/each finding before its fix/);
+    expect(testFirst?.text).toMatch(/cause found before the fix/);
+    expect(testFirst?.text).toMatch(/Calling the Skill tool counts neither for nor against/);
+    expect(testFirst?.text).toMatch(/Running the build and the tests before finishing isn't scored/);
+    expect(testFirst?.text).toMatch(/`score` null/);
+    expect(testFirst?.text).not.toMatch(/init message/);
   });
 
   it("give Efficiency the labels clean, repeated calls, re-reads, dead-end loop and Sandbox fight", async () => {
@@ -134,5 +151,26 @@ describe("The rubric version guard", () => {
 
   it("passes the Kit's rubrics against the hashes the Kit recorded for their versions", async () => {
     expect(rubricVersionErrors(await loadRubrics(), RUBRIC_HASHES)).toEqual([]);
+  });
+
+  it("keeps the hash of a rubric the Kit no longer has, so no version of it is reused and its score files still read under its name", () => {
+    expect(Object.keys(RUBRIC_HASHES)).toEqual(expect.arrayContaining(["skill-use@1", "test-first@1"]));
+  });
+});
+
+describe("A rubric's name in the Kit's reports", () => {
+  it.each([
+    ["efficiency@1", "Efficiency v1"],
+    ["ticket-compliance@2", "Ticket compliance v2"],
+    ["skill-use@1", "Skill use v1"],
+    ["test-first@1", "Test-first v1"],
+    ["retired-rubric@3", "Retired rubric v3"],
+  ])("names %s %s", (id, name) => {
+    expect(rubricName(id)).toBe(name);
+  });
+
+  it("leaves its version out when asked to", () => {
+    expect(rubricName("test-first@1", { version: false })).toBe("Test-first");
+    expect(rubricName("ticket-compliance@2", { version: false })).toBe("Ticket compliance");
   });
 });

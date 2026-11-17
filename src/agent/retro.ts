@@ -6,8 +6,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { KIT_PROMPT_NAMES, kitPromptPath } from "../guard/trust-root.ts";
-import { readEvidenceBundle } from "../kit/retroEvidence.ts";
-import { RUBRICS_DIR, SCORERS } from "../kit/rubrics.ts";
+import { type EvidenceBundle, readEvidenceBundle } from "../kit/retroEvidence.ts";
+import { RUBRICS_DIR, rubricName, SCORERS } from "../kit/rubrics.ts";
 
 /** The heading over the pending Retro's own issue in the Retro's prompt. */
 export const RETRO_ISSUE_HEADING = "The pending Retro";
@@ -43,6 +43,17 @@ function quoted(text: string): string[] {
 }
 
 /**
+ * How many of the window's runs each rubric didn't apply to (#739), a line
+ * each, so the Retro knows what went unscored: `Not applicable to Test-first
+ * v1, …: 2 runs in the window.`
+ */
+function notApplicableLines(counts: EvidenceBundle["notApplicable"]): string[] {
+  return Object.entries(counts).map(
+    ([id, runs]) => `Not applicable to ${rubricName(id)}, so unscored and never low-scoring: ${runs === 1 ? "1 run" : `${runs} runs`} in the window.`,
+  );
+}
+
+/**
  * What the Retro's prompt carries after the pending Retro's issue: each part
  * of the evidence bundle in `evidenceFile` under its heading, then the Kit's
  * prompt for each role and each Scorer's rubric, read from the Kit checkout at
@@ -59,7 +70,11 @@ export async function retroContext(evidenceFile: string, kitDir: string): Promis
     "```json",
     JSON.stringify(bundle.window),
     "```",
-    ...(["escapes", "feedback", "followUps", "lowScores", "sample"] as const).flatMap((part) => [`## ${RETRO_SECTIONS[part]}`, ...listed(bundle[part])]),
+    ...(["escapes", "feedback", "followUps", "lowScores", "sample"] as const).flatMap((part) => [
+      `## ${RETRO_SECTIONS[part]}`,
+      ...listed(bundle[part]),
+      ...(part === "lowScores" ? notApplicableLines(bundle.notApplicable) : []),
+    ]),
     `## ${RETRO_SECTIONS.streaks}`,
     ...listed(bundle.streakTable),
     `## ${RETRO_SECTIONS.closedRetros}`,

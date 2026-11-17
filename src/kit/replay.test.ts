@@ -1083,6 +1083,8 @@ describe("A Replay's results", () => {
     readonly review?: Partial<RunRecord>;
     /** Its Efficiency, Ticket compliance and Skill use scores, or null for no score file. */
     readonly scores?: readonly [number, number, number] | null;
+    /** A Test-first score in place of its Skill use one, null for a run Test-first doesn't apply to. */
+    readonly testFirst?: number | null;
     readonly gates?: ReplayGates;
     readonly hiddenTests?: ReplayHiddenTests;
   }
@@ -1111,7 +1113,15 @@ describe("A Replay's results", () => {
                 entries: [
                   aScoreEntry({ score: efficiency }),
                   aScoreEntry({ scorer: "ticket-compliance", score: compliance }),
-                  aScoreEntry({ scorer: "skill-use", score: skillUse }),
+                  given.testFirst === undefined
+                    ? aScoreEntry({ scorer: "skill-use", score: skillUse })
+                    : aScoreEntry({
+                        scorer: "test-first",
+                        threshold: 0.8,
+                        score: given.testFirst,
+                        pass: given.testFirst === null ? null : given.testFirst >= 0.8,
+                        label: given.testFirst === null ? "not-applicable" : "test-first",
+                      }),
                 ],
               }),
             ],
@@ -1468,6 +1478,179 @@ describe("A Replay's results", () => {
         `| #12 (merged in #112) | baseline, default effort | done | ${NOTHING_YET} | – |`,
         `| #12 (merged in #112) | variant, effort high | done | ${NOTHING_YET} | – |`,
       ]);
+    });
+  });
+
+  describe("store each Arm's scores by rubric id", () => {
+    /** The results marker's line in a body. */
+    const markerOf = (body: string) => body.split("\n").find((line) => line.startsWith("<!-- fabrik:replay-results ")) ?? "";
+
+    /** The body with its results marker's line replaced by one holding `results`. */
+    const withMarker = (body: string, results: unknown) => body.replace(markerOf(body), `<!-- fabrik:replay-results ${JSON.stringify(results)} -->`);
+
+    /** Ticket 12's result in run 9001, as a results marker holds it, with each arm's scores as given. */
+    const storedTwelve = (baseline: unknown, variant: unknown) => {
+      const arm = (scores: unknown, side: ReplayArm) => ({
+        gates: "passed",
+        hiddenTests: "passed",
+        verdict: "pass",
+        scores,
+        costUsd: 2,
+        turns: 24,
+        durationMs: 180000,
+        patch: `replays/owner/product/140/12-${side}-9001.patch`,
+      });
+      return [{ ticket: 12, run: 9001, arms: { baseline: arm(baseline, "baseline"), variant: arm(variant, "variant") }, original: { verdict: null, costUsd: null, turns: null, durationMs: null, noReview: false } }];
+    };
+
+    /** Ticket 12's two rows and the totals, once Ticket 7 starts and the body's results are read back from its marker. */
+    const readBack = (body: string) => {
+      const running = started({ ...aReplayIssue(140), body }, 7, 9002).body;
+      return { heading: visible(running).find((line) => line.startsWith("| Ticket |")), rows: rowsOf(running).slice(0, 2), totals: totalsIn(running) };
+    };
+
+    /** Ticket 12 done in run 9001, its results shown from the store. */
+    const twelveDone = () => {
+      const twelve = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" });
+      return resultsIn(twelve.body, outcomesOf(anArm(12, "baseline", 9001), anArm(12, "variant", 9001, { scores: [0.6, 0.85, 0.7] })));
+    };
+
+    it("naming each score's rubric in the results marker it writes", () => {
+      const stored = JSON.parse(markerOf(twelveDone()).replace(/^<!-- fabrik:replay-results (.*) -->$/, "$1"));
+
+      expect(stored[0].arms.baseline.scores).toEqual({ "efficiency@1": 0.8, "ticket-compliance@1": 0.9, "skill-use@1": 0.75 });
+      expect(stored[0].arms.variant.scores).toEqual({ "efficiency@1": 0.6, "ticket-compliance@1": 0.85, "skill-use@1": 0.7 });
+    });
+
+    it("reading a positional results marker from before them as efficiency, ticket compliance and skill use, in that order", () => {
+      const positional = withMarker(twelveDone(), storedTwelve([0.8, 0.9, 0.75], [0.6, null, 0.7]));
+
+      expect(readBack(positional)).toEqual({
+        heading: "| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |",
+        rows: [
+          `| #12 (merged in #112) | baseline, default effort | passed | pass | passed | 0.80 | 0.90 | 0.75 | $2.00 | 24 | 3 min | ${patchOf(12, "baseline", 9001)} | – |`,
+          `| #12 (merged in #112) | variant, effort high | passed | pass | passed | 0.60 | – | 0.70 | $2.00 | 24 | 3 min | ${patchOf(12, "variant", 9001)} | – |`,
+        ],
+        totals: [
+          "Over the 1 Ticket done, beside the original: each one's first Implement run and its Review.",
+          "| Arm | Gates | Pass Verdicts | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| baseline | 1/1 | 1/1 | 1/1 | 0.80 (1/1) | 0.90 (1/1) | 0.75 (1/1) | $2.00 | 24 | 3 min |",
+          "| variant | 1/1 | 1/1 | 1/1 | 0.60 (1/1) | – | 0.70 (1/1) | $2.00 | 24 | 3 min |",
+          "| original | – | – | – | – | – | – | – | – | – |",
+          "Baseline vs original: pass Verdicts 1/1 vs –.",
+        ],
+      });
+    });
+
+    it("showing a positional results marker's three columns, though no Arm has a score for one, and keeping them through every rewrite", () => {
+      const positional = withMarker(twelveDone(), storedTwelve([0.8, 0.9, null], [0.6, null, null]));
+      const once = started({ ...aReplayIssue(140), body: positional }, 7, 9002);
+      const twice = finished(once, 7, 9002, { kind: "weekly-limit" }).body;
+
+      for (const body of [once.body, twice]) {
+        expect(visible(body).find((line) => line.startsWith("| Ticket |"))).toBe(
+          "| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |",
+        );
+        expect(rowsOf(body)[0]).toContain("| passed | 0.80 | 0.90 | – | $2.00 |");
+        expect(rowsOf(body)[1]).toContain("| passed | 0.60 | – | – | $2.00 |");
+      }
+      expect(markerOf(twice)).toContain('"scores":[0.8,0.9,null]');
+    });
+
+    it("showing a positional results marker with no score at all under its three columns, never the Kit's Scorers now", () => {
+      const positional = withMarker(twelveDone(), storedTwelve([null, null, null], [null, null, null]));
+
+      const { heading, rows, totals } = readBack(positional);
+
+      expect(heading).toBe("| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration | Patch | Flags |");
+      expect(rows[0]).toContain("| passed | – | – | – | $2.00 |");
+      expect(totals).toContain("| Arm | Gates | Pass Verdicts | Hidden tests | Efficiency | Ticket compliance | Skill use | Cost | Turns | Duration |");
+    });
+
+    it("showing – in the column of a rubric an Arm has no score for", () => {
+      const keyed = withMarker(
+        twelveDone(),
+        storedTwelve({ "efficiency@1": 0.8, "ticket-compliance@2": 0.9, "skill-use@1": 0.75 }, { "efficiency@1": 0.6, "skill-use@1": 0.7 }),
+      );
+
+      const { rows, totals } = readBack(keyed);
+
+      expect(rows[1]).toBe(`| #12 (merged in #112) | variant, effort high | passed | pass | passed | 0.60 | – | 0.70 | $2.00 | 24 | 3 min | ${patchOf(12, "variant", 9001)} | – |`);
+      expect(totals).toContain("| variant | 1/1 | 1/1 | 1/1 | 0.60 (1/1) | – | 0.70 (1/1) | $2.00 | 24 | 3 min |");
+    });
+
+    it("whatever order the Kit lists its Scorers in, each score showing under its own rubric", () => {
+      const keyed = withMarker(
+        twelveDone(),
+        storedTwelve({ "skill-use@1": 0.75, "efficiency@1": 0.8, "ticket-compliance@2": 0.9 }, { "skill-use@1": 0.7, "efficiency@1": 0.6, "ticket-compliance@2": 0.85 }),
+      );
+
+      const { heading, rows } = readBack(keyed);
+
+      expect(heading).toBe("| Ticket | Arm | Gates | Verdict | Hidden tests | Skill use | Efficiency | Ticket compliance | Cost | Turns | Duration | Patch | Flags |");
+      expect(rows[0]).toContain("| passed | 0.75 | 0.80 | 0.90 | $2.00 |");
+      expect(rows[1]).toContain("| passed | 0.70 | 0.60 | 0.85 | $2.00 |");
+    });
+
+    // #739: a rubric that doesn't apply to an Arm's run gives it no score, which no mean counts.
+    describe("with an Arm Test-first doesn't apply to", () => {
+      it("storing its Test-first score as null", () => {
+        const twelve = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "done" });
+        const body = resultsIn(twelve.body, outcomesOf(anArm(12, "baseline", 9001, { testFirst: null }), anArm(12, "variant", 9001, { testFirst: 1 })));
+        const stored = JSON.parse(markerOf(body).replace(/^<!-- fabrik:replay-results (.*) -->$/, "$1"));
+
+        expect(stored[0].arms.baseline.scores).toEqual({ "efficiency@1": 0.8, "ticket-compliance@1": 0.9, "test-first@1": null });
+        expect(stored[0].arms.variant.scores).toEqual({ "efficiency@1": 0.8, "ticket-compliance@1": 0.9, "test-first@1": 1 });
+      });
+
+      it("leaving it out of that side's Test-first mean, and saying how many each side left out", () => {
+        const body = resultsIn(
+          aFinishedReplay().body,
+          outcomesOf(
+            anArm(12, "baseline", 9001, { testFirst: 1 }),
+            anArm(12, "variant", 9001, { testFirst: null }),
+            anArm(7, "baseline", 9002, { testFirst: 0 }),
+            anArm(7, "variant", 9002, { testFirst: 1 }),
+          ),
+        );
+
+        expect(rowsOf(body)[1]).toContain("| passed | pass | passed | 0.80 | 0.90 | not applicable | $2.00 |");
+        expect(totalsIn(body)).toEqual(
+          expect.arrayContaining([
+            "| Arm | Gates | Pass Verdicts | Hidden tests | Efficiency | Ticket compliance | Test-first | Cost | Turns | Duration |",
+            "| baseline | 2/2 | 2/2 | 2/2 | 0.80 (2/2) | 0.90 (2/2) | 0.50 (2/2) | $4.00 | 48 | 6 min |",
+            "| variant | 2/2 | 2/2 | 2/2 | 0.80 (2/2) | 0.90 (2/2) | 1.00 (1/2, 1 not applicable) | $4.00 | 48 | 6 min |",
+          ]),
+        );
+      });
+
+      it("reading a not-applicable score back from the results marker, with no mean where it applied to no run", () => {
+        const keyed = withMarker(twelveDone(), storedTwelve({ "efficiency@1": 0.8, "test-first@1": null }, { "efficiency@1": 0.6, "test-first@1": 1 }));
+
+        const { heading, rows, totals } = readBack(keyed);
+
+        expect(heading).toBe("| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Test-first | Cost | Turns | Duration | Patch | Flags |");
+        expect(rows[0]).toContain("| passed | 0.80 | not applicable | $2.00 |");
+        expect(rows[1]).toContain("| passed | 0.60 | 1.00 | $2.00 |");
+        expect(totals).toContain("| baseline | 1/1 | 1/1 | 1/1 | 0.80 (1/1) | – (1 not applicable) | $2.00 | 24 | 3 min |");
+        expect(totals).toContain("| variant | 1/1 | 1/1 | 1/1 | 0.60 (1/1) | 1.00 (1/1) | $2.00 | 24 | 3 min |");
+      });
+    });
+
+    it("never putting a score under another rubric's column, a rubric of a name no Kit Scorer has now included", () => {
+      const keyed = withMarker(
+        twelveDone(),
+        storedTwelve({ "efficiency@1": 0.8, "ticket-compliance@1": 0.9, "ticket-compliance@2": 0.85, "retired-rubric@3": 0.4 }, { "efficiency@1": 0.6 }),
+      );
+
+      const { heading, rows } = readBack(keyed);
+
+      expect(heading).toBe(
+        "| Ticket | Arm | Gates | Verdict | Hidden tests | Efficiency | Ticket compliance v1 | Ticket compliance v2 | Retired rubric | Cost | Turns | Duration | Patch | Flags |",
+      );
+      expect(rows[0]).toContain("| passed | 0.80 | 0.90 | 0.85 | 0.40 | $2.00 |");
+      expect(rows[1]).toContain("| passed | 0.60 | – | – | – | $2.00 |");
     });
   });
 

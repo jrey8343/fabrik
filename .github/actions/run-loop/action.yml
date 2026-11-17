@@ -52,6 +52,12 @@ outputs:
   empty-diff:
     description: '"true" when the plan landed an Implement run whose branch changed nothing, an empty diff, which the Run record then says.'
     value: ${{ steps.loop.outputs.empty-diff }}
+  pushed-pull-request:
+    description: For a plan that landed an Implement run's push, the PR it pushed to, the one it opened for a first run, which the Run record then names (#735); empty otherwise.
+    value: ${{ steps.loop.outputs.pushed-pull-request }}
+  pushed-head:
+    description: The head that push left on pushed-pull-request.
+    value: ${{ steps.loop.outputs.pushed-head }}
   preview-url:
     description: For a UI PR whose Kit config declares preview.url, the preview deployment the plan asked to link, filled in for the PR as its push left it; empty otherwise.
     value: ${{ steps.loop.outputs.preview-url }}
