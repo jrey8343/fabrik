@@ -1779,6 +1779,10 @@ describe("What an Implement run pushed, on its Run record", () => {
     expect(implement()?.pushed).toBeNull();
   });
 
+  it("is null for a body-only Touch-up, which pushed no head and is no empty diff, and the record keeps its Touch-up number (#751)", () => {
+    expect(implement({}, { "touch-up": "1", "pull-request": "50" })).toMatchObject({ pushed: null, emptyDiff: false, touchUp: 1, retry: 0, pullRequest: 50 });
+  });
+
   it("is null for an empty diff and a failed landing, whatever the Loop step's outputs say", () => {
     const pushed = { pushedPullRequest: "51", pushedHead: HEAD_SHA };
 

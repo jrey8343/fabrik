@@ -5,7 +5,7 @@
 // (`blocked`). Each is read by the Loop's own rule for it, so the Standing and
 // the Loop can't disagree, and none can turn Stuck.
 import { dispatchedRunsOf, implementRunsWithoutPullRequestOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
-import { conflictRunInFlightIn } from "../github/threads.ts";
+import { bodyOnlyNoteSinceVerdictIn, conflictRunInFlightIn } from "../github/threads.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { agentPullRequestsByGate, inFlightOf, mergeGateLoadOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
@@ -466,9 +466,13 @@ function waitsOnReview(pullRequest: OpenPullRequestFacts, appLogin: string): boo
   return pullRequest.draft && !hasVerdictOnHead(pullRequest);
 }
 
-/** Whether a pull request's head has a Verdict. */
+/**
+ * Whether a pull request's head has its Verdict: one that no body-only
+ * Touch-up's note on that head since (#751) leaves room for a second.
+ */
 export function hasVerdictOnHead(pullRequest: OpenPullRequestFacts): boolean {
-  return verdictsOn(pullRequest.comments).some(({ record }) => record.headSha === pullRequest.headSha);
+  const bodyOnly = bodyOnlyNoteSinceVerdictIn(pullRequest.comments.filter(({ byBot }) => byBot).map(({ body }) => body));
+  return bodyOnly !== pullRequest.headSha && verdictsOn(pullRequest.comments).some(({ record }) => record.headSha === pullRequest.headSha);
 }
 
 /** Whether the Fabrik App took `label` off last, and has commented nothing since. */

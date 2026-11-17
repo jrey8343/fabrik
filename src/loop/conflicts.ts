@@ -14,7 +14,7 @@ import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
 import type { Recovery } from "./recoveryWaits.ts";
-import { runInFlight, runName, unstartedRetry } from "./retry.ts";
+import { hasVerdictOn, runInFlight, runName, unstartedRetry } from "./retry.ts";
 import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
 import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure, KitConfig, MergeableSnapshot, Plan, PullRequestSnapshot } from "./types.ts";
 
@@ -107,7 +107,7 @@ function whyNotUnreviewedDraft(pullRequest: PullRequestSnapshot, mergeable: bool
   const { number, headSha, headPushedAt } = pullRequest;
   const head = headSha.slice(0, 7);
   // A Verdict on its head: the Loop's next step is already decided, or the Operator parked it after a pass.
-  if (pullRequest.verdicts.some((record) => record.headSha === headSha)) {
+  if (hasVerdictOn(pullRequest, headSha)) {
     return `#${number} is a draft with a Verdict on ${head}, so it isn't brought up to date with main`;
   }
   // Only a conflict keeps GitHub from starting the Review its push should have.

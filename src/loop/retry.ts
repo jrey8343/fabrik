@@ -108,6 +108,16 @@ function allTagged(tags: VerdictTags | null): boolean {
 }
 
 /**
+ * Whether a Touch-up's flaw, counted by tag, is about the pull request's body
+ * alone (#751): every item is tagged `[small: body]`. Such a Touch-up may
+ * commit nothing and only rewrite the body. The Kit reads it from the
+ * marker's tags, so the Implementer never judges it.
+ */
+export function bodyOnly(tags: VerdictTags | undefined): boolean {
+  return tags !== undefined && allTagged(tags) && tags.missedEarlier === 0 && tags.small === tags.smallBody;
+}
+
+/**
  * Whether this PR's Ticket is no longer `ready-for-agent`, as the snapshot
  * read its labels through the PR's closing link (#416): agent:implement on it
  * starts nothing (src/loop/implement.ts), so no Retry can start. A PR that no
@@ -205,6 +215,8 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   if (pullRequest.conflictRunInFlight !== null) return { kind: "conflict", main: pullRequest.conflictRunInFlight };
   const latest = pullRequest.verdicts.at(-1);
   if (latest === undefined || pullRequest.pushedSinceVerdict || latest.verdict !== "execution-flaw") return null;
+  // A body-only Touch-up's note is its outcome, though it pushed nothing (#751).
+  if (pullRequest.bodyOnlyNoteSinceVerdict !== null) return null;
   // One on a Ticket no longer ready-for-agent called for no Retry, and one the Kit has since ended for that reason has none in flight (#416).
   if (latest.ticketNotReady === true || pullRequest.retryNoteSinceVerdict === "ended") return null;
   // A Retry works on a draft: once the PR has left draft since the flaw, as when the Operator took it back or the Kit
@@ -231,6 +243,16 @@ export function runName(run: RunInFlight): string {
     case "conflict":
       return "The conflict-only run";
   }
+}
+
+/**
+ * Whether `headSha` already has its Verdict on this PR: one Verdict per head,
+ * except that a body-only Touch-up's note on that head since its latest
+ * Verdict (#751) leaves room for one more, the later Review of the body that
+ * Touch-up wrote, with nothing in the code changed since the head it judged.
+ */
+export function hasVerdictOn(pullRequest: PullRequestSnapshot, headSha: string): boolean {
+  return pullRequest.verdicts.some((record) => record.headSha === headSha) && pullRequest.bodyOnlyNoteSinceVerdict !== headSha;
 }
 
 /** Why a Review on this PR posts no Verdict, while a run is in flight on it; otherwise null. */

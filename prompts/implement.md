@@ -42,7 +42,8 @@ If the end of this prompt has "This run is a Touch-up", the Execution flaw you'r
 
 - A Touch-up works as a retry does: everything under "When you're fixing a PR" applies. Keep the sound work, add commits, write the failing test for each behaviour finding before its fix, and run the build and the tests before you finish.
 - Fix exactly what the findings name. A stale comment or doc is fixed where it is; a `[small: body]` finding is fixed in your `summary`, which becomes the PR body.
-- Committing nothing is a failed attempt, as on a retry.
+- When the end of this prompt says every finding is about the body, the branch is sound and only the PR's body is wrong: commit nothing, and write a `summary` that matches the branch, which replaces the body, and a `fix` saying what you corrected. Review then judges the new body on the same head.
+- Otherwise, committing nothing is a failed attempt, as on a retry.
 - Your output is a retry's: `summary` and `fix`, and the Kit keeps the PR's title.
 
 ## When the Operator requested changes

@@ -25,12 +25,13 @@ import {
   requestChangesRunStartedMarker,
   RETRY_PUSH_MARKER,
   stepUpReasonMarker,
+  touchUpBodyOnlyMarker,
   touchUpPushMarker,
   UNMARKED_RETRY_PUSH,
 } from "./markers.ts";
 import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
 import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
-import { implementSettings, MAX_RETRIES, MAX_TOUCH_UPS, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
+import { bodyOnly, implementSettings, MAX_RETRIES, MAX_TOUCH_UPS, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { type AnswerLines, verdictActions } from "./review.ts";
 import type {
@@ -328,6 +329,11 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
     if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded, parsed.output.summary) };
+    // A Touch-up whose findings were all about the body is told to commit nothing (#751): that's no empty diff.
+    if (inFlight?.kind === "touch-up" && bodyOnly(pullRequest.verdicts.at(-1)?.tags)) {
+      const evidence = evidenceFor(event, config, pullRequest.uiEvidenceMarker !== null);
+      return { kind: "act", actions: bodyOnlyTouchUpLanded(pullRequest, inFlight.touchUp, issueNumber, branch, parsed.output, evidence, changedTestsOf(pullRequest, changes), fixes.operatorComments) };
+    }
     return {
       kind: "act",
       actions: verdictActions(
@@ -386,6 +392,45 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       ...previewToLink(evidence, config, branch, pullRequest.number),
     ],
   };
+}
+
+/**
+ * A body-only Touch-up that committed nothing, as its prompt told it to
+ * (#751): every finding was `[small: body]`. The Kit replaces the PR's body
+ * with its `summary`, posts its `fix` under a note naming the head, which
+ * ends its time in flight but is no push, and adds agent:review, which starts
+ * the Review of that head. That Review may land a second Verdict on it, and
+ * the PR stays in draft until it does. Like the rest of a retry, it's silent.
+ */
+function bodyOnlyTouchUpLanded(
+  pullRequest: PullRequestSnapshot,
+  touchUp: number,
+  issueNumber: number,
+  branch: string,
+  output: { readonly summary: string; readonly fix?: string; readonly operatorCommentsConsidered?: readonly string[] },
+  evidence: string | null,
+  changedTests: readonly string[],
+  operatorComments: NonNullable<ImplementRunFinished["fixes"]>["operatorComments"],
+): Action[] {
+  const { number, headSha } = pullRequest;
+  return [
+    // The body goes first, so the Review its label starts reads the new one.
+    { kind: "edit-issue-body", issue: number, body: pullRequestBody(output.summary, issueNumber, evidence, changedTests) },
+    {
+      kind: "comment",
+      issue: number,
+      body: [
+        touchUpBodyOnlyMarker(touchUp, headSha),
+        `The Implementer's Touch-up ${touchUp} of ${MAX_TOUCH_UPS} on \`${branch}\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${headSha.slice(0, 7)}. Review runs again on ${headSha.slice(0, 7)}, and no Retry was used.`,
+        "",
+        // Present: the on-a-PR contract requires it.
+        withoutMentions(output.fix ?? ""),
+        ...consideredSection(output.operatorCommentsConsidered ?? [], operatorComments),
+      ].join("\n"),
+    },
+    // It notifies nobody, and takes itself off as the Review starts.
+    { kind: "add-labels", issue: number, labels: [REVIEW_LABEL] },
+  ];
 }
 
 /**

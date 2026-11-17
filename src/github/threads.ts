@@ -35,6 +35,7 @@ import {
   stepUpReasonIn,
   stuckTriggerGaveUpMarker,
   stuckTriggerReaddedMarker,
+  touchUpBodyOnlyIn,
   touchUpPushIn,
   UNMARKED_RETRY_PUSH,
   VERDICT_MARKER,
@@ -233,6 +234,24 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
     else if (verdictsIn([body]).length > 0) pushed = false;
   }
   return pushed;
+}
+
+/**
+ * The head a body-only Touch-up's note (#751) since a PR's latest Verdict
+ * names, or null when none came since, from the Fabrik App's comments on it,
+ * oldest first. The note ends the Touch-up's time in flight, as a push note
+ * does, but it is no push: nothing in pushedSinceVerdictIn, landedPushNotes
+ * or the Kit's push notes reads it. A Review may land a second Verdict on
+ * the head it names.
+ */
+export function bodyOnlyNoteSinceVerdictIn(commentBodies: readonly string[]): string | null {
+  let head: string | null = null;
+  for (const body of commentBodies) {
+    const note = touchUpBodyOnlyIn(body);
+    if (note !== null) head = note.headSha;
+    else if (isVerdict(body)) head = null;
+  }
+  return head;
 }
 
 /** Whether a comment is a Verdict: it carries a valid Verdict marker. */

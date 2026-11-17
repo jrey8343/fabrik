@@ -14,8 +14,8 @@ import { FULL_SHA } from "../skills/lock.ts";
 import { agentBranchFor, IMPLEMENTER_AUTHOR } from "../loop/agentPullRequest.ts";
 import { PROTOTYPE_BRANCH_PREFIX } from "../loop/designOutput.ts";
 import { verdictsIn } from "../github/threads.ts";
-import { MAX_TOUCH_UPS } from "../loop/retry.ts";
-import type { FailedRunCommits, GivenOperatorComment, KeptBranchStart } from "../loop/types.ts";
+import { bodyOnly, MAX_TOUCH_UPS } from "../loop/retry.ts";
+import type { FailedRunCommits, GivenOperatorComment, KeptBranchStart, VerdictRecord } from "../loop/types.ts";
 import {
   givenOperatorComments,
   operatorCommentId,
@@ -143,7 +143,7 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
       "## The findings to fix",
       "The latest Verdict on the PR, posted by the Kit:",
       latest.trimEnd(),
-      ...touchUpParts(verdictsIn([latest])[0]?.touchUp),
+      ...touchUpParts(verdictsIn([latest])[0]),
       ...fromOperator.parts,
     ],
     operatorComments: fromOperator.given,
@@ -152,14 +152,18 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
 
 /**
  * The block a Touch-up's prompt carries (#750): which of the Ticket's two it
- * is, read from the Verdict's marker, which the Kit wrote from the findings'
- * tags, so the run never judges that for itself. None on a Retry.
+ * is, and whether every finding is about the PR's body (#751), both read from
+ * the Verdict's marker, which the Kit wrote from the findings' tags, so the
+ * run never judges either for itself. None on a Retry.
  */
-function touchUpParts(touchUp: number | undefined): string[] {
-  if (touchUp === undefined) return [];
+function touchUpParts(flaw: VerdictRecord | undefined): string[] {
+  if (flaw?.touchUp === undefined) return [];
   return [
     "## This run is a Touch-up",
-    `This run is Touch-up ${touchUp} of ${MAX_TOUCH_UPS}: every finding above is tagged small or missed earlier, so fixing them uses none of the Ticket's two Retries. Work as "When you're touching up a PR" says.`,
+    `This run is Touch-up ${flaw.touchUp} of ${MAX_TOUCH_UPS}: every finding above is tagged small or missed earlier, so fixing them uses none of the Ticket's two Retries. Work as "When you're touching up a PR" says.`,
+    ...(bodyOnly(flaw.tags)
+      ? ["Every finding above is about the pull request's body (`[small: body]`), so commit nothing: write a `summary` that matches the branch, and a `fix` saying what you corrected."]
+      : []),
   ];
 }
 

@@ -320,6 +320,25 @@ export function touchUpPushIn(body: string): number | null {
 }
 
 /**
+ * The first line of the Kit's note on a PR that a body-only Touch-up (#751)
+ * committed nothing and rewrote its body, naming which Touch-up it was and
+ * the head it left the PR at. It is that Touch-up's outcome, which ends its
+ * time in flight, but no push: the head didn't move. Its Review may land a
+ * second Verdict on that head.
+ */
+export function touchUpBodyOnlyMarker(touchUp: number, headSha: string): string {
+  return `<!-- fabrik:touch-up-body-only ${touchUp} ${headSha} -->`;
+}
+
+const TOUCH_UP_BODY_ONLY_MARKER = /^<!-- fabrik:touch-up-body-only ([1-9]\d*) ([0-9a-f]{40}|[0-9a-f]{64}) -->(?:\n|$)/;
+
+/** A body-only Touch-up's note (#751): which Touch-up it was and the head it names, from its first line, or null for any other comment. Only a bot's comment should be passed in. */
+export function touchUpBodyOnlyIn(body: string): { readonly touchUp: number; readonly headSha: string } | null {
+  const match = TOUCH_UP_BODY_ONLY_MARKER.exec(body);
+  return match === null ? null : { touchUp: Number(match[1]), headSha: match[2]! };
+}
+
+/**
  * The first line of the Kit's note that the Retry a PR's latest Verdict called
  * for never started, and that it has re-added agent:implement for it (#416).
  * The Kit restarts each Retry once: the Retry stays in flight, so re-adding

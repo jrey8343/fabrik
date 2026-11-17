@@ -22,6 +22,7 @@ import {
   stuckTriggerReaddedMarker,
   UNMARKED_RETRY_PUSH,
   verdictMarker,
+  touchUpBodyOnlyMarker,
 } from "../loop/markers.ts";
 import type { KitConfig } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
@@ -320,6 +321,19 @@ describe("a run that was asked for and never began", () => {
         const [standing] = standingsIn(retryFacts([touchUpFlaw]), {}, "2026-11-08T20:00:00Z");
         if (standing === undefined) throw new Error("expected a Standing");
         expect(wordStanding(standing, "2026-11-08T20:00:00Z", "Australia/Sydney").sentence).toBe("An Execution flaw called for Touch-up 1 of 2 1 hour ago; nothing has started. The Kit adds `agent:implement` to #7 again once the Implement job's timeout has passed.");
+      });
+
+      it("a body-only one's note (#751) ends it, though it pushed nothing, and the draft waits on the Review of the same head", () => {
+        const JUDGED = "e".repeat(40);
+        const bodyOnlyFlaw = aComment(
+          `${verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 1 }, touchUp: 1, headSha: JUDGED })}\nVerdict`,
+          FLAW,
+        );
+        const note = aComment(`${touchUpBodyOnlyMarker(1, JUDGED)}\nThe Implementer's Touch-up 1 of 2 committed nothing, as every finding was about the PR's body.`, "2026-11-08T19:30:00Z");
+
+        const standings = standingsIn(retryFacts([bodyOnlyFlaw, note], { headSha: JUDGED }, ["ready-for-agent"]));
+
+        expect(standings).toMatchObject([{ place: "review", detail: { silence: "quiet-draft" } }]);
       });
 
       it("is running once the Touch-up is in flight, named Touch-up 1 of 2", () => {

@@ -69,6 +69,33 @@ describe("A Touch-up's prompt says it is one (#750)", () => {
 
     expect(parts.join("\n")).not.toContain("Touch-up");
   });
+
+  const BODY_ONLY = "Every finding above is about the pull request's body (`[small: body]`)";
+  const taggedVerdict = (tags: { small: number; missedEarlier: number; counted: number; smallBody: number }, items: string[]) =>
+    [
+      verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags, touchUp: 1, headSha: "a".repeat(40) }),
+      ...items,
+    ].join("\n");
+  const touchUpText = async (verdict: string) =>
+    (await retryContext(await fileOf({ ...pullRequest, comments: [{ body: verdict, author: { __typename: "Bot" } }] }))).parts.join("\n");
+
+  it("one whose findings are all [small: body] (#751) says every finding is about the body", async () => {
+    const text = await touchUpText(
+      taggedVerdict({ small: 2, missedEarlier: 0, counted: 0, smallBody: 2 }, ["- [small: body] The body says it adds a test.", "- [small: body] It names the wrong file."]),
+    );
+
+    expect(text).toContain(`${BODY_ONLY}, so commit nothing`);
+  });
+
+  it.each([
+    ["a [small: comment] finding", { small: 2, missedEarlier: 0, counted: 0, smallBody: 1 }, ["- [small: body] The body is stale.", "- [small: comment] So is a doc comment."]],
+    ["a [missed earlier] finding", { small: 1, missedEarlier: 1, counted: 0, smallBody: 1 }, ["- [small: body] The body is stale.", "- [missed earlier] The empty cart throws."]],
+  ])("one with %s doesn't say so", async (_name, tags, items) => {
+    const text = await touchUpText(taggedVerdict(tags, items));
+
+    expect(text).toContain("## This run is a Touch-up");
+    expect(text).not.toContain(BODY_ONLY);
+  });
 });
 
 describe("A run on an existing PR is shown the PR's current description, to rewrite", () => {

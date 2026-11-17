@@ -3,7 +3,8 @@
 // pool of two, on the same model as the run whose push it judged.
 import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
-import { lastPushStepUpReasonIn, pushedSinceVerdictIn, verdictsIn } from "../github/threads.ts";
+import { emptyDiffIn, implementPushOf } from "../github/apply.ts";
+import { bodyOnlyNoteSinceVerdictIn, lastPushStepUpReasonIn, pushedSinceVerdictIn, verdictsIn } from "../github/threads.ts";
 import { planFor } from "./rules.ts";
 import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
@@ -318,6 +319,7 @@ class Thread {
       ticketLabels: ["enhancement", "ready-for-agent"],
       verdicts: verdictsIn(this.comments),
       pushedSinceVerdict: pushedSinceVerdictIn(this.comments),
+      bodyOnlyNoteSinceVerdict: bodyOnlyNoteSinceVerdictIn(this.comments),
       lastPushStepUpReason: lastPushStepUpReasonIn(this.comments),
       change: CHANGE,
     });
@@ -451,5 +453,87 @@ describe("A Touch-up's landing", () => {
     thread.reviewed(SMALL);
 
     expect(thread.finished(retry, BUILT, C)).toEqual({ kind: "nothing", reason: "Retry 1 of 2 on #50 isn't the run in flight, so the retry's branch isn't pushed" });
+  });
+});
+
+describe("A body-only Touch-up (#751)", () => {
+  const BODY_ONLY = "verdict: execution-flaw\n\n- [small: body] The body says it adds a `--dry-run` flag, which the branch doesn't.";
+  const REVIEW_LABELED: LoopEvent = { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" };
+  const PASS = "verdict: pass\n\nThe body now matches the branch.";
+
+  /** A thread whose body-only Touch-up committed nothing, and that run's plan. */
+  function bodyOnlyLanded(): { thread: Thread; plan: Plan } {
+    const thread = new Thread();
+    thread.reviewed(BODY_ONLY);
+    return { thread, plan: thread.finished(thread.implement(), NOTHING, B) };
+  }
+
+  it("that commits nothing replaces the body with its summary, posts its fix under a body-only note on the head, and starts the Review of that head", () => {
+    const { thread, plan } = bodyOnlyLanded();
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "edit-issue-body", issue: 50, body: expect.stringContaining("Handles the empty cart.") });
+    const note = thread.comments.at(-1) ?? "";
+    expect(note.split("\n")[0]).toBe(`<!-- fabrik:touch-up-body-only 1 ${HEAD_SHA} -->`);
+    expect(note).toContain("Fixed the stale comment.");
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:review"] });
+    expect(postedBy(plan)).toEqual([]);
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "push-branch" }));
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "mark-ready-for-review" }));
+  });
+
+  it("is no empty diff and pushes no head, so its Run record says neither", () => {
+    const thread = new Thread();
+    thread.reviewed(BODY_ONLY);
+    const started = thread.implement();
+    const plan = thread.finished(started, NOTHING, B);
+    const event: LoopEvent = { kind: "implement-run-finished", runUrl: RUN, issue: 7, output: "{}", branch: "fabrik/ticket-7", base: "fabrik/ticket-7", changes: NOTHING, fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, touchUp: 1 } };
+
+    expect(emptyDiffIn(plan)).toBe(false);
+    expect(implementPushOf(event, plan, { opened: null }, HEAD_SHA)).toBeNull();
+  });
+
+  it("is no longer in flight at its note: agent:review starts a later Review of the same head", () => {
+    const { thread } = bodyOnlyLanded();
+
+    const review = actionsOf(thread.plan(REVIEW_LABELED)).find((action) => action.kind === "start-agent-run");
+
+    expect(review).toMatchObject({ role: "review", reviewKind: { kind: "later", lastJudged: { headSha: HEAD_SHA } } });
+  });
+
+  it("the Review of that head lands a second Verdict on it, and only then does the PR leave draft", () => {
+    const { thread } = bodyOnlyLanded();
+
+    const pass = thread.reviewed(PASS);
+
+    expect(commentOf(pass)).toContain("## Verdict: Pass");
+    expect(verdictsIn(thread.comments).map((record) => record.headSha)).toEqual([HEAD_SHA, HEAD_SHA]);
+    // The pass starts the Digest writer, whose landing opens the Merge gate (ADR-0022).
+    expect(actionsOf(pass)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:digest"] });
+  });
+
+  it("a Review re-run on that head after its second Verdict lands nothing", () => {
+    const { thread } = bodyOnlyLanded();
+    thread.reviewed(PASS);
+
+    expect(thread.reviewed("verdict: pass\n\nStill fine.")).toEqual({ kind: "nothing", reason: `#50 already has a Verdict on ${HEAD_SHA.slice(0, 7)}` });
+  });
+
+  it("a Review on a judged head with no body-only note since its Verdict lands nothing, as before", () => {
+    const thread = new Thread();
+    thread.reviewed(BODY_ONLY);
+    thread.implement();
+
+    expect(thread.reviewed(PASS)).toEqual({ kind: "nothing", reason: `#50 already has a Verdict on ${HEAD_SHA.slice(0, 7)}` });
+  });
+
+  it("one with a [small: comment] finding beside the body's that commits nothing gets the empty-diff Verdict, which counts", () => {
+    const thread = new Thread();
+    thread.reviewed("verdict: execution-flaw\n\n- [small: body] The body is stale.\n- [small: comment] So is the doc comment on `total()`.");
+
+    const plan = thread.finished(thread.implement(), NOTHING, B);
+
+    expect(commentOf(plan)).toContain("The Implementer's Touch-up 1 of 2 on `fabrik/ticket-7` committed no change");
+    expect(postedBy(plan).at(-1)).toMatchObject({ source: "empty-diff", verdict: "execution-flaw" });
+    expect(commentOf(plan)).toContain("Retry 1 of 2 starts now");
   });
 });

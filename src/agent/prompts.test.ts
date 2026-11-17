@@ -84,8 +84,17 @@ describe("The prompts of the runs on a PR the Operator requested changes on (ADR
     expect(touchUp).toContain('"This run is a Touch-up"');
     expect(touchUp).toContain('everything under "When you\'re fixing a PR" applies');
     expect(touchUp).toContain("uses none of the Ticket's two Retries");
-    expect(touchUp).toContain("Committing nothing is a failed attempt");
+    expect(touchUp).toContain("committing nothing is a failed attempt");
     expect(touchUp).toContain("Your output is a retry's: `summary` and `fix`, and the Kit keeps the PR's title.");
+  });
+
+  it("implement's Touch-up section has a body-only one (#751) commit nothing, with a summary that matches the branch and a fix, and only it", async () => {
+    const touchUp = section(await prompt("implement"), "When you're touching up a PR");
+    const bodyOnly = lineStarting(touchUp, "- When the end of this prompt says every finding is about the body");
+    expect(bodyOnly).toContain("commit nothing");
+    expect(bodyOnly).toContain("a `summary` that matches the branch");
+    expect(bodyOnly).toContain("a `fix` saying what you corrected");
+    expect(lineStarting(touchUp, "- Otherwise, committing nothing is a failed attempt")).not.toBe("");
   });
 
   it("implement no longer has a Request-changes run meet a criterion its requested changes conflict with, and has it name each criterion it amended", async () => {

@@ -13,7 +13,7 @@ import { followUpsSection } from "./followUps.ts";
 import { type HeldOn, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { withoutMentions } from "./mentions.ts";
-import { retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
+import { hasVerdictOn, retryAfterFlaw, type VerdictNext, whyAwaitingRun } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
 import { changeLine } from "./changeFingerprint.ts";
@@ -161,7 +161,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
   });
 }
 
-/** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once. */
+/** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once, or once more after a body-only Touch-up (#751). */
 function landVerdict(
   event: RedChecks | Reviewed,
   { pullRequest }: Snapshot,
@@ -175,7 +175,7 @@ function landVerdict(
   if (pullRequest.headSha !== event.headSha) {
     return { kind: "nothing", reason: `#${pullRequest.number} has moved on from ${event.headSha.slice(0, 7)}, so the Verdict is stale` };
   }
-  if (pullRequest.verdicts.some((record) => record.headSha === event.headSha)) {
+  if (hasVerdictOn(pullRequest, event.headSha)) {
     return { kind: "nothing", reason: `#${pullRequest.number} already has a Verdict on ${event.headSha.slice(0, 7)}` };
   }
   // A Review that started before the run was called for lands nothing either.
