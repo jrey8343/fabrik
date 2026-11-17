@@ -5,8 +5,8 @@ import { UI } from "../__fixtures__/uiEvidence.ts";
 import { landingFailureReport, pushLanding } from "../kit/landingFailure.ts";
 import { replayMarksIn } from "../kit/replay.ts";
 import { planFor } from "../loop/rules.ts";
-import type { Plan } from "../loop/types.ts";
-import { applyPlan, PlanNotApplied } from "./apply.ts";
+import type { LoopEvent, Plan } from "../loop/types.ts";
+import { applyPlan, implementPushOf, PlanNotApplied } from "./apply.ts";
 import { GitHubError } from "./client.ts";
 import { describePlan } from "./describePlan.ts";
 import { pendingPrototypeIn } from "./threads.ts";
@@ -359,7 +359,7 @@ describe("Applying a plan that links a UI PR's preview deployment", () => {
 
     const applied = await applyPlan(fakeGitHub(), repo, plan, heldBranch());
 
-    expect(applied).toEqual({ preview: { pullRequest: 51, url: `https://deploy-preview-51--shop.netlify.app/fabrik-ticket-7/${HEAD}` }, readded: [], refusedCollapses: [] });
+    expect(applied).toEqual({ preview: { pullRequest: 51, url: `https://deploy-preview-51--shop.netlify.app/fabrik-ticket-7/${HEAD}` }, readded: [], refusedCollapses: [], opened: 51 });
   });
 
   it("hands on a retry's preview for the PR it pushed to, changing nothing on GitHub itself", async () => {
@@ -389,8 +389,50 @@ describe("Applying a plan that links a UI PR's preview deployment", () => {
       ],
     };
 
-    expect(await applyPlan(fakeGitHub(), repo, plan, heldBranch())).toEqual({ preview: null, readded: [], refusedCollapses: [] });
-    expect(await applyPlan(fakeGitHub(), repo, { kind: "nothing", reason: "no change" })).toEqual({ preview: null, readded: [], refusedCollapses: [] });
+    expect(await applyPlan(fakeGitHub(), repo, plan, heldBranch())).toEqual({ preview: null, readded: [], refusedCollapses: [], opened: 51 });
+    expect(await applyPlan(fakeGitHub(), repo, { kind: "nothing", reason: "no change" })).toEqual({ preview: null, readded: [], refusedCollapses: [], opened: null });
+  });
+});
+
+// #735: what the push job's Run record names as an Implement run's push, which Yield pairs with its first Verdict.
+describe("The pull request and head an Implement run's landing pushed", () => {
+  const HEAD = "4f2b9c0e1d3a5b7c9e0f2a4b6c8d0e1f3a5b7c9d";
+  const branch = "fabrik/ticket-7";
+  const finished = (fixes?: { pullRequest: number }): LoopEvent => ({
+    kind: "implement-run-finished",
+    issue: 7,
+    output: "{}",
+    branch,
+    base: "main",
+    changes: { net: [], commits: [] },
+    runUrl: "https://github.com/acme/shop/actions/runs/9100",
+    ...(fixes === undefined ? {} : { fixes: { ...fixes, headSha: "e".repeat(40), runUrl: "https://github.com/acme/shop/actions/runs/9100" } }),
+  });
+  const pushes: Plan = { kind: "act", actions: [{ kind: "push-branch", branch }] };
+
+  it("is the pull request a first run's plan opened, at the head its push left", async () => {
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "push-branch", branch },
+        { kind: "open-pull-request", issue: 7, head: branch, base: "main", title: "Waitlist", body: "Adds it.", draft: true },
+      ],
+    };
+    const applied = await applyPlan(fakeGitHub(), repo, plan, { head: HEAD, push: async () => {} });
+
+    expect(implementPushOf(finished(), plan, applied, HEAD)).toEqual({ pullRequest: 51, headSha: HEAD });
+  });
+
+  it("is the pull request a Retry fixes, at the head its push left", () => {
+    expect(implementPushOf(finished({ pullRequest: 50 }), pushes, { opened: null }, HEAD)).toEqual({ pullRequest: 50, headSha: HEAD });
+  });
+
+  it("is none for a plan that pushed nothing, a branch with nothing to push, or any other run", () => {
+    const emptyDiff: Plan = { kind: "act", actions: [{ kind: "comment", issue: 7, body: "Changed nothing." }] };
+
+    expect(implementPushOf(finished({ pullRequest: 50 }), emptyDiff, { opened: null }, HEAD)).toBeNull();
+    expect(implementPushOf(finished({ pullRequest: 50 }), pushes, { opened: null }, null)).toBeNull();
+    expect(implementPushOf({ kind: "dispatch-check" }, pushes, { opened: null }, HEAD)).toBeNull();
   });
 });
 
@@ -597,7 +639,7 @@ describe("Applying a prototype turn's plan (#155)", () => {
 
       const applied = await applyPlan(github, repo, planLinking("https://{branch_slug}--shop.netlify.app/{sha}"), heldBranch());
 
-      expect(applied).toEqual({ preview: { round: 9300, url: `https://prototype-7--shop.netlify.app/${HEAD}/book` }, readded: [], refusedCollapses: [] });
+      expect(applied).toEqual({ preview: { round: 9300, url: `https://prototype-7--shop.netlify.app/${HEAD}/book` }, readded: [], refusedCollapses: [], opened: null });
       expect(github.calls.map(({ method, path }) => `${method} ${path}`)).toEqual([`POST ${issues}/7/comments`]);
     });
 

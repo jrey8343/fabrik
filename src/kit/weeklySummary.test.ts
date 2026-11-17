@@ -36,7 +36,7 @@ import {
 } from "../read/builders.ts";
 import { aScoreEntry, aScoreFile, aSkippedScoreFile } from "../__fixtures__/weeklySummary.ts";
 import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
-import { handBackMarker, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
+import { flakyCheckMarker, handBackMarker, RESEARCH_RUN_FAILED_MARKER, verdictMarker } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import type { RepoHealthFacts } from "./loopHealth.ts";
 import { RUN_RECORD_SCHEMA, readRunRecord, type RunRecord } from "./runRecord.ts";
@@ -1779,6 +1779,177 @@ describe("the Weekly summary", () => {
         mergedPullRequestTitles: [{ title: 'Revert "Build thing 1"', mergedAt: "2026-11-04T00:00:00Z" }],
       });
       expect(rate.thisWeek).toEqual({ reverted: 1, merged: 1 });
+    });
+  });
+
+  // #735: of the Implement runs of each kind whose push got its first Verdict in the week, the share that passed.
+  describe("Yield", () => {
+    // This week runs from 2026-11-01T13:00Z to 2026-11-08T13:00Z; last week from 2026-10-25T13:00Z.
+    const head = (n: number) => n.toString(16).repeat(40).slice(0, 40);
+    /** A live first Implement run on Ticket 7 that pushed `head(n)` to PR 50, ended at `endedAt`. */
+    const pushedRun = (n: number, endedAt: string, overrides: Partial<RunRecord> = {}) =>
+      aRunRecord({ runId: 1000 + n, pullRequest: null, endedAt, pushed: { pullRequest: 50, headSha: head(n) }, ...overrides });
+    const yieldRows = (records: readonly RunRecord[], comments: readonly CommentFacts[]) => {
+      const result = weeklySummary(input({ records, facts: [factsOf({ pullRequests: [aMergedPullRequest("2026-11-07T00:00:00Z", { comments })] })] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return result.body.split("\n").filter((line) => / yield \|/.test(line));
+    };
+
+    it("counts a first run whose pushed head's first Verdict passed as passing, and one whose first Verdict was an Execution flaw as judged only", () => {
+      const rows = yieldRows(
+        [pushedRun(1, "2026-11-02T00:00:00Z"), pushedRun(2, "2026-11-03T00:00:00Z")],
+        [aVerdictComment("pass", head(1), "2026-11-02T01:00:00Z"), aVerdictComment("execution-flaw", head(2), "2026-11-03T01:00:00Z")],
+      );
+
+      expect(rows[0]).toBe("| First-pass yield | 50% (1 of 2) | no judged runs | – |");
+    });
+
+    it("keeps a run's first Verdict: a later pass on the same head doesn't make an Execution flaw pass", () => {
+      const rows = yieldRows(
+        [pushedRun(1, "2026-11-02T00:00:00Z")],
+        [aVerdictComment("execution-flaw", head(1), "2026-11-02T01:00:00Z"), aVerdictComment("pass", head(1), "2026-11-02T05:00:00Z")],
+      );
+
+      expect(rows[0]).toBe("| First-pass yield | 0% (0 of 1) | no judged runs | – |");
+    });
+
+    it("takes a red Required check's Execution flaw on the pushed head as the run's first Verdict", () => {
+      const redCheck = aComment(`${verdictMarker({ verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["test"], headSha: head(1) })}\nRequired checks failed: test`, "2026-11-02T00:30:00Z");
+      const rows = yieldRows([pushedRun(1, "2026-11-02T00:00:00Z")], [redCheck, aVerdictComment("pass", head(1), "2026-11-02T01:00:00Z")]);
+
+      expect(rows[0]).toBe("| First-pass yield | 0% (0 of 1) | no judged runs | – |");
+    });
+
+    it("counts a Verdict on another head as none of the run's", () => {
+      const rows = yieldRows([pushedRun(1, "2026-11-02T00:00:00Z")], [aVerdictComment("pass", head(2), "2026-11-02T01:00:00Z")]);
+
+      expect(rows[0]).toBe("| First-pass yield | no judged runs | no judged runs | – |");
+    });
+
+    it("counts a run in the week its first Verdict was posted, not the week it ended", () => {
+      // Ended on Sunday 1 November 23:00 in Sydney, last week; judged on Monday 2 November 01:00, this week.
+      const rows = yieldRows([pushedRun(1, "2026-11-01T12:00:00Z"), aRunRecord({ runId: 9, role: "triage", endedAt: "2026-11-03T00:00:00Z" })], [aVerdictComment("pass", head(1), "2026-11-01T14:00:00Z")]);
+
+      expect(rows[0]).toBe("| First-pass yield | 100% (1 of 1) | no judged runs | – |");
+    });
+
+    it("counts an empty diff and a Broken run as not passing, in the week its record ended", () => {
+      const rows = yieldRows(
+        [
+          aRunRecord({ runId: 1001, pullRequest: null, emptyDiff: true, endedAt: "2026-10-31T00:00:00Z" }),
+          aRunRecord({ runId: 1002, pullRequest: null, brokenRun: "missing-output", endedAt: "2026-11-02T00:00:00Z" }),
+          pushedRun(3, "2026-11-02T00:00:00Z"),
+        ],
+        [aVerdictComment("pass", head(3), "2026-11-02T01:00:00Z")],
+      );
+
+      expect(rows[0]).toBe("| First-pass yield | 50% (1 of 2) | 0% (0 of 1) | +50 pts |");
+    });
+
+    it("leaves out a run whose first Verdict was counted back as a Flaky check", () => {
+      const redCheck = aComment(`${verdictMarker({ verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["test"], headSha: head(1) })}\nRequired checks failed: test`, "2026-11-02T00:30:00Z");
+      const countedBack = aComment(`${flakyCheckMarker({ headSha: head(1), checks: ["test"], countedBack: true })}\nThe test check was flaky.`, "2026-11-02T03:00:00Z");
+      const rows = yieldRows(
+        [pushedRun(1, "2026-11-02T00:00:00Z"), pushedRun(2, "2026-11-02T00:00:00Z")],
+        [redCheck, aVerdictComment("pass", head(1), "2026-11-02T01:00:00Z"), countedBack, aVerdictComment("pass", head(2), "2026-11-02T04:00:00Z")],
+      );
+
+      expect(rows[0]).toBe("| First-pass yield | 100% (1 of 1) | no judged runs | – |");
+    });
+
+    it("leaves out a first run that pushed nothing and was no empty diff or Broken run, such as one beside another in flight", () => {
+      const rows = yieldRows(
+        [pushedRun(1, "2026-11-02T00:00:00Z"), aRunRecord({ runId: 1002, pullRequest: null, endedAt: "2026-11-02T00:00:00Z" })],
+        [aVerdictComment("pass", head(1), "2026-11-02T01:00:00Z")],
+      );
+
+      expect(rows[0]).toBe("| First-pass yield | 100% (1 of 1) | no judged runs | – |");
+    });
+
+    it("counts a Kept-branch start and a Stepped-up start as first runs, and no Request-changes run, conflict-only run, Replay arm or Infrastructure failure", () => {
+      const rows = yieldRows(
+        [
+          pushedRun(1, "2026-11-02T00:00:00Z", { keptBranch: true }),
+          pushedRun(2, "2026-11-02T00:00:00Z", { stepUp: true, stepUpReason: "marked" }),
+          pushedRun(3, "2026-11-02T00:00:00Z", { pullRequest: 50, requestChanges: true }),
+          pushedRun(4, "2026-11-02T00:00:00Z", { pullRequest: 50, stepUp: true, stepUpReason: "conflict-only" }),
+          pushedRun(5, "2026-11-02T00:00:00Z", { replay: A_REPLAY }),
+          aRunRecord({ runId: 1006, pullRequest: null, emptyDiff: true, infrastructureFailure: "timeout", endedAt: "2026-11-02T00:00:00Z" }),
+        ],
+        [1, 2, 3, 4, 5].map((n) => aVerdictComment(n === 2 ? "execution-flaw" : "pass", head(n), "2026-11-02T01:00:00Z")),
+      );
+
+      expect(rows).toEqual([
+        "| First-pass yield | 50% (1 of 2) | no judged runs | – |",
+        "| Retry 1 yield | no judged runs | no judged runs | – |",
+        "| Retry 2 yield | no judged runs | no judged runs | – |",
+      ]);
+    });
+
+    it("counts Retry 1s and Retry 2s in rows of their own", () => {
+      const rows = yieldRows(
+        [
+          pushedRun(1, "2026-11-02T00:00:00Z", { pullRequest: 50, retry: 1 }),
+          pushedRun(2, "2026-11-03T00:00:00Z", { pullRequest: 50, retry: 1 }),
+          pushedRun(3, "2026-11-04T00:00:00Z", { pullRequest: 50, retry: 2, stepUp: true, stepUpReason: "retry" }),
+        ],
+        [aVerdictComment("pass", head(1), "2026-11-02T01:00:00Z"), aVerdictComment("design-flaw", head(2), "2026-11-03T01:00:00Z"), aVerdictComment("pass", head(3), "2026-11-04T01:00:00Z")],
+      );
+
+      expect(rows).toEqual([
+        "| First-pass yield | no judged runs | no judged runs | – |",
+        "| Retry 1 yield | 50% (1 of 2) | no judged runs | – |",
+        "| Retry 2 yield | 100% (1 of 1) | no judged runs | – |",
+      ]);
+    });
+
+    it("pairs a run with its pull request in its own repo, open or closed", () => {
+      const result = weeklySummary(
+        input({
+          records: [pushedRun(1, "2026-11-02T00:00:00Z"), pushedRun(2, "2026-11-02T00:00:00Z", { repo: "owner/other" })],
+          facts: [
+            factsOf({ openPullRequests: [anOpenPullRequest({ comments: [aVerdictComment("pass", head(1), "2026-11-02T01:00:00Z")] })] }),
+            factsOf({ repo: "owner/other", pullRequests: [aMergedPullRequest("2026-11-07T00:00:00Z", { comments: [aVerdictComment("execution-flaw", head(2), "2026-11-02T01:00:00Z")] })] }),
+          ],
+        }),
+      );
+
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      expect(result.summary.yields.thisWeek.first).toEqual({ passed: 1, judged: 2 });
+    });
+
+    it("sits straight after Tickets dispatched, each row with last week's and the change in points", () => {
+      const rows = (() => {
+        const result = weeklySummary(
+          input({
+            records: [pushedRun(1, "2026-11-02T00:00:00Z"), pushedRun(2, "2026-11-03T00:00:00Z"), pushedRun(3, "2026-10-27T00:00:00Z"), pushedRun(4, "2026-10-28T00:00:00Z")],
+            facts: [
+              factsOf({
+                pullRequests: [
+                  aMergedPullRequest("2026-11-07T00:00:00Z", {
+                    comments: [
+                      aVerdictComment("pass", head(3), "2026-10-27T01:00:00Z"),
+                      aVerdictComment("execution-flaw", head(4), "2026-10-28T01:00:00Z"),
+                      aVerdictComment("pass", head(1), "2026-11-02T01:00:00Z"),
+                      aVerdictComment("pass", head(2), "2026-11-03T01:00:00Z"),
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          }),
+        );
+        if (result.kind !== "summary") throw new Error("expected a summary");
+        return result.body.split("\n");
+      })();
+      const after = rows.findIndex((row) => row.startsWith("| Tickets dispatched |")) + 1;
+
+      expect(rows.slice(after, after + 3)).toEqual([
+        "| First-pass yield | 100% (2 of 2) | 50% (1 of 2) | +50 pts |",
+        "| Retry 1 yield | no judged runs | no judged runs | – |",
+        "| Retry 2 yield | no judged runs | no judged runs | – |",
+      ]);
+      expect(rows[after + 3]).toMatch(/^\| Retries per merged PR \|/);
     });
   });
 

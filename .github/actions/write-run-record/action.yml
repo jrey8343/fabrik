@@ -37,6 +37,14 @@ inputs:
     description: '"true" when the Loop found the Implement run branch changed nothing, an empty diff (the run-loop empty-diff output), which the record says.'
     required: false
     default: ""
+  pushed-pull-request:
+    description: The PR an Implement run's landing pushed to (the run-loop pushed-pull-request output), which the record names with pushed-head (#735); empty when it pushed nothing.
+    required: false
+    default: ""
+  pushed-head:
+    description: The head that push left (the run-loop pushed-head output).
+    required: false
+    default: ""
   loop-outcome:
     description: How the push job's Run the Loop step ended (steps.loop.outcome), which the record's landing reads a failure from when the Loop left no file saying why (#487).
     required: false
@@ -92,6 +100,8 @@ runs:
         FABRIK_STORE_TOKEN: ${{ steps.tokens.outputs.store-token }}
         FABRIK_TRANSCRIPT_DIR: ${{ runner.temp }}/transcript
         FABRIK_EMPTY_DIFF: ${{ inputs.empty-diff }}
+        FABRIK_PUSHED_PULL_REQUEST: ${{ inputs.pushed-pull-request }}
+        FABRIK_PUSHED_HEAD: ${{ inputs.pushed-head }}
         FABRIK_LOOP_OUTCOME: ${{ inputs.loop-outcome }}
         FABRIK_LANDING_FAILED: ${{ inputs.landing-failed }}
       run: node src/kit/record-main.ts
