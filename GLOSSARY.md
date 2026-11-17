@@ -307,7 +307,7 @@ A file in a Product repo that steers how agents behave or how their work is judg
 _Avoid_: config file, protected file
 
 **Coding standards**:
-A Product repo's written rules for how its code should look, which the Reviewer judges against and only the Operator changes.
+A Product repo's written rules for how its code should look, which the Implementer builds to and the Reviewer judges against, and only the Operator changes.
 _Avoid_: style guide, conventions, review instructions
 
 **Merge gate**:

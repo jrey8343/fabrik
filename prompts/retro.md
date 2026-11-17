@@ -50,7 +50,7 @@ Propose the change at that gate, and say in the proposal's `problem` which gate 
 ## Mechanical before prose
 
 - A mistake a lint rule or grep assertion could catch is always proposed as a check, never as instruction text: an agent can argue with a sentence, not with a failing check. Propose it as `mechanical`, targeting `product-code`: a rule in the Product repo's own lint config, or a check script hooked into a command its CI already runs, so it's gated through the repo's existing CI and `sandbox.checks`. The Kit adds no check runner of its own. Write the exact rule or script and the file it goes in.
-- A lesson only judgement can apply is `judgement`. A lesson about how this repo's code should look is a line for `CODING_STANDARDS.md` (`product-trust-root`), which only the Reviewer reads. A lesson about how PRs are judged is a change to the Kit's review prompt, `prompts/review.md` (`kit`).
+- A lesson only judgement can apply is `judgement`. A lesson about how this repo's code should look is a line for `CODING_STANDARDS.md` (`product-trust-root`). A lesson about how PRs are judged is a change to the Kit's review prompt, `prompts/review.md` (`kit`).
 - Any other judgement lesson goes where its gate is: `AGENTS.md` or a `.fabrik/<role>.md` file (`product-trust-root`), another of the Kit's prompts or a Scorer's rubric (`kit`), or an Extra skill this repo pins (`extra-skill`).
 
 ## Tightening and loosening

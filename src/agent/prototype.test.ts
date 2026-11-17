@@ -55,6 +55,13 @@ describe("A prototype turn's context", () => {
     );
   });
 
+  it("carries no Coding standards, which hold code that merges, not throwaway variants (#762)", () => {
+    const text = prototypeTurnContext(withUi, 7, REQUEST).parts.join("\n");
+
+    expect(text).not.toContain("CODING_STANDARDS.md");
+    expect(text).not.toContain("Coding standards");
+  });
+
   it("fences the brief so no run of backticks in it can close the fence", () => {
     const brief = "A: shows ```code``` blocks.";
     const { parts } = prototypeTurnContext(withUi, 7, JSON.stringify({ route: "/book", variants: 2, brief, reply: null }));
