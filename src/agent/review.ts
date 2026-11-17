@@ -20,11 +20,9 @@ import {
   reviewerEvidenceBlock,
   reviewerImages,
 } from "../evidence/uiEvidence.ts";
-import { CODING_STANDARDS_FILE } from "../guard/trust-root.ts";
-import { readIfPresent } from "../kit/checkout.ts";
 import { changedTestsIn, reviewerChangedTestsBlock } from "../loop/changedTests.ts";
 import { checkCode } from "../loop/flakyChecks.ts";
-import { ticketContext, type PullRequestRunContext } from "./implement.ts";
+import { codingStandardsParts, ticketContext, type PullRequestRunContext } from "./implement.ts";
 import { type LaterReviewGiven, laterReviewParts, type PushingRun } from "./laterReview.ts";
 import { operatorInputSections } from "./operatorComments.ts";
 
@@ -55,7 +53,6 @@ export async function reviewContext(
   const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
   const number = pullRequest.number;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
-  const standards = await readIfPresent(join(productDir, CODING_STANDARDS_FILE));
   return {
     pullRequest: number,
     parts: [
@@ -69,7 +66,7 @@ export async function reviewContext(
       // Only a later Review is given what it judges against: its earlier Verdicts, the fix comments and the change since (#748).
       ...(later === null ? [] : laterReviewParts(later)),
       ...(await ticketContext(productDir, specFile)),
-      ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),
+      ...(await codingStandardsParts(productDir)),
       ...ranNothingBlock(ranNothing),
       ...(evidenceDir === null
         ? []

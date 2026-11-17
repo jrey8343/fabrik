@@ -8,10 +8,8 @@ import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { CODING_STANDARDS_FILE } from "../guard/trust-root.ts";
-import { readIfPresent } from "../kit/checkout.ts";
 import type { KitConfig } from "../kit/config.ts";
-import { type ImplementInput, implementInput, ticketContext } from "./implement.ts";
+import { codingStandardsParts, type ImplementInput, implementInput, ticketContext } from "./implement.ts";
 import type { BuiltBranch } from "./result.ts";
 
 const run = promisify(execFile);
@@ -120,10 +118,9 @@ export function replayChangeParts(baseSha: string, diff: string): string[] {
 export async function replayReviewContext(productDir: string, specFile: string, baseSha: string): Promise<string[]> {
   await builtOn(productDir, baseSha);
   const diff = await git(productDir, "diff", baseSha, "HEAD");
-  const standards = await readIfPresent(join(productDir, CODING_STANDARDS_FILE));
   return [
     ...replayChangeParts(baseSha, diff),
     ...(await ticketContext(productDir, specFile)),
-    ...(standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()]),
+    ...(await codingStandardsParts(productDir)),
   ];
 }

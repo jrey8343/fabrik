@@ -415,6 +415,16 @@ export async function ticketContext(productDir: string, specFile: string): Promi
   return parts;
 }
 
+/**
+ * The repo's whole `CODING_STANDARDS.md` from the checkout, under its own
+ * heading, as every Implement run, Review and Replay arm is given it (#762):
+ * nothing when the repo has no such file.
+ */
+export async function codingStandardsParts(productDir: string): Promise<string[]> {
+  const standards = await readIfPresent(join(productDir, CODING_STANDARDS_FILE));
+  return standards === null ? [] : [`## ${CODING_STANDARDS_FILE}`, standards.trimEnd()];
+}
+
 /** What an Implement run works from: the branch it builds on, and what its prompt carries beyond the Ticket. */
 export interface ImplementInput {
   readonly branch: BuiltBranch;
@@ -569,9 +579,7 @@ export function buildLine(build: string | null): string {
  * Reviewer is given it (#762), and the Sandbox's commands.
  */
 export async function implementContext(productDir: string, specFile: string, config: KitConfig): Promise<string[]> {
-  const parts = await ticketContext(productDir, specFile);
-  const standards = await readIfPresent(join(productDir, CODING_STANDARDS_FILE));
-  if (standards !== null) parts.push(`## ${CODING_STANDARDS_FILE}`, standards.trimEnd());
+  const parts = [...(await ticketContext(productDir, specFile)), ...(await codingStandardsParts(productDir))];
   const { build, test, checks } = config.sandbox;
   const commands = [
     buildLine(build),
