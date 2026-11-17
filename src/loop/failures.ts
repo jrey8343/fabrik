@@ -227,7 +227,11 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
   const ranOn = ranOnOf(run, config);
-  const failedRun = run.prototype === true ? `The prototype turn on #${run.issue}` : `The ${runNamed(run.role)} on #${run.issue}`;
+  const open = issue.openPullRequests[0];
+  const target = open ?? run.issue;
+  // Named by the number its notice is posted on, so one on the PR never names its Ticket instead (#772): a Digest run's line is on the PR it digests.
+  const postedOn = run.digest?.pullRequest ?? target;
+  const failedRun = run.prototype === true ? `The prototype turn on #${postedOn}` : `The ${runNamed(run.role)} on #${postedOn}`;
   if (run.role === "digest") {
     // A Digest run's failure is said by the no-Digest line alone: no notice, no mention, nothing held or run again on another Subscription. The gate opens all the same.
     const landed = noDigestAfter(run, failure, pullRequest, operator);
@@ -294,8 +298,6 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ],
     };
   }
-  const open = issue.openPullRequests[0];
-  const target = open ?? run.issue;
   // The review trigger lives on the PR; every other role's on the issue.
   const labelled = run.role === "review" ? target : run.issue;
   // The object the label goes on, by name, so it never lands on the wrong one (#479).

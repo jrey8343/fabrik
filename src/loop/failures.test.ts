@@ -144,8 +144,23 @@ describe("Failure notices", () => {
         { kind: "comment", issue: 12, body: expect.any(String) },
       ],
     });
-    expect(commentOf(plan)).toContain("The Implement run on #7 failed: it crashed.");
+    expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #12 failed: it crashed\.\n/);
     expect(commentOf(plan)).toContain("Re-add `agent:implement` on the Ticket (#7) to run it again.");
+  });
+
+  // #772: a Retry runs on the PR, and its notice lands there, so it names the PR.
+  it("an Implement Retry's failure on the agent PR names the run by the PR's number", () => {
+    const flaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: HEAD_SHA } as const;
+    const plan = planFor(
+      failed({ role: "implement" }),
+      snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [12] }), {
+        pullRequest: aPullRequest({ number: 12, ticket: 7, ticketLabels: ["ready-for-agent"], verdicts: [flaw] }),
+      }),
+      kitConfig(),
+    );
+
+    expect(plan).toMatchObject({ actions: expect.arrayContaining([{ kind: "comment", issue: 12, body: expect.any(String) }]) });
+    expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #12 failed: it crashed\.\n/);
   });
 
   it("an Implement failure with no PR yet comments on the Ticket", () => {
@@ -164,7 +179,7 @@ describe("Failure notices", () => {
   it("an Implement failure with no PR yet marks its notice on the Ticket as the run's failure", () => {
     const plan = planFor(failed({ role: "implement" }), snapshotOf(anIssue({ number: 7 })), kitConfig());
 
-    expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #7 failed: /);
+    expect(commentOf(plan)).toMatch(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #7 failed: it crashed\.\n/);
   });
 
   it("an Implement failure on a Ticket with an open PR marks its notice on the PR, so the conflict check never restarts the run (#424)", () => {
@@ -269,8 +284,18 @@ describe("Failure notices", () => {
         { kind: "comment", issue: 12, body: expect.any(String) },
       ],
     });
-    expect(commentOf(plan)).toContain("The Review run on #7 failed: the Reviewer gave no valid Verdict.");
     expect(commentOf(plan)).toContain("Re-add `agent:review` on this PR to run it again.");
+  });
+
+  // #772: the notice is on the PR, so it names the run by the PR's number, never its Ticket's.
+  it("a Review failure's notice on the PR names the run by the PR's number", () => {
+    const issue = anIssue({ number: 7, openPullRequests: [12] });
+
+    const plan = planFor(failed({ role: "review", report: { failure: "missing-output", detail: "" } }), snapshotOf(issue), kitConfig());
+
+    const opening = commentOf(plan).split("\n")[0]!;
+    expect(opening).toBe("@operator The Review run on #12 failed: the Reviewer gave no valid Verdict.");
+    expect(opening).not.toContain("#7");
   });
 
   // #454: the Review checks job gives up short of its timeout, or GitHub fails it mid-wait, and says which.
@@ -291,7 +316,7 @@ describe("Failure notices", () => {
       });
       expect(commentOf(plan)).toBe(
         [
-          "@operator The Review run on #7 failed: the Required check `e2e` never reported on this PR; fix its workflow's name or `paths:` filter, or take it off the default branch's required list on github.com, and out of `sandbox.checks` too if it's listed there.",
+          "@operator The Review run on #12 failed: the Required check `e2e` never reported on this PR; fix its workflow's name or `paths:` filter, or take it off the default branch's required list on github.com, and out of `sandbox.checks` too if it's listed there.",
           "",
           "This is an Infrastructure failure, so the Loop won't retry it and it doesn't count against the Ticket's retries. Re-adding the `agent:review` label won't change this. After fixing the workflow or the Required checks, re-add `agent:review` on this PR to run it again.",
           "",
@@ -321,7 +346,7 @@ describe("Failure notices", () => {
       const body = commentOf(review({ failure: "timeout", detail: "", checks: ["build", "e2e", "lint"] }));
 
       expect(body).toContain(
-        "The Review run on #7 failed: it stopped waiting for its required checks short of its 30-minute timeout, with `build`, `e2e` and `lint` still running.",
+        "The Review run on #12 failed: it stopped waiting for its required checks short of its 30-minute timeout, with `build`, `e2e` and `lint` still running.",
       );
       expect(body).toContain("Re-add `agent:review` on this PR to run it again.");
     });
@@ -329,7 +354,7 @@ describe("Failure notices", () => {
     it("says it was still waiting when a GitHub request failed, quoting the error, rather than that the Reviewer crashed", () => {
       const body = commentOf(review({ failure: "unread-checks", detail: "gh pr checks failed: HTTP 502: Bad Gateway" }));
 
-      expect(body).toContain("The Review run on #7 failed: a GitHub request failed while it read or waited for its Required checks.");
+      expect(body).toContain("The Review run on #12 failed: a GitHub request failed while it read or waited for its Required checks.");
       expect(body).toContain("> gh pr checks failed: HTTP 502: Bad Gateway");
       expect(body).toContain("Re-add `agent:review` on this PR to run it again.");
     });
@@ -591,7 +616,7 @@ describe("A Broken run", () => {
         kind: "act",
         actions: [
           { kind: "remove-label", issue: 7, label: "agent:implement" },
-          { kind: "comment", issue: 50, body: expect.stringMatching(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #7 failed: the Implementer gave no valid output\./) },
+          { kind: "comment", issue: 50, body: expect.stringMatching(/^<!-- fabrik:implement-run-failed -->\n@operator The Implement run on #50 failed: the Implementer gave no valid output\./) },
         ],
       });
       const body = commentsOf(plan)[0]!.body;
