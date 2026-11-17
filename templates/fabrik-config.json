@@ -54,7 +54,7 @@
     "maps": 1,
     "merge_gate": 3
   },
-  "monitor": { "errors": null, "red_main": true },
+  "monitor": { "errors": null, "red_main": true, "main_checks": [] },
   "audit": { "day": "sunday" },
   "retro": { "day": "saturday" },
   "digest": { "enabled": true },

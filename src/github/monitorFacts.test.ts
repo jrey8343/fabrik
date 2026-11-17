@@ -39,7 +39,7 @@ describe("The Monitor's read of its issues", () => {
       [/\/commits\?/, () => []],
     ]);
 
-    const facts = await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, listedChecks: [] });
+    const facts = await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, listedChecks: [], namedMainChecks: [] });
 
     expect(facts).toEqual({ kind: "rate-limited", error: "GitHub GET /repos/acme/shop/issues failed: 403 API rate limit exceeded" });
   });
@@ -54,7 +54,7 @@ describe("The Monitor's read of its issues", () => {
       ],
     ]);
 
-    await expect(gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: false, listedChecks: [] })).rejects.toThrow("500 oops");
+    await expect(gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: false, listedChecks: [], namedMainChecks: [] })).rejects.toThrow("500 oops");
   });
 
   it("gives the issues and the default branch's checks it read", async () => {
@@ -63,11 +63,75 @@ describe("The Monitor's read of its issues", () => {
       [/\/commits\?/, () => []],
     ]);
 
-    expect(await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, listedChecks: [] })).toEqual({
+    expect(await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, listedChecks: [], namedMainChecks: [] })).toEqual({
       kind: "read",
       issues: [],
       mainChecks: { kind: "read", commits: [] },
     });
+  });
+});
+
+describe("The Monitor's read of the Main checks", () => {
+  const SHA = "9148e44a1b2c3d4e5f60718293a4b5c6d7e8f901";
+  const commits = () => [{ sha: SHA, html_url: `https://github.com/acme/shop/commit/${SHA}` }];
+  const run = (id: number, name: string) => ({
+    id,
+    name,
+    status: "completed",
+    conclusion: "failure",
+    completed_at: "2026-11-06T07:00:00Z",
+    html_url: `https://github.com/acme/shop/runs/${id}`,
+  });
+
+  it("asks for each Main check by name beside the Required checks sandbox.checks lists", async () => {
+    const asked: string[] = [];
+    const github = gitHubAnswering([
+      [/\/issues\?labels=/, () => []],
+      [/\/commits\?/, commits],
+      [
+        /\/check-runs\?check_name=/,
+        (path) => {
+          const name = decodeURIComponent(/check_name=([^&]+)/.exec(path)?.[1] ?? "");
+          asked.push(name);
+          return { check_runs: [run(asked.length, name)] };
+        },
+      ],
+    ]);
+
+    const facts = await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, listedChecks: ["gate"], namedMainChecks: ["image (clinic)"] });
+
+    expect(asked).toEqual(["gate", "image (clinic)"]);
+    expect(facts.kind === "read" && facts.mainChecks?.kind === "read" && facts.mainChecks.commits[0]?.checkRuns.map((each) => each.name)).toEqual([
+      "gate",
+      "image (clinic)",
+    ]);
+  });
+
+  it("reads whether the Monitor itself closed each Main check's newest issue, as it does red main's", async () => {
+    const issue = (number: number, check: string) => ({
+      number,
+      state: "closed",
+      state_reason: "completed",
+      closed_at: "2026-11-06T08:00:00Z",
+      labels: [{ name: "fabrik:monitor" }],
+      user: { login: APP },
+      body: `<!-- fabrik:monitor main-check:${check} -->\nThe Main check is failing.`,
+    });
+    const byMonitor = [{ event: "commented", user: { login: APP }, body: `${RED_MAIN_GREEN_MARKER}\nGreen at …` }, { event: "closed", actor: { login: APP } }];
+    const byOperator = [{ event: "closed", actor: { login: "operator" } }];
+    const github = gitHubAnswering([
+      [/\/issues\?labels=/, () => [issue(50, "deploy"), issue(51, "smoke-check")]],
+      [/\/commits\?/, () => []],
+      [/\/issues\/50\/timeline/, () => byMonitor],
+      [/\/issues\/51\/timeline/, () => byOperator],
+    ]);
+
+    const facts = await gatherMonitorFacts(github, REPO, { appLogin: APP, redMain: true, listedChecks: [], namedMainChecks: ["deploy", "smoke-check"] });
+
+    expect(facts.kind === "read" && facts.issues.map(({ number, closedByMonitor }) => ({ number, closedByMonitor }))).toEqual([
+      { number: 50, closedByMonitor: true },
+      { number: 51, closedByMonitor: false },
+    ]);
   });
 });
 

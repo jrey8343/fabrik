@@ -678,37 +678,56 @@ export const DECISIONS_SO_FAR_HEADING = "## Decisions so far";
 
 /**
  * What a Monitor issue's marker line says it tracks (#148): a Sentry group,
- * red main, or the dead Sentry token the Operator is asked to rotate (#444).
+ * red main, the dead Sentry token the Operator is asked to rotate (#444), or
+ * a Main check, by its name (#744).
  */
 export type MonitorMarker =
   | { readonly kind: "sentry"; readonly group: string }
   | { readonly kind: "red-main" }
-  | { readonly kind: "sentry-token" };
+  | { readonly kind: "sentry-token" }
+  | { readonly kind: "main-check"; readonly check: string };
 
 /**
- * A Monitor issue's marker line, naming the Sentry group, the red main or the
- * Sentry token it tracks. Only the line itself counts, never the Monitor block's markers.
+ * A Monitor issue's marker line, naming the Sentry group, the red main, the
+ * Sentry token or the Main check it tracks. Only the line itself counts, never
+ * the Monitor block's markers. A Main check's name is percent-encoded, so one
+ * with spaces or punctuation is one token that can't end the comment.
  */
-const MONITOR_MARKER = /^<!-- fabrik:monitor (?:sentry:(\S+)|(red-main|sentry-token)) -->$/m;
+const MONITOR_MARKER = /^<!-- fabrik:monitor (?:sentry:(\S+)|main-check:(\S+)|(red-main|sentry-token)) -->$/m;
 
-/** The Monitor marker in this body, or null when it has none. */
+/** The Monitor marker in this body, or null when it has none, or names a Main check in no encoding the Monitor writes. */
 export function monitorMarkerIn(body: string): MonitorMarker | null {
   const match = MONITOR_MARKER.exec(body);
   if (match === null) return null;
   const group = match[1];
   if (group !== undefined) return { kind: "sentry", group };
-  return { kind: match[2] === "sentry-token" ? "sentry-token" : "red-main" };
+  const check = match[2];
+  if (check !== undefined) {
+    try {
+      return { kind: "main-check", check: decodeURIComponent(check) };
+    } catch {
+      return null;
+    }
+  }
+  return { kind: match[3] === "sentry-token" ? "sentry-token" : "red-main" };
 }
 
 /** The marker line a Monitor issue's body opens with, for what it tracks. */
 export function monitorMarkerLine(marker: MonitorMarker): string {
-  return marker.kind === "sentry" ? `<!-- fabrik:monitor sentry:${marker.group} -->` : `<!-- fabrik:monitor ${marker.kind} -->`;
+  switch (marker.kind) {
+    case "sentry":
+      return `<!-- fabrik:monitor sentry:${marker.group} -->`;
+    case "main-check":
+      return `<!-- fabrik:monitor main-check:${encodeURIComponent(marker.check)} -->`;
+    default:
+      return `<!-- fabrik:monitor ${marker.kind} -->`;
+  }
 }
 
 /**
  * The first line of the Monitor's note closing its red-main issue once the
- * default branch is green: its only comment, which tells its own close apart
- * from anyone else's.
+ * default branch is green, or a Main check's once the check is: its only
+ * comment, which tells its own close apart from anyone else's.
  */
 export const RED_MAIN_GREEN_MARKER = "<!-- fabrik:monitor-green -->";
 

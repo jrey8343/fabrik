@@ -7,7 +7,7 @@ The Operator wants to follow a pull request to the point where it is live and to
 - **The Loop still ends at the merge.** Standing widens to follow the work to production. Nothing in the Loop waits on a deploy, and a Live pull request is never a move owed.
 - **Any host, through GitHub.** A deploy run from an Actions job that names an environment is recorded as a Deployment by GitHub itself, whatever the host. The Kit calls no host's API.
 - **"At the merge commit or later"** is GitHub's comparison of the merge commit with the deployed one. A later deploy that succeeds makes an earlier failure Live.
-- **A failed deploy is the Monitor's.** Its red-main check reads every check run on the default branch, and a deploy job is one.
+- **A failed deploy is the Monitor's.** The Product repo names its deploy as a Main check in `monitor.main_checks`, and the Monitor files an issue of its own while it fails on the default branch ([ADR-0025](0025-main-checks-are-named-apart-from-required-checks-and-each-has-its-own-issue.md)). Red main alone reads only the Required checks `sandbox.checks` lists, when it lists any, and a deploy is never one.
 
 ## Considered options
 
@@ -23,7 +23,7 @@ The Operator wants to follow a pull request to the point where it is live and to
 - Netlify, Cloudflare Workers Builds and Cloudflare Pages report no Deployments. A repo on one of them is tracked only once it deploys from an Actions job that names an environment.
 - A reader needs Deployments read on each Product repo.
 - Live means deployed, not checked: nothing looks at the page, and a rollback to an earlier commit is not seen.
-- A failed deploy in a repo with `monitor.red_main` off is seen only where a reader shows it.
+- A failed deploy in a repo that doesn't name it in `monitor.main_checks`, or that has `monitor.red_main` off, which turns Main checks off too, is seen only where a reader shows it.
 - The Standing lasts 24 hours from the merge, so a deploy that lands later than that is never shown.
 
 Decided in [How do a preview link and the live page after merge reach the Console?](https://github.com/jrey8343/fabrik/issues/520).

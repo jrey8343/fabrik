@@ -22,7 +22,7 @@ const DEFAULTS = {
   },
   maxInFlight: 2,
   caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
-  monitor: { errors: null, redMain: true },
+  monitor: { errors: null, redMain: true, mainChecks: [] },
   audit: { day: "sunday" },
   retro: { day: "saturday" },
   digest: { enabled: true },
@@ -276,7 +276,7 @@ describe("Kit config", () => {
       },
       max_in_flight: 2,
       caps: { design_sessions: 2, monitor_issues: 5, maps: 1, merge_gate: 3 },
-      monitor: { errors: null, red_main: true },
+      monitor: { errors: null, red_main: true, main_checks: [] },
       audit: { day: "sunday" },
       retro: { day: "saturday" },
       digest: { enabled: true },
@@ -473,7 +473,7 @@ describe("The monitor block", () => {
   it("leaves production errors off and red main on when the Kit config has no monitor block", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
 
-    expect(result.ok && result.config.monitor).toEqual({ errors: null, redMain: true });
+    expect(result.ok && result.config.monitor).toEqual({ errors: null, redMain: true, mainChecks: [] });
   });
 
   it("reads the Sentry project, defaulting url to sentry.io and min_events to 3", () => {
@@ -488,6 +488,7 @@ describe("The monitor block", () => {
         monitor: {
           errors: { provider: "sentry", org: "acme-health", project: "booking-web", url: "https://sentry.io", minEvents: 3 },
           redMain: true,
+          mainChecks: [],
         },
       },
     });
@@ -512,6 +513,7 @@ describe("The monitor block", () => {
     expect(result.ok && result.config.monitor).toEqual({
       errors: { provider: "sentry", org: "acme-health", project: "booking-web", url: "https://de.sentry.io", minEvents: 10 },
       redMain: false,
+      mainChecks: [],
     });
   });
 
@@ -569,6 +571,30 @@ describe("The monitor block", () => {
   ])("refuses a url that isn't https, naming the field: %j", (changes, error) => {
     expect(resolveKitConfig({ config: withErrors(changes) })).toEqual({ ok: false, errors: [error] });
   });
+
+  it("reads the Main checks main_checks names, each once", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ sandbox: { checks: ["gate", "e2e"] }, monitor: { main_checks: ["deploy", "smoke-check", "deploy"] } }),
+    });
+
+    expect(result.ok && result.config.monitor.mainChecks).toEqual(["deploy", "smoke-check"]);
+  });
+
+  it("refuses a Main check that sandbox.checks lists as a Required check, naming monitor.main_checks", () => {
+    expect(
+      resolveKitConfig({ config: JSON.stringify({ sandbox: { checks: ["gate", "e2e"] }, monitor: { main_checks: ["deploy", "gate"] } }) }),
+    ).toEqual({
+      ok: false,
+      errors: [`monitor.main_checks[1] is "gate": sandbox.checks lists it as a Required check, and a Main check is never one`],
+    });
+  });
+
+  it.each([[{ main_checks: "deploy" }], [{ main_checks: [1] }], [{ main_checks: null }]])(
+    "refuses a main_checks that isn't a list of names, naming the field: %j",
+    (monitor) => {
+      expect(resolveKitConfig({ config: JSON.stringify({ monitor }) })).toEqual({ ok: false, errors: ["monitor.main_checks must be a list of strings"] });
+    },
+  );
 
   it.each([0, null, "false"])("refuses a red_main of %j, naming the field", (redMain) => {
     expect(resolveKitConfig({ config: JSON.stringify({ monitor: { red_main: redMain } }) })).toEqual({

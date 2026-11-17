@@ -1,5 +1,6 @@
 // Monitor issues (#148), as both parts of the Monitor core read and change
-// them: production errors' (./core.ts) and red main's (./redMain.ts). What the
+// them: production errors' (./core.ts), red main's (./redMain.ts) and Main
+// checks' (./mainChecks.ts). What the
 // core reads of each issue, the plan it makes for them, which of the Fabrik
 // App's issues is the newest for a marker, the block of lines the Monitor keeps
 // current in a body (an error issue's stats, red main's details), and how a
@@ -22,7 +23,8 @@ export interface MonitorIssue {
   /**
    * Whether its last close was the Monitor's own, right after its green-at
    * note, rather than the Operator's or the Loop's; false while it's open. The
-   * program reads it for the newest red-main issue alone, so it's false on any other.
+   * program reads it for the newest red-main issue and each Main check's newest
+   * issue alone, so it's false on any other.
    */
   readonly closedByMonitor: boolean;
 }
@@ -33,7 +35,7 @@ export interface MonitorPlan {
   readonly open: readonly IssueToOpen[];
   /** Monitor issues whose body is rewritten in place. */
   readonly rewrite: readonly BodyRewrite[];
-  /** Issues to close as completed, each with its note: only ever red main's. */
+  /** Issues to close as completed, each with its note: only ever red main's and Main checks'. */
   readonly close: readonly IssueToClose[];
   /** The step summary's lines, the quiet setup notes among them. */
   readonly summary: readonly string[];
@@ -60,7 +62,9 @@ export type BodyRewrite =
   /** Only the held line put in or taken out of an open error issue's stats block, refreshing no group's stats. */
   | RewriteOf<"held-line">
   /** The details of the open red-main issue brought up to date with the default branch's red commit. */
-  | RewriteOf<"red-main">;
+  | RewriteOf<"red-main">
+  /** The details of a Main check's open issue brought up to date with the commit it's red at. */
+  | RewriteOf<"main-check">;
 
 interface RewriteOf<Kind extends string> {
   readonly kind: Kind;
@@ -77,10 +81,11 @@ export interface IssueToClose {
   readonly because: string;
 }
 
-/** The newest of the Fabrik App's issues for each Sentry group, by the group's id, for red main, and for the Sentry token. */
+/** The newest of the Fabrik App's issues for each Sentry group, by the group's id, for red main, for each Main check, by its name, and for the Sentry token. */
 export interface NewestByMarker {
   readonly byGroup: ReadonlyMap<string, MonitorIssue>;
   readonly redMain: MonitorIssue | null;
+  readonly byMainCheck: ReadonlyMap<string, MonitorIssue>;
   readonly sentryToken: MonitorIssue | null;
 }
 
@@ -92,6 +97,7 @@ export interface NewestByMarker {
  */
 export function newestByMarker(issues: readonly MonitorIssue[]): NewestByMarker {
   const byGroup = new Map<string, MonitorIssue>();
+  const byMainCheck = new Map<string, MonitorIssue>();
   let redMain: MonitorIssue | null = null;
   let sentryToken: MonitorIssue | null = null;
   for (const issue of issues) {
@@ -99,13 +105,16 @@ export function newestByMarker(issues: readonly MonitorIssue[]): NewestByMarker 
     if (marker?.kind === "sentry") {
       const seen = byGroup.get(marker.group);
       if (seen === undefined || issue.number > seen.number) byGroup.set(marker.group, issue);
+    } else if (marker?.kind === "main-check") {
+      const seen = byMainCheck.get(marker.check);
+      if (seen === undefined || issue.number > seen.number) byMainCheck.set(marker.check, issue);
     } else if (marker?.kind === "red-main" && (redMain === null || issue.number > redMain.number)) {
       redMain = issue;
     } else if (marker?.kind === "sentry-token" && (sentryToken === null || issue.number > sentryToken.number)) {
       sentryToken = issue;
     }
   }
-  return { byGroup, redMain, sentryToken };
+  return { byGroup, redMain, byMainCheck, sentryToken };
 }
 
 // The Monitor block: hidden opening and closing markers, each on a line of its

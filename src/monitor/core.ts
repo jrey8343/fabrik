@@ -1,7 +1,7 @@
 // The Monitor core (#148): from the Kit config's `monitor` block, the Sentry
 // groups and the default branch's check runs read this tick, and every
 // `fabrik:monitor` issue, what the Monitor files, rewrites and closes, and the
-// step summary's lines; red main's part is in ./redMain.ts. Pure, no I/O: the
+// step summary's lines; red main's part is in ./redMain.ts and Main checks' in ./mainChecks.ts. Pure, no I/O: the
 // program (src/monitor/main.ts) gathers the facts and applies the plan.
 import type { KitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL, READY_FOR_HUMAN, WONTFIX } from "../loop/labels.ts";
@@ -22,6 +22,7 @@ import {
   truncated,
   withMonitorBlock,
 } from "./issues.ts";
+import { mainChecksPlan } from "./mainChecks.ts";
 import { type MainChecksRead, redMainPlan } from "./redMain.ts";
 import type { FrameFacts, GroupFacts, LatestEventFacts } from "./sentry.ts";
 
@@ -80,11 +81,12 @@ export interface SentryGroupsRead {
 export function monitorPlanFor(input: MonitorInput): MonitorPlan {
   const errors = productionErrors(input);
   const red = redMainPlan(input);
+  const main = mainChecksPlan(input);
   return {
-    open: [...errors.open, ...red.open],
-    rewrite: [...errors.rewrite, ...red.rewrite],
-    close: [...errors.close, ...red.close],
-    summary: [...errors.summary, ...red.summary],
+    open: [...errors.open, ...red.open, ...main.open],
+    rewrite: [...errors.rewrite, ...red.rewrite, ...main.rewrite],
+    close: [...errors.close, ...red.close, ...main.close],
+    summary: [...errors.summary, ...red.summary, ...main.summary],
   };
 }
 
