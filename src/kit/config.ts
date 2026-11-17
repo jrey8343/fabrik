@@ -436,7 +436,8 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
   roles: {
     triage: { model: OPUS, effort: "medium", timeoutMinutes: 10 },
-    design: { model: OPUS, effort: "medium", timeoutMinutes: 30 },
+    // High, with no Replay first, since a Replay can't vary Design (#767). A prototype turn follows it (prototypeRole).
+    design: { model: OPUS, effort: "high", timeoutMinutes: 30 },
     implement: { model: SONNET, effort: "medium", timeoutMinutes: 60 },
     // High, from #755's reruns (#759).
     review: { model: OPUS, effort: "high", timeoutMinutes: 30 },

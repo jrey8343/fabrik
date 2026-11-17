@@ -380,6 +380,34 @@ describe("A Design session taken live is told to carry every line an async sessi
   });
 });
 
+// A session taken live is given nothing by the Kit, so its skill holds the async
+// prompt's rule for an acceptance criterion and says where to read the Required checks (#763).
+describe("A Design session taken live is held to the async session's rule for an acceptance criterion", () => {
+  const skill = readFileSync(resolve(KIT, "skills", "fabrik-live-design", "SKILL.md"), "utf8");
+  const prompt = readFileSync(resolve(KIT, "prompts", "design.md"), "utf8");
+  const rule = "An acceptance criterion is one check on a Ticket that a test the Required checks run, or the diff itself, shows is met. A criterion may never ask for:";
+  const kinds = (text: string) => {
+    const lines = text.split("\n").map((line) => line.trim());
+    const at = lines.findIndex((line) => line.replaceAll("**", "").endsWith(rule));
+    return at === -1 ? [] : lines.slice(at + 1, at + 6);
+  };
+
+  it("says what an acceptance criterion is, in the async prompt's words", () => {
+    expect(skill.replaceAll("**", "")).toContain(rule);
+  });
+
+  it("names the same five things a criterion may never ask as the async prompt does", () => {
+    expect(kinds(prompt)).toHaveLength(5);
+    expect(kinds(skill)).toEqual(kinds(prompt));
+  });
+
+  it("tells the session to read the Required checks from the Kit config in its checkout, and `.github/workflows/` for what they run", () => {
+    expect(skill).toContain(
+      "Read the Required checks from `sandbox.checks` in `.fabrik/config.json`, as you read the Map cap there, and read `.github/workflows/` to see what each one runs.",
+    );
+  });
+});
+
 /** The body of the issue the plan creates under this key. */
 function createdBody(plan: Plan, key: string): string | undefined {
   if (plan.kind !== "act") return undefined;
