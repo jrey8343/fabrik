@@ -11,7 +11,8 @@ const startsDesignTurn = {
       role: "design",
       issue: 7,
       model: "claude-opus-5-5",
-      effort: "medium",
+      // The Kit's default for Design (#767).
+      effort: "high",
       timeoutMinutes: 30,
       subscription: "Claude token",
     },

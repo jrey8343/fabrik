@@ -731,7 +731,7 @@ describe("The starters the Product repo then owns", () => {
       sandbox: { setup: null, build: null, test: null, checks: [], env: {}, secrets: {} },
       roles: {
         triage: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 10 },
-        design: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 30 },
+        design: { model: "claude-opus-5-5", effort: "high", timeout_minutes: 30 },
         implement: { model: "claude-sonnet-5-5", effort: "medium", timeout_minutes: 60 },
         review: { model: "claude-opus-5-5", effort: "high", timeout_minutes: 30 },
         audit: { model: "claude-opus-5-5", effort: "medium", timeout_minutes: 45 },

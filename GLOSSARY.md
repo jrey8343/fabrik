@@ -166,6 +166,10 @@ _Avoid_: PRD, plan
 One issue an Implementer can turn into a single pull request.
 _Avoid_: task, story
 
+**Acceptance criterion**:
+One check on a Ticket that a test the Required checks run, or the diff itself, shows is met.
+_Avoid_: requirement, AC
+
 **Map**:
 An issue charting the way to a destination still in fog, whose children are Decisions rather than Tickets.
 _Avoid_: epic, roadmap
