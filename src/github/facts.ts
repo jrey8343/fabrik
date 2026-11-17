@@ -217,7 +217,7 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
     specs: issues.filter((issue) => issue.subIssues.nodes.length > 0).map(specOf),
     defaultBranchCommits: defaultBranchCommits.map((commit) => ({ message: commit.message, at: commit.committedDate })),
     mergedPullRequestTitles: closed.flatMap((pr) => (pr.mergedAt === null ? [] : [{ title: pr.title, mergedAt: pr.mergedAt }])),
-    openIssues: openIssues.map(openIssueOf),
+    openIssues: openIssues.map((issue) => openIssueOf(issue, `${repo.owner}/${repo.name}`)),
     openPullRequests: open.filter(isAgent).map(openPullRequestOf),
     plainPullRequests: open.filter((pr) => !isAgent(pr)).map(plainPullRequestOf),
     designQueue,
@@ -461,13 +461,23 @@ const OPEN_PULL_REQUESTS_QUERY = `
   }
 `;
 
+/**
+ * What each open-issue read asks of an issue at the other end of a blocked-by
+ * edge: whether it still blocks is read from its state, why it is in that
+ * state and its repo (blockersIn).
+ */
+const BLOCKER = "number state stateReason repository { nameWithOwner }";
+
+/** An issue's blocked-by edges as the read library's open-issue reads ask for them, each blocker's labels left out. */
+export const BLOCKED_BY = `blockedBy(first: 20) { nodes { ${BLOCKER} } }`;
+
 const ISSUE_FIELDS = `
   number title state createdAt closedAt
   author ${ACTOR}
   labels(first: 50) { nodes { name } }
   ${COMMENTS}
   ${LABEL_EVENTS}
-  blockedBy(first: 20) { nodes { number labels(first: 20) { nodes { name } } } }
+  blockedBy(first: 20) { nodes { ${BLOCKER} labels(first: 20) { nodes { name } } } }
   subIssues(first: 100) { nodes { number } }
 `;
 
@@ -645,8 +655,17 @@ export interface RawIssue {
   labels: { nodes: { name: string }[] };
   comments: { nodes: RawComment[] };
   timelineItems: { nodes: RawLabelEvent[] };
-  blockedBy: { nodes: { number: number; labels: { nodes: { name: string }[] } }[] };
+  blockedBy: { nodes: (RawBlocker & { labels: { nodes: { name: string }[] } })[] };
   subIssues: { nodes: { number: number }[] };
+}
+
+/** An issue at the other end of a blocked-by edge, as BLOCKER reads it. */
+export interface RawBlocker {
+  number: number;
+  state: "OPEN" | "CLOSED";
+  /** Why it is in its state, as GitHub's GraphQL names it; null when GitHub records no reason. */
+  stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+  repository: { nameWithOwner: string };
 }
 
 /** A `fabrik:retro` issue as a Retro's history reads it: as the tick does, with its comments on top. */
@@ -830,7 +849,8 @@ function specOf(issue: RawIssue): SpecFacts {
   };
 }
 
-export function openIssueOf(issue: RawIssue): OpenIssueFacts {
+/** Open issue `issue` of `repo`, `owner/name`, as the Standing rule reads it, from any read that asks for what OpenIssueFacts holds. */
+export function openIssueOf(issue: Omit<RawIssue, "blockedBy"> & { blockedBy: { nodes: readonly RawBlocker[] } }, repo: string): OpenIssueFacts {
   return {
     number: issue.number,
     title: issue.title,
@@ -840,7 +860,22 @@ export function openIssueOf(issue: RawIssue): OpenIssueFacts {
     comments: issue.comments.nodes.map(commentOf),
     labelEvents: labelEventsOf(issue.timelineItems.nodes),
     subIssues: issue.subIssues.nodes.map((subIssue) => subIssue.number),
+    blockers: blockersIn(repo, issue.blockedBy.nodes),
   };
+}
+
+/**
+ * The issues of `repo`, `owner/name`, at the other end of these blocked-by
+ * edges that still block: each one open, or closed as not planned, whose work
+ * never landed (ADR-0001, amended in #98). One closed as completed or
+ * duplicate blocks no more, and one in another repo is left out, its number
+ * meaning nothing here (#771).
+ */
+function blockersIn(repo: string, edges: readonly RawBlocker[]): number[] {
+  const here = repo.toLowerCase();
+  return edges
+    .filter(({ state, stateReason, repository }) => repository.nameWithOwner.toLowerCase() === here && (state === "OPEN" || stateReason === "NOT_PLANNED"))
+    .map(({ number }) => number);
 }
 
 /** An issue whose body has an escape marker, such as a filed Audit candidate. */

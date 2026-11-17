@@ -102,6 +102,13 @@ export interface OpenIssueFacts {
   readonly labelEvents: readonly LabelEvent[];
   /** Its sub-issues, open or closed, by number: a Map's Decisions, or a Spec's Tickets. */
   readonly subIssues: readonly number[];
+  /**
+   * The issues that block it, by number, as GitHub's blocked-by edges give
+   * them: those in its own repo that are open or closed as not planned
+   * (ADR-0001, amended in #98). One closed as completed or duplicate, or one
+   * in another repo, is left out.
+   */
+  readonly blockers: readonly number[];
 }
 
 /** An open `fabrik:monitor` issue, as Held reads the Monitor's held count from it. */

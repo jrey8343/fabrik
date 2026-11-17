@@ -256,7 +256,7 @@ async function gatherFacts(
       defaultBranchCommits: [],
       mergedPullRequestTitles: [],
       openIssues: open.map((issue) => {
-        const facts = openIssueOf({ ...issue, blockedBy: { nodes: [] } });
+        const facts = openIssueOf(issue, kit.repo);
         return { ...facts, comments: withIds(facts.comments, issue.comments.nodes) };
       }),
       openPullRequests: agent.map((pullRequest) => {

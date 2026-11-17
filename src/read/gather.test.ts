@@ -224,6 +224,12 @@ describe("a gather shaped for Home", () => {
       for (const query of await everyQuery()) expect(threeDeepConnectionsIn(query)).toEqual([]);
     });
 
+    it("asks for each open issue's blockers with their state, why they are in it and their repo (#770)", async () => {
+      expect((await everyQuery()).filter((query) => query.includes("issues(states: OPEN, first: 25"))).toEqual([
+        expect.stringMatching(/blockedBy\(first: \d+\) \{ nodes \{ number state stateReason repository \{ nameWithOwner \} \} \}/),
+      ]);
+    });
+
     it("asks for the comments of an issue closed as not planned by its number, a connection inside no other, among the queries held to that shape (#664)", async () => {
       const byNumber = (await everyQuery()).filter((query) => query.includes("issue(number:"));
 
@@ -275,6 +281,63 @@ describe("a gather shaped for Home", () => {
 
       expect(facts.issueBodies).toEqual([{ issue: 31, body: "From PR #50\n\nThe cart total rounds wrong." }]);
       expect(facts.github.openIssues.map(({ number }) => number)).toEqual([31, 32]);
+    });
+
+    describe("the blockers of each open issue (#770)", () => {
+      /** A blocked-by edge to open issue `number` of this repo, as GitHub answers it. */
+      const openBlocker = (number: number) => ({ number, state: "OPEN", stateReason: null, repository: { nameWithOwner: "jrey8343/shop" } });
+      const labelled = (number: number, label: string, blockers: readonly number[]) =>
+        aRawIssue({
+          number,
+          labels: { nodes: [{ name: label }] },
+          timelineItems: { nodes: [{ __typename: "LabeledEvent", createdAt: "2026-10-20T00:00:00Z", actor: OPERATOR, label: { name: label } }] },
+          blockedBy: { nodes: blockers.map(openBlocker) },
+        });
+
+      it("hold the ones in the repo, open or closed as not planned", async () => {
+        const facts = await factsOf({
+          issues: [
+            labelled(10, "ready-for-human", []),
+            {
+              ...labelled(11, "ready-for-human", []),
+              blockedBy: {
+                nodes: [
+                  openBlocker(9),
+                  { number: 4, state: "CLOSED", stateReason: "NOT_PLANNED", repository: { nameWithOwner: "jrey8343/shop" } },
+                  { number: 5, state: "CLOSED", stateReason: "COMPLETED", repository: { nameWithOwner: "jrey8343/shop" } },
+                  { number: 3, state: "OPEN", stateReason: null, repository: { nameWithOwner: "jrey8343/elsewhere" } },
+                ],
+              },
+            },
+          ],
+        });
+
+        expect(facts.github.openIssues.map(({ number, blockers }) => [number, blockers])).toEqual([
+          [10, []],
+          [11, [9, 4]],
+        ]);
+      });
+
+      it("make an issue shaped like gradually-core's three blocked ready-for-human issues and its blocked Map four blocked rows, none of them yours", async () => {
+        const facts = await factsOf({
+          issues: [
+            labelled(457, "ready-for-human", [453]),
+            labelled(459, "ready-for-human", [451, 455, 456]),
+            labelled(9, "wayfinder:map", [1, 7, 8]),
+            labelled(10, "ready-for-human", [9]),
+            ...[1, 7, 8, 451, 453, 455, 456].map((number) => aRawIssue({ number })),
+          ],
+        });
+
+        const standings = rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing);
+        expect(standings.filter(({ issue }) => [457, 459, 9, 10].includes(issue ?? 0)).map(({ issue, work, name, yours, move, detail }) => ({ issue, work, name, yours, move, detail }))).toEqual([
+          { issue: 9, work: "map", name: "blocked", yours: false, move: "nobody", detail: { blockers: [1, 7, 8] } },
+          { issue: 10, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: [9] } },
+          { issue: 457, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: [453] } },
+          { issue: 459, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: [451, 455, 456] } },
+        ]);
+        expect(standings.filter(({ name }) => name === "yours-to-do" || name === "yours-to-read")).toEqual([]);
+      });
     });
 
     it("hold the agent pull requests merged in the last 24 hours, with their Ticket, merge commit and when they merged", async () => {
@@ -643,6 +706,7 @@ function aRawIssue(overrides: Record<string, unknown> = {}): Record<string, unkn
     labels: { nodes: [] },
     comments: { nodes: [] },
     timelineItems: { nodes: [] },
+    blockedBy: { nodes: [] },
     subIssues: { nodes: [] },
     ...overrides,
   };
