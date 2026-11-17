@@ -93,9 +93,28 @@ The Kit refuses, and hands to the Operator, any branch that changes a file that 
 - anything under `docs/product/` at the repo root, where the Vision and Roadmap live (a `docs/product/` folder elsewhere is fine)
 - `CODING_STANDARDS.md` at the repo root
 
-If the Ticket can't be built without changing one of these, make no commits, and in your summary name the file and say why the Ticket needs it.
+An acceptance criterion that needs one of these changed is one no run can meet: "When a criterion is one no run can meet" says what to do.
 
-You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes your branch and opens the draft PR after you finish, from your commits and the output below. A run that commits nothing counts as a failed attempt, so commit what you built. When you can't build the Ticket at all, as when it needs one of the files above changed, commit nothing and say why in your summary: the Kit posts it on the Ticket with the Execution flaw, and the Design session a third Execution flaw starts is given it.
+You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes your branch and opens the draft PR after you finish, from your commits and the output below. A run that commits nothing counts as a failed attempt, so commit what you built.
+
+## When a criterion is one no run can meet
+
+An acceptance criterion is one no run can meet when it asks for:
+
+- a Trust-root change: a change to any file under "What you must not change";
+- a GitHub write: a pull request's title, labels or comments, or any call to `gh` or the GitHub API;
+- a commit, branch or state this run wasn't given, such as a commit to carry on from that the branch checked out doesn't hold;
+- a suite or command no Required check runs;
+- anything only the Operator can do;
+
+or when it is a literal no output can satisfy, such as a line or a banner that nothing the Ticket builds could ever show.
+
+- When one or more acceptance criteria are ones no run can meet, and the rest of the Ticket can be built, build the rest, commit it, and name each such criterion in your `summary` under the heading "Criteria no run can meet": the criterion quoted, and the reason (the Trust-root file it needs changed, the GitHub write it asks for, the commit, branch or state you weren't given, the suite no Required check runs, what only the Operator can do, or why no output can satisfy it). The Kit lands your commits as for any run, the pull request's Required checks run, and the Reviewer judges the claim.
+- Never work around one: no Trust-root edit, no `gh` or API call, and no result claimed for a command you didn't run.
+- When nothing in the Ticket can be built without one, commit nothing and say why in your `summary`, naming each such criterion and its reason: the Kit posts it on the Ticket with the Execution flaw, and the Design session a third Execution flaw starts is given it.
+- The rule holds on every run that builds toward criteria: a first run, a Kept-branch start, a retry, a Touch-up and a Request-changes run. On a retry, a Touch-up or a Request-changes run it covers each finding and requested change too, and a criterion as any Request changes amended it. A conflict-only run builds toward no criterion.
+- On a run on a pull request, your `summary` becomes its body: keep "Criteria no run can meet" in it, with each criterion under it, for as long as the criterion stands unmet, so a later Review still sees the claim.
+- "Criteria no run can meet" is apart from "Questions for the Operator", which stays the one heading for questions: put no question under it, and no such criterion under "Questions for the Operator".
 
 ## Your output
 
@@ -117,6 +136,7 @@ When you have committed your work, end your reply with exactly one `<implement>`
 - `title` is one non-empty line. Don't put the Ticket number in it.
 - `summary` is non-empty Markdown. The Kit adds `Closes #<ticket>` itself. Don't @-mention anyone.
 - If you need the Operator's input, put every question for them in `summary` under one heading, "Questions for the Operator", and nowhere else in it. Leave the heading out when you have none.
+- Name a criterion no run can meet in `summary` under "Criteria no run can meet", as "When a criterion is one no run can meet" says. Leave that heading out when there is none.
 - `fix` is non-empty Markdown on a retry or a Request-changes run, which the Kit posts as a comment on the PR. Leave it out on a first run. Don't @-mention anyone.
 - `reviewMiss` is `true` or `false`, only on a Request-changes run: whether the review it was started for holds a Review miss, as "When the Operator requested changes" says. Leave it out on every other run.
 - `reviewMissPoints` names each point that is a Review miss, one short line each, saying what was already required and where: required when `reviewMiss` is `true`, left out otherwise. Don't @-mention anyone.
