@@ -219,6 +219,14 @@ describe("what gets no mention", () => {
   it("anything at all on a Tick that read no passed head", () => {
     expect(notificationsOf(tick({ heads: [], issues: waiting }))).toEqual([]);
   });
+
+  // The tick's tokens hold no Commit statuses: read, so it can't tell a commit status has since gone green.
+  it("a commit status from an outside service, with no check run on the head, whose state the tick can't read", () => {
+    const skipped = gateRerunMarksIn([{ id: "IC_done", body: gateRerunDoneMarker(HEAD, ["Vercel"], "outside"), createdAt: NOW }]);
+    const pullRequest = atGate({ verdicts: [passNaming(HEAD, "Vercel")], gateReruns: skipped });
+
+    expect(notificationsOf(tick({ pullRequests: [pullRequest], heads: [passedHead([RED_E2E])], issues: [checkIssue(["needs-design"], { check: "Vercel" })] }))).toEqual([]);
+  });
 });
 
 describe("a check's issue waiting on the Operator", () => {
