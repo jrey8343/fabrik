@@ -1,12 +1,12 @@
 import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
-import { digestLabelOnIssue, issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts";
+import { digestLabelOnIssue, issueLabelOnPullRequest, rerunChecksLabelOnIssue, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { landDigest, startDigestOnLabel } from "./digest.ts";
 import { failureNotice } from "./failures.ts";
 import { checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
-import { gateRerunGate } from "./gateRerun.ts";
+import { gateRerunGate, rerunChecksOnLabel } from "./gateRerun.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
@@ -23,6 +23,7 @@ import {
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
   REPLAY_TRIGGER_LABEL,
+  RERUN_CHECKS_LABEL,
   RESEARCH_LABEL,
   REVIEW_LABEL,
   WONTFIX,
@@ -147,6 +148,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withPullRequest(snapshot, (pullRequest) => {
         if (event.label === REVIEW_LABEL) return startReviewOnLabel(pullRequest, config);
         if (event.label === DIGEST_LABEL) return startDigestOnLabel(pullRequest, snapshot, config);
+        if (event.label === RERUN_CHECKS_LABEL) return rerunChecksOnLabel(pullRequest);
         if (event.label === NEEDS_DESIGN) return sendBackToDesign(pullRequest);
         const misplaced = issueLabelOnPullRequest(event.label, pullRequest);
         return misplaced === null
@@ -394,6 +396,8 @@ function labelAdded(
   if (label === REVIEW_LABEL) return { kind: "act", actions: reviewLabelOnIssue(issueNumber, context.issue.openPullRequests) };
   // Nor does agent:digest start the Digest writer anywhere but on a PR.
   if (label === DIGEST_LABEL) return { kind: "act", actions: digestLabelOnIssue(issueNumber, context.issue.openPullRequests) };
+  // Nor does agent:rerun-checks re-run anything but an agent PR's checks at the Merge gate (#783).
+  if (label === RERUN_CHECKS_LABEL) return { kind: "act", actions: rerunChecksLabelOnIssue(issueNumber, context.issue.openPullRequests) };
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

@@ -3,8 +3,9 @@
 // agent:rerun-checks, to re-run that check's failed jobs once more on the pull
 // request's head, and later Ticks read what came of it.
 import { describe, expect, it } from "vitest";
-import { aPullRequest, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, kitConfig, notificationsOf, snapshotOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import { gateRerunSpent } from "./gateRerun.ts";
+import { TRIGGER_LABELS } from "./labels.ts";
 import { gateRerunMarksIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Action, GateRerunMark, HeadCheckRun, LoopEvent, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
@@ -164,5 +165,160 @@ describe("The Tick asks for one more re-run of an Unrelated failure at the Merge
   it("gives no label for a pass that names no Unrelated failure, nor to a PR in draft", () => {
     expect(onPullRequest(tick([atGate({ verdicts: [passNaming()] })], [passedHead([RED_E2E])]))).toEqual([]);
     expect(onPullRequest(tick([atGate({ draft: true })], [passedHead([RED_E2E])]))).toEqual([]);
+  });
+});
+
+describe("agent:rerun-checks on a pull request (#783)", () => {
+  const labeled: LoopEvent = { kind: "pull-request-labeled", pullRequest: 50, label: LABEL };
+  const asked = (started = false): GateRerunMark => ({
+    kind: "asked",
+    headSha: HEAD,
+    checks: [{ name: "e2e", link: "https://github.com/acme/shop/actions/runs/7/job/70", run: 7 }],
+    started,
+    node: "IC_ask",
+    postedAt: "2026-11-18T11:17:00Z",
+  });
+  const onLabel = (pullRequest: PullRequestSnapshot) => planFor(labeled, snapshotOfPullRequest({ ...pullRequest, labels: [LABEL] }), kitConfig());
+
+  it("routes to the Re-run red checks job for the checks the Kit's line asked, taking the label off and marking the line started", () => {
+    expect(onLabel(atGate({ gateReruns: [asked()] }))).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: LABEL },
+        { kind: "mark-gate-rerun-started", pullRequest: 50, node: "IC_ask" },
+        { kind: "rerun-checks", pullRequest: 50, headSha: HEAD, checks: [{ name: "e2e", link: "https://github.com/acme/shop/actions/runs/7/job/70", run: 7 }] },
+      ],
+    });
+  });
+
+  it("comes off with one line saying why when added a second time for the head", () => {
+    const plan = onLabel(atGate({ gateReruns: [asked(true)] }));
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: LABEL },
+        { kind: "comment", issue: 50, body: `${LABEL} came off and nothing started: the Kit re-runs an Unrelated failure once more on a head, and has on ${SHORT} already.` },
+      ],
+    });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("comes off with one line saying why on a pull request with no such pass", () => {
+    expect(onLabel(atGate({ verdicts: [passNaming()] }))).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 50, label: LABEL },
+        {
+          kind: "comment",
+          issue: 50,
+          body: `${LABEL} came off and nothing started: no line from the Kit asks for one more re-run on ${SHORT}, which the hourly Tick asks for an Unrelated failure at the Merge gate.`,
+        },
+      ],
+    });
+  });
+
+  it("comes off with one line saying why once the head has moved since the ask, or the PR left the Merge gate", () => {
+    const moved = onLabel(atGate({ headSha: "d".repeat(40), gateReruns: [asked()] }));
+    const draft = onLabel(atGate({ draft: true, gateReruns: [asked()] }));
+
+    for (const plan of [moved, draft]) expect(onPullRequest(plan).map((action) => action.kind)).toEqual(["remove-label", "comment"]);
+    expect(comments(draft)[0]).toContain("isn't at the Merge gate");
+  });
+
+  it("comes off with one line saying why on a pull request that isn't an agent's", () => {
+    expect(comments(onLabel(atGate({ isAgent: false, gateReruns: [asked()] })))[0]).toContain("#50 isn't an agent PR");
+  });
+
+  it("comes off an issue, saying it goes on the pull request", () => {
+    const issueLabeled: LoopEvent = { kind: "label-added", issue: 7, label: LABEL };
+    const plan = planFor(issueLabeled, snapshotOf(anIssue({ number: 7, labels: [LABEL], openPullRequests: [50] })), kitConfig());
+
+    expect(plan).toEqual({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 7, label: LABEL },
+        { kind: "comment", issue: 7, body: `\`${LABEL}\` goes on the PR, not the Ticket: add it to #50.` },
+      ],
+    });
+  });
+});
+
+describe("Later Ticks read what came of one more re-run at the Merge gate (#783)", () => {
+  /** The Tick before asked at 11:17; this one runs at 12:17. */
+  const ASKED_AT = "2026-11-18T11:17:00Z";
+  const ask = (started: boolean): Extract<GateRerunMark, { kind: "asked" }> => ({
+    kind: "asked",
+    headSha: HEAD,
+    checks: [{ name: "e2e", link: "https://github.com/acme/shop/actions/runs/7/job/70", run: 7 }],
+    started,
+    node: "IC_ask",
+    postedAt: ASKED_AT,
+  });
+  const after = (overrides: Partial<PullRequestSnapshot> = {}) => atGate({ gateReruns: [ask(true)], ...overrides });
+  const doneMarks = (plan: Plan) => marksPosted(plan).filter((mark) => mark.kind === "done");
+
+  it("reports a check green after the re-run as a Flaky check, through the existing read of the passed head, with nothing counted back", () => {
+    const plan = tick([after()], [passedHead([RED_E2E, actionsRun("e2e", "success", "2026-11-18T11:19:00Z", 7, 71)])]);
+
+    const flakyLine = onPullRequest(plan).find((action) => action.kind === "comment-linking");
+    expect(flakyLine?.kind === "comment-linking" && flakyLine.body.join("")).toContain(`<!-- fabrik:flaky-check {"headSha":"${HEAD}","checks":["e2e"]} -->`);
+    expect(flakyLine?.kind === "comment-linking" && flakyLine.body.join("")).not.toContain("countedBack");
+    expect(doneMarks(plan)).toEqual([]);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("reads a check red again, by a run started after the line, as done, said once on the PR", () => {
+    const redAgain = [RED_E2E, actionsRun("e2e", "failure", "2026-11-18T11:19:00Z", 7, 71)];
+    const plan = tick([after()], [passedHead(redAgain)]);
+
+    expect(doneMarks(plan)).toEqual([{ kind: "done", headSha: HEAD, checks: ["e2e"], why: "red-again" }]);
+    expect(comments(plan)).toEqual([expect.stringContaining(`\`e2e\` failed again when the Kit re-ran it once more on ${SHORT}, so the pull request waits for its fix.`)]);
+    expect(onPullRequest(plan).some((action) => action.kind === "add-labels")).toBe(false);
+    expect(notificationsOf(plan)).toEqual([]);
+    expect(gateRerunSpent(after({ gateReruns: [ask(true), ...marksPosted(plan)] }), HEAD, "e2e")).toBe(true);
+    expect(onPullRequest(tick([after({ gateReruns: [ask(true), ...marksPosted(plan)] })], [passedHead(redAgain)]))).toEqual([]);
+  });
+
+  it("waits while the re-run is still running", () => {
+    expect(onPullRequest(tick([after()], [passedHead([RED_E2E, actionsRun("e2e", null, "2026-11-18T11:19:00Z", 7, 71)])]))).toEqual([]);
+  });
+
+  it("reads a re-run that started no run, as when GitHub refused it, as done at the next Tick, said once", () => {
+    const plan = tick([after()], [passedHead([RED_E2E])]);
+
+    expect(doneMarks(plan)).toEqual([{ kind: "done", headSha: HEAD, checks: ["e2e"], why: "refused" }]);
+    expect(comments(plan)[0]).toContain("the Re-run red checks job started no run");
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("reads a label still on at the next Tick with no run behind it as done, said once, and takes it off", () => {
+    const plan = tick([atGate({ gateReruns: [ask(false)], labels: [LABEL] })], [passedHead([RED_E2E])]);
+
+    expect(doneMarks(plan)).toEqual([{ kind: "done", headSha: HEAD, checks: ["e2e"], why: "no-run" }]);
+    expect(onPullRequest(plan)).toContainEqual({ kind: "remove-label", issue: 50, label: LABEL });
+    expect(onPullRequest(plan).some((action) => action.kind === "add-labels")).toBe(false);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("is left to this rule by the stuck-trigger sweep, which reads only the trigger labels an agent run is behind: never added again, never handed to the Operator", () => {
+    expect(TRIGGER_LABELS as readonly string[]).not.toContain(LABEL);
+    const plan = tick([atGate({ gateReruns: [ask(false)], labels: [LABEL] })], [passedHead([RED_E2E])]);
+
+    expect(onPullRequest(plan).filter((action) => action.kind === "add-labels")).toEqual([]);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("leaves a line the Tick just posted alone until the next Tick", () => {
+    const justNow: GateRerunMark = { ...ask(false), postedAt: "2026-11-18T12:10:00Z" };
+
+    expect(onPullRequest(tick([atGate({ gateReruns: [justNow], labels: [LABEL] })], [passedHead([RED_E2E])]))).toEqual([]);
+  });
+
+  it("reads nothing back once the head has moved since the line", () => {
+    const NEW = "d".repeat(40);
+    const moved = atGate({ headSha: NEW, verdicts: [{ ...passNaming(), headSha: NEW }], gateReruns: [ask(true)] });
+
+    expect(onPullRequest(tick([moved], [passedHead([RED_E2E], { headSha: NEW })]))).toEqual([]);
   });
 });

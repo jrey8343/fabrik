@@ -13,6 +13,7 @@
 // and counts as done. A check from an outside service, or one red on main's
 // head, is skipped and counts as done. The Kit never tries twice on one head.
 // Pure.
+import { declineTrigger } from "./declineTrigger.ts";
 import { checkCode, passedHeadAtGate } from "./flakyChecks.ts";
 import { RERUN_CHECKS_LABEL } from "./labels.ts";
 import { gateRerunDoneMarker, gateRerunMarker } from "./markers.ts";
@@ -117,22 +118,96 @@ function askActions(pullRequest: PullRequestSnapshot, head: PassedHeadChecks): A
 }
 
 /**
+ * How long an ask waits before the Tick reads it as come to nothing: the
+ * Re-run red checks job takes a re-run up within minutes, and the Tick is
+ * hourly, so this is the next Tick's, not the one that asked.
+ */
+const READ_BACK_AFTER_MS = 30 * 60_000;
+
+/**
+ * What later Ticks read of each ask on this head from its check runs: a check
+ * whose latest run started after the line and ended red failed again; one
+ * with no run started since, once the line is old enough, was refused (the
+ * claim marked it started) or had no run behind its label, which then comes
+ * off. Each is said once, with a done line. A check green now is a Flaky
+ * check, which the read of the passed head reports; one running is left.
+ */
+function readBackActions(now: string, pullRequest: PullRequestSnapshot, head: PassedHeadChecks): Action[] {
+  const done = new Set(pullRequest.gateReruns.flatMap((mark) => (mark.kind === "done" && mark.headSha === head.headSha ? mark.checks : [])));
+  const found: Record<"red-again" | "refused" | "no-run", string[]> = { "red-again": [], refused: [], "no-run": [] };
+  for (const mark of pullRequest.gateReruns) {
+    if (mark.kind !== "asked" || mark.headSha !== head.headSha) continue;
+    const since = Date.parse(mark.postedAt);
+    for (const { name } of mark.checks) {
+      if (done.has(name)) continue;
+      const latest = latestRun(head.checkRuns, name);
+      if (latest === undefined || latest.conclusion === "success" || latest.status !== "completed") continue;
+      const startedSince = latest.startedAt !== null && Date.parse(latest.startedAt) > since;
+      if (startedSince) {
+        if (isRed(latest)) found["red-again"].push(name);
+      } else if (Date.parse(now) - since >= READ_BACK_AFTER_MS) {
+        found[mark.started ? "refused" : "no-run"].push(name);
+      }
+      done.add(name);
+    }
+  }
+  const lines = (["red-again", "refused", "no-run"] as const).flatMap((why) => (found[why].length === 0 ? [] : [doneLine(pullRequest.number, head.headSha, found[why], why)]));
+  const labelOff: Action[] =
+    found["no-run"].length > 0 && pullRequest.labels.includes(RERUN_CHECKS_LABEL) ? [{ kind: "remove-label", issue: pullRequest.number, label: RERUN_CHECKS_LABEL }] : [];
+  return [...lines, ...labelOff];
+}
+
+/**
  * The Tick's gate re-runs: for each open agent PR at the Merge gate whose
  * latest pass, on its current head, names an Unrelated failure still red
- * there, the ask, once per PR, head and check.
+ * there, the ask, once per PR, head and check; and what came of each ask
+ * on that head, read back.
  */
-export function gateRerunGate(_now: string, snapshot: Snapshot): Plan {
+export function gateRerunGate(now: string, snapshot: Snapshot): Plan {
   const { passedHeads, conflicts } = snapshot;
   if (passedHeads === null || typeof passedHeads === "string" || conflicts === null) {
     return { kind: "nothing", reason: "The Tick read no passed head at the Merge gate, so it asks no re-run of an Unrelated failure there" };
   }
   const actions = passedHeads.flatMap((head) => {
     const pullRequest = conflicts.pullRequests.find((candidate) => candidate.pullRequest.number === head.pullRequest)?.pullRequest;
-    return pullRequest === undefined || passedHeadAtGate(pullRequest) !== head.headSha ? [] : askActions(pullRequest, head);
+    return pullRequest === undefined || passedHeadAtGate(pullRequest) !== head.headSha ? [] : [...readBackActions(now, pullRequest, head), ...askActions(pullRequest, head)];
   });
   return actions.length === 0
     ? { kind: "nothing", reason: "No pass at the Merge gate names an Unrelated failure still red on its head that the Kit hasn't re-run there" }
     : { kind: "act", actions };
+}
+
+/**
+ * agent:rerun-checks added to a pull request (#783): on an agent PR at the
+ * Merge gate whose head the Kit's line asked one more re-run on, and not yet
+ * started, it routes to the Re-run red checks job for that line's checks; the
+ * claim takes it off as the run starts and marks the line started. Anywhere
+ * else, or a second time for a head, by anyone, it comes off with one line
+ * saying why.
+ */
+export function rerunChecksOnLabel(pullRequest: PullRequestSnapshot): Plan {
+  const { number, headSha } = pullRequest;
+  const short = headSha.slice(0, 7);
+  const decline = (why: string): Plan => ({ kind: "act", actions: declineTrigger(number, RERUN_CHECKS_LABEL, why) });
+  if (!pullRequest.isAgent) return decline(`#${number} isn't an agent PR`);
+  if (passedHeadAtGate(pullRequest) === null) return decline(`#${number} isn't at the Merge gate with a pass on its head, ${short}`);
+  const asks = pullRequest.gateReruns.filter((mark): mark is Extract<GateRerunMark, { kind: "asked" }> => mark.kind === "asked" && mark.headSha === headSha);
+  const ask = asks.find((mark) => !mark.started);
+  if (ask === undefined) {
+    return decline(
+      asks.length > 0
+        ? `the Kit re-runs an Unrelated failure once more on a head, and has on ${short} already`
+        : `no line from the Kit asks for one more re-run on ${short}, which the hourly Tick asks for an Unrelated failure at the Merge gate`,
+    );
+  }
+  return {
+    kind: "act",
+    actions: [
+      { kind: "remove-label", issue: number, label: RERUN_CHECKS_LABEL },
+      { kind: "mark-gate-rerun-started", pullRequest: number, node: ask.node },
+      { kind: "rerun-checks", pullRequest: number, headSha, checks: ask.checks },
+    ],
+  };
 }
 
 /** Whether one more re-run of `check` at the Merge gate is done on this head without it reading green, skipped included (#783). */
