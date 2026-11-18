@@ -1,8 +1,9 @@
 // A head whose Required checks are still red after everything the Kit could
 // do goes to the Reviewer (#779). One Verdict, from the Reviewer, holds the
-// code's findings and the red checks together, and every red check counts as
-// the pull request's own: anything short of a Design flaw is an Execution flaw
-// that calls for a Retry, never a Touch-up.
+// code's findings and the red checks together. A red check the Reviewer gives
+// no judgment of counts as the pull request's own (#780), as each does here:
+// anything short of a Design flaw is an Execution flaw that calls for a Retry,
+// never a Touch-up. src/loop/unrelatedFailure.test.ts covers the judgments.
 import { describe, expect, it } from "vitest";
 import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import type { CheckExcerpt } from "../review/failureExcerpt.ts";

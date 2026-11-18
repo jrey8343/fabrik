@@ -1,9 +1,11 @@
 // Review rules: when a Review starts on an agent PR, and how its Verdict lands.
 // On green, the Reviewer's Verdict line decides. On a head whose Required
 // checks are still red after everything the Kit could do, the Reviewer runs
-// too, and its Verdict holds the red checks beside its findings: short of a
-// Design flaw, an Execution flaw that counts (#779). Every Verdict is posted
-// as a PR comment with its marker. Routing flaws onward is for later rules.
+// too, and its Verdict holds the red checks beside its findings (#779), each
+// with the Reviewer's judgment: a check it judged caused makes anything short
+// of a Design flaw an Execution flaw that counts, and an Unrelated failure
+// counts toward nothing (#780). Every Verdict is posted as a PR comment with
+// its marker. Routing flaws onward is for later rules.
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { upToDateBeforeMergeGate } from "./conflicts.ts";
@@ -186,8 +188,9 @@ const NO_FINDINGS: VerdictTags = { small: 0, missedEarlier: 0, counted: 0, small
 /**
  * What the Reviewer's Verdict line lands as on a head whose Required checks
  * are still red (#779), given the red checks that count as the pull
- * request's own: a Design flaw as given, and anything else, a pass included,
- * an Execution flaw while any red check counts. With none counting, the line
+ * request's own, those it judged caused (#780): a Design flaw as given, and
+ * anything else, a pass included, an Execution flaw while any red check
+ * counts. With none counting, as when all are Unrelated failures, the line
  * lands as given.
  */
 export function verdictOnRedHead(verdict: Verdict, counting: readonly string[]): Verdict {
