@@ -13,7 +13,9 @@ import {
   prototypeEventFrom,
   researchEventFrom,
   retroEventFrom,
+  reviewEventFrom,
 } from "./events.ts";
+import { excerptsPassedOut, type FailureExcerpt } from "../review/failureExcerpt.ts";
 
 describe("A scheduled tick", () => {
   const NOW = new Date("2026-11-11T06:17:00Z");
@@ -522,6 +524,37 @@ describe("A finished prototype turn", () => {
 
     expect(() => prototypeEventFrom(noBranch, request, { changes, head: HEAD }, evidence, RUN)).toThrow(/names no branch/);
     expect(() => prototypeEventFrom(triage, request, { changes, head: HEAD }, evidence, RUN)).toThrow(/triage result/);
+  });
+});
+
+describe("A finished Review whose Required checks ended red (#775)", () => {
+  const review = {
+    pullRequest: 50,
+    headSha: "c".repeat(40),
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    repoUrl: "https://github.com/acme/shop",
+    failedChecks: ["unit"],
+    ranNothing: [],
+    result: null,
+    rerun: { outside: [], failedAgain: ["unit"], flaky: [], refused: null },
+  };
+  const first: FailureExcerpt = { kind: "unread", check: "unit", link: "https://github.com/acme/shop/actions/runs/7/job/1", why: "first" };
+  const again: FailureExcerpt = {
+    kind: "actions",
+    check: "unit",
+    link: "https://github.com/acme/shop/actions/runs/7/job/2",
+    steps: [{ name: "Test", earlier: 0, lines: ["FAIL again"] }],
+    annotations: [],
+  };
+
+  it("carries each red check's latest Failure excerpt: after a re-run that failed again, the re-run's", () => {
+    const excerpts = excerptsPassedOut(JSON.stringify([first]), JSON.stringify([again]));
+
+    expect(reviewEventFrom({ ...review, excerpts })).toMatchObject({ kind: "required-checks-finished", excerpts: [again] });
+  });
+
+  it("carries none when the Review's waits passed none out", () => {
+    expect(reviewEventFrom({ ...review, excerpts: excerptsPassedOut(null, null) })).toMatchObject({ kind: "required-checks-finished", excerpts: [] });
   });
 });
 

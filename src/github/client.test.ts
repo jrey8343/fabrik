@@ -318,3 +318,28 @@ describe("A file's text at a ref", () => {
     await expect(new GitHub("token").fileText(repo, "vendor", "main")).resolves.toBeNull();
   });
 });
+
+describe("A log's text", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is the plain text GitHub's redirect leads to, never parsed as JSON", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      asked.push(url);
+      return new Response("2026-11-08T05:14:12.6748036Z ##[error]Process completed with exit code 1.\n", { status: 200, headers: { "content-type": "text/plain" } });
+    });
+
+    await expect(new GitHub("token").logText("/repos/acme/shop/actions/jobs/8/steps/5/logs")).resolves.toBe(
+      "2026-11-08T05:14:12.6748036Z ##[error]Process completed with exit code 1.\n",
+    );
+    expect(asked).toEqual(["https://api.github.com/repos/acme/shop/actions/jobs/8/steps/5/logs"]);
+  });
+
+  it("throws what GitHub answered when there's none, as for a step still running", async () => {
+    vi.stubGlobal("fetch", async () => new Response('{"message":"Not Found"}', { status: 404 }));
+
+    await expect(new GitHub("token", undefined, { retryDelaysMs: [] }).logText("/repos/acme/shop/actions/jobs/8/steps/7/logs")).rejects.toMatchObject({ status: 404 });
+  });
+});

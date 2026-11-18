@@ -555,8 +555,9 @@ export const REPLAY_RECORD_JOB_NAME = "Replay record";
  * bot's issue is taken for the App's (see byAppOf). A
  * Dispatch check also reads workflow runs, through `actions`, and so do a
  * conflict check when it's given them (#387), and the scheduled tick's
- * stuck-trigger sweep (#419) and replay step (#578): the Fabrik App has no Actions
- * permission (ADR-0002), so that is the job's own read-only GITHUB_TOKEN. A
+ * stuck-trigger sweep (#419) and replay step (#578): the Loop reads workflow runs
+ * on the job's own read-only GITHUB_TOKEN, never the Fabrik App's, whose Actions:
+ * read is the Weekly summary's (ADR-0002's addendum). A
  * scheduled tick also reads whether the fabrik-runs store is private,
  * through `store` (see gatherRetroSlice), and the store's Run records through
  * `replayStore`, only while a replay issue the Operator filed is open (see

@@ -98,7 +98,7 @@ jobs:
     permissions:
       # For the conflict check, which reads whether an Implement job is under way before restarting a stalled
       # Request-changes run (#387), and the stuck-trigger sweep, which reads whether a trigger label has a run
-      # behind it (#419); the Fabrik App has no Actions permission. The caller's tick job grants it.
+      # behind it (#419); the Loop reads workflow runs on its job's own token, never the Fabrik App's, whose Actions: read is the Weekly summary's (ADR-0002's addendum). The caller's tick job grants it.
       actions: read
     # The release closing a Dead-tick issue names (#461).
     env:
@@ -158,7 +158,7 @@ jobs:
       group: fabrik-dispatch
       cancel-in-progress: false
     permissions:
-      # Only to count Implement and Research runs in flight; the Fabrik App has no Actions permission.
+      # Only to count Implement and Research runs in flight; the Loop reads workflow runs on its job's own token, never the Fabrik App's, whose Actions: read is the Weekly summary's (ADR-0002's addendum).
       # The caller's tick job grants it.
       actions: read
     env:

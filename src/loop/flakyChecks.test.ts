@@ -43,7 +43,10 @@ describe("A Verdict after the Kit re-ran the red checks (#462)", () => {
     const why = "GitHub refused the workflow token (Resource not accessible by integration). Add `actions: write` under the `loop` job's `permissions:` in `.github/workflows/fabrik.yml`";
     const plan = planFor(redChecks(["unit"], { outside: [], failedAgain: [], flaky: [], refused: why }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
-    expect(verdictOf(plan)).toContain(`These required checks didn't pass, so the Reviewer didn't run:\n\n- \`unit\`\n\nThe Kit couldn't re-run them: ${why}.`);
+    const verdict = verdictOf(plan);
+    expect(verdict).toContain("These required checks didn't pass, so the Reviewer didn't run:\n\n- `unit`\n\n");
+    // After the checks and their excerpts (#775), out of the list.
+    expect(verdict).toMatch(new RegExp(`\\n\\nThe Kit couldn't re-run them: ${why.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`));
   });
 
   it("records the checks it names in its marker, so a later green on the same head can count it back", () => {

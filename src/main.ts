@@ -39,6 +39,7 @@ import { readStoreReplayGates, readStoreReplayPatches, readStoreRunRecords, read
 import type { ReplayStore } from "./github/replaySlice.ts";
 import { planFor } from "./loop/rules.ts";
 import type { KitConfig, LoopEvent } from "./loop/types.ts";
+import { excerptsPassedOut, FAILURE_EXCERPTS_FILE, RERUN_FAILURE_EXCERPTS_FILE } from "./review/failureExcerpt.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -99,7 +100,7 @@ async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise
     case "agent-failure":
       return { ...(await failedRunEvent(input, join(agentDir, AGENT_FAILURE_FILE))), branch: null };
     case "review":
-      return { ...(await finishedReviewEvent(input, join(agentDir, AGENT_RESULT_FILE))), branch: null };
+      return { ...(await finishedReviewEvent(input, agentDir)), branch: null };
     case "digest":
       return { ...(await finishedDigestEvent(input, join(agentDir, AGENT_RESULT_FILE), github, repo, config.operator)), branch: null };
     case "agent-result":
@@ -268,12 +269,18 @@ function thisRunUrl(): string {
   ].join("/");
 }
 
-/** A Review's checks, from its checks job, and the Reviewer's result when green checks let it run. */
+/**
+ * A Review's checks, from its checks job, and the Reviewer's result when green
+ * checks let it run; on red, each red check's Failure excerpt its waits passed
+ * out (#775), none when their artifact is missing.
+ */
 async function finishedReviewEvent(
   input: Extract<PushJobInput, { kind: "review" }>,
-  resultPath: string,
+  agentDir: string,
 ): Promise<{ event: LoopEvent; source: string }> {
-  const result = input.withResult ? readAgentRunResult(await readFile(resultPath, "utf8")) : null;
+  const result = input.withResult ? readAgentRunResult(await readFile(join(agentDir, AGENT_RESULT_FILE), "utf8")) : null;
+  const passedOut = (file: string) => readFile(join(agentDir, file), "utf8").catch(() => null);
+  const excerpts = result === null ? excerptsPassedOut(await passedOut(FAILURE_EXCERPTS_FILE), await passedOut(RERUN_FAILURE_EXCERPTS_FILE)) : [];
   const event = reviewEventFrom({
     pullRequest: input.pullRequest,
     headSha: input.headSha,
@@ -283,6 +290,7 @@ async function finishedReviewEvent(
     ranNothing: input.ranNothing,
     result,
     rerun: input.rerun ?? null,
+    excerpts,
   });
   return {
     event,
