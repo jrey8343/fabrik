@@ -317,7 +317,8 @@ async function main(productDir: string): Promise<void> {
     const stepSummary = process.env["GITHUB_STEP_SUMMARY"] ?? "";
     if (stepSummary !== "") await appendFile(stepSummary, `${summary}\n`);
   }
-  const reader = failureReaderOf(repo, { actions: client });
+  // The workflow token holds Actions: read, Checks: read and Commit statuses: read.
+  const reader = failureReaderOf(repo, { actions: client, checks: client, statuses: client });
   if (rerun === null && outcome.checks === "red") {
     const red = redChecksOf(last, failed);
     console.log(`The Kit can re-run ${red.rerun.length === 0 ? "none of them" : red.rerun.map(({ name }) => name).join(", ")}`);

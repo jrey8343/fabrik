@@ -86,7 +86,7 @@ import { flakyOnPassedHead, flippedOn, passedHeadAtGate, sweptHeadsOf } from "..
 import { closeReasonOf } from "./events.ts";
 import { unrelatedToAsk } from "../loop/gateRerun.ts";
 import { readDefaultBranchHeadChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
-import { type FailureExcerpt, type FailureReader, failureReaderOf, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
+import { type FailureExcerpt, failureReaderOf, isActionsJobLink, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
 import { allPages, GitHubError, pagesOf, type ReadClient, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
@@ -675,23 +675,28 @@ interface RawHeadCheckRun {
 /** Reads the Failure excerpt of each Flaky check's red run on a head; never throws, a run it can't read being one that says why. */
 type RedRunExcerpts = (headSha: string, flaky: readonly { readonly name: string; readonly red: string }[]) => Promise<FailureExcerpt[]>;
 
+/** A workflow token the tick wasn't given: never read, as a GitHub Actions job's red run says so first. */
+const NO_ACTIONS_TOKEN: LogClient = {
+  rest: async () => Promise.reject(new Error("the tick holds no token that reads GitHub Actions jobs")),
+  logText: async () => Promise.reject(new Error("the tick holds no token that reads GitHub Actions jobs")),
+};
+
 /**
- * The tick's reader of a Flaky check's red run (#778): its job and its step's
- * log on the tick job's own workflow token, whose `actions: read` the
- * caller's `tick` job grants, and its annotations on the Fabrik App's Checks:
- * read. With no such token, each says so, keeping its link. An outside
- * service's red run it doesn't read: what the module reads of one is the
- * latest run by that name on the head, which for a Flaky check is its green
- * one, so it says it isn't a GitHub Actions check.
+ * The tick's reader of a Flaky check's red run (#778): a GitHub Actions job
+ * and its step's log on the tick job's own workflow token, whose `actions:
+ * read` the caller's `tick` job grants, and its annotations on the Fabrik
+ * App's Checks: read. An outside service's red run is read itself, by the
+ * check-run id in its link, on the App's Checks: read too; the App holds no
+ * Commit statuses: read, so a commit status says it can't be read. With no
+ * workflow token, a GitHub Actions job's red run says so, keeping its link.
  */
 function redRunExcerpts(app: Pick<ReadClient, "rest">, actions: (ReadClient & Pick<LogClient, "logText">) | null, repo: Repo): RedRunExcerpts {
-  const full = actions === null ? null : failureReaderOf(`${repo.owner}/${repo.name}`, { actions, checks: app });
-  const reader: FailureReader | null = full === null ? null : { job: full.job, stepLog: full.stepLog, annotations: full.annotations };
+  const reader = failureReaderOf(`${repo.owner}/${repo.name}`, { actions: actions ?? NO_ACTIONS_TOKEN, checks: app, statuses: null });
   return async (sha, flaky) => {
     const excerpts: FailureExcerpt[] = [];
     for (const { name, red } of flaky) {
       excerpts.push(
-        reader === null
+        actions === null && isActionsJobLink(red)
           ? { kind: "unread", check: name, link: red, why: "the tick holds no token that reads GitHub Actions jobs" }
           : await readFailureExcerpt({ name, link: red, sha }, reader),
       );

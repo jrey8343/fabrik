@@ -79,18 +79,23 @@ export interface CommitStatus {
 
 /**
  * What an excerpt reads from GitHub, each read on whichever token its job
- * holds. A read GitHub refuses throws. A reader without `checkRuns` and
- * `statuses` reads no check from an outside service (#777).
+ * holds. A read GitHub refuses throws.
  */
 export interface FailureReader {
   job(jobId: number): Promise<ActionsJob>;
   /** One step's log, as plain text. */
   stepLog(jobId: number, step: number): Promise<string>;
   annotations(checkRunId: number): Promise<readonly CheckAnnotation[]>;
+  /** One check run, by its id: an outside check's red run, whose link is its page on GitHub. */
+  checkRun(checkRunId: number): Promise<CheckRun>;
   /** The latest check runs named `name` on the commit `sha`. */
-  checkRuns?(sha: string, name: string): Promise<readonly CheckRun[]>;
-  /** The latest commit status of each context on the commit `sha`. */
-  statuses?(sha: string): Promise<readonly CommitStatus[]>;
+  checkRuns(sha: string, name: string): Promise<readonly CheckRun[]>;
+  /**
+   * The latest commit status of each context on the commit `sha`; null when
+   * the reader's token holds no Commit statuses: read, as the Fabrik App's
+   * doesn't, so a commit status can't be read and its excerpt says so.
+   */
+  readonly statuses: ((sha: string) => Promise<readonly CommitStatus[]>) | null;
 }
 
 /** A client that reads a log's plain text, as the GitHub class does, beside its REST calls. */
@@ -99,25 +104,31 @@ export interface LogClient extends Pick<ReadClient, "rest"> {
 }
 
 /**
- * The FailureReader on a job's own GitHub clients for `repo` (`owner/name`):
- * the job and its logs on `actions`, which needs Actions: read, and the
- * annotations on `checks`, which needs Checks: read, the same client when
- * not given. An outside check's check runs are read on `checks` too, and its
- * commit statuses, which need Commit statuses: read (#777). The Review's
- * waits hand in their workflow token for both; the Tick can hand in the
- * Fabrik App's for `checks`, which holds no Commit statuses: read, so a
- * commit status reads there as a refusal, saying why.
+ * The FailureReader on a job's own GitHub clients for `repo` (`owner/name`),
+ * each named for the permission it needs: the job and its logs on `actions`
+ * (Actions: read); the annotations and an outside check's check runs on
+ * `checks` (Checks: read); an outside check's commit statuses on `statuses`
+ * (Commit statuses: read, #777), or null where the job holds no token with
+ * it. The Review's waits hand in their workflow token for all three; the Tick
+ * and the Monitor hand in the Fabrik App's for `checks`, and null for
+ * `statuses`, as the App holds no Commit statuses: read.
  */
-export function failureReaderOf(repo: string, clients: { readonly actions: LogClient; readonly checks?: Pick<ReadClient, "rest"> }): FailureReader {
-  const { actions, checks = actions } = clients;
+export function failureReaderOf(
+  repo: string,
+  clients: { readonly actions: LogClient; readonly checks: Pick<ReadClient, "rest">; readonly statuses: Pick<ReadClient, "rest"> | null },
+): FailureReader {
+  const { actions, checks, statuses } = clients;
   return {
     job: async (jobId) => (await actions.rest("GET", `/repos/${repo}/actions/jobs/${jobId}`)) as ActionsJob,
     stepLog: (jobId, step) => actions.logText(`/repos/${repo}/actions/jobs/${jobId}/steps/${step}/logs`),
     annotations: (checkRunId) => allPages<CheckAnnotation>(checks, `/repos/${repo}/check-runs/${checkRunId}/annotations`),
-    // An outside check's (#777), on Checks: read and Commit statuses: read, which the Review checks job's token holds.
+    checkRun: async (checkRunId) => (await checks.rest("GET", `/repos/${repo}/check-runs/${checkRunId}`)) as CheckRun,
     checkRuns: (sha, name) =>
       allPages<CheckRun>(checks, `/repos/${repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`, (page) => (page as { check_runs: CheckRun[] }).check_runs),
-    statuses: (sha) => allPages<CommitStatus>(checks, `/repos/${repo}/commits/${sha}/status`, (page) => (page as { statuses: CommitStatus[] }).statuses),
+    statuses:
+      statuses === null
+        ? null
+        : (sha) => allPages<CommitStatus>(statuses, `/repos/${repo}/commits/${sha}/status`, (page) => (page as { statuses: CommitStatus[] }).statuses),
   };
 }
 
@@ -177,6 +188,13 @@ export const STEP_LINES = 150;
 const ACTIONS_JOB = /\/actions\/runs\/\d+\/job\/(\d+)/;
 /** A job's check run, from its `check_run_url`. */
 const CHECK_RUN = /\/check-runs\/(\d+)$/;
+/** A check run's page on GitHub, as its `html_url` gives it: …/<owner>/<repo>/runs/<id>, the link the Tick has of a red run. */
+const CHECK_RUN_PAGE = /^https:\/\/[^/]+\/[^/]+\/[^/]+\/runs\/(\d+)$/;
+
+/** Whether a red check's link is a GitHub Actions job's, whose log the Kit reads on Actions: read. */
+export function isActionsJobLink(link: string): boolean {
+  return ACTIONS_JOB.test(link);
+}
 
 /**
  * Reads a red check's Failure excerpt from GitHub. For a GitHub Actions check:
@@ -229,20 +247,34 @@ export async function readFailureExcerpt(check: RedCheck, github: FailureReader)
 
 /**
  * A red check from an outside service's excerpt (#777): whatever the service
- * wrote to GitHub, as no log of its own can be read there. Its check run on
- * the head by the check's name, when it reported as one, else its commit
- * status by context; each keeps the service's own link, else the check's.
+ * wrote to GitHub, as no log of its own can be read there. The red run itself
+ * when the check's link is its check run's page on GitHub, by the id there,
+ * as the Tick has it of a run that has since turned green (#778); else its
+ * check run on the head by the check's name, when it reported as one, else
+ * its commit status by context. Each keeps the service's own link, else the
+ * check's.
  */
 async function outsideExcerpt(check: RedCheck, github: FailureReader): Promise<FailureExcerpt> {
   const unread = (why: string): FailureExcerpt => ({ kind: "unread", check: check.name, link: check.link, why });
-  if (github.checkRuns === undefined || github.statuses === undefined) return unread("it isn't a GitHub Actions check, so the Kit reads no log for it");
+  const byId = Number(CHECK_RUN_PAGE.exec(check.link)?.[1] ?? Number.NaN);
   let run: CheckRun | undefined;
   let status: CommitStatus | undefined;
   try {
-    run = (await github.checkRuns(check.sha, check.name)).find(({ name, app }) => name === check.name && app?.slug !== "github-actions");
-    if (run === undefined) status = (await github.statuses(check.sha)).find(({ context }) => context === check.name);
+    if (Number.isSafeInteger(byId)) run = await github.checkRun(byId);
+    else {
+      run = (await github.checkRuns(check.sha, check.name)).find(({ name, app }) => name === check.name && app?.slug !== "github-actions");
+      if (run === undefined) {
+        const { statuses } = github;
+        if (statuses === null) {
+          return unread(
+            "GitHub holds no check run by that name on the head, and the Kit can't read a commit status here: its token holds no Commit statuses: read, as the Fabrik App's doesn't",
+          );
+        }
+        status = (await statuses(check.sha)).find(({ context }) => context === check.name);
+      }
+    }
   } catch (error) {
-    return unread(refusal(error));
+    return unread(gone(error) && Number.isSafeInteger(byId) ? "GitHub holds no such check run any more" : refusal(error));
   }
   if (run !== undefined) {
     let annotations: ExcerptAnnotation[] = [];

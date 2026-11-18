@@ -319,6 +319,9 @@ describe("The Failure excerpts a red wait passes out (#775)", () => {
     job: async (id) => (read.push(`job ${id}`), { status: "completed", conclusion: "failure", steps: [{ name: "Test", number: 3, conclusion: "failure" }] }),
     stepLog: async () => "##[error]boom\n",
     annotations: async () => [],
+    checkRun: async (id) => Promise.reject(new Error(`no check run ${id}`)),
+    checkRuns: async () => [],
+    statuses: async () => [],
   };
 
   it("reads each red check the wait names: a GitHub Actions one by the job its link gives, an outside one by what it wrote to GitHub (#777)", async () => {

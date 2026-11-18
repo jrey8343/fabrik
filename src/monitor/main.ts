@@ -118,15 +118,16 @@ async function applyInto(github: GitHub, repo: Repo, plan: MonitorPlan, appLogin
  * The Failure excerpt of each failed run a plan names, by its check run's id
  * (#786): the job and its step logs read on the Monitor job's own workflow
  * token, FABRIK_ACTIONS_TOKEN, whose `actions: read` the caller's tick job
- * grants, and the annotations on the Fabrik App's, through its Checks: read.
- * A read that fails is an excerpt saying why, never a failed run.
+ * grants, and the annotations on the Fabrik App's, through its Checks: read,
+ * which holds no Commit statuses: read. A read that fails is an excerpt
+ * saying why, never a failed run.
  */
 async function readExcerpts(repo: Repo, app: GitHub, runs: readonly FailedRun[]): Promise<Map<number, FailureExcerpt>> {
   const excerpts = new Map<number, FailureExcerpt>();
   if (runs.length === 0) return excerpts;
   const token = process.env["FABRIK_ACTIONS_TOKEN"] ?? "";
   const reader =
-    token === "" ? null : failureReaderOf(`${repo.owner}/${repo.name}`, { actions: new GitHub(token, process.env["GITHUB_API_URL"] || undefined), checks: app });
+    token === "" ? null : failureReaderOf(`${repo.owner}/${repo.name}`, { actions: new GitHub(token, process.env["GITHUB_API_URL"] || undefined), checks: app, statuses: null });
   await Promise.all(
     runs.map(async ({ id, name, link, sha }) => {
       const unread = (why: string): FailureExcerpt => ({ kind: "unread", check: name, link, why });

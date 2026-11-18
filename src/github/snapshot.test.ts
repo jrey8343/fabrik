@@ -4254,22 +4254,50 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
       expect(read()).toEqual([]);
     });
 
-    it("reads nothing of an outside service's red run, whose latest run on the head is its green one, and says so keeping its link", async () => {
+    it("reads an outside service's red run itself, by the check-run id in its link, on the App's Checks: read: what the service wrote to GitHub, never its green run's", async () => {
       const outside = [
         { name: "ci", status: "completed", conclusion: "failure", started_at: "2026-11-11T09:00:00Z", html_url: "https://github.com/acme/shop/runs/501" },
         { name: "ci", status: "completed", conclusion: "success", started_at: "2026-11-11T11:00:00Z", html_url: "https://github.com/acme/shop/runs/502" },
       ];
-      const { github, paths } = appHolding([node(50, [pass(HEAD_SHA)])], outside);
+      const runs: Record<string, unknown> = {
+        "/repos/acme/shop/check-runs/501": {
+          id: 501,
+          name: "ci",
+          app: { slug: "buildkite" },
+          details_url: "https://buildkite.com/acme/shop/builds/812",
+          html_url: "https://github.com/acme/shop/runs/501",
+          output: { title: "Build #812 failed", summary: "3 of 412 specs failed" },
+        },
+        "/repos/acme/shop/check-runs/502": { id: 502, name: "ci", app: { slug: "buildkite" }, output: { title: "Build #813 passed", summary: "" } },
+      };
+      const asked: string[] = [];
+      const { github } = githubHolding([node(50, [pass(HEAD_SHA)])], (path) => {
+        asked.push(path);
+        if (path.includes("/check-runs?")) return { check_runs: outside };
+        if (path.startsWith("/repos/acme/shop/check-runs/501/annotations")) return [{ path: "spec/cart_spec.rb", start_line: 12, annotation_level: "failure", message: "expected 3, got 4" }];
+        return runs[path];
+      });
       const { actions, read } = actionsToken();
 
       const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
 
       expect(snapshot.passedHeads).toEqual([
         expect.objectContaining({
-          excerpts: [{ kind: "unread", check: "ci", link: "https://github.com/acme/shop/runs/501", why: "it isn't a GitHub Actions check, so the Kit reads no log for it" }],
+          excerpts: [
+            {
+              kind: "outside-check-run",
+              check: "ci",
+              link: "https://buildkite.com/acme/shop/builds/812",
+              title: "Build #812 failed",
+              summary: "3 of 412 specs failed",
+              annotations: [{ path: "spec/cart_spec.rb", line: 12, message: "expected 3, got 4" }],
+            },
+          ],
         }),
       ]);
-      expect([...paths(), ...read()]).toEqual([`/repos/acme/shop/commits/${HEAD_SHA}/check-runs?filter=all&per_page=100&page=1`]);
+      expect(asked).toContain("/repos/acme/shop/check-runs/501");
+      expect(asked).not.toContain("/repos/acme/shop/check-runs/502");
+      expect(read()).toEqual([]);
     });
 
     it("gives a red run it can't read as unread, with why and its link, and the tick goes on", async () => {

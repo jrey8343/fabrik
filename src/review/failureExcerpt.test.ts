@@ -32,6 +32,9 @@ function reader(
       return log;
     },
     annotations: async () => annotations,
+    checkRun: async (id) => Promise.reject(new Error(`no check run ${id}`)),
+    checkRuns: async () => [],
+    statuses: async () => [],
   };
 }
 
@@ -225,6 +228,7 @@ describe("A red check from an outside service's Failure excerpt (#777)", () => {
   const outside = ({ checkRuns = [], statuses = [] }: { checkRuns?: readonly CheckRun[]; statuses?: readonly CommitStatus[] }): FailureReader => ({
     ...reader(),
     job: async () => Promise.reject(new Error("an outside check has no job")),
+    checkRun: async (id) => checkRuns.find((run) => run.id === id) ?? Promise.reject(new GitHubError(`GET check run ${id} failed: 404`, 404)),
     checkRuns: async (sha, name) => (sha === SHA ? checkRuns.filter((run) => run.name === name) : []),
     statuses: async (sha) => (sha === SHA ? statuses : []),
   });
@@ -268,6 +272,43 @@ describe("A red check from an outside service's Failure excerpt (#777)", () => {
       annotations: [{ path: "spec/cart_spec.rb", line: 12, message: "expected 3, got 4" }],
     });
     expect(checked).toEqual([4242]);
+  });
+
+  it("reads the red run itself when its link is its check run's page on GitHub, by the id there, never the latest run by its name", async () => {
+    const red = run({ id: 501, html_url: "https://github.com/acme/shop/runs/501", output: { title: "Build #812 failed", summary: "3 of 412 specs failed" } });
+    const green = run({ id: 502, html_url: "https://github.com/acme/shop/runs/502", output: { title: "Build #813 passed", summary: "" } });
+    const checked: number[] = [];
+    const github: FailureReader = { ...outside({ checkRuns: [red, green] }), checkRuns: async () => [green], annotations: async (id) => (checked.push(id), []) };
+
+    expect(await readFailureExcerpt({ name: "buildkite/shop", link: "https://github.com/acme/shop/runs/501", sha: SHA }, github)).toEqual({
+      kind: "outside-check-run",
+      check: "buildkite/shop",
+      link: BUILDKITE,
+      title: "Build #812 failed",
+      summary: "3 of 412 specs failed",
+      annotations: [],
+    });
+    expect(checked).toEqual([501]);
+  });
+
+  it("says why when GitHub holds no check run by the id in its link", async () => {
+    expect(await readFailureExcerpt({ name: "buildkite/shop", link: "https://github.com/acme/shop/runs/9", sha: SHA }, outside({}))).toEqual({
+      kind: "unread",
+      check: "buildkite/shop",
+      link: "https://github.com/acme/shop/runs/9",
+      why: "GitHub holds no such check run any more",
+    });
+  });
+
+  it("says a commit status can't be read on a token with no Commit statuses: read, as the Fabrik App's", async () => {
+    const github: FailureReader = { ...outside({}), statuses: null };
+
+    expect(await readFailureExcerpt({ name: "Vercel", link: VERCEL, sha: SHA }, github)).toEqual({
+      kind: "unread",
+      check: "Vercel",
+      link: VERCEL,
+      why: "GitHub holds no check run by that name on the head, and the Kit can't read a commit status here: its token holds no Commit statuses: read, as the Fabrik App's doesn't",
+    });
   });
 
   it("reads a check run's empty output as empty, keeping its link", async () => {
@@ -770,7 +811,7 @@ describe("The FailureReader on a job's GitHub clients", () => {
     };
     const checks = { rest: async (_method: string, path: string) => (calls.push(`checks ${path}`), path.includes("page=1") ? SAMPLE_ANNOTATIONS : []) };
 
-    const excerpt = await readFailureExcerpt({ name: "Typecheck and test", link: SAMPLE_JOB_LINK, sha: SHA }, failureReaderOf("jrey8343/fabrik", { actions, checks }));
+    const excerpt = await readFailureExcerpt({ name: "Typecheck and test", link: SAMPLE_JOB_LINK, sha: SHA }, failureReaderOf("jrey8343/fabrik", { actions, checks, statuses: checks }));
 
     expect(calls).toEqual([
       "actions /repos/jrey8343/fabrik/actions/jobs/128636834592",
@@ -780,16 +821,33 @@ describe("The FailureReader on a job's GitHub clients", () => {
     expect(excerpt).toMatchObject({ kind: "actions", steps: [{ name: "Typecheck" }], annotations: [{ line: 10 }, { line: 211 }] });
   });
 
-  it("reads the annotations on the Actions client when given no other", async () => {
+  it("reads the annotations on the Actions client when that is the Checks client too, as the Review's workflow token is", async () => {
     const paths: string[] = [];
     const actions = { rest: async (_method: string, path: string) => (paths.push(path), path.includes("annotations") ? [] : SAMPLE_JOB), logText: async () => SAMPLE_STEP_LOG };
 
-    await readFailureExcerpt({ name: "Typecheck and test", link: SAMPLE_JOB_LINK, sha: SHA }, failureReaderOf("jrey8343/fabrik", { actions }));
+    await readFailureExcerpt({ name: "Typecheck and test", link: SAMPLE_JOB_LINK, sha: SHA }, failureReaderOf("jrey8343/fabrik", { actions, checks: actions, statuses: actions }));
 
     expect(paths.at(-1)).toBe("/repos/jrey8343/fabrik/check-runs/128636834592/annotations?per_page=100&page=1");
   });
 
-  it("reads an outside check's check runs on the head by name, then its commit statuses, on the Checks client (#777)", async () => {
+  it("reads an outside check's red run by the id in its link on the Checks client, and its annotations there", async () => {
+    const calls: string[] = [];
+    const actions = { rest: async (_method: string, path: string) => (calls.push(`actions ${path}`), {}), logText: async () => "" };
+    const checks = {
+      rest: async (_method: string, path: string) => {
+        calls.push(`checks ${path}`);
+        if (path.includes("/annotations")) return [];
+        return { id: 501, name: "buildkite/shop", app: { slug: "buildkite" }, details_url: null, html_url: "https://github.com/acme/shop/runs/501", output: { title: "Build #812 failed", summary: "" } };
+      },
+    };
+
+    const excerpt = await readFailureExcerpt({ name: "buildkite/shop", link: "https://github.com/acme/shop/runs/501", sha: SHA }, failureReaderOf("acme/shop", { actions, checks, statuses: null }));
+
+    expect(calls).toEqual(["checks /repos/acme/shop/check-runs/501", "checks /repos/acme/shop/check-runs/501/annotations?per_page=100&page=1"]);
+    expect(excerpt).toMatchObject({ kind: "outside-check-run", link: "https://github.com/acme/shop/runs/501", title: "Build #812 failed" });
+  });
+
+  it("reads an outside check's check runs on the head by name, then its commit statuses, on the Checks and statuses clients (#777)", async () => {
     const calls: string[] = [];
     const actions = { rest: async (_method: string, path: string) => (calls.push(`actions ${path}`), {}), logText: async () => "" };
     const checks = {
@@ -800,7 +858,7 @@ describe("The FailureReader on a job's GitHub clients", () => {
       },
     };
 
-    const excerpt = await readFailureExcerpt({ name: "ci/circle: build", link: "https://circleci.com/gh/acme/shop/9", sha: SHA }, failureReaderOf("acme/shop", { actions, checks }));
+    const excerpt = await readFailureExcerpt({ name: "ci/circle: build", link: "https://circleci.com/gh/acme/shop/9", sha: SHA }, failureReaderOf("acme/shop", { actions, checks, statuses: checks }));
 
     expect(calls).toEqual([
       `checks /repos/acme/shop/commits/${SHA}/check-runs?check_name=ci%2Fcircle%3A%20build&filter=latest&per_page=100&page=1`,
@@ -871,6 +929,7 @@ describe("What real runs showed of reading a failure (#710)", () => {
       ],
     };
     const github: FailureReader = {
+      ...reader(),
       job: async () => job,
       stepLog: async (_job, step) => {
         if (step === 5) return SAMPLE_STEP_LOG;
@@ -893,6 +952,7 @@ describe("What real runs showed of reading a failure (#710)", () => {
     };
     const logs: Record<string, string> = { "133912299641/9": "##[error]first attempt\n", "133917331191/8": "##[error]re-run\n" };
     const github: FailureReader = {
+      ...reader(),
       job: async (id) => jobs[id]!,
       stepLog: async (id, step) => logs[`${id}/${step}`]!,
       annotations: async () => [],
@@ -908,6 +968,7 @@ describe("What real runs showed of reading a failure (#710)", () => {
   it("a job GitHub never gave a runner leaves no steps, no log and no annotation, and reads as never started", async () => {
     // Observed: a job that failed with no runner name, no steps, no annotation, and a job log GitHub's storage answered 404.
     const github: FailureReader = {
+      ...reader(),
       job: async () => ({ status: "completed", conclusion: "failure", steps: [] }),
       stepLog: async () => Promise.reject(new GitHubError("GitHub GET …/logs failed: 404", 404)),
       annotations: async () => [],
