@@ -7,6 +7,7 @@ import { failureNotice } from "./failures.ts";
 import { bringInCheckFix, type CheckFixes, checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
 import { gateRerunGate, rerunChecksOnLabel } from "./gateRerun.ts";
+import { operatorMentionGate } from "./operatorMention.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
@@ -233,7 +234,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return thenCheckQueues(
         alongside(
           withDeadTickClosed(event, snapshot, config, withReasonNoted(stuckTriggers(event.now, snapshot, config))),
-          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate, gateRerunGate], event.now, snapshot, config),
+          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate, gateRerunGate, operatorMentionGate], event.now, snapshot, config),
         ),
       );
   }

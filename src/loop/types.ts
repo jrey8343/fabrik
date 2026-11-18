@@ -11,7 +11,7 @@ import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
-import type { CheckFixMark, FlakyCheckMark, PrototypeRequestMarker } from "./markers.ts";
+import type { CheckFixMark, FlakyCheckMark, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
 import type { RequestChangesText, RollInIssue } from "./owedRollIn.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
@@ -876,6 +876,12 @@ export interface PullRequestSnapshot {
    * spent for its checks.
    */
   readonly checkFixMarks: readonly CheckFixMark[];
+  /**
+   * The Kit's mentions of the Operator over an Unrelated failure on it
+   * (#785), oldest first, read from their markers: a check one names isn't
+   * mentioned on this PR again.
+   */
+  readonly operatorMentions: readonly OperatorMentionMark[];
   /**
    * The fingerprint of its own change at `headSha` (#643), which a Verdict on
    * that head records under its marker. No snapshot read from GitHub holds
