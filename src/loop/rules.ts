@@ -4,7 +4,7 @@ import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom
 import { digestLabelOnIssue, issueLabelOnPullRequest, rerunChecksLabelOnIssue, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { landDigest, startDigestOnLabel } from "./digest.ts";
 import { failureNotice } from "./failures.ts";
-import { checkConflicts } from "./conflicts.ts";
+import { bringInCheckFix, type CheckFixes, checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
 import { gateRerunGate, rerunChecksOnLabel } from "./gateRerun.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
@@ -28,6 +28,7 @@ import {
   REVIEW_LABEL,
   WONTFIX,
 } from "./labels.ts";
+import { flakyCheckIssueOf } from "./markers.ts";
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
@@ -134,10 +135,13 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     // the Dispatch check would start (#439).
     case "issue-closed":
       return withIssue(snapshot, ({ issue }) => {
-        const plan: Plan = {
-          kind: "act",
-          actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
-        };
+        const plan: Plan = alongside(
+          {
+            kind: "act",
+            actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
+          },
+          checkFixLanded(event, issue, snapshot, config),
+        );
         return makesUnusable(issue.labels) ? resumingHeldRuns(plan, snapshot, config, issue.number) : plan;
       });
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
@@ -278,7 +282,37 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
         heldOn(snapshot.kitIssues, config),
         recoveryWaits(config),
         heldOf("implement", snapshot.kitIssues),
+        checkFixesOf(snapshot),
       );
+}
+
+/**
+ * The check's fixes the tick's conflict check brings in (#784): each check's
+ * issue it read closed as completed, and its read of the heads at the Merge
+ * gate. Null for any other event, which reads none.
+ */
+function checkFixesOf({ closedCheckIssues, passedHeads }: Snapshot): CheckFixes | null {
+  if (closedCheckIssues === null) return null;
+  return {
+    closed: closedCheckIssues.flatMap(({ number, check, closedAt, stateReason }) => (stateReason === "completed" ? [{ check, issue: number, closedAt }] : [])),
+    passedHeads: passedHeads === null || typeof passedHeads === "string" ? [] : passedHeads,
+  };
+}
+
+/**
+ * A check's issue closed as completed, so the fix for the check is on main
+ * (#784): each agent PR that check holds at the Merge gate is brought up to
+ * date (src/loop/conflicts.ts). Nothing for any other issue, or a check's
+ * issue closed as not planned, as a duplicate, or with no reason given.
+ */
+function checkFixLanded(event: Extract<LoopEvent, { kind: "issue-closed" }>, issue: IssueSnapshot, snapshot: Snapshot, config: KitConfig): Plan {
+  const check = issue.byApp && !issue.open ? flakyCheckIssueOf(issue.body) : null;
+  if (check === null) return { kind: "nothing", reason: `#${issue.number} isn't a check's issue` };
+  if (event.stateReason !== "completed") {
+    return withReasonNoted({ kind: "nothing", reason: `#${issue.number} didn't close as completed, so no fix for \`${check}\` landed to bring in` });
+  }
+  if (snapshot.conflicts === null) return withReasonNoted({ kind: "nothing", reason: `The snapshot holds no open agent PRs, so the fix for \`${check}\` was brought into none` });
+  return withReasonNoted(bringInCheckFix(snapshot.conflicts, { check, issue: issue.number, closedAt: null }, snapshot.operator, heldOn(snapshot.kitIssues, config)));
 }
 
 /** The conflict check as one of the tick's gates. */

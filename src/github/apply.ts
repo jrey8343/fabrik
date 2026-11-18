@@ -202,8 +202,12 @@ export async function applyPlan(
       }
       if (rebaser === null) throw new Error(`This job can't rebase ${action.branch} onto main`);
       const rebased = await rebaser.rebase(action.branch, action.onto);
-      // Neither is the core's to act on: there's nothing to bring up to date.
-      if (rebased.outcome === "up-to-date" || rebased.outcome === "gone") continue;
+      // Neither is the core's to act on: there's nothing to bring up to date. Only a check's fix records it (#784).
+      if (rebased.outcome === "up-to-date") {
+        await applyEach(action.upToDate ?? []);
+        continue;
+      }
+      if (rebased.outcome === "gone") continue;
       if (rebased.outcome === "conflicted") {
         await applyEach(action.conflicted);
         continue;

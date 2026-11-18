@@ -6,7 +6,7 @@ import { landingFailureReport, pushLanding } from "../kit/landingFailure.ts";
 import { replayMarksIn } from "../kit/replay.ts";
 import { gateRerunMarker, gateRerunMarksIn } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
-import type { LoopEvent, Plan } from "../loop/types.ts";
+import type { Action, LoopEvent, Plan } from "../loop/types.ts";
 import { applyPlan, implementPushOf, PlanNotApplied } from "./apply.ts";
 import { GitHubError } from "./client.ts";
 import { describePlan } from "./describePlan.ts";
@@ -992,6 +992,18 @@ describe("Applying a plan that rebases an agent PR onto main (#304)", () => {
     await applyPlan(github, repo, plan, null, null, rebaser);
 
     expect(github.calls).toEqual([]);
+    expect(rebaser.pushed).toEqual([]);
+  });
+
+  it("when the branch already holds main's head, applies the up-to-date actions a plan gives and pushes nothing (#784)", async () => {
+    const github = fakeGitHub();
+    const rebaser = fakeRebaser("up-to-date");
+    const [rebase] = plan.kind === "act" ? plan.actions : [];
+    const recording: Plan = { kind: "act", actions: [{ ...(rebase as Extract<Action, { kind: "rebase-onto-main" }>), upToDate: [{ kind: "comment", issue: 50, body: "up to date" }] }] };
+
+    await applyPlan(github, repo, recording, null, null, rebaser);
+
+    expect(github.calls.map(({ body }) => body)).toEqual([{ body: "up to date" }]);
     expect(rebaser.pushed).toEqual([]);
   });
 

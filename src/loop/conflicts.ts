@@ -10,16 +10,20 @@
 // ADR-0016): nothing else would move it on. So does a draft whose Review passed
 // while it conflicts with main, before the Merge gate opens (#480), and one whose
 // Review stopped waiting because it conflicts (#704, ADR-0028), at once, with no
-// grace period: the Review that period leaves room for has ended.
+// grace period: the Review that period leaves room for has ended. The one
+// exception to "a PR only behind main is left alone" is a PR a check holds at
+// the Merge gate by an Unrelated failure once that check's issue closes as
+// completed (#784): the fix is on main, so the Kit brings it in by this path.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
-import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
+import { flakyOnPassedHead, passedHeadAtGate } from "./flakyChecks.ts";
+import { checkFixMarker, type CheckFixMark, conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
 import type { Recovery } from "./recoveryWaits.ts";
 import { checkNames } from "./checkNames.ts";
 import { hasVerdictOn, runInFlight, runName, unstartedRetry } from "./retry.ts";
 import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
-import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure, KitConfig, MergeableSnapshot, Plan, PullRequestSnapshot } from "./types.ts";
+import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure, KitConfig, MergeableSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot } from "./types.ts";
 
 /**
  * The conflict check, on a push to the default branch or the scheduled tick:
@@ -30,7 +34,11 @@ import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure
  * reviewed (#389), or why there's neither. Each recovery waits as long as
  * `waits`, the record of recovery waits at the repo's Kit config
  * (src/loop/recoveryWaits.ts), says. `heldTickets` are the Tickets whose
- * Implement run is held until a reset (#424).
+ * Implement run is held until a reset (#424). On the scheduled tick, `fixes`
+ * are the check's issues closed as completed and the tick's read of the heads
+ * at the Merge gate: a PR a fixed check holds there, whose issue closed since
+ * its pass, is brought up to date though it may be only behind main, should
+ * the issue-closed event have missed it (#784).
  */
 export function checkConflicts(
   conflicts: ConflictSnapshot,
@@ -38,6 +46,7 @@ export function checkConflicts(
   held: HeldOn | null,
   waits: Readonly<Record<Recovery, number>>,
   heldTickets: readonly number[],
+  fixes: CheckFixes | null = null,
 ): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];
@@ -59,7 +68,12 @@ export function checkConflicts(
       continue;
     }
     const why = whyNotRebased(candidate, main, operator, { now, reviewMinutes: waits.unreviewedDraft });
-    if (why !== null) reasons.push(why.reason);
+    const fixed = fixes === null ? [] : fixesHolding(candidate.pullRequest, fixes.closed, greenAtGate(candidate.pullRequest, fixes.passedHeads));
+    if (fixed.length > 0) {
+      const done = fixBroughtIn(candidate, main, why, fixed, held);
+      if (Array.isArray(done)) actions.push(...done);
+      else reasons.push(done.reason);
+    } else if (why !== null) reasons.push(why.reason);
     else actions.push(rebaseOntoMain(candidate.pullRequest, main, held));
   }
   if (actions.length > 0) return { kind: "act", actions };
@@ -115,7 +129,8 @@ function whyNotRebased(
     return { rule: "tried", reason: `#${number} was already tried against main at ${main.slice(0, 7)}, so it waits for main to move or for the Operator` };
   }
   if (mergeable === null) return { rule: "unknown", reason: `GitHub hadn't worked out whether #${number} conflicts with main, so it's left for the scheduled tick` };
-  // Rebasing a PR that's only behind would push, and start a Review, on every PR after every merge.
+  // Rebasing a PR that's only behind would push, and start a Review, on every PR after every merge. A check's fix
+  // landing is the one exception (#784), which the caller weighs on this rule (fixBroughtIn).
   if (mergeable) return { rule: "clean", reason: `#${number} doesn't conflict with main, so it's left as it is` };
   return null;
 }
@@ -392,6 +407,148 @@ export function upToDateBeforeMergeGate(
   if (mergeable === null || mergeable.main === null || mergeable.mergeable !== false) return null;
   if (pullRequest.ticket === null || pullRequest.conflictAttempts.includes(mergeable.main)) return null;
   return rebaseOntoMain(pullRequest, mergeable.main, held, "passed-draft");
+}
+
+/**
+ * A check whose issue closed as completed, so its fix is on main (#784): the
+ * check, its issue, and when it closed; null when it closed just now, as the
+ * issue-closed event says.
+ */
+export interface FixedCheck {
+  readonly check: string;
+  readonly issue: number;
+  readonly closedAt: string | null;
+}
+
+/** What the tick's conflict check weighs of the check's fixes (#784): the check's issues closed as completed, and its read of the heads at the Merge gate. */
+export interface CheckFixes {
+  readonly closed: readonly FixedCheck[];
+  readonly passedHeads: readonly PassedHeadChecks[];
+}
+
+/** The checks that have since read green on this PR's head at the Merge gate, as the tick's own read of it finds (#693). */
+function greenAtGate(pullRequest: PullRequestSnapshot, passedHeads: readonly PassedHeadChecks[]): string[] {
+  const head = passedHeads.find((read) => read.pullRequest === pullRequest.number && read.headSha === pullRequest.headSha);
+  return head === undefined ? [] : flakyOnPassedHead({ ...head, marks: [] }).map(({ name }) => name);
+}
+
+/**
+ * Of these `fixed` checks, each that holds this PR at the Merge gate (#784):
+ * it is an open agent PR out of draft whose latest pass, on its current head,
+ * names an Unrelated failure of the check, which hasn't since read green
+ * there, by a Flaky check line or the tick's read (`green`), and whose issue
+ * closed since that pass. One the Kit has already brought up to date for on
+ * this head is spent (CheckFixMark).
+ */
+function fixesHolding(pullRequest: PullRequestSnapshot, fixed: readonly FixedCheck[], green: readonly string[]): FixedCheck[] {
+  const head = passedHeadAtGate(pullRequest);
+  if (head === null || pullRequest.ticket === null) return [];
+  const pass = pullRequest.verdicts.findLast((record) => record.verdict === "pass");
+  const greenHere = new Set([...green, ...pullRequest.flakyCheckMarks.filter((mark) => mark.headSha === head).flatMap((mark) => mark.checks)]);
+  const spent = new Set(pullRequest.checkFixMarks.filter((mark) => mark.headSha === head).flatMap((mark) => mark.fixes.map(({ check }) => check)));
+  const passedAt = pullRequest.verdictPostedAt;
+  const sincePass = ({ closedAt }: FixedCheck) => closedAt === null || (passedAt !== null && Date.parse(closedAt) > Date.parse(passedAt));
+  const seen = new Set<string>();
+  return fixed.filter((fix) => {
+    if (seen.has(fix.check)) return false;
+    const holds = (pass?.unrelated ?? []).includes(fix.check) && !greenHere.has(fix.check) && !spent.has(fix.check) && sincePass(fix);
+    if (holds) seen.add(fix.check);
+    return holds;
+  });
+}
+
+/**
+ * What bringing this PR up to date for its checks' fixes does (#784), given
+ * why ADR-0011 wouldn't otherwise (`why`): only being behind main doesn't stop
+ * it, as the one exception to that rule, but everything else ADR-0011 leaves
+ * alone stays alone. A PR whose head already holds main's has nothing to bring
+ * in: the rebase finds it so and pushes nothing, and its `upToDate` note
+ * records that once, with no attempt marker and no draft. Its notes say the fix
+ * for each check landed, naming its issue, and carry the attempt marker, as
+ * any bring-up-to-date's do, and the record of the move (CheckFixMark).
+ */
+function fixBroughtIn(
+  { pullRequest }: ConflictCandidate,
+  main: string,
+  why: NotRebased | null,
+  fixes: readonly FixedCheck[],
+  held: HeldOn | null,
+): Action[] | NotRebased {
+  if (why !== null && why.rule !== "clean") return why;
+  const { number, headSha } = pullRequest;
+  const head = main.slice(0, 7);
+  const checks = checkNames(fixes.map(({ check }) => check));
+  const issues = issueList(fixes.map(({ issue }) => issue));
+  const record = (outcome: CheckFixMark["outcome"]) => checkFixMarker({ headSha, main, outcome, fixes: fixes.map(({ check, issue }) => ({ check, issue })) });
+  const landed = `The fix for ${checks} landed: ${issues} closed as completed. #${number} was held at the Merge gate by an Unrelated failure of ${fixes.length === 1 ? "it" : "them"}`;
+  // A head that already holds main's has nothing to bring in: the rebase finds it so, pushes nothing, and this records it.
+  const upToDate: Action = {
+    kind: "comment",
+    issue: number,
+    body: [record("held-main"), `${landed}, but its head ${headSha.slice(0, 7)} already holds \`main\` at ${head}, so there was nothing to bring in and nothing was pushed.`].join("\n"),
+  };
+  const notes: StanceNotes = {
+    ...stanceNotes("merge-gate", number, head),
+    why: `${landed}, and \`main\` is at ${head}`,
+    pushed: "The PR is back in draft, and Review runs again on the rebased head, which holds the fix; a pass brings it back to you.",
+  };
+  const said = stanceNoteBodies(notes, agentBranchFor(pullRequest.ticket as number), number, held);
+  const rebase = rebaseOntoMain(pullRequest, main, held, "merge-gate", {
+    pushed: [record("rebased"), said.pushed].join("\n"),
+    refused: said.refused,
+    conflicted: [record("conflict-run"), said.conflicted].join("\n"),
+  });
+  return [rebase.kind === "rebase-onto-main" ? { ...rebase, upToDate: [upToDate] } : rebase];
+}
+
+/**
+ * Whether the Kit brought the fix for `check` to this PR's head (#784), as
+ * the Operator's mention reads it (#785): its latest record for the check
+ * was of a rebase or a conflict-only run and the head has moved since, or
+ * the head is the one that already held main's head when the check's issue
+ * closed as completed. The check's issue and how it went; null otherwise, as
+ * when a conflict-only run ended without a push.
+ */
+export function fixBroughtTo(pullRequest: PullRequestSnapshot, check: string): { readonly issue: number; readonly outcome: CheckFixMark["outcome"] } | null {
+  const mark = pullRequest.checkFixMarks.findLast(({ fixes }) => fixes.some((fix) => fix.check === check));
+  if (mark === undefined) return null;
+  const onHead = mark.headSha === pullRequest.headSha;
+  if (mark.outcome === "held-main" ? !onHead : onHead) return null;
+  const issue = mark.fixes.find((fix) => fix.check === check)?.issue as number;
+  return { issue, outcome: mark.outcome };
+}
+
+/** Issue numbers as a note lists them: `#12`, `#12 and #13`, `#12, #13 and #14`. */
+function issueList(issues: readonly number[]): string {
+  const refs = issues.map((issue) => `#${issue}`);
+  const last = refs.pop();
+  return refs.length === 0 ? (last ?? "") : `${refs.join(", ")} and ${last}`;
+}
+
+/**
+ * What a check's issue closing as completed does (#784): each open agent PR
+ * that check holds at the Merge gate (fixesHolding) is brought up to date by
+ * ADR-0011's path, though it may be only behind main. Every other PR, and
+ * every other rule of the conflict check, waits for its own event.
+ */
+export function bringInCheckFix(conflicts: ConflictSnapshot, fixed: FixedCheck, operator: string, held: HeldOn | null): Plan {
+  const { main, now } = conflicts;
+  const holding = conflicts.pullRequests.flatMap((candidate) => {
+    const fixes = fixesHolding(candidate.pullRequest, [fixed], []);
+    return fixes.length === 0 ? [] : [{ candidate, fixes }];
+  });
+  const check = checkNames([fixed.check]);
+  if (holding.length === 0) return { kind: "nothing", reason: `No agent PR at the Merge gate is held by an Unrelated failure of ${check}, so its fix has nothing to bring up to date` };
+  if (main === null) return { kind: "nothing", reason: "The default branch has no head, so there's no fix to bring in" };
+  const actions: Action[] = [];
+  const reasons: string[] = [];
+  for (const { candidate, fixes } of holding) {
+    const why = whyNotRebased(candidate, main, operator, { now, reviewMinutes: 0 });
+    const done = fixBroughtIn(candidate, main, why, fixes, held);
+    if (Array.isArray(done)) actions.push(...done);
+    else reasons.push(done.reason);
+  }
+  return actions.length > 0 ? { kind: "act", actions } : { kind: "nothing", reason: reasons.join("; ") };
 }
 
 /**

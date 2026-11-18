@@ -40,14 +40,16 @@ import {
   USAGE_CREDITS_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
-import { escapeMarkerIn, flakyCheckMarksIn, gateRerunMarksIn } from "../loop/markers.ts";
+import { checkFixMarksIn, escapeMarkerIn, flakyCheckIssueOf, flakyCheckMarksIn, gateRerunMarksIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { weekStart } from "../loop/weeklyGate.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
 import type {
   AgentRole,
   AuditSnapshot,
+  ClosedCheckIssue,
   ConflictCandidate,
+  IssueSnapshot,
   ConflictSnapshot,
   FlawHeadChecks,
   HeadCheckRun,
@@ -80,6 +82,7 @@ import type {
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { flakyOnPassedHead, flippedOn, passedHeadAtGate, sweptHeadsOf } from "../loop/flakyChecks.ts";
+import { closeReasonOf } from "./events.ts";
 import { unrelatedToAsk } from "../loop/gateRerun.ts";
 import { readDefaultBranchHeadChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type FailureExcerpt, type FailureReader, failureReaderOf, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
@@ -623,8 +626,9 @@ export async function gatherSnapshot(
   const weeklyLabel = WEEKLY_RUN_EVENTS.includes(event.kind) ? weeklyLabelOf(part?.issue?.labels ?? []) : null;
   const weeklyIssues = weeklyLabel === null ? null : weeklyIssuesOf(await queryWeeklyIssues(github, repo, weeklyLabel), appLogin);
   // A push to the default branch may leave an agent PR conflicting with it; the tick catches any the push missed (#304).
+  // A check's issue closed as completed brings in its fix to each agent PR the check holds at the Merge gate (#784).
   const conflicts =
-    event.kind === "main-pushed" || event.kind === "kit-config-changed"
+    event.kind === "main-pushed" || event.kind === "kit-config-changed" || fixLandedOn(event, part?.issue ?? null)
       ? await gatherConflicts(github, actions, repo, new Date().toISOString(), appLogin, operator ?? owner, wait)
       : event.kind === "scheduled-tick"
         ? await gatherConflicts(github, actions, repo, event.now, appLogin, operator ?? owner, wait)
@@ -634,6 +638,8 @@ export async function gatherSnapshot(
   const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests, excerpts) : null;
   // And reports a Required check that has both failed and succeeded on a head the Reviewer passed, at the Merge gate (#693).
   const passedHeads = event.kind === "scheduled-tick" && conflicts !== null ? await gatherPassedHeads(github, repo, conflicts.pullRequests, excerpts) : null;
+  // And brings in a check's fix to a PR it holds at the Merge gate, when the issue-closed event missed its issue's close (#784).
+  const closedCheckIssues = event.kind === "scheduled-tick" ? await gatherClosedCheckIssues(github, repo, appLogin, event.now) : null;
   // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480), and
   // a Review that stopped because its PR conflicts does at once (#704): the Loop reads that again itself, not trusting the wait's read.
   const weighedForConflict = event.kind === "review-run-finished" ? event.pullRequest : stoppedOnConflict(event) ? (part?.pullRequest?.number ?? null) : null;
@@ -654,8 +660,8 @@ export async function gatherSnapshot(
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -790,6 +796,54 @@ async function readHeadCheckRuns(github: Pick<ReadClient, "rest">, repo: Repo, h
   const path = `/repos/${repo.owner}/${repo.name}/commits/${headSha}/check-runs?filter=all`;
   const runs = await allPages<RawHeadCheckRun>(github, path, (page) => (page as { check_runs: RawHeadCheckRun[] }).check_runs);
   return runs.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion, startedAt: run.started_at, url: run.html_url ?? "" }));
+}
+
+/** Whether the event is a check's issue (#462, #781) closing as completed, whose fix the Loop brings in (#784). */
+function fixLandedOn(event: LoopEvent, issue: IssueSnapshot | null): boolean {
+  return event.kind === "issue-closed" && event.stateReason === "completed" && issue !== null && issue.byApp && flakyCheckIssueOf(issue.body) !== null;
+}
+
+/** How far back the tick reads the check's issues that have closed (#784): as for the Carriers it reads closed (#533). */
+const CLOSED_CHECK_ISSUES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** How many of them the tick reads at most, the most recently updated first. */
+const CLOSED_CHECK_ISSUES_PAGE = 50;
+
+const CLOSED_CHECK_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $labels: [String!]!, $since: DateTime!) {
+    repository(owner: $owner, name: $name) {
+      issues(states: CLOSED, labels: $labels, filterBy: { since: $since }, first: ${CLOSED_CHECK_ISSUES_PAGE}, orderBy: { field: UPDATED_AT, direction: DESC }) {
+        nodes { number body closedAt stateReason author { login __typename } }
+      }
+    }
+  }
+`;
+
+interface ClosedCheckIssuesQueryResult {
+  repository: {
+    issues: {
+      nodes: { number: number; body: string; closedAt: string | null; stateReason: string | null; author: { login: string; __typename: string } | null }[];
+    };
+  };
+}
+
+/**
+ * The check's issues the Fabrik App filed (#462, #781) that closed in the 7
+ * days before `now`, newest close first, with why each closed (#784). GitHub
+ * can't filter by close, so it reads those updated in the window, which every
+ * one closed in it is, the most recently updated page at most: one it misses
+ * only leaves a PR held, as it was.
+ */
+async function gatherClosedCheckIssues(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string | null, now: string): Promise<ClosedCheckIssue[]> {
+  const since = new Date(Date.parse(now) - CLOSED_CHECK_ISSUES_WINDOW_MS).toISOString();
+  const data = await github.graphql<ClosedCheckIssuesQueryResult>(CLOSED_CHECK_ISSUES_QUERY, { owner: repo.owner, name: repo.name, labels: [FLAKY_CHECK_LABEL], since });
+  return data.repository.issues.nodes
+    .flatMap((node) => {
+      const check = byAppOf(node.author, appLogin) ? flakyCheckIssueOf(node.body) : null;
+      if (check === null || node.closedAt === null || Date.parse(node.closedAt) < Date.parse(since)) return [];
+      return [{ number: node.number, check, closedAt: node.closedAt, stateReason: closeReasonOf(node.stateReason) }];
+    })
+    .sort((a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt));
 }
 
 /** The events whose plan may find a Flaky check (#462). */
@@ -1385,6 +1439,7 @@ type EventPart = Omit<
   | "flakyCheckIssues"
   | "flakySweep"
   | "passedHeads"
+  | "closedCheckIssues"
 >;
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
@@ -2086,6 +2141,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
     verdicts: verdictsIn(botComments),
     flakyCheckMarks: flakyCheckMarksIn(botComments),
+    checkFixMarks: checkFixMarksIn(botComments),
     // With each ask's node id, which its claim marks it started on, and when it was posted, which a re-run must start after (#783).
     gateReruns: gateRerunMarksIn(fromBots),
     requestChangesRun: requestChangesRunIn(botComments),
