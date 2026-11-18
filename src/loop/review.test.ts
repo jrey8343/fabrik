@@ -260,13 +260,59 @@ describe("Review: red CI", () => {
       );
     });
 
-    it("carries the excerpt under the heading of checks that failed again on the Kit's re-run, and lists an outside check by name alone", () => {
+    it("carries the excerpt under the heading of checks that failed again on the Kit's re-run, and an outside check's under the outside checks' heading (#777)", () => {
       const rerun = { outside: ["Vercel"], failedAgain: ["build"], flaky: [], refused: null };
-      const plan = planFor(redChecks({ failed: ["build", "Vercel"], rerun, excerpts: [excerpt("build")] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+      const vercel: FailureExcerpt = { kind: "commit-status", check: "Vercel", link: "https://vercel.com/acme/shop/abc", description: "Deployment has failed" };
+      const plan = planFor(redChecks({ failed: ["build", "Vercel"], rerun, excerpts: [excerpt("build"), vercel] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
       const verdict = verdictOf(plan);
       expect(verdict).toContain(`failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:\n\n- \`build\` ([the job](${JOB}))`);
-      expect(verdict).toContain("aren't GitHub Actions, so the Kit couldn't re-run them:\n\n- `Vercel`\n");
+      expect(verdict).toContain(
+        [
+          "These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:",
+          "",
+          "- `Vercel` ([the service's page](https://vercel.com/acme/shop/abc))",
+          "",
+          "  A commit status from an outside service, whose own log can't be reached from GitHub. Its description:",
+          "",
+          "  ```text",
+          "  Deployment has failed",
+          "  ```",
+        ].join("\n"),
+      );
+    });
+
+    it("gives the whole log budget to the GitHub Actions check beside an outside check (#777)", () => {
+      const rerun = { outside: ["buildkite/shop"], failedAgain: ["build"], flaky: [], refused: null };
+      const long = Array.from({ length: 150 }, (_, i) => `${String(i + 1).padStart(5, "0")} `.padEnd(400, "x"));
+      const buildkite: FailureExcerpt = {
+        kind: "outside-check-run",
+        check: "buildkite/shop",
+        link: "https://buildkite.com/acme/shop/builds/812",
+        title: "Build #812 failed",
+        summary: "3 of 412 specs failed",
+        annotations: [],
+      };
+      const plan = planFor(
+        redChecks({ failed: ["build", "buildkite/shop"], rerun, excerpts: [excerpt("build", { steps: [{ name: "Run pnpm test", earlier: 0, lines: long }] }), buildkite] }),
+        snapshotOfPullRequest(aPullRequest()),
+        kitConfig(),
+      );
+
+      const verdict = verdictOf(plan);
+      // 40,000 characters hold the last 99 lines of 401, as for the GitHub Actions check alone.
+      expect(verdict).toContain("_51 earlier lines left out");
+      expect(verdict).toContain(long[51]);
+      expect(verdict).toContain("A check run from an outside service, whose own log can't be reached from GitHub. Its title and summary:");
+    });
+
+    it("says under an outside check that its failure couldn't be read when the Review passed out no excerpt for it", () => {
+      const rerun = { outside: ["Vercel"], failedAgain: [], flaky: [], refused: null };
+      const plan = planFor(redChecks({ failed: ["Vercel"], rerun }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+      expect(verdictOf(plan)).toContain(
+        "aren't GitHub Actions, so the Kit couldn't re-run them:\n\n- `Vercel`\n\n  Its failure couldn't be read: the Review checks job passed out no Failure excerpt for it.",
+      );
     });
 
     it("says under each check that its failure couldn't be read when the Review passed out no excerpt, and the Execution flaw still lands", () => {
