@@ -94,3 +94,156 @@ describe("Red main's Failure excerpts", () => {
     ]);
   });
 });
+
+describe("Red main's Failure excerpts, on a red-main issue already open", () => {
+  /** aRedMainIssue()'s block as the Monitor wrote it with testFailed(901)'s excerpt. */
+  const withExcerpt = aRedMainIssue({
+    body: aRedMainBody([...RED_DETAILS, "", "Each failed check's Failure excerpt:", "", ...testFailedLines(901)]),
+  });
+
+  it("rewrites a block for a newer red commit with that commit's excerpt in place of the old one, asking for it alone", () => {
+    const input = redMainInput([failedAt(STILL_RED, [912, "test"]), failedAt(RED, [901, "test"])], { issues: [withExcerpt] });
+
+    expect(runsNeedingExcerpt(monitorPlanFor(input))).toEqual([{ id: 912, name: "test", link: runUrl(912), sha: STILL_RED }]);
+    const [rewrite] = monitorPlanFor(withExcerpts(input, [912, testFailed(912)])).rewrite;
+    expect(rewrite?.body).toBe(
+      aRedMainBody([
+        `- Red at: [\`dead000\`](${commitUrl(STILL_RED)})`,
+        "- Failed checks:",
+        `  - [\`test\`](${runUrl(912)}) failed`,
+        "",
+        "Each failed check's Failure excerpt:",
+        "",
+        ...testFailedLines(912),
+      ]),
+    );
+  });
+
+  it.each([
+    ["its details and their excerpt", withExcerpt],
+    ["its details alone, as the Monitor wrote them before it carried excerpts", aRedMainIssue()],
+  ])("leaves a block naming the red commit's details alone, holding %s, and asks for no excerpt", (_holding, issue) => {
+    const input = redMainInput([failedAt(RED, [901, "test"])], { issues: [issue] });
+    const plan = monitorPlanFor(input);
+
+    expect(plan.open).toEqual([]);
+    expect(plan.rewrite).toEqual([]);
+    expect(runsNeedingExcerpt(plan)).toEqual([]);
+    expect(monitorPlanFor(withExcerpts(input, [901, testFailed(901)])).rewrite).toEqual([]);
+  });
+});
+
+describe("A Tick that names nothing new", () => {
+  it.each([
+    [
+      "the default branch green, closing the open red-main issue",
+      redMainInput([aCommit(RED, [aCheckRun({ id: 901, name: "test", conclusion: "success" })])], { issues: [aRedMainIssue()] }),
+    ],
+    [
+      "the red-main issue's close held",
+      redMainInput([failedAt(RED, [901, "test"])], {
+        issues: [aRedMainIssue({ open: false, stateReason: "completed", closedAt: "2026-11-06T08:00:00Z" })],
+      }),
+    ],
+    [
+      "`monitor.red_main` off",
+      redMainInput([failedAt(RED, [901, "test"])], { monitor: { ...DEFAULT_KIT_CONFIG.monitor, redMain: false }, mainChecks: null }),
+    ],
+  ])("asks for no excerpt with %s", (_with, input) => {
+    expect(runsNeedingExcerpt(monitorPlanFor(input))).toEqual([]);
+  });
+});
+
+describe("A Main check's Failure excerpt", () => {
+  const mainChecksInput = (commits: readonly MainCommit[], overrides: Partial<MonitorInput> = {}): MonitorInput =>
+    redMainInput(commits, { monitor: { ...DEFAULT_KIT_CONFIG.monitor, redMain: true, mainChecks: ["deploy"] }, listedChecks: ["test"], ...overrides });
+  const deployFailed = (id: number): FailureExcerpt => ({ ...testFailed(id), check: "deploy" });
+  const deployLines = (id: number) => [`- \`deploy\` ([the job](${runUrl(id)}))`, ...testFailedLines(id).slice(1)];
+
+  it("files the deploy issue with the excerpt of the failed run it names", () => {
+    const input = mainChecksInput([failedAt(RED, [902, "deploy"])]);
+
+    expect(runsNeedingExcerpt(monitorPlanFor(input))).toEqual([{ id: 902, name: "deploy", link: runUrl(902), sha: RED }]);
+    const [filed] = monitorPlanFor(withExcerpts(input, [902, deployFailed(902)])).open;
+    expect(monitorBlockIn(filed?.body ?? "")).toEqual([
+      `- Red at: [\`badc0de\`](${commitUrl(RED)})`,
+      "- Failed checks:",
+      `  - [\`deploy\`](${runUrl(902)}) failed`,
+      "",
+      "Each failed check's Failure excerpt:",
+      "",
+      ...deployLines(902),
+    ]);
+  });
+
+  it('files a "Still failing after" issue with the excerpt of its own run, not the closed issue\'s', () => {
+    const [closed] = monitorPlanFor(withExcerpts(mainChecksInput([failedAt(RED, [902, "deploy"])]), [902, deployFailed(902)])).open;
+    const closedAsFixed = aMonitorIssue({ number: 50, open: false, stateReason: "completed", closedAt: "2026-11-06T08:00:00Z", body: closed?.body ?? "" });
+    const input = mainChecksInput([failedAt(STILL_RED, [922, "deploy"]), failedAt(RED, [902, "deploy"])], { issues: [closedAsFixed] });
+
+    expect(runsNeedingExcerpt(monitorPlanFor(input))).toEqual([{ id: 922, name: "deploy", link: runUrl(922), sha: STILL_RED }]);
+    const [filed] = monitorPlanFor(withExcerpts(input, [922, deployFailed(922)])).open;
+    expect(filed?.body).toContain("Still failing after #50");
+    expect(monitorBlockIn(filed?.body ?? "")?.slice(3)).toEqual(["", "Each failed check's Failure excerpt:", "", ...deployLines(922)]);
+  });
+
+  it("rewrites the open deploy issue for a newer red commit with that commit's excerpt", () => {
+    const [filed] = monitorPlanFor(withExcerpts(mainChecksInput([failedAt(RED, [902, "deploy"])]), [902, deployFailed(902)])).open;
+    const open: MonitorIssue = aMonitorIssue({ number: 50, body: filed?.body ?? "" });
+    const input = mainChecksInput([failedAt(STILL_RED, [922, "deploy"]), failedAt(RED, [902, "deploy"])], { issues: [open] });
+
+    expect(runsNeedingExcerpt(monitorPlanFor(input))).toEqual([{ id: 922, name: "deploy", link: runUrl(922), sha: STILL_RED }]);
+    const [rewrite] = monitorPlanFor(withExcerpts(input, [922, deployFailed(922)])).rewrite;
+    expect(monitorBlockIn(rewrite?.body ?? "")?.slice(3)).toEqual(["", "Each failed check's Failure excerpt:", "", ...deployLines(922)]);
+  });
+
+  it("says why a failure couldn't be read, under the check's name with its run link", () => {
+    const refused = "GitHub refused the read: GET /repos/acme/clinic/actions/jobs/902 failed with 403: Resource not accessible by integration";
+    const why: FailureExcerpt = { kind: "unread", check: "deploy", link: runUrl(902), why: refused };
+    const [filed] = monitorPlanFor(withExcerpts(mainChecksInput([failedAt(RED, [902, "deploy"])]), [902, why])).open;
+
+    expect(monitorBlockIn(filed?.body ?? "")?.slice(3)).toEqual([
+      "",
+      "Each failed check's Failure excerpt:",
+      "",
+      `- \`deploy\` ([the job](${runUrl(902)}))`,
+      "",
+      `  Its failure couldn't be read: ${refused}.`,
+    ]);
+  });
+});
+
+describe("A Monitor issue's body with Failure excerpts", () => {
+  /** GitHub's limit on an issue's body. */
+  const LIMIT = 65_536;
+  /** An excerpt whose log lines fill the cap and whose annotation alone passes GitHub's limit. */
+  const huge = (id: number, check: string): FailureExcerpt => ({
+    kind: "actions",
+    check,
+    link: runUrl(id),
+    steps: [{ name: "Test", lines: Array.from({ length: 150 }, (_, i) => `line ${i} `.padEnd(300, "x")), earlier: 0 }],
+    annotations: [{ path: "src/a.ts", line: 1, message: "y".repeat(70_000) }],
+  });
+
+  it("files a red-main issue cut until it fits GitHub's limit, saying so", () => {
+    const input = withExcerpts(redMainInput([failedAt(RED, [901, "test"], [903, "e2e"])]), [901, huge(901, "test")], [903, huge(903, "e2e")]);
+    const [filed] = monitorPlanFor(input).open;
+
+    expect(filed?.body.length).toBeLessThanOrEqual(LIMIT);
+    expect(filed?.body.length).toBeGreaterThan(LIMIT - 1_000);
+    expect(filed?.body).toContain("_Shortened to fit the comment._");
+    expect(filed?.body).toContain(`- \`e2e\` ([the job](${runUrl(903)}))`);
+  });
+
+  it("rewrites a block cut to fit what the rest of the body leaves, Windows line endings and Triage's notes included", () => {
+    const notes = "Triage: ".padEnd(20_000, "n");
+    const issue = aRedMainIssue({ body: `${aRedMainBody()}\n${notes}`.replaceAll("\n", "\r\n") });
+    const input = withExcerpts(redMainInput([failedAt(STILL_RED, [912, "test"])], { issues: [issue] }), [912, huge(912, "test")]);
+    const [rewrite] = monitorPlanFor(input).rewrite;
+
+    expect(rewrite?.body.length).toBeLessThanOrEqual(LIMIT);
+    expect(rewrite?.body.length).toBeGreaterThan(LIMIT - 1_000);
+    expect(rewrite?.body).toContain(notes);
+    expect(rewrite?.body).toContain(`- \`test\` ([the job](${runUrl(912)}))`);
+  });
+});
