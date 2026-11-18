@@ -5,7 +5,7 @@ import type { ChangedPath } from "../guard/trust-root.ts";
 import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
-import type { CheckExcerpt } from "../review/failureExcerpt.ts";
+import type { CheckExcerpt, FailureExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
@@ -381,10 +381,11 @@ export type LoopEvent =
       /** What the Kit's re-run of the red checks came to (#462); absent when it didn't try, as from a Kit before it. */
       readonly rerun?: RerunReport;
       /**
-       * The latest Failure excerpt the Review read of each red GitHub Actions
-       * check (#775): the re-run's for one that failed again, with the first
-       * wait's beside it as its first attempt (#776), else the first wait's.
-       * A check with none here couldn't be read; absent, none could.
+       * The latest Failure excerpt the Review read of each red check, an outside
+       * service's among them (#775, #777): the re-run's for one that failed
+       * again, with the first wait's beside it as its first attempt (#776),
+       * else the first wait's. A check with none here couldn't be read;
+       * absent, none could.
        */
       readonly excerpts?: readonly CheckExcerpt[];
       /** The Review run, linked from the Verdict comment. */
@@ -1082,6 +1083,8 @@ export interface FlawHeadChecks {
    */
   readonly untaggedFinding?: true;
   readonly checkRuns: readonly HeadCheckRun[];
+  /** The Failure excerpt of each red run the sweep reports, read by the tick before its plan (#778). */
+  readonly excerpts: readonly FailureExcerpt[];
 }
 
 /**
@@ -1100,6 +1103,8 @@ export interface PassedHeadChecks {
   readonly checkRuns: readonly HeadCheckRun[];
   /** The Flaky check lines already on the PR, so the tick names each check on each head once. */
   readonly marks: readonly FlakyCheckMark[];
+  /** The Failure excerpt of each red run the read reports, read by the tick before its plan (#778). */
+  readonly excerpts: readonly FailureExcerpt[];
 }
 
 /** A required check that reported both failure and success on the same head commit (GLOSSARY.md), with a link to a run of each. */
@@ -1107,6 +1112,13 @@ export interface FlakyCheck {
   readonly name: string;
   readonly red: string;
   readonly green: string;
+  /**
+   * The red run's Failure excerpt, which the check's issue carries (#778): for
+   * one the Kit's re-run turned green, its first attempt's, which the Review
+   * checks job read before the re-run; for one the tick finds, the one it
+   * read. Absent when none was read, which the issue says.
+   */
+  readonly excerpt?: FailureExcerpt;
 }
 
 /**
@@ -1831,6 +1843,12 @@ export type Action =
       readonly body: string;
       /** Names the comment for later `comment-linking` actions in the plan, which link to it. */
       readonly key?: string;
+    }
+  | {
+      /** Comments on an issue created earlier in the plan (#778). */
+      readonly kind: "comment-on-created";
+      readonly on: CreatedIssue;
+      readonly body: string;
     }
   | {
       /** Comments on an issue, linking comments posted or issues created earlier in the plan. */

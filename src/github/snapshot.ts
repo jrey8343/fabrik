@@ -79,8 +79,9 @@ import type {
   UnlandedImplementRun,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
-import { passedHeadAtGate, uncountedFlaws } from "../loop/flakyChecks.ts";
+import { flakyOnPassedHead, flippedOn, passedHeadAtGate, uncountedFlaws } from "../loop/flakyChecks.ts";
 import { readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
+import { type FailureExcerpt, type FailureReader, failureReaderOf, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
 import { allPages, GitHubError, pagesOf, type ReadClient, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
@@ -564,7 +565,9 @@ export const REPLAY_RECORD_JOB_NAME = "Replay record";
  * gatherReplaySlice). Only src/main.ts, which the tick
  * runs, passes `replayStore`; the Kit job, which never routes a tick, doesn't.
  * agent:replay added reads every open replay issue, which a replay Ticket's
- * claim weighs, and nothing of the store.
+ * claim weighs, and nothing of the store. The tick reads the Failure excerpt
+ * of each Flaky check's red run it will report (#778): the job and its step's
+ * log through `actions`, the annotations on the Fabrik App's Checks: read.
  */
 export async function gatherSnapshot(
   client: ReadClient,
@@ -572,7 +575,7 @@ export async function gatherSnapshot(
   event: LoopEvent,
   operator: string | null,
   appLogin: string | null,
-  actions: ReadClient | null = null,
+  actions: (ReadClient & Pick<LogClient, "logText">) | null = null,
   store: Pick<ReadClient, "rest"> | null = null,
   replayStore: ReplayStore | null = null,
   wait: (ms: number) => Promise<void> = sleep,
@@ -626,9 +629,10 @@ export async function gatherSnapshot(
         ? await gatherConflicts(github, actions, repo, event.now, appLogin, operator ?? owner, wait)
         : null;
   // The tick counts back an Execution flaw whose checks have since passed on its head (#462).
-  const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests) : null;
+  const excerpts = redRunExcerpts(github, actions, repo);
+  const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests, excerpts) : null;
   // And reports a Required check that has both failed and succeeded on a head the Reviewer passed, at the Merge gate (#693).
-  const passedHeads = event.kind === "scheduled-tick" && conflicts !== null ? await gatherPassedHeads(github, repo, conflicts.pullRequests) : null;
+  const passedHeads = event.kind === "scheduled-tick" && conflicts !== null ? await gatherPassedHeads(github, repo, conflicts.pullRequests, excerpts) : null;
   // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480), and
   // a Review that stopped because its PR conflicts does at once (#704): the Loop reads that again itself, not trusting the wait's read.
   const weighedForConflict = event.kind === "review-run-finished" ? event.pullRequest : stoppedOnConflict(event) ? (part?.pullRequest?.number ?? null) : null;
@@ -662,34 +666,66 @@ interface RawHeadCheckRun {
   readonly html_url: string | null;
 }
 
+/** Reads the Failure excerpt of each Flaky check's red run on a head; never throws, a run it can't read being one that says why. */
+type RedRunExcerpts = (headSha: string, flaky: readonly { readonly name: string; readonly red: string }[]) => Promise<FailureExcerpt[]>;
+
+/**
+ * The tick's reader of a Flaky check's red run (#778): its job and its step's
+ * log on the tick job's own workflow token, whose `actions: read` the
+ * caller's `tick` job grants, and its annotations on the Fabrik App's Checks:
+ * read. With no such token, each says so, keeping its link. An outside
+ * service's red run it doesn't read: what the module reads of one is the
+ * latest run by that name on the head, which for a Flaky check is its green
+ * one, so it says it isn't a GitHub Actions check.
+ */
+function redRunExcerpts(app: Pick<ReadClient, "rest">, actions: (ReadClient & Pick<LogClient, "logText">) | null, repo: Repo): RedRunExcerpts {
+  const full = actions === null ? null : failureReaderOf(`${repo.owner}/${repo.name}`, { actions, checks: app });
+  const reader: FailureReader | null = full === null ? null : { job: full.job, stepLog: full.stepLog, annotations: full.annotations };
+  return async (sha, flaky) => {
+    const excerpts: FailureExcerpt[] = [];
+    for (const { name, red } of flaky) {
+      excerpts.push(
+        reader === null
+          ? { kind: "unread", check: name, link: red, why: "the tick holds no token that reads GitHub Actions jobs" }
+          : await readFailureExcerpt({ name, link: red, sha }, reader),
+      );
+    }
+    return excerpts;
+  };
+}
+
 /**
  * For the tick's Flaky check sweep (#462): each open agent PR's Execution
- * flaws that name red checks, whatever their source (#779), not yet counted back, with every check run on the head each
- * was given on, every attempt included. The Fabrik App reads them with
+ * flaws that name red checks, whatever their source (#779), not yet counted
+ * back or reported, with every check run on the head each was given on, every
+ * attempt included, and the Failure excerpt of each red run the sweep reports
+ * (#778). The Fabrik App reads the check runs with
  * Checks: read; without it the sweep is "no-permission", and does nothing.
  */
 async function gatherFlakySweep(
   github: Pick<ReadClient, "rest">,
   repo: Repo,
   candidates: readonly ConflictCandidate[],
+  excerptsOf: RedRunExcerpts,
 ): Promise<FlawHeadChecks[] | "no-permission"> {
   const heads: FlawHeadChecks[] = [];
   try {
     for (const { pullRequest } of candidates) {
-      for (const flaw of uncountedFlaws(pullRequest)) heads.push({ ...flaw, checkRuns: await readHeadCheckRuns(github, repo, flaw.headSha) });
+      for (const flaw of uncountedFlaws(pullRequest)) heads.push({ ...flaw, checkRuns: await readHeadCheckRuns(github, repo, flaw.headSha), excerpts: [] });
     }
   } catch (error) {
     if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";
     throw error;
   }
-  return heads;
+  return Promise.all(heads.map(async (head) => ({ ...head, excerpts: await excerptsOf(head.headSha, flippedOn(head) ?? []) })));
 }
 
 /**
  * For the tick's read of the Merge gate (#693): each open agent PR out of
  * draft whose head is still the one its latest pass was given on, with the
  * default branch's own Required checks, every check run on that head, every
- * attempt included, and the PR's Flaky check lines. A branch that can't be
+ * attempt included, the PR's Flaky check lines, and the Failure excerpt of
+ * each red run the read reports (#778). A branch that can't be
  * read is "branch-unread", and no head is read; without Checks: read it is
  * "no-permission". Either way the tick reports nothing of it.
  */
@@ -697,6 +733,7 @@ async function gatherPassedHeads(
   github: Pick<ReadClient, "rest">,
   repo: Repo,
   candidates: readonly ConflictCandidate[],
+  excerptsOf: RedRunExcerpts,
 ): Promise<PassedHeadChecks[] | "no-permission" | "branch-unread"> {
   const atGate = candidates.flatMap(({ pullRequest }) => {
     const headSha = passedHeadAtGate(pullRequest);
@@ -715,13 +752,14 @@ async function gatherPassedHeads(
         required: branch.required,
         checkRuns: await readHeadCheckRuns(github, repo, headSha),
         marks: pullRequest.flakyCheckMarks,
+        excerpts: [],
       });
     }
   } catch (error) {
     if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";
     throw error;
   }
-  return heads;
+  return Promise.all(heads.map(async (head) => ({ ...head, excerpts: await excerptsOf(head.headSha, flakyOnPassedHead(head)) })));
 }
 
 /** Every check run on a head, every attempt included, as the Flaky check sweep reads them. */

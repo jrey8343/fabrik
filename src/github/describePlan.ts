@@ -58,6 +58,8 @@ export function actionPhrase(action: Action): string {
       ].join("");
     case "add-blocked-by":
       return `make #${action.issue} blocked by ${action.blocker.created}`;
+    case "comment-on-created":
+      return `comment on ${action.on.created}`;
     case "close-as-superseded":
       return `close #${action.issue} as superseded`;
     case "start-agent-run":

@@ -99,6 +99,7 @@ export function monitorInput(groups: readonly GroupFacts[], overrides: Partial<M
     issues: [],
     listedChecks: [],
     mainChecks: null,
+    excerpts: new Map(),
     cap: DEFAULT_KIT_CONFIG.caps.monitorIssues,
     operator: "operator",
     timeZone: null,

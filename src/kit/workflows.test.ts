@@ -475,14 +475,21 @@ describe("The Kit's workflows", () => {
     const sentry = step("op://Fabrik App/Sentry token/credential");
     const run = step("run: node kit/src/monitor/main.ts");
 
-    it("checks out only the Kit, at its pinned commit, and holds no GITHUB_TOKEN permissions", () => {
+    it("checks out only the Kit, at its pinned commit", () => {
       const checkouts = steps.filter((candidate) => candidate.includes("uses: actions/checkout@"));
 
       expect(checkouts).toHaveLength(1);
       expect(checkouts[0]).toContain("repository: jrey8343/fabrik");
       expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
       expect(checkouts[0]).toContain("persist-credentials: false");
-      expect(monitor).toMatch(/\n {4}permissions: \{\}\n/);
+    });
+
+    // #786: a failed run's log is read on the job's own token, whose actions: read the caller's tick job grants already.
+    it("asks for actions: read alone, and hands its workflow token to the Monitor for the logs of the failed runs it names", () => {
+      const permissions = /\n {4}permissions:\n((?: {6}.*\n)+)/.exec(monitor)?.[1] ?? "";
+
+      expect(permissions.split("\n").filter((line) => /^ {6}[a-z-]+:/.test(line))).toEqual(["      actions: read"]);
+      expect(steps[run]).toContain("FABRIK_ACTIONS_TOKEN: ${{ github.token }}");
     });
 
     // So the weekly-limit issue being open, or the tick failing, never stops it, and a Sentry outage never stops the tick.

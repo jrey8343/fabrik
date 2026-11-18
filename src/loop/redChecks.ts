@@ -1,14 +1,14 @@
 // The red Required checks on a head, as a Verdict and the Reviewer's prompt
-// carry them: each GitHub Actions check under its name with its Failure
-// excerpt (#775) and, for one that failed again, its first attempt (#776),
-// grouped by what its attempts came to (failed again on the Kit's re-run; not
-// re-run, and why), and each outside check by its name alone. Pure.
+// carry them: each check under its name with its Failure excerpt (#775), an
+// outside service's what it wrote to GitHub (#777), and, for one that failed
+// again, its first attempt (#776), grouped by what its attempts came to
+// (failed again on the Kit's re-run; outside, so not re-run; not re-run, and
+// why). Pure.
 import { type CheckExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
-import { checkCode } from "./flakyChecks.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { RedRequiredChecks } from "./types.ts";
 
-/** Why a red GitHub Actions check has no Failure excerpt: the Review's jobs passed out none for it, as when their artifact is missing. */
+/** Why a red check has no Failure excerpt: the Review's jobs passed out none for it, as when their artifact is missing. */
 export const NO_EXCERPT = "the Review checks job passed out no Failure excerpt for it";
 
 /** What each group of red checks is headed with: by what the Kit's re-run came to. */
@@ -35,25 +35,25 @@ export function redChecksGrouped({ failed, rerun }: Pick<RedRequiredChecks, "fai
 }
 
 /**
- * The red checks under `headings`, each group a heading and its checks: a
- * GitHub Actions check as its Failure excerpt's list item, one with no
- * excerpt saying its failure couldn't be read, and an outside check as its
- * name. The excerpts take what's left of `room` around them.
+ * The red checks under `headings`, each group a heading and its checks, each
+ * check its Failure excerpt's list item, and one with no excerpt saying its
+ * failure couldn't be read. The excerpts take what's left of `room` around
+ * them.
  */
 export function redChecksText(red: RedRequiredChecks, headings: RedCheckHeadings, room = Number.POSITIVE_INFINITY): string {
   const { again, outside, plain } = redChecksGrouped(red);
-  const excerpts = [...again, ...plain].map(
+  const excerpts = [...again, ...outside, ...plain].map(
     (name): CheckExcerpt => red.excerpts.find(({ check }) => check === name) ?? { kind: "unread", check: name, link: "", why: NO_EXCERPT },
   );
   const { heading: plainHeading, after = [] } = headings.plain(red.rerun?.refused ?? null);
   const text = (blocks: readonly string[]) => {
     const blockOf = (name: string) => blocks[excerpts.findIndex(({ check }) => check === name)]!;
-    // A check with an excerpt is a list item of paragraphs, so a blank line parts them; outside checks are one line each.
+    // Each check is a list item of paragraphs, so a blank line parts them.
     const listed = (heading: string, items: readonly string[], between: string, lines: readonly string[] = []) =>
       items.length === 0 ? [] : [[heading, "", items.join(between), ...lines].join("\n")];
     return [
       ...listed(headings.again, again.map(blockOf), "\n\n"),
-      ...listed(headings.outside, outside.map((name) => `- ${checkCode(name)}`), "\n"),
+      ...listed(headings.outside, outside.map(blockOf), "\n\n"),
       ...listed(plainHeading, plain.map(blockOf), "\n\n", after),
     ].join("\n\n");
   };

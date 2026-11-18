@@ -14,6 +14,7 @@ import type {
   AgentRole,
   BranchChanges,
   FailureReport,
+  FlakyCheck,
   GivenOperatorComment,
   ImplementEvidence,
   LoopEvent,
@@ -339,8 +340,9 @@ export interface FinishedReview {
   /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
   readonly rerun: RerunReport | null;
   /**
-   * On red checks, each red GitHub Actions check's latest Failure excerpt the Review's waits passed out (#775),
-   * with its first attempt's for one that failed again (#776); none when they passed none.
+   * Each red check's latest Failure excerpt the Review's waits passed out (#775), an outside one's among them (#777),
+   * with its first attempt's for one that failed again (#776); none when they passed none. A check the Kit's re-run
+   * turned green has its first attempt's alone, which its Flaky check's issue carries (#778).
    */
   readonly excerpts?: readonly CheckExcerpt[];
 }
@@ -348,8 +350,13 @@ export interface FinishedReview {
 /** Turns a finished Review into the Loop event its push job applies. */
 export function reviewEventFrom(review: FinishedReview): LoopEvent {
   const { pullRequest, headSha, runUrl, result } = review;
+  // Each Flaky check's red run is its first attempt, read before the re-run, for its issue (#778).
+  const flaky = (review.rerun?.flaky ?? []).map((check): FlakyCheck => {
+    const excerpt = review.excerpts?.find(({ check: name }) => name === check.name);
+    return excerpt === undefined ? check : { ...check, excerpt };
+  });
   if (result === null) {
-    const rerun = review.rerun === null ? {} : { rerun: review.rerun };
+    const rerun = review.rerun === null ? {} : { rerun: { ...review.rerun, flaky } };
     return { kind: "required-checks-finished", pullRequest, headSha, failed: review.failedChecks, ...rerun, excerpts: review.excerpts ?? [], runUrl };
   }
   if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
@@ -359,7 +366,7 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     pullRequest,
     headSha,
     output: result.output,
-    ...(review.rerun === null || review.rerun.flaky.length === 0 ? {} : { flaky: review.rerun.flaky }),
+    ...(flaky.length === 0 ? {} : { flaky }),
     ...(review.ranNothing.length === 0 ? {} : { ranNothing: review.ranNothing }),
     runUrl,
     repoUrl: review.repoUrl,

@@ -13,17 +13,22 @@
 // its 1Password item is missing or couldn't be read. A Sentry API error is a
 // warning in the step summary, never a failed run, and red main still runs.
 // Red main and the Main checks read check runs through the App's Checks: read; while the App
-// lacks it, GitHub refuses them and red main is a quiet dormant note. GitHub's
+// lacks it, GitHub refuses them and red main is a quiet dormant note. The
+// Failure excerpt of each failed run an issue it files or rewrites names is
+// read with FABRIK_ACTIONS_TOKEN, the job's own workflow token, for the job and
+// its log, and the App's token for the annotations (#786); a read that fails
+// says why in the issue, never failing the run. GitHub's
 // rate limit on either read is a warning. Any other error fails the run with
 // an ::error, and the step summary still says what this tick applied before it.
 import { appendFile } from "node:fs/promises";
-import { GitHub, type Repo } from "../github/client.ts";
+import { GitHub, type Repo, whyUnread } from "../github/client.ts";
 import { closingNotePosted, gatherMonitorFacts } from "../github/monitorFacts.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "../kit/caller.ts";
 import { type KitConfig, resolveKitConfig } from "../kit/config.ts";
-import { groupsNeedingLatestEvent, type MonitorInput, monitorPlanFor, type SentryRead } from "./core.ts";
-import type { MonitorPlan } from "./issues.ts";
+import { type FailureExcerpt, failureReaderOf, readFailureExcerpt } from "../review/failureExcerpt.ts";
+import { groupsNeedingLatestEvent, type MonitorInput, monitorPlanFor, runsNeedingExcerpt, type SentryRead } from "./core.ts";
+import type { FailedRun, MonitorPlan } from "./issues.ts";
 import { readSentry, withLatestEvents } from "./sentryApi.ts";
 
 function required(name: string): string {
@@ -109,6 +114,32 @@ async function applyInto(github: GitHub, repo: Repo, plan: MonitorPlan, appLogin
   }
 }
 
+/**
+ * The Failure excerpt of each failed run a plan names, by its check run's id
+ * (#786): the job and its step logs read on the Monitor job's own workflow
+ * token, FABRIK_ACTIONS_TOKEN, whose `actions: read` the caller's tick job
+ * grants, and the annotations on the Fabrik App's, through its Checks: read.
+ * A read that fails is an excerpt saying why, never a failed run.
+ */
+async function readExcerpts(repo: Repo, app: GitHub, runs: readonly FailedRun[]): Promise<Map<number, FailureExcerpt>> {
+  const excerpts = new Map<number, FailureExcerpt>();
+  if (runs.length === 0) return excerpts;
+  const token = process.env["FABRIK_ACTIONS_TOKEN"] ?? "";
+  const reader =
+    token === "" ? null : failureReaderOf(`${repo.owner}/${repo.name}`, { actions: new GitHub(token, process.env["GITHUB_API_URL"] || undefined), checks: app });
+  await Promise.all(
+    runs.map(async ({ id, name, link, sha }) => {
+      const unread = (why: string): FailureExcerpt => ({ kind: "unread", check: name, link, why });
+      const excerpt =
+        reader === null
+          ? unread("the Monitor job was given no workflow token to read its log with")
+          : await readFailureExcerpt({ name, link, sha }, reader).catch((error: unknown) => unread(whyUnread(error, "the read")));
+      excerpts.set(id, excerpt);
+    }),
+  );
+  return excerpts;
+}
+
 async function main(): Promise<void> {
   const [owner, name] = required("GITHUB_REPOSITORY").split("/");
   if (owner === undefined || name === undefined) throw new Error("GITHUB_REPOSITORY is not owner/name");
@@ -132,22 +163,27 @@ async function main(): Promise<void> {
     await report([`Warning: GitHub's rate limit stopped the Monitor reading its issues, so it did nothing this tick: ${gitHubFacts.error}`]);
     return;
   }
-  const inputWith = (sentry: SentryRead | null): MonitorInput => ({
+  const inputWith = (sentry: SentryRead | null, excerpts: ReadonlyMap<number, FailureExcerpt> = new Map()): MonitorInput => ({
     monitor: config.monitor,
     sentry,
     issues: gitHubFacts.issues,
     listedChecks,
     mainChecks: gitHubFacts.mainChecks,
+    excerpts,
     cap: config.caps.monitorIssues,
     // By default the Operator owns the Product repos they run Fabrik in, as the Loop has it.
     operator: config.operator ?? owner,
     timeZone: config.timeZone,
   });
-  // Which groups are filed and held never depends on their latest events, so a
-  // plan with the groups as listed names the ones whose latest event to read.
+  // Which groups are filed and held never depends on their latest events, nor
+  // what's filed or rewritten on a failed run's excerpt, so a plan with the
+  // groups as listed and no excerpt names the latest events and excerpts to read.
   const planAsListed = monitorPlanFor(inputWith(sentryAsListed));
-  const sentryWithEvents = await withLatestEvents(sentryAsListed, errors, sentryToken, groupsNeedingLatestEvent(planAsListed));
-  const plan = monitorPlanFor(inputWith(sentryWithEvents));
+  const [sentryWithEvents, excerpts] = await Promise.all([
+    withLatestEvents(sentryAsListed, errors, sentryToken, groupsNeedingLatestEvent(planAsListed)),
+    readExcerpts(repo, github, runsNeedingExcerpt(planAsListed)),
+  ]);
+  const plan = monitorPlanFor(inputWith(sentryWithEvents, excerpts));
   await report([...(await apply(github, repo, plan, appLogin)), ...plan.summary]);
 }
 

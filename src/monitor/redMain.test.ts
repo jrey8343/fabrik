@@ -51,6 +51,10 @@ describe("Red main", () => {
           "",
           "The checks the Monitor reads are the Required checks `sandbox.checks` in `.fabrik/config.json` lists or, when it lists none, every check but those of Fabrik's own jobs.",
         ].join("\n"),
+        failedRuns: [
+          { id: 903, name: "e2e", link: runUrl(903), sha: RED },
+          { id: 901, name: "test", link: runUrl(901), sha: RED },
+        ],
       },
     ]);
   });
@@ -78,6 +82,7 @@ describe("Red main", () => {
           "- Failed checks:",
           `  - [\`lint\`](${runUrl(912)}) failed`,
         ]),
+        failedRuns: [{ id: 912, name: "lint", link: runUrl(912), sha: STILL_RED }],
         summary: "Refreshed red main's details on #41.",
       },
     ]);

@@ -103,8 +103,9 @@ const UNREVIEWED_RED_CHECK_HEADINGS: RedCheckHeadings = {
 
 /**
  * Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be
- * counted from the PR alone. Each red GitHub Actions check carries its Failure
- * excerpt under its name, so the Retry starts from why it failed (#775).
+ * counted from the PR alone. Each red check carries its Failure excerpt under
+ * its name, so the Retry starts from why it failed (#775): an outside
+ * service's, what it wrote to GitHub, under the outside checks' heading (#777).
  * Since #779 a red head goes to the Reviewer (applyReview), and no push job
  * gives this event; it lands as it always did.
  */

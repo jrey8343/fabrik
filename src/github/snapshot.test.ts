@@ -3922,6 +3922,8 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
           { name: "ci", status: "completed", conclusion: "failure", startedAt: "2026-11-11T11:00:00Z", url: "https://github.com/acme/shop/actions/runs/8/job/99" },
         ],
         marks: [{ headSha: HEAD_SHA, checks: ["e2e"] }],
+        // No token here reads GitHub Actions: the tick's run passes its own (#778).
+        excerpts: [{ kind: "unread", check: "ci", link: "https://github.com/acme/shop/actions/runs/8/job/99", why: "the tick holds no token that reads GitHub Actions jobs" }],
       },
     ]);
     expect(paths()).toEqual([`/repos/acme/shop/commits/${HEAD_SHA}/check-runs?filter=all&per_page=100&page=1`]);
@@ -3960,6 +3962,113 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
     const { github } = githubHolding([node(50, [pass(HEAD_SHA)])]);
 
     expect((await gatherSnapshot(github, repo, { kind: "main-pushed", head: "9".repeat(40) }, null, APP_LOGIN)).passedHeads).toBeNull();
+  });
+
+  describe("the Failure excerpt of each red run it reports (#778)", () => {
+    const RED_JOB = "https://github.com/acme/shop/actions/runs/8/job/99";
+    const JOB = { status: "completed", conclusion: "failure", steps: [{ name: "Set up job", number: 1, conclusion: "success" }, { name: "Test", number: 3, conclusion: "failure" }] };
+    const EXCERPT = {
+      kind: "actions",
+      check: "ci",
+      link: RED_JOB,
+      steps: [{ name: "Test", lines: ["FAIL src/a.test.ts > adds", "##[error]Process completed with exit code 1."], earlier: 0 }],
+      annotations: [{ path: "src/a.test.ts", line: 3, message: "expected 3 to be 4" }],
+    };
+    const ANNOTATIONS = [
+      { path: "src/a.test.ts", start_line: 3, annotation_level: "failure", message: "expected 3 to be 4" },
+      { path: ".github", start_line: 1, annotation_level: "notice", message: "Ubuntu 26 is coming." },
+    ];
+    /** The App's GitHub, which answers the annotations with its Checks: read; the Loop never reads a job on it. */
+    const appHolding = (nodes: unknown[], runs: unknown[] = RUNS) =>
+      githubHolding(nodes, (path) => {
+        if (path.includes("/check-runs?")) return { check_runs: runs };
+        if (path.startsWith("/repos/acme/shop/check-runs/99/annotations")) return ANNOTATIONS;
+        if (path.includes("/actions/")) return new GitHubError("GET job failed: 403", 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }) });
+        return undefined;
+      });
+    /** The tick job's own workflow token, `actions: read`, which reads the job and its step's log. */
+    function actionsToken() {
+      const read: string[] = [];
+      const actions = {
+        async rest(_method: string, path: string) {
+          read.push(path);
+          if (path === "/repos/acme/shop/actions/jobs/99") return JOB;
+          throw new GitHubError(`GET ${path} failed: 404`, 404, { body: "{}" });
+        },
+        async logText(path: string) {
+          read.push(path);
+          return "2026-11-11T11:00:01.0000000Z FAIL src/a.test.ts > adds\n2026-11-11T11:00:02.0000000Z ##[error]Process completed with exit code 1.\n";
+        },
+      };
+      return { actions: actions as unknown as GitHub, read: () => read.filter((path) => path.includes("/actions/jobs/")) };
+    }
+
+    it("reads the red run's excerpt for a Flaky check on a passed head: the job and its log on the tick's own token, the annotations on the App's", async () => {
+      const { github } = appHolding([node(50, [pass(HEAD_SHA)])]);
+      const { actions, read } = actionsToken();
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(snapshot.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, excerpts: [EXCERPT] })]);
+      expect(read()).toEqual(["/repos/acme/shop/actions/jobs/99", "/repos/acme/shop/actions/jobs/99/steps/3/logs"]);
+    });
+
+    it("reads the red run's excerpt for a Flaky check on a ci Execution flaw the sweep counts back", async () => {
+      const flaw = bot(`${verdictMarker({ verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["ci"], headSha: HEAD_SHA })}\nRed.`);
+      const redThenGreen = [
+        { name: "ci", status: "completed", conclusion: "failure", started_at: "2026-11-11T09:00:00Z", html_url: RED_JOB },
+        { name: "ci", status: "completed", conclusion: "success", started_at: "2026-11-11T11:00:00Z", html_url: "https://github.com/acme/shop/actions/runs/8/job/100" },
+      ];
+      const { github } = appHolding([node(50, [flaw], { isDraft: true })], redThenGreen);
+      const { actions } = actionsToken();
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(snapshot.flakySweep).toEqual([expect.objectContaining({ pullRequest: 50, headSha: HEAD_SHA, excerpts: [EXCERPT] })]);
+    });
+
+    it("reads none for a head with no Flaky check, nor for a check a line already names there", async () => {
+      const named = bot(`${flakyCheckMarker({ headSha: HEAD_SHA, checks: ["ci"] })}\nFlaky.`);
+      const { github } = appHolding([node(50, [pass(HEAD_SHA), named])]);
+      const green = appHolding([node(51, [pass(HEAD_SHA)])], [RUNS[0]]).github;
+      const { actions, read } = actionsToken();
+
+      const withLine = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+      const allGreen = await gatherSnapshot(green, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(withLine.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, excerpts: [] })]);
+      expect(allGreen.passedHeads).toEqual([expect.objectContaining({ pullRequest: 51, excerpts: [] })]);
+      expect(read()).toEqual([]);
+    });
+
+    it("reads nothing of an outside service's red run, whose latest run on the head is its green one, and says so keeping its link", async () => {
+      const outside = [
+        { name: "ci", status: "completed", conclusion: "failure", started_at: "2026-11-11T09:00:00Z", html_url: "https://github.com/acme/shop/runs/501" },
+        { name: "ci", status: "completed", conclusion: "success", started_at: "2026-11-11T11:00:00Z", html_url: "https://github.com/acme/shop/runs/502" },
+      ];
+      const { github, paths } = appHolding([node(50, [pass(HEAD_SHA)])], outside);
+      const { actions, read } = actionsToken();
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(snapshot.passedHeads).toEqual([
+        expect.objectContaining({
+          excerpts: [{ kind: "unread", check: "ci", link: "https://github.com/acme/shop/runs/501", why: "it isn't a GitHub Actions check, so the Kit reads no log for it" }],
+        }),
+      ]);
+      expect([...paths(), ...read()]).toEqual([`/repos/acme/shop/commits/${HEAD_SHA}/check-runs?filter=all&per_page=100&page=1`]);
+    });
+
+    it("gives a red run it can't read as unread, with why and its link, and the tick goes on", async () => {
+      const { github } = appHolding([node(50, [pass(HEAD_SHA)])]);
+      const gone = { ...actionsToken().actions, rest: async () => Promise.reject(new GitHubError("GET job failed: 404", 404, { body: "{}" })) } as unknown as GitHub;
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, gone);
+
+      expect(snapshot.passedHeads).toEqual([
+        expect.objectContaining({ excerpts: [{ kind: "unread", check: "ci", link: RED_JOB, why: "GitHub holds no such job any more, as when it is past the repo's retention period" }] }),
+      ]);
+    });
   });
 });
 

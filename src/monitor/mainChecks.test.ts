@@ -59,7 +59,13 @@ describe("A Main check", () => {
     const plan = monitorPlanFor(mainChecksInput([deployFailedAt(RED)]));
 
     expect(plan.open).toEqual([
-      { sentryGroup: null, title: "Red main: `deploy` is failing on the default branch", body: DEPLOY_BODY, labels: ["fabrik:monitor"] },
+      {
+        sentryGroup: null,
+        title: "Red main: `deploy` is failing on the default branch",
+        body: DEPLOY_BODY,
+        labels: ["fabrik:monitor"],
+        failedRuns: [{ id: 902, name: "deploy", link: runUrl(902), sha: RED }],
+      },
     ]);
     expect(plan.summary).toContain("Red main: the default branch is green at `9148e44`.");
   });
@@ -99,6 +105,7 @@ describe("A Main check", () => {
         kind: "main-check",
         issue: 50,
         body: DEPLOY_BODY.replace(`[\`9148e44\`](${commitUrl(RED)})`, `[\`7654877\`](${commitUrl(NEWER)})`).replace(runUrl(902), runUrl(922)),
+        failedRuns: [{ id: 922, name: "deploy", link: runUrl(922), sha: NEWER }],
         summary: "Refreshed the Main check `deploy`'s details on #50.",
       },
     ]);
