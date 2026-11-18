@@ -1073,6 +1073,8 @@ export interface FlawHeadChecks {
   /** The checks the Verdict named as failed. */
   readonly checks: readonly string[];
   readonly checkRuns: readonly HeadCheckRun[];
+  /** The Failure excerpt of each red run the sweep reports, read by the tick before its plan (#778). */
+  readonly excerpts: readonly FailureExcerpt[];
 }
 
 /**
@@ -1091,6 +1093,8 @@ export interface PassedHeadChecks {
   readonly checkRuns: readonly HeadCheckRun[];
   /** The Flaky check lines already on the PR, so the tick names each check on each head once. */
   readonly marks: readonly FlakyCheckMark[];
+  /** The Failure excerpt of each red run the read reports, read by the tick before its plan (#778). */
+  readonly excerpts: readonly FailureExcerpt[];
 }
 
 /** A required check that reported both failure and success on the same head commit (GLOSSARY.md), with a link to a run of each. */
@@ -1810,6 +1814,12 @@ export type Action =
       readonly body: string;
       /** Names the comment for later `comment-linking` actions in the plan, which link to it. */
       readonly key?: string;
+    }
+  | {
+      /** Comments on an issue created earlier in the plan (#778). */
+      readonly kind: "comment-on-created";
+      readonly on: CreatedIssue;
+      readonly body: string;
     }
   | {
       /** Comments on an issue, linking comments posted or issues created earlier in the plan. */
