@@ -1219,7 +1219,7 @@ jobs:
           retention-days: 7
 
       # On red, the Failure excerpt of each re-run check that failed again (#775), which the push job's
-      # Verdict carries over the first wait's.
+      # Verdict carries in full, with the first wait's after it as the first attempt (#776).
       - name: Pass the Failure excerpts to the push job
         if: steps.wait.outputs.checks == 'red'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

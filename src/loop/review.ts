@@ -19,7 +19,7 @@ import { verdictMarker } from "./markers.ts";
 import { changeLine } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import { parseVerdict, verdictTagsOf } from "./verdict.ts";
-import { type FailureExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
+import { type CheckExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
 import type {
   Action,
   KitConfig,
@@ -111,9 +111,10 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
     const again = red.filter((name) => rerun?.failedAgain.includes(name) === true);
     const outside = red.filter((name) => rerun?.outside.includes(name) === true && !again.includes(name));
     const plain = red.filter((name) => !again.includes(name) && !outside.includes(name));
-    // Each check carries its Failure excerpt under its name (#775), an outside one what it wrote to GitHub (#777).
+    // Each check carries its Failure excerpt under its name (#775), and one that failed again its first
+    // attempt's after it (#776); an outside one what it wrote to GitHub (#777).
     const excerpts = [...again, ...outside, ...plain].map(
-      (name): FailureExcerpt => event.excerpts?.find(({ check }) => check === name) ?? { kind: "unread", check: name, link: "", why: NO_EXCERPT },
+      (name): CheckExcerpt => event.excerpts?.find(({ check }) => check === name) ?? { kind: "unread", check: name, link: "", why: NO_EXCERPT },
     );
     const findings = (room: number): string => {
       const text = (blocks: readonly string[]) => {

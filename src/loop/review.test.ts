@@ -315,6 +315,88 @@ describe("Review: red CI", () => {
       );
     });
 
+    describe("a check that failed both times (#776)", () => {
+      const FIRST_JOB = "https://github.com/acme/shop/actions/runs/7/job/6";
+      const firstAttempt = (step: string): FailureExcerpt =>
+        excerpt("build", {
+          link: FIRST_JOB,
+          steps: [{ name: step, earlier: 0, lines: ["FAIL src/c.test.ts > first attempt's line"] }],
+          annotations: [{ path: "src/c.test.ts", line: 4, message: "Error: connect ECONNREFUSED 127.0.0.1:5432" }],
+        });
+      const failedAgain = (overrides: Partial<Extract<LoopEvent, { kind: "required-checks-finished" }>>) =>
+        planFor(
+          redChecks({ failed: ["build"], rerun: { outside: [], failedAgain: ["build"], flaky: [], refused: null }, ...overrides }),
+          snapshotOfPullRequest(aPullRequest()),
+          kitConfig(),
+        );
+
+      it("shows the re-run's excerpt in full, then the first attempt's failed step and annotations with none of its log lines, and that the same step failed both times", () => {
+        const verdict = verdictOf(failedAgain({ excerpts: [{ ...excerpt("build"), firstAttempt: firstAttempt("Run pnpm test") }] }));
+
+        expect(verdict).toContain(
+          [
+            `- \`build\` ([the job](${JOB}))`,
+            "",
+            "  The step `Run pnpm test` failed. The end of its log:",
+            "",
+            "  ```text",
+            "  FAIL src/a.test.ts > adds",
+            "  ##[error]Process completed with exit code 1.",
+            "  ```",
+            "",
+            "  Its error annotations:",
+            "",
+            "  - `src/a.test.ts`, line 12:",
+            "",
+            "    ```text",
+            "    AssertionError: expected 3 to be 4",
+            "    ```",
+            "",
+            `  Its first attempt, before the Kit re-ran it ([the job](${FIRST_JOB})): the step \`Run pnpm test\` failed. Its error annotations:`,
+            "",
+            "  - `src/c.test.ts`, line 4:",
+            "",
+            "    ```text",
+            "    Error: connect ECONNREFUSED 127.0.0.1:5432",
+            "    ```",
+            "",
+            "  The same step, `Run pnpm test`, failed both times.",
+          ].join("\n"),
+        );
+        expect(verdict).not.toContain("first attempt's line");
+      });
+
+      it("names both steps when they differ", () => {
+        const verdict = verdictOf(failedAgain({ excerpts: [{ ...excerpt("build"), firstAttempt: firstAttempt("Start the database") }] }));
+
+        expect(verdict).toContain("  Different steps failed: `Start the database` the first time, and `Run pnpm test` on the re-run.");
+      });
+
+      it("says why the first attempt couldn't be read, and still shows the re-run's excerpt", () => {
+        const unread: FailureExcerpt = { kind: "unread", check: "build", link: FIRST_JOB, why: "GitHub refused the read: 403" };
+        const verdict = verdictOf(failedAgain({ excerpts: [{ ...excerpt("build"), firstAttempt: unread }] }));
+
+        expect(verdict).toContain("  The step `Run pnpm test` failed. The end of its log:");
+        expect(verdict).toContain(`  Its first attempt, before the Kit re-ran it ([the job](${FIRST_JOB})), couldn't be read: GitHub refused the read: 403.`);
+        expect(verdict).not.toContain("both times");
+      });
+
+      it("shows one attempt and no same-step line for a check that wasn't re-run, as when GitHub refused", () => {
+        const verdict = verdictOf(
+          planFor(
+            redChecks({ failed: ["build"], rerun: { outside: [], failedAgain: [], flaky: [], refused: "the workflow run is past its first attempt" }, excerpts: [excerpt("build")] }),
+            snapshotOfPullRequest(aPullRequest()),
+            kitConfig(),
+          ),
+        );
+
+        expect(verdict).toContain("  The step `Run pnpm test` failed. The end of its log:");
+        expect(verdict).not.toContain("first attempt,");
+        expect(verdict).not.toContain("both times");
+        expect(verdict).not.toContain("Different steps");
+      });
+    });
+
     it("says under each check that its failure couldn't be read when the Review passed out no excerpt, and the Execution flaw still lands", () => {
       const plan = planFor(redChecks({ failed: ["build", "lint"] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 

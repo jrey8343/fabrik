@@ -5,7 +5,7 @@ import type { ChangedPath } from "../guard/trust-root.ts";
 import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
-import type { FailureExcerpt } from "../review/failureExcerpt.ts";
+import type { CheckExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
@@ -382,10 +382,12 @@ export type LoopEvent =
       readonly rerun?: RerunReport;
       /**
        * The latest Failure excerpt the Review read of each red check, an outside
-       * service's among them (#775, #777): the re-run's for one that failed again, else the first
-       * wait's. A check with none here couldn't be read; absent, none could.
+       * service's among them (#775, #777): the re-run's for one that failed
+       * again, with the first wait's beside it as its first attempt (#776),
+       * else the first wait's. A check with none here couldn't be read;
+       * absent, none could.
        */
-      readonly excerpts?: readonly FailureExcerpt[];
+      readonly excerpts?: readonly CheckExcerpt[];
       /** The Review run, linked from the Verdict comment. */
       readonly runUrl: string;
     }
