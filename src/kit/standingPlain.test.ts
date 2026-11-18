@@ -32,7 +32,7 @@ describe("a Plain pull request's Standing", () => {
   it("is yours to merge for a Kit bump out of draft, merging cleanly, with every Required check passed: no place, never stopping work, never Stuck", () => {
     expect(standingsIn({ plainPullRequests: [aPlainPullRequest()] })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: null,
         pullRequest: 70,
@@ -178,7 +178,7 @@ describe("a Plain pull request's Standing", () => {
     it("is the issue's own Standing while issue 12 is open and has one, carrying both numbers and the name the pull request would have had", () => {
       expect(standingsIn({ openIssues: [handedOver], plainPullRequests: [pairing({ draft: true })] })).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 12,
           pullRequest: 80,
@@ -200,7 +200,7 @@ describe("a Plain pull request's Standing", () => {
     it("takes yours to merge, with the mark off, once the pull request is ready", () => {
       expect(standingsIn({ openIssues: [handedOver], plainPullRequests: [pairing()] })).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 12,
           pullRequest: 80,

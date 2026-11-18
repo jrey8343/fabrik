@@ -205,7 +205,7 @@ function aRawIssue(overrides: Record<string, unknown> = {}): Record<string, unkn
     labels: { nodes: [] },
     comments: { nodes: [] },
     timelineItems: { nodes: [] },
-    blockedBy: { nodes: [] },
+    blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
     ...overrides,
   };
 }
@@ -328,6 +328,7 @@ describe("the gather of the store", () => {
         labelEvents: [{ label: "ready-for-human", action: "labeled", actor: "fabrik-app[bot]", at: "2026-11-08T10:00:00Z" }],
         subIssues: [],
         blockers: [],
+        hiddenBlockers: 0,
       },
     ]);
   });
@@ -343,9 +344,25 @@ describe("the gather of the store", () => {
     const standingOf = async (blockers: ReturnType<typeof blockedBy>) => rowsOf(await storeFactsFrom({ issues: [issue(blockers)] }), null, null, null, NOW).map(({ standing }) => standing);
 
     expect(await standingOf(blockedBy("OPEN", null))).toEqual([
-      expect.objectContaining({ repo: RUN_STORE_REPO, issue: 12, work: "ready-for-human", name: "blocked", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T10:00:00Z", detail: { blockers: [11] } }),
+      expect.objectContaining({ repo: RUN_STORE_REPO, issue: 12, work: "ready-for-human", name: "blocked", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T10:00:00Z", detail: { blockers: [{ repo: RUN_STORE_REPO, number: 11 }], hiddenBlockers: 0 } }),
     ]);
     expect(await standingOf(blockedBy("CLOSED", "COMPLETED"))).toEqual([expect.objectContaining({ issue: 12, name: "yours-to-do", yours: true, since: "2026-11-08T10:00:00Z" })]);
+  });
+
+  it("makes a ready-for-human issue there blocked by an open issue in another repo, or a hidden one, blocked (#771)", async () => {
+    const issue = (blockedBy: unknown[], hidden: number) =>
+      aRawIssue({
+        labels: { nodes: [{ name: "ready-for-human" }] },
+        timelineItems: { nodes: [{ __typename: "LabeledEvent", createdAt: "2026-11-08T10:00:00Z", actor: APP, label: { name: "ready-for-human" } }] },
+        blockedBy: { nodes: blockedBy },
+        issueDependenciesSummary: { blockedBy: blockedBy.length + hidden },
+      });
+    const standingOf = async (raw: ReturnType<typeof issue>) => rowsOf(await storeFactsFrom({ issues: [raw] }), null, null, null, NOW).map(({ standing }) => standing);
+
+    expect(await standingOf(issue([{ number: 3, state: "OPEN", stateReason: null, repository: { nameWithOwner: "jrey8343/shop" } }], 0))).toEqual([
+      expect.objectContaining({ issue: 12, name: "blocked", yours: false, detail: { blockers: [{ repo: "jrey8343/shop", number: 3 }], hiddenBlockers: 0 } }),
+    ]);
+    expect(await standingOf(issue([], 1))).toEqual([expect.objectContaining({ issue: 12, name: "blocked", yours: false, detail: { blockers: [], hiddenBlockers: 1 } })]);
   });
 
   it("gives a row for an open \"Weekly summary failed\" issue until it is closed", async () => {

@@ -6,6 +6,7 @@
 // the Loop can't disagree, and none can turn Stuck.
 import { dispatchedRunsOf, implementRunsWithoutPullRequestOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
 import { bodyOnlyTouchUpHeadIn, conflictRunInFlightIn } from "../github/threads.ts";
+import { inBlockerOrder } from "../loop/blockers.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { agentPullRequestsByGate, inFlightOf, mergeGateLoadOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
@@ -22,7 +23,7 @@ import {
 } from "../loop/labels.ts";
 import { auditMarksIn, retroMarksIn } from "../loop/markers.ts";
 import { whyNotResearchable } from "../loop/research.ts";
-import { type AgentRole, type DispatchSnapshot, isOfPullRequest } from "../loop/types.ts";
+import { type AgentRole, type DispatchSnapshot, isOfPullRequest, type ResearchDecisionSnapshot, type TicketSnapshot } from "../loop/types.ts";
 import { DAY, FAILED_RUNS_A_WEEK, failedInWeek, weekStart } from "../loop/weeklyGate.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type CommentFacts, type LabelEvent, verdictsOn } from "./retroEvidence.ts";
@@ -157,6 +158,7 @@ function dispatchFactsOf({ github, kit }: Pick<StandingFacts, "github" | "kit">)
   const runsInFlight = kit.runsInFlight === "unread" ? null : kit.runsInFlight;
   const runs = runsInFlight === null ? null : dispatchedRunsOf(runsInFlight);
   const snapshot: DispatchSnapshot = {
+    repo: github.repo,
     ...candidates,
     ...agentPullRequestsByGate(github.openPullRequests),
     implementRunsInProgress: runs?.implement ?? 0,
@@ -226,29 +228,32 @@ function slotStandingsOf({ github, kit }: StandingFacts): StandingNamed<"waiting
 }
 
 /**
- * Each `ready-for-agent` Ticket with open blockers, or one closed as not
- * planned, and each research Decision on a live Map with open blockers, as
- * Dispatch reads them: nothing moves it, so the move is nobody's.
+ * Each `ready-for-agent` Ticket and each research Decision on a live Map that
+ * a Blocker holds, open or closed as not planned, in any repo, or hidden in a
+ * repo the Fabrik App can't read, as Dispatch reads them: nothing moves it,
+ * so the move is nobody's.
  */
 function blockedStandingsOf({ github, kit }: StandingFacts): StandingNamed<"blocked">[] {
   const candidates = kit?.dispatch?.candidates ?? { tickets: [], researchDecisions: [] };
-  const blocked = (number: number, blockers: readonly number[], decision: boolean): StandingNamed<"blocked">[] => {
+  const blocked = (
+    { number, openBlockers, notPlannedBlockers, hiddenBlockers }: TicketSnapshot | ResearchDecisionSnapshot,
+    decision: boolean,
+  ): StandingNamed<"blocked">[] => {
+    if (openBlockers.length + notPlannedBlockers.length + hiddenBlockers === 0) return [];
     const since = readySince(github.openIssues, number, decision);
     if (since === null) return [];
     return [
       {
         ...inFlight(github.repo, number, null, since, decision ? "research-decision" : "ticket", decision ? null : "implement", { role: decision ? "research" : "implement", on: "issue" }, "nobody"),
         name: "blocked",
-        detail: { blockers: [...new Set(blockers)].sort((a, b) => a - b) },
+        detail: { blockers: inBlockerOrder([...openBlockers, ...notPlannedBlockers]), hiddenBlockers },
       },
     ];
   };
   return [
-    ...candidates.tickets
-      .filter((ticket) => ticket.open && ticket.labels.includes(READY_FOR_AGENT) && ticket.subIssues === 0)
-      .flatMap((ticket) => blocked(ticket.number, [...ticket.openBlockers, ...ticket.notPlannedBlockers], false)),
-    ...candidates.researchDecisions.filter((decision) => decision.open && whyNotResearchable(decision) === null).flatMap((decision) => blocked(decision.number, decision.openBlockers, true)),
-  ].filter(({ detail }) => detail.blockers.length > 0);
+    ...candidates.tickets.filter((ticket) => ticket.open && ticket.labels.includes(READY_FOR_AGENT) && ticket.subIssues === 0).flatMap((ticket) => blocked(ticket, false)),
+    ...candidates.researchDecisions.filter((decision) => decision.open && whyNotResearchable(decision) === null).flatMap((decision) => blocked(decision, true)),
+  ];
 }
 
 /** When an open issue got `ready-for-agent`, or `wayfinder:research` for a research Decision, or was opened with it; null when it isn't among the open issues. */

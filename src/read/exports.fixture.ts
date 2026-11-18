@@ -205,6 +205,15 @@ const A_MERGED_TICKET = {
   closedByPullRequestsReferences: { nodes: [A_MERGED_PULL_REQUEST] },
 };
 
+/** Issue 9, `ready-for-human`, blocked by issue 3 of `a/b` and one issue the Fabrik App can't read (#771). */
+export const A_BLOCKED_ISSUE = anOpenIssue({
+  number: 9,
+  title: "Sign the contract",
+  labels: ["ready-for-human"],
+  blockers: [{ repo: "a/b", number: 3 }],
+  hiddenBlockers: 1,
+});
+
 /** Ticket 7, `ready-for-agent`, given `agent:implement` on 2026-11-08 at 19:20, with no run started on it since. */
 const A_TICKET_WAITING = anOpenIssue({
   number: 7,
@@ -215,7 +224,7 @@ const A_TICKET_WAITING = anOpenIssue({
 
 /** Ticket 7's Standing, its Implement run asked for and not started, as the rule kept it. */
 const A_KEPT_STANDING = {
-  schema: 1,
+  schema: 2,
   repo: "owner/product",
   issue: 7,
   pullRequest: null,
@@ -594,7 +603,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     ),
   standingsOf: () =>
     standingsOf(
-      standingFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
+      standingFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING, A_BLOCKED_ISSUE] }) }),
       NOW,
     ),
   stuckBarMinutes: () =>

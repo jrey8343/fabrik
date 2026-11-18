@@ -374,6 +374,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
         labelEvents: [],
         subIssues: [],
         blockers: [],
+        hiddenBlockers: 0,
       },
     ]);
   });
@@ -394,7 +395,7 @@ describe("Gathering a Product repo's GitHub facts", () => {
     ]);
   });
 
-  describe("an open issue's blockers (#770)", () => {
+  describe("an open issue's blockers (#770, #771)", () => {
     /** A blocked-by edge to issue `number` in `repo`, as GitHub answers it. */
     const edge = (number: number, state: string, stateReason: string | null, nameWithOwner = "jrey8343/shop") => ({
       number,
@@ -403,24 +404,27 @@ describe("Gathering a Product repo's GitHub facts", () => {
       repository: { nameWithOwner },
       labels: { nodes: [] },
     });
-    const readyForHuman = (number: number, blockers: unknown[]) =>
+    /** A ready-for-human issue with these visible blocked-by edges, and as many open blockers in all as GitHub's summary says: by default, the open ones it could see. */
+    const readyForHuman = (number: number, blockers: ReturnType<typeof edge>[], openInAll = blockers.filter(({ state }) => state === "OPEN").length) =>
       aRawIssue({
         number,
         labels: { nodes: [{ name: "ready-for-human" }] },
         timelineItems: { nodes: [aRawLabelEvent("ready-for-human", "2026-11-01T00:00:00Z", OPERATOR)] },
         blockedBy: { nodes: blockers },
+        issueDependenciesSummary: { blockedBy: openInAll },
       });
 
-    it("asks for each blocker's state, why it is in that state and its repo", async () => {
+    it("asks for up to 50 blockers' state, why each is in that state and its repo, and how many open blockers GitHub counts", async () => {
       const queries: string[] = [];
       const github = repoWith({});
       await gatherGitHubFacts({ graphql: (query, variables) => (queries.push(query), github.graphql(query, variables)) }, repo, NOW, OPERATOR.login);
 
       const openIssues = queries.find((query) => query.includes("issues(states: OPEN, first: 25"));
-      expect(openIssues).toMatch(/blockedBy\(first: \d+\) \{ nodes \{ number state stateReason repository \{ nameWithOwner \}/);
+      expect(openIssues).toMatch(/blockedBy\(first: 50\) \{ nodes \{ number state stateReason repository \{ nameWithOwner \}/);
+      expect(openIssues).toContain("issueDependenciesSummary { blockedBy }");
     });
 
-    it("keeps the ones in its repo that are open or closed as not planned, and none closed as completed or duplicate or in another repo", async () => {
+    it("keeps the ones in any repo that are open or closed as not planned, by repo then number, and none closed as completed or duplicate", async () => {
       const github = repoWith({
         openIssues: [
           readyForHuman(20, [
@@ -429,23 +433,49 @@ describe("Gathering a Product repo's GitHub facts", () => {
             edge(5, "CLOSED", "COMPLETED"),
             edge(6, "CLOSED", "DUPLICATE"),
             edge(7, "OPEN", null, "jrey8343/elsewhere"),
-            edge(8, "OPEN", null, "JRey8343/Shop"),
+            edge(3, "CLOSED", "NOT_PLANNED", "a/b"),
+            edge(2, "CLOSED", "COMPLETED", "a/b"),
           ]),
         ],
       });
 
       const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
-      expect(facts.openIssues.map(({ number, blockers }) => [number, blockers])).toEqual([[20, [9, 4, 8]]]);
+      expect(facts.openIssues.map(({ number, blockers, hiddenBlockers }) => ({ number, blockers, hiddenBlockers }))).toEqual([
+        {
+          number: 20,
+          blockers: [
+            { repo: "a/b", number: 3 },
+            { repo: "jrey8343/elsewhere", number: 7 },
+            { repo: "jrey8343/shop", number: 4 },
+            { repo: "jrey8343/shop", number: 9 },
+          ],
+          hiddenBlockers: 0,
+        },
+      ]);
     });
 
-    it("makes the Kit's own Standing of a ready-for-human issue blocked while a blocker is open or closed as not planned, and yours to do once none is", async () => {
+    it("counts as hidden each open blocker GitHub counts that the read couldn't see, as in a repo the Fabrik App can't read", async () => {
+      const github = repoWith({
+        openIssues: [readyForHuman(20, [edge(9, "OPEN", null), edge(4, "CLOSED", "NOT_PLANNED")], 3), readyForHuman(21, [], 1)],
+      });
+
+      const facts = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
+
+      expect(facts.openIssues.map(({ number, blockers, hiddenBlockers }) => ({ number, blockers, hiddenBlockers }))).toEqual([
+        { number: 20, blockers: [{ repo: "jrey8343/shop", number: 4 }, { repo: "jrey8343/shop", number: 9 }], hiddenBlockers: 2 },
+        { number: 21, blockers: [], hiddenBlockers: 1 },
+      ]);
+    });
+
+    it("makes the Kit's own Standing of a ready-for-human issue blocked while a blocker in any repo is open or closed as not planned, or one is hidden, and yours to do once none is", async () => {
       const github = repoWith({
         openIssues: [
           readyForHuman(20, [edge(9, "OPEN", null)]),
           readyForHuman(21, [edge(4, "CLOSED", "NOT_PLANNED")]),
-          readyForHuman(22, [edge(5, "CLOSED", "COMPLETED"), edge(6, "CLOSED", "DUPLICATE")]),
+          readyForHuman(22, [edge(5, "CLOSED", "COMPLETED"), edge(6, "CLOSED", "DUPLICATE"), edge(2, "CLOSED", "COMPLETED", "a/b")]),
           readyForHuman(23, [edge(7, "OPEN", null, "jrey8343/elsewhere")]),
+          readyForHuman(24, [], 1),
         ],
       });
 
@@ -456,7 +486,8 @@ describe("Gathering a Product repo's GitHub facts", () => {
         { issue: 20, name: "blocked", yours: false, since: "2026-11-01T00:00:00Z" },
         { issue: 21, name: "blocked", yours: false, since: "2026-11-01T00:00:00Z" },
         { issue: 22, name: "yours-to-do", yours: true, since: "2026-11-01T00:00:00Z" },
-        { issue: 23, name: "yours-to-do", yours: true, since: "2026-11-01T00:00:00Z" },
+        { issue: 23, name: "blocked", yours: false, since: "2026-11-01T00:00:00Z" },
+        { issue: 24, name: "blocked", yours: false, since: "2026-11-01T00:00:00Z" },
       ]);
     });
   });
@@ -1013,6 +1044,7 @@ function aRawIssue(overrides: Record<string, unknown> = {}) {
     comments: { nodes: [] },
     timelineItems: { nodes: [] },
     blockedBy: { nodes: [] },
+    issueDependenciesSummary: { blockedBy: 0 },
     subIssues: { nodes: [] },
     ...overrides,
   };

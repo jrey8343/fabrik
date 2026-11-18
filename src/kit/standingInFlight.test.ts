@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
+import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, issueRef, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
 import {
   aComment,
   aLabelAdded,
@@ -23,6 +23,9 @@ import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
 
+/** Issue `number` of `owner/product`, the repo these Standings are of. */
+const here = (number: number) => issueRef(number, "owner/product");
+
 /** `owner/product`'s Kit, on the default Kit config, with nothing for Dispatch to weigh and these runs in flight. */
 function aKit(runsInFlight: readonly RunInFlightFact[] | "unread", overrides: Partial<RepoKitFacts> = {}): RepoKitFacts {
   return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: { candidates: { tickets: [], researchDecisions: [] } }, runsInFlight, headChecks: {}, ...overrides };
@@ -43,7 +46,7 @@ describe("work that goes on without the Operator", () => {
       const standings = standingsIn({ openIssues: [ticket(7)] }, aKit([aRunInFlight({ issue: 7, createdAt: "2026-11-08T19:20:00Z" })]));
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 7,
           pullRequest: null,
@@ -212,7 +215,7 @@ describe("work that goes on without the Operator", () => {
         const standings = standingsIn({ openIssues: [ticket(7)], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }, aKit([checks]));
         expect(standings).toEqual([
           {
-            schema: 1,
+            schema: 2,
             repo: "owner/product",
             issue: 7,
             pullRequest: 50,
@@ -284,7 +287,7 @@ describe("work that goes on without the Operator", () => {
         const standings = standingsIn({ openIssues: [ticket(7)], kitIssues: [carrier([implement])] }, null);
         expect(standings).toEqual([
           {
-            schema: 1,
+            schema: 2,
             repo: "owner/product",
             issue: 7,
             pullRequest: null,
@@ -325,7 +328,7 @@ describe("work that goes on without the Operator", () => {
         const heldTicket = ticket(7, ["ready-for-agent", "agent:implement"]);
         const standings = standingsIn(
           { openIssues: [heldTicket, anOpenIssue({ number: 8, labels: ["ready-for-agent", "ready-for-human"] })], kitIssues: [carrier([implement, { ...implement, issue: 8 }])] },
-          aKit([aRunInFlight()], { dispatch: { candidates: { tickets: [aTicket({ number: 7, labels: ["ready-for-agent"], openBlockers: [3] })], researchDecisions: [] } } }),
+          aKit([aRunInFlight()], { dispatch: { candidates: { tickets: [aTicket({ number: 7, labels: ["ready-for-agent"], openBlockers: [here(3)] })], researchDecisions: [] } } }),
         );
         expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([
           { issue: 8, name: "yours-to-do" },
@@ -355,7 +358,7 @@ describe("work that goes on without the Operator", () => {
         const standings = givenUpIn({ audits: [failedAudit(96, "2026-11-08T02:05:00Z"), failedAudit(95, "2026-11-08T00:05:00Z"), run(90, "Audit", "2026-11-01T00:05:00Z", auditBody(AUDITED_SHA))] });
         expect(standings).toEqual([
           {
-            schema: 1,
+            schema: 2,
             repo: "owner/product",
             issue: 96,
             pullRequest: null,
@@ -411,7 +414,7 @@ describe("work that goes on without the Operator", () => {
           openIssues: [ticket(7, ["ready-for-agent", "agent:implement"]), ticket(8), ticket(9), anOpenIssue({ number: 13, labels: ["ready-for-human"] })],
           kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 8, label: "agent:implement" }])],
         },
-        aKit("unread", { dispatch: { candidates: { tickets: [aTicket({ number: 9, openBlockers: [3] })], researchDecisions: [] } } }),
+        aKit("unread", { dispatch: { candidates: { tickets: [aTicket({ number: 9, openBlockers: [here(3)] })], researchDecisions: [] } } }),
       );
       expect(standings.map(({ issue, name }) => ({ issue, name })).toSorted((a, b) => (a.issue ?? 0) - (b.issue ?? 0))).toEqual([
         { issue: 8, name: "held" },
@@ -435,7 +438,7 @@ describe("work that goes on without the Operator", () => {
       );
       expect(standings.filter(({ issue }) => issue === 14)).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 14,
           pullRequest: null,
@@ -542,7 +545,7 @@ describe("work that goes on without the Operator", () => {
       );
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 21,
           pullRequest: null,
@@ -563,11 +566,11 @@ describe("work that goes on without the Operator", () => {
   });
 
   describe("blocked", () => {
-    it("gives a ready-for-agent Ticket with open blockers one Standing, blocked, the move nobody's, naming its blockers", () => {
-      const standings = standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14, openBlockers: [9, 3] }]));
+    it("gives a ready-for-agent Ticket with open blockers one Standing, blocked, the move nobody's, naming its blockers by repo", () => {
+      const standings = standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14, openBlockers: [here(9), issueRef(2, "a/b"), here(3)] }]));
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 14,
           pullRequest: null,
@@ -581,7 +584,7 @@ describe("work that goes on without the Operator", () => {
           stuckAt: null,
           awaits: { role: "implement", on: "issue" },
           subscription: null,
-          detail: { blockers: [3, 9] },
+          detail: { blockers: [issueRef(2, "a/b"), here(3), here(9)], hiddenBlockers: 0 },
         },
       ]);
     });
@@ -590,12 +593,31 @@ describe("work that goes on without the Operator", () => {
       const decision = anOpenIssue({ number: 16, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", readyAt)] });
       const standings = standingsIn(
         { openIssues: [ready(14), decision] },
-        aKit([], { dispatch: { candidates: { tickets: [aTicket({ number: 14, notPlannedBlockers: [5] })], researchDecisions: [aResearchDecision({ number: 16, openBlockers: [4] })] } } }),
+        aKit([], { dispatch: { candidates: { tickets: [aTicket({ number: 14, notPlannedBlockers: [here(5)] })], researchDecisions: [aResearchDecision({ number: 16, openBlockers: [here(4)] })] } } }),
       );
       expect(standings.map(({ issue, work, name, move, detail }) => ({ issue, work, name, move, detail }))).toEqual([
-        { issue: 14, work: "ticket", name: "blocked", move: "nobody", detail: { blockers: [5] } },
-        { issue: 16, work: "research-decision", name: "blocked", move: "nobody", detail: { blockers: [4] } },
+        { issue: 14, work: "ticket", name: "blocked", move: "nobody", detail: { blockers: [here(5)], hiddenBlockers: 0 } },
+        { issue: 16, work: "research-decision", name: "blocked", move: "nobody", detail: { blockers: [here(4)], hiddenBlockers: 0 } },
       ]);
+    });
+
+    it("blocks a research Decision on a blocker closed as not planned, as a Ticket (#771)", () => {
+      const decision = anOpenIssue({ number: 16, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", readyAt)] });
+      const standings = standingsIn({ openIssues: [decision] }, aKit([], { dispatch: { candidates: { tickets: [], researchDecisions: [aResearchDecision({ number: 16, notPlannedBlockers: [here(5)] })] } } }));
+      expect(standings.map(({ issue, name, detail }) => ({ issue, name, detail }))).toEqual([{ issue: 16, name: "blocked", detail: { blockers: [here(5)], hiddenBlockers: 0 } }]);
+    });
+
+    it("blocks a Ticket or research Decision on hidden blockers alone, those in repos the Fabrik App can't read (#771)", () => {
+      const decision = anOpenIssue({ number: 16, labels: ["wayfinder:research"], labelEvents: [aLabelAdded("wayfinder:research", readyAt)] });
+      const standings = standingsIn(
+        { openIssues: [ready(14), decision] },
+        aKit([], { dispatch: { candidates: { tickets: [aTicket({ number: 14, hiddenBlockers: 1 })], researchDecisions: [aResearchDecision({ number: 16, hiddenBlockers: 2 })] } } }),
+      );
+      expect(standings.map(({ issue, name, detail }) => ({ issue, name, detail }))).toEqual([
+        { issue: 14, name: "blocked", detail: { blockers: [], hiddenBlockers: 1 } },
+        { issue: 16, name: "blocked", detail: { blockers: [], hiddenBlockers: 2 } },
+      ]);
+      expect(wordStanding(standings[0]!, "2026-11-08T20:00:00Z", "UTC").sentence).toBe("Blocked by 1 issue the Fabrik App can't read.");
     });
 
     it("gives a Ticket with no open blocker none", () => {
@@ -608,7 +630,7 @@ describe("work that goes on without the Operator", () => {
       const spec = anOpenIssue({ number: 3, labels: ["ready-for-agent", "agent:implement"], subIssues: [14], labelEvents: [aLabelAdded("ready-for-agent", readyAt)] });
       const standings = standingsIn(
         { openIssues: [spec, ready(14)], kitIssues: [aWeeklyLimitIssue(null, [{ role: "implement", issue: 3, label: "agent:implement" }])] },
-        dispatching([{ number: 3, subIssues: 1, openBlockers: [2] }, { number: 14, openBlockers: [2] }], {}, [aRunInFlight()]),
+        dispatching([{ number: 3, subIssues: 1, openBlockers: [here(2)] }, { number: 14, openBlockers: [here(2)] }], {}, [aRunInFlight()]),
       );
       expect(standings.map(({ issue, name }) => ({ issue, name }))).toEqual([{ issue: 14, name: "blocked" }]);
     });
@@ -664,10 +686,18 @@ describe("work that goes on without the Operator", () => {
       expect(words(design, 21).sentence).toBe("Waiting for a Design session slot for 2 days.");
     });
 
-    it("names the blockers", () => {
-      const standings = standingsIn({ openIssues: [ready(14), ready(15)] }, dispatching([{ number: 14, openBlockers: [9, 3] }, { number: 15, openBlockers: [4] }]));
+    it("names the blockers: this repo's by number, first, another repo's by repo, and the hidden ones counted, last", () => {
+      const standings = standingsIn(
+        { openIssues: [ready(14), ready(15), ready(16)] },
+        dispatching([
+          { number: 14, openBlockers: [here(9), here(3)] },
+          { number: 15, openBlockers: [issueRef(4, "jrey8343/fabrik")] },
+          { number: 16, openBlockers: [issueRef(3, "a/b")], notPlannedBlockers: [here(12)], hiddenBlockers: 2 },
+        ]),
+      );
       expect(words(standings, 14)).toEqual({ pill: "Blocked", sentence: "Blocked by #3 and #9.", remedy: null });
-      expect(words(standings, 15).sentence).toBe("Blocked by #4.");
+      expect(words(standings, 15).sentence).toBe("Blocked by jrey8343/fabrik#4.");
+      expect(words(standings, 16).sentence).toBe("Blocked by #12, a/b#3 and 2 issues the Fabrik App can't read.");
     });
   });
 });

@@ -106,7 +106,7 @@ describe("work the Kit hands back", () => {
     const standings = standingsIn({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"], comments: [infrastructureFailure("2026-11-08T19:59:00Z")] })] });
     expect(standings).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: null,
@@ -214,7 +214,7 @@ describe("work the Kit hands back", () => {
     });
 
     it("a Ticket handed back with ready-for-human stays the Operator's, naming its hand-back, though it has blockers: the Kit's notice asks a move of them (#770)", () => {
-      const ticket = anOpenIssue({ number: 7, labels: ["ready-for-human"], comments: [said(stopTicketOf({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: false }, aPullRequest({ number: 50, ticket: 7, open: false, ticketLabels: ["ready-for-agent"] }), "operator"))], labelEvents: [readyForHuman], blockers: [3] });
+      const ticket = anOpenIssue({ number: 7, labels: ["ready-for-human"], comments: [said(stopTicketOf({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: false }, aPullRequest({ number: 50, ticket: 7, open: false, ticketLabels: ["ready-for-agent"] }), "operator"))], labelEvents: [readyForHuman], blockers: [{ repo: "owner/product", number: 3 }], hiddenBlockers: 1 });
       expect(standingsIn({ openIssues: [ticket] })).toEqual([expect.objectContaining({ issue: 7, name: "yours-to-do", yours: true, detail: expect.objectContaining({ handBack: "closed-by-hand" }) })]);
     });
 
@@ -349,7 +349,7 @@ describe("the wording of work handed back", () => {
   const SINCE = "2026-11-08T12:00:00Z";
   const FORTY_MINUTES_ON = "2026-11-08T12:40:00Z";
   const handedBack = (handBack: HandBack, role: AgentRole | null, label: string | null, failure: string | null = null): Standing => ({
-    schema: 1,
+    schema: 2,
     repo: "owner/product",
     issue: 7,
     pullRequest: 50,

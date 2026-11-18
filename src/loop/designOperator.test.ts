@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, aTicket, dispatchSnapshotOf, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { closingCommentText } from "./design.ts";
 import { planFor } from "./rules.ts";
 import type { Action, Plan } from "./types.ts";
 
@@ -236,7 +237,7 @@ describe("Landing a live Design session that ended with an Operator brief", () =
 function closingComment(plan: Plan): string {
   const close = plan.kind === "act" ? plan.actions.find((action) => action.kind === "close-as-superseded") : undefined;
   if (close?.kind !== "close-as-superseded") throw new Error("the plan doesn't close the issue as superseded");
-  return close.comment.map((part) => (typeof part === "string" ? part : `<${part.created}>`)).join("");
+  return closingCommentText(close.comment, "acme/shop", (part) => `<${part.created}>`);
 }
 
 function created(plan: Plan): Extract<Action, { kind: "create-issue" }>[] {

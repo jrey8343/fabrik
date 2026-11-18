@@ -20,6 +20,6 @@ A `ready-for-human` issue, a Map, or a grilling, prototype or task Decision bloc
 
 ## Not covered
 
-- A blocker in another repo doesn't count yet ([#771](https://github.com/jrey8343/fabrik/issues/771)).
+- A blocker in another repo doesn't count yet ([#771](https://github.com/jrey8343/fabrik/issues/771), whose notes are [a blocker in any repo, named by its repo](cross-repo-blockers.md)).
 - The Console still folds a Decision under its Map. Listing an unblocked Decision of a blocked Map in its own row is jrey8343/fabrik-console#50.
 - A Ticket's and a research Decision's blocked rules are as they were.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aReading, acceptedBody, aReplayIssue, baseOf, replaySlice, requestBody } from "../__fixtures__/replay.ts";
-import { aResearchDecision, aTicket, kitConfig, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
+import { aResearchDecision, aTicket, issueRef, kitConfig, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
 import { aRunRecord } from "../read/builders.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { type ReplayCandidate, replayMarksIn } from "../kit/replay.ts";
@@ -64,7 +64,7 @@ describe("The scheduled tick's replay step", () => {
     });
 
     it.each([
-      ["blocked", aTicket({ number: 31, openBlockers: [30] })],
+      ["blocked", aTicket({ number: 31, openBlockers: [issueRef(30)] })],
       ["already dispatched", aTicket({ number: 31, labels: ["enhancement", "ready-for-agent", "agent:implement"] })],
       ["building in an open PR", aTicket({ number: 31, openLinkedPullRequests: [60] })],
       ["a Spec", aTicket({ number: 31, subIssues: 3 })],
