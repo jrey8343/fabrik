@@ -4,6 +4,7 @@
 // alone", by ADR-0011's own path.
 import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import { fixBroughtTo } from "./conflicts.ts";
 import { flakyCheckIssueMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Action, ClosedCheckIssue, ConflictCandidate, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
@@ -247,6 +248,28 @@ describe("the tick's conflict check, catching a close the issue-closed event mis
     const pushed: LoopEvent = { kind: "main-pushed", head: MAIN };
 
     expect(rebasesIn(planFor(pushed, ticking([BEHIND], [CLOSED_SINCE], { closedCheckIssues: null }), kitConfig()))).toEqual([]);
+  });
+});
+
+describe("the record a later rule reads of this move (#785)", () => {
+  const mark = (outcome: "rebased" | "conflict-run" | "held-main", headSha = HEAD_SHA) => ({ headSha, main: MAIN, outcome, fixes: [{ check: "e2e", issue: 12 }] });
+
+  it("says a head is the one the Kit brought the fix to, once the head moved past a rebase or a conflict-only run", () => {
+    const old = "b".repeat(40);
+
+    expect(fixBroughtTo(heldAtGate({ checkFixMarks: [mark("rebased", old)] }), "e2e")).toEqual({ issue: 12, outcome: "rebased" });
+    expect(fixBroughtTo(heldAtGate({ checkFixMarks: [mark("conflict-run", old)] }), "e2e")).toEqual({ issue: 12, outcome: "conflict-run" });
+  });
+
+  it("says so of a head that already held main's head when the issue closed", () => {
+    expect(fixBroughtTo(heldAtGate({ checkFixMarks: [mark("held-main")] }), "e2e")).toEqual({ issue: 12, outcome: "held-main" });
+  });
+
+  it("says nothing of a head the fix wasn't brought to: none recorded, another check's, or a conflict-only run that never pushed", () => {
+    expect(fixBroughtTo(heldAtGate(), "e2e")).toBeNull();
+    expect(fixBroughtTo(heldAtGate({ checkFixMarks: [mark("held-main")] }), "lint")).toBeNull();
+    expect(fixBroughtTo(heldAtGate({ checkFixMarks: [mark("conflict-run")] }), "e2e")).toBeNull();
+    expect(fixBroughtTo(heldAtGate({ checkFixMarks: [mark("held-main", "b".repeat(40))] }), "e2e")).toBeNull();
   });
 });
 

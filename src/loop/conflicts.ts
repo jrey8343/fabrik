@@ -505,6 +505,23 @@ function fixBroughtIn(
   ];
 }
 
+/**
+ * Whether the Kit brought the fix for `check` to this PR's head (#784), as
+ * the Operator's mention reads it (#785): its latest record for the check
+ * was of a rebase or a conflict-only run and the head has moved since, or
+ * the head is the one that already held main's head when the check's issue
+ * closed as completed. The check's issue and how it went; null otherwise, as
+ * when a conflict-only run ended without a push.
+ */
+export function fixBroughtTo(pullRequest: PullRequestSnapshot, check: string): { readonly issue: number; readonly outcome: CheckFixMark["outcome"] } | null {
+  const mark = pullRequest.checkFixMarks.findLast(({ fixes }) => fixes.some((fix) => fix.check === check));
+  if (mark === undefined) return null;
+  const onHead = mark.headSha === pullRequest.headSha;
+  if (mark.outcome === "held-main" ? !onHead : onHead) return null;
+  const issue = mark.fixes.find((fix) => fix.check === check)?.issue as number;
+  return { issue, outcome: mark.outcome };
+}
+
 /** Issue numbers as a note lists them: `#12`, `#12 and #13`, `#12, #13 and #14`. */
 function issueList(issues: readonly number[]): string {
   const refs = issues.map((issue) => `#${issue}`);

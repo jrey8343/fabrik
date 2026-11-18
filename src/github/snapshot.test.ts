@@ -26,7 +26,7 @@ import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { changedTestsSection } from "../loop/changedTests.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, flakyCheckMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER, verdictMarker } from "../loop/markers.ts";
+import { checkFixMarker, DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, flakyCheckIssueMarker, flakyCheckMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER, verdictMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import {
@@ -2638,7 +2638,7 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
       labels: { nodes: [{ name: "fabrik:usage-credits" }] },
       comments: { nodes: comments },
     });
-    const isClosedCarriersQuery = (query: string) => query.includes("states: CLOSED") && query.includes("filterBy: { since: $since }") && !query.includes("stateReason");
+    const isClosedCarriersQuery = (query: string) => query.includes("states: CLOSED") && query.includes("filterBy: { since: $since }") && !query.includes("closedAt stateReason");
 
     /** The read-only API, answering the closed-Carrier read with these nodes, the rest as githubWith does. */
     function closedCarriersGitHub(nodes: unknown[], hasNextPage = false, targets: Record<number, unknown> = {}) {
@@ -3730,6 +3730,131 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
 
     expect(snapshot?.conflicts ?? null).toBeNull();
     expect(reads()).toBe(0);
+  });
+
+  describe("for a check's fix (#784)", () => {
+    const pass = verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA, unrelated: ["e2e"] });
+    const held = (number: number, kit: string[] = []) =>
+      node(number, "MERGEABLE", {
+        comments: { pageInfo: { hasPreviousPage: false }, nodes: [pass, ...kit].map((body) => ({ body: `${body}\nSaid.`, createdAt: "2026-11-18T08:00:00Z", author: { __typename: "Bot" } })) },
+      });
+    const checkIssue = {
+      repository: {
+        ...issueData(12).repository,
+        issue: { ...issueData(12).repository.issue, state: "CLOSED", author: { login: "fabrik-app[bot]", __typename: "Bot" }, body: `${flakyCheckIssueMarker("e2e")}\nThe check.` },
+      },
+    };
+
+    /** A GitHub with these open PRs and the check's issue #12, answering a comparison of main with a PR's head as `behindBy` says. */
+    function githubFor(nodes: unknown[], behindBy: Record<string, number> = {}) {
+      const compared: string[] = [];
+      const github = {
+        [ANSWERS_CONFLICTS]: true,
+        async graphql(query: string) {
+          if (isConflictsQuery(query)) return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } };
+          if (query.includes("issue(number: $number)")) return checkIssue;
+          const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+          return { repository: { owner: { login: "acme" }, defaultBranchRef: null, issues: none, pullRequests: none } };
+        },
+        async rest(method: string, path: string) {
+          const match = /^\/repos\/acme\/shop\/compare\/([0-9a-f]{40})\.\.\.([0-9a-f]{40})$/.exec(path);
+          if (method !== "GET" || match === null) throw new Error(`Unexpected call: ${path}`);
+          compared.push(`${match[1]}...${match[2]}`);
+          const behind = behindBy[match[2] as string];
+          if (behind === undefined) throw new GitHubError("GitHub GET compare failed: 404", 404);
+          return { behind_by: behind };
+        },
+      } as unknown as GitHub;
+      return { github, compared };
+    }
+
+    const COMPLETED: LoopEvent = { kind: "issue-closed", issue: 12, stateReason: "completed" };
+
+    it("gathers the open agent PRs when a check's issue closes as completed, and whether each held one already holds main's head", async () => {
+      const { github, compared } = githubFor([held(50), node(51, "MERGEABLE")], { [HEAD_SHA]: 0 });
+
+      const snapshot = await gatherSnapshot(github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(compared).toEqual([`${"d".repeat(40)}...${HEAD_SHA}`]);
+      expect(snapshot.conflicts?.pullRequests.map(({ pullRequest, holdsMain }) => [pullRequest.number, holdsMain])).toEqual([
+        [50, true],
+        [51, undefined],
+      ]);
+    });
+
+    it("reads a PR as not holding main's head when it's behind, and as unknown when the comparison can't be read", async () => {
+      const behind = await gatherSnapshot(githubFor([held(50)], { [HEAD_SHA]: 3 }).github, repo, COMPLETED, null, APP_LOGIN);
+      const unread = await gatherSnapshot(githubFor([held(50)]).github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(behind.conflicts?.pullRequests[0]?.holdsMain).toBe(false);
+      expect(unread.conflicts?.pullRequests[0]?.holdsMain).toBeNull();
+    });
+
+    it.each([["not-planned" as const], [null]])("gathers none when the issue closed as %s", async (stateReason) => {
+      const snapshot = await gatherSnapshot(githubFor([held(50)]).github, repo, { kind: "issue-closed", issue: 12, stateReason }, null, APP_LOGIN);
+
+      expect(snapshot.conflicts).toBeNull();
+    });
+
+    it("reads, on a tick, the check's issues the App filed that closed in the last week, newest close first, with why each closed", async () => {
+      const app = { login: "fabrik-app[bot]", __typename: "Bot" };
+      const closed = (number: number, closedAt: string, stateReason: string, author: unknown = app, check = "e2e") => ({
+        number,
+        body: `${flakyCheckIssueMarker(check)}\nThe check.`,
+        closedAt,
+        stateReason,
+        author,
+      });
+      const asked: Record<string, unknown>[] = [];
+      const { github: base } = githubReading([[]]);
+      const github = {
+        ...base,
+        async graphql(query: string, variables: Record<string, unknown>) {
+          if (!query.includes("closedAt stateReason")) return base.graphql(query, variables);
+          asked.push(variables);
+          return {
+            repository: {
+              issues: {
+                nodes: [
+                  closed(20, "2026-11-17T09:00:00Z", "NOT_PLANNED", app, "lint"),
+                  closed(21, "2026-11-18T09:00:00Z", "COMPLETED"),
+                  closed(22, "2026-11-18T09:30:00Z", "COMPLETED", { login: "mallory", __typename: "User" }),
+                  closed(23, "2026-11-01T09:00:00Z", "COMPLETED"),
+                  { ...closed(24, "2026-11-18T09:00:00Z", "COMPLETED"), body: "No marker." },
+                ],
+              },
+            },
+          };
+        },
+      } as unknown as GitHub;
+
+      const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-18T10:17:00Z" }, null, "fabrik-app[bot]");
+
+      expect(asked).toEqual([expect.objectContaining({ labels: ["fabrik:flaky-check"], since: "2026-11-11T10:17:00.000Z" })]);
+      expect(snapshot.closedCheckIssues).toEqual([
+        { number: 21, check: "e2e", closedAt: "2026-11-18T09:00:00Z", stateReason: "completed" },
+        { number: 20, check: "lint", closedAt: "2026-11-17T09:00:00Z", stateReason: "not-planned" },
+      ]);
+    });
+
+    it("reads no closed check's issue for any event but the tick", async () => {
+      const snapshot = await gatherSnapshot(githubFor([held(50)], { [HEAD_SHA]: 0 }).github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(snapshot.closedCheckIssues).toBeNull();
+    });
+
+    it("reads the Kit's records of bringing a PR up to date for a check's fix, under an attempt marker or on their own", async () => {
+      const rebased = checkFixMarker({ headSha: "b".repeat(40), main: "8".repeat(40), outcome: "rebased", fixes: [{ check: "e2e", issue: 12 }] });
+      const heldMain = checkFixMarker({ headSha: HEAD_SHA, main: "d".repeat(40), outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] });
+      const { github } = githubFor([held(50, [`<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\n${rebased}`, heldMain])], { [HEAD_SHA]: 0 });
+
+      const snapshot = await gatherSnapshot(github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(snapshot.conflicts?.pullRequests[0]?.pullRequest.checkFixMarks).toEqual([
+        { headSha: "b".repeat(40), main: "8".repeat(40), outcome: "rebased", fixes: [{ check: "e2e", issue: 12 }] },
+        { headSha: HEAD_SHA, main: "d".repeat(40), outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] },
+      ]);
+    });
   });
 
   it("pages past the first open PRs, so an agent PR behind others' isn't missed (#341)", async () => {

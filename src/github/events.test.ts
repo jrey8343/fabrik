@@ -192,6 +192,18 @@ describe("A pull request closing", () => {
   });
 });
 
+describe("An issue closing", () => {
+  it("says why GitHub says it closed, so only a check's issue closed as completed brings its fix in (#784)", () => {
+    const closed = (state_reason: unknown) => loopEventFrom("issues", { action: "closed", issue: { number: 12, state_reason } });
+
+    expect(closed("completed")).toEqual({ kind: "issue-closed", issue: 12, stateReason: "completed" });
+    expect(closed("not_planned")).toEqual({ kind: "issue-closed", issue: 12, stateReason: "not-planned" });
+    expect(closed("duplicate")).toEqual({ kind: "issue-closed", issue: 12, stateReason: "duplicate" });
+    expect(closed(null)).toEqual({ kind: "issue-closed", issue: 12, stateReason: null });
+    expect(loopEventFrom("issues", { action: "closed", issue: { number: 12 } })).toEqual({ kind: "issue-closed", issue: 12, stateReason: null });
+  });
+});
+
 describe("A comment on an issue", () => {
   it("is still an issue comment", () => {
     const payload = {
