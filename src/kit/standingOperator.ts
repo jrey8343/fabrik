@@ -5,6 +5,7 @@
 // with their neighbours, the question that waits on someone else and a
 // weekly limit the Kit rides out on another Subscription.
 import { researchRunFailedIn } from "../github/threads.ts";
+import { inBlockerOrder } from "../loop/blockers.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import { earliestOf, resetsAtOf } from "../loop/kitIssueMarks.ts";
 import {
@@ -116,12 +117,12 @@ function readingMatterOf({ repo, openAudits, openRetros, openReplays, openIssues
       });
       const mapSince = lastAdded(map.labelEvents, MAP_LABEL) ?? map.createdAt;
       return [
-        map.blockers.length > 0
+        isBlocked(map)
           ? blockedStandingOf(map, repo, "map", mapSince)
-          : reading(map.number, "map", mapSince, null, decisions.filter(({ issue }) => issue.blockers.length === 0).map(({ issue }) => issue.number)),
+          : reading(map.number, "map", mapSince, null, decisions.filter(({ issue }) => !isBlocked(issue)).map(({ issue }) => issue.number)),
         ...decisions.map(({ issue, label }) => {
           const since = lastAdded(issue.labelEvents, label) ?? issue.createdAt;
-          return issue.blockers.length > 0 ? blockedStandingOf(issue, repo, "operator-decision", since) : reading(issue.number, "operator-decision", since, map.number, []);
+          return isBlocked(issue) ? blockedStandingOf(issue, repo, "operator-decision", since) : reading(issue.number, "operator-decision", since, map.number, []);
         }),
       ];
     }),
@@ -252,11 +253,11 @@ export function answerOf(issue: OpenIssueFacts): string | null {
 /**
  * An open issue labelled `ready-for-human`: the Operator's to do, with no
  * place on the Loop, since it got the label, or was opened with it; or, while
- * an issue of its repo blocks it, blocked since then, nobody's move (#770).
+ * a Blocker holds it, blocked since then, nobody's move (#770, #771).
  */
 export function readyForHumanStandingOf(issue: OpenIssueFacts, repo: string, _now: string): StandingNamed<"yours-to-do" | "blocked"> {
   const since = lastAdded(issue.labelEvents, READY_FOR_HUMAN) ?? issue.createdAt;
-  if (issue.blockers.length > 0) return blockedStandingOf(issue, repo, "ready-for-human", since);
+  if (isBlocked(issue)) return blockedStandingOf(issue, repo, "ready-for-human", since);
   return {
     ...theOperators(repo, issue.number, null, since),
     work: "ready-for-human",
@@ -266,11 +267,16 @@ export function readyForHumanStandingOf(issue: OpenIssueFacts, repo: string, _no
   };
 }
 
+/** Whether a Blocker holds this open issue: one its read could see, or one hidden in a repo the Fabrik App can't read (#771). */
+function isBlocked(issue: OpenIssueFacts): boolean {
+  return issue.blockers.length > 0 || issue.hiddenBlockers > 0;
+}
+
 /**
  * The Operator's own work on `issue` while it has blockers: nothing can be
  * done on it until they close, so the move is nobody's and it stops no work.
  * It stands so since `since`, the time it would stand the Operator's without
- * them, carrying its blockers once each, lowest first, as a Ticket's are.
+ * them, carrying its blockers and its hidden ones, as a Ticket's are.
  */
 function blockedStandingOf(issue: OpenIssueFacts, repo: string, work: "ready-for-human" | "map" | "operator-decision", since: string): StandingNamed<"blocked"> {
   return {
@@ -281,7 +287,7 @@ function blockedStandingOf(issue: OpenIssueFacts, repo: string, work: "ready-for
     work,
     place: null,
     name: "blocked",
-    detail: { blockers: [...new Set(issue.blockers)].sort((a, b) => a - b) },
+    detail: { blockers: inBlockerOrder(issue.blockers), hiddenBlockers: issue.hiddenBlockers },
   };
 }
 

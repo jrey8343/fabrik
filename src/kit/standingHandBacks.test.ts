@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { PAST_HAND_BACK_NOTICES } from "../__fixtures__/handBackWordings.ts";
-import { aPullRequest } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aRunInFlight, aWeeklyLimitIssue, factsOf, standingFactsOf } from "../read/builders.ts";
 import { conflictRunEnded, requestChangesRunEnded } from "../loop/conflicts.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import { stopTicketOf } from "../loop/handClosing.ts";
 import { stopForGoneKeptBranch } from "../loop/keptBranch.ts";
-import { handBackMarker } from "../loop/markers.ts";
+import { handBackMarker, handBackMarkIn } from "../loop/markers.ts";
 import { unstartedRetry } from "../loop/retry.ts";
+import { planFor } from "../loop/rules.ts";
 import type { Action, AgentRole } from "../loop/types.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { landingFailureReport, pushLanding } from "./landingFailure.ts";
@@ -23,6 +24,22 @@ describe("reading which hand-back a notice is", () => {
   it("reads the hidden line, wherever it is", () => {
     const body = ["<!-- fabrik:implement-run-failed -->", "@operator The Implement run on #7 failed: it crashed.", "", handBackMarker({ kind: "infrastructure-failure", role: "implement", failure: "crash" })].join("\n");
     expect(handBackOfNotice(body)).toEqual({ kind: "infrastructure-failure", role: "implement", failure: "crash" });
+  });
+
+  // #772: a notice on the Ticket's PR names the PR's number, and reads as the same hand-back, by its hidden line or, without it, by its opening.
+  it("reads a failure notice posted on the Ticket's PR, by its hidden line and by its opening alone", () => {
+    const plan = planFor(
+      { kind: "agent-run-failed", role: "review", issue: 7, runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1", jobResult: "failure", secretsStep: "success", report: { failure: "missing-output", detail: "" } },
+      snapshotOf(anIssue({ number: 7, openPullRequests: [12] })),
+      kitConfig(),
+    );
+    const notice = plan.kind === "act" ? plan.actions.find((action) => action.kind === "comment") : undefined;
+    if (notice?.kind !== "comment") throw new Error("expected the failure notice");
+
+    expect(notice).toMatchObject({ issue: 12, body: expect.stringContaining("The Review run on #12 failed:") });
+    expect(handBackOfNotice(notice.body)).toEqual({ kind: "infrastructure-failure", role: "review", failure: "missing-output" });
+    const unmarked = notice.body.split("\n").filter((line) => handBackMarkIn(line) === null).join("\n");
+    expect(handBackOfNotice(unmarked)).toEqual({ kind: "infrastructure-failure", role: "review" });
   });
 
   it.each(PAST_HAND_BACK_NOTICES.map((notice) => [notice.release, notice.handBack, notice.role ?? "no role", notice] as const))(
@@ -89,7 +106,7 @@ describe("work the Kit hands back", () => {
     const standings = standingsIn({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"], comments: [infrastructureFailure("2026-11-08T19:59:00Z")] })] });
     expect(standings).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: null,
@@ -197,7 +214,7 @@ describe("work the Kit hands back", () => {
     });
 
     it("a Ticket handed back with ready-for-human stays the Operator's, naming its hand-back, though it has blockers: the Kit's notice asks a move of them (#770)", () => {
-      const ticket = anOpenIssue({ number: 7, labels: ["ready-for-human"], comments: [said(stopTicketOf({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: false }, aPullRequest({ number: 50, ticket: 7, open: false, ticketLabels: ["ready-for-agent"] }), "operator"))], labelEvents: [readyForHuman], blockers: [3] });
+      const ticket = anOpenIssue({ number: 7, labels: ["ready-for-human"], comments: [said(stopTicketOf({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: false }, aPullRequest({ number: 50, ticket: 7, open: false, ticketLabels: ["ready-for-agent"] }), "operator"))], labelEvents: [readyForHuman], blockers: [{ repo: "owner/product", number: 3 }], hiddenBlockers: 1 });
       expect(standingsIn({ openIssues: [ticket] })).toEqual([expect.objectContaining({ issue: 7, name: "yours-to-do", yours: true, detail: expect.objectContaining({ handBack: "closed-by-hand" }) })]);
     });
 
@@ -332,7 +349,7 @@ describe("the wording of work handed back", () => {
   const SINCE = "2026-11-08T12:00:00Z";
   const FORTY_MINUTES_ON = "2026-11-08T12:40:00Z";
   const handedBack = (handBack: HandBack, role: AgentRole | null, label: string | null, failure: string | null = null): Standing => ({
-    schema: 1,
+    schema: 2,
     repo: "owner/product",
     issue: 7,
     pullRequest: 50,

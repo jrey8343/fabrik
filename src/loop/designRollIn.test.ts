@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aNamedPullRequest, anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { aNamedPullRequest, anIssue, issueRef, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { landedNothingContext } from "../agent/design.ts";
 import { replySchemaOf } from "../agent/launch.ts";
 import { countLandedNothing, currentDesignSessionIn, designSessionOf, designTurnFailedIn, pendingPrototypeIn, unansweredPrototypesIn } from "../github/threads.ts";
@@ -73,7 +73,7 @@ describe("What a Roll-in's closing comment ends with", () => {
   const NOT_SENT = "Nothing has been sent to #42. The Operator sends this Roll-in with a Request changes on #42 that carries this text and names this issue, #7.";
 
   it("on a Ticket under a Spec, closes it the same way and says which Tickets stay blocked by it", () => {
-    const ticket = inSession({ parent: 3, openBlocking: [8, 9] });
+    const ticket = inSession({ parent: 3, openBlocking: [issueRef(8), issueRef(9)] });
     const plan = land(rollIn, naming(ticket));
     if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
     const [comment, ...rest] = plan.actions;
@@ -214,7 +214,7 @@ describe("A Roll-in onto a pull request that can't take one", () => {
 
 describe("What settling a Roll-in touches", () => {
   it("notifies nobody", () => {
-    const plan = land(rollIn, snapshotOf(inSession({ openBlocking: [8] }), { operator: "jrey", namedPullRequests: [openAgentPullRequest()] }));
+    const plan = land(rollIn, snapshotOf(inSession({ openBlocking: [issueRef(8)] }), { operator: "jrey", namedPullRequests: [openAgentPullRequest()] }));
 
     expect(plan.kind).toBe("act");
     expect(notificationsOf(plan, "jrey")).toEqual([]);

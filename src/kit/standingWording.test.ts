@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aDesignQueueIssue, aTicket } from "../__fixtures__/snapshots.ts";
+import { aDesignQueueIssue, aTicket, issueRef } from "../__fixtures__/snapshots.ts";
 import {
   aComment,
   aDeploymentsRead,
@@ -263,18 +263,25 @@ describe("the wording of reading matter", () => {
     ]);
   });
 
-  it("says a blocked ready-for-human issue and a blocked Map are blocked by their blockers, as a Ticket is", () => {
+  it("says a blocked ready-for-human issue and a blocked Map are blocked by their blockers, as a Ticket is: another repo's by repo, after this repo's, and hidden ones counted, last", () => {
+    const here = (number: number) => issueRef(number, "owner/product");
     expect(
       words({
         openIssues: [
-          anOpenIssue({ number: 10, labels: ["ready-for-human"], createdAt: SINCE, blockers: [9] }),
-          anOpenIssue({ number: 9, labels: ["wayfinder:map"], createdAt: minutesAfter(1), blockers: [8, 1, 7] }),
+          anOpenIssue({ number: 10, labels: ["ready-for-human"], createdAt: SINCE, blockers: [here(9)] }),
+          anOpenIssue({ number: 9, labels: ["wayfinder:map"], createdAt: minutesAfter(1), blockers: [here(8), here(1), here(7)] }),
+          anOpenIssue({ number: 11, labels: ["ready-for-human"], createdAt: minutesAfter(2), blockers: [issueRef(3, "a/b"), here(12)], hiddenBlockers: 2 }),
+          anOpenIssue({ number: 13, labels: ["ready-for-human"], createdAt: minutesAfter(3), blockers: [issueRef(770, "jrey8343/fabrik"), here(12)], hiddenBlockers: 1 }),
+          anOpenIssue({ number: 14, labels: ["ready-for-human"], createdAt: minutesAfter(4), hiddenBlockers: 1 }),
         ],
         openMaps: [9],
       }),
     ).toEqual([
       { pill: "Blocked", sentence: "Blocked by #9.", remedy: null },
       { pill: "Blocked", sentence: "Blocked by #1, #7 and #8.", remedy: null },
+      { pill: "Blocked", sentence: "Blocked by #12, a/b#3 and 2 issues the Fabrik App can't read.", remedy: null },
+      { pill: "Blocked", sentence: "Blocked by #12, jrey8343/fabrik#770 and 1 issue the Fabrik App can't read.", remedy: null },
+      { pill: "Blocked", sentence: "Blocked by 1 issue the Fabrik App can't read.", remedy: null },
     ]);
   });
 });

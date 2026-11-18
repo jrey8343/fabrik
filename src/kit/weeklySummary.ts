@@ -4,6 +4,7 @@
 // model call.
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
+import type { IssueRef } from "../loop/blockers.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import {
   DISPATCH_LABEL,
@@ -103,12 +104,17 @@ export interface OpenIssueFacts {
   /** Its sub-issues, open or closed, by number: a Map's Decisions, or a Spec's Tickets. */
   readonly subIssues: readonly number[];
   /**
-   * The issues that block it, by number, as GitHub's blocked-by edges give
-   * them: those in its own repo that are open or closed as not planned
-   * (ADR-0001, amended in #98). One closed as completed or duplicate, or one
-   * in another repo, is left out.
+   * Its Blockers its read could see, as GitHub's blocked-by edges give them:
+   * the issues in any repo that are open or closed as not planned (ADR-0001,
+   * amended in #98 and #771), each once by repo, then number. One closed as
+   * completed or duplicate is left out.
    */
-  readonly blockers: readonly number[];
+  readonly blockers: readonly IssueRef[];
+  /**
+   * How many more open blockers GitHub counts than its read could see, as in
+   * a repo the Fabrik App can't read: they hold it as any Blocker does (#771).
+   */
+  readonly hiddenBlockers: number;
 }
 
 /** An open `fabrik:monitor` issue, as Held reads the Monitor's held count from it. */

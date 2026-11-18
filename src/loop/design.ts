@@ -45,6 +45,7 @@ import {
   type RollInText,
   SESSION_FINISHED,
 } from "./markers.ts";
+import { blockersPhrase, hiddenBlockersPhrase, type IssueRef, issueRefName, refsNamedFrom } from "./blockers.ts";
 import { spelled } from "./readable.ts";
 import type { MapCap } from "./mapCap.ts";
 import { withoutMentions } from "./mentions.ts";
@@ -59,6 +60,7 @@ import type {
   IssueSnapshot,
   KitConfig,
   LoopEvent,
+  MovedBlocking,
   NamedPullRequestSnapshot,
   Plan,
   StartingComment,
@@ -356,14 +358,14 @@ function landTurn(
   // Every outcome but a round ends the session and frees its slot, so the next waiting issue can start.
   if (output.kind === "not-planned") {
     // Nothing new is ready, so there is nothing for Dispatch to check.
-    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, notPlannedComment(output.comment, snapshot.issue.openBlocking)), CHECK_DESIGN_QUEUE] };
+    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, notPlannedComment(output.comment, snapshot.issue)), CHECK_DESIGN_QUEUE] };
   }
   if (output.kind === "roll-in") {
     if (named === null) return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the pull request the Roll-in names" };
     const cannot = whyNoRollIn(issueNumber, output.pullRequest, named);
     if (cannot !== null) return wrongOutcome(issueNumber, cannot);
     // The same finish with another comment: the issue's work is to be built on a pull request, which the Kit leaves alone.
-    const comment = rollInComment(issueNumber, output.pullRequest, output, snapshot.issue.openBlocking);
+    const comment = rollInComment(issueNumber, output.pullRequest, output, snapshot.issue);
     return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, comment), CHECK_DESIGN_QUEUE] };
   }
   // The Spec stays the single parent of its work: a Ticket under one splits into
@@ -418,19 +420,23 @@ function closeAsNotPlanned(issueNumber: number, comment: string): Action[] {
 }
 
 /** Nothing to build: the closing comment of a session that finished as not planned, with its reasoning. */
-function notPlannedComment(comment: string, blocking: readonly number[]): string {
+function notPlannedComment(comment: string, issue: Pick<IssueSnapshot, "repo" | "openBlocking">): string {
   return [
     `${SESSION_FINISHED} This issue won't be built, so the Kit closes it as not planned.`,
     "",
     closingNote(comment),
-    ...stillBlockedNote(blocking),
+    ...stillBlockedNote(issue),
   ].join("\n");
 }
 
-/** The lines that end a not-planned closing comment when the issue blocks others: which stay blocked, and until when. None when it blocks nothing. */
-function stillBlockedNote(blocking: readonly number[]): string[] {
+/**
+ * The lines that end a not-planned closing comment when the issue blocks
+ * others, in any repo, this repo's named first: which stay blocked, and until
+ * when. None when it blocks nothing.
+ */
+function stillBlockedNote({ repo, openBlocking: blocking }: Pick<IssueSnapshot, "repo" | "openBlocking">): string[] {
   if (blocking.length === 0) return [];
-  const stillBlocked = blocking.map((issue) => `#${issue}`).join(", ");
+  const stillBlocked = refsNamedFrom(blocking, repo).join(", ");
   return [
     "",
     `${stillBlocked} stay${blocking.length === 1 ? "s" : ""} blocked by it: an issue closed as not planned never lands its work, so Dispatch won't start ${blocking.length === 1 ? "it" : "them"} until the Operator removes the blocked-by edge.`,
@@ -476,9 +482,11 @@ export function rollInNotSentLine(issueNumber: number, pullRequest: number): str
  * neither from the other. The contract refused a text that mentions anyone,
  * so the comment mentions nobody. It goes on the issue only: the Kit puts
  * nothing on the pull request, where a Retry would read it, and sends
- * nothing (ADR-0010).
+ * nothing (ADR-0010). Given the issue, it ends naming the issues it still
+ * blocks, in any repo; without it, as a reader's builder writes one, it
+ * names none.
  */
-export function rollInComment(issueNumber: number, pullRequest: number, text: RollInText, blocking: readonly number[] = []): string {
+export function rollInComment(issueNumber: number, pullRequest: number, text: RollInText, issue: Pick<IssueSnapshot, "repo" | "openBlocking"> | null = null): string {
   return [
     rollInMarker(pullRequest),
     rollInDataLine(text),
@@ -493,7 +501,7 @@ export function rollInComment(issueNumber: number, pullRequest: number, text: Ro
     ...text.acceptanceCriteria.map((criterion) => `- ${criterion.trim()}`),
     "",
     rollInNotSentLine(issueNumber, pullRequest),
-    ...stillBlockedNote(blocking),
+    ...(issue === null ? [] : stillBlockedNote(issue)),
   ].join("\n");
 }
 
@@ -625,17 +633,22 @@ function taskList(steps: readonly string[]): string[] {
 /**
  * Creates these Tickets under `parent`, blockers first so each blocked-by edge
  * points at an issue that exists. They take the superseded issue's place among
- * its blockers: a Ticket nothing else in the outcome blocks takes on the
- * issue's open blockers, and each open issue it blocked then waits on every
- * Ticket no other Ticket waits on, the ones that finish last. The issue's own
- * edges stay, recording what happened once it closes.
+ * its blockers: a Ticket nothing else in the outcome blocks takes on every
+ * Blocker of the issue its snapshot could see, in any repo, one closed as not
+ * planned among them, by its database id, and each open issue it blocked, in
+ * any repo, then waits on every Ticket no other Ticket waits on, the ones that
+ * finish last. GitHub writes an edge only from the blocked issue's side, so
+ * one in a repo the Fabrik App can't write to stays as it is, and the closing
+ * comment names it for the Operator to move by hand, as it does the hidden
+ * blockers it can't carry (#771). The issue's own edges stay, recording what
+ * happened once it closes.
  */
 function ticketActions(
   outcome: readonly SpecTicket[],
   superseded: IssueSnapshot,
   parent: CreatedIssue | number,
   operator: string,
-): { actions: Action[]; created: CreatedIssue[]; moved: (string | CreatedIssue)[] } {
+): { actions: Action[]; created: CreatedIssue[]; moved: (string | CreatedIssue | MovedBlocking)[] } {
   const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
   // The contract has already refused blockers that loop, so there is always an order.
   const tickets = dependencyOrder(outcome) ?? [];
@@ -662,7 +675,7 @@ function ticketActions(
                 labels: ticket.stepUp === true ? [...readyLabels(superseded), STEP_UP_LABEL] : readyLabels(superseded),
               }),
           parent,
-          blockedBy: ticket.blockedBy.length === 0 ? superseded.openBlockers : ticket.blockedBy.map(ticketIssue),
+          blockedBy: ticket.blockedBy.length === 0 ? superseded.blockers : ticket.blockedBy.map(ticketIssue),
         }),
       ),
       ...superseded.openBlocking.flatMap((issue) =>
@@ -670,29 +683,65 @@ function ticketActions(
       ),
     ],
     created: tickets.map((ticket) => ticketIssue(ticket.key)),
-    moved: movedEdges(first, superseded.openBlockers, superseded.openBlocking, last),
+    moved: movedEdges(first, superseded, last),
   };
 }
 
 /**
- * For the closing comment: which blockers the first Tickets took on, and which
- * issues now wait on the last ones. Empty when nothing moved.
+ * For the closing comment: which blockers the first Tickets took on, how many
+ * hidden ones they couldn't, and which issues now wait on the last ones, each
+ * as its edges went (closingCommentText). Empty when nothing moved.
  */
 function movedEdges(
   first: readonly CreatedIssue[],
-  blockers: readonly number[],
-  blocking: readonly number[],
+  { number, repo, blockers, hiddenBlockers, openBlocking }: IssueSnapshot,
   last: readonly CreatedIssue[],
-): (string | CreatedIssue)[] {
-  if (blockers.length === 0 && blocking.length === 0) return [];
-  const issueLinks = (issues: readonly number[]) => issues.map((issue) => `#${issue}`).join(", ");
+): (string | CreatedIssue | MovedBlocking)[] {
+  if (blockers.length === 0 && hiddenBlockers === 0 && openBlocking.length === 0) return [];
+  const them = hiddenBlockers === 1 ? "it" : "them";
   return [
     "\n\nBlocked-by edges moved to the new Tickets:",
     ...(blockers.length === 0
       ? []
-      : ["\n- ", ...commaList(first), ` ${first.length === 1 ? "is" : "are"} now blocked by ${issueLinks(blockers)}.`]),
-    ...blocking.flatMap((issue) => [`\n- #${issue} is now blocked by `, ...commaList(last), "."]),
+      : ["\n- ", ...commaList(first), ` ${first.length === 1 ? "is" : "are"} now blocked by ${blockersPhrase(blockers, 0, repo)}.`]),
+    ...(hiddenBlockers === 0
+      ? []
+      : [
+          `\n- Move by hand: ${hiddenBlockersPhrase(hiddenBlockers)} blocked #${number}, so the Kit couldn't carry ${them}: block `,
+          ...commaList(first),
+          ` by ${them}${blockers.length === 0 ? "" : " too"}.`,
+        ]),
+    ...openBlocking.map((blocking): MovedBlocking => ({ blocking, blockers: last })),
   ];
+}
+
+/**
+ * A close-as-superseded comment as it is posted from `here`, the repo: each
+ * created issue written by `nameOf`, and each issue the superseded one blocked
+ * as now blocked by the new Tickets whose edges GitHub wrote, then, for those
+ * it `refused`, as on an issue in a repo the Fabrik App can't write to, a line
+ * for the Operator to add them by hand.
+ */
+export function closingCommentText(
+  comment: readonly (string | CreatedIssue | MovedBlocking)[],
+  here: string,
+  nameOf: (issue: CreatedIssue) => string,
+  refused: (issue: IssueRef, blocker: CreatedIssue) => boolean = () => false,
+): string {
+  const names = (issues: readonly CreatedIssue[]) => issues.map(nameOf).join(", ");
+  return comment
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!("blocking" in part)) return nameOf(part);
+      const name = issueRefName(part.blocking, here);
+      const written = part.blockers.filter((blocker) => !refused(part.blocking, blocker));
+      const unwritten = part.blockers.filter((blocker) => refused(part.blocking, blocker));
+      return [
+        ...(written.length === 0 ? [] : [`\n- ${name} is now blocked by ${names(written)}.`]),
+        ...(unwritten.length === 0 ? [] : [`\n- Move by hand: block ${name} by ${names(unwritten)}. The Fabrik App can't write a blocked-by edge on ${name}.`]),
+      ].join("");
+    })
+    .join("");
 }
 
 /** Created issues for a comment, separated by commas. */

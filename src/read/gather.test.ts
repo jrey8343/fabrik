@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient, type Repo } from "../github/client.ts";
+import { wordStanding } from "../kit/standingWording.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
 import { aDigestComment, aRollInComment } from "./builders.ts";
 import { type Facts, gatherRepo } from "./gather.ts";
@@ -67,7 +68,7 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       if (query.includes("pullRequests(states: OPEN, first: 25")) return answer({ repository: { pullRequests: page(raw.openPullRequests) } });
       if (query.includes("labels: [$needsDesign]")) return answer({ repository: { owner: { login: "jrey8343" }, issues: page(labelled(variables["needsDesign"])) } });
       // Dispatch's own reads ask more of each issue, which an issue here has none of.
-      const candidate = (issue: Record<string, unknown>) => ({ ...issue, blockedBy: { nodes: [] }, closedByPullRequestsReferences: { nodes: [] }, subIssues: { totalCount: 0 }, assignees: { nodes: [] }, parent: null });
+      const candidate = (issue: Record<string, unknown>) => ({ ...issue, blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 }, closedByPullRequestsReferences: { nodes: [] }, subIssues: { totalCount: 0 }, assignees: { nodes: [] }, parent: null });
       if (query.includes("labels: [$ready]")) return answer({ repository: { owner: { login: "jrey8343" }, issues: page(labelled(variables["ready"]).map(candidate)), pullRequests: { nodes: [] } } });
       if (query.includes("labels: [$research]")) return answer({ repository: { issues: page(labelled(variables["research"]).map(candidate)) } });
       if (query.includes("labels: $labels")) return answer({ repository: { owner: { login: "jrey8343" }, issues: { nodes: [] } } });
@@ -224,9 +225,9 @@ describe("a gather shaped for Home", () => {
       for (const query of await everyQuery()) expect(threeDeepConnectionsIn(query)).toEqual([]);
     });
 
-    it("asks for each open issue's blockers with their state, why they are in it and their repo (#770)", async () => {
+    it("asks for up to 50 of each open issue's blockers with their state, why they are in it and their repo, and how many open blockers GitHub counts (#770, #771)", async () => {
       expect((await everyQuery()).filter((query) => query.includes("issues(states: OPEN, first: 25"))).toEqual([
-        expect.stringMatching(/blockedBy\(first: \d+\) \{ nodes \{ number state stateReason repository \{ nameWithOwner \} \} \}/),
+        expect.stringMatching(/blockedBy\(first: 50\) \{ nodes \{ number state stateReason repository \{ nameWithOwner \} \} \}\s+issueDependenciesSummary \{ blockedBy \}/),
       ]);
     });
 
@@ -283,7 +284,9 @@ describe("a gather shaped for Home", () => {
       expect(facts.github.openIssues.map(({ number }) => number)).toEqual([31, 32]);
     });
 
-    describe("the blockers of each open issue (#770)", () => {
+    describe("the blockers of each open issue (#770, #771)", () => {
+      /** These issues of this repo, as a blocked Standing names them. */
+      const shop = (...numbers: number[]) => numbers.map((number) => ({ repo: "jrey8343/shop", number }));
       /** A blocked-by edge to open issue `number` of this repo, as GitHub answers it. */
       const openBlocker = (number: number) => ({ number, state: "OPEN", stateReason: null, repository: { nameWithOwner: "jrey8343/shop" } });
       const labelled = (number: number, label: string, blockers: readonly number[]) =>
@@ -294,7 +297,7 @@ describe("a gather shaped for Home", () => {
           blockedBy: { nodes: blockers.map(openBlocker) },
         });
 
-      it("hold the ones in the repo, open or closed as not planned", async () => {
+      it("hold the ones in any repo, open or closed as not planned, and the hidden ones", async () => {
         const facts = await factsOf({
           issues: [
             labelled(10, "ready-for-human", []),
@@ -308,14 +311,42 @@ describe("a gather shaped for Home", () => {
                   { number: 3, state: "OPEN", stateReason: null, repository: { nameWithOwner: "jrey8343/elsewhere" } },
                 ],
               },
+              issueDependenciesSummary: { blockedBy: 3 },
             },
           ],
         });
 
-        expect(facts.github.openIssues.map(({ number, blockers }) => [number, blockers])).toEqual([
-          [10, []],
-          [11, [9, 4]],
+        expect(facts.github.openIssues.map(({ number, blockers, hiddenBlockers }) => [number, blockers, hiddenBlockers])).toEqual([
+          [10, [], 0],
+          [
+            11,
+            [
+              { repo: "jrey8343/elsewhere", number: 3 },
+              { repo: "jrey8343/shop", number: 4 },
+              { repo: "jrey8343/shop", number: 9 },
+            ],
+            1,
+          ],
         ]);
+      });
+
+      it("make a ready-for-human issue, a Map and a grilling Decision, each with an open blocker in another repo, blocked rows naming it by repo (#771)", async () => {
+        const elsewhere = { number: 3, state: "OPEN", stateReason: null, repository: { nameWithOwner: "a/b" } };
+        const facts = await factsOf({
+          issues: [
+            { ...labelled(10, "ready-for-human", []), blockedBy: { nodes: [elsewhere] } },
+            { ...labelled(9, "wayfinder:map", []), subIssues: { nodes: [{ number: 11 }] }, blockedBy: { nodes: [elsewhere] } },
+            { ...labelled(11, "wayfinder:grilling", []), blockedBy: { nodes: [elsewhere] } },
+          ],
+        });
+
+        const rows = rowsOf(facts, null, null, null, NOW);
+        expect(rows.map(({ standing: { issue, work, name, yours, detail } }) => ({ issue, work, name, yours, detail })).filter(({ issue }) => [9, 10, 11].includes(issue ?? 0))).toEqual([
+          { issue: 9, work: "map", name: "blocked", yours: false, detail: { blockers: [{ repo: "a/b", number: 3 }], hiddenBlockers: 0 } },
+          { issue: 10, work: "ready-for-human", name: "blocked", yours: false, detail: { blockers: [{ repo: "a/b", number: 3 }], hiddenBlockers: 0 } },
+          { issue: 11, work: "operator-decision", name: "blocked", yours: false, detail: { blockers: [{ repo: "a/b", number: 3 }], hiddenBlockers: 0 } },
+        ]);
+        expect(rows.map(({ standing }) => wordStanding(standing, NOW, "UTC").sentence).filter((sentence) => sentence.startsWith("Blocked"))).toEqual(["Blocked by a/b#3.", "Blocked by a/b#3.", "Blocked by a/b#3."]);
       });
 
       // Shaped like jrey8343/gradually-core's #457, #459, #10 and #9, which stood yours while blocked.
@@ -332,10 +363,10 @@ describe("a gather shaped for Home", () => {
 
         const standings = rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing);
         expect(standings.filter(({ issue }) => [457, 459, 9, 10].includes(issue ?? 0)).map(({ issue, work, name, yours, move, detail }) => ({ issue, work, name, yours, move, detail }))).toEqual([
-          { issue: 9, work: "map", name: "blocked", yours: false, move: "nobody", detail: { blockers: [1, 7, 8] } },
-          { issue: 10, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: [9] } },
-          { issue: 457, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: [453] } },
-          { issue: 459, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: [451, 455, 456] } },
+          { issue: 9, work: "map", name: "blocked", yours: false, move: "nobody", detail: { blockers: shop(1, 7, 8), hiddenBlockers: 0 } },
+          { issue: 10, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: shop(9), hiddenBlockers: 0 } },
+          { issue: 457, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: shop(453), hiddenBlockers: 0 } },
+          { issue: 459, work: "ready-for-human", name: "blocked", yours: false, move: "nobody", detail: { blockers: shop(451, 455, 456), hiddenBlockers: 0 } },
         ]);
         expect(standings.filter(({ name }) => name === "yours-to-do" || name === "yours-to-read")).toEqual([]);
       });
@@ -707,7 +738,7 @@ function aRawIssue(overrides: Record<string, unknown> = {}): Record<string, unkn
     labels: { nodes: [] },
     comments: { nodes: [] },
     timelineItems: { nodes: [] },
-    blockedBy: { nodes: [] },
+    blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
     subIssues: { nodes: [] },
     ...overrides,
   };

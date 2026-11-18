@@ -3,11 +3,13 @@ import {
   anIssue,
   aPullRequest,
   HEAD_SHA,
+  issueRef,
   kitConfig,
   notificationsOf,
   snapshotOf,
   snapshotOfPullRequest,
 } from "../__fixtures__/snapshots.ts";
+import { closingCommentText } from "./design.ts";
 import { roundLineIn, withoutRoundLines } from "./roundLine.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, VerdictRecord } from "./types.ts";
@@ -280,7 +282,7 @@ function commentsOf(plan: Plan): string[] {
     action.kind === "comment"
       ? [action.body]
       : action.kind === "close-as-superseded"
-        ? [action.comment.map((part) => (typeof part === "string" ? part : "#?")).join("")]
+        ? [closingCommentText(action.comment, "acme/shop", () => "#?")]
         : action.kind === "comment-linking"
           ? [action.body.map((part) => (typeof part === "string" ? part : "#?")).join("")]
           : [],
@@ -370,7 +372,7 @@ describe("The Design session after a Ticket comes back names the Operator commen
     ["not planned", notPlanned],
   ])("ends the closing comment of %s with the comments it weighed", (_, output) => {
     // returnedTicket blocks #12, so the split's moved edges and not-planned's note both come before the section.
-    const plan = planFor(turnNaming(output, ["conversation-3"]), snapshotOf({ ...returnedTicket, openBlocking: [12] }), kitConfig());
+    const plan = planFor(turnNaming(output, ["conversation-3"]), snapshotOf({ ...returnedTicket, openBlocking: [issueRef(12)] }), kitConfig());
 
     const closing = commentsOf(plan).filter((body) => body.includes("**Design session finished.**"));
     expect(closing).toHaveLength(1);

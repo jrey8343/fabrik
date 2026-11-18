@@ -7,6 +7,7 @@ import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { CheckExcerpt, FailureExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
+import type { IssueRef } from "./blockers.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
@@ -672,6 +673,8 @@ export interface PendingPrototype extends PrototypeRequestMarker {
 
 /** An issue as the core sees it, gathered fresh by the GitHub adapter. */
 export interface IssueSnapshot {
+  /** Its repo, `owner/name`, from which an issue there is named by number alone. */
+  readonly repo: string;
   readonly number: number;
   /** Its title as it stands: a research Decision's line in its Map's Decisions so far names it by this (src/loop/researchLanding.ts). */
   readonly title: string;
@@ -772,10 +775,16 @@ export interface IssueSnapshot {
    * agent:implement for the run after while its own push job is still running.
    */
   readonly runsWithOutcome: readonly number[];
-  /** The open issues blocking it, by GitHub's native issue dependencies. */
-  readonly openBlockers: readonly number[];
-  /** The open issues it blocks. */
-  readonly openBlocking: readonly number[];
+  /**
+   * Its Blockers its read could see, by GitHub's native issue dependencies:
+   * the issues in any repo that are open or closed as not planned, each once
+   * by repo, then number, with its database id, which a blocked-by edge takes.
+   */
+  readonly blockers: readonly ExistingIssue[];
+  /** How many more open blockers GitHub counts than its read could see, as in a repo the Fabrik App can't read (#771). */
+  readonly hiddenBlockers: number;
+  /** The open issues it blocks, in any repo, each once by repo, then number. */
+  readonly openBlocking: readonly IssueRef[];
 }
 
 /** An Implement run on a Ticket whose push job hasn't finished (#725). */
@@ -1362,10 +1371,12 @@ export interface TicketSnapshot {
   readonly number: number;
   readonly open: boolean;
   readonly labels: readonly string[];
-  /** The issues blocking it that are still open. */
-  readonly openBlockers: readonly number[];
-  /** The issues blocking it that closed as not planned: their work never landed, so they still block it. */
-  readonly notPlannedBlockers: readonly number[];
+  /** The issues blocking it, in any repo, that are still open. */
+  readonly openBlockers: readonly IssueRef[];
+  /** The issues blocking it, in any repo, that closed as not planned: their work never landed, so they still block it. */
+  readonly notPlannedBlockers: readonly IssueRef[];
+  /** How many more open blockers GitHub counts than its read could see, as in a repo the Fabrik App can't read: they block it too (#771). */
+  readonly hiddenBlockers: number;
   /** How many sub-issues it has, open or closed. Any at all make it a Spec. */
   readonly subIssues: number;
   /** The open pull requests linked to close it. */
@@ -1400,8 +1411,12 @@ export interface ResearchDecisionSnapshot {
   readonly labels: readonly string[];
   /** The logins it's assigned to: the Operator assigning themselves claims it, as in `/wayfinder`. */
   readonly assignees: readonly string[];
-  /** The issues blocking it that are still open. */
-  readonly openBlockers: readonly number[];
+  /** The issues blocking it, in any repo, that are still open. */
+  readonly openBlockers: readonly IssueRef[];
+  /** The issues blocking it, in any repo, that closed as not planned: they block it as they do a Ticket (#771). */
+  readonly notPlannedBlockers: readonly IssueRef[];
+  /** How many more open blockers GitHub counts than its read could see, as in a repo the Fabrik App can't read: they block it too (#771). */
+  readonly hiddenBlockers: number;
   /** Its parent, which must be an open Map, or null when it isn't a sub-issue. */
   readonly parentIssue: ParentIssueSnapshot | null;
   /**
@@ -1414,6 +1429,8 @@ export interface ResearchDecisionSnapshot {
 
 /** What a Dispatch check needs: the Tickets it may release and the work already in flight. */
 export interface DispatchSnapshot {
+  /** The repo, `owner/name`, whose blockers Dispatch names by number alone. */
+  readonly repo: string;
   /** Every open `ready-for-agent` issue, in any order. */
   readonly tickets: readonly TicketSnapshot[];
   /** The open agent PRs in draft, by number: Ticket work in flight, each holding a max_in_flight slot. */
@@ -1914,6 +1931,22 @@ export interface CreatedIssue {
   readonly created: string;
 }
 
+/** An issue that already exists, in any repo, with its database id, which a blocked-by edge takes. */
+export interface ExistingIssue extends IssueRef {
+  readonly databaseId: number;
+}
+
+/**
+ * A line of a closing comment for an issue the superseded one blocked: the
+ * new issues it now waits on, written by earlier `add-blocked-by` actions in
+ * the plan. An edge GitHub refused to write, as on an issue in a repo the
+ * Fabrik App isn't installed on, is named for the Operator to add by hand.
+ */
+export interface MovedBlocking {
+  readonly blocking: IssueRef;
+  readonly blockers: readonly CreatedIssue[];
+}
+
 /** A comment an earlier `comment` action with a `key` in the same plan posts, linked by its URL. */
 export interface PostedComment {
   readonly posted: string;
@@ -1931,8 +1964,8 @@ export type Action =
       readonly labels: readonly Label[];
       /** The issue it becomes a sub-issue of: one created earlier in the plan, or an existing issue by its number. */
       readonly parent: CreatedIssue | number | null;
-      /** The issues blocking it: each one created earlier in the plan, or an existing issue by its number. */
-      readonly blockedBy: readonly (CreatedIssue | number)[];
+      /** The issues blocking it: each one created earlier in the plan, or an existing issue in any repo. */
+      readonly blockedBy: readonly (CreatedIssue | ExistingIssue)[];
       /** Who it is assigned to when it is created; none when left out. */
       readonly assignees?: readonly string[];
     }
@@ -1940,13 +1973,19 @@ export type Action =
       /** Comments on an issue, then closes it as completed: another issue now carries its work. */
       readonly kind: "close-as-superseded";
       readonly issue: number;
-      /** The comment's Markdown, with each created issue written as its `#number`. */
-      readonly comment: readonly (string | CreatedIssue)[];
+      /** The comment's Markdown, with each created issue written as its `#number`, and each moved blocked-by edge as it went. */
+      readonly comment: readonly (string | CreatedIssue | MovedBlocking)[];
     }
   | {
-      /** Makes an existing issue wait on one created earlier in the plan, by a blocked-by edge. */
+      /**
+       * Makes an existing issue, in any repo, wait on one created earlier in
+       * the plan, by a blocked-by edge. GitHub writes an edge only from the
+       * blocked issue's side, so on an issue in another repo the Fabrik App
+       * can't write to, GitHub's refusal is kept for the closing comment
+       * (MovedBlocking) and the plan goes on.
+       */
       readonly kind: "add-blocked-by";
-      readonly issue: number;
+      readonly issue: IssueRef;
       readonly blocker: CreatedIssue;
     }
   | { readonly kind: "add-labels"; readonly issue: number; readonly labels: readonly Label[] }

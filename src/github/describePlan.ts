@@ -54,10 +54,10 @@ export function actionPhrase(action: Action): string {
           : `, a sub-issue of ${typeof action.parent === "number" ? `#${action.parent}` : action.parent.created}`,
         action.blockedBy.length === 0
           ? ""
-          : `, blocked by ${action.blockedBy.map((b) => (typeof b === "number" ? `#${b}` : b.created)).join(", ")}`,
+          : `, blocked by ${action.blockedBy.map((b) => ("databaseId" in b ? `${b.repo}#${b.number}` : b.created)).join(", ")}`,
       ].join("");
     case "add-blocked-by":
-      return `make #${action.issue} blocked by ${action.blocker.created}`;
+      return `make ${action.issue.repo}#${action.issue.number} blocked by ${action.blocker.created}`;
     case "comment-on-created":
       return `comment on ${action.on.created}`;
     case "close-as-superseded":

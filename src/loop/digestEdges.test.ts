@@ -208,9 +208,9 @@ function onKitIssues(plan: Plan): Action[] {
   );
 }
 
-/** The same actions, with a run named as a Digest run's notice names its own. */
+/** The same actions, with a run named as a Digest run's notice names its own: by the PR its line is on (#772). */
 function namingTheDigestRun(actions: readonly Action[]): Action[] {
-  return JSON.parse(JSON.stringify(actions).replaceAll("The Implement run on #7", "The Digest run on #7")) as Action[];
+  return JSON.parse(JSON.stringify(actions).replaceAll("The Implement run on #7", "The Digest run on #50")) as Action[];
 }
 
 /** The issue a plan opened, as the adapter would later read it back once GitHub gave it this number. */
@@ -243,7 +243,7 @@ describe("The Digest: a failure that stalls the whole repo", () => {
     const open = kitIssueOpenedBy(failedOn(refused(), [], kitConfig()), 40);
     const plan = failedOn(refused(), [open], kitConfig());
 
-    expect(onKitIssues(plan)).toEqual([{ kind: "comment", issue: 40, body: `The Digest run on #7 stalled on the limit too. [The run](${RUN})` }]);
+    expect(onKitIssues(plan)).toEqual([{ kind: "comment", issue: 40, body: `The Digest run on #50 stalled on the limit too. [The run](${RUN})` }]);
     expect(onKitIssues(plan)).toEqual(namingTheDigestRun(onKitIssues(implementFailedOn(refused(), [open], kitConfig()))));
   });
 

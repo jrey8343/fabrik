@@ -109,6 +109,21 @@ describe("The Rotate the Claude token issue", () => {
 
     expect(notificationsOf(later)).toEqual([]);
   });
+
+  // #772: an Implement run on a Ticket with an open PR posts its notice there, and the issue names the same number.
+  it("names a later run whose notice goes to the Ticket's PR by the PR's number", () => {
+    const rotation = kitIssueOpenedBy(planFor(deadToken(7), snapshotOf(anIssue({ number: 7 })), kitConfig()), 40);
+
+    const plan = planFor({ ...deadToken(8), role: "implement" }, snapshotOf(anIssue({ number: 8, openPullRequests: [12] }), { kitIssues: [rotation] }), kitConfig());
+
+    expect(plan).toMatchObject({
+      kind: "act",
+      actions: expect.arrayContaining([
+        { kind: "comment", issue: 12, body: expect.stringMatching(/^<!-- fabrik:implement-run-failed -->\nThe Implement run on #12 failed: the Claude token was refused/) },
+        { kind: "comment", issue: 40, body: `The Implement run on #12 was refused too. [The run](${RUN})` },
+      ]),
+    });
+  });
 });
 
 describe("The dead-token issue names the Subscription whose vault item needs rotating", () => {
@@ -215,7 +230,7 @@ describe("Each failure event yields at most one notification mechanism", () => {
 
 const RESETS_AT = "2026-11-09T04:00:00.000Z";
 
-function weeklyLimit(issue = 7, resetsAt: string | null = RESETS_AT): LoopEvent {
+function weeklyLimit(issue = 7, resetsAt: string | null = RESETS_AT): Extract<LoopEvent, { kind: "agent-run-failed" }> {
   return {
     kind: "agent-run-failed",
     role: "implement",
@@ -232,6 +247,21 @@ function weeklyLimit(issue = 7, resetsAt: string | null = RESETS_AT): LoopEvent 
 }
 
 describe("The weekly-limit issue", () => {
+  // #772: the run's notice is on PR #12, so the issue names the run by the same number.
+  it("names a run whose notice goes to the Ticket's PR by the PR's number, as the notice does", () => {
+    const plan = planFor({ ...weeklyLimit(), role: "review" }, snapshotOf(anIssue({ number: 7, openPullRequests: [12] })), kitConfig());
+
+    expect(plan).toMatchObject({
+      kind: "act",
+      actions: [
+        { kind: "remove-label", issue: 12, label: "agent:review" },
+        { kind: "comment", issue: 12, body: expect.stringMatching(/^The Review run on #12 failed: it hit the weekly usage limit\./) },
+        { kind: "open-issue", body: expect.stringMatching(/^@operator The Review run on #12 hit the weekly usage limit\. It resets at 2026-11-09 04:00 UTC\./) },
+      ],
+    });
+    expect(JSON.stringify(plan)).not.toMatch(/#7\b/);
+  });
+
   it("the first run to hit the weekly limit opens an issue saying when it resets, @-mentioning the Operator", () => {
     const plan = planFor(weeklyLimit(), snapshotOf(anIssue({ number: 7 })), kitConfig());
 

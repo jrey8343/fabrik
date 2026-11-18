@@ -18,6 +18,14 @@ import type {
   TicketSnapshot,
 } from "../loop/types.ts";
 
+/** The repo the core's tests run in, `owner/name`, as aPullRequest()'s URL has it. */
+export const REPO = "acme/shop";
+
+/** Issue `number` of `repo`, by default REPO, as a blocker or a blocked issue names it. */
+export function issueRef(number: number, repo = REPO): { readonly repo: string; readonly number: number } {
+  return { repo, number };
+}
+
 /**
  * An issue with these labels and this parent; everything else is plain. The
  * adapter fills `parent` and `parentIssue` from the one GitHub parent, so
@@ -29,6 +37,7 @@ import type {
 export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
   const pending = overrides.pendingPrototype ?? null;
   return {
+    repo: REPO,
     number: 1,
     title: "An issue",
     open: true,
@@ -49,7 +58,8 @@ export function anIssue(overrides: Partial<IssueSnapshot> = {}): IssueSnapshot {
     keptBranch: null,
     unlandedImplementRuns: null,
     runsWithOutcome: [],
-    openBlockers: [],
+    blockers: [],
+    hiddenBlockers: 0,
     openBlocking: [],
     ...overrides,
     ...parentOf(overrides),
@@ -140,6 +150,7 @@ export function aTicket(overrides: Partial<TicketSnapshot> = {}): TicketSnapshot
     labels: ["enhancement", "ready-for-agent"],
     openBlockers: [],
     notPlannedBlockers: [],
+    hiddenBlockers: 0,
     subIssues: 0,
     openLinkedPullRequests: [],
     mergedLinkedPullRequests: [],
@@ -156,6 +167,8 @@ export function aResearchDecision(overrides: Partial<ResearchDecisionSnapshot> =
     labels: ["wayfinder:research"],
     assignees: [],
     openBlockers: [],
+    notPlannedBlockers: [],
+    hiddenBlockers: 0,
     parentIssue: { number: 3, open: true, labels: ["enhancement", "wayfinder:map"] },
     lastRunFailed: false,
     ...overrides,
@@ -171,6 +184,7 @@ export function dispatchSnapshotOf(
     issue: null,
     pullRequest: null,
     dispatch: {
+      repo: REPO,
       tickets,
       openAgentDraftPullRequests: [],
       openAgentPullRequestsAtMergeGate: [],

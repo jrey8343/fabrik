@@ -1,5 +1,6 @@
 // Dispatch (ADR-0001): the Kit, not a person, decides when a Ticket starts,
 // and when a research Decision does.
+import { blockersPhrase } from "./blockers.ts";
 import { keptBranchGone, stopForGoneKeptBranch } from "./keptBranch.ts";
 import { DISPATCH_LABEL, type Label, READY_FOR_AGENT, RESEARCH_LABEL } from "./labels.ts";
 import { mergedReason } from "./mergedTickets.ts";
@@ -42,13 +43,13 @@ export function dispatch(snapshot: DispatchSnapshot, config: KitConfig, held: He
  * holds it back.
  */
 function stopsForGoneKeptBranch(ticket: TicketSnapshot, runTickets: readonly number[]): boolean {
-  return keptBranchGone(ticket.labels, ticket.keptBranch) && whyNotEligibleBesidesKeptBranch(ticket, runTickets) === null;
+  return keptBranchGone(ticket.labels, ticket.keptBranch) && whyNotEligibleBesidesKeptBranch(ticket, runTickets, null) === null;
 }
 
 /** The Dispatch check's releases, with no stopped Ticket. */
 function releasing(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDispatched): Plan {
   const decisions = [...snapshot.researchDecisions].sort((a, b) => a.number - b.number);
-  const candidates = candidatesOf(snapshot, held);
+  const candidates = candidatesOf(snapshot, held, snapshot.repo);
   const ineligible = candidates.flatMap(({ why }) => (why === null ? [] : [why]));
   const eligible = candidates.filter(({ why }) => why === null);
   if (eligible.length === 0) {
@@ -235,24 +236,28 @@ export function waitingForDispatch(
   snapshot: DispatchCandidates,
   held: HeldDispatched,
 ): number[] {
-  return candidatesOf(snapshot, held).flatMap(({ number, why }) => (why === null ? [number] : []));
+  return candidatesOf(snapshot, held, null).flatMap(({ number, why }) => (why === null ? [number] : []));
 }
 
 /** What Dispatch weighs releasing, slots aside: the candidates, and the Tickets an Implement run under way has already taken (#578). */
 export type DispatchCandidates = Pick<DispatchSnapshot, "tickets" | "researchDecisions" | "implementRunTickets">;
 
-/** Every issue Dispatch weighs, lowest issue number first, with why it can't be released, or null. */
-function candidatesOf(snapshot: DispatchCandidates, held: HeldDispatched): Candidate[] {
+/**
+ * Every issue Dispatch weighs, lowest issue number first, with why it can't be
+ * released, or null; a blocker named from `here`, the repo, by number alone
+ * when it is there, or by its repo everywhere when `here` is null.
+ */
+function candidatesOf(snapshot: DispatchCandidates, held: HeldDispatched, here: string | null): Candidate[] {
   return [
     ...snapshot.tickets.map((ticket): Candidate => ({
       number: ticket.number,
       label: DISPATCH_LABEL,
-      why: held.implement.includes(ticket.number) && ticket.open ? `#${ticket.number} is held` : whyNotEligible(ticket, snapshot.implementRunTickets),
+      why: held.implement.includes(ticket.number) && ticket.open ? `#${ticket.number} is held` : whyNotEligible(ticket, snapshot.implementRunTickets, here),
     })),
     ...snapshot.researchDecisions.map((decision): Candidate => ({
       number: decision.number,
       label: RESEARCH_LABEL,
-      why: held.research.includes(decision.number) && decision.open ? `#${decision.number} is held` : whyNotReleasable(decision),
+      why: held.research.includes(decision.number) && decision.open ? `#${decision.number} is held` : whyNotReleasable(decision, here),
     })),
   ].sort((a, b) => a.number - b.number);
 }
@@ -266,24 +271,21 @@ function count(n: number, one: string, many: string): string {
  * open, ready, buildable Ticket that nothing is already working on, no PR of
  * which has merged, and whose last Implement run didn't fail.
  */
-function whyNotEligible(ticket: TicketSnapshot, runTickets: readonly number[]): string | null {
-  const why = whyNotEligibleBesidesKeptBranch(ticket, runTickets);
+function whyNotEligible(ticket: TicketSnapshot, runTickets: readonly number[], here: string | null): string | null {
+  const why = whyNotEligibleBesidesKeptBranch(ticket, runTickets, here);
   if (why !== null) return why;
   return keptBranchGone(ticket.labels, ticket.keptBranch) ? `#${ticket.number}'s Kept branch is gone` : null;
 }
 
 /** whyNotEligible, leaving out a gone Kept branch, which Dispatch weighs last (#536). */
-function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot, runTickets: readonly number[]): string | null {
+function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot, runTickets: readonly number[], here: string | null): string | null {
   const name = `#${ticket.number}`;
   if (!ticket.open) return `${name} is closed`;
   // Its work landed though GitHub left it open: only the scheduled tick closes it, never a run (#543).
   if (ticket.mergedLinkedPullRequests.length > 0) return mergedReason(ticket.number, ticket.mergedLinkedPullRequests);
   if (!ticket.labels.includes(READY_FOR_AGENT)) return `${name} isn't ${READY_FOR_AGENT}`;
-  if (ticket.openBlockers.length > 0) return `${name} is blocked by ${list(ticket.openBlockers)}`;
-  // A blocker closed as not planned never landed its work, so it blocks until the Operator removes the edge.
-  if (ticket.notPlannedBlockers.length > 0) {
-    return `${name} is blocked by ${list(ticket.notPlannedBlockers)}, closed as not planned`;
-  }
+  const blocked = whyBlocked(name, ticket, here);
+  if (blocked !== null) return blocked;
   if (ticket.subIssues > 0) return `${name} has sub-issues, so it's a Spec`;
   if (ticket.openLinkedPullRequests.length > 0) {
     return `${name} already has the open PR ${list(ticket.openLinkedPullRequests)}`;
@@ -303,16 +305,30 @@ function whyNotEligibleBesidesKeptBranch(ticket: TicketSnapshot, runTickets: rea
  * claimed, nothing blocks and nothing is already working on, and whose last
  * run didn't fail.
  */
-function whyNotReleasable(decision: ResearchDecisionSnapshot): string | null {
+function whyNotReleasable(decision: ResearchDecisionSnapshot, here: string | null): string | null {
   const notResearchable = whyNotResearchable(decision);
   if (notResearchable !== null) return notResearchable;
   const name = `#${decision.number}`;
   // Assigning themselves claims it for the Operator, as in `/wayfinder`.
   if (decision.assignees.length > 0) return `${name} is assigned to ${decision.assignees.join(", ")}`;
-  if (decision.openBlockers.length > 0) return `${name} is blocked by ${list(decision.openBlockers)}`;
+  const blocked = whyBlocked(name, decision, here);
+  if (blocked !== null) return blocked;
   if (decision.labels.includes(RESEARCH_LABEL)) return `${name} already has ${RESEARCH_LABEL}`;
   // A broken Decision mustn't burn runs in a loop: the Operator re-adding the label is its only resume.
   if (decision.lastRunFailed) return `${name}'s last Research run failed, so only adding ${RESEARCH_LABEL} again runs it`;
+  return null;
+}
+
+/**
+ * Why a Blocker holds this Ticket or research Decision, named from `here`, or
+ * null when none does: an open one in any repo, or one hidden in a repo the
+ * Fabrik App can't read; else one closed as not planned, which never landed
+ * its work, so blocks until the Operator removes the edge (ADR-0001, amended
+ * in #98 and #771).
+ */
+function whyBlocked(name: string, { openBlockers, notPlannedBlockers, hiddenBlockers }: TicketSnapshot | ResearchDecisionSnapshot, here: string | null): string | null {
+  if (openBlockers.length > 0 || hiddenBlockers > 0) return `${name} is blocked by ${blockersPhrase(openBlockers, hiddenBlockers, here)}`;
+  if (notPlannedBlockers.length > 0) return `${name} is blocked by ${blockersPhrase(notPlannedBlockers, 0, here)}, closed as not planned`;
   return null;
 }
 

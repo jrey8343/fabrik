@@ -238,6 +238,24 @@ describe("A run refused while no other Subscription is free, with rotation on", 
     ]);
   });
 
+  // #772: a held run has no failure notice, only its held line, so the issue names the run by the number that line is on.
+  it.each([
+    ["a Triage run, whose line stays on its issue though a PR is open", refused("triage"), { labels: ["needs-triage"], openPullRequests: [12] }, 7],
+    [
+      "a conflict-only run, whose line is on the PR it was resolving",
+      { ...(refused("implement") as Extract<LoopEvent, { kind: "agent-run-failed" }>), conflict: { pullRequest: 50, main: "d".repeat(40) } },
+      { labels: ["enhancement", "ready-for-agent"], openPullRequests: [12, 50] },
+      50,
+    ],
+  ] as const)("names %s by the number its held line is on", (_what, event, ticket, lineOn) => {
+    const other = quietIssue(40, "Claude token 2", EARLIER);
+
+    const plan = planFor(event, snapshotOf(anIssue({ number: 7, ...ticket }), { kitIssues: [other] }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "comment-linking", issue: lineOn }));
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "open-issue", body: expect.stringMatching(new RegExp(`^@operator The \\w+ run on #${lineOn} hit the weekly usage limit`)) }));
+  });
+
   it("@-mentions the Operator on the refused Subscription's open issue when no issue has buzzed yet", () => {
     const other = quietIssue(40, "Claude token 2", EARLIER);
     const mine = quietIssue(41, "Claude token");

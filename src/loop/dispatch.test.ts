@@ -7,6 +7,7 @@ import {
   dispatchSnapshotOf,
   kitConfig,
   HEAD_SHA,
+  issueRef,
   repoSnapshot,
   snapshotOf,
   snapshotOfPullRequest,
@@ -32,12 +33,23 @@ describe("A Dispatch check", () => {
   it.each([
     ["is closed", { open: false }, "#12 is closed"],
     ["isn't ready-for-agent", { labels: ["enhancement", "needs-design"] }, "#12 isn't ready-for-agent"],
-    ["has an open blocker", { openBlockers: [9] }, "#12 is blocked by #9"],
-    ["has open blockers", { openBlockers: [9, 10] }, "#12 is blocked by #9, #10"],
+    ["has an open blocker", { openBlockers: [issueRef(9)] }, "#12 is blocked by #9"],
+    ["has open blockers", { openBlockers: [issueRef(9), issueRef(10)] }, "#12 is blocked by #9 and #10"],
+    // A blocker in another repo blocks it too, named by its repo (#771).
+    ["has an open blocker in another repo", { openBlockers: [issueRef(3, "a/b")] }, "#12 is blocked by a/b#3"],
+    ["has open blockers here and in another repo", { openBlockers: [issueRef(3, "a/b"), issueRef(9)] }, "#12 is blocked by #9 and a/b#3"],
+    // One GitHub counts in a repo the Fabrik App can't read blocks it, unnamed (#771).
+    ["has a hidden blocker", { hiddenBlockers: 1 }, "#12 is blocked by 1 issue the Fabrik App can't read"],
+    ["has an open blocker and hidden ones", { openBlockers: [issueRef(9)], hiddenBlockers: 2 }, "#12 is blocked by #9 and 2 issues the Fabrik App can't read"],
     [
       "is blocked by an issue closed as not planned",
-      { notPlannedBlockers: [9] },
+      { notPlannedBlockers: [issueRef(9)] },
       "#12 is blocked by #9, closed as not planned",
+    ],
+    [
+      "is blocked by an issue in another repo closed as not planned",
+      { notPlannedBlockers: [issueRef(3, "a/b")] },
+      "#12 is blocked by a/b#3, closed as not planned",
     ],
     ["has sub-issues, so it's a Spec", { subIssues: 3 }, "#12 has sub-issues, so it's a Spec"],
     ["has an open linked PR", { openLinkedPullRequests: [40] }, "#12 already has the open PR #40"],
@@ -70,7 +82,7 @@ describe("A Dispatch check", () => {
   it("passes over an ineligible Ticket to dispatch an eligible one", () => {
     const plan = planFor(
       check,
-      dispatchSnapshotOf([aTicket({ number: 3, openBlockers: [2] }), aTicket({ number: 5 })]),
+      dispatchSnapshotOf([aTicket({ number: 3, openBlockers: [issueRef(2)] }), aTicket({ number: 5 })]),
       kitConfig(),
     );
 
@@ -434,8 +446,16 @@ describe("A Dispatch check releasing research Decisions", () => {
 
   it.each([
     ["is assigned, which claims it for the Operator", { assignees: ["jrey"] }, "#12 is assigned to jrey"],
-    ["has an open blocker", { openBlockers: [9] }, "#12 is blocked by #9"],
-    ["has open blockers", { openBlockers: [9, 10] }, "#12 is blocked by #9, #10"],
+    ["has an open blocker", { openBlockers: [issueRef(9)] }, "#12 is blocked by #9"],
+    ["has open blockers", { openBlockers: [issueRef(9), issueRef(10)] }, "#12 is blocked by #9 and #10"],
+    ["has an open blocker in another repo", { openBlockers: [issueRef(3, "a/b")] }, "#12 is blocked by a/b#3"],
+    ["has a hidden blocker", { hiddenBlockers: 1 }, "#12 is blocked by 1 issue the Fabrik App can't read"],
+    // A research Decision counts one closed as not planned, as a Ticket does (#771).
+    [
+      "is blocked by an issue closed as not planned",
+      { notPlannedBlockers: [issueRef(9)] },
+      "#12 is blocked by #9, closed as not planned",
+    ],
     [
       "already has agent:research",
       { labels: ["wayfinder:research", "agent:research"] },

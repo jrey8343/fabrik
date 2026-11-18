@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isUi } from "../evidence/uiEvidence.ts";
 import type { UiConfig } from "../kit/config.ts";
-import { EXPORT_CALLS, EXPORT_SHAPES, NOT_DATA } from "./exports.fixture.ts";
+import { A_BLOCKED_ISSUE, EXPORT_CALLS, EXPORT_SHAPES, NOT_DATA } from "./exports.fixture.ts";
 
 const ENTRY = new URL("./index.ts", import.meta.url);
 
@@ -47,6 +47,18 @@ describe("the read library's entry", () => {
 
   it("exports every type the interface fixture holds a value of, and no other", () => {
     expect(exportedTypeNames().toSorted()).toEqual(Object.keys(EXPORT_SHAPES).toSorted());
+  });
+});
+
+describe("the read library's Standing", () => {
+  it("is at schema 2, whose blocked Standing names each blocker by its repo and counts the hidden ones (#771)", async () => {
+    const { STANDING_SCHEMA, wordStanding } = await import("./index.ts");
+    const standings = (await EXPORT_CALLS["standingsOf"]!()) as Awaited<ReturnType<(typeof import("./index.ts"))["standingsOf"]>>;
+    const blocked = standings.find(({ issue }) => issue === A_BLOCKED_ISSUE.number);
+
+    expect(STANDING_SCHEMA).toBe(2);
+    expect(blocked).toMatchObject({ schema: 2, name: "blocked", detail: { blockers: [{ repo: "a/b", number: 3 }], hiddenBlockers: 1 } });
+    expect(wordStanding(blocked!, "2026-11-09T00:00:00Z", "UTC").sentence).toBe("Blocked by a/b#3 and 1 issue the Fabrik App can't read.");
   });
 });
 

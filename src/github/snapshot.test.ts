@@ -885,10 +885,12 @@ describe("Gathering a Design queue check's needs-design issues", () => {
 });
 
 describe("Gathering an issue's blocked-by edges", () => {
-  it("holds only the open issues in this repo blocking it, and the open issues in this repo it blocks", async () => {
+  it("holds its Blockers in any repo, open or closed as not planned, with their database ids, its hidden blockers, and the open issues in any repo it blocks (#771)", async () => {
+    const queries: string[] = [];
     const github = {
       async graphql(query: string): Promise<unknown> {
         if (query.includes("issue(number: $number)")) {
+          queries.push(query);
           return {
             repository: {
               owner: { login: "acme" },
@@ -903,11 +905,14 @@ describe("Gathering an issue's blocked-by edges", () => {
                 closedByPullRequestsReferences: { nodes: [] },
                 blockedBy: {
                   nodes: [
-                    { number: 10, state: "OPEN", repository: { nameWithOwner: "acme/shop" } },
-                    { number: 9, state: "CLOSED", repository: { nameWithOwner: "acme/shop" } },
-                    { number: 11, state: "OPEN", repository: { nameWithOwner: "acme/api" } },
+                    { databaseId: 1010, number: 10, state: "OPEN", stateReason: "REOPENED", repository: { nameWithOwner: "acme/shop" } },
+                    { databaseId: 1009, number: 9, state: "CLOSED", stateReason: "COMPLETED", repository: { nameWithOwner: "acme/shop" } },
+                    { databaseId: 1005, number: 5, state: "CLOSED", stateReason: "NOT_PLANNED", repository: { nameWithOwner: "acme/shop" } },
+                    { databaseId: 2011, number: 11, state: "OPEN", stateReason: null, repository: { nameWithOwner: "acme/api" } },
+                    { databaseId: 2003, number: 3, state: "CLOSED", stateReason: "DUPLICATE", repository: { nameWithOwner: "acme/api" } },
                   ],
                 },
+                issueDependenciesSummary: { blockedBy: 3 },
                 blocking: {
                   nodes: [
                     { number: 7, state: "OPEN", repository: { nameWithOwner: "acme/shop" } },
@@ -925,7 +930,22 @@ describe("Gathering an issue's blocked-by edges", () => {
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 6, label: "needs-design" }, null, null);
 
-    expect(snapshot.issue).toMatchObject({ openBlockers: [10], openBlocking: [7] });
+    expect(snapshot.issue).toMatchObject({
+      repo: "acme/shop",
+      blockers: [
+        { repo: "acme/api", number: 11, databaseId: 2011 },
+        { repo: "acme/shop", number: 5, databaseId: 1005 },
+        { repo: "acme/shop", number: 10, databaseId: 1010 },
+      ],
+      hiddenBlockers: 1,
+      openBlocking: [
+        { repo: "acme/api", number: 12 },
+        { repo: "acme/shop", number: 7 },
+      ],
+    });
+    expect(queries[0]).toContain("blockedBy(first: 50) { nodes { number state stateReason repository { nameWithOwner } databaseId } }");
+    expect(queries[0]).toContain("issueDependenciesSummary { blockedBy }");
+    expect(queries[0]).toContain("blocking(first: 50) { nodes { number state repository { nameWithOwner } } }");
   });
 });
 
@@ -1191,7 +1211,7 @@ function issueGitHub({
             closedByPullRequestsReferences: {
               nodes: openPullRequests.map((number) => ({ number, state: "OPEN", isDraft: true, headRefName: "fabrik/ticket-98", author: { __typename: "Bot" } })),
             },
-            blockedBy: { nodes: [] },
+            blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
             blocking: { nodes: [] },
           },
         },
@@ -1219,7 +1239,7 @@ const issueData = (number: number) => ({
       comments: { nodes: [] },
       timelineItems: { nodes: [] },
       closedByPullRequestsReferences: { nodes: [] },
-      blockedBy: { nodes: [] },
+      blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
       blocking: { nodes: [] },
     },
   },
@@ -1752,7 +1772,7 @@ describe("Gathering an issue's Design session", () => {
                 comments: { nodes: comments.map((comment, i) => ({ createdAt: "2026-11-02T09:00:00Z", fullDatabaseId: String(5000 + i), ...comment })) },
                 timelineItems: { nodes: timeline },
                 closedByPullRequestsReferences: { nodes: [] },
-                blockedBy: { nodes: [] },
+                blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
                 blocking: { nodes: [] },
               },
             },
@@ -1953,7 +1973,7 @@ describe("Gathering the open Maps a Design-session turn's Map is weighed against
 });
 
 describe("Gathering a Dispatch check's Tickets", () => {
-  it("holds each Ticket's open blockers apart from those closed as not planned, and drops those closed any other way", async () => {
+  it("holds each Ticket's open blockers in any repo apart from those closed as not planned, drops those closed any other way, and counts its hidden ones (#771)", async () => {
     const github = {
       async graphql(query: string): Promise<unknown> {
         if (query.includes("labels: [$ready]")) {
@@ -1970,12 +1990,15 @@ describe("Gathering a Dispatch check's Tickets", () => {
                     subIssues: { totalCount: 0 },
                     blockedBy: {
                       nodes: [
-                        { number: 10, state: "OPEN", stateReason: null },
-                        { number: 9, state: "CLOSED", stateReason: "NOT_PLANNED" },
-                        { number: 8, state: "CLOSED", stateReason: "COMPLETED" },
-                        { number: 7, state: "CLOSED", stateReason: "DUPLICATE" },
+                        { number: 10, state: "OPEN", stateReason: null, repository: { nameWithOwner: "acme/shop" } },
+                        { number: 9, state: "CLOSED", stateReason: "NOT_PLANNED", repository: { nameWithOwner: "acme/shop" } },
+                        { number: 8, state: "CLOSED", stateReason: "COMPLETED", repository: { nameWithOwner: "acme/shop" } },
+                        { number: 7, state: "CLOSED", stateReason: "DUPLICATE", repository: { nameWithOwner: "acme/shop" } },
+                        { number: 3, state: "OPEN", stateReason: null, repository: { nameWithOwner: "a/b" } },
+                        { number: 2, state: "CLOSED", stateReason: "COMPLETED", repository: { nameWithOwner: "a/b" } },
                       ],
                     },
+                    issueDependenciesSummary: { blockedBy: 3 },
                     closedByPullRequestsReferences: { nodes: [] },
                     comments: { nodes: [] },
                   },
@@ -1991,7 +2014,10 @@ describe("Gathering a Dispatch check's Tickets", () => {
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "dispatch-check" }, null, null, actionsWith([]) as unknown as GitHub);
 
-    expect(snapshot.dispatch?.tickets).toMatchObject([{ number: 6, openBlockers: [10], notPlannedBlockers: [9] }]);
+    expect(snapshot.dispatch?.repo).toBe("acme/shop");
+    expect(snapshot.dispatch?.tickets).toMatchObject([
+      { number: 6, openBlockers: [{ repo: "a/b", number: 3 }, { repo: "acme/shop", number: 10 }], notPlannedBlockers: [{ repo: "acme/shop", number: 9 }], hiddenBlockers: 1 },
+    ]);
   });
 
   /** The read-only API, holding one open ready-for-agent Ticket, #6, with these comments and closing PRs, and no research Decision. */
@@ -2009,7 +2035,7 @@ describe("Gathering a Dispatch check's Tickets", () => {
             state: "OPEN",
             labels: { nodes: [{ name: "ready-for-agent" }] },
             subIssues: { totalCount: 0 },
-            blockedBy: { nodes: [] },
+            blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
             closedByPullRequestsReferences: { nodes: closedBy },
             comments: { nodes: comments },
           };
@@ -2061,12 +2087,14 @@ function aResearchNode(
     labels = ["wayfinder:research"],
     assignees = [],
     blockedBy = [],
+    openBlockersInAll = blockedBy.filter(({ state }) => state === "OPEN").length,
     parent = { number: 3, state: "OPEN", labels: ["enhancement", "wayfinder:map"] },
     comments = [],
   }: {
     labels?: string[];
     assignees?: string[];
-    blockedBy?: { number: number; state: "OPEN" | "CLOSED" }[];
+    blockedBy?: { number: number; state: "OPEN" | "CLOSED"; stateReason?: string | null; repository?: { nameWithOwner: string } }[];
+    openBlockersInAll?: number;
     parent?: GitHubParent | null;
     comments?: { body: string; author: { login: string; __typename: string } | null }[];
   } = {},
@@ -2076,7 +2104,8 @@ function aResearchNode(
     state: "OPEN",
     labels: { nodes: labels.map((name) => ({ name })) },
     assignees: { nodes: assignees.map((login) => ({ login })) },
-    blockedBy: { nodes: blockedBy },
+    blockedBy: { nodes: blockedBy.map((edge) => ({ stateReason: null, repository: { nameWithOwner: "acme/shop" }, ...edge })) },
+    issueDependenciesSummary: { blockedBy: openBlockersInAll },
     parent: parent === null ? null : { number: parent.number, state: parent.state, labels: { nodes: parent.labels.map((name) => ({ name })) } },
     comments: { nodes: comments },
   };
@@ -2112,7 +2141,7 @@ describe("Gathering a Dispatch check's research Decisions", () => {
     return snapshot.dispatch?.researchDecisions;
   }
 
-  it("holds each one, on every page, with its labels, assignees, open blockers and parent Map's state", async () => {
+  it("holds each one, on every page, with its labels, assignees, Blockers in any repo, hidden blockers and parent Map's state", async () => {
     const decisions = await gathered([
       [
         aResearchNode(12, {
@@ -2120,8 +2149,11 @@ describe("Gathering a Dispatch check's research Decisions", () => {
           assignees: ["jrey"],
           blockedBy: [
             { number: 10, state: "OPEN" },
-            { number: 9, state: "CLOSED" },
+            { number: 9, state: "CLOSED", stateReason: "COMPLETED" },
+            { number: 8, state: "CLOSED", stateReason: "NOT_PLANNED" },
+            { number: 4, state: "OPEN", repository: { nameWithOwner: "a/b" } },
           ],
+          openBlockersInAll: 3,
         }),
       ],
       [
@@ -2136,12 +2168,14 @@ describe("Gathering a Dispatch check's research Decisions", () => {
         open: true,
         labels: ["wayfinder:research", "agent:research"],
         assignees: ["jrey"],
-        openBlockers: [10],
+        openBlockers: [{ repo: "a/b", number: 4 }, { repo: "acme/shop", number: 10 }],
+        notPlannedBlockers: [{ repo: "acme/shop", number: 8 }],
+        hiddenBlockers: 1,
         parentIssue: { number: 3, open: true, labels: ["enhancement", "wayfinder:map"] },
         lastRunFailed: false,
       },
-      { number: 14, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], parentIssue: { number: 5, open: false, labels: ["wayfinder:map"] }, lastRunFailed: false },
-      { number: 15, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], parentIssue: null, lastRunFailed: false },
+      { number: 14, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], notPlannedBlockers: [], hiddenBlockers: 0, parentIssue: { number: 5, open: false, labels: ["wayfinder:map"] }, lastRunFailed: false },
+      { number: 15, open: true, labels: ["wayfinder:research"], assignees: [], openBlockers: [], notPlannedBlockers: [], hiddenBlockers: 0, parentIssue: null, lastRunFailed: false },
     ]);
   });
 
@@ -2245,7 +2279,7 @@ describe("Gathering a scheduled tick's ready-for-agent Tickets (#543)", () => {
             state: "OPEN",
             labels: { nodes: [{ name: "ready-for-agent" }] },
             subIssues: { totalCount: 0 },
-            blockedBy: { nodes: [] },
+            blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
             closedByPullRequestsReferences: { nodes: prs },
             comments: { nodes: [] },
           }));
@@ -2884,7 +2918,7 @@ describe("Gathering the PRs an Auditor named", () => {
                 comments: { nodes: [] },
                 timelineItems: { nodes: [] },
                 closedByPullRequestsReferences: { nodes: [] },
-                blockedBy: { nodes: [] },
+                blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
                 blocking: { nodes: [] },
               },
             },
@@ -2996,7 +3030,7 @@ describe("Gathering the pull request a Design-session turn's Roll-in names", () 
               comments: { nodes: [] },
               timelineItems: { nodes: [] },
               closedByPullRequestsReferences: { nodes: [] },
-              blockedBy: { nodes: [] },
+              blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
               blocking: { nodes: [] },
             },
           },
@@ -3083,7 +3117,7 @@ describe("Gathering a Design-session turn's starting reply", () => {
         comments: { nodes: [] },
         timelineItems: { nodes: [] },
         closedByPullRequestsReferences: { nodes: [] },
-        blockedBy: { nodes: [] },
+        blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 },
         blocking: { nodes: [] },
       },
     },
@@ -3376,7 +3410,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
         asked.push(query);
         if (query.includes("$replay")) return { repository: { issues: { nodes: replayIssues } } };
         if (query.includes("$ready")) {
-          const ticket = { number: 31, state: "OPEN", labels: { nodes: [{ name: "ready-for-agent" }] }, subIssues: { totalCount: 0 }, blockedBy: { nodes: [] }, closedByPullRequestsReferences: { nodes: [] }, comments: { nodes: [] } };
+          const ticket = { number: 31, state: "OPEN", labels: { nodes: [{ name: "ready-for-agent" }] }, subIssues: { totalCount: 0 }, blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 }, closedByPullRequestsReferences: { nodes: [] }, comments: { nodes: [] } };
           return { repository: { owner: { login: "acme" }, issues: { ...none, nodes: [ticket] }, pullRequests: { nodes: [] } } };
         }
         if (query.includes("$research")) return { repository: { issues: none } };
@@ -3476,7 +3510,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(records));
 
       expect(snapshot.replay?.capacity).toEqual({
-        tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], subIssues: 0, openLinkedPullRequests: [], mergedLinkedPullRequests: [], lastRunFailed: false }],
+        tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], hiddenBlockers: 0, subIssues: 0, openLinkedPullRequests: [], mergedLinkedPullRequests: [], lastRunFailed: false }],
         researchDecisions: [],
         implementRunTickets: [],
         weeklyLimits: { "Claude token": aReading(0.3) },
