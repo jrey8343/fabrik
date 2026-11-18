@@ -695,10 +695,11 @@ function redRunExcerpts(app: Pick<ReadClient, "rest">, actions: (ReadClient & Pi
 }
 
 /**
- * For the tick's Flaky check sweep (#462): each open agent PR's ci-sourced
- * Execution flaws not yet counted back, with every check run on the head each
- * was given on, every attempt included, and the Failure excerpt of each red
- * run the sweep reports (#778). The Fabrik App reads the check runs with
+ * For the tick's Flaky check sweep (#462): each open agent PR's Execution
+ * flaws that name red checks, whatever their source (#779), not yet counted
+ * back or reported, with every check run on the head each was given on, every
+ * attempt included, and the Failure excerpt of each red run the sweep reports
+ * (#778). The Fabrik App reads the check runs with
  * Checks: read; without it the sweep is "no-permission", and does nothing.
  */
 async function gatherFlakySweep(
@@ -710,9 +711,7 @@ async function gatherFlakySweep(
   const heads: FlawHeadChecks[] = [];
   try {
     for (const { pullRequest } of candidates) {
-      for (const { headSha, checks = [] } of uncountedFlaws(pullRequest)) {
-        heads.push({ pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha, checks, checkRuns: await readHeadCheckRuns(github, repo, headSha), excerpts: [] });
-      }
+      for (const flaw of uncountedFlaws(pullRequest)) heads.push({ ...flaw, checkRuns: await readHeadCheckRuns(github, repo, flaw.headSha), excerpts: [] });
     }
   } catch (error) {
     if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";

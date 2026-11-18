@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
+import { uncountedFlaws } from "./flakyChecks.ts";
 import type { FailureExcerpt } from "../review/failureExcerpt.ts";
 import { planFor } from "./rules.ts";
-import type { Action, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, LoopEvent, PassedHeadChecks, Plan, RerunReport, Snapshot } from "./types.ts";
+import type { Action, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, LoopEvent, PassedHeadChecks, Plan, PullRequestSnapshot, RerunReport, Snapshot, VerdictRecord } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const E2E: FlakyCheck = { name: "e2e", red: "https://github.com/acme/shop/actions/runs/7/job/70", green: "https://github.com/acme/shop/actions/runs/7/job/99" };
@@ -152,6 +153,94 @@ describe("The hourly tick's sweep for Flaky checks (#462)", () => {
 
   it("is quiet when the Fabrik App can't read check runs", () => {
     expect(swept(sweep("no-permission"))).toEqual([]);
+  });
+});
+
+// #779: a Reviewer's Verdict on a red head names its red checks too, so the sweep reads every Execution flaw that names
+// checks, whatever its source. One with no untagged finding counted only for its checks, and is counted back as a
+// red-checks Verdict is; one with an untagged finding counts for that, so its checks are reported and the count stands.
+describe("The hourly tick's sweep of a Reviewer's Execution flaw on a red head (#779)", () => {
+  const TICK: LoopEvent = { kind: "scheduled-tick", now: "2026-11-11T12:17:00Z" };
+  const FLAW = "b".repeat(40);
+  const flipped: HeadCheckRun[] = [
+    { name: "e2e", status: "completed", conclusion: "failure", startedAt: "2026-11-11T09:00:00Z", url: E2E.red },
+    { name: "e2e", status: "completed", conclusion: "success", startedAt: "2026-11-11T11:00:00Z", url: E2E.green },
+  ];
+  const reviewerFlaw = (counted: number, overrides: Partial<VerdictRecord> = {}): VerdictRecord => ({
+    verdict: "execution-flaw",
+    source: "reviewer",
+    requestChanges: false,
+    checks: ["e2e"],
+    tags: { small: 1, missedEarlier: 0, counted, smallBody: 0 },
+    headSha: FLAW,
+    ...overrides,
+  });
+  /** The sweep of this PR's flaws, each read as the Tick's gatherer reads it, with these check runs on its head. */
+  const sweepOf = (pullRequest: PullRequestSnapshot) =>
+    planFor(TICK, { ...tickSnapshot(), flakySweep: uncountedFlaws(pullRequest).map((flaw) => ({ ...flaw, checkRuns: flipped, excerpts: [] })) }, kitConfig());
+  const lineOf = (plan: Plan) => actionsOf(plan).map(textOf).find((text) => text.includes("<!-- fabrik:flaky-check "));
+
+  it("reads every Execution flaw that names checks, whatever its source, and no other Verdict", () => {
+    const pullRequest = aPullRequest({
+      verdicts: [
+        { verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["unit"], headSha: "1".repeat(40) },
+        reviewerFlaw(0),
+        reviewerFlaw(1, { headSha: "2".repeat(40) }),
+        { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "3".repeat(40) },
+        { verdict: "design-flaw", source: "reviewer", requestChanges: false, checks: ["e2e"], headSha: "4".repeat(40) },
+      ],
+    });
+
+    expect(uncountedFlaws(pullRequest)).toEqual([
+      { pullRequest: 50, ticket: 7, headSha: "1".repeat(40), checks: ["unit"] },
+      { pullRequest: 50, ticket: 7, headSha: FLAW, checks: ["e2e"] },
+      { pullRequest: 50, ticket: 7, headSha: "2".repeat(40), checks: ["e2e"], untaggedFinding: true },
+    ]);
+  });
+
+  it("counts back a Reviewer's flaw with no untagged finding once every check it named reads green on its head", () => {
+    const line = lineOf(sweepOf(aPullRequest({ verdicts: [reviewerFlaw(0)] })));
+
+    expect(line).toContain(`"countedBack":true`);
+    expect(line).toContain("so that Verdict no longer counts toward #7's Retries");
+  });
+
+  it("counts back a pass a red check made a flaw, which has no finding of its own", () => {
+    const line = lineOf(sweepOf(aPullRequest({ verdicts: [reviewerFlaw(0, { tags: { small: 0, missedEarlier: 0, counted: 0, smallBody: 0 } })] })));
+
+    expect(line).toContain(`"countedBack":true`);
+  });
+
+  it("reports the checks of one with an untagged finding as Flaky checks, filing their issue, and the count stands", () => {
+    const plan = sweepOf(aPullRequest({ verdicts: [reviewerFlaw(1)] }));
+    const line = lineOf(plan);
+
+    expect(line).not.toContain("countedBack");
+    expect(line).toContain(`"checks":["e2e"]`);
+    expect(line).toContain("`e2e` has since passed on bbbbbbb");
+    expect(line).toContain("a Flaky check (#new)");
+    expect(line).toContain("still counts");
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "create-issue" }));
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("reports them once: a line naming the flaw's checks on its head leaves it out of the next sweep", () => {
+    const pullRequest = aPullRequest({ verdicts: [reviewerFlaw(1)], flakyCheckMarks: [{ headSha: FLAW, checks: ["e2e"] }] });
+
+    expect(uncountedFlaws(pullRequest)).toEqual([]);
+    // A line on the head naming other checks, as the Kit's re-run's, leaves it in.
+    expect(uncountedFlaws(aPullRequest({ verdicts: [reviewerFlaw(1)], flakyCheckMarks: [{ headSha: FLAW, checks: ["lint"] }] }))).toHaveLength(1);
+  });
+
+  it("a Reviewer's flaw a later green counted back no longer counts toward the Retries", () => {
+    const counted = reviewerFlaw(0, { flaky: true });
+    const plan = planFor(
+      { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: "verdict: execution-flaw\n\n- A bug.", runUrl: RUN, repoUrl: "https://github.com/acme/shop" },
+      snapshotOfPullRequest(aPullRequest({ verdicts: [counted], pushedSinceVerdict: true })),
+      kitConfig(),
+    );
+
+    expect(verdictOf(plan)).toContain("Retry 1 of 2 starts now");
   });
 });
 

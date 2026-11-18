@@ -82,7 +82,7 @@ export type PushJobInput =
       readonly failedChecks: readonly string[];
       /** On green checks, the ones that passed by being skipped or reporting neutral, which ran nothing on the head. */
       readonly ranNothing: readonly string[];
-      /** Whether green checks let the Reviewer run, so its result is there to apply. */
+      /** Whether the Reviewer ran, so its result is there to apply: on green checks, or on red ones after everything the Kit could do (#779). */
       readonly withResult: boolean;
       /** What the Kit's re-run of the red checks came to (#462); absent when its job didn't run. */
       readonly rerun?: RerunReport;
@@ -221,19 +221,13 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       if (checks !== undefined && FAILED.includes(checks.result)) return failure("review", ticket, checks, kit);
       if (reviewer !== undefined && FAILED.includes(reviewer.result)) return failure("review", ticket, reviewer, kit);
       if (checks?.result !== "success") return { kind: "nothing", reason: `the Review checks job ended ${checks?.result ?? "unknown"}` };
-      const headSha = checks.outputs["head-sha"] ?? "";
-      // Red checks the Kit re-ran (#462): their wait's reading stands, and its failure is the Review's, as the first wait's is.
-      const rerunJob = needs[RERUN_CHECKS_JOB];
+      // Red checks the Kit re-ran (#462): their wait's failure is the Review's, as the first wait's is.
       const rerunWait = needs[RERUN_WAIT_JOB];
       if (rerunWait !== undefined && FAILED.includes(rerunWait.result)) return failure("review", ticket, rerunWait, kit);
-      const report = checks.outputs["checks"] === "red" ? rerunReportOf(checks.outputs["red"], rerunJob, rerunWait) : null;
-      const last = report !== null && rerunWait?.result === "success" ? rerunWait : checks;
-      const outcome = last.outputs["checks"];
-      const failedChecks = readNames(last.outputs["failed"]);
-      const ranNothing = readNames(last.outputs["ran-nothing"]);
+      const { headSha, outcome, failedChecks, ranNothing, rerun: report } = reviewChecksOf(needs);
       const rerun = report === null ? {} : { rerun: report };
-      if (outcome === "red") return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, withResult: false, ...rerun };
-      if (outcome === "green" && reviewer?.result === "success") {
+      // Green, or red after everything the Kit could do (#779): the Reviewer judged the head, and no Verdict comes from red checks alone.
+      if ((outcome === "green" || outcome === "red") && reviewer?.result === "success") {
         return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, withResult: true, ...rerun };
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };
@@ -251,6 +245,41 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
     default:
       return { kind: "nothing", reason: `the Kit job routed to ${route || "nothing"}` };
   }
+}
+
+/** How a Review's checks ended, as its waits read them, and what the Kit's re-run of the red ones came to. */
+export interface ReviewChecks {
+  /** The head the checks ran on. */
+  readonly headSha: string;
+  /** "green", "red" or "stale", as the last wait read them; "" when none says. */
+  readonly outcome: string;
+  /** The Required checks that failed or were cancelled, as the last wait read them. */
+  readonly failedChecks: string[];
+  /** On green, the ones that passed by being skipped or reporting neutral. */
+  readonly ranNothing: string[];
+  /** What the Kit's re-run of the red checks came to (#462), or null when its job didn't run. */
+  readonly rerun: RerunReport | null;
+}
+
+/**
+ * A Review's checks, from its jobs' results and outputs: the re-run's wait's
+ * reading when the Kit re-ran the red checks and it waited on them, else the
+ * first wait's. The push job lands the Verdict by it, and the Reviewer on a
+ * red head is given the same red checks (#779).
+ */
+export function reviewChecksOf(needs: Needs): ReviewChecks {
+  const checks = needs["review-checks"];
+  const rerunWait = needs[RERUN_WAIT_JOB];
+  const outputs = checks?.outputs ?? {};
+  const rerun = outputs["checks"] === "red" ? rerunReportOf(outputs["red"], needs[RERUN_CHECKS_JOB], rerunWait) : null;
+  const last = rerun !== null && rerunWait?.result === "success" ? rerunWait.outputs : outputs;
+  return {
+    headSha: outputs["head-sha"] ?? "",
+    outcome: last["checks"] ?? "",
+    failedChecks: readNames(last["failed"]),
+    ranNothing: readNames(last["ran-nothing"]),
+    rerun,
+  };
 }
 
 /** The key of the job that runs the Digest writer, as loop.yml names it. */

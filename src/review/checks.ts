@@ -1,6 +1,6 @@
 // Whether an agent PR's required checks have finished, and how. The Review job
-// waits on this before the Reviewer runs: red checks are an Execution flaw and
-// the Reviewer never starts. Pure, no I/O.
+// waits on this before the Reviewer runs: red checks the Kit re-runs once, and
+// a head still red goes to the Reviewer with its red checks (#779). Pure, no I/O.
 
 /** One check on the PR's head, as `gh pr checks --json name,bucket` reports it. */
 export interface CheckState {

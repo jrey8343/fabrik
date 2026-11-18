@@ -5,6 +5,7 @@
 // come from: a bot's, where quoting one mustn't fake it.
 import type { SentBack } from "../loop/backToDesign.ts";
 import { changeIn } from "../loop/changeFingerprint.ts";
+import { countsBackOnGreen } from "../loop/flakyChecks.ts";
 import {
   BACK_TO_DESIGN_MARKER,
   conflictAttemptIn,
@@ -57,7 +58,8 @@ export function verdictsIn(commentBodies: readonly string[]): VerdictRecord[] {
   return commentBodies.flatMap((body) => {
     const record = readVerdictMarker(body);
     if (record === null) return [];
-    return [record.source === "ci" && countedBack.has(record.headSha) ? { ...record, flaky: true as const } : record];
+    // One from red checks alone (#462), or a Reviewer's on a red head with no untagged finding (#779).
+    return [countedBack.has(record.headSha) && countsBackOnGreen(record) ? { ...record, flaky: true as const } : record];
   });
 }
 

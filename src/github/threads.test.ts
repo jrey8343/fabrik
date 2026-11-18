@@ -679,4 +679,29 @@ describe("A Verdict counted back for a Flaky check (#462)", () => {
     expect(verdictsIn([rerunLine, ...flaw])).toEqual([expect.not.objectContaining({ flaky: true })]);
     expect(verdictsIn([...flaw, countedBack])).toEqual([expect.objectContaining({ checks: ["e2e"], flaky: true })]);
   });
+
+  // #779: a Reviewer's Verdict on a red head names its red checks, and is counted back only with no untagged finding.
+  it("reads a Reviewer's flaw on a red head as flaky once its head is counted back, only when it had no untagged finding", () => {
+    const reviewed = (output: string) =>
+      commented(
+        planFor(
+          {
+            kind: "review-run-finished",
+            pullRequest: 50,
+            headSha: HEAD_SHA,
+            output,
+            runUrl: "https://github.com/acme/shop/actions/runs/1",
+            repoUrl: "https://github.com/acme/shop",
+            redChecks: { failed: ["e2e"], excerpts: [] },
+          },
+          snapshotOfPullRequest(aPullRequest()),
+          kitConfig(),
+        ),
+      );
+    const countedBack = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["e2e"],"countedBack":true} -->\n\`e2e\` has since passed.`;
+
+    expect(verdictsIn([...reviewed("verdict: pass\n\nLooks right."), countedBack])).toEqual([expect.objectContaining({ source: "reviewer", checks: ["e2e"], flaky: true })]);
+    expect(verdictsIn([...reviewed("verdict: execution-flaw\n\n- [small: comment] A stale comment."), countedBack])).toEqual([expect.objectContaining({ flaky: true })]);
+    expect(verdictsIn([...reviewed("verdict: execution-flaw\n\n- A bug."), countedBack])).toEqual([expect.not.objectContaining({ flaky: true })]);
+  });
 });

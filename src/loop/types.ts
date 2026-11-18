@@ -392,10 +392,10 @@ export type LoopEvent =
       readonly runUrl: string;
     }
   | {
-      /** The Reviewer finished on a green agent PR; its push job holds the Verdict, not yet posted. */
+      /** The Reviewer finished on an agent PR, green or still red (#779); its push job holds the Verdict, not yet posted. */
       readonly kind: "review-run-finished";
       readonly pullRequest: number;
-      /** The head commit the checks passed on and the Reviewer judged. */
+      /** The head commit the checks finished on and the Reviewer judged. */
       readonly headSha: string;
       /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
       readonly output: string;
@@ -408,6 +408,8 @@ export type LoopEvent =
       readonly repoUrl: string;
       /** The Operator comments the Reviewer was given; none when left out. */
       readonly operatorComments?: readonly GivenOperatorComment[];
+      /** On a head whose Required checks were still red after everything the Kit could do (#779), those checks; absent on green. */
+      readonly redChecks?: RedRequiredChecks;
     }
   | {
       /** The Digest writer finished on an agent PR; its push job holds the reply, not yet posted (ADR-0022). */
@@ -1066,13 +1068,20 @@ export interface HeadCheckRun {
   readonly url: string;
 }
 
-/** An open agent PR's ci-sourced Execution flaw not yet counted back, and every check run on its head (#462). */
+/** An open agent PR's Execution flaw that names red checks (#462, #779), not yet counted back or reported, and every check run on its head. */
 export interface FlawHeadChecks {
   readonly pullRequest: number;
   readonly ticket: number | null;
   readonly headSha: string;
   /** The checks the Verdict named as failed. */
   readonly checks: readonly string[];
+  /**
+   * True when the Verdict, a Reviewer's on a red head (#779), has an
+   * untagged finding beside its checks: it counts for that, so a later green
+   * reports its checks as Flaky checks and nothing is counted back. Absent
+   * on one that is counted back.
+   */
+  readonly untaggedFinding?: true;
   readonly checkRuns: readonly HeadCheckRun[];
   /** The Failure excerpt of each red run the sweep reports, read by the tick before its plan (#778). */
   readonly excerpts: readonly FailureExcerpt[];
@@ -1110,6 +1119,25 @@ export interface FlakyCheck {
    * read. Absent when none was read, which the issue says.
    */
   readonly excerpt?: FailureExcerpt;
+}
+
+/**
+ * The Required checks still red on the head a Reviewer judged, after
+ * everything the Kit could do (#779): the re-run's wait ended red, or the
+ * first wait ended red and nothing was re-run. Its Verdict holds them beside
+ * the Reviewer's findings, and the Reviewer was given the same.
+ */
+export interface RedRequiredChecks {
+  /** The Required checks that failed or were cancelled, as the last wait read them. */
+  readonly failed: readonly string[];
+  /** What the Kit's re-run of the red checks came to (#462); absent when its job didn't run. */
+  readonly rerun?: RerunReport;
+  /**
+   * Each red GitHub Actions check's latest Failure excerpt (#775), with its
+   * first attempt's for one that failed again (#776). A check with none here
+   * couldn't be read.
+   */
+  readonly excerpts: readonly CheckExcerpt[];
 }
 
 /**
@@ -1370,8 +1398,8 @@ export interface Snapshot {
    */
   readonly flakyCheckIssues: readonly KitIssueSnapshot[];
   /**
-   * For the scheduled tick: each open agent PR's ci-sourced Execution flaws not
-   * yet counted back, with every check run on the head each was given on (#462);
+   * For the scheduled tick: each open agent PR's Execution flaws that name red
+   * checks, whatever their source (#779), not yet counted back, with every check run on the head each was given on (#462);
    * "no-permission" when the Fabrik App lacks Checks: read; null for any other event.
    */
   readonly flakySweep: readonly FlawHeadChecks[] | "no-permission" | null;

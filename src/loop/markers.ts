@@ -50,8 +50,8 @@ export function verdictMarker(record: VerdictRecord): string {
 
 /**
  * A Flaky check line on an agent PR (#462): the head the checks flipped on,
- * and which. `countedBack` when the checks a ci-sourced Execution flaw named
- * have since passed on its head, so that Verdict no longer counts toward the
+ * and which. `countedBack` when the checks an Execution flaw counted back on
+ * green named (src/loop/flakyChecks.ts, countsBackOnGreen) have since passed on its head, so that Verdict no longer counts toward the
  * Ticket's Retries; absent when the Kit's own re-run found them.
  */
 export interface FlakyCheckMark {

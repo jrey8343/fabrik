@@ -270,11 +270,12 @@ function thisRunUrl(): string {
 }
 
 /**
- * A Review's checks, from its checks job, and the Reviewer's result when green
- * checks let it run; each red check's Failure excerpt its waits passed out
- * (#775), none when their artifact is missing. A first wait that ended red
- * passed them out even when the Kit's re-run turned it green, and the Flaky
- * checks' issues carry those (#778).
+ * A Review's checks, from its checks job, and the Reviewer's result, on green
+ * checks and on red ones after everything the Kit could do (#779); each red
+ * check's Failure excerpt its waits passed out (#775), none when their
+ * artifact is missing. A first wait that ended red passed them out even when
+ * the Kit's re-run turned it green, and the Flaky checks' issues carry those
+ * (#778).
  */
 async function finishedReviewEvent(
   input: Extract<PushJobInput, { kind: "review" }>,

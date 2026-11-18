@@ -331,7 +331,11 @@ export interface FinishedReview {
   readonly failedChecks: readonly string[];
   /** On green checks, the ones that passed by being skipped or reporting neutral, so ran nothing on the head. */
   readonly ranNothing: readonly string[];
-  /** The Reviewer's result, null when red checks kept it from running. */
+  /**
+   * The Reviewer's result: on green checks, and on red ones after everything
+   * the Kit could do (#779). Null lands red checks as a Verdict from CI, which
+   * no push job gives since #779.
+   */
   readonly result: AgentRunResult | null;
   /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
   readonly rerun: RerunReport | null;
@@ -367,6 +371,10 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     runUrl,
     repoUrl: review.repoUrl,
     ...givenTo(result),
+    // A head still red after everything the Kit could do (#779): its Verdict holds the red checks beside the findings.
+    ...(review.failedChecks.length === 0
+      ? {}
+      : { redChecks: { failed: review.failedChecks, ...(review.rerun === null ? {} : { rerun: review.rerun }), excerpts: review.excerpts ?? [] } }),
   };
 }
 
