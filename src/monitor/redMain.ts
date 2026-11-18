@@ -7,7 +7,19 @@ import { CALLER_JOBS } from "../kit/caller.ts";
 import type { KitConfig } from "../kit/config.ts";
 import { MONITOR_LABEL } from "../loop/labels.ts";
 import { monitorMarkerLine, RED_MAIN_GREEN_MARKER } from "../loop/markers.ts";
-import { ascending, bodyCode, monitorBlock, type MonitorIssue, type MonitorPlan, newestByMarker, withMonitorBlock } from "./issues.ts";
+import { GITHUB_COMMENT_LIMIT } from "../loop/roundLine.ts";
+import { type FailureExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
+import {
+  ascending,
+  bodyCode,
+  type FailedRun,
+  monitorBlock,
+  monitorBlockIn,
+  type MonitorIssue,
+  type MonitorPlan,
+  newestByMarker,
+  withMonitorBlock,
+} from "./issues.ts";
 
 /** What red main's part of the plan reads of the Monitor core's input (./core.ts). */
 export interface RedMainInput {
@@ -18,6 +30,11 @@ export interface RedMainInput {
   readonly listedChecks: readonly string[];
   /** Every issue in the Product repo carrying fabrik:monitor, open or closed. */
   readonly issues: readonly MonitorIssue[];
+  /**
+   * The Failure excerpt of each failed run read this tick, by its check run's
+   * id: only those a plan without them named (runsNeedingExcerpt in ./core.ts).
+   */
+  readonly excerpts: ReadonlyMap<number, FailureExcerpt>;
 }
 
 export type MainChecksRead =
@@ -60,7 +77,7 @@ export interface CheckRun {
  * comment and only close. With no decided commit, or `monitor.red_main` off,
  * it does nothing. Its issue never counts toward the cap on error issues.
  */
-export function redMainPlan({ monitor, mainChecks, listedChecks, issues }: RedMainInput): MonitorPlan {
+export function redMainPlan({ monitor, mainChecks, listedChecks, issues, excerpts }: RedMainInput): MonitorPlan {
   const nothing = { open: [], rewrite: [], close: [], summary: [] };
   if (!monitor.redMain || mainChecks === null) return nothing;
   if (mainChecks.kind === "rate-limited") {
@@ -89,9 +106,14 @@ export function redMainPlan({ monitor, mainChecks, listedChecks, issues }: RedMa
     return { ...nothing, summary: [`Red main: the default branch is green at ${shortSha(commit)}.`] };
   }
   if (issue?.open === true) {
-    const body = withMonitorBlock(issue, detailsOf(commit, state.failed));
+    const body = detailsRewriteOf(issue, commit, state.failed, excerpts);
     if (body !== null) {
-      return { ...nothing, rewrite: [{ kind: "red-main", issue: issue.number, body, summary: `Refreshed red main's details on #${issue.number}.` }] };
+      return {
+        ...nothing,
+        rewrite: [
+          { kind: "red-main", issue: issue.number, body, failedRuns: failedRunsOf(commit, state.failed), summary: `Refreshed red main's details on #${issue.number}.` },
+        ],
+      };
     }
     return { ...nothing, summary: [`Red main: the default branch is still red at ${shortSha(commit)}, as #${issue.number} says.`] };
   }
@@ -105,7 +127,15 @@ export function redMainPlan({ monitor, mainChecks, listedChecks, issues }: RedMa
   }
   return {
     ...nothing,
-    open: [{ sentryGroup: null, title: RED_MAIN_TITLE, body: redMainBodyOf(commit, state.failed), labels: [MONITOR_LABEL] }],
+    open: [
+      {
+        sentryGroup: null,
+        title: RED_MAIN_TITLE,
+        body: redMainBodyOf(commit, state.failed, excerpts),
+        labels: [MONITOR_LABEL],
+        failedRuns: failedRunsOf(commit, state.failed),
+      },
+    ],
   };
 }
 
@@ -191,15 +221,22 @@ const RED_MAIN_TITLE = "Red main: the default branch's CI is failing";
 export const CHECK_NAME_MAX = 100;
 
 /** The red-main issue's body: what it tracks, then the red commit's details in its Monitor block. */
-function redMainBodyOf(commit: MainCommit, failed: readonly CheckRun[]): string {
-  return [
-    monitorMarkerLine({ kind: "red-main" }),
-    "The default branch is red: the newest commit on it whose checks the Monitor reads have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
-    "",
-    ...monitorBlock(detailsOf(commit, failed)),
-    "",
-    "The checks the Monitor reads are the Required checks `sandbox.checks` in `.fabrik/config.json` lists or, when it lists none, every check but those of Fabrik's own jobs.",
-  ].join("\n");
+function redMainBodyOf(commit: MainCommit, failed: readonly CheckRun[], excerpts: ReadonlyMap<number, FailureExcerpt>): string {
+  const bodyWith = (block: readonly string[]) =>
+    [
+      monitorMarkerLine({ kind: "red-main" }),
+      "The default branch is red: the newest commit on it whose checks the Monitor reads have all finished failed some of them. The Monitor keeps the details below current while it stays red, and closes this issue itself once the default branch is green again.",
+      "",
+      ...monitorBlock(block),
+      "",
+      "The checks the Monitor reads are the Required checks `sandbox.checks` in `.fabrik/config.json` lists or, when it lists none, every check but those of Fabrik's own jobs.",
+    ].join("\n");
+  return bodyWith(blockLinesOf(commit, failed, excerpts, bodyWith));
+}
+
+/** The failed runs, by name, as the details name them. */
+function byName(failed: readonly CheckRun[]): CheckRun[] {
+  return [...failed].sort((a, b) => ascending(a.name, b.name));
 }
 
 /** The red commit and its failed checks, by name, each linked to its run: the details a red-main or Main check issue's Monitor block holds. */
@@ -207,10 +244,71 @@ export function detailsOf(commit: MainCommit, failed: readonly CheckRun[]): stri
   return [
     `- Red at: [${shortSha(commit)}](${commit.url})`,
     "- Failed checks:",
-    ...[...failed]
-      .sort((a, b) => ascending(a.name, b.name))
-      .map((run) => `  - [${bodyCode(run.name, CHECK_NAME_MAX)}](${run.url}) ${run.conclusion === "timed_out" ? "timed out" : "failed"}`),
+    ...byName(failed).map((run) => `  - [${bodyCode(run.name, CHECK_NAME_MAX)}](${run.url}) ${run.conclusion === "timed_out" ? "timed out" : "failed"}`),
   ];
+}
+
+/** The failed runs a red-main or Main check issue's details name, by name, on the commit they failed on: those whose Failure excerpts its block carries. */
+export function failedRunsOf(commit: MainCommit, failed: readonly CheckRun[]): FailedRun[] {
+  return byName(failed).map(({ id, name, url }) => ({ id, name, link: url, sha: commit.sha }));
+}
+
+/** GitHub's limit on an issue's body, in characters: the same as a comment's. */
+const BODY_LIMIT = GITHUB_COMMENT_LIMIT;
+
+/** The line that opens the Failure excerpts in a Monitor block, after the details and a blank line. */
+const EXCERPTS_HEADING = "Each failed check's Failure excerpt:";
+
+/**
+ * A red-main or Main check issue's Monitor block (#786): the details, then,
+ * when any was read, each failed run's Failure excerpt under its check's
+ * name, in the details' order. `bodyWith` gives the whole body around a
+ * block's lines; the excerpts are cut, as in a Verdict, until it fits
+ * GitHub's limit, and past that the block holds the details alone. A run
+ * whose excerpt wasn't read shows none: the program reads every run a plan
+ * names before it plans the bodies it applies.
+ */
+export function blockLinesOf(
+  commit: MainCommit,
+  failed: readonly CheckRun[],
+  excerpts: ReadonlyMap<number, FailureExcerpt>,
+  bodyWith: (block: readonly string[]) => string,
+): string[] {
+  const details = detailsOf(commit, failed);
+  const read = byName(failed).flatMap((run) => excerpts.get(run.id) ?? []);
+  if (read.length === 0) return details;
+  const linesWith = (blocks: readonly string[]) => [...details, "", EXCERPTS_HEADING, "", ...blocks.join("\n\n").split("\n")];
+  // The excerpts take what the body leaves around them, the blank lines between them counted.
+  let room = BODY_LIMIT - bodyWith(linesWith(read.map(() => ""))).length + 2 * (read.length - 1);
+  // A body with Windows line endings takes a character more a line: each pass cuts by what the last one was over.
+  for (let pass = 0; pass < 3; pass++) {
+    const lines = linesWith(renderFailureExcerpts(read, { room }));
+    const over = bodyWith(lines).length - BODY_LIMIT;
+    if (over <= 0) return lines;
+    room -= over;
+  }
+  return details;
+}
+
+/**
+ * The open issue's body with its Monitor block naming the red commit's
+ * details, and carrying their excerpts; or null when the block names those
+ * details already, with or without excerpts, or the body has no block. So the
+ * excerpts alone never rewrite a block, and a block is rewritten exactly when
+ * its details change.
+ */
+export function detailsRewriteOf(
+  issue: MonitorIssue,
+  commit: MainCommit,
+  failed: readonly CheckRun[],
+  excerpts: ReadonlyMap<number, FailureExcerpt>,
+): string | null {
+  const current = monitorBlockIn(issue.body);
+  if (current === null) return null;
+  const details = detailsOf(commit, failed);
+  const named = details.every((line, i) => current[i] === line) && (current.length === details.length || (current[details.length] === "" && current[details.length + 1] === EXCERPTS_HEADING));
+  if (named) return null;
+  return withMonitorBlock(issue, blockLinesOf(commit, failed, excerpts, (block) => withMonitorBlock(issue, block) ?? issue.body));
 }
 
 /**
