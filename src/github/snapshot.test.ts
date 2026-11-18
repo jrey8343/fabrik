@@ -4041,6 +4041,24 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
       expect(read()).toEqual([]);
     });
 
+    it("reads nothing of an outside service's red run, whose latest run on the head is its green one, and says so keeping its link", async () => {
+      const outside = [
+        { name: "ci", status: "completed", conclusion: "failure", started_at: "2026-11-11T09:00:00Z", html_url: "https://github.com/acme/shop/runs/501" },
+        { name: "ci", status: "completed", conclusion: "success", started_at: "2026-11-11T11:00:00Z", html_url: "https://github.com/acme/shop/runs/502" },
+      ];
+      const { github, paths } = appHolding([node(50, [pass(HEAD_SHA)])], outside);
+      const { actions, read } = actionsToken();
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(snapshot.passedHeads).toEqual([
+        expect.objectContaining({
+          excerpts: [{ kind: "unread", check: "ci", link: "https://github.com/acme/shop/runs/501", why: "it isn't a GitHub Actions check, so the Kit reads no log for it" }],
+        }),
+      ]);
+      expect([...paths(), ...read()]).toEqual([`/repos/acme/shop/commits/${HEAD_SHA}/check-runs?filter=all&per_page=100&page=1`]);
+    });
+
     it("gives a red run it can't read as unread, with why and its link, and the tick goes on", async () => {
       const { github } = appHolding([node(50, [pass(HEAD_SHA)])]);
       const gone = { ...actionsToken().actions, rest: async () => Promise.reject(new GitHubError("GET job failed: 404", 404, { body: "{}" })) } as unknown as GitHub;

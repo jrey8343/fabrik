@@ -81,7 +81,7 @@ import type {
 } from "../loop/types.ts";
 import { flakyOnPassedHead, flippedOn, passedHeadAtGate, uncountedFlaws } from "../loop/flakyChecks.ts";
 import { readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
-import { type FailureExcerpt, failureReaderOf, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
+import { type FailureExcerpt, type FailureReader, failureReaderOf, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
 import { allPages, GitHubError, pagesOf, type ReadClient, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
@@ -673,10 +673,14 @@ type RedRunExcerpts = (headSha: string, flaky: readonly { readonly name: string;
  * The tick's reader of a Flaky check's red run (#778): its job and its step's
  * log on the tick job's own workflow token, whose `actions: read` the
  * caller's `tick` job grants, and its annotations on the Fabrik App's Checks:
- * read. With no such token, each says so, keeping its link.
+ * read. With no such token, each says so, keeping its link. An outside
+ * service's red run it doesn't read: what the module reads of one is the
+ * latest run by that name on the head, which for a Flaky check is its green
+ * one, so it says it isn't a GitHub Actions check.
  */
 function redRunExcerpts(app: Pick<ReadClient, "rest">, actions: (ReadClient & Pick<LogClient, "logText">) | null, repo: Repo): RedRunExcerpts {
-  const reader = actions === null ? null : failureReaderOf(`${repo.owner}/${repo.name}`, { actions, checks: app });
+  const full = actions === null ? null : failureReaderOf(`${repo.owner}/${repo.name}`, { actions, checks: app });
+  const reader: FailureReader | null = full === null ? null : { job: full.job, stepLog: full.stepLog, annotations: full.annotations };
   return async (sha, flaky) => {
     const excerpts: FailureExcerpt[] = [];
     for (const { name, red } of flaky) {
