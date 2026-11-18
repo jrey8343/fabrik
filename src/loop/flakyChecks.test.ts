@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
+import type { FailureExcerpt } from "../review/failureExcerpt.ts";
 import { planFor } from "./rules.ts";
 import type { Action, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, LoopEvent, PassedHeadChecks, Plan, RerunReport, Snapshot } from "./types.ts";
 
@@ -272,5 +273,83 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
 
     expect(lines(plan)).toEqual([expect.stringContaining('"countedBack":true')]);
     expect(swept(plan).filter((action) => action.kind === "create-issue")).toHaveLength(1);
+  });
+});
+
+describe("A Flaky check's issue carries the Failure excerpt of each red run it reports (#778)", () => {
+  const excerpt = (check: string, link: string, line: string): FailureExcerpt => ({
+    kind: "actions",
+    check,
+    link,
+    steps: [{ name: "Run pnpm test", earlier: 0, lines: [line, "##[error]Process completed with exit code 1."] }],
+    annotations: [{ path: "src/a.test.ts", line: 12, message: "AssertionError: expected 3 to be 4" }],
+  });
+  const created = (plan: Plan) => actionsOf(plan).flatMap((action) => (action.kind === "create-issue" ? [action] : []));
+  /** A rendered excerpt's opening: the check and its job, the failed step, and the line its log ends on before the exit code. */
+  const rendered = (check: string, link: string, line: string) =>
+    [`- \`${check}\` ([the job](${link}))`, "", "  The step `Run pnpm test` failed. The end of its log:", "", "  ```text", `  ${line}`, "  ##[error]Process completed with exit code 1.", "  ```"].join("\n");
+
+  it("files a check the Kit's re-run turned green with its first attempt's excerpt in the body, after the pull request, head and run links", () => {
+    const flaky: FlakyCheck = { ...E2E, excerpt: excerpt("e2e", E2E.red, "FAIL src/a.test.ts > adds") };
+    const event: LoopEvent = { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: "verdict: pass\n\nGood.", flaky: [flaky], runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
+
+    const [issue] = created(planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig()));
+
+    expect(issue).toMatchObject({ title: "Flaky required check: e2e", labels: ["needs-triage", "fabrik:flaky-check"] });
+    expect(issue?.body).toContain(`- #50 at ${HEAD_SHA.slice(0, 7)}: [red](${E2E.red}), [green](${E2E.green})`);
+    expect(issue?.body).toContain(rendered("e2e", E2E.red, "FAIL src/a.test.ts > adds"));
+    expect(issue?.body).toContain("  - `src/a.test.ts`, line 12:");
+    expect(issue?.body.indexOf("[red](")).toBeLessThan(issue?.body.indexOf("([the job](") ?? -1);
+  });
+
+  it("comments on the check's open issue with that red run's excerpt when it's flaky again on another pull request", () => {
+    const open = { number: 88, labels: ["fabrik:flaky-check"], body: '<!-- fabrik:flaky-check-issue {"check":"e2e"} -->\nFlaky.', comments: [] };
+    const snapshot = { ...snapshotOfPullRequest(aPullRequest({ number: 61 })), flakyCheckIssues: [open] };
+    const flaky: FlakyCheck = { ...E2E, excerpt: excerpt("e2e", E2E.red, "FAIL src/b.test.ts > times out") };
+    const event: LoopEvent = { kind: "required-checks-finished", pullRequest: 61, headSha: HEAD_SHA, failed: ["Vercel"], rerun: { outside: ["Vercel"], failedAgain: [], flaky: [flaky], refused: null }, runUrl: RUN };
+
+    const actions = actionsOf(planFor(event, snapshot, kitConfig()));
+
+    expect(created(planFor(event, snapshot, kitConfig()))).toEqual([]);
+    const comment = actions.find((action) => action.kind === "comment" && action.issue === 88);
+    expect(textOf(comment!)).toMatch(new RegExp(`^Flaky again on #61 at ${HEAD_SHA.slice(0, 7)}: \\[red\\]\\(${E2E.red}\\), \\[green\\]\\(${E2E.green}\\)\\.\\n\\n`));
+    expect(textOf(comment!)).toContain(rendered("e2e", E2E.red, "FAIL src/b.test.ts > times out"));
+  });
+
+  it.each([
+    ["one that couldn't be read", { kind: "unread", check: "e2e", link: E2E.red, why: "the job never started, so it left no log and no annotation" } as FailureExcerpt, "the job never started, so it left no log and no annotation"],
+    ["none at all, as when the Review's artifact is missing", undefined, "the Kit read no Failure excerpt of this run"],
+  ])("still files the issue when the red run has %s, saying why and keeping the run's link", (_, excerpt, why) => {
+    const flaky: FlakyCheck = excerpt === undefined ? E2E : { ...E2E, excerpt };
+    const plan = planFor(redChecks(["Vercel"], { outside: ["Vercel"], failedAgain: [], flaky: [flaky], refused: null }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+
+    const [issue] = created(plan);
+    expect(issue?.body).toContain(`- \`e2e\` ([the job](${E2E.red}))\n\n  Its failure couldn't be read: ${why}.`);
+    expect(issue?.body).toContain(`[red](${E2E.red})`);
+  });
+
+  it("holds the log to the module's cap, and never passes GitHub's limit in the body or a comment, however much the run's annotations hold", () => {
+    const huge: FailureExcerpt = {
+      kind: "actions",
+      check: "e2e",
+      link: E2E.red,
+      steps: [{ name: "Run pnpm test", earlier: 0, lines: Array.from({ length: 150 }, (_, i) => `${i}`.padEnd(400, "x")) }],
+      annotations: Array.from({ length: 20 }, (_, line) => ({ path: "src/a.test.ts", line, message: "m".repeat(4_096) })),
+    };
+    const open = { number: 88, labels: ["fabrik:flaky-check"], body: '<!-- fabrik:flaky-check-issue {"check":"e2e"} -->\nFlaky.', comments: [] };
+    const filed = planFor(redChecks(["Vercel"], { outside: ["Vercel"], failedAgain: [], flaky: [{ ...E2E, excerpt: huge }], refused: null }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+    const commented = planFor(
+      redChecks(["Vercel"], { outside: ["Vercel"], failedAgain: [], flaky: [{ ...E2E, excerpt: huge }], refused: null }),
+      { ...snapshotOfPullRequest(aPullRequest()), flakyCheckIssues: [open] },
+      kitConfig(),
+    );
+
+    const body = created(filed)[0]!.body;
+    const comment = textOf(actionsOf(commented).find((action) => action.kind === "comment" && action.issue === 88)!);
+    for (const text of [body, comment]) {
+      expect(text.length).toBeLessThanOrEqual(65_536);
+      expect(text).toContain("_Shortened to fit the comment._");
+      expect(text).toContain(`[red](${E2E.red})`);
+    }
   });
 });

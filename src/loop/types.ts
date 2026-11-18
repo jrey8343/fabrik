@@ -5,7 +5,7 @@ import type { ChangedPath } from "../guard/trust-root.ts";
 import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
-import type { CheckExcerpt } from "../review/failureExcerpt.ts";
+import type { CheckExcerpt, FailureExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
@@ -1098,6 +1098,13 @@ export interface FlakyCheck {
   readonly name: string;
   readonly red: string;
   readonly green: string;
+  /**
+   * The red run's Failure excerpt, which the check's issue carries (#778): for
+   * one the Kit's re-run turned green, its first attempt's, which the Review
+   * checks job read before the re-run; for one the tick finds, the one it
+   * read. Absent when none was read, which the issue says.
+   */
+  readonly excerpt?: FailureExcerpt;
 }
 
 /**

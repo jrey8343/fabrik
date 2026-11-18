@@ -9,13 +9,30 @@
 // on the PR, mentioning nobody, and the check's own Flaky check issue for
 // Triage, filed once and commented on each time the check proves flaky again, so the Product's
 // suite gets fixed. Pure.
+import { renderFailureExcerpts } from "../review/failureExcerpt.ts";
 import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker } from "./markers.ts";
+import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 /** A check's name as Markdown code: a backtick in it can't end the span. */
 export function checkCode(name: string): string {
   return `\`${name.replace(/`/g, "'")}\``;
+}
+
+/** Why a Flaky check's red run has no Failure excerpt: the Kit read none, as when the Review's artifact is missing. */
+const NO_EXCERPT = "the Kit read no Failure excerpt of this run";
+
+/**
+ * An issue's body or comment, `text`, then the Failure excerpt of the check's
+ * red run (#778), rendered under the module's cap in the room GitHub's limit
+ * leaves it. A run with none read says so, keeping the red run's link.
+ */
+function withExcerpt(text: string, check: FlakyCheck): string {
+  const excerpt = check.excerpt ?? { kind: "unread", check: check.name, link: check.red, why: NO_EXCERPT };
+  const heading = "Why the red run failed, its Failure excerpt:";
+  const above = `${text}\n\n${heading}\n\n`;
+  return `${above}${renderFailureExcerpts([excerpt], { room: GITHUB_COMMENT_LIMIT - above.length }).join("\n\n")}`;
 }
 
 /**
@@ -37,7 +54,7 @@ function issueActions(
     const runs = `#${pullRequest} at ${short}: [red](${check.red}), [green](${check.green})`;
     const open = issues.find((issue) => flakyCheckIssueOf(issue.body) === check.name);
     if (open !== undefined) {
-      actions.push({ kind: "comment", issue: open.number, body: `Flaky again on ${runs}.` });
+      actions.push({ kind: "comment", issue: open.number, body: withExcerpt(`Flaky again on ${runs}.`, check) });
       refs.push(open.number);
       continue;
     }
@@ -52,14 +69,17 @@ function issueActions(
       kind: "create-issue",
       key,
       title: `Flaky required check: ${check.name}`,
-      body: [
-        flakyCheckIssueMarker(check.name),
-        `The required check ${checkCode(check.name)} reported both failure and success on the same head commit: a Flaky check. ` +
-          "Each time it fails costs a Review a re-run, and one the Kit doesn't catch costs a Ticket a Retry, so it's worth fixing in the suite. " +
-          "The Kit comments here each time it proves flaky again while this is open.",
-        "",
-        `- ${runs}`,
-      ].join("\n"),
+      body: withExcerpt(
+        [
+          flakyCheckIssueMarker(check.name),
+          `The required check ${checkCode(check.name)} reported both failure and success on the same head commit: a Flaky check. ` +
+            "Each time it fails costs a Review a re-run, and one the Kit doesn't catch costs a Ticket a Retry, so it's worth fixing in the suite. " +
+            "The Kit comments here each time it proves flaky again while this is open.",
+          "",
+          `- ${runs}`,
+        ].join("\n"),
+        check,
+      ),
       labels: [NEEDS_TRIAGE, FLAKY_CHECK_LABEL],
       parent: null,
       blockedBy: [],
