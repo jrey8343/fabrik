@@ -463,7 +463,7 @@ function fixesHolding(pullRequest: PullRequestSnapshot, fixed: readonly FixedChe
  * any bring-up-to-date's do, and the record of the move (CheckFixMark).
  */
 function fixBroughtIn(
-  { pullRequest, holdsMain }: ConflictCandidate,
+  { pullRequest }: ConflictCandidate,
   main: string,
   why: NotRebased | null,
   fixes: readonly FixedCheck[],
@@ -475,34 +475,25 @@ function fixBroughtIn(
   const checks = checkNames(fixes.map(({ check }) => check));
   const issues = issueList(fixes.map(({ issue }) => issue));
   const record = (outcome: CheckFixMark["outcome"]) => checkFixMarker({ headSha, main, outcome, fixes: fixes.map(({ check, issue }) => ({ check, issue })) });
-  const it = fixes.length === 1 ? "it" : "them";
-  const landed = `The fix for ${checks} landed: ${issues} closed as completed. #${number} was held at the Merge gate by an Unrelated failure of ${it}`;
-  // It can only conflict with a main it doesn't hold.
-  if (why !== null && holdsMain === true) {
-    return [
-      {
-        kind: "comment",
-        issue: number,
-        body: [record("held-main"), `${landed}, but its head ${headSha.slice(0, 7)} already holds \`main\` at ${head}, so there was nothing to bring in and nothing was pushed.`].join("\n"),
-      },
-    ];
-  }
-  if (why !== null && holdsMain !== false) {
-    return { rule: "unknown", reason: `Whether #${number} already holds main at ${head} couldn't be read, so bringing in the fix for ${checks} waits for the next scheduled tick` };
-  }
+  const landed = `The fix for ${checks} landed: ${issues} closed as completed. #${number} was held at the Merge gate by an Unrelated failure of ${fixes.length === 1 ? "it" : "them"}`;
+  // A head that already holds main's has nothing to bring in: the rebase finds it so, pushes nothing, and this records it.
+  const upToDate: Action = {
+    kind: "comment",
+    issue: number,
+    body: [record("held-main"), `${landed}, but its head ${headSha.slice(0, 7)} already holds \`main\` at ${head}, so there was nothing to bring in and nothing was pushed.`].join("\n"),
+  };
   const notes: StanceNotes = {
     ...stanceNotes("merge-gate", number, head),
     why: `${landed}, and \`main\` is at ${head}`,
     pushed: "The PR is back in draft, and Review runs again on the rebased head, which holds the fix; a pass brings it back to you.",
   };
   const said = stanceNoteBodies(notes, agentBranchFor(pullRequest.ticket as number), number, held);
-  return [
-    rebaseOntoMain(pullRequest, main, held, "merge-gate", {
-      pushed: [record("rebased"), said.pushed].join("\n"),
-      refused: said.refused,
-      conflicted: [record("conflict-run"), said.conflicted].join("\n"),
-    }),
-  ];
+  const rebase = rebaseOntoMain(pullRequest, main, held, "merge-gate", {
+    pushed: [record("rebased"), said.pushed].join("\n"),
+    refused: said.refused,
+    conflicted: [record("conflict-run"), said.conflicted].join("\n"),
+  });
+  return [rebase.kind === "rebase-onto-main" ? { ...rebase, upToDate: [upToDate] } : rebase];
 }
 
 /**

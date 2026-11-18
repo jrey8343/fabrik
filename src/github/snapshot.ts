@@ -824,26 +824,6 @@ async function gatherClosedCheckIssues(github: Pick<ReadClient, "graphql">, repo
     .sort((a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt));
 }
 
-/**
- * Whether this PR's head already holds the default branch's head `main`, so
- * a rebase would bring nothing in (#784), from GitHub's comparison of the two;
- * null when it can't be read.
- */
-async function readHoldsMain(github: Pick<ReadClient, "rest">, repo: Repo, main: string, headSha: string): Promise<boolean | null> {
-  try {
-    const compared = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/compare/${main}...${headSha}`)) as { behind_by?: unknown };
-    return typeof compared.behind_by === "number" ? compared.behind_by === 0 : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Whether a check may hold this PR at the Merge gate by an Unrelated failure (#781), so the conflict check reads whether it holds main (#784). */
-function heldByUnrelated(pullRequest: PullRequestSnapshot): boolean {
-  if (passedHeadAtGate(pullRequest) === null) return false;
-  return (pullRequest.verdicts.findLast((record) => record.verdict === "pass")?.unrelated ?? []).length > 0;
-}
-
 /** The events whose plan may find a Flaky check (#462). */
 const FLAKY_CHECK_EVENTS: readonly LoopEvent["kind"][] = ["required-checks-finished", "review-run-finished", "scheduled-tick"];
 
@@ -2315,7 +2295,7 @@ interface ConflictsQueryResult {
  * whether an Implement job is under way (#387); without one, that's unknown.
  */
 async function gatherConflicts(
-  github: Pick<ReadClient, "graphql" | "rest">,
+  github: Pick<ReadClient, "graphql">,
   actions: Pick<ReadClient, "rest"> | null,
   repo: Repo,
   now: string,
@@ -2346,10 +2326,7 @@ async function gatherConflicts(
   // Each agent PR's earlier comments are read once, after the last read.
   const pullRequests: ConflictCandidate[] = [];
   for (const { node, mergeable } of agents) {
-    const pullRequest = pullRequestSnapshotOf(await withEarlierComments(github, repo, node), appLogin, operator);
-    // A check's fix may have nothing to bring in (#784): read that only for a PR a check may hold at the Merge gate.
-    const holdsMain = head !== null && heldByUnrelated(pullRequest) ? { holdsMain: await readHoldsMain(github, repo, head, pullRequest.headSha) } : {};
-    pullRequests.push({ pullRequest, mergeable, ...holdsMain });
+    pullRequests.push({ pullRequest: pullRequestSnapshotOf(await withEarlierComments(github, repo, node), appLogin, operator), mergeable });
   }
   const implementJobUnderWay = actions === null ? null : await readImplementJobUnderWay(actions, repo);
   return { main: head, now, implementJobUnderWay, pullRequests };

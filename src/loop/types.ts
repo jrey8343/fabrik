@@ -1685,12 +1685,6 @@ export interface ConflictCandidate {
    * hadn't worked it out by the end of the adapter's bounded poll.
    */
   readonly mergeable: boolean | null;
-  /**
-   * Whether the PR's head already holds the default branch's head, so a
-   * rebase would bring nothing in (#784). Read only for a PR a check holds at
-   * the Merge gate by an Unrelated failure; absent or null when unread.
-   */
-  readonly holdsMain?: boolean | null;
 }
 
 /** An issue or PR a held run is on, as the adapter read it on a scheduled tick (src/loop/resume.ts). */
@@ -2128,7 +2122,9 @@ export type Action =
        * rebased, then applies `pushed`; if the push is refused, as when the
        * branch moved meanwhile, it applies `refused` instead of `pushed`.
        * When the rebase conflicts, it applies `conflicted` and pushes nothing.
-       * A branch already holding `onto`, or gone, gets none of them.
+       * A branch already holding `onto` gets only `upToDate`, when the plan
+       * gives it, as bringing in a check's fix does (#784), and pushes
+       * nothing; one gone gets none of them.
        */
       readonly kind: "rebase-onto-main";
       readonly pullRequest: number;
@@ -2138,6 +2134,7 @@ export type Action =
       readonly pushed: readonly Action[];
       readonly refused: readonly Action[];
       readonly conflicted: readonly Action[];
+      readonly upToDate?: readonly Action[];
     }
   /**
    * Push the issue's prototype branch, `prototype/<issue>`, which the push job

@@ -35,7 +35,7 @@ function closing(candidates: readonly ConflictCandidate[], overrides: Partial<Sn
 }
 
 /** PR #50, only behind main. */
-const BEHIND: ConflictCandidate = { pullRequest: heldAtGate(), mergeable: true, holdsMain: false };
+const BEHIND: ConflictCandidate = { pullRequest: heldAtGate(), mergeable: true };
 
 function rebasesIn(plan: Plan): Extract<Action, { kind: "rebase-onto-main" }>[] {
   return plan.kind === "act"
@@ -108,37 +108,37 @@ describe("what a check's issue closing leaves alone", () => {
   it("leaves a PR alone whose pass names an Unrelated failure of another check", () => {
     const other = heldAtGate({ verdicts: [{ ...PASSED, unrelated: ["lint"] }] });
 
-    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: other, mergeable: true, holdsMain: false }]), kitConfig()))).toEqual([]);
+    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: other, mergeable: true }]), kitConfig()))).toEqual([]);
   });
 
   it("leaves a Plain pull request alone", () => {
     const plain = heldAtGate({ isAgent: false, ticket: null });
 
-    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: plain, mergeable: true, holdsMain: false }]), kitConfig()))).toEqual([]);
+    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: plain, mergeable: true }]), kitConfig()))).toEqual([]);
   });
 
   it("leaves an agent PR alone whose pass names no Unrelated failure", () => {
     const { unrelated: _, ...clean } = PASSED;
 
-    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: heldAtGate({ verdicts: [clean] }), mergeable: true, holdsMain: false }]), kitConfig()))).toEqual([]);
+    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: heldAtGate({ verdicts: [clean] }), mergeable: true }]), kitConfig()))).toEqual([]);
   });
 
   it("leaves a PR alone whose head moved since its pass", () => {
     const moved = heldAtGate({ headSha: "b".repeat(40) });
 
-    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: moved, mergeable: true, holdsMain: false }]), kitConfig()))).toEqual([]);
+    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: moved, mergeable: true }]), kitConfig()))).toEqual([]);
   });
 
   it("leaves a PR alone whose check has since read green on its head, by a Flaky check line", () => {
     const green = heldAtGate({ flakyCheckMarks: [{ headSha: HEAD_SHA, checks: ["e2e"] }] });
 
-    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: green, mergeable: true, holdsMain: false }]), kitConfig()))).toEqual([]);
+    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: green, mergeable: true }]), kitConfig()))).toEqual([]);
   });
 
   it("leaves a PR alone with a run in flight", () => {
     const inFlight = heldAtGate({ requestChangesRunInFlight: 9, notedChangesRequests: [9], requestChangesRunReviews: [9], requestChangesRunSince: "2026-11-18T09:00:00Z" });
 
-    const plan = planFor(COMPLETED, closing([{ pullRequest: inFlight, mergeable: true, holdsMain: false }]), kitConfig());
+    const plan = planFor(COMPLETED, closing([{ pullRequest: inFlight, mergeable: true }]), kitConfig());
 
     expect(rebasesIn(plan)).toEqual([]);
     expect(plan.kind === "act" ? plan.notes : []).toEqual([expect.stringContaining("still in flight")]);
@@ -147,7 +147,7 @@ describe("what a check's issue closing leaves alone", () => {
   it("leaves a PR alone with a Request changes from the Operator no run has started for, whose run brings main in", () => {
     const unbuilt = heldAtGate({ unbuiltChangesRequests: [{ review: 9, reviewer: "operator", reviewerIsBot: false, submittedAt: "2026-11-18T09:00:00Z" }] });
 
-    const plan = planFor(COMPLETED, closing([{ pullRequest: unbuilt, mergeable: true, holdsMain: false }]), kitConfig());
+    const plan = planFor(COMPLETED, closing([{ pullRequest: unbuilt, mergeable: true }]), kitConfig());
 
     expect(rebasesIn(plan)).toEqual([]);
     expect(plan.kind === "act" ? plan.notes : []).toEqual([expect.stringContaining("Request changes from the Operator that no run has started for")]);
@@ -158,13 +158,13 @@ describe("a second close, or a later one, on the same main head", () => {
   it("tries nothing more once the PR was tried against main's head", () => {
     const tried = heldAtGate({ conflictAttempts: [MAIN] });
 
-    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: tried, mergeable: true, holdsMain: false }]), kitConfig()))).toEqual([]);
+    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: tried, mergeable: true }]), kitConfig()))).toEqual([]);
   });
 
   it("tries nothing more once the Kit brought the fix in on this head, as when its conflict-only run ended without a push", () => {
     const spent = heldAtGate({ checkFixMarks: [{ headSha: HEAD_SHA, main: "8".repeat(40), outcome: "conflict-run", fixes: [{ check: "e2e", issue: 12 }] }] });
 
-    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: spent, mergeable: true, holdsMain: false }]), kitConfig()))).toEqual([]);
+    expect(rebasesIn(planFor(COMPLETED, closing([{ pullRequest: spent, mergeable: true }]), kitConfig()))).toEqual([]);
   });
 });
 
@@ -217,14 +217,14 @@ describe("the tick's conflict check, catching a close the issue-closed event mis
     expect(rebasesIn(planFor(TICK, ticking([BEHIND], [CLOSED_SINCE], { passedHeads }), kitConfig()))).toEqual([]);
   });
 
-  it("records once a PR that already holds main's head, and then says nothing more", () => {
-    const holds: ConflictCandidate = { ...BEHIND, holdsMain: true };
-    const first = planFor(TICK, ticking([holds], [CLOSED_SINCE]), kitConfig());
-    const recorded: ConflictCandidate = { ...holds, pullRequest: heldAtGate({ checkFixMarks: [{ headSha: HEAD_SHA, main: MAIN, outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] }] }) };
+  it("records once a PR that already holds main's head, and then tries nothing more", () => {
+    const [first] = rebasesIn(planFor(TICK, ticking([BEHIND], [CLOSED_SINCE]), kitConfig()));
+    const recorded: ConflictCandidate = { ...BEHIND, pullRequest: heldAtGate({ checkFixMarks: [{ headSha: HEAD_SHA, main: MAIN, outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] }] }) };
 
     const later = planFor(TICK, ticking([recorded], [CLOSED_SINCE]), kitConfig());
 
-    expect(first.kind === "act" ? first.actions.filter((action) => action.kind === "comment" && action.issue === 50) : []).toHaveLength(1);
+    expect(first?.upToDate).toHaveLength(1);
+    expect(rebasesIn(later)).toEqual([]);
     expect(later.kind === "act" ? later.actions.filter((action) => action.kind === "comment" && action.issue === 50) : []).toEqual([]);
   });
 
@@ -274,34 +274,36 @@ describe("the record a later rule reads of this move (#785)", () => {
 });
 
 describe("a PR that already holds main's head", () => {
-  const HOLDS: ConflictCandidate = { pullRequest: heldAtGate(), mergeable: true, holdsMain: true };
+  it("gets no push, and, as the rebase finds nothing to bring in, one note recording so, with no draft and no attempt marker", () => {
+    const [rebase] = rebasesIn(planFor(COMPLETED, closing([BEHIND]), kitConfig()));
 
-  it("gets no push, and one note recording that there was nothing to bring in", () => {
-    const plan = planFor(COMPLETED, closing([HOLDS]), kitConfig());
-
-    expect(rebasesIn(plan)).toEqual([]);
-    const comments = plan.kind === "act" ? plan.actions.filter((action) => action.kind === "comment") : [];
-    expect(comments).toHaveLength(1);
-    expect(commentOn(comments, 50)).toBe(
-      [
-        `<!-- fabrik:check-fix {"headSha":"${HEAD_SHA}","main":"${MAIN}","outcome":"held-main","fixes":[{"check":"e2e","issue":12}]} -->`,
-        "The fix for `e2e` landed: #12 closed as completed. #50 was held at the Merge gate by an Unrelated failure of it, but its head aaaaaaa already holds `main` at 9999999, so there was nothing to bring in and nothing was pushed.",
-      ].join("\n"),
-    );
+    expect(rebase?.upToDate).toEqual([
+      {
+        kind: "comment",
+        issue: 50,
+        body: [
+          `<!-- fabrik:check-fix {"headSha":"${HEAD_SHA}","main":"${MAIN}","outcome":"held-main","fixes":[{"check":"e2e","issue":12}]} -->`,
+          "The fix for `e2e` landed: #12 closed as completed. #50 was held at the Merge gate by an Unrelated failure of it, but its head aaaaaaa already holds `main` at 9999999, so there was nothing to bring in and nothing was pushed.",
+        ].join("\n"),
+      },
+    ]);
   });
 
-  it("records it once: a second close says nothing more", () => {
-    const recorded: ConflictCandidate = { ...HOLDS, pullRequest: heldAtGate({ checkFixMarks: [{ headSha: HEAD_SHA, main: MAIN, outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] }] }) };
+  it("records it once: a second close tries nothing more on that head", () => {
+    const recorded: ConflictCandidate = { ...BEHIND, pullRequest: heldAtGate({ checkFixMarks: [{ headSha: HEAD_SHA, main: MAIN, outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] }] }) };
 
     const plan = planFor(COMPLETED, closing([recorded]), kitConfig());
 
+    expect(rebasesIn(plan)).toEqual([]);
     expect(plan.kind === "act" ? plan.actions.filter((action) => action.kind === "comment") : []).toEqual([]);
   });
 
-  it("leaves a PR for the tick when whether it holds main couldn't be read", () => {
-    const plan = planFor(COMPLETED, closing([{ ...HOLDS, holdsMain: null }]), kitConfig());
+  it("is the only rebase that records an up-to-date branch: a PR main moved under leaves it unrecorded, as before", () => {
+    const pushed: LoopEvent = { kind: "main-pushed", head: MAIN };
+    const conflicting: ConflictCandidate = { pullRequest: heldAtGate({ verdicts: [{ ...PASSED, unrelated: [] }] }), mergeable: false };
 
-    expect(rebasesIn(plan)).toEqual([]);
-    expect(plan.kind === "act" ? plan.notes : []).toEqual([expect.stringContaining("waits for the next scheduled tick")]);
+    const [rebase] = rebasesIn(planFor(pushed, closing([conflicting]), kitConfig()));
+
+    expect(rebase?.upToDate).toBeUndefined();
   });
 });

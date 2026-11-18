@@ -3745,9 +3745,8 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
       },
     };
 
-    /** A GitHub with these open PRs and the check's issue #12, answering a comparison of main with a PR's head as `behindBy` says. */
-    function githubFor(nodes: unknown[], behindBy: Record<string, number> = {}) {
-      const compared: string[] = [];
+    /** A GitHub with these open PRs and the check's issue #12. */
+    function githubFor(nodes: unknown[]) {
       const github = {
         [ANSWERS_CONFLICTS]: true,
         async graphql(query: string) {
@@ -3756,38 +3755,17 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
           const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
           return { repository: { owner: { login: "acme" }, defaultBranchRef: null, issues: none, pullRequests: none } };
         },
-        async rest(method: string, path: string) {
-          const match = /^\/repos\/acme\/shop\/compare\/([0-9a-f]{40})\.\.\.([0-9a-f]{40})$/.exec(path);
-          if (method !== "GET" || match === null) throw new Error(`Unexpected call: ${path}`);
-          compared.push(`${match[1]}...${match[2]}`);
-          const behind = behindBy[match[2] as string];
-          if (behind === undefined) throw new GitHubError("GitHub GET compare failed: 404", 404);
-          return { behind_by: behind };
-        },
       } as unknown as GitHub;
-      return { github, compared };
+      return { github };
     }
 
     const COMPLETED: LoopEvent = { kind: "issue-closed", issue: 12, stateReason: "completed" };
 
-    it("gathers the open agent PRs when a check's issue closes as completed, and whether each held one already holds main's head", async () => {
-      const { github, compared } = githubFor([held(50), node(51, "MERGEABLE")], { [HEAD_SHA]: 0 });
+    it("gathers the open agent PRs when a check's issue closes as completed", async () => {
+      const snapshot = await gatherSnapshot(githubFor([held(50), node(51, "MERGEABLE")]).github, repo, COMPLETED, null, APP_LOGIN);
 
-      const snapshot = await gatherSnapshot(github, repo, COMPLETED, null, APP_LOGIN);
-
-      expect(compared).toEqual([`${"d".repeat(40)}...${HEAD_SHA}`]);
-      expect(snapshot.conflicts?.pullRequests.map(({ pullRequest, holdsMain }) => [pullRequest.number, holdsMain])).toEqual([
-        [50, true],
-        [51, undefined],
-      ]);
-    });
-
-    it("reads a PR as not holding main's head when it's behind, and as unknown when the comparison can't be read", async () => {
-      const behind = await gatherSnapshot(githubFor([held(50)], { [HEAD_SHA]: 3 }).github, repo, COMPLETED, null, APP_LOGIN);
-      const unread = await gatherSnapshot(githubFor([held(50)]).github, repo, COMPLETED, null, APP_LOGIN);
-
-      expect(behind.conflicts?.pullRequests[0]?.holdsMain).toBe(false);
-      expect(unread.conflicts?.pullRequests[0]?.holdsMain).toBeNull();
+      expect(snapshot.conflicts?.main).toBe("d".repeat(40));
+      expect(snapshot.conflicts?.pullRequests.map(({ pullRequest }) => pullRequest.number)).toEqual([50, 51]);
     });
 
     it.each([["not-planned" as const], [null]])("gathers none when the issue closed as %s", async (stateReason) => {
@@ -3838,7 +3816,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     });
 
     it("reads no closed check's issue for any event but the tick", async () => {
-      const snapshot = await gatherSnapshot(githubFor([held(50)], { [HEAD_SHA]: 0 }).github, repo, COMPLETED, null, APP_LOGIN);
+      const snapshot = await gatherSnapshot(githubFor([held(50)]).github, repo, COMPLETED, null, APP_LOGIN);
 
       expect(snapshot.closedCheckIssues).toBeNull();
     });
@@ -3846,7 +3824,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     it("reads the Kit's records of bringing a PR up to date for a check's fix, under an attempt marker or on their own", async () => {
       const rebased = checkFixMarker({ headSha: "b".repeat(40), main: "8".repeat(40), outcome: "rebased", fixes: [{ check: "e2e", issue: 12 }] });
       const heldMain = checkFixMarker({ headSha: HEAD_SHA, main: "d".repeat(40), outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] });
-      const { github } = githubFor([held(50, [`<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\n${rebased}`, heldMain])], { [HEAD_SHA]: 0 });
+      const { github } = githubFor([held(50, [`<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\n${rebased}`, heldMain])]);
 
       const snapshot = await gatherSnapshot(github, repo, COMPLETED, null, APP_LOGIN);
 
