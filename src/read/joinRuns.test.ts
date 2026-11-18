@@ -143,7 +143,7 @@ describe("rows settled against fresh runs with no gather", () => {
       {
         ...kept[0],
         standing: {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 12,
           pullRequest: null,

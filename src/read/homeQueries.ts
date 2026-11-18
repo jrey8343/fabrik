@@ -11,7 +11,8 @@
 // and for why each issue cross-referenced to a pull request is in its state,
 // with one query more, by number, for the comments of those closed as not
 // planned (#664).
-import { ACTOR, BLOCKED_BY, COMMENTS, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawBlockedBy, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
+import { BLOCKED_BY, type RawBlockedBy } from "../github/blockers.ts";
+import { ACTOR, COMMENTS, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
 
 /** An issue's last 100 comments, as the Weekly summary reads them, with each one's id: a Prototype's round is known by its comment. */
 export const COMMENTS_WITH_IDS = `comments(last: 100) { nodes { databaseId url body createdAt author ${ACTOR} } }`;

@@ -15,7 +15,7 @@ function actionsOf(plan: Plan): readonly Action[] {
 
 /** What the plan does to these issues, leaving out the queue checks every tick asks for. */
 function actionsOn(plan: Plan, issues: readonly number[]): readonly Action[] {
-  return actionsOf(plan).filter((action) => "issue" in action && issues.includes(action.issue));
+  return actionsOf(plan).filter((action) => "issue" in action && typeof action.issue === "number" && issues.includes(action.issue));
 }
 
 describe("The scheduled tick, on a Ticket GitHub left open after its PR merged (#543)", () => {

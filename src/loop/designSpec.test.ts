@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, issueRef, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { closingCommentText } from "./design.ts";
 import { planFor } from "./rules.ts";
 import type { Action, Plan } from "./types.ts";
 
@@ -188,32 +189,35 @@ describe("A Ticket the Design session marks for a Stepped-up start (ADR-0014)", 
   });
 });
 
+/** Issue `number` of the repo, as a blocker the snapshot read, with its database id. */
+const blocker = (number: number) => ({ ...issueRef(number), databaseId: 1000 + number });
+
 describe("A Spec that supersedes an issue keeps the issue's place among its blockers", () => {
   const output = { ...finished, tickets: [ticket("model"), ticket("copy"), ticket("sms", ["model"])] };
 
   it("gives each Ticket with no blocker in the outcome a blocked-by edge to every open blocker of the issue, and none to a closed one", () => {
-    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlockers: [10] });
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], blockers: [blocker(10)] });
 
     const plan = planFor(turnFinished(output), snapshotOf(issue), kitConfig());
 
     expect(created(plan).map((action) => [action.key, action.blockedBy])).toEqual([
       ["spec", []],
-      ["ticket:model", [10]],
-      ["ticket:copy", [10]],
+      ["ticket:model", [blocker(10)]],
+      ["ticket:copy", [blocker(10)]],
       ["ticket:sms", [{ created: "ticket:model" }]],
     ]);
   });
 
   it("points each open issue the superseded issue blocked at every Ticket no other Ticket waits on, before the issue closes", () => {
-    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlocking: [20] });
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlocking: [issueRef(20)] });
 
     const plan = planFor(turnFinished(output), snapshotOf(issue), kitConfig());
 
     const actions = plan.kind === "act" ? plan.actions : [];
     const edges = actions.filter((action) => action.kind === "add-blocked-by");
     expect(edges).toEqual([
-      { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:copy" } },
-      { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:sms" } },
+      { kind: "add-blocked-by", issue: issueRef(20), blocker: { created: "ticket:copy" } },
+      { kind: "add-blocked-by", issue: issueRef(20), blocker: { created: "ticket:sms" } },
     ]);
     const closing = actions.findIndex((action) => action.kind === "close-as-superseded");
     expect(actions.findLastIndex((action) => action.kind === "add-blocked-by")).toBeLessThan(closing);
@@ -223,7 +227,7 @@ describe("A Spec that supersedes an issue keeps the issue's place among its bloc
   });
 
   it("says in the closing comment which blockers the Tickets took on and which issues now wait on which Tickets, mentioning nobody", () => {
-    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlockers: [10, 11], openBlocking: [20, 21] });
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], blockers: [blocker(10), blocker(11)], openBlocking: [issueRef(20), issueRef(21)] });
 
     const plan = planFor(turnFinished(output), snapshotOf(issue), kitConfig());
 
@@ -235,7 +239,7 @@ describe("A Spec that supersedes an issue keeps the issue's place among its bloc
         "Too big for one PR, so it's a Spec in two Tickets.",
         "",
         "Blocked-by edges moved to the new Tickets:",
-        "- <ticket:model>, <ticket:copy> are now blocked by #10, #11.",
+        "- <ticket:model>, <ticket:copy> are now blocked by #10 and #11.",
         "- #20 is now blocked by <ticket:copy>, <ticket:sms>.",
         "- #21 is now blocked by <ticket:copy>, <ticket:sms>.",
       ].join("\n"),
@@ -253,13 +257,13 @@ describe("A Spec that supersedes an issue keeps the issue's place among its bloc
   });
 
   it("gives a single Ticket both the issue's blockers and the issues it blocked", () => {
-    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], openBlockers: [10], openBlocking: [20] });
+    const issue = anIssue({ number: 7, labels: ["enhancement", "needs-design"], blockers: [blocker(10)], openBlocking: [issueRef(20)] });
 
     const plan = planFor(turnFinished({ ...finished, tickets: [ticket("model")] }), snapshotOf(issue), kitConfig());
 
-    expect(created(plan).at(-1)?.blockedBy).toEqual([10]);
+    expect(created(plan).at(-1)?.blockedBy).toEqual([blocker(10)]);
     expect(plan.kind === "act" ? plan.actions.filter((action) => action.kind === "add-blocked-by") : []).toEqual([
-      { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:model" } },
+      { kind: "add-blocked-by", issue: issueRef(20), blocker: { created: "ticket:model" } },
     ]);
     expect(closingComment(plan)).toContain("- <ticket:model> is now blocked by #10.\n- #20 is now blocked by <ticket:model>.");
   });
@@ -269,7 +273,7 @@ describe("A Spec that supersedes an issue keeps the issue's place among its bloc
 function closingComment(plan: Plan): string {
   const close = plan.kind === "act" ? plan.actions.find((action) => action.kind === "close-as-superseded") : undefined;
   if (close?.kind !== "close-as-superseded") throw new Error("the plan doesn't close the issue as superseded");
-  return close.comment.map((part) => (typeof part === "string" ? part : `<${part.created}>`)).join("");
+  return closingCommentText(close.comment, "acme/shop", (part) => `<${part.created}>`);
 }
 
 describe("Intake of the issues a Design session creates", () => {

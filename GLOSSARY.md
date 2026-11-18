@@ -206,6 +206,10 @@ _Avoid_: fast-track, easy fix
 The Kit releasing a ready, unblocked Ticket to an Implementer, or an unblocked research Decision on an open Map to the Researcher.
 _Avoid_: kick off, assign
 
+**Blocker**:
+An issue, in any repo, that holds another piece of work by a blocked-by edge: one still open, or closed as not planned. One closed as completed or duplicate blocks no more. One in a repo the Fabrik App can't read is a hidden blocker, counted but unnamed (ADR-0001).
+_Avoid_: dependency, prerequisite
+
 **Verdict**:
 The Reviewer's judgment on a pull request: pass, Execution flaw or Design flaw.
 _Avoid_: approval, review result

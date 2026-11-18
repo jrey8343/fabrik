@@ -50,7 +50,7 @@ describe("a run that was asked for and never began", () => {
   it("gives a Ticket whose agent:implement was added 40 minutes ago, with no Implement run in flight, not-started, the Kit's, turning Stuck 210 minutes after the label", () => {
     expect(standingsIn({ openIssues: [askedFor("2026-11-08T19:20:00Z")] })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: null,
@@ -255,7 +255,7 @@ describe("a run that was asked for and never began", () => {
     it("gives the Ticket and its draft not-started, at Implement, awaiting an Implement run on the pull request, from the Verdict", () => {
       expect(standingsIn(retryFacts())).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 7,
           pullRequest: 50,

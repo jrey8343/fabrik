@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, issueRef, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
 
@@ -50,7 +50,7 @@ describe("A Design session finishes as not planned", () => {
   });
 
   it("on a Ticket back from a Spec, closes it as not planned and says which Tickets stay blocked by it", () => {
-    const ticket = anIssue({ number: 7, parent: 3, labels: ["enhancement", "needs-design"], openBlocking: [8, 9] });
+    const ticket = anIssue({ number: 7, parent: 3, labels: ["enhancement", "needs-design"], openBlocking: [issueRef(9, "a/b"), issueRef(8), issueRef(9)] });
 
     expect(planFor(finished(notPlanned), snapshotOf(ticket), kitConfig())).toEqual({
       kind: "act",
@@ -63,7 +63,7 @@ describe("A Design session finishes as not planned", () => {
             "",
             "The Operator decided the cart stays as it is: nobody asked for it.",
             "",
-            "#8, #9 stay blocked by it: an issue closed as not planned never lands its work, so Dispatch won't start them until the Operator removes the blocked-by edge.",
+            "#8, #9, a/b#9 stay blocked by it: an issue closed as not planned never lands its work, so Dispatch won't start them until the Operator removes the blocked-by edge.",
           ].join("\n"),
         },
         { kind: "remove-label", issue: 7, label: "needs-design" },

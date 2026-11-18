@@ -23,7 +23,7 @@ describe("the store's Standings", () => {
     const standings = storeStandingsIn({ summaries: [aSummaryIssue({ number: 9, open: true, bodyWrittenAt: "2026-11-09T07:00:00Z" })] });
     expect(standings).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "jrey8343/fabrik-runs",
         issue: 9,
         pullRequest: null,
@@ -51,7 +51,7 @@ describe("the store's Standings", () => {
       });
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "jrey8343/fabrik-runs",
           issue: 9,
           pullRequest: null,
@@ -117,7 +117,7 @@ describe("the store's Standings", () => {
     });
     expect(standings).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "jrey8343/fabrik-runs",
         issue: 14,
         pullRequest: null,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anIssue, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { anIssue, issueRef, kitConfig, notificationsOf, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { planFor } from "./rules.ts";
 import type { Action, Plan } from "./types.ts";
 
@@ -126,7 +126,7 @@ describe("The Map and the Decisions a Design session charts", () => {
   });
 
   it("labels each Decision with its type alone, never a state or category label, and gives the Map's own blockers to none of them", () => {
-    const issue = anIssue({ number: 7, labels: ["bug", "needs-design"], openBlockers: [10], openBlocking: [20] });
+    const issue = anIssue({ number: 7, labels: ["bug", "needs-design"], blockers: [{ ...issueRef(10), databaseId: 1010 }], hiddenBlockers: 1, openBlocking: [issueRef(20)] });
     const output = { ...charted, decisions: ["research", "prototype", "grilling", "task"].map((type) => decision(type, type)) };
 
     const plan = planFor(turnFinished(output), snapshotOf(issue, { openMaps: [] }), kitConfig());

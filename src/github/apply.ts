@@ -12,7 +12,9 @@ import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
 import { isEmptyDiffComment, withPrototypeStarted } from "../loop/markers.ts";
-import type { Action, CreatedIssue, LoopEvent, Plan, PostedComment } from "../loop/types.ts";
+import { sameRepo } from "../loop/blockers.ts";
+import { closingCommentText } from "../loop/design.ts";
+import type { Action, CreatedIssue, ExistingIssue, LoopEvent, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
 import { allPages, type GitHub, GitHubError, gitHubMessageOf, type Repo } from "./client.ts";
 import type { WrittenReview } from "./writtenOn.ts";
@@ -173,7 +175,7 @@ export async function applyPlan(
   heads: DigestHeadReader | null = null,
 ): Promise<AppliedPlan> {
   if (plan.kind !== "act") return { preview: null, readded: [], refusedCollapses: [], opened: null };
-  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [], refusedCollapses: [] };
+  const made: Made = { created: new Map(), posted: new Map(), opened: null, preview: null, run, readded: [], refusedCollapses: [], refusedEdges: new Set() };
   const applyEach = async (actions: readonly Action[]): Promise<void> => {
     for (const action of actions) {
       if (action.kind === "carry-digest") {
@@ -263,6 +265,13 @@ interface Made {
   readonly readded: ReaddedLabel[];
   /** Each older Digest GitHub refused to collapse. */
   readonly refusedCollapses: RefusedCollapse[];
+  /** Each blocked-by edge GitHub refused on an issue in another repo, `owner/name#N<key>`, for the closing comment to name (#771). */
+  readonly refusedEdges: Set<string>;
+}
+
+/** A blocked-by edge from an issue in any repo to one the plan created, as Made's refusedEdges holds it. */
+function edgeKey(issue: { readonly repo: string; readonly number: number }, blocker: CreatedIssue): string {
+  return `${issue.repo.toLowerCase()}#${issue.number}<${blocker.created}>`;
 }
 
 /** A comment a plan posted: its URL for links in text, its id for an edit. */
@@ -289,16 +298,9 @@ function createdIn(created: ReadonlyMap<string, CreatedRecord>, { created: key }
   return record;
 }
 
-/** An issue's database id, which a blocked-by edge takes: made earlier in the plan, or read from GitHub. */
-async function databaseId(
-  github: GitHubApi,
-  repo: Repo,
-  issue: CreatedIssue | number,
-  created: ReadonlyMap<string, CreatedRecord>,
-): Promise<number> {
-  if (typeof issue !== "number") return createdIn(created, issue).id;
-  const existing = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/${issue}`)) as CreatedRecord;
-  return existing.id;
+/** An issue's database id, which a blocked-by edge takes: made earlier in the plan, or read with the edge, in any repo. */
+function databaseId(issue: CreatedIssue | ExistingIssue, created: ReadonlyMap<string, CreatedRecord>): number {
+  return "databaseId" in issue ? issue.databaseId : createdIn(created, issue).id;
 }
 
 /** Creates the issue, then links it under its parent and to each blocker, each made earlier in the plan or existing. */
@@ -322,21 +324,28 @@ async function createIssue(
     await github.rest("POST", `${issues}/${parent}/sub_issues`, { sub_issue_id: issue.id });
   }
   for (const blocker of action.blockedBy) {
-    await addBlockedBy(github, repo, issue.number, blocker, created);
+    await github.rest("POST", `${issues}/${issue.number}/dependencies/blocked_by`, { issue_id: databaseId(blocker, created) });
   }
 }
 
-/** Makes `issue` wait on `blocker` by a native blocked-by edge. */
-async function addBlockedBy(
-  github: GitHubApi,
-  repo: Repo,
-  issue: number,
-  blocker: CreatedIssue | number,
-  created: ReadonlyMap<string, CreatedRecord>,
-): Promise<void> {
-  await github.rest("POST", `/repos/${repo.owner}/${repo.name}/issues/${issue}/dependencies/blocked_by`, {
-    issue_id: await databaseId(github, repo, blocker, created),
-  });
+/**
+ * Makes `action.issue`, in any repo, wait on an issue the plan created, by a
+ * native blocked-by edge, which GitHub writes only from the blocked issue's
+ * side. On an issue in another repo, GitHub refuses it with a 403 or 404 where
+ * the Fabrik App can't write: that refusal is kept for the closing comment to
+ * name, and the plan goes on (#771). Any other failure fails the plan.
+ */
+async function addBlockedBy(github: GitHubApi, repo: Repo, action: Extract<Action, { kind: "add-blocked-by" }>, made: Made): Promise<void> {
+  const { issue, blocker } = action;
+  const path = `/repos/${issue.repo}/issues/${issue.number}/dependencies/blocked_by`;
+  try {
+    await github.rest("POST", path, { issue_id: databaseId(blocker, made.created) });
+  } catch (error) {
+    const elsewhere = !sameRepo(issue.repo, `${repo.owner}/${repo.name}`);
+    if (!(elsewhere && error instanceof GitHubError && (error.status === 403 || error.status === 404))) throw error;
+    console.log(`::warning title=Blocked-by edge not moved::${issue.repo}#${issue.number}: ${gitHubMessageOf(error)}`);
+    made.refusedEdges.add(edgeKey(issue, blocker));
+  }
 }
 
 /** Whether the plan asks for a Dispatch check, which the Dispatch job then runs. */
@@ -399,7 +408,18 @@ async function apply(
     case "create-issue":
       return createIssue(github, repo, action, made.created);
     case "add-blocked-by":
-      return addBlockedBy(github, repo, action.issue, action.blocker, made.created);
+      return addBlockedBy(github, repo, action, made);
+    case "close-as-superseded": {
+      const body = closingCommentText(
+        action.comment,
+        `${repo.owner}/${repo.name}`,
+        (part) => `#${createdIn(made.created, part).number}`,
+        (issue, blocker) => made.refusedEdges.has(edgeKey(issue, blocker)),
+      );
+      await github.rest("POST", `${issues}/${action.issue}/comments`, { body });
+      await github.rest("PATCH", `${issues}/${action.issue}`, { state: "closed", state_reason: "completed" });
+      return;
+    }
     case "close-pull-request":
       // Closing never deletes the head branch; only a merge with auto-delete on would.
       await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`, { state: "closed" });
@@ -615,6 +635,7 @@ async function applyToIssue(
         | "link-prototype-preview"
         | "create-issue"
         | "add-blocked-by"
+        | "close-as-superseded"
         | "open-issue"
         | "push-branch"
         | "push-prototype-branch"
@@ -691,14 +712,6 @@ async function applyToIssue(
       const line = action.line.map((part) => (typeof part === "string" ? part : postedIn(posted, part).url)).join("");
       const map = (await github.rest("GET", issue)) as { body: string | null };
       await github.rest("PATCH", issue, { body: withDecisionLine(map.body ?? "", line) });
-      return;
-    }
-    case "close-as-superseded": {
-      const body = action.comment
-        .map((part) => (typeof part === "string" ? part : `#${createdIn(created, part).number}`))
-        .join("");
-      await github.rest("POST", `${issue}/comments`, { body });
-      await github.rest("PATCH", issue, { state: "closed", state_reason: "completed" });
       return;
     }
     case "start-agent-run":

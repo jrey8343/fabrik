@@ -123,7 +123,7 @@ describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
     const plan: Plan = {
       kind: "act",
       actions: [
-        { kind: "create-issue", key: "ticket:a", title: "A", body: "A.", labels: [], parent: null, blockedBy: [10] },
+        { kind: "create-issue", key: "ticket:a", title: "A", body: "A.", labels: [], parent: null, blockedBy: [{ repo: "acme/shop", number: 10, databaseId: 1010 }] },
         {
           kind: "create-issue",
           key: "ticket:b",
@@ -133,7 +133,7 @@ describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
           parent: null,
           blockedBy: [{ created: "ticket:a" }],
         },
-        { kind: "add-blocked-by", issue: 20, blocker: { created: "ticket:b" } },
+        { kind: "add-blocked-by", issue: { repo: "acme/shop", number: 20 }, blocker: { created: "ticket:b" } },
         { kind: "close-as-superseded", issue: 7, comment: ["Now ", { created: "ticket:b" }, "."] },
       ],
     };
@@ -153,6 +153,69 @@ describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
     expect(lastEdge).toBeLessThan(closing);
   });
 
+  describe("in another repo (#771)", () => {
+    /** fakeGitHub, but GitHub answers a blocked-by edge on an issue of `a/b` with `refusal`, and lets one on `c/d` through. */
+    function withOtherRepos(refusal: GitHubError) {
+      const github = fakeGitHub();
+      return {
+        calls: github.calls,
+        graphql: github.graphql,
+        async rest(method: string, path: string, body?: unknown): Promise<unknown> {
+          if (path.startsWith("/repos/a/b/")) {
+            github.calls.push({ method, path, body });
+            throw refusal;
+          }
+          return github.rest(method, path, body);
+        },
+      };
+    }
+    const blocking = (repo: string, number: number) => ({ repo, number });
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "create-issue", key: "ticket:a", title: "A", body: "A.", labels: [], parent: null, blockedBy: [{ repo: "a/b", number: 3, databaseId: 2003 }] },
+        { kind: "add-blocked-by", issue: blocking("a/b", 9), blocker: { created: "ticket:a" } },
+        { kind: "add-blocked-by", issue: blocking("c/d", 4), blocker: { created: "ticket:a" } },
+        { kind: "add-blocked-by", issue: blocking("acme/shop", 20), blocker: { created: "ticket:a" } },
+        {
+          kind: "close-as-superseded",
+          issue: 7,
+          comment: [
+            "Split into ",
+            { created: "ticket:a" },
+            ".",
+            { blocking: blocking("a/b", 9), blockers: [{ created: "ticket:a" }] },
+            { blocking: blocking("c/d", 4), blockers: [{ created: "ticket:a" }] },
+            { blocking: blocking("acme/shop", 20), blockers: [{ created: "ticket:a" }] },
+          ],
+        },
+      ],
+    };
+
+    it.each([403, 404])("writes a blocker in another repo by its database id, and when GitHub refuses an edge on an issue there with a %i, goes on and names it in the closing comment to add by hand", async (status) => {
+      const github = withOtherRepos(new GitHubError(`GitHub POST failed: ${status}`, status, { request: "POST /repos/a/b/issues/9/dependencies/blocked_by" }));
+
+      await applyPlan(github, repo, plan);
+
+      expect(github.calls.filter((call) => call.path.endsWith("/dependencies/blocked_by")).map((call) => [call.path, call.body])).toEqual([
+        [`${issues}/100/dependencies/blocked_by`, { issue_id: 2003 }],
+        ["/repos/a/b/issues/9/dependencies/blocked_by", { issue_id: 1100 }],
+        ["/repos/c/d/issues/4/dependencies/blocked_by", { issue_id: 1100 }],
+        [`${issues}/20/dependencies/blocked_by`, { issue_id: 1100 }],
+      ]);
+      expect(github.calls.find((call) => call.method === "POST" && call.path === `${issues}/7/comments`)?.body).toEqual({
+        body: "Split into #100.\n- Move by hand: block a/b#9 by #100. The Fabrik App can't write a blocked-by edge on a/b#9.\n- c/d#4 is now blocked by #100.\n- #20 is now blocked by #100.",
+      });
+      expect(github.calls).toContainEqual({ method: "PATCH", path: `${issues}/7`, body: { state: "closed", state_reason: "completed" } });
+    });
+
+    it("fails the plan on any other refusal, as for an issue in its own repo", async () => {
+      const github = withOtherRepos(new GitHubError("GitHub POST failed: 502", 502, { request: "POST /repos/a/b/issues/9/dependencies/blocked_by" }));
+
+      await expect(applyPlan(github, repo, plan)).rejects.toThrow();
+      expect(github.calls.some((call) => call.method === "PATCH" && call.path === `${issues}/7`)).toBe(false);
+    });
+  });
 });
 
 describe("Applying a trigger label the issue already carries (#417)", () => {

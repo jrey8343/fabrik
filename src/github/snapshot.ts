@@ -16,6 +16,7 @@ import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { agentPullRequestsByGate } from "../loop/dispatch.ts";
+import { inBlockerOrder, type IssueRef } from "../loop/blockers.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { parseDesignTurnOutput } from "../loop/designOutput.ts";
 import { digestMarkIn } from "../loop/digestContract.ts";
@@ -56,6 +57,7 @@ import type {
   DesignQueueSnapshot,
   DispatchSnapshot,
   HeldTargetSnapshot,
+  IssueSnapshot,
   KeptBranch,
   KitIssueSnapshot,
   LabelledTrigger,
@@ -114,6 +116,7 @@ import {
   type TriggerHistoryEntry,
   verdictsIn,
 } from "./threads.ts";
+import { BLOCKED_BY, blockedByFields, blockersOf, issueRefOf, type RawBlockedBy, type RawBlocker, type RawDependenciesSummary } from "./blockers.ts";
 import { leavingOutHeldLines } from "./heldLines.ts";
 import { operatorsRequestChangesIn, type WrittenReview } from "./writtenOn.ts";
 
@@ -138,7 +141,7 @@ const ISSUE_QUERY = `
           }
         }
         closedByPullRequestsReferences(first: 10, includeClosedPrs: false) { nodes { number state isDraft headRefName author { __typename } } }
-        blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }
+        ${blockedByFields("databaseId")}
         blocking(first: 50) { nodes { number state repository { nameWithOwner } } }
       }
     }
@@ -162,7 +165,8 @@ interface IssueQueryResult {
       timelineItems: { nodes: LabelTimelineItem[] };
       // includeClosedPrs: false leaves out only PRs closed unmerged: a merged one still comes back (#543).
       closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean; headRefName: string; author: { __typename: string } | null }[] };
-      blockedBy: DependencyEdges;
+      blockedBy: RawBlockedBy<RawBlocker & { databaseId: number }>;
+      issueDependenciesSummary: RawDependenciesSummary;
       blocking: DependencyEdges;
     } | null;
   };
@@ -180,20 +184,14 @@ function parentIssueOf(parent: ParentNode | null): ParentIssueSnapshot | null {
   return { number: parent.number, open: parent.state === "OPEN", labels: parent.labels.nodes.map((label) => label.name) };
 }
 
-/** One direction of an issue's native dependencies, as the issue query reads it. */
+/** The issues an issue blocks, as the issue query reads them. */
 interface DependencyEdges {
   nodes: { number: number; state: "OPEN" | "CLOSED"; repository: { nameWithOwner: string } }[];
 }
 
-/**
- * The open issues at the other end of these edges, by number, that live in
- * this repo. An issue in another repo is left out: its number means nothing here.
- */
-function openIssueNumbersIn(repo: Repo, edges: DependencyEdges): number[] {
-  const here = `${repo.owner}/${repo.name}`.toLowerCase();
-  return edges.nodes
-    .filter((issue) => issue.state === "OPEN" && issue.repository.nameWithOwner.toLowerCase() === here)
-    .map((issue) => issue.number);
+/** The open issues at the other end of these edges, in any repo, each once by repo, then number. */
+function openIssuesIn(edges: DependencyEdges): IssueRef[] {
+  return inBlockerOrder(edges.nodes.filter((issue) => issue.state === "OPEN").map((issue) => ({ repo: issue.repository.nameWithOwner, number: issue.number })));
 }
 
 /**
@@ -340,7 +338,7 @@ const DISPATCH_QUERY = `
           state
           labels(first: 100) { nodes { name } }
           subIssues { totalCount }
-          blockedBy(first: 50) { nodes { number state stateReason } }
+          ${BLOCKED_BY}
           closedByPullRequestsReferences(first: 20, includeClosedPrs: false) { nodes { number state } }
           comments(last: 100) { nodes { body author { login __typename } } }
         }
@@ -362,7 +360,8 @@ interface DispatchQueryResult {
         state: "OPEN" | "CLOSED";
         labels: { nodes: { name: string }[] };
         subIssues: { totalCount: number };
-        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED"; stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null }[] };
+        blockedBy: RawBlockedBy;
+        issueDependenciesSummary: RawDependenciesSummary;
         closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] };
         comments: { nodes: { body: string; author: { login: string; __typename: string } | null }[] };
       }[];
@@ -383,7 +382,7 @@ const RESEARCH_DECISIONS_QUERY = `
           state
           labels(first: 100) { nodes { name } }
           assignees(first: 10) { nodes { login } }
-          blockedBy(first: 50) { nodes { number state } }
+          ${BLOCKED_BY}
           parent { number state labels(first: 100) { nodes { name } } }
           comments(last: 100) { nodes { body author { login __typename } } }
         }
@@ -401,7 +400,8 @@ interface ResearchDecisionsQueryResult {
         state: "OPEN" | "CLOSED";
         labels: { nodes: { name: string }[] };
         assignees: { nodes: { login: string }[] };
-        blockedBy: { nodes: { number: number; state: "OPEN" | "CLOSED" }[] };
+        blockedBy: RawBlockedBy;
+        issueDependenciesSummary: RawDependenciesSummary;
         parent: ParentNode | null;
         comments: { nodes: { body: string; author: { login: string; __typename: string } | null }[] };
       }[];
@@ -1901,6 +1901,7 @@ async function gatherIssue(github: ReadClient, repo: Repo, number: number, opera
   const keptBranch = await keptBranchIfMarked(github, repo, issue.number, labels);
   return {
     issue: {
+      repo: `${repo.owner}/${repo.name}`,
       number: issue.number,
       title: issue.title,
       open: issue.state === "OPEN",
@@ -1934,8 +1935,8 @@ async function gatherIssue(github: ReadClient, repo: Repo, number: number, opera
       // Read only for agent:implement on a Ticket with no open PR, where the start check weighs them (#725).
       unlandedImplementRuns: null,
       runsWithOutcome: runsWithOutcomeIn(comments),
-      openBlockers: openIssueNumbersIn(repo, issue.blockedBy),
-      openBlocking: openIssueNumbersIn(repo, issue.blocking),
+      ...issueBlockersOf(issue),
+      openBlocking: openIssuesIn(issue.blocking),
     },
     pullRequest: null,
     dispatch: null,
@@ -2288,6 +2289,7 @@ async function gatherDispatch(
     issue: null,
     pullRequest: null,
     dispatch: {
+      repo: `${repo.owner}/${repo.name}`,
       tickets,
       ...agentPullRequestsByGate(agentPullRequests),
       implementRunsInProgress: runs.implement,
@@ -2299,6 +2301,22 @@ async function gatherDispatch(
     designQueue: null,
     operator: operator ?? page.repository.owner.login,
   };
+}
+
+/** A Ticket's or research Decision's Blockers, by the one rule (src/github/blockers.ts), as Dispatch weighs them. */
+function dispatchBlockersOf(issue: { blockedBy: RawBlockedBy; issueDependenciesSummary: RawDependenciesSummary }): Pick<TicketSnapshot, "openBlockers" | "notPlannedBlockers" | "hiddenBlockers"> {
+  const { open, notPlanned, hidden } = blockersOf(issue.blockedBy.nodes, issue.issueDependenciesSummary);
+  return { openBlockers: open, notPlannedBlockers: notPlanned, hiddenBlockers: hidden };
+}
+
+/**
+ * An issue's Blockers by the one rule, open or closed as not planned, with
+ * each one's database id, which a Design session's split writes its edges by,
+ * and its hidden ones.
+ */
+function issueBlockersOf(issue: { blockedBy: RawBlockedBy<RawBlocker & { databaseId: number }>; issueDependenciesSummary: RawDependenciesSummary }): Pick<IssueSnapshot, "blockers" | "hiddenBlockers"> {
+  const { open, notPlanned, hidden } = blockersOf(issue.blockedBy.nodes, issue.issueDependenciesSummary, (edge) => ({ ...issueRefOf(edge), databaseId: edge.databaseId }));
+  return { blockers: inBlockerOrder([...open, ...notPlanned]), hiddenBlockers: hidden };
 }
 
 /**
@@ -2339,10 +2357,7 @@ async function gatherDispatchTickets(github: ReadClient, repo: Repo, appLogin: s
         number: issue.number,
         open: issue.state === "OPEN",
         labels,
-        openBlockers: issue.blockedBy.nodes.filter((b) => b.state === "OPEN").map((b) => b.number),
-        notPlannedBlockers: issue.blockedBy.nodes
-          .filter((b) => b.state === "CLOSED" && b.stateReason === "NOT_PLANNED")
-          .map((b) => b.number),
+        ...dispatchBlockersOf(issue),
         subIssues: issue.subIssues.totalCount,
         openLinkedPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "OPEN"),
         mergedLinkedPullRequests: pullRequestsIn(issue.closedByPullRequestsReferences, "MERGED"),
@@ -2378,7 +2393,7 @@ async function gatherResearchDecisions(github: ReadClient, repo: Repo, appLogin:
         open: issue.state === "OPEN",
         labels: issue.labels.nodes.map((label) => label.name),
         assignees: issue.assignees.nodes.map((assignee) => assignee.login),
-        openBlockers: issue.blockedBy.nodes.filter((b) => b.state === "OPEN").map((b) => b.number),
+        ...dispatchBlockersOf(issue),
         parentIssue: parentIssueOf(issue.parent),
         // Only the App's own notice counts, so nobody, another bot included, can fake a failure or clear one.
         lastRunFailed: researchRunFailedIn(

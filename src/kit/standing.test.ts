@@ -25,7 +25,10 @@ import {
   factsOf,
   standingFactsOf,
 } from "../read/builders.ts";
-import { aTicket } from "../__fixtures__/snapshots.ts";
+import { aTicket, issueRef } from "../__fixtures__/snapshots.ts";
+
+/** Issue `number` of `owner/product`, the repo these Standings are of. */
+const here = (number: number) => issueRef(number, "owner/product");
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
@@ -58,7 +61,7 @@ describe("the Standing rule", () => {
       });
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 7,
           pullRequest: 50,
@@ -230,7 +233,7 @@ describe("the Standing rule", () => {
       it("stands as yours to merge, stopping work, since the pass, naming the head it passed and the head it has", () => {
         expect(standingsIn({ openPullRequests: [moved(60)] })).toEqual([
           {
-            schema: 1,
+            schema: 2,
             repo: "owner/product",
             issue: 10,
             pullRequest: 60,
@@ -294,7 +297,7 @@ describe("the Standing rule", () => {
       const standings = standingsIn({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [passed], labelEvents: [handedBack] })] });
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 7,
           pullRequest: 50,
@@ -345,7 +348,7 @@ describe("the Standing rule", () => {
       // #15 waits on Triage, the Kit's (#608).
       expect(standings.filter(({ move }) => move === "operator")).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 13,
           pullRequest: null,
@@ -365,13 +368,15 @@ describe("the Standing rule", () => {
       ]);
     });
 
-    it("gives an open issue labelled ready-for-human with blockers one Standing, blocked and nobody's move, its blockers in order, since the label", () => {
+    it("gives an open issue labelled ready-for-human with blockers one Standing, blocked and nobody's move, its blockers once each by repo, then number, since the label", () => {
       const standings = standingsIn({
-        openIssues: [anOpenIssue({ number: 13, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-01T20:00:00Z")], blockers: [9, 5, 9] })],
+        openIssues: [
+          anOpenIssue({ number: 13, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-01T20:00:00Z")], blockers: [here(9), issueRef(3, "a/b"), here(5), here(9)], hiddenBlockers: 1 }),
+        ],
       });
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 13,
           pullRequest: null,
@@ -385,8 +390,21 @@ describe("the Standing rule", () => {
           stuckAt: null,
           awaits: null,
           subscription: null,
-          detail: { blockers: [5, 9] },
+          detail: { blockers: [issueRef(3, "a/b"), here(5), here(9)], hiddenBlockers: 1 },
         },
+      ]);
+    });
+
+    it("gives an open issue labelled ready-for-human blocked only by an issue in another repo, or a hidden one, a blocked Standing (#771)", () => {
+      const standings = standingsIn({
+        openIssues: [
+          anOpenIssue({ number: 13, labels: ["ready-for-human"], blockers: [issueRef(4, "jrey8343/fabrik")] }),
+          anOpenIssue({ number: 14, labels: ["ready-for-human"], hiddenBlockers: 1 }),
+        ],
+      });
+      expect(standings.map(({ issue, name, yours, detail }) => ({ issue, name, yours, detail }))).toEqual([
+        { issue: 13, name: "blocked", yours: false, detail: { blockers: [issueRef(4, "jrey8343/fabrik")], hiddenBlockers: 0 } },
+        { issue: 14, name: "blocked", yours: false, detail: { blockers: [], hiddenBlockers: 1 } },
       ]);
     });
 
@@ -396,7 +414,7 @@ describe("the Standing rule", () => {
         kit: { number, labels, body: "", comments: [] },
       });
       const issues = [kitIssue(20, ["fabrik:weekly-limit"]), kitIssue(21, ["ready-for-human", "fabrik:token-rotation"]), kitIssue(22, ["ready-for-human", "fabrik:usage-credits"])];
-      const blocked = standingsIn({ openIssues: issues.map(({ open }) => ({ ...open, blockers: [5] })), kitIssues: issues.map(({ kit }) => kit) });
+      const blocked = standingsIn({ openIssues: issues.map(({ open }) => ({ ...open, blockers: [here(5), issueRef(3, "a/b")], hiddenBlockers: 1 })), kitIssues: issues.map(({ kit }) => kit) });
       const unblocked = standingsIn({ openIssues: issues.map(({ open }) => open), kitIssues: issues.map(({ kit }) => kit) });
       expect(blocked.map(({ issue, name }) => [issue, name])).toEqual([
         [20, "weekly-limit-reached"],
@@ -417,7 +435,7 @@ describe("the Standing rule", () => {
       });
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 12,
           pullRequest: null,
@@ -458,7 +476,7 @@ describe("the Standing rule", () => {
       const standings = standingsIn({ openIssues: [designing(12, [aDesignRound(1, "2026-11-02T20:00:00Z"), operatorAnswer("2026-11-03T20:00:00Z"), aDesignTurnFailedNotice("2026-11-06T20:00:00Z")])] });
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 12,
           pullRequest: null,
@@ -551,7 +569,7 @@ describe("the Standing rule", () => {
     it("is waiting for its reset, the Kit's and never Stuck, for a weekly-limit issue while another Subscription is free, naming its Subscription", () => {
       expect(standingsIn(facts(weeklyLimit(20, "B", "2026-11-10T22:00:00Z")), listing("A", "B"))).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 20,
           pullRequest: null,
@@ -574,7 +592,7 @@ describe("the Standing rule", () => {
       const standings = standingsIn(facts(weeklyLimit(20, "A", "2026-11-10T22:00:00Z"), weeklyLimit(21, "B", "2026-11-09T22:00:00Z", "2026-11-07T20:00:00Z")), listing("A", "B"));
       expect(standings).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 20,
           pullRequest: null,
@@ -606,7 +624,7 @@ describe("the Standing rule", () => {
     it("is the Operator's token refused, stopping work, for a token-rotation issue, saying whether another Subscription is free, not ready-for-human work", () => {
       expect(standingsIn(facts(tokenRotation(22, "B")), listing("A", "B"))).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 22,
           pullRequest: null,
@@ -629,7 +647,7 @@ describe("the Standing rule", () => {
     it("is the Operator's to do, stopping work, for a usage-credits issue, naming its Subscription", () => {
       expect(standingsIn(facts(usageCredits(23, "B")), listing("A", "B"))).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 23,
           pullRequest: null,
@@ -651,7 +669,7 @@ describe("the Standing rule", () => {
 
   describe("reading matter", () => {
     const reading = (issue: number, work: Standing["work"], since: string, detail = { map: null as number | null, decisions: [] as number[] }) => ({
-      schema: 1,
+      schema: 2,
       repo: "owner/product",
       issue,
       pullRequest: null,
@@ -719,17 +737,17 @@ describe("the Standing rule", () => {
     });
 
     describe("blocked", () => {
-      const blocked = (issue: number, work: Standing["work"], since: string, blockers: readonly number[]) => ({
+      const blocked = (issue: number, work: Standing["work"], since: string, blockers: readonly number[], hiddenBlockers = 0) => ({
         ...reading(issue, work, since),
         name: "blocked",
         move: "nobody",
         yours: false,
-        detail: { blockers },
+        detail: { blockers: blockers.map(here), hiddenBlockers },
       });
-      const map = (blockers: readonly number[]) =>
-        anOpenIssue({ number: 30, labels: ["wayfinder:map"], labelEvents: [aLabelAdded("wayfinder:map", "2026-11-03T20:00:00Z")], subIssues: [31, 32], blockers });
-      const grilling = (number: number, blockers: readonly number[]) =>
-        anOpenIssue({ number, labels: ["wayfinder:grilling"], labelEvents: [aLabelAdded("wayfinder:grilling", "2026-11-04T20:00:00Z")], blockers });
+      const map = (blockers: readonly number[], hiddenBlockers = 0) =>
+        anOpenIssue({ number: 30, labels: ["wayfinder:map"], labelEvents: [aLabelAdded("wayfinder:map", "2026-11-03T20:00:00Z")], subIssues: [31, 32], blockers: blockers.map(here), hiddenBlockers });
+      const grilling = (number: number, blockers: readonly number[], hiddenBlockers = 0) =>
+        anOpenIssue({ number, labels: ["wayfinder:grilling"], labelEvents: [aLabelAdded("wayfinder:grilling", "2026-11-04T20:00:00Z")], blockers: blockers.map(here), hiddenBlockers });
 
       it("gives an open Map with blockers a blocked Standing, nobody's move, since it got wayfinder:map, still a Map, and its unblocked Decision stays yours to read, carrying it", () => {
         const standings = standingsIn({ openIssues: [map([8, 1, 7]), grilling(31, [])], openMaps: [30] });
@@ -746,6 +764,15 @@ describe("the Standing rule", () => {
       it("leaves a blocked Decision out of the Decisions its unblocked Map carries, as it waits on no one", () => {
         const standings = standingsIn({ openIssues: [map([]), grilling(31, [32]), grilling(32, [])], openMaps: [30] });
         expect(standings.find(({ issue }) => issue === 30)).toEqual(reading(30, "map", "2026-11-03T20:00:00Z", { map: null, decisions: [32] }));
+      });
+
+      it("blocks a Map and a grilling Decision on hidden blockers alone (#771)", () => {
+        const standings = standingsIn({ openIssues: [map([], 1), grilling(31, [], 2), grilling(32, [])], openMaps: [30] });
+        expect(standings).toEqual([
+          blocked(30, "map", "2026-11-03T20:00:00Z", [], 1),
+          blocked(31, "operator-decision", "2026-11-04T20:00:00Z", [], 2),
+          reading(32, "operator-decision", "2026-11-04T20:00:00Z", { map: 30, decisions: [] }),
+        ]);
       });
     });
 
@@ -765,7 +792,7 @@ describe("the Standing rule", () => {
       const standings = standingsIn({ openIssues: [mapOf(30, [31]), failed(31)], openMaps: [30] });
       expect(decisionsIn(standings)).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 31,
           pullRequest: null,
@@ -814,7 +841,7 @@ describe("the Standing rule", () => {
     it("gives an unanswered needs-info issue the Operator filed one Standing, needs your answer at Triage, stopping work, since the label", () => {
       expect(standingsIn({ openIssues: [asked(18, "operator")] })).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 18,
           pullRequest: null,
@@ -842,7 +869,7 @@ describe("the Standing rule", () => {
     it("never makes one anyone else filed the Operator's: it waits on its author, nobody's move, at Triage", () => {
       expect(standingsIn({ openIssues: [asked(16, "kate")] })).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 16,
           pullRequest: null,
@@ -990,7 +1017,7 @@ describe("work that goes on without the Operator (#606)", () => {
           repo: "owner/product",
           branch: "main",
           config: { ok: true, config: DEFAULT_KIT_CONFIG },
-          dispatch: { candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 15, openBlockers: [3] })], researchDecisions: [] } },
+          dispatch: { candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 15, openBlockers: [here(3)] })], researchDecisions: [] } },
           headChecks: {},
           runsInFlight: [
             aRunInFlight({ issue: 7, createdAt: "2026-11-08T19:20:00Z" }),
@@ -1110,7 +1137,7 @@ describe("a merged agent pull request at Production (#634)", () => {
   it("is live once a deploy that counts succeeded, nobody's move, since the deciding report, carrying its Ticket though closed", () => {
     expect(atProduction(read({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }))).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: 50,
@@ -1173,7 +1200,7 @@ describe("a merged agent pull request at Production (#634)", () => {
     for (const now of ["2026-11-08T20:00:00Z", "2026-11-09T19:29:00Z"]) {
       expect(atProduction(read({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }), { now, overrides: untracked })).toEqual([
         {
-          schema: 1,
+          schema: 2,
           repo: "owner/product",
           issue: 7,
           pullRequest: 50,
@@ -1243,7 +1270,7 @@ describe("a passed draft waiting on its Digest (#654)", () => {
   it("is running while a Digest job is in flight on it: at Review, the Kit's, awaiting the role digest on the pull request, the pass shown as given", () => {
     expect(standingsIn({ openPullRequests: [waiting()] }, { kit: kit([aDigestRunOn(50)]) })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: 50,
@@ -1265,7 +1292,7 @@ describe("a passed draft waiting on its Digest (#654)", () => {
   it("is not-started while the label is on and no Digest job is in flight, from when the label was last added, turning Stuck at the bar after it", () => {
     expect(standingsIn({ openPullRequests: [waiting()] }, { kit: kit() })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: 50,

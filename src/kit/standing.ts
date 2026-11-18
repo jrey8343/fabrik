@@ -22,7 +22,7 @@ import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 /** Goes up only when a field is removed or changes meaning: a new name or a new `detail` key leaves it. */
-export const STANDING_SCHEMA = 1;
+export const STANDING_SCHEMA = 2;
 
 /** What kind of work a Standing is. */
 export type StandingWork =
@@ -164,7 +164,13 @@ export interface StandingDetails {
   readonly "check-failing": { readonly plain: PlainKind | null; readonly check: string; readonly checkIs: "failing" | "never-reported"; readonly passedAt?: string; readonly passedHead?: string };
   readonly conflicts: { readonly plain: PlainKind };
   readonly draft: { readonly plain: PlainKind };
-  readonly blocked: { readonly blockers: readonly number[] };
+  /**
+   * `blockers`: the Blockers its read could see, each by its repo, `owner/name`,
+   * set for this repo's too, once, by repo, then number; `hiddenBlockers`: how
+   * many more GitHub counts in repos the Fabrik App can't read, which can block
+   * it alone (#771).
+   */
+  readonly blocked: { readonly blockers: readonly { readonly repo: string; readonly number: number }[]; readonly hiddenBlockers: number };
   /** `author` is a login, with no `@`. */
   readonly "waiting-on-author": { readonly author: string };
   /** A merged agent pull request at Production (src/kit/standingProduction.ts): each of its five names carries the same keys. */

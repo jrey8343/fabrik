@@ -7,7 +7,8 @@
 // App's last word, as a Product repo's row carries them (./rows.ts). No
 // history, no Run record and no transcript is read here.
 import { pagesOf, type ReadClient, whyUnread } from "../github/client.ts";
-import { ACTOR, BLOCKED_BY, COMMENTS, LABEL_EVENTS, openIssueOf, PAGE_INFO, type RawBlockedBy, type RawIssue } from "../github/facts.ts";
+import { BLOCKED_BY, type RawBlockedBy, type RawDependenciesSummary } from "../github/blockers.ts";
+import { ACTOR, COMMENTS, LABEL_EVENTS, openIssueOf, PAGE_INFO, type RawIssue } from "../github/facts.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { loginOf } from "../github/snapshot.ts";
 import { checkCallerWorkflow } from "../kit/caller.ts";
@@ -107,7 +108,7 @@ const OPEN_ISSUES_QUERY = `
 type RawSummary = Pick<RawIssue, "number" | "title" | "state" | "createdAt" | "comments"> & { lastEditedAt: string | null };
 
 /** An open issue as OPEN_ISSUES_QUERY reads it. */
-type RawStoreIssue = Pick<RawIssue, "number" | "title" | "state" | "createdAt" | "author" | "labels" | "comments" | "timelineItems"> & { blockedBy: RawBlockedBy };
+type RawStoreIssue = Pick<RawIssue, "number" | "title" | "state" | "createdAt" | "author" | "labels" | "comments" | "timelineItems"> & { blockedBy: RawBlockedBy; issueDependenciesSummary: RawDependenciesSummary };
 
 /**
  * The store read at `now`, ISO 8601, with `client`: the release its caller
@@ -156,7 +157,7 @@ async function gatherStoreFacts(client: ReadClient, appLogin: string | null): Pr
       .map(({ number, title, createdAt, comments }) => ({ number, title, createdAt, appComments: appCommentsOf(comments) })),
     readyForHuman: stillOpen
       .filter(({ labels }) => labels.nodes.some(({ name }) => name === READY_FOR_HUMAN))
-      .map((issue) => openIssueOf({ ...issue, closedAt: null, subIssues: { nodes: [] } }, RUN_STORE_REPO)),
+      .map((issue) => openIssueOf({ ...issue, closedAt: null, subIssues: { nodes: [] } })),
   };
 }
 

@@ -47,7 +47,7 @@ describe("a draft with nothing to explain it", () => {
   it("is waiting on the Kit at Review from its last push, turning Stuck at the bar, and awaits a Review on the pull request", () => {
     expect(standingsIn({ openPullRequests: [quiet()] })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: 50,
@@ -132,7 +132,7 @@ describe("a draft with a pass on its head", () => {
     });
     expect(standingsIn({ openPullRequests: [parked] })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: 50,
@@ -178,7 +178,7 @@ describe("the Operator's Request changes with no run started", () => {
   it("is waiting on the Kit at Implement from when it was submitted, for a Request-changes run on the pull request, turning Stuck at the bar", () => {
     expect(standingsIn({ openPullRequests: [atTheGate()] })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 7,
         pullRequest: 50,
@@ -256,7 +256,7 @@ describe("an issue waiting on Triage", () => {
   it("with its needs-info question answered is waiting on the Kit at Triage from the first answer, for a Triage run, turning Stuck at the bar", () => {
     expect(standingsIn({ openIssues: [question([answer])] })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 12,
         pullRequest: null,
@@ -337,7 +337,7 @@ describe("silences the rule cannot date", () => {
     const facts = { openIssues: [anOpenIssue({ number: 14, labels: ["ready-for-agent"], labelEvents: [aLabelAdded("ready-for-agent", READY)] })] };
     expect(standingsIn(facts, { kit: dispatching([{ number: 14 }]) })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 14,
         pullRequest: null,
@@ -381,7 +381,7 @@ describe("silences the rule cannot date", () => {
     const holding = (number: number) => aDesignQueueIssue({ number, designRounds: 1 });
     expect(standingsIn({ designQueue: { issues: [waiting, holding(22)], designTurnsInProgress: [] } })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 21,
         pullRequest: null,
@@ -405,7 +405,7 @@ describe("silences the rule cannot date", () => {
     const between = anOpenReplay({ body: aReplayBody({ state: "pending" }) });
     expect(standingsIn({ openReplays: [between] })).toEqual([
       {
-        schema: 1,
+        schema: 2,
         repo: "owner/product",
         issue: 140,
         pullRequest: null,
@@ -435,14 +435,14 @@ describe("silences the rule cannot date", () => {
     ] as const)("gives an open issue labelled %s waiting on the Kit with no stuckAt, since the label", (_, label, work, place) => {
       const issue = anOpenIssue({ number: 30, labels: [label], labelEvents: [aLabelAdded(label, LABELLED)] });
       expect(standingsIn({ openIssues: [issue] }, { kit: null })).toEqual([
-        { schema: 1, repo: "owner/product", issue: 30, pullRequest: null, work, place, since: LABELLED, subscription: null, ...leftOver },
+        { schema: 2, repo: "owner/product", issue: 30, pullRequest: null, work, place, since: LABELLED, subscription: null, ...leftOver },
       ]);
     });
 
     it("gives an open agent PR out of draft that nothing names waiting on the Kit with no stuckAt, since it left draft", () => {
       const pullRequest = anOpenPullRequest({ number: 50, ticket: 7, draft: false, draftEvents: [{ kind: "ready", actor: "operator", at: LABELLED }] });
       expect(standingsIn({ openPullRequests: [pullRequest] })).toEqual([
-        { schema: 1, repo: "owner/product", issue: 7, pullRequest: 50, work: "ticket", place: "merge-gate", since: LABELLED, subscription: null, ...leftOver, detail: { ...leftOver.detail, head: HEAD } },
+        { schema: 2, repo: "owner/product", issue: 7, pullRequest: 50, work: "ticket", place: "merge-gate", since: LABELLED, subscription: null, ...leftOver, detail: { ...leftOver.detail, head: HEAD } },
       ]);
     });
 
