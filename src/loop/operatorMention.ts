@@ -13,7 +13,8 @@
 // never takes a check off the Required list, skips it or merges past it: the
 // mention says what's left, which is the Operator's. Pure.
 import { fixBroughtTo } from "./conflicts.ts";
-import { checkCode, passedHeadAtGate } from "./flakyChecks.ts";
+import { checkCode } from "../review/failureExcerpt.ts";
+import { passedHeadAtGate } from "./flakyChecks.ts";
 import { gateRerunSpent, stillRed } from "./gateRerun.ts";
 import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
 import { flakyCheckIssueOf, operatorMentionMarker } from "./markers.ts";

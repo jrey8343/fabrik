@@ -24,7 +24,7 @@ import {
 } from "../evidence/uiEvidence.ts";
 import { type Needs, reviewChecksOf } from "../kit/pushJob.ts";
 import { changedTestsIn, reviewerChangedTestsBlock } from "../loop/changedTests.ts";
-import { checkCode } from "../loop/flakyChecks.ts";
+import { checkCode } from "../review/failureExcerpt.ts";
 import { redChecksOnMainOf, redChecksText } from "../loop/redChecks.ts";
 import type { RedRequiredChecks } from "../loop/types.ts";
 import { excerptsPassedOut, FAILURE_EXCERPTS_FILE, RERUN_FAILURE_EXCERPTS_FILE } from "../review/failureExcerpt.ts";

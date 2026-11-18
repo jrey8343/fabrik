@@ -17,8 +17,12 @@
 //   step's log, if GitHub holds none, reads as a step that left none.
 // - A check run's error annotation has the level `failure`, not `error`.
 import { allPages, GitHubError, type ReadClient, whyUnread } from "../github/client.ts";
-import { checkCode } from "../loop/flakyChecks.ts";
 import { withoutMentions } from "../loop/mentions.ts";
+
+/** A check's name as Markdown code: a backtick in it can't end the span. */
+export function checkCode(name: string): string {
+  return `\`${name.replace(/`/g, "'")}\``;
+}
 
 /** A red check on a commit: its name, the link GitHub gives it, and the commit it failed on. */
 export interface RedCheck {

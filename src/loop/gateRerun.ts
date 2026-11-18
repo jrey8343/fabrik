@@ -14,7 +14,8 @@
 // head, is skipped and counts as done. The Kit never tries twice on one head.
 // Pure.
 import { declineTrigger } from "./declineTrigger.ts";
-import { checkCode, passedHeadAtGate } from "./flakyChecks.ts";
+import { checkCode } from "../review/failureExcerpt.ts";
+import { passedHeadAtGate } from "./flakyChecks.ts";
 import { isRed, latestRun } from "./headChecks.ts";
 import { RERUN_CHECKS_LABEL } from "./labels.ts";
 import { gateRerunDoneMarker, gateRerunMarker } from "./markers.ts";

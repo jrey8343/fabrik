@@ -45,7 +45,7 @@ import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { GitHub } from "../github/client.ts";
 import type { MergeableState } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
-import { checkCode } from "../loop/flakyChecks.ts";
+import { checkCode } from "./failureExcerpt.ts";
 import type { FailureReport } from "../loop/types.ts";
 import { type BranchRequiredChecks, type DefaultBranchHeadChecks, readDefaultBranchHeadChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type ChecksOutcome, checksFromGh, requiredChecksOutcome } from "./checks.ts";

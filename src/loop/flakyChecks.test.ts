@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aCausedRedCheckReview, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
+import { aCausedRedCheckReview, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import { uncountedFlaws } from "./flakyChecks.ts";
 import type { FailureExcerpt } from "../review/failureExcerpt.ts";
 import { planFor } from "./rules.ts";
