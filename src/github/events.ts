@@ -336,8 +336,8 @@ export interface FinishedReview {
   /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
   readonly rerun: RerunReport | null;
   /**
-   * Each red GitHub Actions check's latest Failure excerpt the Review's waits passed out (#775), with its
-   * first attempt's for one that failed again (#776); none when they passed none. A check the Kit's re-run
+   * Each red check's latest Failure excerpt the Review's waits passed out (#775), an outside one's among them (#777),
+   * with its first attempt's for one that failed again (#776); none when they passed none. A check the Kit's re-run
    * turned green has its first attempt's alone, which its Flaky check's issue carries (#778).
    */
   readonly excerpts?: readonly CheckExcerpt[];

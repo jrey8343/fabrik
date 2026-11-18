@@ -361,7 +361,10 @@ jobs:
     concurrency:
       group: fabrik-monitor
       cancel-in-progress: false
-    permissions: {}
+    permissions:
+      # Only to read the log of a failed run a red-main or Main check issue names, its Failure excerpt (#786);
+      # the annotations go on the Fabrik App's Checks: read. The caller's tick job grants it.
+      actions: read
     steps:
       - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -419,4 +422,5 @@ jobs:
           FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
           FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}
           FABRIK_SENTRY_TOKEN: ${{ steps.sentry.outputs.SENTRY_TOKEN }}
+          FABRIK_ACTIONS_TOKEN: ${{ github.token }}
         run: node kit/src/monitor/main.ts

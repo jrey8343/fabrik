@@ -4,6 +4,8 @@ import { GitHubError } from "../github/client.ts";
 import {
   type ActionsJob,
   type CheckAnnotation,
+  type CheckRun,
+  type CommitStatus,
   type ExcerptAnnotation,
   type FailedStep,
   type FailureExcerpt,
@@ -208,12 +210,123 @@ describe("A red check's failure that can't be read", () => {
     expect(await readFailureExcerpt(check, github)).toMatchObject({ kind: "unread", why: "GitHub refused the read: fetch failed" });
   });
 
-  it("says a check whose link isn't a GitHub Actions job has no log the Kit reads", async () => {
-    expect(await readFailureExcerpt({ name: "Vercel", link: "https://vercel.com/acme/shop/abc", sha: SHA }, reader())).toEqual({
+});
+
+describe("A red check from an outside service's Failure excerpt (#777)", () => {
+  const VERCEL = "https://vercel.com/acme/shop/abc";
+  const status = (overrides: Partial<CommitStatus> = {}): CommitStatus => ({
+    context: "Vercel",
+    state: "failure",
+    description: "Deployment has failed",
+    target_url: "https://vercel.com/acme/shop/abc/logs",
+    ...overrides,
+  });
+  /** A GitHub that holds these check runs and commit statuses on the head, and no GitHub Actions job. */
+  const outside = ({ checkRuns = [], statuses = [] }: { checkRuns?: readonly CheckRun[]; statuses?: readonly CommitStatus[] }): FailureReader => ({
+    ...reader(),
+    job: async () => Promise.reject(new Error("an outside check has no job")),
+    checkRuns: async (sha, name) => (sha === SHA ? checkRuns.filter((run) => run.name === name) : []),
+    statuses: async (sha) => (sha === SHA ? statuses : []),
+  });
+
+  it("reads a red commit status's description and target link", async () => {
+    const github = outside({ statuses: [status(), status({ context: "codecov/patch", description: "60% of diff hit" })] });
+
+    expect(await readFailureExcerpt({ name: "Vercel", link: VERCEL, sha: SHA }, github)).toEqual({
+      kind: "commit-status",
+      check: "Vercel",
+      link: "https://vercel.com/acme/shop/abc/logs",
+      description: "Deployment has failed",
+    });
+  });
+
+  const BUILDKITE = "https://buildkite.com/acme/shop/builds/812";
+  const run = (overrides: Partial<CheckRun> = {}): CheckRun => ({
+    id: 4242,
+    name: "buildkite/shop",
+    app: { slug: "buildkite" },
+    details_url: BUILDKITE,
+    html_url: "https://github.com/acme/shop/runs/4242",
+    output: { title: "Build #812 failed", summary: "3 of 412 specs failed:\n- spec/cart_spec.rb:12" },
+    ...overrides,
+  });
+
+  it("reads a red outside check run's title, summary, error annotations and details link", async () => {
+    const annotations: CheckAnnotation[] = [
+      { path: "spec/cart_spec.rb", start_line: 12, annotation_level: "failure", message: "expected 3, got 4" },
+      { path: "spec/cart_spec.rb", start_line: 30, annotation_level: "warning", message: "slow spec" },
+    ];
+    const checked: number[] = [];
+    const github: FailureReader = { ...outside({ checkRuns: [run()] }), annotations: async (id) => (checked.push(id), annotations) };
+
+    expect(await readFailureExcerpt({ name: "buildkite/shop", link: BUILDKITE, sha: SHA }, github)).toEqual({
+      kind: "outside-check-run",
+      check: "buildkite/shop",
+      link: BUILDKITE,
+      title: "Build #812 failed",
+      summary: "3 of 412 specs failed:\n- spec/cart_spec.rb:12",
+      annotations: [{ path: "spec/cart_spec.rb", line: 12, message: "expected 3, got 4" }],
+    });
+    expect(checked).toEqual([4242]);
+  });
+
+  it("reads a check run's empty output as empty, keeping its link", async () => {
+    const github: FailureReader = { ...outside({ checkRuns: [run({ output: { title: null, summary: null } })] }), annotations: async () => [] };
+
+    expect(await readFailureExcerpt({ name: "buildkite/shop", link: BUILDKITE, sha: SHA }, github)).toEqual({
+      kind: "outside-check-run",
+      check: "buildkite/shop",
+      link: BUILDKITE,
+      title: "",
+      summary: "",
+      annotations: [],
+    });
+  });
+
+  it("reads a commit status's missing description as empty, and keeps the check's link where it gave none", async () => {
+    const github = outside({ statuses: [status({ description: null, target_url: null })] });
+
+    expect(await readFailureExcerpt({ name: "Vercel", link: VERCEL, sha: SHA }, github)).toEqual({ kind: "commit-status", check: "Vercel", link: VERCEL, description: "" });
+  });
+
+  it("reads no GitHub Actions check run as an outside one", async () => {
+    const github = outside({ checkRuns: [run({ app: { slug: "github-actions" } })], statuses: [status({ context: "buildkite/shop" })] });
+
+    expect(await readFailureExcerpt({ name: "buildkite/shop", link: BUILDKITE, sha: SHA }, github)).toMatchObject({ kind: "commit-status" });
+  });
+
+  it("says why when GitHub refuses a read, and never throws", async () => {
+    const refused = new GitHubError("GitHub GET /repos/acme/shop/commits/b/status failed: 403", 403, {
+      body: '{"message":"Resource not accessible by integration"}',
+      request: "GET /repos/acme/shop/commits/b/status",
+    });
+    const github: FailureReader = { ...outside({}), statuses: async () => Promise.reject(refused) };
+
+    expect(await readFailureExcerpt({ name: "Vercel", link: VERCEL, sha: SHA }, github)).toEqual({
       kind: "unread",
       check: "Vercel",
-      link: "https://vercel.com/acme/shop/abc",
-      why: "it isn't a GitHub Actions check, so the Kit reads no log for it",
+      link: VERCEL,
+      why: expect.stringMatching(/^GitHub refused the read: .*Resource not accessible by integration/),
+    });
+  });
+
+  it("keeps a check run whose annotations GitHub refused, saying why", async () => {
+    const github: FailureReader = { ...outside({ checkRuns: [run()] }), annotations: async () => Promise.reject(new TypeError("fetch failed")) };
+
+    expect(await readFailureExcerpt({ name: "buildkite/shop", link: BUILDKITE, sha: SHA }, github)).toMatchObject({
+      kind: "outside-check-run",
+      title: "Build #812 failed",
+      annotations: [],
+      annotationsUnread: "GitHub refused the read: fetch failed",
+    });
+  });
+
+  it("says GitHub holds nothing by the check's name on the head when it holds neither", async () => {
+    expect(await readFailureExcerpt({ name: "Vercel", link: VERCEL, sha: SHA }, outside({}))).toEqual({
+      kind: "unread",
+      check: "Vercel",
+      link: VERCEL,
+      why: "GitHub holds no check run or commit status by that name on the head",
     });
   });
 });
@@ -426,6 +539,95 @@ describe("Rendering a check that failed both times (#776)", () => {
   });
 });
 
+describe("Rendering an outside check's Failure excerpt (#777)", () => {
+  const VERCEL = "https://vercel.com/acme/shop/abc/logs";
+  const BUILDKITE = "https://buildkite.com/acme/shop/builds/812";
+  const status = (description: string): FailureExcerpt => ({ kind: "commit-status", check: "Vercel", link: VERCEL, description });
+  const run = (overrides: Partial<Extract<FailureExcerpt, { kind: "outside-check-run" }>> = {}): FailureExcerpt => ({
+    kind: "outside-check-run",
+    check: "buildkite/shop",
+    link: BUILDKITE,
+    title: "Build #812 failed",
+    summary: "3 of 412 specs failed:\n- spec/cart_spec.rb:12",
+    annotations: [{ path: "spec/cart_spec.rb", line: 12, message: "expected 3, got 4" }],
+    ...overrides,
+  });
+
+  it("shows a commit status's description and target link under its name, and says the service's own log can't be reached", () => {
+    expect(renderFailureExcerpts([status("Deployment has failed")])).toEqual([
+      [
+        `- \`Vercel\` ([the service's page](${VERCEL}))`,
+        "",
+        "  A commit status from an outside service, whose own log can't be reached from GitHub. Its description:",
+        "",
+        "  ```text",
+        "  Deployment has failed",
+        "  ```",
+      ].join("\n"),
+    ]);
+  });
+
+  it("shows an outside check run's title, summary, error annotations and details link, and says the same", () => {
+    expect(renderFailureExcerpts([run()])).toEqual([
+      [
+        `- \`buildkite/shop\` ([the service's page](${BUILDKITE}))`,
+        "",
+        "  A check run from an outside service, whose own log can't be reached from GitHub. Its title and summary:",
+        "",
+        "  ```text",
+        "  Build #812 failed",
+        "",
+        "  3 of 412 specs failed:",
+        "  - spec/cart_spec.rb:12",
+        "  ```",
+        "",
+        "  Its error annotations:",
+        "",
+        "  - `spec/cart_spec.rb`, line 12:",
+        "",
+        "    ```text",
+        "    expected 3, got 4",
+        "    ```",
+      ].join("\n"),
+    ]);
+  });
+
+  it("says a commit status with no description wrote nothing to GitHub, and keeps its link", () => {
+    expect(renderFailureExcerpts([status("")])).toEqual([
+      [
+        `- \`Vercel\` ([the service's page](${VERCEL}))`,
+        "",
+        "  A commit status from an outside service, whose own log can't be reached from GitHub. It wrote nothing to GitHub but its result: no description.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("says a check run with no output wrote nothing to GitHub, and keeps its link", () => {
+    expect(renderFailureExcerpts([run({ title: "", summary: "", annotations: [] })])).toEqual([
+      [
+        `- \`buildkite/shop\` ([the service's page](${BUILDKITE}))`,
+        "",
+        "  A check run from an outside service, whose own log can't be reached from GitHub. It wrote nothing to GitHub but its result: no title, summary or error annotation.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("shows what a check run did write: its summary alone, or its annotations alone", () => {
+    const [summaryOnly] = renderFailureExcerpts([run({ title: "", annotations: [] })]);
+    expect(summaryOnly).toContain("Its summary:\n\n  ```text\n  3 of 412 specs failed:");
+    expect(summaryOnly).toContain("It has no error annotation.");
+
+    const [annotationsOnly] = renderFailureExcerpts([run({ title: "", summary: "" })]);
+    expect(annotationsOnly).toContain("It wrote no title or summary.\n\n  Its error annotations:");
+  });
+
+  it("says why under its name when its annotations couldn't be read", () => {
+    const [block] = renderFailureExcerpts([run({ annotations: [], annotationsUnread: "GitHub refused the read: 403" })]);
+
+    expect(block).toContain("Its annotations couldn't be read: GitHub refused the read: 403.");
+  });
+});
+
 describe("The cap on Failure excerpts' log lines", () => {
   const link = (check: string) => `https://github.com/acme/shop/actions/runs/7/job/${check}`;
   /** `count` lines of 100 characters, each 101 with its newline, numbered from 1. */
@@ -481,6 +683,44 @@ describe("The cap on Failure excerpts' log lines", () => {
     // 20,000 characters hold 49 lines of 401.
     expect(kept(blocks[1]!)).toHaveLength(49);
     expect(kept(blocks[2]!)).toHaveLength(49);
+  });
+
+  it("gives the whole 40,000 to a GitHub Actions check beside an outside check, which has no log lines (#777)", () => {
+    const blocks = renderFailureExcerpts([
+      red("b", lines(150, 400)),
+      { kind: "outside-check-run", check: "buildkite/shop", link: "https://buildkite.com/acme/shop/builds/812", title: "Build failed", summary: "s".repeat(30_000), annotations: [] },
+      { kind: "commit-status", check: "Vercel", link: "https://vercel.com/acme/shop/abc", description: "Deployment has failed" },
+    ]);
+
+    // 40,000 characters hold 99 lines of 401, as for a check alone.
+    expect(kept(blocks[0]!)).toHaveLength(99);
+    expect(blocks[1]).toContain("s".repeat(30_000));
+  });
+
+  it("shortens an outside check's summary and annotations, saying so, when the comment would pass its room (#777)", () => {
+    const summary = "s".repeat(20_000);
+    const message = "m".repeat(20_000);
+    const excerpts: FailureExcerpt[] = [
+      red("a", lines(150, 400)),
+      {
+        kind: "outside-check-run",
+        check: "buildkite/shop",
+        link: "https://buildkite.com/acme/shop/builds/812",
+        title: "Build failed",
+        summary,
+        annotations: [{ path: "spec/a_spec.rb", line: 1, message }],
+      },
+    ];
+
+    const tight = renderFailureExcerpts(excerpts, { room: 20_000 }).join("\n\n");
+    expect(tight.length).toBeLessThanOrEqual(20_000);
+    expect(tight).not.toContain(summary);
+    expect(tight).not.toContain(message);
+    // Each shortened alike, as long as both fit: a little under half the room each.
+    expect(tight).toContain("s".repeat(9_000));
+    expect(tight).toContain("m".repeat(9_000));
+    expect(tight).toContain("_Shortened to fit the comment._");
+    expect(tight).toContain("- `buildkite/shop` ([the service's page](https://buildkite.com/acme/shop/builds/812))");
   });
 
   it("never cuts annotations for the cap", () => {
@@ -546,6 +786,26 @@ describe("The FailureReader on a job's GitHub clients", () => {
 
     expect(paths.at(-1)).toBe("/repos/jrey8343/fabrik/check-runs/128636834592/annotations?per_page=100&page=1");
   });
+
+  it("reads an outside check's check runs on the head by name, then its commit statuses, on the Checks client (#777)", async () => {
+    const calls: string[] = [];
+    const actions = { rest: async (_method: string, path: string) => (calls.push(`actions ${path}`), {}), logText: async () => "" };
+    const checks = {
+      rest: async (_method: string, path: string) => {
+        calls.push(`checks ${path}`);
+        if (path.includes("/check-runs?")) return { total_count: 0, check_runs: [] };
+        return { state: "failure", statuses: [{ context: "ci/circle: build", state: "failure", description: "Your tests failed on CircleCI", target_url: "https://circleci.com/gh/acme/shop/9" }] };
+      },
+    };
+
+    const excerpt = await readFailureExcerpt({ name: "ci/circle: build", link: "https://circleci.com/gh/acme/shop/9", sha: SHA }, failureReaderOf("acme/shop", { actions, checks }));
+
+    expect(calls).toEqual([
+      `checks /repos/acme/shop/commits/${SHA}/check-runs?check_name=ci%2Fcircle%3A%20build&filter=latest&per_page=100&page=1`,
+      `checks /repos/acme/shop/commits/${SHA}/status?per_page=100&page=1`,
+    ]);
+    expect(excerpt).toEqual({ kind: "commit-status", check: "ci/circle: build", link: "https://circleci.com/gh/acme/shop/9", description: "Your tests failed on CircleCI" });
+  });
 });
 
 describe("The excerpts the Review's waits pass out to the push job", () => {
@@ -570,6 +830,25 @@ describe("The excerpts the Review's waits pass out to the push job", () => {
     expect(excerptsPassedOut(null, null)).toEqual([]);
     expect(excerptsPassedOut("not json", "{}")).toEqual([]);
     expect(excerptsPassedOut(JSON.stringify([{ kind: "actions", check: "unit" }, first("lint", "first")]), null)).toEqual([first("lint", "first")]);
+  });
+
+  it("carry an outside check's excerpt, and drop one that doesn't read (#777)", () => {
+    const status: FailureExcerpt = { kind: "commit-status", check: "Vercel", link: "https://vercel.com/acme/shop/abc", description: "Deployment has failed" };
+    const run: FailureExcerpt = {
+      kind: "outside-check-run",
+      check: "buildkite/shop",
+      link: "https://buildkite.com/acme/shop/builds/812",
+      title: "Build failed",
+      summary: "",
+      annotations: [{ path: "spec/a_spec.rb", line: null, message: "boom" }],
+      annotationsUnread: "GitHub refused the read: 403",
+    };
+    const broken = [
+      { kind: "commit-status", check: "x", link: "" },
+      { kind: "outside-check-run", check: "y", link: "", title: "t", summary: "s" },
+    ];
+
+    expect(excerptsPassedOut(JSON.stringify([status, run, ...broken]), null)).toEqual([status, run]);
   });
 });
 

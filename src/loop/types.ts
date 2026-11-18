@@ -381,10 +381,11 @@ export type LoopEvent =
       /** What the Kit's re-run of the red checks came to (#462); absent when it didn't try, as from a Kit before it. */
       readonly rerun?: RerunReport;
       /**
-       * The latest Failure excerpt the Review read of each red GitHub Actions
-       * check (#775): the re-run's for one that failed again, with the first
-       * wait's beside it as its first attempt (#776), else the first wait's.
-       * A check with none here couldn't be read; absent, none could.
+       * The latest Failure excerpt the Review read of each red check, an outside
+       * service's among them (#775, #777): the re-run's for one that failed
+       * again, with the first wait's beside it as its first attempt (#776),
+       * else the first wait's. A check with none here couldn't be read;
+       * absent, none could.
        */
       readonly excerpts?: readonly CheckExcerpt[];
       /** The Review run, linked from the Verdict comment. */

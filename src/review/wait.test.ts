@@ -321,18 +321,26 @@ describe("The Failure excerpts a red wait passes out (#775)", () => {
     annotations: async () => [],
   };
 
-  it("reads each red GitHub Actions check the wait names, by the job its link gives, and no outside check", async () => {
+  it("reads each red check the wait names: a GitHub Actions one by the job its link gives, an outside one by what it wrote to GitHub (#777)", async () => {
     read.length = 0;
     const checks: CheckDetail[] = [
       { name: "unit", bucket: "fail", link: job(11), workflow: "CI" },
       { name: "lint", bucket: "pass", link: job(12), workflow: "CI" },
       { name: "Vercel", bucket: "fail", link: "https://vercel.com/acme/shop/1", workflow: "" },
     ];
+    const outside: FailureReader = {
+      ...reader,
+      checkRuns: async (sha, name) => (read.push(`check runs ${name} on ${sha}`), []),
+      statuses: async (sha) => (read.push(`statuses on ${sha}`), [{ context: "Vercel", state: "failure", description: "Deployment has failed", target_url: null }]),
+    };
 
-    const excerpts = await redExcerpts(checks, ["unit", "Vercel"], HEAD, reader);
+    const excerpts = await redExcerpts(checks, ["unit", "Vercel"], HEAD, outside);
 
-    expect(read).toEqual(["job 11"]);
-    expect(excerpts).toEqual([{ kind: "actions", check: "unit", link: job(11), steps: [{ name: "Test", earlier: 0, lines: ["##[error]boom"] }], annotations: [] }]);
+    expect(read).toEqual(["job 11", `check runs Vercel on ${HEAD}`, `statuses on ${HEAD}`]);
+    expect(excerpts).toEqual([
+      { kind: "actions", check: "unit", link: job(11), steps: [{ name: "Test", earlier: 0, lines: ["##[error]boom"] }], annotations: [] },
+      { kind: "commit-status", check: "Vercel", link: "https://vercel.com/acme/shop/1", description: "Deployment has failed" },
+    ]);
   });
 
   it("reads the re-run's job for a check that failed again, as the checks on the head now link it", async () => {
