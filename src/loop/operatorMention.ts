@@ -1,5 +1,5 @@
 // The Operator's mention (#785, spec #774). The Kit heals an Unrelated failure
-// short of setting it aside (ADR-0030): one more re-run at the Merge gate
+// short of setting it aside (ADR-0031): one more re-run at the Merge gate
 // (src/loop/gateRerun.ts), Triage routing the check's issue, and bringing the
 // PR up to date once that issue closes as completed (src/loop/conflicts.ts).
 // Until those moves are spent the Operator hears of the failure as quietly as
