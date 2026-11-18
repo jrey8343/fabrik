@@ -83,9 +83,42 @@ export function flakyCheckMarksIn(commentBodies: readonly string[]): FlakyCheckM
   });
 }
 
+/**
+ * An Unrelated failure line on an agent PR (#781): the head the Reviewer's
+ * Verdict was given on, and the red checks it judged the PR didn't cause.
+ */
+export interface UnrelatedFailureMark {
+  readonly headSha: string;
+  readonly checks: readonly string[];
+}
+
+const UNRELATED_FAILURE_MARKER = /^<!-- fabrik:unrelated-failure (\{.*?\}) -->/;
+
+export function unrelatedFailureMarker({ headSha, checks }: UnrelatedFailureMark): string {
+  return `<!-- fabrik:unrelated-failure ${markerJson({ headSha, checks })} -->`;
+}
+
+/** The Unrelated failure lines among these comments, oldest first. */
+export function unrelatedFailureMarksIn(commentBodies: readonly string[]): UnrelatedFailureMark[] {
+  return commentBodies.flatMap((body) => {
+    const json = UNRELATED_FAILURE_MARKER.exec(body)?.[1];
+    if (json === undefined) return [];
+    try {
+      const { headSha, checks } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof headSha !== "string" || !Array.isArray(checks) || !checks.every((name) => typeof name === "string")) return [];
+      return [{ headSha, checks }];
+    } catch {
+      return [];
+    }
+  });
+}
+
 const FLAKY_CHECK_ISSUE_MARKER = /^<!-- fabrik:flaky-check-issue (\{.*?\}) -->/;
 
-/** A Flaky check issue's first line (#462), naming the check it's about: one issue per check. */
+/**
+ * A check's issue's first line (#462), naming the check it's about: one issue
+ * per check, holding its Flaky checks and its Unrelated failures alike (#781).
+ */
 export function flakyCheckIssueMarker(check: string): string {
   return `<!-- fabrik:flaky-check-issue ${markerJson({ check })} -->`;
 }

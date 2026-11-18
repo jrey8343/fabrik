@@ -12,7 +12,7 @@ import { upToDateBeforeMergeGate } from "./conflicts.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { digestOnPass } from "./digest.ts";
-import { checkCode, flakyCheckActions } from "./flakyChecks.ts";
+import { checkCode, flakyCheckActions, type UnrelatedFailure, unrelatedFailureActions } from "./flakyChecks.ts";
 import { followUpsSection } from "./followUps.ts";
 import { type HeldOn, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
@@ -26,6 +26,7 @@ import { parseVerdict, type RedCheckJudgment, verdictTagsOf } from "./verdict.ts
 import { type RedCheckHeadings, REVIEWED_RED_CHECK_HEADINGS, redChecksText } from "./redChecks.ts";
 import type {
   Action,
+  CreatedIssue,
   KitConfig,
   LoopEvent,
   Plan,
@@ -140,7 +141,8 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
   return landVerdict(event, snapshot, (pullRequest) => {
     // On a head still red after everything the Kit could do (#779), each red check with the Reviewer's judgment (#780).
     const red = event.redChecks;
-    const parsed = parseVerdict(event.output, red?.failed ?? []);
+    // A NUL marks where the Verdict links an issue it files (#781): the Reviewer's text holds none.
+    const parsed = parseVerdict(event.output.replaceAll(CREATED_REF_EDGE, ""), red?.failed ?? []);
     if (!parsed.ok) {
       return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
     }
@@ -152,6 +154,8 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
     const counting = judged.filter(({ judgment }) => judgment === "caused").map(({ check }) => check);
     const unrelated = judged.filter(({ judgment }) => judgment === "unrelated").map(({ check }) => check);
     const verdict = verdictOnRedHead(parsed.verdict, counting);
+    // Each Unrelated failure is said on the PR ahead of the Verdict, with its check's issue, which the Verdict links too (#781).
+    const said = unrelatedFailureActions(pullRequest.number, event.headSha, unrelatedFailuresOf(judged, red, event.runUrl), snapshot.flakyCheckIssues);
     // A pass is what the Reviewer checked, then any Follow-ups; a flaw is its findings.
     const reviewed = parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings;
     // Counted as the Review that gave it was started (#749): the snapshot holds the Verdicts before this one. A pass a
@@ -161,7 +165,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
       verdict,
       source: "reviewer",
       findings:
-        red === undefined ? reviewed : (room) => withRedChecks(reviewed, red, { verdict, passed: parsed.verdict === "pass", headSha: event.headSha, judged }, room),
+        red === undefined ? reviewed : (room) => withRedChecks(reviewed, red, { verdict, passed: parsed.verdict === "pass", headSha: event.headSha, judged, issues: said.refs }, room),
       // Only a pass carries Follow-ups.
       followUps: verdict === "pass" ? followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number) : [],
       considered: consideredSection(parsed.considered, event.operatorComments),
@@ -171,7 +175,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
       tags,
     }, snapshot.operator, held);
     // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
-    actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues));
+    actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues), ...said.actions);
     // A pass that gave way to a Request changes deferred during a Retry (#427) keeps the PR in draft for its run.
     if (verdict !== "pass" || passGivesWay(pullRequest)) return { kind: "act", actions };
     // One on a PR that conflicts with main brings it up to date first, in draft: the Operator's review couldn't land (#480).
@@ -180,6 +184,38 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
     // A pass that would open the Merge gate starts the Digest writer in its place, where the Digest is on (ADR-0022).
     return { kind: "act", actions: [...actions, ...digestOnPass(event, pullRequest, snapshot, config)] };
   });
+}
+
+/**
+ * The red checks the Reviewer judged Unrelated failures (#781), each with its
+ * reason as a sentence that mentions nobody, and the Failure excerpt the
+ * Review read of it, linking its red run; with none read, the Review's run.
+ */
+function unrelatedFailuresOf(judged: readonly RedCheckJudgment[], red: RedRequiredChecks | undefined, runUrl: string): UnrelatedFailure[] {
+  return judged.flatMap(({ check, judgment, reason }) => {
+    if (judgment !== "unrelated") return [];
+    const excerpt = red?.excerpts.find((each) => each.check === check);
+    return [{ name: check, red: excerpt?.link ?? runUrl, reason: sentence(withoutMentions(reason)), ...(excerpt === undefined ? {} : { excerpt }) }];
+  });
+}
+
+/**
+ * An issue the plan files, as a Verdict's text holds it until its comment is
+ * posted (#781): its key between NULs, which the Verdict's comment links as
+ * the issue's `#number`.
+ */
+const CREATED_REF_EDGE = "\u0000";
+
+function issueRef(ref: number | CreatedIssue): string {
+  return typeof ref === "number" ? `#${ref}` : `${CREATED_REF_EDGE}${ref.created}${CREATED_REF_EDGE}`;
+}
+
+/** A Verdict's comment: plain, or linking each issue the plan files that its text names (#781). */
+function verdictComment(issue: number, body: string): Action {
+  const parts = body.split(CREATED_REF_EDGE);
+  if (parts.length === 1) return { kind: "comment", issue, body, key: VERDICT_COMMENT.posted };
+  const linked = parts.flatMap((part, at): (string | CreatedIssue)[] => (at % 2 === 1 ? [{ created: part }] : part === "" ? [] : [part]));
+  return { kind: "comment-linking", issue, body: linked, key: VERDICT_COMMENT.posted };
 }
 
 /** The tags of a Verdict with no finding of its own: none of any kind. */
@@ -200,7 +236,8 @@ export function verdictOnRedHead(verdict: Verdict, counting: readonly string[]):
 /**
  * A Reviewer's findings on a red head (#779), then its "Red Required checks"
  * part: each check under its name with the Reviewer's judgment and reason
- * (#780), its attempts, its Failure excerpt and its job link, the excerpts
+ * (#780), an Unrelated failure's linking its check's issue (#781), its
+ * attempts, its Failure excerpt and its job link, the excerpts
  * fitted to what's left of `room`. An Execution flaw says which checks are
  * Unrelated failures and that the run fixing it leaves them alone; a pass
  * names each and says the Merge gate holds the pull request until it is green.
@@ -208,7 +245,20 @@ export function verdictOnRedHead(verdict: Verdict, counting: readonly string[]):
 function withRedChecks(
   findings: string,
   red: RedRequiredChecks,
-  { verdict, passed, headSha, judged }: { readonly verdict: Verdict; readonly passed: boolean; readonly headSha: string; readonly judged: readonly RedCheckJudgment[] },
+  {
+    verdict,
+    passed,
+    headSha,
+    judged,
+    issues,
+  }: {
+    readonly verdict: Verdict;
+    readonly passed: boolean;
+    readonly headSha: string;
+    readonly judged: readonly RedCheckJudgment[];
+    /** Each Unrelated failure's issue (#781), which its note links. */
+    readonly issues: ReadonlyMap<string, number | CreatedIssue>;
+  },
   room: number,
 ): string {
   const short = headSha.slice(0, 7);
@@ -234,7 +284,9 @@ function withRedChecks(
     const given = judged.find((each) => each.check === check);
     if (given === undefined) return [];
     const reason = sentence(withoutMentions(given.reason));
-    return [given.judgment === "caused" ? `Caused by this pull request: ${reason}` : `An Unrelated failure: ${reason}`];
+    if (given.judgment === "caused") return [`Caused by this pull request: ${reason}`];
+    const issue = issues.get(check);
+    return [issue === undefined ? `An Unrelated failure: ${reason}` : `An Unrelated failure, reported on ${issueRef(issue)}: ${reason}`];
   };
   const head = [...(findings === "" ? [] : [findings]), "### Red Required checks", intro, ""].join("\n\n");
   return head + redChecksText(red, REVIEWED_RED_CHECK_HEADINGS, room - head.length, notesOf);
@@ -386,7 +438,7 @@ export function verdictActions(
     .map((label): Action => ({ kind: "remove-label", issue: pullRequest.number, label }));
   return [
     ...labelsOff,
-    { kind: "comment", issue: pullRequest.number, body, key: VERDICT_COMMENT.posted },
+    verdictComment(pullRequest.number, body),
     ...(next?.actions ?? []),
   ];
 }

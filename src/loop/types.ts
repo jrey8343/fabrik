@@ -1886,6 +1886,8 @@ export type Action =
       readonly issue: number;
       /** The comment's Markdown, with each posted comment written as its URL and each created issue as its `#number`. */
       readonly body: readonly (string | PostedComment | CreatedIssue)[];
+      /** Names the comment for later `comment-linking` actions in the plan, as a `comment`'s key does: a Verdict linking an issue it files (#781). */
+      readonly key?: string;
     }
   | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
   | {
