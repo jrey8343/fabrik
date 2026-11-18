@@ -190,6 +190,10 @@ _Avoid_: manual brief, human brief
 The Operator working through an issue only they can do with an agent beside them, step by step, ending with what was done recorded on the issue.
 _Avoid_: walkthrough, hand-off
 
+**Operator session**:
+A live session between the Operator and an agent that acts as the Operator, started from the Console on an issue that waits on them, with no machine of the Operator's running. A Pairing session started this way is one, and so is the working of a Map's HITL Decision.
+_Avoid_: remote session, cloud session (where one may run, not what it is), chat
+
 **Audit**:
 The issue an Auditor files: up to three refactoring candidates for the Operator to file as issues or set aside, closed by the Operator when done.
 _Avoid_: architecture review, report
