@@ -26,7 +26,18 @@ import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { changedTestsSection } from "../loop/changedTests.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { checkFixMarker, DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, flakyCheckIssueMarker, flakyCheckMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER, verdictMarker } from "../loop/markers.ts";
+import {
+  checkFixMarker,
+  DESIGN_TURN_FAILED_MARKER,
+  EMPTY_DIFF_MARKER,
+  flakyCheckIssueMarker,
+  flakyCheckMarker,
+  gateRerunDoneMarker,
+  gateRerunMarker,
+  IMPLEMENT_RUN_FAILED_MARKER,
+  RESEARCH_RUN_FAILED_MARKER,
+  verdictMarker,
+} from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import {
@@ -4065,6 +4076,58 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
     const { github } = githubHolding([node(50, [pass(HEAD_SHA)])]);
 
     expect((await gatherSnapshot(github, repo, { kind: "main-pushed", head: "9".repeat(40) }, null, APP_LOGIN)).passedHeads).toBeNull();
+  });
+
+  describe("for one more re-run of an Unrelated failure at the Merge gate (#783)", () => {
+    const MAIN = "9".repeat(40);
+    const passNaming = (headSha: string, unrelated: string[]) =>
+      bot(`${verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, unrelated, headSha })}\nPassed.`);
+    /** main's head, where `ci` is `conclusion`. */
+    const onMain = (conclusion: string) => (path: string) => {
+      if (path === "/repos/acme/shop/branches/main") return { protected: true, protection: { required_status_checks: { enforcement_level: "everyone", contexts: ["ci"] } }, commit: { sha: MAIN } };
+      if (path.startsWith(`/repos/acme/shop/commits/${MAIN}/check-runs?`)) {
+        return { check_runs: [{ id: 1, name: "ci", status: "completed", conclusion, started_at: "2026-11-11T08:00:00Z", completed_at: "2026-11-11T08:10:00Z", html_url: "https://github.com/acme/shop/actions/runs/5/job/50" }] };
+      }
+      return undefined;
+    };
+
+    it("reads main's head for an Unrelated failure still red on a passed head, which it skips when red there too", async () => {
+      const { github, paths } = githubHolding([node(50, [passNaming(HEAD_SHA, ["ci"])])], onMain("failure"));
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+
+      expect(snapshot.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, redOnMain: ["ci"] })]);
+      expect(paths()).toContain(`/repos/acme/shop/commits/${MAIN}/check-runs?filter=all&per_page=100&page=1`);
+    });
+
+    it("gives no check red on main when it passed there", async () => {
+      const { github } = githubHolding([node(50, [passNaming(HEAD_SHA, ["ci"])])], onMain("success"));
+
+      expect((await gatherSnapshot(github, repo, TICK, null, APP_LOGIN)).passedHeads).toEqual([expect.objectContaining({ redOnMain: [] })]);
+    });
+
+    it("reads main's head for no passed head with nothing to ask", async () => {
+      const { github, paths } = githubHolding([node(50, [pass(HEAD_SHA)])], onMain("failure"));
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+
+      expect(snapshot.passedHeads).toEqual([expect.not.objectContaining({ redOnMain: expect.anything() })]);
+      expect(paths().filter((path) => path.includes(MAIN))).toEqual([]);
+    });
+
+    it("reads the Kit's gate re-run lines on the PR, with each ask's comment and time, and none a person wrote", async () => {
+      const ask = { id: "IC_ask", body: `${gateRerunMarker(HEAD_SHA, [{ name: "ci", link: "https://github.com/acme/shop/actions/runs/8/job/99" }])}\nRe-running.`, createdAt: "2026-11-11T11:17:00Z", author: { __typename: "Bot" } };
+      const done = { ...bot(`${gateRerunDoneMarker(HEAD_SHA, ["lint"], "red-on-main")}\nSkipped.`), id: "IC_done" };
+      const forged = { id: "IC_person", body: `${gateRerunDoneMarker(HEAD_SHA, ["ci"], "refused")}\nDone.`, createdAt: "2026-11-11T11:30:00Z", author: { __typename: "User" } };
+      const { github } = githubHolding([node(50, [passNaming(HEAD_SHA, ["ci", "lint"]), ask, done, forged])], onMain("success"));
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+
+      expect(snapshot.conflicts?.pullRequests[0]?.pullRequest.gateReruns).toEqual([
+        { kind: "asked", headSha: HEAD_SHA, checks: [{ name: "ci", link: "https://github.com/acme/shop/actions/runs/8/job/99", run: 8 }], started: false, node: "IC_ask", postedAt: "2026-11-11T11:17:00Z" },
+        { kind: "done", headSha: HEAD_SHA, checks: ["lint"], why: "red-on-main" },
+      ]);
+    });
   });
 
   describe("the Failure excerpt of each red run it reports (#778)", () => {

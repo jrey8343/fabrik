@@ -82,6 +82,29 @@ export function rerunOutcome(red: readonly RerunnableCheck[], after: readonly Ch
   return { failedAgain, flaky };
 }
 
+/** A workflow run as the Re-run red checks job reads it before re-running it. */
+export interface WorkflowRunRead {
+  readonly run_attempt: number;
+  readonly head_sha: string;
+}
+
+/**
+ * Why the Re-run red checks job re-runs none of the red checks, from one
+ * workflow run behind them, or null when that run may be re-run. The
+ * Review's own re-run (`atGate` null) is one round per head: a run past its
+ * first attempt has been re-run on this head already, by the Kit or by hand
+ * (ADR-0018). One more re-run at the Merge gate (#783) is allowed past the
+ * first attempt this once, on the head the Kit's line named, `atGate`; the
+ * Kit asks it once per head, so this never repeats.
+ */
+export function whyNotRerunRun(run: WorkflowRunRead, { atGate }: { readonly atGate: string | null }): string | null {
+  if (atGate === null) return run.run_attempt > 1 ? "they had been re-run on this head already" : null;
+  if (run.head_sha !== atGate) {
+    return `a workflow run behind them is on ${run.head_sha.slice(0, 7)}, not ${atGate.slice(0, 7)}, the head the Kit asked to re-run them on`;
+  }
+  return null;
+}
+
 /**
  * Why GitHub refused to re-run a workflow run, from what `gh api` printed: a
  * token without `actions: write` names the line the caller workflow lacks;

@@ -4,6 +4,7 @@ import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } f
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { landingFailureReport, pushLanding } from "../kit/landingFailure.ts";
 import { replayMarksIn } from "../kit/replay.ts";
+import { gateRerunMarker, gateRerunMarksIn } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Action, LoopEvent, Plan } from "../loop/types.ts";
 import { applyPlan, implementPushOf, PlanNotApplied } from "./apply.ts";
@@ -749,6 +750,50 @@ describe("Marking whether a prototype request's prototype turn has started (#155
     await applyPlan(github, repo, mark(false));
 
     expect(github.calls).toEqual([`GET ${issues}/comments/9010`]);
+  });
+});
+
+describe("Marking the Kit's line asking one more re-run at the Merge gate started (#783)", () => {
+  /** A GitHub holding the ask comment IC_ask on #50, which a GraphQL query reads and a mutation edits; it records each mutation's body. */
+  function holdingAsk(body: string) {
+    const comment = { body };
+    const edits: string[] = [];
+    return {
+      comment,
+      edits,
+      async rest(): Promise<never> {
+        throw new Error("no REST expected");
+      },
+      async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+        expect(variables["id"]).toBe("IC_ask");
+        if (query.includes("updateIssueComment")) {
+          comment.body = variables["body"] as string;
+          edits.push(comment.body);
+          return {} as T;
+        }
+        return { node: { body: comment.body } } as T;
+      },
+    };
+  }
+  const ask = `${gateRerunMarker("c".repeat(40), [{ name: "e2e", link: "https://github.com/acme/shop/actions/runs/7/job/70" }])}\nRe-running it.`;
+  const mark: Plan = { kind: "act", actions: [{ kind: "mark-gate-rerun-started", pullRequest: 50, node: "IC_ask" }] };
+
+  it("marks the line started, which the snapshot reads back, leaving its text as it was", async () => {
+    const github = holdingAsk(ask);
+
+    await applyPlan(github, repo, mark);
+
+    expect(gateRerunMarksIn([{ id: "IC_ask", body: github.comment.body, createdAt: "2026-11-18T11:17:00Z" }])).toEqual([expect.objectContaining({ kind: "asked", started: true })]);
+    expect(github.comment.body.split("\n").slice(1)).toEqual(["Re-running it."]);
+  });
+
+  it("leaves a line already marked started as it is", async () => {
+    const github = holdingAsk(ask);
+    await applyPlan(github, repo, mark);
+
+    await applyPlan(github, repo, mark);
+
+    expect(github.edits).toHaveLength(1);
   });
 });
 

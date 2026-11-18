@@ -12,10 +12,13 @@ import { AGENT_ROLES, type Action, type AgentRole, isOfPullRequest, type Plan } 
 /** This line's version. A reader takes a line at no other. */
 export const KIT_SAID_VERSION = 1;
 
-/** Where the Kit job routes: the agent run's role, a replay's two arms, the push job alone, or nothing. */
-export type KitRoute = AgentRole | "replay" | "push" | "none";
+/**
+ * Where the Kit job routes: the agent run's role, a replay's two arms, the Re-run red checks job alone for
+ * agent:rerun-checks (#783), the push job alone, or nothing.
+ */
+export type KitRoute = AgentRole | "replay" | "rerun-checks" | "push" | "none";
 
-const ROUTES: readonly KitRoute[] = [...AGENT_ROLES, "replay", "push", "none"];
+const ROUTES: readonly KitRoute[] = [...AGENT_ROLES, "replay", "rerun-checks", "push", "none"];
 const RUN_KINDS: readonly RunKind[] = ["first", "retry", "touch-up", "request-changes", "conflict-only", "prototype"];
 
 /** What the Kit job routed, as its closing step's name says it. */
@@ -61,8 +64,9 @@ function actionsOf(plan: Plan | null): readonly Action[] {
 
 /**
  * Where the Kit job routes `plan` (null for an event the Loop doesn't act on):
- * the agent run's role, "replay", "push" for a plan that acts with no agent
- * run (a hold-only plan included), and "none" for one that does nothing.
+ * the agent run's role, "replay", "rerun-checks" for one more re-run at the
+ * Merge gate (#783), "push" for a plan that acts with no agent run (a
+ * hold-only plan included), and "none" for one that does nothing.
  */
 export function routeOf(plan: Plan | null): KitRoute {
   if (plan === null || plan.kind === "nothing") return "none";
@@ -70,6 +74,7 @@ export function routeOf(plan: Plan | null): KitRoute {
   const run = actions.find((action): action is StartAgentRun => action.kind === "start-agent-run");
   if (run !== undefined) return run.role;
   if (actions.some((action) => action.kind === "start-replay")) return "replay";
+  if (actions.some((action) => action.kind === "rerun-checks")) return "rerun-checks";
   return "push";
 }
 

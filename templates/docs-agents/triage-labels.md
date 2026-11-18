@@ -19,16 +19,17 @@ A sub-issue filed with no state label gets no `needs-triage` from Fabrik, since 
 
 Fabrik also uses these labels, which aren't triage roles. Skills don't set them; Setup creates them.
 
-**`agent:` labels** start a run. Fabrik adds each itself, and you re-add one to run it again. It comes off as the run starts (`agent:review` comes off with the Review's Verdict), so one still on half an hour after it was added is a run that never started: the hourly tick adds it again once, and if it's still on at a later tick, takes it off and @-mentions you. `agent:digest` differs: it stays on until the Digest writer's attempt ends, and the tick never adds it again or @-mentions you over it. One whose run never started comes off with a line on the PR saying no Digest could be written, and the PR goes to the Merge gate without one.
+**`agent:` labels** start a run. Fabrik adds each itself, and you re-add one to run it again. It comes off as the run starts (`agent:review` comes off with the Review's Verdict), so one still on half an hour after it was added is a run that never started: the hourly tick adds it again once, and if it's still on at a later tick, takes it off and @-mentions you. `agent:digest` differs: it stays on until the Digest writer's attempt ends, and the tick never adds it again or @-mentions you over it. One whose run never started comes off with a line on the PR saying no Digest could be written, and the PR goes to the Merge gate without one. `agent:rerun-checks` starts no agent: the tick adds it once per head and check, and one still on at the next tick with no run behind it comes off with a line on the PR, which counts the re-run as done. Added anywhere else, or again for the same head, it comes off with one line saying why.
 
-| Label             | Goes on                    | Starts                                          |
-| ----------------- | -------------------------- | ----------------------------------------------- |
-| `agent:implement` | a `ready-for-agent` Ticket | an Implementer, or resumes its PR's run         |
-| `agent:design`    | a `needs-design` issue     | a Design session's first turn                   |
-| `agent:review`    | an agent PR                | a Review, or resumes one                        |
-| `agent:digest`    | an agent PR with a pass    | the Digest writer                               |
-| `agent:research`  | a research Decision        | a Researcher                                    |
-| `agent:replay`    | a replay issue             | the Replay's next Ticket                        |
+| Label                | Goes on                               | Starts                                                          |
+| -------------------- | ------------------------------------- | --------------------------------------------------------------- |
+| `agent:implement`    | a `ready-for-agent` Ticket            | an Implementer, or resumes its PR's run                         |
+| `agent:design`       | a `needs-design` issue                | a Design session's first turn                                   |
+| `agent:review`       | an agent PR                           | a Review, or resumes one                                        |
+| `agent:digest`       | an agent PR with a pass               | the Digest writer                                               |
+| `agent:rerun-checks` | an agent PR at the Merge gate         | one more re-run of its Unrelated failures' failed jobs          |
+| `agent:research`     | a research Decision                   | a Researcher                                                    |
+| `agent:replay`       | a replay issue                        | the Replay's next Ticket                                        |
 
 **`fabrik:` labels** say what an issue is to Fabrik, and `fabrik:step-up` and `fabrik:kept-branch` mark a Ticket:
 
