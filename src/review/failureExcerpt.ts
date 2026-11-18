@@ -52,12 +52,41 @@ export interface CheckAnnotation {
   readonly message: string;
 }
 
-/** What an excerpt reads from GitHub, each read on whichever token its job holds. A read GitHub refuses throws. */
+/** A check run on a commit, as `GET …/commits/{ref}/check-runs` gives it, cut to what an outside check's excerpt reads. */
+export interface CheckRun {
+  readonly id: number;
+  readonly name: string;
+  /** The app that made it: `github-actions` for a GitHub Actions job. */
+  readonly app?: { readonly slug?: string } | null;
+  /** The integrator's page with the full details, which the Kit can't read. */
+  readonly details_url?: string | null;
+  readonly html_url?: string | null;
+  readonly output?: { readonly title?: string | null; readonly summary?: string | null } | null;
+}
+
+/** A commit status, as `GET …/commits/{ref}/status` lists it: the latest for each context. */
+export interface CommitStatus {
+  readonly context: string;
+  readonly state: string;
+  readonly description: string | null;
+  /** The service's page with the full build output, which the Kit can't read. */
+  readonly target_url: string | null;
+}
+
+/**
+ * What an excerpt reads from GitHub, each read on whichever token its job
+ * holds. A read GitHub refuses throws. A reader without `checkRuns` and
+ * `statuses` reads no check from an outside service (#777).
+ */
 export interface FailureReader {
   job(jobId: number): Promise<ActionsJob>;
   /** One step's log, as plain text. */
   stepLog(jobId: number, step: number): Promise<string>;
   annotations(checkRunId: number): Promise<readonly CheckAnnotation[]>;
+  /** The latest check runs named `name` on the commit `sha`. */
+  checkRuns?(sha: string, name: string): Promise<readonly CheckRun[]>;
+  /** The latest commit status of each context on the commit `sha`. */
+  statuses?(sha: string): Promise<readonly CommitStatus[]>;
 }
 
 /** A client that reads a log's plain text, as the GitHub class does, beside its REST calls. */
@@ -69,8 +98,11 @@ export interface LogClient extends Pick<ReadClient, "rest"> {
  * The FailureReader on a job's own GitHub clients for `repo` (`owner/name`):
  * the job and its logs on `actions`, which needs Actions: read, and the
  * annotations on `checks`, which needs Checks: read, the same client when
- * not given. The Review's waits hand in their workflow token for both; the
- * Tick can hand in the Fabrik App's for `checks`.
+ * not given. An outside check's check runs are read on `checks` too, and its
+ * commit statuses, which need Commit statuses: read (#777). The Review's
+ * waits hand in their workflow token for both; the Tick can hand in the
+ * Fabrik App's for `checks`, which holds no Commit statuses: read, so a
+ * commit status reads there as a refusal, saying why.
  */
 export function failureReaderOf(repo: string, clients: { readonly actions: LogClient; readonly checks?: Pick<ReadClient, "rest"> }): FailureReader {
   const { actions, checks = actions } = clients;
@@ -78,6 +110,10 @@ export function failureReaderOf(repo: string, clients: { readonly actions: LogCl
     job: async (jobId) => (await actions.rest("GET", `/repos/${repo}/actions/jobs/${jobId}`)) as ActionsJob,
     stepLog: (jobId, step) => actions.logText(`/repos/${repo}/actions/jobs/${jobId}/steps/${step}/logs`),
     annotations: (checkRunId) => allPages<CheckAnnotation>(checks, `/repos/${repo}/check-runs/${checkRunId}/annotations`),
+    // An outside check's (#777), on Checks: read and Commit statuses: read, which the Review checks job's token holds.
+    checkRuns: (sha, name) =>
+      allPages<CheckRun>(checks, `/repos/${repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`, (page) => (page as { check_runs: CheckRun[] }).check_runs),
+    statuses: (sha) => allPages<CommitStatus>(checks, `/repos/${repo}/commits/${sha}/status`, (page) => (page as { statuses: CommitStatus[] }).statuses),
   };
 }
 
@@ -115,6 +151,19 @@ export type FailureExcerpt =
       /** Why the annotations couldn't be read, when they couldn't. */
       readonly annotationsUnread?: string;
     }
+  /** A commit status from an outside service (#777): its description, empty when it wrote none, and its target link. */
+  | { readonly kind: "commit-status"; readonly check: string; readonly link: string; readonly description: string }
+  /** A check run from an outside service (#777): its output's title and summary, each empty when it wrote none, its error annotations, and its details link. */
+  | {
+      readonly kind: "outside-check-run";
+      readonly check: string;
+      readonly link: string;
+      readonly title: string;
+      readonly summary: string;
+      readonly annotations: readonly ExcerptAnnotation[];
+      /** Why the annotations couldn't be read, when they couldn't. */
+      readonly annotationsUnread?: string;
+    }
   | { readonly kind: "unread"; readonly check: string; readonly link: string; readonly why: string };
 
 /** How many of a failed step's last lines an excerpt keeps: a test runner prints its failures and summary last. */
@@ -129,13 +178,16 @@ const CHECK_RUN = /\/check-runs\/(\d+)$/;
  * Reads a red check's Failure excerpt from GitHub. For a GitHub Actions check:
  * the job's steps, each whose conclusion is failure with its own log alone,
  * cleaned and cut to its last 150 lines, and the check run's error
- * annotations. A failure that can't be read gives only why, never throwing:
+ * annotations. A check whose link names no GitHub Actions job is an outside
+ * service's: a check run, or else a commit status, of its name on the head,
+ * read for what the service wrote to GitHub (#777). A failure that can't be
+ * read gives only why, never throwing:
  * a missing excerpt is never the error of the job that tried.
  */
 export async function readFailureExcerpt(check: RedCheck, github: FailureReader): Promise<FailureExcerpt> {
   const unread = (why: string): FailureExcerpt => ({ kind: "unread", check: check.name, link: check.link, why });
   const jobId = Number(ACTIONS_JOB.exec(check.link)?.[1] ?? Number.NaN);
-  if (!Number.isSafeInteger(jobId)) return unread("it isn't a GitHub Actions check, so the Kit reads no log for it");
+  if (!Number.isSafeInteger(jobId)) return outsideExcerpt(check, github);
   let job: ActionsJob;
   try {
     job = await github.job(jobId);
@@ -169,6 +221,47 @@ export async function readFailureExcerpt(check: RedCheck, github: FailureReader)
     annotations,
     ...(annotationsUnread === null ? {} : { annotationsUnread }),
   };
+}
+
+/**
+ * A red check from an outside service's excerpt (#777): whatever the service
+ * wrote to GitHub, as no log of its own can be read there. Its check run on
+ * the head by the check's name, when it reported as one, else its commit
+ * status by context; each keeps the service's own link, else the check's.
+ */
+async function outsideExcerpt(check: RedCheck, github: FailureReader): Promise<FailureExcerpt> {
+  const unread = (why: string): FailureExcerpt => ({ kind: "unread", check: check.name, link: check.link, why });
+  if (github.checkRuns === undefined || github.statuses === undefined) return unread("it isn't a GitHub Actions check, so the Kit reads no log for it");
+  let run: CheckRun | undefined;
+  let status: CommitStatus | undefined;
+  try {
+    run = (await github.checkRuns(check.sha, check.name)).find(({ name, app }) => name === check.name && app?.slug !== "github-actions");
+    if (run === undefined) status = (await github.statuses(check.sha)).find(({ context }) => context === check.name);
+  } catch (error) {
+    return unread(refusal(error));
+  }
+  if (run !== undefined) {
+    let annotations: ExcerptAnnotation[] = [];
+    let annotationsUnread: string | null = null;
+    try {
+      annotations = (await github.annotations(run.id))
+        .filter(({ annotation_level }) => annotation_level === "failure")
+        .map(({ path, start_line, message }) => ({ path, line: start_line, message }));
+    } catch (error) {
+      annotationsUnread = refusal(error);
+    }
+    return {
+      kind: "outside-check-run",
+      check: check.name,
+      link: run.details_url || run.html_url || check.link,
+      title: (run.output?.title ?? "").trim(),
+      summary: (run.output?.summary ?? "").trim(),
+      annotations,
+      ...(annotationsUnread === null ? {} : { annotationsUnread }),
+    };
+  }
+  if (status === undefined) return unread("GitHub holds no check run or commit status by that name on the head");
+  return { kind: "commit-status", check: check.name, link: status.target_url || check.link, description: (status.description ?? "").trim() };
 }
 
 /** A failed step, with the last lines of its log, or why there are none. */
@@ -232,7 +325,7 @@ function isExcerpt(value: unknown): value is FailureExcerpt {
   const excerpt = value as Record<string, unknown>;
   if (!isString(excerpt["check"]) || !isString(excerpt["link"])) return false;
   if (excerpt["kind"] === "unread") return isString(excerpt["why"]);
-  if (excerpt["kind"] !== "actions") return false;
+  if (excerpt["kind"] === "commit-status") return isString(excerpt["description"]);
   const { steps, annotations, annotationsUnread } = excerpt;
   const isStep = (step: unknown) => {
     const { name, lines, earlier, why } = (step ?? {}) as Record<string, unknown>;
@@ -242,6 +335,16 @@ function isExcerpt(value: unknown): value is FailureExcerpt {
     const { path, line, message } = (annotation ?? {}) as Record<string, unknown>;
     return isString(path) && (line === null || typeof line === "number") && isString(message);
   };
+  if (excerpt["kind"] === "outside-check-run") {
+    return (
+      isString(excerpt["title"]) &&
+      isString(excerpt["summary"]) &&
+      Array.isArray(annotations) &&
+      annotations.every(isAnnotation) &&
+      (annotationsUnread === undefined || isString(annotationsUnread))
+    );
+  }
+  if (excerpt["kind"] !== "actions") return false;
   return (
     Array.isArray(steps) && steps.every(isStep) && Array.isArray(annotations) && annotations.every(isAnnotation) && (annotationsUnread === undefined || isString(annotationsUnread))
   );
@@ -288,21 +391,32 @@ export function renderFailureExcerpts(excerpts: readonly FailureExcerpt[], { roo
   };
   const cutShare = most(share, (n) => fits(render(n, Number.POSITIVE_INFINITY)));
   if (cutShare !== null) return render(cutShare, Number.POSITIVE_INFINITY);
-  const longest = Math.max(0, ...excerpts.flatMap((excerpt) => (excerpt.kind === "actions" ? excerpt.annotations.map(({ message }) => message.length) : [])));
+  const longest = Math.max(0, ...excerpts.flatMap(shortenable).map(({ length }) => length));
   const messageMax = most(longest, (n) => fits(render(0, n)));
   if (messageMax !== null) return render(0, messageMax);
   return excerpts.map((excerpt) => `${headOf(excerpt)}\n\n  Its Failure excerpt didn't fit the comment.`);
 }
 
-/** The check's name, and its job link when the excerpt has one. */
-function headOf(excerpt: FailureExcerpt): string {
-  return `- ${checkCode(excerpt.check)}${excerpt.link === "" ? "" : ` ([the job](${excerpt.link}))`}`;
+/** The text of an excerpt a comment too long shortens: its annotation messages, and an outside check's description or title and summary (#777). */
+function shortenable(excerpt: FailureExcerpt): string[] {
+  const messages = excerpt.kind === "actions" || excerpt.kind === "outside-check-run" ? excerpt.annotations.map(({ message }) => message) : [];
+  if (excerpt.kind === "commit-status") return [excerpt.description];
+  if (excerpt.kind === "outside-check-run") return [[excerpt.title, excerpt.summary].filter((part) => part !== "").join("\n\n"), ...messages];
+  return messages;
 }
 
-/** One excerpt's block, its log lines held to `share` characters and each annotation message to `messageMax`. */
+/** The check's name, and its job link, or an outside check's own link, when the excerpt has one. */
+function headOf(excerpt: FailureExcerpt): string {
+  const outside = excerpt.kind === "commit-status" || excerpt.kind === "outside-check-run";
+  return `- ${checkCode(excerpt.check)}${excerpt.link === "" ? "" : ` ([${outside ? "the service's page" : "the job"}](${excerpt.link}))`}`;
+}
+
+/** One excerpt's block, its log lines held to `share` characters and each annotation message, or an outside check's text, to `messageMax`. */
 function rendered(excerpt: FailureExcerpt, share: number, messageMax: number): string {
   const head = headOf(excerpt);
+  const block = (parts: readonly string[]) => [head, "", ...parts.flatMap((part, i) => (i === 0 ? [indent(part, 2)] : ["", indent(part, 2)]))].join("\n");
   if (excerpt.kind === "unread") return [head, "", indent(`Its failure couldn't be read: ${prose(excerpt.why)}.`, 2)].join("\n");
+  if (excerpt.kind === "commit-status" || excerpt.kind === "outside-check-run") return block(outsideParts(excerpt, messageMax));
   const kept = keptLines(excerpt.steps, share);
   const parts: string[] = [];
   for (const [i, step] of excerpt.steps.entries()) {
@@ -324,6 +438,32 @@ function rendered(excerpt: FailureExcerpt, share: number, messageMax: number): s
     parts.push(excerpt.annotations.map((annotation) => annotationItem(annotation, messageMax)).join("\n\n"));
   }
   return [head, "", ...parts.flatMap((part, i) => (i === 0 ? [indent(part, 2)] : ["", indent(part, 2)]))].join("\n");
+}
+
+/**
+ * An outside check's paragraphs (#777): that the service's own log can't be
+ * reached, then what it wrote to GitHub, or that it wrote nothing. Its text
+ * takes no share of the log lines' cap, and is shortened to `messageMax` as
+ * an annotation message is.
+ */
+function outsideParts(excerpt: Extract<FailureExcerpt, { kind: "commit-status" | "outside-check-run" }>, messageMax: number): string[] {
+  const unreachable = `A ${excerpt.kind === "commit-status" ? "commit status" : "check run"} from an outside service, whose own log can't be reached from GitHub.`;
+  const text = (written: string) => [fenced(written.slice(0, messageMax).split(/\r?\n/)), ...(written.length > messageMax ? [SHORTENED] : [])];
+  if (excerpt.kind === "commit-status") {
+    if (excerpt.description === "") return [`${unreachable} It wrote nothing to GitHub but its result: no description.`];
+    return [`${unreachable} Its description:`, ...text(excerpt.description)];
+  }
+  const { title, summary, annotations, annotationsUnread } = excerpt;
+  if (title === "" && summary === "" && annotations.length === 0 && annotationsUnread === undefined) {
+    return [`${unreachable} It wrote nothing to GitHub but its result: no title, summary or error annotation.`];
+  }
+  const written = [title, summary].filter((part) => part !== "");
+  const what = title === "" ? (summary === "" ? null : "Its summary:") : summary === "" ? "Its title:" : "Its title and summary:";
+  const parts = what === null ? [`${unreachable} It wrote no title or summary.`] : [`${unreachable} ${what}`, ...text(written.join("\n\n"))];
+  if (annotationsUnread !== undefined) parts.push(`Its annotations couldn't be read: ${prose(annotationsUnread)}.`);
+  else if (annotations.length === 0) parts.push("It has no error annotation.");
+  else parts.push("Its error annotations:", annotations.map((annotation) => annotationItem(annotation, messageMax)).join("\n\n"));
+  return parts;
 }
 
 function annotationItem({ path, line, message }: ExcerptAnnotation, messageMax: number): string {
