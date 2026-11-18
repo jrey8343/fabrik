@@ -267,7 +267,7 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
  * its trigger-sweep slice holds no trigger label, with nothing under way.
  * It reads no open ready-for-agent Ticket.
  */
-export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers" | "readyTickets" | "weekCarriers" | "closedCarriers">> = {}): Snapshot {
+export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers" | "readyTickets" | "weekCarriers" | "closedCarriers" | "closedCheckIssues" | "passedHeads">> = {}): Snapshot {
   return repoSnapshot({
     conflicts: { main: HEAD_SHA, now: "2026-01-01T00:00:00Z", implementJobUnderWay: null, pullRequests: [] },
     audit: { head: HEAD_SHA, issues: [] },

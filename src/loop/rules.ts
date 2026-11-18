@@ -4,7 +4,7 @@ import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom
 import { digestLabelOnIssue, issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { landDigest, startDigestOnLabel } from "./digest.ts";
 import { failureNotice } from "./failures.ts";
-import { bringInCheckFix, checkConflicts } from "./conflicts.ts";
+import { bringInCheckFix, type CheckFixes, checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
@@ -279,7 +279,21 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
         heldOn(snapshot.kitIssues, config),
         recoveryWaits(config),
         heldOf("implement", snapshot.kitIssues),
+        checkFixesOf(snapshot),
       );
+}
+
+/**
+ * The check's fixes the tick's conflict check brings in (#784): each check's
+ * issue it read closed as completed, and its read of the heads at the Merge
+ * gate. Null for any other event, which reads none.
+ */
+function checkFixesOf({ closedCheckIssues, passedHeads }: Snapshot): CheckFixes | null {
+  if (closedCheckIssues === null) return null;
+  return {
+    closed: closedCheckIssues.flatMap(({ number, check, closedAt, stateReason }) => (stateReason === "completed" ? [{ check, issue: number, closedAt }] : [])),
+    passedHeads: passedHeads === null || typeof passedHeads === "string" ? [] : passedHeads,
+  };
 }
 
 /**

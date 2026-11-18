@@ -31,7 +31,11 @@ import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure
  * reviewed (#389), or why there's neither. Each recovery waits as long as
  * `waits`, the record of recovery waits at the repo's Kit config
  * (src/loop/recoveryWaits.ts), says. `heldTickets` are the Tickets whose
- * Implement run is held until a reset (#424).
+ * Implement run is held until a reset (#424). On the scheduled tick, `fixes`
+ * are the check's issues closed as completed and the tick's read of the heads
+ * at the Merge gate: a PR a fixed check holds there, whose issue closed since
+ * its pass, is brought up to date though it may be only behind main, should
+ * the issue-closed event have missed it (#784).
  */
 export function checkConflicts(
   conflicts: ConflictSnapshot,
@@ -39,6 +43,7 @@ export function checkConflicts(
   held: HeldOn | null,
   waits: Readonly<Record<Recovery, number>>,
   heldTickets: readonly number[],
+  fixes: CheckFixes | null = null,
 ): Plan {
   const { main, now } = conflicts;
   const reasons: string[] = [];
@@ -60,7 +65,12 @@ export function checkConflicts(
       continue;
     }
     const why = whyNotRebased(candidate, main, operator, { now, reviewMinutes: waits.unreviewedDraft });
-    if (why !== null) reasons.push(why.reason);
+    const fixed = fixes === null ? [] : fixesHolding(candidate.pullRequest, fixes.closed, greenAtGate(candidate.pullRequest, fixes.passedHeads));
+    if (fixed.length > 0) {
+      const done = fixBroughtIn(candidate, main, why, fixed, held);
+      if (Array.isArray(done)) actions.push(...done);
+      else reasons.push(done.reason);
+    } else if (why !== null) reasons.push(why.reason);
     else actions.push(rebaseOntoMain(candidate.pullRequest, main, held));
   }
   if (actions.length > 0) return { kind: "act", actions };
@@ -406,6 +416,18 @@ export interface FixedCheck {
   readonly closedAt: string | null;
 }
 
+/** What the tick's conflict check weighs of the check's fixes (#784): the check's issues closed as completed, and its read of the heads at the Merge gate. */
+export interface CheckFixes {
+  readonly closed: readonly FixedCheck[];
+  readonly passedHeads: readonly PassedHeadChecks[];
+}
+
+/** The checks that have since read green on this PR's head at the Merge gate, as the tick's own read of it finds (#693). */
+function greenAtGate(pullRequest: PullRequestSnapshot, passedHeads: readonly PassedHeadChecks[]): string[] {
+  const head = passedHeads.find((read) => read.pullRequest === pullRequest.number && read.headSha === pullRequest.headSha);
+  return head === undefined ? [] : flakyOnPassedHead({ ...head, marks: [] }).map(({ name }) => name);
+}
+
 /**
  * Of these `fixed` checks, each that holds this PR at the Merge gate (#784):
  * it is an open agent PR out of draft whose latest pass, on its current head,
@@ -466,7 +488,7 @@ function fixBroughtIn(
     ];
   }
   if (why !== null && holdsMain !== false) {
-    return { rule: "unknown", reason: `Whether #${number} already holds main at ${head} couldn't be read, so bringing in the fix for ${checks} is left for the scheduled tick` };
+    return { rule: "unknown", reason: `Whether #${number} already holds main at ${head} couldn't be read, so bringing in the fix for ${checks} waits for the next scheduled tick` };
   }
   const notes: StanceNotes = {
     ...stanceNotes("merge-gate", number, head),
