@@ -49,6 +49,18 @@ export interface IssueToOpen {
   readonly labels: readonly Label[];
   /** Who it's assigned to as it's filed, whom GitHub notifies; none when absent. */
   readonly assignees?: readonly string[];
+  /** For red main's and a Main check's, each failed run its Monitor block names, whose Failure excerpt the block carries once read (#786). */
+  readonly failedRuns?: readonly FailedRun[];
+}
+
+/** A failed check run a red-main or Main check issue's Monitor block names, on the commit it failed on (#786). */
+export interface FailedRun {
+  /** GitHub's id for the check run. */
+  readonly id: number;
+  readonly name: string;
+  /** The run's page on GitHub: for a GitHub Actions check, its job. */
+  readonly link: string;
+  readonly sha: string;
 }
 
 /** A Monitor issue's body rewritten in place, with the step summary's line saying what changed. */
@@ -61,10 +73,10 @@ export type BodyRewrite =
   | (RewriteOf<"stats"> & { readonly sentryGroup: string })
   /** Only the held line put in or taken out of an open error issue's stats block, refreshing no group's stats. */
   | RewriteOf<"held-line">
-  /** The details of the open red-main issue brought up to date with the default branch's red commit. */
-  | RewriteOf<"red-main">
-  /** The details of a Main check's open issue brought up to date with the commit it's red at. */
-  | RewriteOf<"main-check">;
+  /** The details of the open red-main issue brought up to date with the default branch's red commit, naming each failed run, whose excerpt they carry once read. */
+  | (RewriteOf<"red-main"> & { readonly failedRuns: readonly FailedRun[] })
+  /** The details of a Main check's open issue brought up to date with the commit it's red at, naming its failed run, whose excerpt they carry once read. */
+  | (RewriteOf<"main-check"> & { readonly failedRuns: readonly FailedRun[] });
 
 interface RewriteOf<Kind extends string> {
   readonly kind: Kind;
