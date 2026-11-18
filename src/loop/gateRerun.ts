@@ -14,33 +14,29 @@
 // head, is skipped and counts as done. The Kit never tries twice on one head.
 // Pure.
 import { declineTrigger } from "./declineTrigger.ts";
-import { checkCode, passedHeadAtGate } from "./flakyChecks.ts";
+import { checkCode } from "../review/failureExcerpt.ts";
+import { passedHeadAtGate } from "./flakyChecks.ts";
+import { isRed, latestRun } from "./headChecks.ts";
 import { RERUN_CHECKS_LABEL } from "./labels.ts";
 import { gateRerunDoneMarker, gateRerunMarker } from "./markers.ts";
 import type { Action, GateRerunDone, GateRerunMark, HeadCheckRun, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
-const RED = ["failure", "timed_out", "cancelled", "action_required", "startup_failure"];
-
 /** A GitHub Actions job's page: …/actions/runs/<run>/job/<job>. Any other check run is an outside service's. */
 const ACTIONS_JOB = /\/actions\/runs\/\d+\/job\/\d+$/;
 
-/** A check's latest run on a head: a run not yet started is the newest, as GitHub queued it after every run that has. */
-function latestRun(checkRuns: readonly HeadCheckRun[], name: string): HeadCheckRun | undefined {
-  const started = (run: HeadCheckRun) => (run.startedAt === null ? Infinity : Date.parse(run.startedAt));
-  return checkRuns.filter((run) => run.name === name).toSorted((a, b) => started(a) - started(b)).at(-1);
-}
-
-function isRed(run: HeadCheckRun | undefined): run is HeadCheckRun {
-  return run !== undefined && run.conclusion !== null && RED.includes(run.conclusion);
-}
-
 /**
- * Whether `name` is still red among a head's check runs (#785): its latest
- * run ended red, or it has none, as a commit status from an outside service,
- * which the check runs can't say has turned green.
+ * Whether `name` is known to be still red among a head's check runs (#785):
+ * its latest run ended red. A check with no check run on the head is a commit
+ * status from an outside service, whose state the tick can't read: the
+ * Fabrik App holds no Commit statuses: read and the caller's tick job grants
+ * its token no `statuses: read`, and neither the snapshot nor the Merge gate's
+ * read of a head holds a status rollup. So it isn't known to be red, and
+ * nothing is said of it that only a red check would earn, such as the
+ * Operator's mention after it went green; nor can the sweep see it go green
+ * to report it as a Flaky check.
  */
 export function stillRed(checkRuns: readonly HeadCheckRun[], name: string): boolean {
-  return !checkRuns.some((run) => run.name === name) || isRed(latestRun(checkRuns, name));
+  return isRed(latestRun(checkRuns, name));
 }
 
 /** The checks a gate re-run line on this PR already names on this head, asked or done. */

@@ -10,16 +10,24 @@ import {
 import type { FailureExcerpt } from "../review/failureExcerpt.ts";
 import { MAX_ISSUE_URL_LENGTH } from "./followUps.ts";
 import { planFor } from "./rules.ts";
-import type { Action, LoopEvent, Plan } from "./types.ts";
+import type { Action, LoopEvent, Plan, RedRequiredChecks } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
 /** The Digest off in Kit config, so a pass opens the Merge gate itself; what it does with the Digest on is src/loop/digestGate.test.ts's. */
 const DIGEST_OFF = kitConfig({ digest: { enabled: false } });
 
-function redChecks(overrides: Partial<Extract<LoopEvent, { kind: "required-checks-finished" }>> = {}): LoopEvent {
-  return { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN, ...overrides };
+/**
+ * The Review of a head whose Required checks are still red (#779), `build` by
+ * default, as an Execution flaw with no `red-checks:` block: each red check
+ * is caused, as the Reviewer gave no judgment of it (#780).
+ */
+function redHead(red: Partial<RedRequiredChecks> = {}): LoopEvent {
+  return reviewed("verdict: execution-flaw\n\n- A bug.", { redChecks: { failed: ["build"], excerpts: [], ...red } });
 }
+
+/** The note under a red check the Reviewer gave no judgment of (#780). */
+const NO_JUDGMENT = "  Caused by this pull request: the Reviewer gave no judgment.";
 
 function reviewed(output: string, overrides: Partial<Extract<LoopEvent, { kind: "review-run-finished" }>> = {}): LoopEvent {
   return { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output, runUrl: RUN, repoUrl: "https://github.com/acme/shop", ...overrides };
@@ -159,7 +167,7 @@ describe("Review: a stale Verdict", () => {
     ["the PR is closed", aPullRequest({ open: false })],
   ])("isn't posted when %s", (_, pullRequest) => {
     expect(planFor(reviewed("verdict: pass"), snapshotOfPullRequest(pullRequest), kitConfig()).kind).toBe("nothing");
-    expect(planFor(redChecks(), snapshotOfPullRequest(pullRequest), kitConfig()).kind).toBe("nothing");
+    expect(planFor(redHead(), snapshotOfPullRequest(pullRequest), kitConfig()).kind).toBe("nothing");
   });
 });
 
@@ -203,24 +211,7 @@ describe("Review: the Verdict marker", () => {
   });
 });
 
-describe("Review: red CI", () => {
-  it("red required checks yield an Execution-flaw Verdict comment from CI, and no Reviewer run", () => {
-    const plan = planFor(redChecks({ failed: ["build", "test"] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
-
-    const actions = actionsOf(plan);
-    expect(actions.filter((action) => action.kind === "start-agent-run")).toEqual([]);
-    expect(actions.map((action) => action.kind)).toEqual(["comment", "add-labels"]);
-    const [body] = commentsOf(plan);
-    expect(actions[0]).toMatchObject({ kind: "comment", issue: 50 });
-    expect(verdictsPostedIn([body!])).toEqual([
-      { verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["build", "test"], headSha: HEAD_SHA },
-    ]);
-    expect(body).toContain("`build`");
-    expect(body).toContain("`test`");
-    expect(notificationsOf(plan)).toEqual([]);
-    expect(body).toContain(`[The run](${RUN})`);
-  });
-
+describe("Review: a head whose Required checks are still red (#779)", () => {
   describe("each red check's Failure excerpt (#775)", () => {
     const JOB = "https://github.com/acme/shop/actions/runs/7/job/8";
     const excerpt = (check: string, overrides: Partial<Extract<FailureExcerpt, { kind: "actions" }>> = {}): FailureExcerpt => ({
@@ -234,13 +225,15 @@ describe("Review: red CI", () => {
     const verdictOf = (plan: Plan) => commentsOf(plan).find((body) => body.includes("## Verdict"))!;
 
     it("carries the failed step, its last log lines, its error annotations and the job link under the check's name", () => {
-      const plan = planFor(redChecks({ failed: ["build"], excerpts: [excerpt("build")] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+      const plan = planFor(redHead({ failed: ["build"], excerpts: [excerpt("build")] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
       expect(verdictOf(plan)).toContain(
         [
-          "These required checks didn't pass, so the Reviewer didn't run:",
+          "These failed:",
           "",
           `- \`build\` ([the job](${JOB}))`,
+          "",
+          NO_JUDGMENT,
           "",
           "  The step `Run pnpm test` failed. The end of its log:",
           "",
@@ -263,15 +256,17 @@ describe("Review: red CI", () => {
     it("carries the excerpt under the heading of checks that failed again on the Kit's re-run, and an outside check's under the outside checks' heading (#777)", () => {
       const rerun = { outside: ["Vercel"], failedAgain: ["build"], flaky: [], refused: null };
       const vercel: FailureExcerpt = { kind: "commit-status", check: "Vercel", link: "https://vercel.com/acme/shop/abc", description: "Deployment has failed" };
-      const plan = planFor(redChecks({ failed: ["build", "Vercel"], rerun, excerpts: [excerpt("build"), vercel] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+      const plan = planFor(redHead({ failed: ["build", "Vercel"], rerun, excerpts: [excerpt("build"), vercel] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
       const verdict = verdictOf(plan);
-      expect(verdict).toContain(`failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:\n\n- \`build\` ([the job](${JOB}))`);
+      expect(verdict).toContain(`These failed again when the Kit re-ran them on the same head:\n\n- \`build\` ([the job](${JOB}))`);
       expect(verdict).toContain(
         [
-          "These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:",
+          "These aren't GitHub Actions, so the Kit couldn't re-run them:",
           "",
           "- `Vercel` ([the service's page](https://vercel.com/acme/shop/abc))",
+          "",
+          NO_JUDGMENT,
           "",
           "  A commit status from an outside service, whose own log can't be reached from GitHub. Its description:",
           "",
@@ -294,7 +289,7 @@ describe("Review: red CI", () => {
         annotations: [],
       };
       const plan = planFor(
-        redChecks({ failed: ["build", "buildkite/shop"], rerun, excerpts: [excerpt("build", { steps: [{ name: "Run pnpm test", earlier: 0, lines: long }] }), buildkite] }),
+        redHead({ failed: ["build", "buildkite/shop"], rerun, excerpts: [excerpt("build", { steps: [{ name: "Run pnpm test", earlier: 0, lines: long }] }), buildkite] }),
         snapshotOfPullRequest(aPullRequest()),
         kitConfig(),
       );
@@ -308,10 +303,10 @@ describe("Review: red CI", () => {
 
     it("says under an outside check that its failure couldn't be read when the Review passed out no excerpt for it", () => {
       const rerun = { outside: ["Vercel"], failedAgain: [], flaky: [], refused: null };
-      const plan = planFor(redChecks({ failed: ["Vercel"], rerun }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+      const plan = planFor(redHead({ failed: ["Vercel"], rerun }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
       expect(verdictOf(plan)).toContain(
-        "aren't GitHub Actions, so the Kit couldn't re-run them:\n\n- `Vercel`\n\n  Its failure couldn't be read: the Review checks job passed out no Failure excerpt for it.",
+        `aren't GitHub Actions, so the Kit couldn't re-run them:\n\n- \`Vercel\`\n\n${NO_JUDGMENT}\n\n  Its failure couldn't be read: the Review checks job passed out no Failure excerpt for it.`,
       );
     });
 
@@ -323,9 +318,9 @@ describe("Review: red CI", () => {
           steps: [{ name: step, earlier: 0, lines: ["FAIL src/c.test.ts > first attempt's line"] }],
           annotations: [{ path: "src/c.test.ts", line: 4, message: "Error: connect ECONNREFUSED 127.0.0.1:5432" }],
         });
-      const failedAgain = (overrides: Partial<Extract<LoopEvent, { kind: "required-checks-finished" }>>) =>
+      const failedAgain = (red: Partial<RedRequiredChecks>) =>
         planFor(
-          redChecks({ failed: ["build"], rerun: { outside: [], failedAgain: ["build"], flaky: [], refused: null }, ...overrides }),
+          redHead({ failed: ["build"], rerun: { outside: [], failedAgain: ["build"], flaky: [], refused: null }, ...red }),
           snapshotOfPullRequest(aPullRequest()),
           kitConfig(),
         );
@@ -336,6 +331,8 @@ describe("Review: red CI", () => {
         expect(verdict).toContain(
           [
             `- \`build\` ([the job](${JOB}))`,
+            "",
+            NO_JUDGMENT,
             "",
             "  The step `Run pnpm test` failed. The end of its log:",
             "",
@@ -384,7 +381,7 @@ describe("Review: red CI", () => {
       it("shows one attempt and no same-step line for a check that wasn't re-run, as when GitHub refused", () => {
         const verdict = verdictOf(
           planFor(
-            redChecks({ failed: ["build"], rerun: { outside: [], failedAgain: [], flaky: [], refused: "the workflow run is past its first attempt" }, excerpts: [excerpt("build")] }),
+            redHead({ failed: ["build"], rerun: { outside: [], failedAgain: [], flaky: [], refused: "the workflow run is past its first attempt" }, excerpts: [excerpt("build")] }),
             snapshotOfPullRequest(aPullRequest()),
             kitConfig(),
           ),
@@ -398,19 +395,19 @@ describe("Review: red CI", () => {
     });
 
     it("says under each check that its failure couldn't be read when the Review passed out no excerpt, and the Execution flaw still lands", () => {
-      const plan = planFor(redChecks({ failed: ["build", "lint"] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+      const plan = planFor(redHead({ failed: ["build", "lint"] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
       const verdict = verdictOf(plan);
-      expect(verdict).toContain("- `build`\n\n  Its failure couldn't be read: the Review checks job passed out no Failure excerpt for it.");
-      expect(verdict).toContain("- `lint`\n\n  Its failure couldn't be read: the Review checks job passed out no Failure excerpt for it.");
-      expect(verdictsPostedIn([verdict])).toEqual([expect.objectContaining({ verdict: "execution-flaw", source: "ci", checks: ["build", "lint"] })]);
+      expect(verdict).toContain(`- \`build\`\n\n${NO_JUDGMENT}\n\n  Its failure couldn't be read: the Review checks job passed out no Failure excerpt for it.`);
+      expect(verdict).toContain(`- \`lint\`\n\n${NO_JUDGMENT}\n\n  Its failure couldn't be read: the Review checks job passed out no Failure excerpt for it.`);
+      expect(verdictsPostedIn([verdict])).toEqual([expect.objectContaining({ verdict: "execution-flaw", source: "reviewer", checks: ["build", "lint"] })]);
     });
 
     it("says why under a check whose failure couldn't be read, with its job link", () => {
       const unread: FailureExcerpt = { kind: "unread", check: "build", link: JOB, why: "the job never started, so it left no log and no annotation" };
-      const plan = planFor(redChecks({ failed: ["build"], excerpts: [unread] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+      const plan = planFor(redHead({ failed: ["build"], excerpts: [unread] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
-      expect(verdictOf(plan)).toContain(`- \`build\` ([the job](${JOB}))\n\n  Its failure couldn't be read: the job never started, so it left no log and no annotation.`);
+      expect(verdictOf(plan)).toContain(`- \`build\` ([the job](${JOB}))\n\n${NO_JUDGMENT}\n\n  Its failure couldn't be read: the job never started, so it left no log and no annotation.`);
     });
 
     it("is always posted, cut to fit GitHub's comment limit, however much the checks' annotations hold", () => {
@@ -419,11 +416,11 @@ describe("Review: red CI", () => {
           steps: [{ name: "Run pnpm test", earlier: 0, lines: Array.from({ length: 150 }, () => "x".repeat(400)) }],
           annotations: Array.from({ length: 10 }, (_, line) => ({ path: "src/a.test.ts", line, message: "m".repeat(4_096) })),
         });
-      const plan = planFor(redChecks({ failed: ["a", "b", "c"], excerpts: [huge("a"), huge("b"), huge("c")] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
+      const plan = planFor(redHead({ failed: ["a", "b", "c"], excerpts: [huge("a"), huge("b"), huge("c")] }), snapshotOfPullRequest(aPullRequest()), kitConfig());
 
       const verdict = verdictOf(plan);
       expect(verdict.length).toBeLessThanOrEqual(65_536);
-      expect(verdict).toContain("_Shortened to fit the comment._");
+      expect(verdict).toContain("_Shortened to fit GitHub's size limit._");
       expect(verdict).toContain("Retry 1 of 2 starts now");
       expect(verdictsPostedIn([verdict])).toEqual([expect.objectContaining({ verdict: "execution-flaw", checks: ["a", "b", "c"] })]);
     });

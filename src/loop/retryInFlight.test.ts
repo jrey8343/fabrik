@@ -3,7 +3,7 @@
 // no Verdict (ADR-0006). These tests replay a PR's thread: each plan's comments
 // are posted, and the next snapshot reads them back as the adapter does.
 import { describe, expect, it } from "vitest";
-import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { aCausedRedCheckReview, anIssue, aPullRequest, kitConfig, NO_TAGS, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { type PullRequestHistoryItem, pushedSinceVerdictIn, requestChangesRunIn, requestChangesSinceRunIn, verdictsIn } from "../github/threads.ts";
 import { planFor } from "./rules.ts";
 import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
@@ -91,8 +91,9 @@ class Thread {
   }
 }
 
+/** The Review of `headSha` finishes with its Required check `build` still red, which the Reviewer judged caused: an Execution flaw that counts. */
 function redChecks(headSha: string): LoopEvent {
-  return { kind: "required-checks-finished", pullRequest: 50, headSha, failed: ["build"], runUrl: RUN };
+  return aCausedRedCheckReview({ headSha, runUrl: RUN });
 }
 
 function reviewed(headSha: string, output: string): LoopEvent {
@@ -286,7 +287,7 @@ describe("A Review while a Request-changes run is in flight", () => {
     thread.retryPushes(B, C, true);
     thread.pushRed(C);
 
-    expect(verdictsIn(thread.comments).at(-1)).toEqual({ verdict: "execution-flaw", source: "ci", requestChanges: true, checks: ["build"], headSha: C });
+    expect(verdictsIn(thread.comments).at(-1)).toEqual({ verdict: "execution-flaw", source: "reviewer", requestChanges: true, checks: ["build"], tags: NO_TAGS, headSha: C });
     expect(verdictLines(thread).at(-1)).toMatch(/^Retry 1 of 2 starts now, stepped up:/);
   });
 

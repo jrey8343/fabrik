@@ -3,183 +3,44 @@
 // re-run of the red checks passes (src/review/rerun.ts), or when the checks an
 // Execution flaw named have since passed on its head, which the hourly tick
 // reads; that Verdict then no longer counts toward the Ticket's Retries, unless
-// it is a Reviewer's with an untagged finding beside its checks (#779). The tick also reads the head the Reviewer passed at the Merge gate,
-// where a Required check that has both failed and succeeded is reported, with
-// nothing counted back (#693). Each way the Operator hears of it twice over, quietly: one line
-// on the PR, mentioning nobody, and the check's own Flaky check issue for
-// Triage, filed once and commented on each time the check proves flaky again, so the Product's
-// suite gets fixed. That issue holds the check's Unrelated failures too (#781): the Operator hears
-// of one the same way, a line ahead of the Verdict and a comment on the issue, and one that later
-// passes on its head is a Flaky check. Pure.
-import { type FailureExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
-import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
-import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker, unrelatedFailureMarker } from "./markers.ts";
-import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
-import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
+// it is a Reviewer's with an untagged finding beside its checks (#779). The
+// tick also reads the head the Reviewer passed at the Merge gate, where a
+// Required check that has both failed and succeeded is reported, with nothing
+// counted back (#693), and an open draft's Unrelated failures
+// (src/loop/unrelatedFailures.ts), one that has since passed on its head being
+// a Flaky check. Each way the Operator hears of it twice over, quietly: one
+// line on the PR, mentioning nobody, and the check's issue for Triage
+// (src/loop/checkIssue.ts), filed once and commented on each time the check
+// proves flaky again, so the Product's suite gets fixed. Pure.
+import { checkCode, type FailureExcerpt } from "../review/failureExcerpt.ts";
+import { type CheckReport, checkIssueActions, issueRef } from "./checkIssue.ts";
+import { isRed, runsOf } from "./headChecks.ts";
+import { flakyCheckMarker } from "./markers.ts";
+import { unrelatedOnDraft } from "./unrelatedFailures.ts";
+import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, KitIssueSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot, SweptHead, VerdictRecord } from "./types.ts";
 
-/** A check's name as Markdown code: a backtick in it can't end the span. */
-export function checkCode(name: string): string {
-  return `\`${name.replace(/`/g, "'")}\``;
-}
-
-/** Why a red run has no Failure excerpt: the Kit read none, as when the Review's artifact is missing. */
-const NO_EXCERPT = "the Kit read no Failure excerpt of this run";
-
-/**
- * An Unrelated failure (#781, GLOSSARY.md): a red check still red on its head
- * after the Kit's re-run, which the Reviewer judged the pull request didn't
- * cause. `red` links its red run, and `reason` is the Reviewer's one-line
- * reason, as a sentence that mentions nobody.
- */
-export interface UnrelatedFailure {
-  readonly name: string;
-  readonly red: string;
-  readonly reason: string;
-  /** That red run's Failure excerpt, as the Review read it; absent when none was read, which the issue says. */
-  readonly excerpt?: FailureExcerpt;
-}
-
-/** One red run a check's issue reports (#781): a Flaky check's, or an Unrelated failure's. */
-type Reported = { readonly kind: "flaky"; readonly check: FlakyCheck } | { readonly kind: "unrelated"; readonly check: UnrelatedFailure };
-
-/** A new check's issue's title (#781), which names both kinds it holds. One filed before #781 keeps its old one. */
-export function checkIssueTitle(name: string): string {
-  return `Flaky check or Unrelated failure: ${checkCode(name)}`;
-}
-
-/**
- * An issue's body or comment, `text`, then the Failure excerpt of the check's
- * red run (#778), rendered under the module's cap in the room GitHub's limit
- * leaves it. A run with none read says so, keeping the red run's link.
- */
-function withExcerpt(text: string, { check }: Reported): string {
-  const excerpt = check.excerpt ?? { kind: "unread", check: check.name, link: check.red, why: NO_EXCERPT };
-  const heading = "Why the red run failed, its Failure excerpt:";
-  const above = `${text}\n\n${heading}\n\n`;
-  return `${above}${renderFailureExcerpts([excerpt], { room: GITHUB_COMMENT_LIMIT - above.length }).join("\n\n")}`;
-}
-
-/** What a check's issue says of one red run, as its body's opening and as a later comment, with the PR, head and run links. */
-function reportOf(pullRequest: number, short: string, reported: Reported): { readonly opening: string; readonly again: string } {
-  if (reported.kind === "flaky") {
-    const { name, red, green } = reported.check;
-    const runs = `#${pullRequest} at ${short}: [red](${red}), [green](${green})`;
-    return {
-      opening: [
-        `The required check ${checkCode(name)} reported both failure and success on the same head commit: a Flaky check. ` +
-          "Each time it fails costs a Review a re-run, and one the Kit doesn't catch costs a Ticket a Retry, so it's worth fixing in the suite.",
-        "",
-        `- ${runs}`,
-      ].join("\n"),
-      again: `Flaky again on ${runs}.`,
-    };
-  }
-  const { name, red, reason } = reported.check;
-  const runs = `#${pullRequest} at ${short}: [red](${red})`;
-  const judged = `The Reviewer judged the pull request didn't cause it: ${reason}`;
+/** What a check's issue says of a Flaky check's red run, as its body's opening and as a later comment, with the PR, head and run links. */
+function reportOf(pullRequest: number, short: string, { name, red, green, excerpt }: FlakyCheck): CheckReport {
+  const runs = `#${pullRequest} at ${short}: [red](${red}), [green](${green})`;
   return {
+    kind: "flaky-check",
+    name,
+    red,
+    ...(excerpt === undefined ? {} : { excerpt }),
     opening: [
-      `The required check ${checkCode(name)} was still red after the Kit's re-run, and the Reviewer judged the pull request didn't cause it: an Unrelated failure. ` +
-        "It costs the Ticket no Retry, but the Merge gate holds the pull request until the check is green, so it's worth fixing in the suite.",
+      `The required check ${checkCode(name)} reported both failure and success on the same head commit: a Flaky check. ` +
+        "Each time it fails costs a Review a re-run, and one the Kit doesn't catch costs a Ticket a Retry, so it's worth fixing in the suite.",
       "",
       `- ${runs}`,
-      `- ${judged}`,
     ].join("\n"),
-    again: `Unrelated failure on ${runs}. ${judged}`,
+    again: `Flaky again on ${runs}.`,
   };
 }
 
-/**
- * Each red run's check's issue: the open one for its check when there is one,
- * by its marker, whatever its title, else one filed earlier in the same plan
- * (`filed`, by check), else one filed now, which goes into `filed`. The Kit
- * files nothing else for it: never a Ticket or a Design issue (#781).
- */
-function issueActions(
-  pullRequest: number,
-  headSha: string,
-  reports: readonly Reported[],
-  issues: readonly KitIssueSnapshot[],
-  filed: Map<string, CreatedIssue> = new Map(),
-): { actions: Action[]; refs: (number | CreatedIssue)[] } {
-  const actions: Action[] = [];
-  const refs: (number | CreatedIssue)[] = [];
+/** Each Flaky check's issue (src/loop/checkIssue.ts), filed or commented on, and each one's issue in order. */
+function issueActions(pullRequest: number, headSha: string, flaky: readonly FlakyCheck[], issues: readonly KitIssueSnapshot[], filed: Map<string, CreatedIssue>) {
   const short = headSha.slice(0, 7);
-  for (const reported of reports) {
-    const { name } = reported.check;
-    const { opening, again } = reportOf(pullRequest, short, reported);
-    const open = issues.find((issue) => flakyCheckIssueOf(issue.body) === name);
-    if (open !== undefined) {
-      actions.push({ kind: "comment", issue: open.number, body: withExcerpt(again, reported) });
-      refs.push(open.number);
-      continue;
-    }
-    const earlier = filed.get(name);
-    if (earlier !== undefined) {
-      // Filed earlier in this plan for another PR or head: this red run goes on it as a comment, with its own excerpt.
-      actions.push({ kind: "comment-on-created", on: earlier, body: withExcerpt(again, reported) });
-      refs.push(earlier);
-      continue;
-    }
-    // By check, not by its place in the list: the count-back sweep and the Merge gate's read may each file one on the same head.
-    const key = `${reported.kind === "flaky" ? "flaky-check" : "unrelated-failure"}-${short}-${name}`;
-    actions.push({
-      kind: "create-issue",
-      key,
-      title: checkIssueTitle(name),
-      body: withExcerpt(
-        [
-          flakyCheckIssueMarker(name),
-          opening,
-          "",
-          "The Kit comments here each time the check proves flaky again, or the Reviewer judges another of its red runs an Unrelated failure, while this is open.",
-        ].join("\n"),
-        reported,
-      ),
-      labels: [NEEDS_TRIAGE, FLAKY_CHECK_LABEL],
-      parent: null,
-      blockedBy: [],
-    });
-    refs.push({ created: key });
-    filed.set(name, { created: key });
-  }
-  return { actions, refs };
-}
-
-/**
- * What the Kit does about the red checks the Reviewer judged Unrelated
- * failures on this head (#781): each one's issue, then one line on the PR,
- * mentioning nobody, with its marker, saying each is still red and that the
- * Reviewer judged the PR didn't cause it, and linking its issue. The Verdict
- * that follows is the event's one notification, and links each issue too, by
- * `refs`. A check `saidBefore`, which an earlier Verdict on this head named an
- * Unrelated failure, as before a Touch-up that changed only the body (#751),
- * is said once: only its open issue is linked. Nothing when there is none.
- */
-export function unrelatedFailureActions(
-  pullRequest: number,
-  headSha: string,
-  unrelated: readonly UnrelatedFailure[],
-  issues: readonly KitIssueSnapshot[],
-  saidBefore: readonly string[] = [],
-): { actions: Action[]; refs: ReadonlyMap<string, number | CreatedIssue> } {
-  const fresh = unrelated.filter(({ name }) => !saidBefore.includes(name));
-  const linked = new Map<string, number | CreatedIssue>(
-    unrelated.flatMap(({ name }) => {
-      const open = issues.find((issue) => flakyCheckIssueOf(issue.body) === name);
-      return open === undefined ? [] : [[name, open.number] as const];
-    }),
-  );
-  if (fresh.length === 0) return { actions: [], refs: linked };
-  const { actions, refs } = issueActions(pullRequest, headSha, fresh.map((check) => ({ kind: "unrelated", check })), issues);
-  const short = headSha.slice(0, 7);
-  const body: (string | CreatedIssue)[] = [unrelatedFailureMarker({ headSha, checks: fresh.map(({ name }) => name) }), "\n"];
-  fresh.forEach(({ name }, at) => {
-    body.push(`${at === 0 ? "" : " "}${checkCode(name)} is still red on ${short}, and the Reviewer judged this pull request didn't cause it: an Unrelated failure (`);
-    body.push(issueRef(refs[at]!), ").");
-    linked.set(name, refs[at]!);
-  });
-  return { actions: [...actions, { kind: "comment-linking", issue: pullRequest, body }], refs: linked };
+  return checkIssueActions(headSha, flaky.map((check) => reportOf(pullRequest, short, check)), issues, filed);
 }
 
 /**
@@ -210,7 +71,7 @@ function flakyLineActions(
   wording: (name: string, short: string) => string,
 ): Action[] {
   if (flaky.length === 0) return [];
-  const { actions, refs } = issueActions(pullRequest, headSha, flaky.map((check) => ({ kind: "flaky", check })), issues, filed);
+  const { actions, refs } = issueActions(pullRequest, headSha, flaky, issues, filed);
   const short = headSha.slice(0, 7);
   const body: (string | CreatedIssue)[] = [flakyCheckMarker({ headSha, checks: flaky.map(({ name }) => name) }), "\n"];
   flaky.forEach(({ name }, at) => {
@@ -218,11 +79,6 @@ function flakyLineActions(
     body.push(issueRef(refs[at]!), ").");
   });
   return [...actions, { kind: "comment-linking", issue: pullRequest, body }];
-}
-
-/** An issue in a comment-linking body: an existing one by its `#number`, a created one as the adapter writes it. */
-function issueRef(ref: number | CreatedIssue): string | CreatedIssue {
-  return typeof ref === "number" ? `#${ref}` : ref;
 }
 
 /**
@@ -240,7 +96,7 @@ export function countedBackActions(
   issues: readonly KitIssueSnapshot[],
   filed: Map<string, CreatedIssue> = new Map(),
 ): Action[] {
-  const { actions, refs } = issueActions(pullRequest, headSha, flaky.map((check) => ({ kind: "flaky", check })), issues, filed);
+  const { actions, refs } = issueActions(pullRequest, headSha, flaky, issues, filed);
   const short = headSha.slice(0, 7);
   const names = flaky.map(({ name }) => checkCode(name)).join(", ");
   const body: (string | CreatedIssue)[] = [
@@ -273,34 +129,18 @@ export function countsBackOnGreen(record: VerdictRecord): boolean {
  * One with an untagged finding is marked so: its checks are reported, and it
  * still counts.
  */
-export function uncountedFlaws(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns" | "excerpts">[] {
+export function uncountedFlaws(pullRequest: PullRequestSnapshot): SweptHead[] {
   const reported = (headSha: string, checks: readonly string[]) =>
     checks.every((name) => pullRequest.flakyCheckMarks.some((mark) => mark.headSha === headSha && mark.checks.includes(name)));
   return pullRequest.verdicts.flatMap((record) => {
     const checks = record.checks ?? [];
     if (record.verdict !== "execution-flaw" || record.flaky === true || checks.length === 0 || reported(record.headSha, checks)) return [];
-    const flaw = { pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: record.headSha, checks };
-    return [countsBackOnGreen(record) ? flaw : { ...flaw, untaggedFinding: true as const }];
+    return [{ pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: record.headSha, checks, kind: countsBackOnGreen(record) ? "counted-back" : "untagged-finding" }];
   });
 }
 
-/**
- * The Unrelated failures the latest Verdict on this open agent draft named
- * (#781), on the head it was given on, less any a Flaky check line already
- * names there; none when there are none. A pass at the Merge gate isn't read
- * here: the read of its passed head finds a check that has since succeeded.
- */
-export function unrelatedOnDraft(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns" | "excerpts">[] {
-  if (!pullRequest.isAgent || !pullRequest.open || !pullRequest.draft) return [];
-  const latest = pullRequest.verdicts.at(-1);
-  if (latest === undefined) return [];
-  const named = new Set(pullRequest.flakyCheckMarks.filter((mark) => mark.headSha === latest.headSha).flatMap((mark) => mark.checks));
-  const checks = (latest.unrelated ?? []).filter((name) => !named.has(name));
-  return checks.length === 0 ? [] : [{ pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: latest.headSha, checks, unrelated: true }];
-}
-
 /** Every head of this PR the tick's sweep reads (src/github/snapshot.ts): its uncounted flaws' (#462, #779), and its draft's Unrelated failures' (#781). */
-export function sweptHeadsOf(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns" | "excerpts">[] {
+export function sweptHeadsOf(pullRequest: PullRequestSnapshot): SweptHead[] {
   return [...uncountedFlaws(pullRequest), ...unrelatedOnDraft(pullRequest)];
 }
 
@@ -314,8 +154,6 @@ export function passedHeadAtGate(pullRequest: PullRequestSnapshot): string | nul
   const passed = pullRequest.verdicts.findLast((record) => record.verdict === "pass");
   return passed?.headSha === pullRequest.headSha ? passed.headSha : null;
 }
-
-const RED = ["failure", "timed_out", "cancelled", "action_required", "startup_failure"];
 
 /** A Flaky check the tick found, with the excerpt it read of that check's red run, when it read one (#778). */
 function withRedExcerpt(check: FlakyCheck, excerpts: readonly FailureExcerpt[]): FlakyCheck {
@@ -332,21 +170,17 @@ function withRedExcerpt(check: FlakyCheck, excerpts: readonly FailureExcerpt[]):
  * none does. The tick reads the excerpt of each red run this gives before its
  * plan (src/github/snapshot.ts).
  */
-export function flippedOn({ checks, checkRuns, excerpts, unrelated }: FlawHeadChecks): FlakyCheck[] | null {
-  const flipped = (name: string): FlakyCheck | null => {
-    // A run not yet started is the newest: GitHub queued it after every run that has.
-    const started = (run: HeadCheckRun) => (run.startedAt === null ? Infinity : Date.parse(run.startedAt));
-    const runs = checkRuns.filter((run) => run.name === name).toSorted((a, b) => started(a) - started(b));
+export function flippedOn({ checks, checkRuns, excerpts, kind }: FlawHeadChecks): FlakyCheck[] | null {
+  const flipped = (name: string): FlakyCheck[] => {
+    const runs = runsOf(checkRuns, name);
     const latest = runs.at(-1);
-    const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
-    return latest?.conclusion !== "success" || red === undefined ? null : withRedExcerpt({ name, red: red.url, green: latest.url }, excerpts);
+    const red = runs.find(isRed);
+    return latest?.conclusion !== "success" || red === undefined ? [] : [withRedExcerpt({ name, red: red.url, green: latest.url }, excerpts)];
   };
-  const flaky = checks.map(flipped);
-  if (unrelated === true) {
-    const each = flaky.filter((check) => check !== null);
-    return each.length === 0 ? null : each;
-  }
-  return flaky.every((check) => check !== null) ? flaky : null;
+  const flaky = checks.flatMap(flipped);
+  // An Unrelated failure flips on its own; a flaw's checks flip together.
+  const enough = kind === "unrelated" ? flaky.length > 0 : flaky.length === checks.length;
+  return enough ? flaky : null;
 }
 
 /**
@@ -361,9 +195,28 @@ export function flakyOnPassedHead({ headSha, required, checkRuns, marks, excerpt
     if (named.has(name)) return [];
     const runs = checkRuns.filter((run) => run.name === name);
     const green = runs.find((run) => run.conclusion === "success");
-    const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
+    const red = runs.find(isRed);
     return green === undefined || red === undefined ? [] : [withRedExcerpt({ name, red: red.url, green: green.url }, excerpts)];
   });
+}
+
+/**
+ * What a later green on a swept head says: a flaw counted only for its
+ * checks is counted back; a Reviewer's flaw with an untagged finding counts
+ * for that (#779), so its checks are reported and the count stands; an
+ * Unrelated failure counted toward nothing (#781), so it is reported, and
+ * there's nothing to count back.
+ */
+function sweptActions(head: FlawHeadChecks, flaky: readonly FlakyCheck[], issues: readonly KitIssueSnapshot[], filed: Map<string, CreatedIssue>): Action[] {
+  const line = (wording: (name: string, short: string) => string) => flakyLineActions(head.pullRequest, head.headSha, flaky, issues, filed, wording);
+  switch (head.kind) {
+    case "counted-back":
+      return countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, issues, filed);
+    case "untagged-finding":
+      return line((name, short) => `${name} has since passed on ${short}, where it was red beside the Reviewer's own findings, so that Verdict still counts`);
+    case "unrelated":
+      return line((name, short) => `${name} has since passed on ${short}, where the Reviewer judged it an Unrelated failure`);
+  }
 }
 
 /**
@@ -390,19 +243,7 @@ export function flakyCheckGate(_now: string, snapshot: Snapshot): Plan {
   for (const head of flakySweep === null || flakySweep === "no-permission" ? [] : flakySweep) {
     const flaky = flippedOn(head);
     if (flaky === null) continue;
-    // A Reviewer's flaw with an untagged finding counts for that (#779): its checks are reported, and the count stands.
-    // An Unrelated failure counted toward nothing (#781): it is reported, and there's nothing to count back.
-    actions.push(
-      ...(head.unrelated === true
-        ? flakyLineActions(head.pullRequest, head.headSha, flaky, snapshot.flakyCheckIssues, filed, (name, short) =>
-            `${name} has since passed on ${short}, where the Reviewer judged it an Unrelated failure`,
-          )
-        : head.untaggedFinding === true
-          ? flakyLineActions(head.pullRequest, head.headSha, flaky, snapshot.flakyCheckIssues, filed, (name, short) =>
-              `${name} has since passed on ${short}, where it was red beside the Reviewer's own findings, so that Verdict still counts`,
-            )
-          : countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed)),
-    );
+    actions.push(...sweptActions(head, flaky, snapshot.flakyCheckIssues, filed));
     for (const { name } of flaky) countedBack.add(key(head.pullRequest, head.headSha, name));
   }
   for (const head of passedHeads === null || typeof passedHeads === "string" ? [] : passedHeads) {

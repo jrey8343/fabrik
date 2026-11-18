@@ -56,7 +56,7 @@ import { landRetro } from "./retroLanding.ts";
 import { startWeekly, weeklyRoleOf } from "./weeklyRuns.ts";
 import { dispatch } from "./dispatch.ts";
 import { sweepStuckTriggers } from "./triggerSweep.ts";
-import { applyRedChecks, applyReview, startReview, startReviewOnLabel } from "./review.ts";
+import { applyReview, startReview, startReviewOnLabel } from "./review.ts";
 import type {
   Action,
   IssueContext,
@@ -160,8 +160,6 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
           ? { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` }
           : { kind: "act", actions: misplaced };
       });
-    case "required-checks-finished":
-      return applyRedChecks(event, snapshot, config);
     case "review-run-finished":
       return applyReview(event, snapshot, config);
     case "digest-run-finished":

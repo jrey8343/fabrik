@@ -239,7 +239,7 @@ A Required check still red on an agent pull request's head after the Kit's re-ru
 _Avoid_: flake, pre-existing failure
 
 **Failure excerpt**:
-The part of a red Required check's log, with its annotations, that the Kit puts under the check's name, so whoever fixes it sees why it failed without opening GitHub. For a check from an outside service, whose own log GitHub doesn't hold, it is whatever that service wrote to GitHub.
+The part of a red Required check's log, with its annotations, that the Kit puts under the check's name, so whoever fixes it sees why it failed without opening GitHub.
 _Avoid_: log, CI output, failure log
 
 **Retry**:

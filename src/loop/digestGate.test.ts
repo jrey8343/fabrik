@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import {
+  aCausedRedCheckReview,
   anIssue,
   aPullRequest,
   aTicket,
@@ -85,7 +86,7 @@ describe("The Digest: a pass", () => {
   it.each([
     ["an Execution flaw from the Reviewer", reviewed("verdict: execution-flaw\n\nThe empty-cart case throws.")],
     ["a Design flaw", reviewed("verdict: design-flaw\n\nThe Ticket asks for two contradictory things.")],
-    ["an Execution flaw from red required checks", { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN } as const],
+    ["an Execution flaw on a head still red, with a check the Reviewer judged caused", aCausedRedCheckReview()],
   ])("%s adds no label", (_what, event: LoopEvent) => {
     const plan = planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig());
 

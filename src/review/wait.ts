@@ -45,7 +45,7 @@ import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { GitHub } from "../github/client.ts";
 import type { MergeableState } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
-import { checkCode } from "../loop/flakyChecks.ts";
+import { checkCode } from "./failureExcerpt.ts";
 import type { FailureReport } from "../loop/types.ts";
 import { type BranchRequiredChecks, type DefaultBranchHeadChecks, readDefaultBranchHeadChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type ChecksOutcome, checksFromGh, requiredChecksOutcome } from "./checks.ts";
@@ -317,11 +317,12 @@ async function main(productDir: string): Promise<void> {
     const stepSummary = process.env["GITHUB_STEP_SUMMARY"] ?? "";
     if (stepSummary !== "") await appendFile(stepSummary, `${summary}\n`);
   }
-  const reader = failureReaderOf(repo, { actions: client });
+  // The workflow token holds Actions: read, Checks: read and Commit statuses: read.
+  const reader = failureReaderOf(repo, { actions: client, checks: client, statuses: client });
   if (rerun === null && outcome.checks === "red") {
     const red = redChecksOf(last, failed);
     console.log(`The Kit can re-run ${red.rerun.length === 0 ? "none of them" : red.rerun.map(({ name }) => name).join(", ")}`);
-    lines.push(`red=${JSON.stringify(red)}`, `main=${JSON.stringify(await onMain(() => readDefaultBranchHeadChecks(client, repo, failed)))}`);
+    lines.push(`red=${JSON.stringify(red)}`, `main=${JSON.stringify(await onMain(() => readDefaultBranchHeadChecks(client, repo, failed, "check-runs-and-statuses")))}`);
     // Before anything is re-run (#775): the re-run may leave the first attempt's job readable only by its own id.
     await leaveExcerpts(FAILURE_EXCERPTS_FILE, () => redExcerpts(last, failed, outcome.headSha, reader));
   }

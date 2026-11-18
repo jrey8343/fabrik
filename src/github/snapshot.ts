@@ -86,7 +86,7 @@ import { flakyOnPassedHead, flippedOn, passedHeadAtGate, sweptHeadsOf } from "..
 import { closeReasonOf } from "./events.ts";
 import { unrelatedToAsk } from "../loop/gateRerun.ts";
 import { readDefaultBranchHeadChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
-import { type FailureExcerpt, type FailureReader, failureReaderOf, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
+import { type FailureExcerpt, failureReaderOf, isActionsJobLink, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
 import { allPages, GitHubError, pagesOf, type ReadClient, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
 import {
@@ -675,23 +675,28 @@ interface RawHeadCheckRun {
 /** Reads the Failure excerpt of each Flaky check's red run on a head; never throws, a run it can't read being one that says why. */
 type RedRunExcerpts = (headSha: string, flaky: readonly { readonly name: string; readonly red: string }[]) => Promise<FailureExcerpt[]>;
 
+/** A workflow token the tick wasn't given: never read, as a GitHub Actions job's red run says so first. */
+const NO_ACTIONS_TOKEN: LogClient = {
+  rest: async () => Promise.reject(new Error("the tick holds no token that reads GitHub Actions jobs")),
+  logText: async () => Promise.reject(new Error("the tick holds no token that reads GitHub Actions jobs")),
+};
+
 /**
- * The tick's reader of a Flaky check's red run (#778): its job and its step's
- * log on the tick job's own workflow token, whose `actions: read` the
- * caller's `tick` job grants, and its annotations on the Fabrik App's Checks:
- * read. With no such token, each says so, keeping its link. An outside
- * service's red run it doesn't read: what the module reads of one is the
- * latest run by that name on the head, which for a Flaky check is its green
- * one, so it says it isn't a GitHub Actions check.
+ * The tick's reader of a Flaky check's red run (#778): a GitHub Actions job
+ * and its step's log on the tick job's own workflow token, whose `actions:
+ * read` the caller's `tick` job grants, and its annotations on the Fabrik
+ * App's Checks: read. An outside service's red run is read itself, by the
+ * check-run id in its link, on the App's Checks: read too; the App holds no
+ * Commit statuses: read, so a commit status says it can't be read. With no
+ * workflow token, a GitHub Actions job's red run says so, keeping its link.
  */
 function redRunExcerpts(app: Pick<ReadClient, "rest">, actions: (ReadClient & Pick<LogClient, "logText">) | null, repo: Repo): RedRunExcerpts {
-  const full = actions === null ? null : failureReaderOf(`${repo.owner}/${repo.name}`, { actions, checks: app });
-  const reader: FailureReader | null = full === null ? null : { job: full.job, stepLog: full.stepLog, annotations: full.annotations };
+  const reader = failureReaderOf(`${repo.owner}/${repo.name}`, { actions: actions ?? NO_ACTIONS_TOKEN, checks: app, statuses: null });
   return async (sha, flaky) => {
     const excerpts: FailureExcerpt[] = [];
     for (const { name, red } of flaky) {
       excerpts.push(
-        reader === null
+        actions === null && isActionsJobLink(red)
           ? { kind: "unread", check: name, link: red, why: "the tick holds no token that reads GitHub Actions jobs" }
           : await readFailureExcerpt({ name, link: red, sha }, reader),
       );
@@ -769,7 +774,8 @@ async function gatherPassedHeads(
     throw error;
   }
   // The Unrelated failures the Tick may ask one more re-run of are read on main's head, once for them all (#783):
-  // one red there too is skipped. Read on the Fabrik App's Checks: read; one that can't be read says so.
+  // one red there too is skipped. Read on the Fabrik App's Checks: read, its check runs alone, as the App holds no
+  // Commit statuses: read (ADR-0002) and GitHub would refuse the whole read; a commit status is skipped as outside anyway.
   const toAsk = new Map(
     heads.map((head) => {
       const pullRequest = atGate.find((gate) => gate.pullRequest.number === head.pullRequest)!.pullRequest;
@@ -778,7 +784,7 @@ async function gatherPassedHeads(
     }),
   );
   const names = [...new Set([...toAsk.values()].flat())];
-  const main = names.length === 0 ? null : await readDefaultBranchHeadChecks(github, `${repo.owner}/${repo.name}`, names);
+  const main = names.length === 0 ? null : await readDefaultBranchHeadChecks(github, `${repo.owner}/${repo.name}`, names, "check-runs");
   const redOnMain: readonly string[] | "unread" | null =
     main === null ? null : main.kind === "unread" ? "unread" : main.checks.flatMap(({ name, is }) => (is === "failing" ? [name] : []));
   return Promise.all(
@@ -846,7 +852,7 @@ async function gatherClosedCheckIssues(github: Pick<ReadClient, "graphql">, repo
 }
 
 /** The events whose plan may find a Flaky check (#462). */
-const FLAKY_CHECK_EVENTS: readonly LoopEvent["kind"][] = ["required-checks-finished", "review-run-finished", "scheduled-tick"];
+const FLAKY_CHECK_EVENTS: readonly LoopEvent["kind"][] = ["review-run-finished", "scheduled-tick"];
 
 /** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
 const WEEKLY_RUN_EVENTS: readonly LoopEvent["kind"][] = ["issue-opened", "agent-run-failed", "audit-run-finished", "retro-run-finished"];
@@ -1357,7 +1363,6 @@ async function gatherEventPart(
   switch (event.kind) {
     case "pull-request-pushed":
     case "pull-request-labeled":
-    case "required-checks-finished":
     case "review-run-finished":
     case "digest-run-finished":
     case "pull-request-left-draft":

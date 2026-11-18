@@ -4,26 +4,16 @@
 // again, its first attempt (#776), grouped by what its attempts came to
 // (failed again on the Kit's re-run; outside, so not re-run; not re-run, and
 // why). Pure.
-import { type CheckExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
+import { type CheckExcerpt, checkCode, renderFailureExcerpts } from "../review/failureExcerpt.ts";
+import { joinLinked, type Linked, linkedLength } from "./linked.ts";
 import { withoutMentions } from "./mentions.ts";
-import { checkCode } from "./flakyChecks.ts";
 import type { RedChecksOnMain, RedRequiredChecks } from "./types.ts";
 
 /** Why a red check has no Failure excerpt: the Review's jobs passed out none for it, as when their artifact is missing. */
 export const NO_EXCERPT = "the Review checks job passed out no Failure excerpt for it";
 
-/** What each group of red checks is headed with: by what the Kit's re-run came to. */
-export interface RedCheckHeadings {
-  /** The checks the Kit re-ran on the same head that failed again. */
-  readonly again: string;
-  /** The checks that aren't GitHub Actions, which the Kit can't re-run. */
-  readonly outside: string;
-  /** The rest, which the Kit didn't re-run, given why when GitHub or the Kit refused (`refused`), with any lines after them. */
-  readonly plain: (refused: string | null) => { readonly heading: string; readonly after?: readonly string[] };
-}
-
 /** The checks in each group, in the order the wait read them. */
-export function redChecksGrouped({ failed, rerun }: Pick<RedRequiredChecks, "failed" | "rerun">): {
+function redChecksGrouped({ failed, rerun }: Pick<RedRequiredChecks, "failed" | "rerun">): {
   readonly again: readonly string[];
   readonly outside: readonly string[];
   readonly plain: readonly string[];
@@ -36,37 +26,47 @@ export function redChecksGrouped({ failed, rerun }: Pick<RedRequiredChecks, "fai
 }
 
 /**
- * The red checks under `headings`, each group a heading and its checks, each
- * check its Failure excerpt's list item, and one with no excerpt saying its
- * failure couldn't be read. Under each check's name come `notesOf` its
- * paragraphs, such as the Reviewer's judgment of it (#780). The excerpts take
- * what's left of `room` around them.
+ * The red checks, each group under the heading of what its attempts came to,
+ * each check its Failure excerpt's list item, and one with no excerpt saying
+ * its failure couldn't be read, as the Reviewer's prompt is given them.
  */
-export function redChecksText(
+export function redChecksText(red: RedRequiredChecks): string {
+  return redChecksLinked(red).join("");
+}
+
+/**
+ * The red checks as redChecksText gives them, and under each check's name
+ * `notesOf` its paragraphs, such as the Reviewer's judgment of it (#780),
+ * which may link an issue the plan files (#781). The excerpts take what's
+ * left of `room` around them.
+ */
+export function redChecksLinked(
   red: RedRequiredChecks,
-  headings: RedCheckHeadings,
   room = Number.POSITIVE_INFINITY,
-  notesOf: (check: string) => readonly string[] = () => [],
-): string {
+  notesOf: (check: string) => readonly Linked[] = () => [],
+): Linked {
   const { again, outside, plain } = redChecksGrouped(red);
   const excerpts = [...again, ...outside, ...plain].map(
     (name): CheckExcerpt => red.excerpts.find(({ check }) => check === name) ?? { kind: "unread", check: name, link: "", why: NO_EXCERPT },
   );
-  const { heading: plainHeading, after = [] } = headings.plain(red.rerun?.refused ?? null);
-  const text = (blocks: readonly string[]) => {
+  const refused = red.rerun?.refused ?? null;
+  const plainHeading = refused === null ? "These failed:" : `The Kit didn't re-run these: ${withoutMentions(refused.trim().replace(/\.$/, ""))}.`;
+  const text = (blocks: readonly string[]): Linked => {
     const blockOf = (name: string) =>
-      withNotes(blocks[excerpts.findIndex(({ check }) => check === name)]!, [...notesOf(name), ...(red.onMain === undefined ? [] : [onMainLine(red.onMain, name)])]);
+      withNotes(blocks[excerpts.findIndex(({ check }) => check === name)]!, [...notesOf(name), ...(red.onMain === undefined ? [] : [[onMainLine(red.onMain, name)]])]);
     // Each check is a list item of paragraphs, so a blank line parts them.
-    const listed = (heading: string, items: readonly string[], between: string, lines: readonly string[] = []) =>
-      items.length === 0 ? [] : [[heading, "", items.join(between), ...lines].join("\n")];
-    return [
-      ...listed(headings.again, again.map(blockOf), "\n\n"),
-      ...listed(headings.outside, outside.map(blockOf), "\n\n"),
-      ...listed(plainHeading, plain.map(blockOf), "\n\n", after),
-    ].join("\n\n");
+    const listed = (heading: string, items: readonly Linked[]): Linked[] => (items.length === 0 ? [] : [[`${heading}\n\n`, ...joinLinked(items, "\n\n")]]);
+    return joinLinked(
+      [
+        ...listed("These failed again when the Kit re-ran them on the same head:", again.map(blockOf)),
+        ...listed("These aren't GitHub Actions, so the Kit couldn't re-run them:", outside.map(blockOf)),
+        ...listed(plainHeading, plain.map(blockOf)),
+      ],
+      "\n\n",
+    );
   };
   // The excerpts take what's left of the room around them, the blank lines between them counted.
-  const around = text(excerpts.map(() => "")).length;
+  const around = linkedLength(text(excerpts.map(() => "")));
   return text(renderFailureExcerpts(excerpts, { room: room - around + 2 * Math.max(excerpts.length - 1, 0) }));
 }
 
@@ -113,19 +113,9 @@ export function redChecksOnMainOf(text: string | undefined): RedChecksOnMain {
 }
 
 /** A check's list item with these paragraphs under its first line, its name, indented to stay in the item. */
-function withNotes(block: string, notes: readonly string[]): string {
-  if (notes.length === 0) return block;
+function withNotes(block: string, notes: readonly Linked[]): Linked {
+  if (notes.length === 0) return [block];
   const newline = block.indexOf("\n");
   const [head, rest] = newline === -1 ? [block, ""] : [block.slice(0, newline), block.slice(newline)];
-  return [head, ...notes.map((note) => `  ${note}`)].join("\n\n") + rest;
+  return [...joinLinked([[head], ...notes.map((note) => ["  ", ...note])], "\n\n"), rest];
 }
-
-/**
- * How a Reviewer's Verdict and its prompt head the red checks on a head it
- * judged (#779): by what each check's attempts came to.
- */
-export const REVIEWED_RED_CHECK_HEADINGS: RedCheckHeadings = {
-  again: "These failed again when the Kit re-ran them on the same head:",
-  outside: "These aren't GitHub Actions, so the Kit couldn't re-run them:",
-  plain: (refused) => ({ heading: refused === null ? "These failed:" : `The Kit didn't re-run these: ${withoutMentions(refused.trim().replace(/\.$/, ""))}.` }),
-};

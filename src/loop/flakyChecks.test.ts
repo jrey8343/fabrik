@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
+import { aCausedRedCheckReview, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import { uncountedFlaws } from "./flakyChecks.ts";
 import type { FailureExcerpt } from "../review/failureExcerpt.ts";
 import { planFor } from "./rules.ts";
@@ -8,8 +8,10 @@ import type { Action, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const E2E: FlakyCheck = { name: "e2e", red: "https://github.com/acme/shop/actions/runs/7/job/70", green: "https://github.com/acme/shop/actions/runs/7/job/99" };
 
-function redChecks(failed: string[], rerun: RerunReport): LoopEvent {
-  return { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed, rerun, runUrl: RUN };
+/** The Review of a head still red after the Kit's re-run (#779), each red check judged caused, and `rerun.flaky` the checks the re-run turned green. */
+function redChecks(failed: string[], rerun: RerunReport, pullRequest = 50): LoopEvent {
+  const judged = failed.map((name) => `- caused \`${name}\`: it fails in code the change touches.`).join("\n");
+  return aCausedRedCheckReview({ pullRequest, output: `verdict: pass\n\nGood.\n\nred-checks:\n${judged}`, flaky: rerun.flaky, redChecks: { failed, rerun, excerpts: [] }, runUrl: RUN });
 }
 
 function actionsOf(plan: Plan): readonly Action[] {
@@ -29,34 +31,6 @@ function textOf(action: Action): string {
   if (action.kind === "comment-linking") return action.body.map((part) => (typeof part === "string" ? part : "#new")).join("");
   return "";
 }
-
-describe("A Verdict after the Kit re-ran the red checks (#462)", () => {
-  it("names the checks that failed again on a re-run of the same head, apart from the outside ones", () => {
-    const plan = planFor(redChecks(["unit", "Vercel"], { outside: ["Vercel"], failedAgain: ["unit"], flaky: [], refused: null }), snapshotOfPullRequest(aPullRequest()), kitConfig());
-    const verdict = verdictOf(plan);
-
-    expect(verdict).toContain("These required checks failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:\n\n- `unit`");
-    expect(verdict).toContain("These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:\n\n- `Vercel`");
-    expect(verdict).not.toContain("flaky");
-    expect(verdict).toContain("Retry 1 of 2 starts now");
-  });
-
-  it("says why the Kit couldn't re-run them when GitHub refused", () => {
-    const why = "GitHub refused the workflow token (Resource not accessible by integration). Add `actions: write` under the `loop` job's `permissions:` in `.github/workflows/fabrik.yml`";
-    const plan = planFor(redChecks(["unit"], { outside: [], failedAgain: [], flaky: [], refused: why }), snapshotOfPullRequest(aPullRequest()), kitConfig());
-
-    const verdict = verdictOf(plan);
-    expect(verdict).toContain("These required checks didn't pass, so the Reviewer didn't run:\n\n- `unit`\n\n");
-    // After the checks and their excerpts (#775), out of the list.
-    expect(verdict).toMatch(new RegExp(`\\n\\nThe Kit couldn't re-run them: ${why.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`));
-  });
-
-  it("records the checks it names in its marker, so a later green on the same head can count it back", () => {
-    const plan = planFor(redChecks(["unit", "lint"], { outside: [], failedAgain: ["unit", "lint"], flaky: [], refused: null }), snapshotOfPullRequest(aPullRequest()), kitConfig());
-
-    expect(verdictsPostedIn([verdictOf(plan)])).toEqual([expect.objectContaining({ source: "ci", checks: ["unit", "lint"] })]);
-  });
-});
 
 describe("A Flaky check the Kit's re-run found (#462)", () => {
   it("is said on the PR in one line mentioning nobody, ahead of the Verdict, and filed as an issue for Triage", () => {
@@ -122,7 +96,7 @@ describe("The hourly tick's sweep for Flaky checks (#462)", () => {
     startedAt,
     url: `https://github.com/acme/shop/actions/runs/7/job/${id}`,
   });
-  const head = (checkRuns: HeadCheckRun[], checks = ["e2e"]): FlawHeadChecks => ({ pullRequest: 50, ticket: 7, headSha: FLAW, checks, checkRuns, excerpts: [] });
+  const head = (checkRuns: HeadCheckRun[], checks = ["e2e"]): FlawHeadChecks => ({ pullRequest: 50, ticket: 7, headSha: FLAW, checks, kind: "counted-back", checkRuns, excerpts: [] });
   const sweep = (heads: FlawHeadChecks[] | "no-permission") => planFor(TICK, { ...tickSnapshot(), flakySweep: heads }, kitConfig());
   const swept = (plan: Plan) => actionsOf(plan).filter((action) => action.kind !== "check-dispatch" && action.kind !== "check-design-queue");
 
@@ -192,9 +166,9 @@ describe("The hourly tick's sweep of a Reviewer's Execution flaw on a red head (
     });
 
     expect(uncountedFlaws(pullRequest)).toEqual([
-      { pullRequest: 50, ticket: 7, headSha: "1".repeat(40), checks: ["unit"] },
-      { pullRequest: 50, ticket: 7, headSha: FLAW, checks: ["e2e"] },
-      { pullRequest: 50, ticket: 7, headSha: "2".repeat(40), checks: ["e2e"], untaggedFinding: true },
+      { pullRequest: 50, ticket: 7, headSha: "1".repeat(40), checks: ["unit"], kind: "counted-back" },
+      { pullRequest: 50, ticket: 7, headSha: FLAW, checks: ["e2e"], kind: "counted-back" },
+      { pullRequest: 50, ticket: 7, headSha: "2".repeat(40), checks: ["e2e"], kind: "untagged-finding" },
     ]);
   });
 
@@ -350,7 +324,7 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
   });
 
   it("files a separate issue for each check when the count-back sweep and this read each find one on the same head", () => {
-    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["e2e"], checkRuns: [run("e2e", "failure", "2026-11-11T09:00:00Z", 60), run("e2e", "success", "2026-11-11T10:00:00Z", 61)], excerpts: [] };
+    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["e2e"], kind: "counted-back", checkRuns: [run("e2e", "failure", "2026-11-11T09:00:00Z", 60), run("e2e", "success", "2026-11-11T10:00:00Z", 61)], excerpts: [] };
     const created = swept(read([head(greenThenRed)], [flaw])).flatMap((action) => (action.kind === "create-issue" ? [action.key] : []));
 
     expect(created).toHaveLength(2);
@@ -358,7 +332,7 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
   });
 
   it("leaves the count-back sweep as it was, and says a check it counts back on that head once", () => {
-    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["ci"], checkRuns: [run("ci", "failure", "2026-11-11T09:00:00Z", 70), run("ci", "success", "2026-11-11T11:00:00Z", 99)], excerpts: [] };
+    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["ci"], kind: "counted-back", checkRuns: [run("ci", "failure", "2026-11-11T09:00:00Z", 70), run("ci", "success", "2026-11-11T11:00:00Z", 99)], excerpts: [] };
     const plan = read([head(flaw.checkRuns as HeadCheckRun[])], [flaw]);
 
     expect(lines(plan)).toEqual([expect.stringContaining('"countedBack":true')]);
@@ -396,7 +370,7 @@ describe("A Flaky check's issue carries the Failure excerpt of each red run it r
     const open = { number: 88, labels: ["fabrik:flaky-check"], body: '<!-- fabrik:flaky-check-issue {"check":"e2e"} -->\nFlaky.', comments: [] };
     const snapshot = { ...snapshotOfPullRequest(aPullRequest({ number: 61 })), flakyCheckIssues: [open] };
     const flaky: FlakyCheck = { ...E2E, excerpt: excerpt("e2e", E2E.red, "FAIL src/b.test.ts > times out") };
-    const event: LoopEvent = { kind: "required-checks-finished", pullRequest: 61, headSha: HEAD_SHA, failed: ["Vercel"], rerun: { outside: ["Vercel"], failedAgain: [], flaky: [flaky], refused: null }, runUrl: RUN };
+    const event = redChecks(["Vercel"], { outside: ["Vercel"], failedAgain: [], flaky: [flaky], refused: null }, 61);
 
     const actions = actionsOf(planFor(event, snapshot, kitConfig()));
 
@@ -438,7 +412,7 @@ describe("A Flaky check's issue carries the Failure excerpt of each red run it r
     const comment = textOf(actionsOf(commented).find((action) => action.kind === "comment" && action.issue === 88)!);
     for (const text of [body, comment]) {
       expect(text.length).toBeLessThanOrEqual(65_536);
-      expect(text).toContain("_Shortened to fit the comment._");
+      expect(text).toContain("_Shortened to fit GitHub's size limit._");
       expect(text).toContain(`[red](${E2E.red})`);
     }
   });
@@ -454,6 +428,7 @@ describe("A Flaky check's issue carries the Failure excerpt of each red run it r
       ticket: 7,
       headSha: HEAD,
       checks: ["e2e"],
+      kind: "counted-back",
       checkRuns: redThenGreen("e2e"),
       excerpts,
       ...overrides,

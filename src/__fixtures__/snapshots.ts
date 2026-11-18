@@ -8,6 +8,7 @@ import type {
   IssueSnapshot,
   KitConfig,
   LabelledTrigger,
+  LoopEvent,
   NamedPullRequestSnapshot,
   Plan,
   PullRequestSnapshot,
@@ -86,6 +87,28 @@ export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapsho
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
 export const HEAD_SHA = "a".repeat(40);
+
+/** The tags of a Verdict with no finding of its own, as aCausedRedCheckReview()'s: none of any kind. */
+export const NO_TAGS = { small: 0, missedEarlier: 0, counted: 0, smallBody: 0 } as const;
+
+/**
+ * The Review of a head whose Required check `build` is still red after
+ * everything the Kit could do, which the Reviewer judged caused (#779, #780):
+ * an Execution flaw that counts and calls for a Retry, never a Touch-up, as
+ * red checks alone did before #779. Its marker records `build` in `checks`.
+ */
+export function aCausedRedCheckReview(overrides: Partial<Extract<LoopEvent, { kind: "review-run-finished" }>> = {}): LoopEvent {
+  return {
+    kind: "review-run-finished",
+    pullRequest: 50,
+    headSha: HEAD_SHA,
+    output: "verdict: pass\n\nChecked each acceptance criterion against the diff.\n\nred-checks:\n- caused `build`: the typecheck error is in a stub the change breaks.",
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    repoUrl: "https://github.com/acme/shop",
+    redChecks: { failed: ["build"], excerpts: [] },
+    ...overrides,
+  };
+}
 
 /** A pull request, by default an open agent draft PR the Fabrik App opened for a Ticket, with no Verdicts yet. */
 export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): PullRequestSnapshot {

@@ -3,7 +3,7 @@
 // pool of two, on the same model as the run whose push it judged.
 import { describe, expect, it } from "vitest";
 import { A, B, C, D, type Fixes, finished, PullRequestOnGitHub, requestedChanges, RUN } from "../__fixtures__/pullRequestThread.ts";
-import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
+import { aCausedRedCheckReview, anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { emptyDiffIn, implementPushOf } from "../github/apply.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { planFor } from "./rules.ts";
@@ -102,9 +102,9 @@ describe("Which flaws call for a Touch-up", () => {
     );
   });
 
-  it("a flaw from red checks never calls for one", () => {
+  it("a flaw on a head still red, with a check the Reviewer judged caused, never calls for one", () => {
     const plan = planFor(
-      { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN },
+      aCausedRedCheckReview(),
       snapshotOfPullRequest(laterReviewOf()),
       kitConfig(),
     );

@@ -56,7 +56,9 @@ export async function readRequiredChecks(client: Pick<ReadClient, "rest">, repo:
   if (branch.kind === "unread") {
     return { repo, branch: branch.name ?? "", readAt: now, required: [], holdsAdmins: "unknown", heads: Object.fromEntries(asked.map((sha) => [sha, "unread"])) };
   }
-  const read = await Promise.all(asked.map(async (sha) => [sha, branch.required.length === 0 ? [] : await readHead(client, target, sha, branch.required)] as const));
+  const read = await Promise.all(
+    asked.map(async (sha) => [sha, branch.required.length === 0 ? [] : await readHead(client, target, sha, branch.required, "check-runs-and-statuses")] as const),
+  );
   return { repo, branch: branch.name, readAt: now, required: branch.required, holdsAdmins: branch.holdsAdmins, heads: Object.fromEntries(read) };
 }
 
@@ -81,13 +83,29 @@ export type DefaultBranchHeadChecks =
   | { readonly kind: "unread"; readonly why: string };
 
 /**
- * How each of `names` stands on the default branch's head, judged as a
- * merge judges it (#780): the Review's wait reads the red checks there for
- * the Reviewer, as evidence of whether the pull request caused them. One
- * never reported there didn't run there. Four REST requests while each list
- * fits a page: the repo, the branch, and its head's check runs and statuses.
+ * Which reports on a head a read takes: its check runs and its commit
+ * statuses, on a token with Checks: read and Commit statuses: read; or its
+ * check runs alone, on one with Checks: read only, as the Fabrik App's
+ * (ADR-0002), which GitHub refuses a commit status. A check reported only by
+ * a commit status then reads as never reported.
  */
-export async function readDefaultBranchHeadChecks(client: Pick<ReadClient, "rest">, repo: string, names: readonly string[]): Promise<DefaultBranchHeadChecks> {
+export type HeadReports = "check-runs-and-statuses" | "check-runs";
+
+/**
+ * How each of `names` stands on the default branch's head, judged as a
+ * merge judges it (#780), from the head's `reports`: the Review's wait reads
+ * the red checks there for the Reviewer, as evidence of whether the pull
+ * request caused them, and the Tick reads an Unrelated failure there before
+ * one more re-run at the Merge gate (#783). One never reported there didn't
+ * run there. Four REST requests while each list fits a page: the repo, the
+ * branch, and its head's check runs and statuses; three for check runs alone.
+ */
+export async function readDefaultBranchHeadChecks(
+  client: Pick<ReadClient, "rest">,
+  repo: string,
+  names: readonly string[],
+  reports: HeadReports,
+): Promise<DefaultBranchHeadChecks> {
   const target = repoOf(repo);
   const repoPath = `/repos/${target.owner}/${target.name}`;
   let branch: string;
@@ -103,7 +121,7 @@ export async function readDefaultBranchHeadChecks(client: Pick<ReadClient, "rest
   } catch (error) {
     return { kind: "unread", why: whyUnread(error, `GET ${branchPath}`) };
   }
-  const checks = await readHead(client, target, sha, names);
+  const checks = await readHead(client, target, sha, names, reports);
   if (checks === "unread") return { kind: "unread", why: `GitHub didn't give the checks on ${branch}'s head, ${sha.slice(0, 7)}` };
   return { kind: "read", branch, sha, checks };
 }
@@ -239,14 +257,14 @@ interface Report {
   readonly id: number;
 }
 
-/** Each Required check on one head, from its check runs and its commit statuses; unread when either could not be read. */
-async function readHead(client: Pick<ReadClient, "rest">, repo: Repo, sha: string, required: readonly string[]): Promise<readonly HeadCheck[] | "unread"> {
+/** Each Required check on one head, from its check runs and, when `reads` says so, its commit statuses; unread when any could not be read. */
+async function readHead(client: Pick<ReadClient, "rest">, repo: Repo, sha: string, required: readonly string[], reads: HeadReports): Promise<readonly HeadCheck[] | "unread"> {
   const path = `/repos/${repo.owner}/${repo.name}/commits/${sha}`;
   let reports: Report[];
   try {
     const [runs, statuses] = await Promise.all([
       allPages<RawCheckRun>(client, `${path}/check-runs?filter=all`, (page) => (page as { check_runs: RawCheckRun[] }).check_runs),
-      allPages<RawStatus>(client, `${path}/statuses`),
+      reads === "check-runs" ? [] : allPages<RawStatus>(client, `${path}/statuses`),
     ]);
     reports = [...runs.map(reportOfCheckRun), ...statuses.map(reportOfStatus)];
   } catch {
