@@ -96,7 +96,7 @@ describe("The hourly tick's sweep for Flaky checks (#462)", () => {
     startedAt,
     url: `https://github.com/acme/shop/actions/runs/7/job/${id}`,
   });
-  const head = (checkRuns: HeadCheckRun[], checks = ["e2e"]): FlawHeadChecks => ({ pullRequest: 50, ticket: 7, headSha: FLAW, checks, checkRuns, excerpts: [] });
+  const head = (checkRuns: HeadCheckRun[], checks = ["e2e"]): FlawHeadChecks => ({ pullRequest: 50, ticket: 7, headSha: FLAW, checks, kind: "counted-back", checkRuns, excerpts: [] });
   const sweep = (heads: FlawHeadChecks[] | "no-permission") => planFor(TICK, { ...tickSnapshot(), flakySweep: heads }, kitConfig());
   const swept = (plan: Plan) => actionsOf(plan).filter((action) => action.kind !== "check-dispatch" && action.kind !== "check-design-queue");
 
@@ -166,9 +166,9 @@ describe("The hourly tick's sweep of a Reviewer's Execution flaw on a red head (
     });
 
     expect(uncountedFlaws(pullRequest)).toEqual([
-      { pullRequest: 50, ticket: 7, headSha: "1".repeat(40), checks: ["unit"] },
-      { pullRequest: 50, ticket: 7, headSha: FLAW, checks: ["e2e"] },
-      { pullRequest: 50, ticket: 7, headSha: "2".repeat(40), checks: ["e2e"], untaggedFinding: true },
+      { pullRequest: 50, ticket: 7, headSha: "1".repeat(40), checks: ["unit"], kind: "counted-back" },
+      { pullRequest: 50, ticket: 7, headSha: FLAW, checks: ["e2e"], kind: "counted-back" },
+      { pullRequest: 50, ticket: 7, headSha: "2".repeat(40), checks: ["e2e"], kind: "untagged-finding" },
     ]);
   });
 
@@ -324,7 +324,7 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
   });
 
   it("files a separate issue for each check when the count-back sweep and this read each find one on the same head", () => {
-    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["e2e"], checkRuns: [run("e2e", "failure", "2026-11-11T09:00:00Z", 60), run("e2e", "success", "2026-11-11T10:00:00Z", 61)], excerpts: [] };
+    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["e2e"], kind: "counted-back", checkRuns: [run("e2e", "failure", "2026-11-11T09:00:00Z", 60), run("e2e", "success", "2026-11-11T10:00:00Z", 61)], excerpts: [] };
     const created = swept(read([head(greenThenRed)], [flaw])).flatMap((action) => (action.kind === "create-issue" ? [action.key] : []));
 
     expect(created).toHaveLength(2);
@@ -332,7 +332,7 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
   });
 
   it("leaves the count-back sweep as it was, and says a check it counts back on that head once", () => {
-    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["ci"], checkRuns: [run("ci", "failure", "2026-11-11T09:00:00Z", 70), run("ci", "success", "2026-11-11T11:00:00Z", 99)], excerpts: [] };
+    const flaw: FlawHeadChecks = { pullRequest: 50, ticket: 7, headSha: PASSED, checks: ["ci"], kind: "counted-back", checkRuns: [run("ci", "failure", "2026-11-11T09:00:00Z", 70), run("ci", "success", "2026-11-11T11:00:00Z", 99)], excerpts: [] };
     const plan = read([head(flaw.checkRuns as HeadCheckRun[])], [flaw]);
 
     expect(lines(plan)).toEqual([expect.stringContaining('"countedBack":true')]);
@@ -428,6 +428,7 @@ describe("A Flaky check's issue carries the Failure excerpt of each red run it r
       ticket: 7,
       headSha: HEAD,
       checks: ["e2e"],
+      kind: "counted-back",
       checkRuns: redThenGreen("e2e"),
       excerpts,
       ...overrides,

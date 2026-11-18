@@ -1079,27 +1079,31 @@ export interface HeadCheckRun {
   readonly url: string;
 }
 
-/** An open agent PR's Execution flaw that names red checks (#462, #779), not yet counted back or reported, and every check run on its head. */
-export interface FlawHeadChecks {
+/**
+ * What a later green on a swept head does with its checks:
+ * - `counted-back`: an Execution flaw that counted only for its red checks
+ *   (#462, #779) is counted back once every one reads green.
+ * - `untagged-finding`: a Reviewer's flaw on a red head with an untagged
+ *   finding beside its checks (#779) counts for that, so once every check
+ *   reads green they are reported as Flaky checks and the count stands.
+ * - `unrelated`: the Unrelated failures the latest Verdict on an open draft
+ *   named (#781), which counted toward nothing: each is reported as a Flaky
+ *   check on its own once it reads green.
+ */
+export type SweptKind = "counted-back" | "untagged-finding" | "unrelated";
+
+/** A head of an open agent PR whose named checks the tick's Flaky check sweep reads (#462, #779, #781), not yet counted back or reported. */
+export interface SweptHead {
   readonly pullRequest: number;
   readonly ticket: number | null;
   readonly headSha: string;
-  /** The checks the Verdict named as failed. */
+  /** The checks the Verdict named: an Execution flaw's red ones, or a draft's Unrelated failures. */
   readonly checks: readonly string[];
-  /**
-   * True when the Verdict, a Reviewer's on a red head (#779), has an
-   * untagged finding beside its checks: it counts for that, so a later green
-   * reports its checks as Flaky checks and nothing is counted back. Absent
-   * on one that is counted back.
-   */
-  readonly untaggedFinding?: true;
-  /**
-   * True when `checks` are the Unrelated failures the latest Verdict on an
-   * open draft named (#781), which counted toward nothing: each is reported
-   * as a Flaky check on its own once it reads green, and nothing is counted
-   * back. Absent on an Execution flaw's caused checks.
-   */
-  readonly unrelated?: true;
+  readonly kind: SweptKind;
+}
+
+/** A swept head (#462, #779, #781) with every check run on it. */
+export interface FlawHeadChecks extends SweptHead {
   readonly checkRuns: readonly HeadCheckRun[];
   /** The Failure excerpt of each red run the sweep reports, read by the tick before its plan (#778). */
   readonly excerpts: readonly FailureExcerpt[];

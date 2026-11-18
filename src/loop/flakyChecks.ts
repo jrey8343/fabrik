@@ -16,7 +16,7 @@ import { isRed, runsOf } from "./headChecks.ts";
 import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker, unrelatedFailureMarker } from "./markers.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
-import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
+import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, KitIssueSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot, SweptHead, VerdictRecord } from "./types.ts";
 
 /** A check's name as Markdown code: a backtick in it can't end the span. */
 export function checkCode(name: string): string {
@@ -274,14 +274,13 @@ export function countsBackOnGreen(record: VerdictRecord): boolean {
  * One with an untagged finding is marked so: its checks are reported, and it
  * still counts.
  */
-export function uncountedFlaws(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns" | "excerpts">[] {
+export function uncountedFlaws(pullRequest: PullRequestSnapshot): SweptHead[] {
   const reported = (headSha: string, checks: readonly string[]) =>
     checks.every((name) => pullRequest.flakyCheckMarks.some((mark) => mark.headSha === headSha && mark.checks.includes(name)));
   return pullRequest.verdicts.flatMap((record) => {
     const checks = record.checks ?? [];
     if (record.verdict !== "execution-flaw" || record.flaky === true || checks.length === 0 || reported(record.headSha, checks)) return [];
-    const flaw = { pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: record.headSha, checks };
-    return [countsBackOnGreen(record) ? flaw : { ...flaw, untaggedFinding: true as const }];
+    return [{ pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: record.headSha, checks, kind: countsBackOnGreen(record) ? "counted-back" : "untagged-finding" }];
   });
 }
 
@@ -291,17 +290,17 @@ export function uncountedFlaws(pullRequest: PullRequestSnapshot): Omit<FlawHeadC
  * names there; none when there are none. A pass at the Merge gate isn't read
  * here: the read of its passed head finds a check that has since succeeded.
  */
-export function unrelatedOnDraft(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns" | "excerpts">[] {
+export function unrelatedOnDraft(pullRequest: PullRequestSnapshot): SweptHead[] {
   if (!pullRequest.isAgent || !pullRequest.open || !pullRequest.draft) return [];
   const latest = pullRequest.verdicts.at(-1);
   if (latest === undefined) return [];
   const named = new Set(pullRequest.flakyCheckMarks.filter((mark) => mark.headSha === latest.headSha).flatMap((mark) => mark.checks));
   const checks = (latest.unrelated ?? []).filter((name) => !named.has(name));
-  return checks.length === 0 ? [] : [{ pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: latest.headSha, checks, unrelated: true }];
+  return checks.length === 0 ? [] : [{ pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: latest.headSha, checks, kind: "unrelated" }];
 }
 
 /** Every head of this PR the tick's sweep reads (src/github/snapshot.ts): its uncounted flaws' (#462, #779), and its draft's Unrelated failures' (#781). */
-export function sweptHeadsOf(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns" | "excerpts">[] {
+export function sweptHeadsOf(pullRequest: PullRequestSnapshot): SweptHead[] {
   return [...uncountedFlaws(pullRequest), ...unrelatedOnDraft(pullRequest)];
 }
 
@@ -331,19 +330,17 @@ function withRedExcerpt(check: FlakyCheck, excerpts: readonly FailureExcerpt[]):
  * none does. The tick reads the excerpt of each red run this gives before its
  * plan (src/github/snapshot.ts).
  */
-export function flippedOn({ checks, checkRuns, excerpts, unrelated }: FlawHeadChecks): FlakyCheck[] | null {
-  const flipped = (name: string): FlakyCheck | null => {
+export function flippedOn({ checks, checkRuns, excerpts, kind }: FlawHeadChecks): FlakyCheck[] | null {
+  const flipped = (name: string): FlakyCheck[] => {
     const runs = runsOf(checkRuns, name);
     const latest = runs.at(-1);
     const red = runs.find(isRed);
-    return latest?.conclusion !== "success" || red === undefined ? null : withRedExcerpt({ name, red: red.url, green: latest.url }, excerpts);
+    return latest?.conclusion !== "success" || red === undefined ? [] : [withRedExcerpt({ name, red: red.url, green: latest.url }, excerpts)];
   };
-  const flaky = checks.map(flipped);
-  if (unrelated === true) {
-    const each = flaky.filter((check) => check !== null);
-    return each.length === 0 ? null : each;
-  }
-  return flaky.every((check) => check !== null) ? flaky : null;
+  const flaky = checks.flatMap(flipped);
+  // An Unrelated failure flips on its own; a flaw's checks flip together.
+  const enough = kind === "unrelated" ? flaky.length > 0 : flaky.length === checks.length;
+  return enough ? flaky : null;
 }
 
 /**
@@ -361,6 +358,25 @@ export function flakyOnPassedHead({ headSha, required, checkRuns, marks, excerpt
     const red = runs.find(isRed);
     return green === undefined || red === undefined ? [] : [withRedExcerpt({ name, red: red.url, green: green.url }, excerpts)];
   });
+}
+
+/**
+ * What a later green on a swept head says: a flaw counted only for its
+ * checks is counted back; a Reviewer's flaw with an untagged finding counts
+ * for that (#779), so its checks are reported and the count stands; an
+ * Unrelated failure counted toward nothing (#781), so it is reported, and
+ * there's nothing to count back.
+ */
+function sweptActions(head: FlawHeadChecks, flaky: readonly FlakyCheck[], issues: readonly KitIssueSnapshot[], filed: Map<string, CreatedIssue>): Action[] {
+  const line = (wording: (name: string, short: string) => string) => flakyLineActions(head.pullRequest, head.headSha, flaky, issues, filed, wording);
+  switch (head.kind) {
+    case "counted-back":
+      return countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, issues, filed);
+    case "untagged-finding":
+      return line((name, short) => `${name} has since passed on ${short}, where it was red beside the Reviewer's own findings, so that Verdict still counts`);
+    case "unrelated":
+      return line((name, short) => `${name} has since passed on ${short}, where the Reviewer judged it an Unrelated failure`);
+  }
 }
 
 /**
@@ -387,19 +403,7 @@ export function flakyCheckGate(_now: string, snapshot: Snapshot): Plan {
   for (const head of flakySweep === null || flakySweep === "no-permission" ? [] : flakySweep) {
     const flaky = flippedOn(head);
     if (flaky === null) continue;
-    // A Reviewer's flaw with an untagged finding counts for that (#779): its checks are reported, and the count stands.
-    // An Unrelated failure counted toward nothing (#781): it is reported, and there's nothing to count back.
-    actions.push(
-      ...(head.unrelated === true
-        ? flakyLineActions(head.pullRequest, head.headSha, flaky, snapshot.flakyCheckIssues, filed, (name, short) =>
-            `${name} has since passed on ${short}, where the Reviewer judged it an Unrelated failure`,
-          )
-        : head.untaggedFinding === true
-          ? flakyLineActions(head.pullRequest, head.headSha, flaky, snapshot.flakyCheckIssues, filed, (name, short) =>
-              `${name} has since passed on ${short}, where it was red beside the Reviewer's own findings, so that Verdict still counts`,
-            )
-          : countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed)),
-    );
+    actions.push(...sweptActions(head, flaky, snapshot.flakyCheckIssues, filed));
     for (const { name } of flaky) countedBack.add(key(head.pullRequest, head.headSha, name));
   }
   for (const head of passedHeads === null || typeof passedHeads === "string" ? [] : passedHeads) {
