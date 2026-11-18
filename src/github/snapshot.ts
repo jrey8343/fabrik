@@ -80,7 +80,8 @@ import type {
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
 import { flakyOnPassedHead, flippedOn, passedHeadAtGate, uncountedFlaws } from "../loop/flakyChecks.ts";
-import { readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
+import { unrelatedToAsk } from "../loop/gateRerun.ts";
+import { readDefaultBranchHeadChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type FailureExcerpt, type FailureReader, failureReaderOf, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
 import { allPages, GitHubError, pagesOf, type ReadClient, type Repo, refusalOf } from "./client.ts";
 import { gatherReplayAcceptance, type ReplayStore } from "./replaySlice.ts";
@@ -724,8 +725,10 @@ async function gatherFlakySweep(
  * For the tick's read of the Merge gate (#693): each open agent PR out of
  * draft whose head is still the one its latest pass was given on, with the
  * default branch's own Required checks, every check run on that head, every
- * attempt included, the PR's Flaky check lines, and the Failure excerpt of
- * each red run the read reports (#778). A branch that can't be
+ * attempt included, the PR's Flaky check lines, the Failure excerpt of
+ * each red run the read reports (#778), and, for a head whose pass names an
+ * Unrelated failure the Tick may ask one more re-run of, which of those are
+ * red on the default branch's head (#783). A branch that can't be
  * read is "branch-unread", and no head is read; without Checks: read it is
  * "no-permission". Either way the tick reports nothing of it.
  */
@@ -759,7 +762,26 @@ async function gatherPassedHeads(
     if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";
     throw error;
   }
-  return Promise.all(heads.map(async (head) => ({ ...head, excerpts: await excerptsOf(head.headSha, flakyOnPassedHead(head)) })));
+  // The Unrelated failures the Tick may ask one more re-run of are read on main's head, once for them all (#783):
+  // one red there too is skipped. Read on the Fabrik App's Checks: read; one that can't be read says so.
+  const toAsk = new Map(
+    heads.map((head) => {
+      const pullRequest = atGate.find((gate) => gate.pullRequest.number === head.pullRequest)!.pullRequest;
+      // A commit status, with no check run, is an outside service's, skipped whatever main says.
+      return [head.pullRequest, unrelatedToAsk(pullRequest, head.checkRuns).flatMap(({ name, red }) => (red === null ? [] : [name]))] as const;
+    }),
+  );
+  const names = [...new Set([...toAsk.values()].flat())];
+  const main = names.length === 0 ? null : await readDefaultBranchHeadChecks(github, `${repo.owner}/${repo.name}`, names);
+  const redOnMain: readonly string[] | "unread" | null =
+    main === null ? null : main.kind === "unread" ? "unread" : main.checks.flatMap(({ name, is }) => (is === "failing" ? [name] : []));
+  return Promise.all(
+    heads.map(async (head) => ({
+      ...head,
+      excerpts: await excerptsOf(head.headSha, flakyOnPassedHead(head)),
+      ...(redOnMain === null || (toAsk.get(head.pullRequest) ?? []).length === 0 ? {} : { redOnMain }),
+    })),
+  );
 }
 
 /** Every check run on a head, every attempt included, as the Flaky check sweep reads them. */
