@@ -1694,7 +1694,7 @@ describe("loop.yml's claim job", () => {
 
   it("takes agent:design off as the Design session's first turn starts, agent:research as a Research run starts and agent:replay as a replay Ticket's run starts, as it takes agent:implement off", () => {
     expect(job("implement-claim")).toContain(
-      "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
+      "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || needs.kit.outputs.route == 'rerun-checks' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
     );
   });
 });
@@ -2782,7 +2782,7 @@ describe("loop.yml's replay jobs", () => {
   });
 
   it("keeps the push job off the replay route, so the judge, score-record, Dispatch and Design queue jobs skip by themselves", () => {
-    expect(job("push")).toContain("\n    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'\n");
+    expect(job("push")).toContain("\n    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay' && ");
     expect(pushNeeds().filter((need) => need.startsWith("replay-"))).toEqual([]);
   });
 });
@@ -2875,7 +2875,7 @@ describe("Re-running red checks", () => {
     expect(rerun).not.toContain("create-github-app-token");
     expect(rerun.match(/uses: actions\/checkout@/g)).toHaveLength(1);
     expect(rerun).toContain("repository: jrey8343/fabrik");
-    expect(rerun).toContain("FABRIK_RED: ${{ needs.review-checks.outputs.red }}");
+    expect(rerun).toContain("|| needs.review-checks.outputs.red }}");
   });
 
   it("waits on the re-run checks read-only, on the head the first wait read, leaving a failure report as it does", () => {
@@ -2889,6 +2889,70 @@ describe("Re-running red checks", () => {
 
   it("hands both jobs to the push job", () => {
     expect(job("push")).toMatch(/needs: \[[^\]]*review-checks, rerun-checks, rerun-wait, review,/);
+  });
+});
+
+// #783: agent:rerun-checks routes to the Re-run red checks job for one more re-run of an Unrelated failure at the Merge gate.
+describe("One more re-run at the Merge gate", () => {
+  type Job = { readonly result: string; readonly outputs?: Readonly<Record<string, string>> };
+  /** A job's `if:`, evaluated as GitHub would on these jobs' results and outputs, in a run that wasn't cancelled. */
+  const runs = (name: string, jobs: Readonly<Record<string, Job>>, label = "agent:rerun-checks"): boolean => {
+    const body = job(name);
+    const condition = /\n    if: >-\n((?: {6}.*\n)+)/.exec(body)?.[1] ?? /\n    if: (.*)\n/.exec(body)?.[1];
+    if (condition === undefined) throw new Error(`${name} has no if:`);
+    const read = (needed: string, output: string | undefined) => {
+      const ran = jobs[needed] ?? { result: "skipped" };
+      return output === undefined ? ran.result : (ran.outputs?.[output] ?? "");
+    };
+    const js = condition
+      .replace(/\s+/g, " ")
+      .replace(/!cancelled\(\)/g, "true")
+      .replace(/always\(\)/g, "true")
+      .replace(/github\.event\.label\.name/g, JSON.stringify(label))
+      .replace(/needs\.([\w-]+)\.(?:result|outputs\.([\w-]+))/g, (_all, needed: string, output?: string) => JSON.stringify(read(needed, output)))
+      .replace(/([!=])=/g, "$1==");
+    if (!/^[\s"'\w\-:.[\]()&|!=]*$/.test(js)) throw new Error(`${name}'s if: has more than the test reads: ${js}`);
+    return new Function(`return (${js});`)() as boolean;
+  };
+  const gate: Readonly<Record<string, Job>> = { kit: { result: "success", outputs: { route: "rerun-checks" } } };
+
+  it("routes agent:rerun-checks to the Re-run red checks job, though the Review checks job it needs on a Review is skipped", () => {
+    expect(job("rerun-checks")).toContain("!cancelled()");
+    expect(runs("rerun-checks", gate)).toBe(true);
+  });
+
+  it("still re-runs a Review's red checks, and nothing on green or a failed Kit job", () => {
+    const review = (checks: string): Readonly<Record<string, Job>> => ({ kit: { result: "success", outputs: { route: "review" } }, "review-checks": { result: "success", outputs: { checks } } });
+
+    expect(runs("rerun-checks", review("red"))).toBe(true);
+    expect(runs("rerun-checks", review("green"))).toBe(false);
+    expect(runs("rerun-checks", { kit: { result: "failure" } })).toBe(false);
+    expect(runs("rerun-checks", { kit: { result: "success", outputs: { route: "push" } } })).toBe(false);
+  });
+
+  it("re-runs the checks the Kit's line named, past a run's first attempt on that head alone, read only through env:", () => {
+    const rerun = job("rerun-checks");
+
+    expect(rerun).toContain("FABRIK_RED: ${{ needs.kit.outputs.route == 'rerun-checks' && needs.kit.outputs.rerun-red || needs.review-checks.outputs.red }}");
+    expect(rerun).toContain("FABRIK_GATE_HEAD: ${{ needs.kit.outputs.route == 'rerun-checks' && needs.kit.outputs.head-sha || '' }}");
+  });
+
+  it("takes the label off as the run starts, in the claim job", () => {
+    expect(runs("implement-claim", gate)).toBe(true);
+  });
+
+  it("starts no wait, no Reviewer and no push job", () => {
+    const after = { ...gate, "implement-claim": { result: "success" }, "rerun-checks": { result: "success", outputs: { rerun: "e2e" } } };
+
+    expect(runs("rerun-wait", after)).toBe(false);
+    expect(runs("review", after)).toBe(false);
+    expect(runs("push", after)).toBe(false);
+  });
+
+  it("leaves the Re-run red checks job the only one with actions: write", () => {
+    const writers = loop.split(/\n(?=  [a-z-]+:\n)/).filter((section) => /\n {6}actions: write\n/.test(section)).map((section) => section.split(":")[0]!.trim());
+
+    expect(writers).toEqual(["rerun-checks"]);
   });
 });
 

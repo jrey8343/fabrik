@@ -116,8 +116,11 @@ jobs:
       # For an Auditor run: the pending Audit's marked commit, which the Audit job checks out.
       audit-commit: ${{ steps.route.outputs.audit-commit }}
       # For a Digest run (ADR-0022): the head its pass was given on, a full sha, which the Digest job checks out and
-      # the push job lands the Digest for.
+      # the push job lands the Digest for. For one more re-run at the Merge gate (#783): the head whose checks it re-runs.
       head-sha: ${{ steps.route.outputs.head-sha }}
+      # For one more re-run at the Merge gate (#783): the checks the Kit's line named, as JSON in the Review checks job's
+      # red shape. Their names come from the Product's CI, so a job reads it only through `env:`.
+      rerun-red: ${{ steps.route.outputs.rerun-red }}
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
@@ -722,13 +725,16 @@ jobs:
   # its round, hold the slot), marking a prototype turn's request started on
   # the request's own comment (src/loop/design.ts), and agent:replay off a
   # replay issue as its next Ticket's run starts, marking that Ticket in
-  # progress in this run (src/loop/replayRun.ts). It applies the same plan
-  # the Kit job routed on; the run itself is the agent job's. Like the push
-  # job, it never touches Product code.
+  # progress in this run (src/loop/replayRun.ts), and agent:rerun-checks off an
+  # agent PR at the Merge gate as one more re-run of its Unrelated failures
+  # starts, marking the Kit's line that asked it started (src/loop/gateRerun.ts,
+  # #783). It applies the same plan the Kit job routed on; the run itself is
+  # the agent job's, or the Re-run red checks job's. Like the push job, it
+  # never touches Product code.
   implement-claim:
     name: Claim the work
     needs: kit
-    if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
+    if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || needs.kit.outputs.route == 'rerun-checks' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # One replay claim at a time across the repo, since one replay Ticket runs at a time across
@@ -1117,10 +1123,17 @@ jobs:
   # workflow token, and nothing else. It loads no secret, checks out no Product
   # code and runs none. A run already re-run on this head isn't re-run again,
   # and a refusal re-runs nothing: the Verdict says why (src/review/rerun-main.ts).
+  # agent:rerun-checks routes here too (#783), for one more re-run of an
+  # Unrelated failure at the Merge gate: the checks the Kit's line named, on
+  # the head it named, past a run's first attempt this once. No wait, Reviewer
+  # or push job follows it; later Ticks read what came of it. !cancelled(), as
+  # the Review checks job skips on that route.
   rerun-checks:
     name: Re-run red checks
     needs: [kit, review-checks]
-    if: needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'red'
+    if: >-
+      !cancelled() && ((needs.kit.outputs.route == 'review' && needs.review-checks.outputs.checks == 'red') ||
+      needs.kit.outputs.route == 'rerun-checks')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1149,7 +1162,8 @@ jobs:
         id: rerun
         env:
           GH_TOKEN: ${{ github.token }}
-          FABRIK_RED: ${{ needs.review-checks.outputs.red }}
+          FABRIK_RED: ${{ needs.kit.outputs.route == 'rerun-checks' && needs.kit.outputs.rerun-red || needs.review-checks.outputs.red }}
+          FABRIK_GATE_HEAD: ${{ needs.kit.outputs.route == 'rerun-checks' && needs.kit.outputs.head-sha || '' }}
         run: node kit/src/review/rerun-main.ts
 
   # The wait on the re-run checks (#462): the Review checks job's wait again, with
@@ -2092,11 +2106,13 @@ jobs:
   # notice, which for a Digest run is its no-Digest line. always(), so
   # it still runs after a cancelled agent job. Never on a replay, whose
   # replay-record job is its push job, so the judge, score-record, Dispatch
-  # and Design queue jobs, which follow this one, skip a replay too.
+  # and Design queue jobs, which follow this one, skip a replay too. Nor on
+  # one more re-run at the Merge gate (#783), whose claim lands its plan and
+  # whose outcome later Ticks read from the head's check runs.
   push:
     name: Push
     needs: [kit, triage, design, prototype, implement, review-checks, rerun-checks, rerun-wait, review, digest, audit, retro-evidence, retro, research]
-    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'
+    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay' && needs.kit.outputs.route != 'rerun-checks'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # A push to the default branch runs the conflict check, as the scheduled tick does: it takes turns with
