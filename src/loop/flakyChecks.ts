@@ -8,7 +8,9 @@
 // nothing counted back (#693). Each way the Operator hears of it twice over, quietly: one line
 // on the PR, mentioning nobody, and the check's own Flaky check issue for
 // Triage, filed once and commented on each time the check proves flaky again, so the Product's
-// suite gets fixed. Pure.
+// suite gets fixed. That issue holds the check's Unrelated failures too (#781): the Operator hears
+// of one the same way, a line ahead of the Verdict and a comment on the issue, and one that later
+// passes on its head is a Flaky check. Pure.
 import { type FailureExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
 import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker, unrelatedFailureMarker } from "./markers.ts";

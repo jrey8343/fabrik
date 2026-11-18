@@ -84,6 +84,19 @@ describe("The Verdict after an Unrelated failure line (#781)", () => {
     expect(textOf(verdict)).toContain(`An Unrelated failure, reported on #new:${gate!.key}:`);
   });
 
+  it("reads no link from a log line holding NULs: a Verdict that files no issue stays a plain comment, its text as given", () => {
+    const nul = excerpt("gate", GATE_JOB, "binary \u0000unrelated-failure-aaaaaaa-gate\u0000 output");
+    const plan = planFor(
+      reviewed("verdict: pass\n\nChecked it.\n\nred-checks:\n- caused `gate`: the stub.", { redChecks: { failed: ["gate"], excerpts: [nul] } }),
+      snapshotOfPullRequest(aPullRequest()),
+      kitConfig(),
+    );
+    const verdict = actionsOf(plan)[verdictIndex(plan)]!;
+
+    expect(verdict).toMatchObject({ kind: "comment", key: "verdict" });
+    expect(textOf(verdict)).toContain("binary \u0000unrelated-failure-aaaaaaa-gate\u0000 output");
+  });
+
   it("links an open issue for the check by its number, and stays a plain comment", () => {
     const open: KitIssueSnapshot = { number: 88, labels: ["fabrik:flaky-check"], body: '<!-- fabrik:flaky-check-issue {"check":"e2e"} -->\nFlaky.', comments: [] };
     const plan = land(`verdict: execution-flaw\n\n- The empty cart throws.\n\n${ONE_UNRELATED}`, { issues: [open] });

@@ -141,8 +141,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
   return landVerdict(event, snapshot, (pullRequest) => {
     // On a head still red after everything the Kit could do (#779), each red check with the Reviewer's judgment (#780).
     const red = event.redChecks;
-    // A NUL marks where the Verdict links an issue it files (#781): the Reviewer's text holds none.
-    const parsed = parseVerdict(event.output.replaceAll(CREATED_REF_EDGE, ""), red?.failed ?? []);
+    const parsed = parseVerdict(event.output, red?.failed ?? []);
     if (!parsed.ok) {
       return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
     }
@@ -175,6 +174,7 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
       ...(counting.length === 0 ? {} : { checks: counting }),
       unrelated,
       tags,
+      filed: [...said.refs.values()].filter((ref) => typeof ref !== "number"),
     }, snapshot.operator, held);
     // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
     actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues), ...said.actions);
@@ -206,17 +206,25 @@ function unrelatedFailuresOf(judged: readonly RedCheckJudgment[], red: RedRequir
  * posted (#781): its key between NULs, which the Verdict's comment links as
  * the issue's `#number`.
  */
-const CREATED_REF_EDGE = "\u0000";
-
-function issueRef(ref: number | CreatedIssue): string {
-  return typeof ref === "number" ? `#${ref}` : `${CREATED_REF_EDGE}${ref.created}${CREATED_REF_EDGE}`;
+function createdToken({ created }: CreatedIssue): string {
+  return `\u0000${created}\u0000`;
 }
 
-/** A Verdict's comment: plain, or linking each issue the plan files that its text names (#781). */
-function verdictComment(issue: number, body: string): Action {
-  const parts = body.split(CREATED_REF_EDGE);
-  if (parts.length === 1) return { kind: "comment", issue, body, key: VERDICT_COMMENT.posted };
-  const linked = parts.flatMap((part, at): (string | CreatedIssue)[] => (at % 2 === 1 ? [{ created: part }] : part === "" ? [] : [part]));
+function issueRef(ref: number | CreatedIssue): string {
+  return typeof ref === "number" ? `#${ref}` : createdToken(ref);
+}
+
+/**
+ * A Verdict's comment: plain, or linking each issue the plan files that its
+ * text names (#781). Only those issues' own tokens are read as links, so a
+ * NUL in a log line stays text.
+ */
+function verdictComment(issue: number, body: string, filed: readonly CreatedIssue[]): Action {
+  const named = filed.filter((ref) => body.includes(createdToken(ref)));
+  if (named.length === 0) return { kind: "comment", issue, body, key: VERDICT_COMMENT.posted };
+  const byToken = new Map(named.map((ref) => [createdToken(ref), ref]));
+  const parts = body.split(new RegExp(`(${[...byToken.keys()].map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`));
+  const linked = parts.flatMap((part): (string | CreatedIssue)[] => (part === "" ? [] : [byToken.get(part) ?? part]));
   return { kind: "comment-linking", issue, body: linked, key: VERDICT_COMMENT.posted };
 }
 
@@ -374,6 +382,7 @@ export function verdictActions(
     unrelated = [],
     ranNothing,
     tags = null,
+    filed = [],
   }: {
     readonly verdict: Verdict;
     readonly source: VerdictRecord["source"];
@@ -389,6 +398,8 @@ export function verdictActions(
     readonly ranNothing?: readonly string[];
     readonly followUps?: readonly string[];
     readonly considered?: readonly string[];
+    /** The issues the plan files that the findings link (#781): each Unrelated failure's new issue. */
+    readonly filed?: readonly CreatedIssue[];
   },
   operator: string,
   held: HeldOn | null,
@@ -440,7 +451,7 @@ export function verdictActions(
     .map((label): Action => ({ kind: "remove-label", issue: pullRequest.number, label }));
   return [
     ...labelsOff,
-    verdictComment(pullRequest.number, body),
+    verdictComment(pullRequest.number, body, filed),
     ...(next?.actions ?? []),
   ];
 }
