@@ -270,7 +270,9 @@ const SHORTENED = "_Shortened to fit the comment._";
  * Each excerpt as a Markdown list item under its check's name, in the order
  * given: the job link, each failed step's kept log lines, and its error
  * annotations as file, line and message. The failure text sits in fenced
- * blocks, as data a mention or a heading in it can't escape.
+ * blocks, as data a mention or a heading in it can't escape. A check that
+ * failed both times then shows its first attempt, with no log lines, and
+ * whether the same step failed both times (#776).
  *
  * The log lines share LOG_CAP equally between the excerpts that have any,
  * and a share one doesn't fill goes to no other. Each excerpt's lines are cut
