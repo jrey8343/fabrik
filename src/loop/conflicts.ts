@@ -10,7 +10,10 @@
 // ADR-0016): nothing else would move it on. So does a draft whose Review passed
 // while it conflicts with main, before the Merge gate opens (#480), and one whose
 // Review stopped waiting because it conflicts (#704, ADR-0028), at once, with no
-// grace period: the Review that period leaves room for has ended.
+// grace period: the Review that period leaves room for has ended. The one
+// exception to "a PR only behind main is left alone" is a PR a check holds at
+// the Merge gate by an Unrelated failure once that check's issue closes as
+// completed (#784): the fix is on main, so the Kit brings it in by this path.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
@@ -126,7 +129,8 @@ function whyNotRebased(
     return { rule: "tried", reason: `#${number} was already tried against main at ${main.slice(0, 7)}, so it waits for main to move or for the Operator` };
   }
   if (mergeable === null) return { rule: "unknown", reason: `GitHub hadn't worked out whether #${number} conflicts with main, so it's left for the scheduled tick` };
-  // Rebasing a PR that's only behind would push, and start a Review, on every PR after every merge.
+  // Rebasing a PR that's only behind would push, and start a Review, on every PR after every merge. A check's fix
+  // landing is the one exception (#784), which the caller weighs on this rule (fixBroughtIn).
   if (mergeable) return { rule: "clean", reason: `#${number} doesn't conflict with main, so it's left as it is` };
   return null;
 }
@@ -458,7 +462,8 @@ function fixesHolding(pullRequest: PullRequestSnapshot, fixed: readonly FixedChe
  * why ADR-0011 wouldn't otherwise (`why`): only being behind main doesn't stop
  * it, as the one exception to that rule, but everything else ADR-0011 leaves
  * alone stays alone. A PR whose head already holds main's has nothing to bring
- * in, so the Kit pushes nothing and records that once. Its notes say the fix
+ * in: the rebase finds it so and pushes nothing, and its `upToDate` note
+ * records that once, with no attempt marker and no draft. Its notes say the fix
  * for each check landed, naming its issue, and carry the attempt marker, as
  * any bring-up-to-date's do, and the record of the move (CheckFixMark).
  */
