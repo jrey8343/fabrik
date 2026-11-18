@@ -155,6 +155,31 @@ describe("Applying a plan that moves blocked-by edges onto new Tickets", () => {
 
 });
 
+describe("Applying a comment on an issue the plan created (#778)", () => {
+  const plan: Plan = {
+    kind: "act",
+    actions: [
+      { kind: "create-issue", key: "flaky-check-ccccccc-ci", title: "Flaky required check: ci", body: "First.", labels: [], parent: null, blockedBy: [] },
+      { kind: "comment-on-created", on: { created: "flaky-check-ccccccc-ci" }, body: "Flaky again." },
+    ],
+  };
+
+  it("comments on the issue the plan created by that key", async () => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.calls.filter(({ method }) => method === "POST").map(({ path, body }) => [path, body])).toEqual([
+      [issues, expect.objectContaining({ title: "Flaky required check: ci", body: "First." })],
+      [`${issues}/100/comments`, { body: "Flaky again." }],
+    ]);
+  });
+
+  it("is named in the plan's summary", () => {
+    expect(describePlan(plan).split("\n")).toEqual(['- create "Flaky required check: ci" ()', "- comment on flaky-check-ccccccc-ci"]);
+  });
+});
+
 describe("Applying a trigger label the issue already carries (#417)", () => {
   const changes = (calls: { method: string; path: string; body: unknown }[]) =>
     calls.filter(({ method }) => method !== "GET").map(({ method, path, body }) => [method, path, body]);

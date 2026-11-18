@@ -9,13 +9,30 @@
 // on the PR, mentioning nobody, and the check's own Flaky check issue for
 // Triage, filed once and commented on each time the check proves flaky again, so the Product's
 // suite gets fixed. Pure.
+import { type FailureExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
 import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker } from "./markers.ts";
+import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import type { Action, CreatedIssue, FlakyCheck, FlawHeadChecks, HeadCheckRun, KitIssueSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
 /** A check's name as Markdown code: a backtick in it can't end the span. */
 export function checkCode(name: string): string {
   return `\`${name.replace(/`/g, "'")}\``;
+}
+
+/** Why a Flaky check's red run has no Failure excerpt: the Kit read none, as when the Review's artifact is missing. */
+const NO_EXCERPT = "the Kit read no Failure excerpt of this run";
+
+/**
+ * An issue's body or comment, `text`, then the Failure excerpt of the check's
+ * red run (#778), rendered under the module's cap in the room GitHub's limit
+ * leaves it. A run with none read says so, keeping the red run's link.
+ */
+function withExcerpt(text: string, check: FlakyCheck): string {
+  const excerpt = check.excerpt ?? { kind: "unread", check: check.name, link: check.red, why: NO_EXCERPT };
+  const heading = "Why the red run failed, its Failure excerpt:";
+  const above = `${text}\n\n${heading}\n\n`;
+  return `${above}${renderFailureExcerpts([excerpt], { room: GITHUB_COMMENT_LIMIT - above.length }).join("\n\n")}`;
 }
 
 /**
@@ -37,12 +54,14 @@ function issueActions(
     const runs = `#${pullRequest} at ${short}: [red](${check.red}), [green](${check.green})`;
     const open = issues.find((issue) => flakyCheckIssueOf(issue.body) === check.name);
     if (open !== undefined) {
-      actions.push({ kind: "comment", issue: open.number, body: `Flaky again on ${runs}.` });
+      actions.push({ kind: "comment", issue: open.number, body: withExcerpt(`Flaky again on ${runs}.`, check) });
       refs.push(open.number);
       continue;
     }
     const earlier = filed.get(check.name);
     if (earlier !== undefined) {
+      // Filed earlier in this plan for another PR or head: this red run goes on it as a comment, with its own excerpt.
+      actions.push({ kind: "comment-on-created", on: earlier, body: withExcerpt(`Flaky again on ${runs}.`, check) });
       refs.push(earlier);
       continue;
     }
@@ -52,14 +71,17 @@ function issueActions(
       kind: "create-issue",
       key,
       title: `Flaky required check: ${check.name}`,
-      body: [
-        flakyCheckIssueMarker(check.name),
-        `The required check ${checkCode(check.name)} reported both failure and success on the same head commit: a Flaky check. ` +
-          "Each time it fails costs a Review a re-run, and one the Kit doesn't catch costs a Ticket a Retry, so it's worth fixing in the suite. " +
-          "The Kit comments here each time it proves flaky again while this is open.",
-        "",
-        `- ${runs}`,
-      ].join("\n"),
+      body: withExcerpt(
+        [
+          flakyCheckIssueMarker(check.name),
+          `The required check ${checkCode(check.name)} reported both failure and success on the same head commit: a Flaky check. ` +
+            "Each time it fails costs a Review a re-run, and one the Kit doesn't catch costs a Ticket a Retry, so it's worth fixing in the suite. " +
+            "The Kit comments here each time it proves flaky again while this is open.",
+          "",
+          `- ${runs}`,
+        ].join("\n"),
+        check,
+      ),
       labels: [NEEDS_TRIAGE, FLAKY_CHECK_LABEL],
       parent: null,
       blockedBy: [],
@@ -162,13 +184,20 @@ export function passedHeadAtGate(pullRequest: PullRequestSnapshot): string | nul
 
 const RED = ["failure", "timed_out", "cancelled", "action_required", "startup_failure"];
 
+/** A Flaky check the tick found, with the excerpt it read of that check's red run, when it read one (#778). */
+function withRedExcerpt(check: FlakyCheck, excerpts: readonly FailureExcerpt[]): FlakyCheck {
+  const excerpt = excerpts.find(({ check: name, link }) => name === check.name && link === check.red);
+  return excerpt === undefined ? check : { ...check, excerpt };
+}
+
 /**
  * The checks that flipped on this flaw's head, each with a red run and its
  * latest, green, run; null unless every check the Verdict named reads green
  * now and has a red run on that head. Each goes by its latest run, so red,
- * green, red again is still red.
+ * green, red again is still red. The tick reads the excerpt of each red run
+ * this gives before its plan (src/github/snapshot.ts).
  */
-function flippedOn({ checks, checkRuns }: FlawHeadChecks): FlakyCheck[] | null {
+export function flippedOn({ checks, checkRuns, excerpts }: FlawHeadChecks): FlakyCheck[] | null {
   const flaky: FlakyCheck[] = [];
   for (const name of checks) {
     // A run not yet started is the newest: GitHub queued it after every run that has.
@@ -177,7 +206,7 @@ function flippedOn({ checks, checkRuns }: FlawHeadChecks): FlakyCheck[] | null {
     const latest = runs.at(-1);
     const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
     if (latest?.conclusion !== "success" || red === undefined) return null;
-    flaky.push({ name, red: red.url, green: latest.url });
+    flaky.push(withRedExcerpt({ name, red: red.url, green: latest.url }, excerpts));
   }
   return flaky;
 }
@@ -188,14 +217,14 @@ function flippedOn({ checks, checkRuns }: FlawHeadChecks): FlakyCheck[] | null {
  * to one of each; less any a Flaky check line on the PR already names on this
  * head. A check that was only skipped or neutral never succeeded.
  */
-function flakyOnPassedHead({ headSha, required, checkRuns, marks }: PassedHeadChecks): FlakyCheck[] {
+export function flakyOnPassedHead({ headSha, required, checkRuns, marks, excerpts }: PassedHeadChecks): FlakyCheck[] {
   const named = new Set(marks.filter((mark) => mark.headSha === headSha).flatMap((mark) => mark.checks));
   return required.flatMap((name) => {
     if (named.has(name)) return [];
     const runs = checkRuns.filter((run) => run.name === name);
     const green = runs.find((run) => run.conclusion === "success");
     const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
-    return green === undefined || red === undefined ? [] : [{ name, red: red.url, green: green.url }];
+    return green === undefined || red === undefined ? [] : [withRedExcerpt({ name, red: red.url, green: green.url }, excerpts)];
   });
 }
 

@@ -400,6 +400,9 @@ async function apply(
       return createIssue(github, repo, action, made.created);
     case "add-blocked-by":
       return addBlockedBy(github, repo, action.issue, action.blocker, made.created);
+    case "comment-on-created":
+      await github.rest("POST", `${issues}/${createdIn(made.created, action.on).number}/comments`, { body: action.body });
+      return;
     case "close-pull-request":
       // Closing never deletes the head branch; only a merge with auto-delete on would.
       await github.rest("PATCH", `/repos/${repo.owner}/${repo.name}/pulls/${action.pullRequest}`, { state: "closed" });
@@ -615,6 +618,7 @@ async function applyToIssue(
         | "link-prototype-preview"
         | "create-issue"
         | "add-blocked-by"
+        | "comment-on-created"
         | "open-issue"
         | "push-branch"
         | "push-prototype-branch"
