@@ -1037,6 +1037,12 @@ describe("The Review's waits, when they end red", () => {
     expect(job(name)).not.toMatch(/excerpt.*: \$\{\{ steps\.wait\.outputs/);
   });
 
+  // #780: the Reviewer weighs each red check's result on the default branch's head, which the first wait reads.
+  it("the review-checks job passes out the red checks' results on the default branch's head, which the Review job is given with its jobs", () => {
+    expect(job("review-checks")).toContain("      main: ${{ steps.wait.outputs.main }}\n");
+    expect(job("review")).toContain("FABRIK_RED_CHECKS_NEEDS: ${{ needs.review-checks.outputs.checks == 'red' && toJSON(needs) || '' }}");
+  });
+
   it.each(["review-checks", "rerun-wait"])("the %s job reads them on the token it held already", (name) => {
     expect(job(name)).toContain("    permissions:\n      contents: read\n      pull-requests: read\n      checks: read\n      statuses: read\n");
     expect(job(name)).toMatch(/\n      actions: read\n/);

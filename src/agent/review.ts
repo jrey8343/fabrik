@@ -25,7 +25,7 @@ import {
 import { type Needs, reviewChecksOf } from "../kit/pushJob.ts";
 import { changedTestsIn, reviewerChangedTestsBlock } from "../loop/changedTests.ts";
 import { checkCode } from "../loop/flakyChecks.ts";
-import { REVIEWED_RED_CHECK_HEADINGS, redChecksText } from "../loop/redChecks.ts";
+import { REVIEWED_RED_CHECK_HEADINGS, redChecksOnMainOf, redChecksText } from "../loop/redChecks.ts";
 import type { RedRequiredChecks } from "../loop/types.ts";
 import { excerptsPassedOut, FAILURE_EXCERPTS_FILE, RERUN_FAILURE_EXCERPTS_FILE } from "../review/failureExcerpt.ts";
 import { codingStandardsParts, ticketContext, type PullRequestRunContext } from "./implement.ts";
@@ -164,8 +164,8 @@ function ranNothingBlock(ranNothing: readonly string[]): string[] {
 
 /**
  * The red Required checks on the head a Reviewer judges (#779), as Kit code
- * read them: each with its attempts and its Failure excerpt, the failure
- * text data from CI. prompts/review.md's Red Required checks section says
+ * read them: each with its attempts, its result on the default branch's head
+ * (#780) and its Failure excerpt, the failure text data from CI. prompts/review.md's Red Required checks section says
  * how to judge the code beside them.
  */
 function redChecksBlock(red: RedRequiredChecks): string[] {
@@ -180,17 +180,21 @@ function redChecksBlock(red: RedRequiredChecks): string[] {
  * The red Required checks a Review job gives its Reviewer (#779): read from
  * the Review's jobs, FABRIK_RED_CHECKS_NEEDS, as the push job reads them
  * (src/kit/pushJob.ts), with the Failure excerpts both waits passed out,
- * downloaded into FABRIK_RED_CHECKS_DIR. Null on a green head, which is
+ * downloaded into FABRIK_RED_CHECKS_DIR, and each check's result on the
+ * default branch's head, which the first wait passed out (#780). Null on a green head, which is
  * given neither. A file that's missing gives its checks no excerpt, and each
  * then says its failure couldn't be read.
  */
 export async function readRedChecks(needsText: string | undefined, dir: string | undefined): Promise<RedRequiredChecks | null> {
   if (needsText === undefined || needsText === "") return null;
-  const { outcome, failedChecks, rerun } = reviewChecksOf(JSON.parse(needsText) as Needs);
+  const needs = JSON.parse(needsText) as Needs;
+  const { outcome, failedChecks, rerun } = reviewChecksOf(needs);
   if (outcome !== "red" || failedChecks.length === 0) return null;
   const passedOut = (file: string) => (dir === undefined || dir === "" ? Promise.resolve(null) : readFile(join(dir, file), "utf8").catch(() => null));
   const excerpts = excerptsPassedOut(await passedOut(FAILURE_EXCERPTS_FILE), await passedOut(RERUN_FAILURE_EXCERPTS_FILE));
-  return { failed: failedChecks, ...(rerun === null ? {} : { rerun }), excerpts };
+  // Each red check's result on the default branch's head, which the first wait read (#780).
+  const onMain = redChecksOnMainOf(needs["review-checks"]?.outputs["main"]);
+  return { failed: failedChecks, ...(rerun === null ? {} : { rerun }), excerpts, onMain };
 }
 
 /**

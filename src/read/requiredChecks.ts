@@ -75,6 +75,39 @@ export async function readDefaultBranchRequiredChecks(client: Pick<ReadClient, "
   return branch.kind === "read" ? { kind: "read", required: branch.required } : { kind: "unread", why: branch.why };
 }
 
+/** How some checks stand on the default branch's head, or why that couldn't be read. */
+export type DefaultBranchHeadChecks =
+  | { readonly kind: "read"; readonly branch: string; readonly sha: string; readonly checks: readonly HeadCheck[] }
+  | { readonly kind: "unread"; readonly why: string };
+
+/**
+ * How each of `names` stands on the default branch's head, judged as a
+ * merge judges it (#780): the Review's wait reads the red checks there for
+ * the Reviewer, as evidence of whether the pull request caused them. One
+ * never reported there didn't run there. Four REST requests while each list
+ * fits a page: the repo, the branch, and its head's check runs and statuses.
+ */
+export async function readDefaultBranchHeadChecks(client: Pick<ReadClient, "rest">, repo: string, names: readonly string[]): Promise<DefaultBranchHeadChecks> {
+  const target = repoOf(repo);
+  const repoPath = `/repos/${target.owner}/${target.name}`;
+  let branch: string;
+  let sha: string;
+  try {
+    branch = ((await client.rest("GET", repoPath)) as { default_branch: string }).default_branch;
+  } catch (error) {
+    return { kind: "unread", why: whyUnread(error, `GET ${repoPath}`) };
+  }
+  const branchPath = `${repoPath}/branches/${encodeURIComponent(branch)}`;
+  try {
+    sha = ((await client.rest("GET", branchPath)) as { commit: { sha: string } }).commit.sha;
+  } catch (error) {
+    return { kind: "unread", why: whyUnread(error, `GET ${branchPath}`) };
+  }
+  const checks = await readHead(client, target, sha, names);
+  if (checks === "unread") return { kind: "unread", why: `GitHub didn't give the checks on ${branch}'s head, ${sha.slice(0, 7)}` };
+  return { kind: "read", branch, sha, checks };
+}
+
 /**
  * The heads a checks read is asked about, from rows, each once, from its
  * `detail.head`: each agent pull request's at the Merge gate, and each open

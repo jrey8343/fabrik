@@ -1138,7 +1138,26 @@ export interface RedRequiredChecks {
    * couldn't be read.
    */
   readonly excerpts: readonly CheckExcerpt[];
+  /**
+   * Each red check's result on the default branch's head, which the first
+   * wait read for the Reviewer (#780), or why it couldn't be read; absent
+   * where the push job reads the red checks, which doesn't carry it.
+   */
+  readonly onMain?: RedChecksOnMain;
 }
+
+/** How some checks stood on the default branch's head (#780), as the Review's first wait read them, or why that couldn't be read. */
+export type RedChecksOnMain =
+  | {
+      readonly kind: "read";
+      /** The default branch's name. */
+      readonly branch: string;
+      /** Its head, as read. */
+      readonly sha: string;
+      /** Each check by name: passed, failing, running, or never reported there, so not run there; with its report's page, when it gave one. */
+      readonly checks: readonly { readonly name: string; readonly is: "passed" | "failing" | "running" | "never-reported"; readonly url: string | null }[];
+    }
+  | { readonly kind: "unread"; readonly why: string };
 
 /**
  * What the Kit's re-run of an agent PR's red required checks came to (#462,

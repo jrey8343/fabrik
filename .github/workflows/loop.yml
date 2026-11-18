@@ -1056,6 +1056,8 @@ jobs:
       ran-nothing: ${{ steps.wait.outputs.ran-nothing }}
       # On red, as JSON: the GitHub Actions checks the Kit can re-run, with their workflow runs, and the outside ones (#462).
       red: ${{ steps.wait.outputs.red }}
+      # On red, as JSON: each red check's result on the default branch's head, which the Reviewer weighs (#780).
+      main: ${{ steps.wait.outputs.main }}
     steps:
       - name: Check out the Kit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
