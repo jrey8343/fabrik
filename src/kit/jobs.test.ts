@@ -480,3 +480,31 @@ describe("The Kit job's line of what it routed (#616)", () => {
     expect(line).not.toContain("claude");
   });
 });
+
+describe("The Kit job's routing of agent:rerun-checks (#783)", () => {
+  const head = "c".repeat(40);
+  const atGate = aPullRequest({
+    draft: false,
+    headSha: head,
+    labels: ["agent:rerun-checks"],
+    verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, unrelated: ["e2e"], headSha: head }],
+    gateReruns: [
+      { kind: "asked", headSha: head, checks: [{ name: "e2e", link: "https://github.com/acme/shop/actions/runs/7/job/70", run: 7 }], started: false, node: "IC_ask", postedAt: "2026-11-18T11:17:00Z" },
+    ],
+  });
+  const labeled = (pullRequest = atGate) => planFor({ kind: "pull-request-labeled", pullRequest: 50, label: "agent:rerun-checks" }, snapshotOfPullRequest(pullRequest), kitConfig());
+
+  it("routes to the Re-run red checks job, with the PR, its head and the checks to re-run in the Review checks job's red shape, and starts no agent", () => {
+    const outputs = kitJobOutputs(labeled(), 7, kitConfig());
+
+    expect(outputs).toMatchObject({ route: "rerun-checks", "pull-request": "50", "head-sha": head, subscription: "", model: "" });
+    expect(JSON.parse(outputs["rerun-red"] ?? "")).toEqual({ rerun: [{ name: "e2e", link: "https://github.com/acme/shop/actions/runs/7/job/70", run: 7 }], outside: [] });
+    expect(JSON.parse(outputs["kit-said"] ?? "")).toEqual({ fabrik: 1, route: "rerun-checks", run: null, held: [], replay: null });
+  });
+
+  it("routes a decline to the push job alone, with nothing to re-run", () => {
+    const outputs = kitJobOutputs(labeled({ ...atGate, gateReruns: [] }), 7, kitConfig());
+
+    expect(outputs).toMatchObject({ route: "push", "rerun-red": "", "head-sha": "" });
+  });
+});

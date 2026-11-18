@@ -11,6 +11,8 @@
 //                            plan starts that agent run (a Retro run's evidence job, then its Retro job),
 //                            "replay" when it starts a replay Ticket's two arms (#156), its claim and then
 //                            its replay jobs,
+//                            "rerun-checks" when agent:rerun-checks asks one more re-run at the Merge gate (#783),
+//                            its claim and then the Re-run red checks job, with no agent and no push job,
 //                            "push" when the push job has something to apply,
 //                            "none" when the plan is to do nothing
 //   triage-timeout-minutes   the Triage role's Kit config timeout
@@ -46,7 +48,11 @@
 //   audit-commit             for an Auditor run, the pending Audit's marked commit, which the Audit job
 //                            checks out; else empty
 //   head-sha                 for a Digest run, the head its pass was given on, a full sha, which the Digest job
-//                            checks out and the push job lands the Digest for; else empty
+//                            checks out and the push job lands the Digest for; for one more re-run at the Merge
+//                            gate (#783), the head whose checks it re-runs; else empty
+//   rerun-red                for one more re-run at the Merge gate (#783), the checks to re-run as one line of JSON in
+//                            the Review checks job's `red` shape, {rerun: [{name, link, run}], outside: []}, which the
+//                            Re-run red checks job reads through `env:`, as the names come from the Product's CI; else empty
 //   model, effort            the model and effort the plan chose for its agent run (a Step-up, say),
 //                            empty when it starts none or leaves effort to the CLI
 //   retry                    for an Implement run, its Retry number (0 for a first or Request-changes run); else empty
@@ -225,6 +231,8 @@ export function kitJobOutputs(
   const builds = run?.role === "implement" ? run.issue : ticket;
   // The closing step's line: what this job routed, held and declined included, as one line of JSON (#616).
   const said = JSON.stringify(kitSaidOf(plan, ticket));
+  // One more re-run at the Merge gate (#783) starts no agent: the Re-run red checks job re-runs the checks the Kit's line asked.
+  const rerun = plan?.kind === "act" ? plan.actions.find((action): action is Extract<Action, { kind: "rerun-checks" }> => action.kind === "rerun-checks") : undefined;
   if (replay !== null) return { ...kitJobOutputs(null, null, config), ...replayOutputs(replay), "kit-said": said };
   return {
     route: routeOf(plan),
@@ -238,7 +246,7 @@ export function kitJobOutputs(
     "retro-timeout-minutes": String(config.roles.retro.timeoutMinutes),
     "research-timeout-minutes": String(config.roles.research.timeoutMinutes),
     "digest-timeout-minutes": String(config.roles.digest.timeoutMinutes),
-    "pull-request": pullRequest === null ? "" : String(pullRequest),
+    "pull-request": rerun !== undefined ? String(rerun.pullRequest) : pullRequest === null ? "" : String(pullRequest),
     ticket: (onPullRequest || run?.role === "implement") && builds !== null ? String(builds) : "",
     // A retry, and a Kept-branch start (#536), check out the Ticket's agent branch; any other first Implement run cuts it
     // from the default branch.
@@ -257,7 +265,9 @@ export function kitJobOutputs(
     // An Auditor run reads the Product repo up to the commit its pending Audit marks.
     "audit-commit": run?.role === "audit" ? (run.commit ?? "") : "",
     // A Digest run reads the PR at the head its pass was given on, and its Digest lands only while that is still the PR's head.
-    "head-sha": run?.role === "digest" ? (run.headSha ?? "") : "",
+    "head-sha": run?.role === "digest" ? (run.headSha ?? "") : (rerun?.headSha ?? ""),
+    // Only ever names and links the Kit's own line recorded, read only through `env:`.
+    "rerun-red": rerun === undefined ? "" : JSON.stringify({ rerun: rerun.checks.map(({ name, link, run: id }) => ({ name, link, run: id })), outside: [] }),
     model: run?.model ?? "",
     effort: run?.effort ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.
