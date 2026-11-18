@@ -111,6 +111,18 @@ describe("The prompts of the runs on a PR the Operator requested changes on (ADR
     },
   );
 
+  it.each(["When you're fixing a PR", "When the Operator requested changes"])(
+    "implement's %s section leaves alone any check the Verdict names as an Unrelated failure (#780), straight after the red check's three points",
+    async (heading) => {
+      const lines = section(await prompt("implement"), heading).split("\n");
+      const at = lines.findIndex((line) => line.startsWith("  3. When the failure doesn't reproduce"));
+
+      expect(lines[at + 1]).toBe(
+        "- Leave alone any check the Verdict names as an Unrelated failure: the Reviewer judged that this pull request didn't cause it, so it isn't yours to fix, and it counts toward nothing.",
+      );
+    },
+  );
+
   it("implement has a Touch-up section (#750): it works as a retry, spends no Retry, fails on an empty commit, and outputs a retry's fields", async () => {
     const touchUp = section(await prompt("implement"), "When you're touching up a PR");
     expect(touchUp).toContain('"This run is a Touch-up"');

@@ -26,7 +26,7 @@ export function isReviewerFlaw({ verdict, source }: Pick<VerdictRecord, "verdict
 }
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, tags, touchUp, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, unrelated, ranNothing, tags, touchUp, headSha } = record;
   const reviewerFlaw = isReviewerFlaw(record);
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
@@ -38,6 +38,8 @@ export function verdictMarker(record: VerdictRecord): string {
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     ...(ticketNotReady === true ? { ticketNotReady } : {}),
     ...(checks === undefined ? {} : { checks }),
+    // Only a Reviewer's Verdict on a red head that judged a check an Unrelated failure names them (#780).
+    ...(unrelated === undefined || unrelated.length === 0 ? {} : { unrelated }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     // Only a Reviewer's Execution flaw counts its findings by tag (#749).
     ...(tags === undefined || !reviewerFlaw ? {} : { tags }),

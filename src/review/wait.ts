@@ -22,6 +22,8 @@
 //            neutral, as a JSON list, which the Reviewer and the Digest are told
 //            and the step summary names
 //   red      on red, the ones the Kit can re-run and the outside ones (src/review/rerun.ts), as JSON
+//   main     on red, each red check's result on the default branch's head, as JSON, for the
+//            Reviewer to judge whether the PR caused it (#780): read once, before anything is re-run
 // After the Kit re-ran red checks (#462), the same wait runs again as the Re-run
 // checks' wait, given FABRIK_RERUN (the re-run checks, as the red output named
 // them), FABRIK_RERUN_AT and FABRIK_HEAD_SHA: it waits until the re-run checks
@@ -45,7 +47,7 @@ import type { MergeableState } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { checkCode } from "../loop/flakyChecks.ts";
 import type { FailureReport } from "../loop/types.ts";
-import { type BranchRequiredChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
+import { type BranchRequiredChecks, type DefaultBranchHeadChecks, readDefaultBranchHeadChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type ChecksOutcome, checksFromGh, requiredChecksOutcome } from "./checks.ts";
 import {
   FAILURE_EXCERPTS_FILE,
@@ -319,7 +321,7 @@ async function main(productDir: string): Promise<void> {
   if (rerun === null && outcome.checks === "red") {
     const red = redChecksOf(last, failed);
     console.log(`The Kit can re-run ${red.rerun.length === 0 ? "none of them" : red.rerun.map(({ name }) => name).join(", ")}`);
-    lines.push(`red=${JSON.stringify(red)}`);
+    lines.push(`red=${JSON.stringify(red)}`, `main=${JSON.stringify(await onMain(() => readDefaultBranchHeadChecks(client, repo, failed)))}`);
     // Before anything is re-run (#775): the re-run may leave the first attempt's job readable only by its own id.
     await leaveExcerpts(FAILURE_EXCERPTS_FILE, () => redExcerpts(last, failed, outcome.headSha, reader));
   }
@@ -349,6 +351,24 @@ export async function redExcerpts(checks: readonly CheckDetail[], names: readonl
     excerpts.push(await readFailureExcerpt({ name, link, sha }, reader));
   }
   return excerpts;
+}
+
+/**
+ * The red checks' results on the default branch's head (#780). Never fails
+ * the wait: an error reads as unread, and the Reviewer is told why.
+ */
+async function onMain(read: () => Promise<DefaultBranchHeadChecks>): Promise<DefaultBranchHeadChecks> {
+  try {
+    const result = await read();
+    console.log(
+      result.kind === "read"
+        ? `On ${result.branch}'s head, ${result.sha.slice(0, 7)}: ${result.checks.map(({ name, is }) => `${name} ${is}`).join(", ")}`
+        : `Couldn't read the red checks on the default branch's head: ${result.why}`,
+    );
+    return result;
+  } catch (error) {
+    return { kind: "unread", why: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /**

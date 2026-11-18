@@ -704,4 +704,35 @@ describe("A Verdict counted back for a Flaky check (#462)", () => {
     expect(verdictsIn([...reviewed("verdict: execution-flaw\n\n- [small: comment] A stale comment."), countedBack])).toEqual([expect.objectContaining({ flaky: true })]);
     expect(verdictsIn([...reviewed("verdict: execution-flaw\n\n- A bug."), countedBack])).toEqual([expect.not.objectContaining({ flaky: true })]);
   });
+
+  // #780: the marker holds the caused checks in `checks` and the Unrelated failures in `unrelated`, and count-back reads `checks` alone.
+  it("reads back a Reviewer's caused checks and Unrelated failures, and counts back on its caused checks alone", () => {
+    const [verdict] = commented(
+      planFor(
+        {
+          kind: "review-run-finished",
+          pullRequest: 50,
+          headSha: HEAD_SHA,
+          output: "verdict: pass\n\nLooks right.\n\nred-checks:\n- caused `gate`: the stub breaks.\n- unrelated `e2e`: red on main's head too.",
+          runUrl: "https://github.com/acme/shop/actions/runs/1",
+          repoUrl: "https://github.com/acme/shop",
+          redChecks: { failed: ["gate", "e2e"], excerpts: [] },
+        },
+        snapshotOfPullRequest(aPullRequest()),
+        kitConfig(),
+      ),
+    );
+    const countedBack = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["gate"],"countedBack":true} -->\n\`gate\` has since passed.`;
+
+    expect(verdictsIn([verdict!])).toEqual([expect.objectContaining({ verdict: "execution-flaw", checks: ["gate"], unrelated: ["e2e"] })]);
+    expect(verdictsIn([verdict!, countedBack])).toEqual([expect.objectContaining({ flaky: true })]);
+  });
+
+  it("reads a marker with no Unrelated failures, or a malformed list of them, as naming none", () => {
+    const marker = (unrelated: string) => `<!-- fabrik:verdict {"verdict":"pass","source":"reviewer","requestChanges":false,"unrelated":${unrelated},"headSha":"${HEAD_SHA}"} -->`;
+
+    expect(verdictsIn([marker("[]")])).toEqual([expect.not.objectContaining({ unrelated: expect.anything() })]);
+    expect(verdictsIn([marker('[1, "e2e"]')])).toEqual([expect.not.objectContaining({ unrelated: expect.anything() })]);
+    expect(verdictsIn([marker('["e2e"]')])).toEqual([expect.objectContaining({ unrelated: ["e2e"] })]);
+  });
 });
