@@ -113,7 +113,53 @@ export function unrelatedFailureMarksIn(commentBodies: readonly string[]): Unrel
   });
 }
 
-const FLAKY_CHECK_ISSUE_MARKER = /^<!-- fabrik:flaky-check-issue (\{.*?\}) -->/;
+/**
+ * The Kit's record that it brought an agent PR up to date for a check's fix
+ * (#784): the checks whose issues closed as completed, each with its issue,
+ * the PR's head when it did, the default branch's head, and how it went:
+ * `rebased` (the clean rebase pushed), `conflict-run` (a conflict-only run
+ * started) or `held-main` (the head already held `main`'s, so nothing was
+ * pushed). The move is spent for those checks on that head. It sits on a
+ * line of its own in the note, after the conflict attempt's marker when
+ * there is one.
+ */
+export interface CheckFixMark {
+  readonly headSha: string;
+  readonly main: string;
+  readonly outcome: "rebased" | "conflict-run" | "held-main";
+  readonly fixes: readonly { readonly check: string; readonly issue: number }[];
+}
+
+const CHECK_FIX_MARKER = /^<!-- fabrik:check-fix (\{.*?\}) -->$/m;
+
+export function checkFixMarker({ headSha, main, outcome, fixes }: CheckFixMark): string {
+  return `<!-- fabrik:check-fix ${markerJson({ headSha, main, outcome, fixes: fixes.map(({ check, issue }) => ({ check, issue })) })} -->`;
+}
+
+const CHECK_FIX_OUTCOMES: readonly string[] = ["rebased", "conflict-run", "held-main"];
+
+/** The Kit's records among these comments of bringing a PR up to date for a check's fix (#784), oldest first. */
+export function checkFixMarksIn(commentBodies: readonly string[]): CheckFixMark[] {
+  return commentBodies.flatMap((body) => {
+    const json = CHECK_FIX_MARKER.exec(body)?.[1];
+    if (json === undefined) return [];
+    try {
+      const { headSha, main, outcome, fixes } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof headSha !== "string" || typeof main !== "string" || typeof outcome !== "string" || !CHECK_FIX_OUTCOMES.includes(outcome)) return [];
+      if (!Array.isArray(fixes)) return [];
+      const read = fixes.flatMap((fix: unknown) => {
+        const { check, issue } = (fix ?? {}) as Record<string, unknown>;
+        return typeof check === "string" && typeof issue === "number" ? [{ check, issue }] : [];
+      });
+      if (read.length !== fixes.length) return [];
+      return [{ headSha, main, outcome: outcome as CheckFixMark["outcome"], fixes: read }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+const FLAKY_CHECK_ISSUE_MARKER =/^<!-- fabrik:flaky-check-issue (\{.*?\}) -->/;
 
 /**
  * A check's issue's first line (#462), naming the check it's about: one issue

@@ -11,7 +11,7 @@ import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
-import type { FlakyCheckMark, PrototypeRequestMarker } from "./markers.ts";
+import type { CheckFixMark, FlakyCheckMark, PrototypeRequestMarker } from "./markers.ts";
 import type { RequestChangesText, RollInIssue } from "./owedRollIn.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
@@ -366,7 +366,16 @@ export type LoopEvent =
        */
       readonly digest?: { readonly pullRequest: number; readonly headSha: string };
     }
-  | { readonly kind: "issue-closed"; readonly issue: number }
+  | {
+      readonly kind: "issue-closed";
+      readonly issue: number;
+      /**
+       * Why it closed, from the event's payload (#784): a check's issue closed
+       * as completed brings up to date each agent PR that check holds at the
+       * Merge gate. Absent or null when GitHub gave none.
+       */
+      readonly stateReason?: CloseReason;
+    }
   /** A PR was opened or pushed to, so its required checks start; a Review waits for them. */
   | { readonly kind: "pull-request-pushed"; readonly pullRequest: number }
   | { readonly kind: "pull-request-labeled"; readonly pullRequest: number; readonly label: string }
@@ -859,6 +868,12 @@ export interface PullRequestSnapshot {
   readonly verdicts: readonly VerdictRecord[];
   /** The Fabrik App's Flaky check lines on it (#462), oldest first, read from their markers. */
   readonly flakyCheckMarks: readonly FlakyCheckMark[];
+  /**
+   * The Kit's records of bringing it up to date for a check's fix (#784),
+   * oldest first, read from their markers: on a head with one, that move is
+   * spent for its checks.
+   */
+  readonly checkFixMarks: readonly CheckFixMark[];
   /**
    * The fingerprint of its own change at `headSha` (#643), which a Verdict on
    * that head records under its marker. No snapshot read from GitHub holds
@@ -1449,6 +1464,13 @@ export interface Snapshot {
    */
   readonly passedHeads: readonly PassedHeadChecks[] | "no-permission" | "branch-unread" | null;
   /**
+   * For the scheduled tick: the check's issues (#462, #781) closed in the
+   * days before it, newest close first, so the tick brings up to date a PR a
+   * check holds at the Merge gate whose issue's close the issue-closed event
+   * missed (#784). Null for any other event.
+   */
+  readonly closedCheckIssues: readonly ClosedCheckIssue[] | null;
+  /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.
    */
@@ -1633,6 +1655,19 @@ export interface ConflictSnapshot {
   readonly pullRequests: readonly ConflictCandidate[];
 }
 
+/** Why GitHub says an issue closed: completed, not planned, or a duplicate; null when it gave no reason. */
+export type CloseReason = "completed" | "not-planned" | "duplicate" | null;
+
+/** A check's issue (#462, #781) that has closed, as the tick reads it (#784). */
+export interface ClosedCheckIssue {
+  readonly number: number;
+  /** The check its marker names. */
+  readonly check: string;
+  /** When it closed, as an ISO 8601 time. */
+  readonly closedAt: string;
+  readonly stateReason: CloseReason;
+}
+
 /** Whether one PR merges cleanly into the default branch, as a Reviewer's Verdict weighs it (#480). */
 export interface MergeableSnapshot {
   /** The default branch's head commit, or null when it has none. */
@@ -1650,6 +1685,12 @@ export interface ConflictCandidate {
    * hadn't worked it out by the end of the adapter's bounded poll.
    */
   readonly mergeable: boolean | null;
+  /**
+   * Whether the PR's head already holds the default branch's head, so a
+   * rebase would bring nothing in (#784). Read only for a PR a check holds at
+   * the Merge gate by an Unrelated failure; absent or null when unread.
+   */
+  readonly holdsMain?: boolean | null;
 }
 
 /** An issue or PR a held run is on, as the adapter read it on a scheduled tick (src/loop/resume.ts). */

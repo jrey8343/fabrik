@@ -2638,7 +2638,7 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
       labels: { nodes: [{ name: "fabrik:usage-credits" }] },
       comments: { nodes: comments },
     });
-    const isClosedCarriersQuery = (query: string) => query.includes("states: CLOSED") && query.includes("filterBy: { since: $since }");
+    const isClosedCarriersQuery = (query: string) => query.includes("states: CLOSED") && query.includes("filterBy: { since: $since }") && !query.includes("stateReason");
 
     /** The read-only API, answering the closed-Carrier read with these nodes, the rest as githubWith does. */
     function closedCarriersGitHub(nodes: unknown[], hasNextPage = false, targets: Record<number, unknown> = {}) {

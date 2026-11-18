@@ -14,12 +14,13 @@
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
-import { conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
+import { flakyOnPassedHead, passedHeadAtGate } from "./flakyChecks.ts";
+import { checkFixMarker, type CheckFixMark, conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
 import type { Recovery } from "./recoveryWaits.ts";
 import { checkNames } from "./checkNames.ts";
 import { hasVerdictOn, runInFlight, runName, unstartedRetry } from "./retry.ts";
 import { actOnUndelivered, unnotedChangesRequests } from "./undelivered.ts";
-import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure, KitConfig, MergeableSnapshot, Plan, PullRequestSnapshot } from "./types.ts";
+import type { Action, ConflictCandidate, ConflictSnapshot, InfrastructureFailure, KitConfig, MergeableSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot } from "./types.ts";
 
 /**
  * The conflict check, on a push to the default branch or the scheduled tick:
@@ -392,6 +393,127 @@ export function upToDateBeforeMergeGate(
   if (mergeable === null || mergeable.main === null || mergeable.mergeable !== false) return null;
   if (pullRequest.ticket === null || pullRequest.conflictAttempts.includes(mergeable.main)) return null;
   return rebaseOntoMain(pullRequest, mergeable.main, held, "passed-draft");
+}
+
+/**
+ * A check whose issue closed as completed, so its fix is on main (#784): the
+ * check, its issue, and when it closed; null when it closed just now, as the
+ * issue-closed event says.
+ */
+export interface FixedCheck {
+  readonly check: string;
+  readonly issue: number;
+  readonly closedAt: string | null;
+}
+
+/**
+ * Of these `fixed` checks, each that holds this PR at the Merge gate (#784):
+ * it is an open agent PR out of draft whose latest pass, on its current head,
+ * names an Unrelated failure of the check, which hasn't since read green
+ * there, by a Flaky check line or the tick's read (`green`), and whose issue
+ * closed since that pass. One the Kit has already brought up to date for on
+ * this head is spent (CheckFixMark).
+ */
+function fixesHolding(pullRequest: PullRequestSnapshot, fixed: readonly FixedCheck[], green: readonly string[]): FixedCheck[] {
+  const head = passedHeadAtGate(pullRequest);
+  if (head === null || pullRequest.ticket === null) return [];
+  const pass = pullRequest.verdicts.findLast((record) => record.verdict === "pass");
+  const greenHere = new Set([...green, ...pullRequest.flakyCheckMarks.filter((mark) => mark.headSha === head).flatMap((mark) => mark.checks)]);
+  const spent = new Set(pullRequest.checkFixMarks.filter((mark) => mark.headSha === head).flatMap((mark) => mark.fixes.map(({ check }) => check)));
+  const passedAt = pullRequest.verdictPostedAt;
+  const sincePass = ({ closedAt }: FixedCheck) => closedAt === null || (passedAt !== null && Date.parse(closedAt) > Date.parse(passedAt));
+  const seen = new Set<string>();
+  return fixed.filter((fix) => {
+    if (seen.has(fix.check)) return false;
+    const holds = (pass?.unrelated ?? []).includes(fix.check) && !greenHere.has(fix.check) && !spent.has(fix.check) && sincePass(fix);
+    if (holds) seen.add(fix.check);
+    return holds;
+  });
+}
+
+/**
+ * What bringing this PR up to date for its checks' fixes does (#784), given
+ * why ADR-0011 wouldn't otherwise (`why`): only being behind main doesn't stop
+ * it, as the one exception to that rule, but everything else ADR-0011 leaves
+ * alone stays alone. A PR whose head already holds main's has nothing to bring
+ * in, so the Kit pushes nothing and records that once. Its notes say the fix
+ * for each check landed, naming its issue, and carry the attempt marker, as
+ * any bring-up-to-date's do, and the record of the move (CheckFixMark).
+ */
+function fixBroughtIn(
+  { pullRequest, holdsMain }: ConflictCandidate,
+  main: string,
+  why: NotRebased | null,
+  fixes: readonly FixedCheck[],
+  held: HeldOn | null,
+): Action[] | NotRebased {
+  if (why !== null && why.rule !== "clean") return why;
+  const { number, headSha } = pullRequest;
+  const head = main.slice(0, 7);
+  const checks = checkNames(fixes.map(({ check }) => check));
+  const issues = issueList(fixes.map(({ issue }) => issue));
+  const record = (outcome: CheckFixMark["outcome"]) => checkFixMarker({ headSha, main, outcome, fixes: fixes.map(({ check, issue }) => ({ check, issue })) });
+  const it = fixes.length === 1 ? "it" : "them";
+  const landed = `The fix for ${checks} landed: ${issues} closed as completed. #${number} was held at the Merge gate by an Unrelated failure of ${it}`;
+  // It can only conflict with a main it doesn't hold.
+  if (why !== null && holdsMain === true) {
+    return [
+      {
+        kind: "comment",
+        issue: number,
+        body: [record("held-main"), `${landed}, but its head ${headSha.slice(0, 7)} already holds \`main\` at ${head}, so there was nothing to bring in and nothing was pushed.`].join("\n"),
+      },
+    ];
+  }
+  if (why !== null && holdsMain !== false) {
+    return { rule: "unknown", reason: `Whether #${number} already holds main at ${head} couldn't be read, so bringing in the fix for ${checks} is left for the scheduled tick` };
+  }
+  const notes: StanceNotes = {
+    ...stanceNotes("merge-gate", number, head),
+    why: `${landed}, and \`main\` is at ${head}`,
+    pushed: "The PR is back in draft, and Review runs again on the rebased head, which holds the fix; a pass brings it back to you.",
+  };
+  const said = stanceNoteBodies(notes, agentBranchFor(pullRequest.ticket as number), number, held);
+  return [
+    rebaseOntoMain(pullRequest, main, held, "merge-gate", {
+      pushed: [record("rebased"), said.pushed].join("\n"),
+      refused: said.refused,
+      conflicted: [record("conflict-run"), said.conflicted].join("\n"),
+    }),
+  ];
+}
+
+/** Issue numbers as a note lists them: `#12`, `#12 and #13`, `#12, #13 and #14`. */
+function issueList(issues: readonly number[]): string {
+  const refs = issues.map((issue) => `#${issue}`);
+  const last = refs.pop();
+  return refs.length === 0 ? (last ?? "") : `${refs.join(", ")} and ${last}`;
+}
+
+/**
+ * What a check's issue closing as completed does (#784): each open agent PR
+ * that check holds at the Merge gate (fixesHolding) is brought up to date by
+ * ADR-0011's path, though it may be only behind main. Every other PR, and
+ * every other rule of the conflict check, waits for its own event.
+ */
+export function bringInCheckFix(conflicts: ConflictSnapshot, fixed: FixedCheck, operator: string, held: HeldOn | null): Plan {
+  const { main, now } = conflicts;
+  const holding = conflicts.pullRequests.flatMap((candidate) => {
+    const fixes = fixesHolding(candidate.pullRequest, [fixed], []);
+    return fixes.length === 0 ? [] : [{ candidate, fixes }];
+  });
+  const check = checkNames([fixed.check]);
+  if (holding.length === 0) return { kind: "nothing", reason: `No agent PR at the Merge gate is held by an Unrelated failure of ${check}, so its fix has nothing to bring up to date` };
+  if (main === null) return { kind: "nothing", reason: "The default branch has no head, so there's no fix to bring in" };
+  const actions: Action[] = [];
+  const reasons: string[] = [];
+  for (const { candidate, fixes } of holding) {
+    const why = whyNotRebased(candidate, main, operator, { now, reviewMinutes: 0 });
+    const done = fixBroughtIn(candidate, main, why, fixes, held);
+    if (Array.isArray(done)) actions.push(...done);
+    else reasons.push(done.reason);
+  }
+  return actions.length > 0 ? { kind: "act", actions } : { kind: "nothing", reason: reasons.join("; ") };
 }
 
 /**

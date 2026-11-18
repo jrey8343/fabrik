@@ -21,7 +21,22 @@ import type {
   RerunReport,
   PullRequestCommentPlace,
   StepUpReason,
+  CloseReason,
 } from "../loop/types.ts";
+
+/** Why GitHub says an issue closed, from its webhook's `state_reason` or its GraphQL `stateReason`, either spelling (#784). */
+export function closeReasonOf(reason: string | null | undefined): CloseReason {
+  switch (reason?.toLowerCase()) {
+    case "completed":
+      return "completed";
+    case "not_planned":
+      return "not-planned";
+    case "duplicate":
+      return "duplicate";
+    default:
+      return null;
+  }
+}
 
 /**
  * Maps an Actions event to the Loop event it stands for, or null if the Loop
@@ -67,7 +82,8 @@ export function loopEventFrom(
     };
   }
   if (eventName === "issues" && payload["action"] === "closed") {
-    return { kind: "issue-closed", issue: (payload["issue"] as { number: number }).number };
+    const issue = payload["issue"] as { number: number; state_reason?: string | null };
+    return { kind: "issue-closed", issue: issue.number, stateReason: closeReasonOf(issue.state_reason) };
   }
   // pull_request_target, so the run uses the base branch's caller workflow and
   // Kit config, never the PR's. The Loop never checks out PR code.
