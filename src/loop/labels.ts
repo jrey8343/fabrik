@@ -43,6 +43,15 @@ export const REVIEW_LABEL = "agent:review";
  */
 export const DIGEST_LABEL = "agent:digest";
 
+/**
+ * The trigger label the hourly Tick adds to an agent PR at the Merge gate to
+ * have the Re-run red checks job re-run an Unrelated failure once more on its
+ * head (#783), as the Tick's own job can't. It comes off as the run starts.
+ * Not one of TRIGGER_LABELS: no agent run is behind it, so the stuck-trigger
+ * sweep leaves it to its own rule (src/loop/gateRerun.ts).
+ */
+export const RERUN_CHECKS_LABEL = "agent:rerun-checks";
+
 /** The label on the Kit's token-rotation issue, by which the adapter finds it. */
 export const TOKEN_ROTATION_LABEL = "fabrik:token-rotation";
 
@@ -164,6 +173,7 @@ export type Label =
   | typeof DESIGN_LABEL
   | typeof REVIEW_LABEL
   | typeof DIGEST_LABEL
+  | typeof RERUN_CHECKS_LABEL
   | KitIssueLabel
   | typeof MONITOR_LABEL
   | typeof FLAKY_CHECK_LABEL
@@ -181,6 +191,7 @@ export const ALL_LABELS: readonly Label[] = [
   DESIGN_LABEL,
   REVIEW_LABEL,
   DIGEST_LABEL,
+  RERUN_CHECKS_LABEL,
   RESEARCH_LABEL,
   REPLAY_TRIGGER_LABEL,
   ...CATEGORY_LABELS,
@@ -210,6 +221,7 @@ export const LOOP_LABELS: Readonly<Record<Label, { readonly color: string; reado
   [DESIGN_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Design session's first turn (the Kit adds it; it comes off as the turn starts)" },
   [REVIEW_LABEL]: { color: "c2e0c6", description: "Fabrik: starts or resumes a Review (it comes off with the Verdict)" },
   [DIGEST_LABEL]: { color: "c2e0c6", description: "Fabrik: starts the Digest writer on a passed PR (it comes off when the attempt ends)" },
+  [RERUN_CHECKS_LABEL]: { color: "c2e0c6", description: "Fabrik: re-runs an Unrelated failure once more at the Merge gate (off as the run starts)" },
   [RESEARCH_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Researcher on a research Decision (the Kit adds it; off as the run starts)" },
   [REPLAY_TRIGGER_LABEL]: { color: "c2e0c6", description: "Fabrik: starts a Replay's next Ticket (the Kit adds it; it comes off as the run starts)" },
   [BUG]: { color: "d73a4a", description: "Something isn't working" },

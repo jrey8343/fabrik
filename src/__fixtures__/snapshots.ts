@@ -92,6 +92,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     labels: [],
     verdicts: [],
     flakyCheckMarks: [],
+    gateReruns: [],
     requestChangesRun: false,
     conflictRun: false,
     lastPushStepUpReason: null,

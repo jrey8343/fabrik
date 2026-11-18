@@ -40,7 +40,7 @@ import {
   USAGE_CREDITS_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
-import { escapeMarkerIn, flakyCheckMarksIn } from "../loop/markers.ts";
+import { escapeMarkerIn, flakyCheckMarksIn, gateRerunMarksIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { weekStart } from "../loop/weeklyGate.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
@@ -2063,6 +2063,8 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     // Only a bot's markers count, so nobody can fake a Verdict or a Request-changes run by quoting one.
     verdicts: verdictsIn(botComments),
     flakyCheckMarks: flakyCheckMarksIn(botComments),
+    // With each ask's node id, which its claim marks it started on, and when it was posted, which a re-run must start after (#783).
+    gateReruns: gateRerunMarksIn(fromBots),
     requestChangesRun: requestChangesRunIn(botComments),
     conflictRun: conflictRunIn(botComments),
     lastPushStepUpReason: lastPushStepUpReasonIn(botComments),

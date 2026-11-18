@@ -92,6 +92,10 @@ export function actionPhrase(action: Action): string {
       return `push ${prototypeBranchFor(action.issue)}, only as a fast-forward`;
     case "mark-prototype-request":
       return `mark #${action.issue}'s prototype request ${action.started ? "as its prototype turn started" : "as waiting for its prototype turn again"}`;
+    case "mark-gate-rerun-started":
+      return `mark the Kit's line on #${action.pullRequest} asking one more re-run at the Merge gate as started`;
+    case "rerun-checks":
+      return `re-run the failed jobs behind ${action.checks.map(({ name }) => name).join(", ")} on #${action.pullRequest} at ${action.headSha.slice(0, 7)} once more, which the Kit job routes to the Re-run red checks job`;
     case "open-pull-request":
       return `open a draft PR from ${action.head} to ${action.base} that closes #${action.issue}`;
     case "convert-to-draft":

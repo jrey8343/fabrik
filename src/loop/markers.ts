@@ -12,7 +12,7 @@ import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { RequestChangesAnswers } from "./implementOutput.ts";
 import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
-import { AGENT_ROLES, type AgentRole, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
+import { AGENT_ROLES, type AgentRole, type GateRerunDone, type GateRerunMark, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -100,6 +100,64 @@ export function flakyCheckIssueOf(body: string): string | null {
   } catch {
     return null;
   }
+}
+
+const GATE_RERUN_MARKER = /^<!-- fabrik:gate-rerun (\{.*?\}) -->/;
+const GATE_RERUN_DONE_MARKER = /^<!-- fabrik:gate-rerun-done (\{.*?\}) -->/;
+const GATE_RERUN_DONE: readonly GateRerunDone[] = ["outside", "red-on-main", "red-again", "refused", "no-run"];
+/** A GitHub Actions job's page: …/actions/runs/<run>/job/<job>, whose workflow run the Re-run red checks job re-runs. */
+const ACTIONS_JOB = /\/actions\/runs\/(\d+)\/job\/\d+$/;
+
+/**
+ * The first line of the Kit's line asking one more re-run at the Merge gate
+ * (#783): the head and each check with its red run's job page; `started`
+ * once agent:rerun-checks came off as the re-run started.
+ */
+export function gateRerunMarker(headSha: string, checks: readonly { readonly name: string; readonly link: string }[], started = false): string {
+  return `<!-- fabrik:gate-rerun ${markerJson({ headSha, checks: checks.map(({ name, link }) => ({ name, link })), ...(started ? { started } : {}) })} -->`;
+}
+
+/** The first line of the Kit's line saying one more re-run at the Merge gate is done for these checks on this head without them reading green, and why (#783). */
+export function gateRerunDoneMarker(headSha: string, checks: readonly string[], why: GateRerunDone): string {
+  return `<!-- fabrik:gate-rerun-done ${markerJson({ headSha, checks, why })} -->`;
+}
+
+/** An ask's comment marked started, its first line alone changed; the body as it was when it's no ask, or started already. */
+export function withGateRerunStarted(body: string): string {
+  const [first = "", ...rest] = body.split("\n");
+  const [mark] = gateRerunMarksIn([{ id: "", body: first, createdAt: "" }]);
+  if (mark?.kind !== "asked" || mark.started) return body;
+  return [gateRerunMarker(mark.headSha, mark.checks, true), ...rest].join("\n");
+}
+
+/** The gate re-run lines among these comments, oldest first: an ask with its comment's node id and time, or a re-run done. */
+export function gateRerunMarksIn(comments: readonly { readonly id: string; readonly body: string; readonly createdAt: string }[]): GateRerunMark[] {
+  return comments.flatMap(({ id, body, createdAt }): GateRerunMark[] => {
+    const asked = GATE_RERUN_MARKER.exec(body)?.[1];
+    const done = GATE_RERUN_DONE_MARKER.exec(body)?.[1];
+    try {
+      if (asked !== undefined) {
+        const { headSha, checks, started } = JSON.parse(asked) as Record<string, unknown>;
+        if (typeof headSha !== "string" || !Array.isArray(checks) || checks.length === 0) return [];
+        const read = checks.map((check: unknown) => {
+          const { name, link } = (typeof check === "object" && check !== null ? check : {}) as Record<string, unknown>;
+          const run = typeof link === "string" ? ACTIONS_JOB.exec(link)?.[1] : undefined;
+          return typeof name === "string" && typeof link === "string" && run !== undefined ? { name, link, run: Number(run) } : null;
+        });
+        if (read.includes(null)) return [];
+        return [{ kind: "asked", headSha, checks: read.filter((check) => check !== null), started: started === true, node: id, postedAt: createdAt }];
+      }
+      if (done !== undefined) {
+        const { headSha, checks, why } = JSON.parse(done) as Record<string, unknown>;
+        if (typeof headSha !== "string" || !Array.isArray(checks) || !checks.every((name) => typeof name === "string")) return [];
+        if (!GATE_RERUN_DONE.includes(why as GateRerunDone)) return [];
+        return [{ kind: "done", headSha, checks, why: why as GateRerunDone }];
+      }
+    } catch {
+      return [];
+    }
+    return [];
+  });
 }
 
 /** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */

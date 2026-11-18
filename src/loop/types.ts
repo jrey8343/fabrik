@@ -859,6 +859,8 @@ export interface PullRequestSnapshot {
   readonly verdicts: readonly VerdictRecord[];
   /** The Fabrik App's Flaky check lines on it (#462), oldest first, read from their markers. */
   readonly flakyCheckMarks: readonly FlakyCheckMark[];
+  /** The Fabrik App's lines about one more re-run at the Merge gate (#783), oldest first, read from their markers. */
+  readonly gateReruns: readonly GateRerunMark[];
   /**
    * The fingerprint of its own change at `headSha` (#643), which a Verdict on
    * that head records under its marker. No snapshot read from GitHub holds
@@ -1105,7 +1107,41 @@ export interface PassedHeadChecks {
   readonly marks: readonly FlakyCheckMark[];
   /** The Failure excerpt of each red run the read reports, read by the tick before its plan (#778). */
   readonly excerpts: readonly FailureExcerpt[];
+  /**
+   * The checks red on the default branch's head, of those the Tick would ask
+   * one more re-run of at the Merge gate (#783), which it skips; "unread" when
+   * GitHub didn't say, and absent when it had none to ask.
+   */
+  readonly redOnMain?: readonly string[] | "unread";
 }
+
+/**
+ * Why one more re-run of an Unrelated failure at the Merge gate (#783) is
+ * done on a head without the check reading green: it's from an outside
+ * service, it's red on the default branch's head too, it failed again when
+ * re-run, the Re-run red checks job re-ran nothing, or agent:rerun-checks
+ * sat with no run behind it.
+ */
+export type GateRerunDone = "outside" | "red-on-main" | "red-again" | "refused" | "no-run";
+
+/**
+ * A Fabrik App line on an agent PR about one more re-run at the Merge gate
+ * (#783): the ask, with the head, each check and its red run's job page,
+ * which the Re-run red checks job re-runs the workflow run of, marked started
+ * once its claim takes agent:rerun-checks off; or a re-run done without the
+ * check reading green, and why. The comment's node id and when it was posted
+ * come with an ask.
+ */
+export type GateRerunMark =
+  | {
+      readonly kind: "asked";
+      readonly headSha: string;
+      readonly checks: readonly { readonly name: string; readonly link: string; readonly run: number }[];
+      readonly started: boolean;
+      readonly node: string;
+      readonly postedAt: string;
+    }
+  | { readonly kind: "done"; readonly headSha: string; readonly checks: readonly string[]; readonly why: GateRerunDone };
 
 /** A required check that reported both failure and success on the same head commit (GLOSSARY.md), with a link to a run of each. */
 export interface FlakyCheck {
@@ -2096,6 +2132,30 @@ export type Action =
    * It never opens a PR, and nothing in the Kit deletes the branch.
    */
   | { readonly kind: "push-prototype-branch"; readonly issue: number }
+  | {
+      /**
+       * Marks the Kit's line asking one more re-run at the Merge gate (#783)
+       * started, on the Fabrik App's own comment, as agent:rerun-checks comes
+       * off: the label added again for that head then starts nothing. An
+       * edit, so it notifies nobody.
+       */
+      readonly kind: "mark-gate-rerun-started";
+      readonly pullRequest: number;
+      /** The line's comment, by its node id. */
+      readonly node: string;
+    }
+  | {
+      /**
+       * Re-runs the failed jobs of the workflow runs behind these red checks on
+       * the PR's head, once, past a run's first attempt (#783). Not a GitHub
+       * change here: the workflow routes it to the Re-run red checks job
+       * (src/kit/jobs.ts), which alone holds `actions: write`.
+       */
+      readonly kind: "rerun-checks";
+      readonly pullRequest: number;
+      readonly headSha: string;
+      readonly checks: readonly { readonly name: string; readonly link: string; readonly run: number }[];
+    }
   | {
       /**
        * Marks a Design session's prototype request (#155), on the Fabrik App's

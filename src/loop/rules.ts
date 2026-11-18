@@ -6,6 +6,7 @@ import { landDigest, startDigestOnLabel } from "./digest.ts";
 import { failureNotice } from "./failures.ts";
 import { checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
+import { gateRerunGate } from "./gateRerun.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
@@ -226,7 +227,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return thenCheckQueues(
         alongside(
           withDeadTickClosed(event, snapshot, config, withReasonNoted(stuckTriggers(event.now, snapshot, config))),
-          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate], event.now, snapshot, config),
+          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate, gateRerunGate], event.now, snapshot, config),
         ),
       );
   }
