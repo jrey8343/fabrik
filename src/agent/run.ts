@@ -49,7 +49,10 @@
 // Full Review section, else "false" (#747). A later Review takes
 // FABRIK_LATER_REVIEW_FILE, what its job's step read for it: its earlier
 // Verdicts, the fix comments, the run that pushed its head and the change
-// since the last judged head (src/agent/laterReview.ts, #748).
+// since the last judged head (src/agent/laterReview.ts, #748). A Review of a
+// head whose Required checks are still red (#779) takes FABRIK_RED_CHECKS_NEEDS,
+// the Review's jobs as JSON, and FABRIK_RED_CHECKS_DIR, where both waits'
+// Failure excerpts were downloaded; on green both are empty.
 // An Auditor run is in a checkout of the default branch at its pending Audit's
 // marked commit: FABRIK_ISSUE_FILE is the Audit and FABRIK_AUDIT_FILE what the
 // agent-inputs step gathered for it (src/agent/inputs.ts), and its result
@@ -123,7 +126,7 @@ import {
   streamWatch,
 } from "./launch.ts";
 import { type LaterReviewGiven, readLaterReviewFile } from "./laterReview.ts";
-import { isFullReview, ranNothingOf, reviewContext, reviewPromptFor } from "./review.ts";
+import { isFullReview, ranNothingOf, readRedChecks, reviewContext, reviewPromptFor } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
 import { missingSkills, runSummary } from "./summary.ts";
@@ -395,9 +398,9 @@ function modelFor(role: { model: string; effort: string | null }): { model: stri
  * section only on a Full Review (#747), the later-Review section only on a
  * later one (#748). `review` is null for every other role.
  */
-async function promptTemplate(prompt: KitPrompt, review: { readonly later: LaterReviewGiven | null } | null): Promise<string> {
+async function promptTemplate(prompt: KitPrompt, review: { readonly later: LaterReviewGiven | null; readonly red?: boolean } | null): Promise<string> {
   const template = await readFile(join(KIT_DIR, kitPromptPath(prompt)), "utf8");
-  return review === null ? template : reviewPromptFor(template, review.later);
+  return review === null ? template : reviewPromptFor(template, review.later, review.red === true);
 }
 
 async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
@@ -514,10 +517,13 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   let subject = issueNumber;
   // A Review's kind: a Full Review (#747), whose `later` is null, or a later Review with what it is given (#748); null
   // for every other role. A replay arm's Review is a first run's, so it is always a Full Review.
-  let reviewKind: { readonly later: LaterReviewGiven | null } | null = spec.replay === "review" ? { later: null } : null;
+  let reviewKind: { readonly later: LaterReviewGiven | null; readonly red?: boolean } | null = spec.replay === "review" ? { later: null } : null;
   if (spec.reviewsPullRequest === true) {
+    // Only on a head whose Required checks are still red after everything the Kit could do (#779): those checks.
+    const red = await readRedChecks(process.env["FABRIK_RED_CHECKS_NEEDS"], process.env["FABRIK_RED_CHECKS_DIR"]);
     reviewKind = {
       later: isFullReview(process.env["FABRIK_FULL_REVIEW"]) ? null : await readLaterReviewFile(required("FABRIK_LATER_REVIEW_FILE")),
+      red: red !== null,
     };
     // Set only for a UI PR: where its Review job downloaded the UI evidence, whether or not that worked,
     // and why its capture failed, as the PR's marker records it.
@@ -531,6 +537,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       // The Required checks that passed on this head only by being skipped or reporting neutral (#456).
       ranNothingOf(process.env["FABRIK_RAN_NOTHING"]),
       reviewKind.later,
+      red,
     );
     subject = review.pullRequest;
     extra.push(...review.parts);
