@@ -3,10 +3,11 @@
 // and the check's own issue, one per check, which holds its Flaky checks and
 // its Unrelated failures alike.
 import { describe, expect, it } from "vitest";
-import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import type { FailureExcerpt } from "../review/failureExcerpt.ts";
+import { sweptHeadsOf } from "./flakyChecks.ts";
 import { planFor } from "./rules.ts";
-import type { Action, KitIssueSnapshot, LoopEvent, Plan, PullRequestSnapshot, RedRequiredChecks } from "./types.ts";
+import type { Action, HeadCheckRun, KitIssueSnapshot, LoopEvent, PassedHeadChecks, Plan, PullRequestSnapshot, RedRequiredChecks, VerdictRecord } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const E2E_JOB = "https://github.com/acme/shop/actions/runs/7/job/70";
@@ -158,5 +159,103 @@ describe("The check's issue for an Unrelated failure (#781)", () => {
 
     expect(issue!.body).toContain(`- #50 at ${HEAD_SHA.slice(0, 7)}: [red](${RUN})`);
     expect(issue!.body).toContain("the Kit read no Failure excerpt of this run");
+  });
+});
+
+describe("An Unrelated failure that later succeeds on its head is reported as a Flaky check (#781)", () => {
+  const TICK: LoopEvent = { kind: "scheduled-tick", now: "2026-11-11T12:17:00Z" };
+  const FLAW = "b".repeat(40);
+  const short = FLAW.slice(0, 7);
+  const run = (name: string, conclusion: string | null, startedAt: string, id: number): HeadCheckRun => ({
+    name,
+    status: conclusion === null ? "in_progress" : "completed",
+    conclusion,
+    startedAt,
+    url: `https://github.com/acme/shop/actions/runs/7/job/${id}`,
+  });
+  const e2eFlipped = [run("e2e", "failure", "2026-11-11T09:00:00Z", 70), run("e2e", "success", "2026-11-11T11:00:00Z", 99)];
+  const gateRed = [run("gate", "failure", "2026-11-11T09:00:00Z", 71)];
+  const flaw = (overrides: Partial<VerdictRecord> = {}): VerdictRecord => ({
+    verdict: "execution-flaw",
+    source: "reviewer",
+    requestChanges: false,
+    unrelated: ["e2e"],
+    tags: { small: 0, missedEarlier: 0, counted: 1, smallBody: 0 },
+    headSha: FLAW,
+    ...overrides,
+  });
+  /** The Tick's sweep of these PRs, each head read as the Tick's gatherer reads it, with these check runs on it. */
+  const sweep = (pullRequests: PullRequestSnapshot[], checkRuns: HeadCheckRun[], flakyCheckIssues: KitIssueSnapshot[] = []) =>
+    planFor(
+      TICK,
+      { ...tickSnapshot(), flakySweep: pullRequests.flatMap((pullRequest) => sweptHeadsOf(pullRequest).map((head) => ({ ...head, checkRuns, excerpts: [] }))), flakyCheckIssues },
+      kitConfig(),
+    );
+  const swept = (plan: Plan) => (plan.kind === "act" ? plan.actions : []).filter((action) => action.kind !== "check-dispatch" && action.kind !== "check-design-queue");
+  const lines = (plan: Plan) => swept(plan).map(textOf).filter((text) => text.startsWith("<!-- fabrik:flaky-check "));
+
+  it("on an open draft, by the latest Verdict's unrelated checks: one Flaky check line and the issue, with nothing counted back", () => {
+    const plan = sweep([aPullRequest({ verdicts: [flaw()] })], e2eFlipped);
+
+    expect(lines(plan)).toEqual([
+      `<!-- fabrik:flaky-check {"headSha":"${FLAW}","checks":["e2e"]} -->\n\`e2e\` has since passed on ${short}, where the Reviewer judged it an Unrelated failure: a Flaky check (#new:flaky-check-${short}-e2e).`,
+    ]);
+    expect(swept(plan)).toContainEqual(
+      expect.objectContaining({
+        kind: "create-issue",
+        title: "Flaky check or Unrelated failure: `e2e`",
+        body: expect.stringContaining("[red](https://github.com/acme/shop/actions/runs/7/job/70), [green](https://github.com/acme/shop/actions/runs/7/job/99)"),
+      }),
+    );
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("comments Flaky again on the check's open issue", () => {
+    const open: KitIssueSnapshot = { number: 88, labels: ["fabrik:flaky-check"], body: '<!-- fabrik:flaky-check-issue {"check":"e2e"} -->\nUnrelated.', comments: [] };
+    const plan = sweep([aPullRequest({ verdicts: [flaw()] })], e2eFlipped, [open]);
+
+    expect(swept(plan)).toContainEqual(expect.objectContaining({ kind: "comment", issue: 88, body: expect.stringMatching(/^Flaky again on #50 at /) }));
+    expect(swept(plan).some((action) => action.kind === "create-issue")).toBe(false);
+  });
+
+  it("reports each check on its own once it reads green, leaving one still red", () => {
+    const plan = sweep([aPullRequest({ verdicts: [flaw({ unrelated: ["gate", "e2e"] })] })], [...gateRed, ...e2eFlipped]);
+
+    expect(lines(plan)).toEqual([expect.stringContaining(`{"headSha":"${FLAW}","checks":["e2e"]}`)]);
+  });
+
+  it("reads nothing while the check is still red, nor once a line has named it on that head", () => {
+    expect(lines(sweep([aPullRequest({ verdicts: [flaw()] })], [run("e2e", "failure", "2026-11-11T09:00:00Z", 70)]))).toEqual([]);
+    expect(lines(sweep([aPullRequest({ verdicts: [flaw()], flakyCheckMarks: [{ headSha: FLAW, checks: ["e2e"] }] })], e2eFlipped))).toEqual([]);
+  });
+
+  it("reads only the latest Verdict, and only on an open draft", () => {
+    const later = flaw({ unrelated: undefined, checks: ["gate"], headSha: "c".repeat(40) });
+
+    expect(lines(sweep([aPullRequest({ verdicts: [flaw(), later] })], e2eFlipped))).toEqual([]);
+    expect(lines(sweep([aPullRequest({ verdicts: [flaw()], draft: false })], e2eFlipped))).toEqual([]);
+    expect(lines(sweep([aPullRequest({ verdicts: [flaw()], open: false })], e2eFlipped))).toEqual([]);
+  });
+
+  it("two pull requests whose Unrelated failure of one check turned green in the same Tick share one new issue, which both lines link", () => {
+    const plan = sweep([aPullRequest({ verdicts: [flaw()] }), aPullRequest({ number: 61, verdicts: [flaw()] })], e2eFlipped);
+
+    const filed = swept(plan).filter((action) => action.kind === "create-issue");
+    expect(filed).toHaveLength(1);
+    expect(swept(plan)).toContainEqual(expect.objectContaining({ kind: "comment-on-created", on: { created: `flaky-check-${short}-e2e` }, body: expect.stringMatching(/^Flaky again on #61 at /) }));
+    expect(lines(plan)).toHaveLength(2);
+    for (const line of lines(plan)) expect(line).toContain(`(#new:flaky-check-${short}-e2e).`);
+  });
+
+  it("at the Merge gate, the read of the passed head reports it once, with nothing counted back", () => {
+    const passed: PassedHeadChecks = { pullRequest: 50, ticket: 7, headSha: FLAW, required: ["e2e"], checkRuns: e2eFlipped, marks: [], excerpts: [] };
+    const atGate = aPullRequest({ verdicts: [flaw({ verdict: "pass", tags: undefined })], draft: false, headSha: FLAW });
+    const plan = planFor(
+      TICK,
+      { ...tickSnapshot(), flakySweep: sweptHeadsOf(atGate).map((head) => ({ ...head, checkRuns: e2eFlipped, excerpts: [] })), passedHeads: [passed] },
+      kitConfig(),
+    );
+
+    expect(lines(plan)).toEqual([`<!-- fabrik:flaky-check {"headSha":"${FLAW}","checks":["e2e"]} -->\n\`e2e\` has both failed and succeeded on ${short}, the head the Reviewer passed: a Flaky check (#new:flaky-check-${short}-e2e).`]);
   });
 });

@@ -283,6 +283,26 @@ export function uncountedFlaws(pullRequest: PullRequestSnapshot): Omit<FlawHeadC
 }
 
 /**
+ * The Unrelated failures the latest Verdict on this open agent draft named
+ * (#781), on the head it was given on, less any a Flaky check line already
+ * names there; none when there are none. A pass at the Merge gate isn't read
+ * here: the read of its passed head finds a check that has since succeeded.
+ */
+export function unrelatedOnDraft(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns" | "excerpts">[] {
+  if (!pullRequest.isAgent || !pullRequest.open || !pullRequest.draft) return [];
+  const latest = pullRequest.verdicts.at(-1);
+  if (latest === undefined) return [];
+  const named = new Set(pullRequest.flakyCheckMarks.filter((mark) => mark.headSha === latest.headSha).flatMap((mark) => mark.checks));
+  const checks = (latest.unrelated ?? []).filter((name) => !named.has(name));
+  return checks.length === 0 ? [] : [{ pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: latest.headSha, checks, unrelated: true }];
+}
+
+/** Every head of this PR the tick's sweep reads (src/github/snapshot.ts): its uncounted flaws' (#462, #779), and its draft's Unrelated failures' (#781). */
+export function sweptHeadsOf(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns" | "excerpts">[] {
+  return [...uncountedFlaws(pullRequest), ...unrelatedOnDraft(pullRequest)];
+}
+
+/**
  * The head the Reviewer passed, when this is an open agent PR out of draft
  * whose head is still the one its latest pass was given on (#693); null
  * otherwise, as when its head moved after the pass (#692).
@@ -305,21 +325,26 @@ function withRedExcerpt(check: FlakyCheck, excerpts: readonly FailureExcerpt[]):
  * The checks that flipped on this flaw's head, each with a red run and its
  * latest, green, run; null unless every check the Verdict named reads green
  * now and has a red run on that head. Each goes by its latest run, so red,
- * green, red again is still red. The tick reads the excerpt of each red run
- * this gives before its plan (src/github/snapshot.ts).
+ * green, red again is still red. Unrelated failures (#781), which counted
+ * toward nothing, flip each on its own: those that read green now, null when
+ * none does. The tick reads the excerpt of each red run this gives before its
+ * plan (src/github/snapshot.ts).
  */
-export function flippedOn({ checks, checkRuns, excerpts }: FlawHeadChecks): FlakyCheck[] | null {
-  const flaky: FlakyCheck[] = [];
-  for (const name of checks) {
+export function flippedOn({ checks, checkRuns, excerpts, unrelated }: FlawHeadChecks): FlakyCheck[] | null {
+  const flipped = (name: string): FlakyCheck | null => {
     // A run not yet started is the newest: GitHub queued it after every run that has.
     const started = (run: HeadCheckRun) => (run.startedAt === null ? Infinity : Date.parse(run.startedAt));
     const runs = checkRuns.filter((run) => run.name === name).toSorted((a, b) => started(a) - started(b));
     const latest = runs.at(-1);
     const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
-    if (latest?.conclusion !== "success" || red === undefined) return null;
-    flaky.push(withRedExcerpt({ name, red: red.url, green: latest.url }, excerpts));
+    return latest?.conclusion !== "success" || red === undefined ? null : withRedExcerpt({ name, red: red.url, green: latest.url }, excerpts);
+  };
+  const flaky = checks.map(flipped);
+  if (unrelated === true) {
+    const each = flaky.filter((check) => check !== null);
+    return each.length === 0 ? null : each;
   }
-  return flaky;
+  return flaky.every((check) => check !== null) ? flaky : null;
 }
 
 /**
@@ -344,7 +369,9 @@ export function flakyOnPassedHead({ headSha, required, checkRuns, marks, excerpt
  * names red checks, whose checks all read green now on the head it was given
  * on, is counted back (#462), unless it is a Reviewer's with an untagged
  * finding: then its checks are reported as Flaky checks and it still counts
- * (#779). And each Required check that has both failed and
+ * (#779). Each Unrelated failure the latest Verdict on an open draft named
+ * that reads green now on its head is reported too, with nothing counted back
+ * (#781). And each Required check that has both failed and
  * succeeded on the head the Reviewer passed, at the Merge gate, is reported, as
  * no Retry was spent there to count back (#693). A line marks each, so the
  * sweep never says one twice.
@@ -362,12 +389,17 @@ export function flakyCheckGate(_now: string, snapshot: Snapshot): Plan {
     const flaky = flippedOn(head);
     if (flaky === null) continue;
     // A Reviewer's flaw with an untagged finding counts for that (#779): its checks are reported, and the count stands.
+    // An Unrelated failure counted toward nothing (#781): it is reported, and there's nothing to count back.
     actions.push(
-      ...(head.untaggedFinding === true
+      ...(head.unrelated === true
         ? flakyLineActions(head.pullRequest, head.headSha, flaky, snapshot.flakyCheckIssues, filed, (name, short) =>
-            `${name} has since passed on ${short}, where it was red beside the Reviewer's own findings, so that Verdict still counts`,
+            `${name} has since passed on ${short}, where the Reviewer judged it an Unrelated failure`,
           )
-        : countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed)),
+        : head.untaggedFinding === true
+          ? flakyLineActions(head.pullRequest, head.headSha, flaky, snapshot.flakyCheckIssues, filed, (name, short) =>
+              `${name} has since passed on ${short}, where it was red beside the Reviewer's own findings, so that Verdict still counts`,
+            )
+          : countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed)),
     );
     for (const { name } of flaky) countedBack.add(key(head.pullRequest, head.headSha, name));
   }
