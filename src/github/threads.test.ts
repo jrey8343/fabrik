@@ -707,7 +707,7 @@ describe("A Verdict counted back for a Flaky check (#462)", () => {
 
   // #780: the marker holds the caused checks in `checks` and the Unrelated failures in `unrelated`, and count-back reads `checks` alone.
   it("reads back a Reviewer's caused checks and Unrelated failures, and counts back on its caused checks alone", () => {
-    const [verdict] = commented(
+    const verdict = commented(
       planFor(
         {
           kind: "review-run-finished",
@@ -721,7 +721,7 @@ describe("A Verdict counted back for a Flaky check (#462)", () => {
         snapshotOfPullRequest(aPullRequest()),
         kitConfig(),
       ),
-    );
+    ).find((body) => body.startsWith("<!-- fabrik:verdict"));
     const countedBack = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["gate"],"countedBack":true} -->\n\`gate\` has since passed.`;
 
     expect(verdictsIn([verdict!])).toEqual([expect.objectContaining({ verdict: "execution-flaw", checks: ["gate"], unrelated: ["e2e"] })]);

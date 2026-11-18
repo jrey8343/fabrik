@@ -36,7 +36,7 @@ import {
 } from "../read/builders.ts";
 import { aScoreEntry, aScoreFile, aSkippedScoreFile } from "../__fixtures__/weeklySummary.ts";
 import { aDesignQueueIssue, aResearchDecision, aTicket, AUDITED_SHA, auditBody, RETRO_WINDOW_END, retroBody } from "../__fixtures__/snapshots.ts";
-import { flakyCheckMarker, handBackMarker, RESEARCH_RUN_FAILED_MARKER, verdictMarker } from "../loop/markers.ts";
+import { flakyCheckMarker, handBackMarker, RESEARCH_RUN_FAILED_MARKER, unrelatedFailureMarker, verdictMarker } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import type { RepoHealthFacts } from "./loopHealth.ts";
 import { RUN_RECORD_SCHEMA, readRunRecord, type RunRecord } from "./runRecord.ts";
@@ -456,6 +456,42 @@ describe("the Weekly summary", () => {
     );
     expect(result).toMatchObject({ kind: "summary", summary: { counts: { flakyChecks: { thisWeek: 3, lastWeek: 1 } } } });
     expect(result.kind === "summary" ? result.body : "").toContain("| Flaky checks | 3 | 1 | +2 |");
+  });
+
+  it("counts the week's Unrelated failures from the Kit's lines, once per pull request, head and check, in the row after Flaky checks (#781)", () => {
+    const line = (headSha: string, checks: string[]) => `${unrelatedFailureMarker({ headSha, checks })}\n\`e2e\` is still red.`;
+    const [one, two] = ["a".repeat(40), "b".repeat(40)];
+    const result = weeklySummary(
+      input({
+        records: [aRunRecord({ endedAt: "2026-11-03T00:00:00Z" })],
+        facts: [
+          factsOf({
+            pullRequests: [
+              aMergedPullRequest("2026-11-05T00:00:00Z", {
+                comments: [
+                  aComment(line(one, ["e2e", "lint"]), "2026-11-03T00:00:00Z"),
+                  // The same check on the same head again, as after a Touch-up that changed only the body: counted once.
+                  aComment(line(one, ["e2e"]), "2026-11-04T00:00:00Z"),
+                  aComment(line(two, ["e2e"]), "2026-11-04T00:00:00Z"),
+                  aComment(line(one, ["unit"]), "2026-10-28T00:00:00Z"), // last week
+                ],
+              }),
+            ],
+            openPullRequests: [anOpenPullRequest({ number: 51, comments: [aComment(line(one, ["e2e"]), "2026-11-06T00:00:00Z"), aComment(line(one, ["gate"]), "2026-11-06T00:00:00Z", { byBot: false })] })],
+          }),
+        ],
+      }),
+    );
+
+    expect(result).toMatchObject({ kind: "summary", summary: { counts: { unrelatedFailures: { thisWeek: 4, lastWeek: 1 } } } });
+    const body = result.kind === "summary" ? result.body : "";
+    expect(body).toContain("| Flaky checks | 0 | 0 | 0 |\n| Unrelated failures | 4 | 1 | +3 |");
+  });
+
+  it("shows no Unrelated failure in a week with none", () => {
+    const result = weeklySummary(input({ records: [aRunRecord({ endedAt: "2026-11-03T00:00:00Z" })] }));
+
+    expect(result.kind === "summary" ? result.body : "").toMatch(/\| Unrelated failures \| 0 \| 0 \|/);
   });
 
   it("counts a Retry refused on the weekly limit, then resumed, once (#481)", () => {

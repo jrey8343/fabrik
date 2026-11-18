@@ -674,7 +674,8 @@ async function applyToIssue(
           return "posted" in part ? postedIn(posted, part).url : `#${createdIn(created, part).number}`;
         })
         .join("");
-      await github.rest("POST", `${issue}/comments`, { body });
+      const comment = (await github.rest("POST", `${issue}/comments`, { body })) as { html_url: string; id: number };
+      if (action.key !== undefined) posted.set(action.key, { url: comment.html_url, id: comment.id });
       return;
     }
     case "assign":

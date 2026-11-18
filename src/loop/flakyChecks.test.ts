@@ -71,7 +71,7 @@ describe("A Flaky check the Kit's re-run found (#462)", () => {
     expect(actions).toContainEqual(
       expect.objectContaining({
         kind: "create-issue",
-        title: "Flaky required check: e2e",
+        title: "Flaky check or Unrelated failure: `e2e`",
         labels: ["needs-triage", "fabrik:flaky-check"],
         body: expect.stringContaining(`[red](${E2E.red})`),
       }),
@@ -86,7 +86,7 @@ describe("A Flaky check the Kit's re-run found (#462)", () => {
     const actions = actionsOf(plan);
 
     expect(actions.some((action) => textOf(action).includes("<!-- fabrik:flaky-check "))).toBe(true);
-    expect(actions).toContainEqual(expect.objectContaining({ kind: "create-issue", title: "Flaky required check: e2e" }));
+    expect(actions).toContainEqual(expect.objectContaining({ kind: "create-issue", title: "Flaky check or Unrelated failure: `e2e`" }));
     expect(actions).toContainEqual(expect.objectContaining({ kind: "mark-ready-for-review", pullRequest: 50 }));
   });
 
@@ -135,7 +135,7 @@ describe("The hourly tick's sweep for Flaky checks (#462)", () => {
     expect(swept(plan)).toContainEqual(
       expect.objectContaining({
         kind: "create-issue",
-        title: "Flaky required check: e2e",
+        title: "Flaky check or Unrelated failure: `e2e`",
         body: expect.stringContaining("[red](https://github.com/acme/shop/actions/runs/7/job/70), [green](https://github.com/acme/shop/actions/runs/7/job/99)"),
       }),
     );
@@ -280,7 +280,7 @@ describe("The hourly tick's read of each passed head at the Merge gate (#693)", 
     expect(swept(plan)).toContainEqual(
       expect.objectContaining({
         kind: "create-issue",
-        title: "Flaky required check: ci",
+        title: "Flaky check or Unrelated failure: `ci`",
         labels: ["needs-triage", "fabrik:flaky-check"],
         body: expect.stringContaining("[red](https://github.com/acme/shop/actions/runs/7/job/99), [green](https://github.com/acme/shop/actions/runs/7/job/70)"),
       }),
@@ -385,7 +385,7 @@ describe("A Flaky check's issue carries the Failure excerpt of each red run it r
 
     const [issue] = created(planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig()));
 
-    expect(issue).toMatchObject({ title: "Flaky required check: e2e", labels: ["needs-triage", "fabrik:flaky-check"] });
+    expect(issue).toMatchObject({ title: "Flaky check or Unrelated failure: `e2e`", labels: ["needs-triage", "fabrik:flaky-check"] });
     expect(issue?.body).toContain(`- #50 at ${HEAD_SHA.slice(0, 7)}: [red](${E2E.red}), [green](${E2E.green})`);
     expect(issue?.body).toContain(rendered("e2e", E2E.red, "FAIL src/a.test.ts > adds"));
     expect(issue?.body).toContain("  - `src/a.test.ts`, line 12:");
