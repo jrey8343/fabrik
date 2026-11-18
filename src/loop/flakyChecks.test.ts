@@ -412,7 +412,7 @@ describe("A Flaky check's issue carries the Failure excerpt of each red run it r
     const comment = textOf(actionsOf(commented).find((action) => action.kind === "comment" && action.issue === 88)!);
     for (const text of [body, comment]) {
       expect(text.length).toBeLessThanOrEqual(65_536);
-      expect(text).toContain("_Shortened to fit the comment._");
+      expect(text).toContain("_Shortened to fit GitHub's size limit._");
       expect(text).toContain(`[red](${E2E.red})`);
     }
   });

@@ -367,7 +367,7 @@ function isExcerpt(value: unknown): value is FailureExcerpt {
 export const LOG_CAP = 40_000;
 
 /** What a shortened annotation message ends with. */
-const SHORTENED = "_Shortened to fit the comment._";
+const SHORTENED = "_Shortened to fit GitHub's size limit._";
 
 /**
  * Each excerpt as a Markdown list item under its check's name, in the order
@@ -381,7 +381,7 @@ const SHORTENED = "_Shortened to fit the comment._";
  * and a share one doesn't fill goes to no other. Each excerpt's lines are cut
  * from the top, and the cut says how many lines were left out and links the
  * job. Annotations are outside the cap. `room` is what the blocks may take
- * together, joined by blank lines, as what's left of a comment around them:
+ * together, joined by blank lines, as what's left of a comment or issue body around them:
  * past it, the log lines are cut further, then the annotation messages are
  * shortened, each saying so, and last each block is only its check's name
  * and job link. The text is posted as the runner masked it.
@@ -410,10 +410,10 @@ export function renderFailureExcerpts(excerpts: readonly CheckExcerpt[], { room 
   const longest = Math.max(0, ...excerpts.flatMap(attempts).flatMap(shortenable).map(({ length }) => length));
   const messageMax = most(longest, (n) => fits(render(0, n)));
   if (messageMax !== null) return render(0, messageMax);
-  return excerpts.map((excerpt) => `${headOf(excerpt)}\n\n  Its Failure excerpt didn't fit the comment.`);
+  return excerpts.map((excerpt) => `${headOf(excerpt)}\n\n  Its Failure excerpt didn't fit within GitHub's size limit.`);
 }
 
-/** The text of an excerpt a comment too long shortens: its annotation messages, and an outside check's description or title and summary (#777). */
+/** The text of an excerpt a comment or issue body too long shortens: its annotation messages, and an outside check's description or title and summary (#777). */
 function shortenable(excerpt: FailureExcerpt): string[] {
   const messages = excerpt.kind === "actions" || excerpt.kind === "outside-check-run" ? excerpt.annotations.map(({ message }) => message) : [];
   if (excerpt.kind === "commit-status") return [excerpt.description];

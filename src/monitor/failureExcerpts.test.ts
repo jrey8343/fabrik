@@ -231,7 +231,8 @@ describe("A Monitor issue's body with Failure excerpts", () => {
 
     expect(filed?.body.length).toBeLessThanOrEqual(LIMIT);
     expect(filed?.body.length).toBeGreaterThan(LIMIT - 1_000);
-    expect(filed?.body).toContain("_Shortened to fit the comment._");
+    expect(filed?.body).toContain("_Shortened to fit GitHub's size limit._");
+    expect(filed?.body).not.toContain("fit the comment");
     expect(filed?.body).toContain(`- \`e2e\` ([the job](${runUrl(903)}))`);
   });
 

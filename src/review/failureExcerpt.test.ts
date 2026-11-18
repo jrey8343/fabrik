@@ -532,7 +532,7 @@ describe("Rendering a check that failed both times (#776)", () => {
     );
 
     expect(blocks.join("\n\n").length).toBeLessThanOrEqual(5_000);
-    expect(blocks[0]).toContain("_Shortened to fit the comment._");
+    expect(blocks[0]).toContain("_Shortened to fit GitHub's size limit._");
     // Shortened only as far as it must be: most of the room is the message's.
     expect(blocks[0]).toContain("m".repeat(4_000));
     expect(blocks[0]).toContain("The same step, `Test`, failed both times.");
@@ -719,7 +719,7 @@ describe("The cap on Failure excerpts' log lines", () => {
     // Each shortened alike, as long as both fit: a little under half the room each.
     expect(tight).toContain("s".repeat(9_000));
     expect(tight).toContain("m".repeat(9_000));
-    expect(tight).toContain("_Shortened to fit the comment._");
+    expect(tight).toContain("_Shortened to fit GitHub's size limit._");
     expect(tight).toContain("- `buildkite/shop` ([the service's page](https://buildkite.com/acme/shop/builds/812))");
   });
 
@@ -746,7 +746,7 @@ describe("The cap on Failure excerpts' log lines", () => {
     const tight = renderFailureExcerpts(excerpts, { room: 30_000 }).join("\n\n");
     expect(tight.length).toBeLessThanOrEqual(30_000);
     expect(tight).not.toContain(message);
-    expect(tight).toContain("_Shortened to fit the comment._");
+    expect(tight).toContain("_Shortened to fit GitHub's size limit._");
     expect(tight).toContain("_150 earlier lines left out");
   });
 
@@ -756,6 +756,8 @@ describe("The cap on Failure excerpts' log lines", () => {
     expect(blocks.join("\n\n").length).toBeLessThanOrEqual(400);
     expect(blocks[0]).toContain(`- \`a\` ([the job](${link("a")}))`);
     expect(blocks[1]).toContain(`- \`b\` ([the job](${link("b")}))`);
+    expect(blocks[0]).toContain("Its Failure excerpt didn't fit within GitHub's size limit.");
+    expect(blocks.join("\n\n")).not.toContain("comment");
   });
 });
 

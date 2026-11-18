@@ -420,7 +420,7 @@ describe("Review: a head whose Required checks are still red (#779)", () => {
 
       const verdict = verdictOf(plan);
       expect(verdict.length).toBeLessThanOrEqual(65_536);
-      expect(verdict).toContain("_Shortened to fit the comment._");
+      expect(verdict).toContain("_Shortened to fit GitHub's size limit._");
       expect(verdict).toContain("Retry 1 of 2 starts now");
       expect(verdictsPostedIn([verdict])).toEqual([expect.objectContaining({ verdict: "execution-flaw", checks: ["a", "b", "c"] })]);
     });
