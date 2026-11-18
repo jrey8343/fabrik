@@ -1,9 +1,9 @@
 // Flaky checks (#462, GLOSSARY.md): a required check that reported both
 // failure and success on the same head commit. The Kit finds one when its own
-// re-run of the red checks passes (src/review/rerun.ts), or when the checks a
-// ci-sourced Execution flaw named have since passed on its head, which the
-// hourly tick reads; that Verdict then no longer counts toward the Ticket's
-// Retries. The tick also reads the head the Reviewer passed at the Merge gate,
+// re-run of the red checks passes (src/review/rerun.ts), or when the checks an
+// Execution flaw named have since passed on its head, which the hourly tick
+// reads; that Verdict then no longer counts toward the Ticket's Retries, unless
+// it is a Reviewer's with an untagged finding beside its checks (#779). The tick also reads the head the Reviewer passed at the Merge gate,
 // where a Required check that has both failed and succeeded is reported, with
 // nothing counted back (#693). Each way the Operator hears of it twice over, quietly: one line
 // on the PR, mentioning nobody, and the check's own Flaky check issue for
@@ -114,8 +114,8 @@ function issueRef(ref: number | CreatedIssue): string | CreatedIssue {
 }
 
 /**
- * What the Kit does once the checks a ci-sourced Execution flaw named have
- * since passed on the head it was given on (#462): each one's issue, then one
+ * What the Kit does once the checks an Execution flaw counted back on green
+ * (countsBackOnGreen) named have since passed on the head it was given on (#462): each one's issue, then one
  * line on the PR, mentioning nobody, marking that Verdict counted back, so it
  * no longer counts toward the Ticket's Retries. A Retry already in flight keeps
  * running.
@@ -142,11 +142,34 @@ export function countedBackActions(
   return [...actions, { kind: "comment-linking", issue: pullRequest, body }];
 }
 
-/** The Verdicts on this PR the tick's sweep reads the checks of: ci-sourced Execution flaws naming their checks, not yet counted back. */
-export function uncountedFlaws(pullRequest: PullRequestSnapshot): VerdictRecord[] {
-  return pullRequest.verdicts.filter(
-    (record) => record.verdict === "execution-flaw" && record.source === "ci" && record.flaky !== true && (record.checks?.length ?? 0) > 0,
-  );
+/**
+ * Whether an Execution flaw naming red checks is counted back once they all
+ * read green on its head: one from red checks alone (#462), or a Reviewer's
+ * on a red head with no untagged finding (#779), which counted only for its
+ * checks. A Reviewer's whose tags don't read counts as one with an untagged
+ * finding, so it stands.
+ */
+export function countsBackOnGreen(record: VerdictRecord): boolean {
+  if (record.source === "ci") return true;
+  return record.verdict === "execution-flaw" && (record.checks?.length ?? 0) > 0 && record.tags?.counted === 0;
+}
+
+/**
+ * The Execution flaws on this PR the tick's sweep reads the checks of (#779):
+ * every one that names its red checks, whatever its source, not yet counted
+ * back, nor reported by a Flaky check line naming all its checks on its head.
+ * One with an untagged finding is marked so: its checks are reported, and it
+ * still counts.
+ */
+export function uncountedFlaws(pullRequest: PullRequestSnapshot): Omit<FlawHeadChecks, "checkRuns">[] {
+  const reported = (headSha: string, checks: readonly string[]) =>
+    checks.every((name) => pullRequest.flakyCheckMarks.some((mark) => mark.headSha === headSha && mark.checks.includes(name)));
+  return pullRequest.verdicts.flatMap((record) => {
+    const checks = record.checks ?? [];
+    if (record.verdict !== "execution-flaw" || record.flaky === true || checks.length === 0 || reported(record.headSha, checks)) return [];
+    const flaw = { pullRequest: pullRequest.number, ticket: pullRequest.ticket, headSha: record.headSha, checks };
+    return [countsBackOnGreen(record) ? flaw : { ...flaw, untaggedFinding: true as const }];
+  });
 }
 
 /**
@@ -200,9 +223,11 @@ function flakyOnPassedHead({ headSha, required, checkRuns, marks }: PassedHeadCh
 }
 
 /**
- * The tick's Flaky check sweep. Every ci-sourced Execution flaw on an open
- * agent PR whose checks all read green now on the head it was given on is
- * counted back (#462). And each Required check that has both failed and
+ * The tick's Flaky check sweep. Every Execution flaw on an open agent PR that
+ * names red checks, whose checks all read green now on the head it was given
+ * on, is counted back (#462), unless it is a Reviewer's with an untagged
+ * finding: then its checks are reported as Flaky checks and it still counts
+ * (#779). And each Required check that has both failed and
  * succeeded on the head the Reviewer passed, at the Merge gate, is reported, as
  * no Retry was spent there to count back (#693). A line marks each, so the
  * sweep never says one twice.
@@ -219,7 +244,14 @@ export function flakyCheckGate(_now: string, snapshot: Snapshot): Plan {
   for (const head of flakySweep === null || flakySweep === "no-permission" ? [] : flakySweep) {
     const flaky = flippedOn(head);
     if (flaky === null) continue;
-    actions.push(...countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed));
+    // A Reviewer's flaw with an untagged finding counts for that (#779): its checks are reported, and the count stands.
+    actions.push(
+      ...(head.untaggedFinding === true
+        ? flakyLineActions(head.pullRequest, head.headSha, flaky, snapshot.flakyCheckIssues, filed, (name, short) =>
+            `${name} has since passed on ${short}, where it was red beside the Reviewer's own findings, so that Verdict still counts`,
+          )
+        : countedBackActions(head.pullRequest, head.ticket, head.headSha, flaky, snapshot.flakyCheckIssues, filed)),
+    );
     for (const { name } of flaky) countedBack.add(key(head.pullRequest, head.headSha, name));
   }
   for (const head of passedHeads === null || typeof passedHeads === "string" ? [] : passedHeads) {

@@ -1067,13 +1067,20 @@ export interface HeadCheckRun {
   readonly url: string;
 }
 
-/** An open agent PR's ci-sourced Execution flaw not yet counted back, and every check run on its head (#462). */
+/** An open agent PR's Execution flaw that names red checks (#462, #779), not yet counted back or reported, and every check run on its head. */
 export interface FlawHeadChecks {
   readonly pullRequest: number;
   readonly ticket: number | null;
   readonly headSha: string;
   /** The checks the Verdict named as failed. */
   readonly checks: readonly string[];
+  /**
+   * True when the Verdict, a Reviewer's on a red head (#779), has an
+   * untagged finding beside its checks: it counts for that, so a later green
+   * reports its checks as Flaky checks and nothing is counted back. Absent
+   * on one that is counted back.
+   */
+  readonly untaggedFinding?: true;
   readonly checkRuns: readonly HeadCheckRun[];
 }
 
@@ -1379,8 +1386,8 @@ export interface Snapshot {
    */
   readonly flakyCheckIssues: readonly KitIssueSnapshot[];
   /**
-   * For the scheduled tick: each open agent PR's ci-sourced Execution flaws not
-   * yet counted back, with every check run on the head each was given on (#462);
+   * For the scheduled tick: each open agent PR's Execution flaws that name red
+   * checks, whatever their source (#779), not yet counted back, with every check run on the head each was given on (#462);
    * "no-permission" when the Fabrik App lacks Checks: read; null for any other event.
    */
   readonly flakySweep: readonly FlawHeadChecks[] | "no-permission" | null;
