@@ -12,6 +12,7 @@
 // of one the same way, a line ahead of the Verdict and a comment on the issue, and one that later
 // passes on its head is a Flaky check. Pure.
 import { type FailureExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
+import { isRed, runsOf } from "./headChecks.ts";
 import { NEEDS_TRIAGE, FLAKY_CHECK_LABEL } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf, flakyCheckMarker, unrelatedFailureMarker } from "./markers.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
@@ -315,8 +316,6 @@ export function passedHeadAtGate(pullRequest: PullRequestSnapshot): string | nul
   return passed?.headSha === pullRequest.headSha ? passed.headSha : null;
 }
 
-const RED = ["failure", "timed_out", "cancelled", "action_required", "startup_failure"];
-
 /** A Flaky check the tick found, with the excerpt it read of that check's red run, when it read one (#778). */
 function withRedExcerpt(check: FlakyCheck, excerpts: readonly FailureExcerpt[]): FlakyCheck {
   const excerpt = excerpts.find(({ check: name, link }) => name === check.name && link === check.red);
@@ -334,11 +333,9 @@ function withRedExcerpt(check: FlakyCheck, excerpts: readonly FailureExcerpt[]):
  */
 export function flippedOn({ checks, checkRuns, excerpts, unrelated }: FlawHeadChecks): FlakyCheck[] | null {
   const flipped = (name: string): FlakyCheck | null => {
-    // A run not yet started is the newest: GitHub queued it after every run that has.
-    const started = (run: HeadCheckRun) => (run.startedAt === null ? Infinity : Date.parse(run.startedAt));
-    const runs = checkRuns.filter((run) => run.name === name).toSorted((a, b) => started(a) - started(b));
+    const runs = runsOf(checkRuns, name);
     const latest = runs.at(-1);
-    const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
+    const red = runs.find(isRed);
     return latest?.conclusion !== "success" || red === undefined ? null : withRedExcerpt({ name, red: red.url, green: latest.url }, excerpts);
   };
   const flaky = checks.map(flipped);
@@ -361,7 +358,7 @@ export function flakyOnPassedHead({ headSha, required, checkRuns, marks, excerpt
     if (named.has(name)) return [];
     const runs = checkRuns.filter((run) => run.name === name);
     const green = runs.find((run) => run.conclusion === "success");
-    const red = runs.find((run) => run.conclusion !== null && RED.includes(run.conclusion));
+    const red = runs.find(isRed);
     return green === undefined || red === undefined ? [] : [withRedExcerpt({ name, red: red.url, green: green.url }, excerpts)];
   });
 }
