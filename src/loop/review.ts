@@ -91,13 +91,14 @@ export function startReviewOnLabel(pullRequest: PullRequestSnapshot, config: Kit
   return { kind: "act", actions: declineTrigger(pullRequest.number, REVIEW_LABEL, plan.reason) };
 }
 
-/** Why a red GitHub Actions check has no Failure excerpt: the Review's jobs passed out none for it, as when their artifact is missing. */
+/** Why a red check has no Failure excerpt: the Review's jobs passed out none for it, as when their artifact is missing. */
 const NO_EXCERPT = "the Review checks job passed out no Failure excerpt for it";
 
 /**
  * Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be
- * counted from the PR alone. Each red GitHub Actions check carries its Failure
- * excerpt under its name, so the Retry starts from why it failed (#775).
+ * counted from the PR alone. Each red check carries its Failure excerpt under
+ * its name, so the Retry starts from why it failed (#775): an outside
+ * service's, what it wrote to GitHub, under the outside checks' heading (#777).
  */
 export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: KitConfig): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
@@ -110,20 +111,20 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
     const again = red.filter((name) => rerun?.failedAgain.includes(name) === true);
     const outside = red.filter((name) => rerun?.outside.includes(name) === true && !again.includes(name));
     const plain = red.filter((name) => !again.includes(name) && !outside.includes(name));
-    // Each GitHub Actions check carries its Failure excerpt under its name (#775), and one that failed again
-    // its first attempt's after it (#776); an outside one is named alone.
-    const excerpts = [...again, ...plain].map(
+    // Each check carries its Failure excerpt under its name (#775), and one that failed again its first
+    // attempt's after it (#776); an outside one what it wrote to GitHub (#777).
+    const excerpts = [...again, ...outside, ...plain].map(
       (name): CheckExcerpt => event.excerpts?.find(({ check }) => check === name) ?? { kind: "unread", check: name, link: "", why: NO_EXCERPT },
     );
     const findings = (room: number): string => {
       const text = (blocks: readonly string[]) => {
         const blockOf = (name: string) => blocks[excerpts.findIndex(({ check }) => check === name)]!;
-        // A check with an excerpt is a list item of paragraphs, so a blank line parts them; outside checks are one line each.
+        // Each check is a list item of paragraphs, so a blank line parts them.
         const listed = (heading: string, items: readonly string[], between: string, after: string[] = []) =>
           items.length === 0 ? [] : [[heading, "", items.join(between), ...after].join("\n")];
         return [
           ...listed("These required checks failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:", again.map(blockOf), "\n\n"),
-          ...listed("These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:", outside.map((name) => `- ${checkCode(name)}`), "\n"),
+          ...listed("These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:", outside.map(blockOf), "\n\n"),
           ...listed(
             "These required checks didn't pass, so the Reviewer didn't run:",
             plain.map(blockOf),

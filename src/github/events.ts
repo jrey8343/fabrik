@@ -335,7 +335,7 @@ export interface FinishedReview {
   /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
   readonly rerun: RerunReport | null;
   /**
-   * On red checks, each red GitHub Actions check's latest Failure excerpt the Review's waits passed out (#775),
+   * On red checks, each red check's latest Failure excerpt the Review's waits passed out (#775), an outside one's among them (#777),
    * with its first attempt's for one that failed again (#776); none when they passed none.
    */
   readonly excerpts?: readonly CheckExcerpt[];

@@ -29,10 +29,11 @@
 //   failed-again the re-run checks that failed again, as a JSON list
 //   flaky        the re-run checks that passed, with their red and green runs, as JSON
 // A wait that ends red also leaves, in FABRIK_OUT_DIR, the Failure excerpt of
-// each red GitHub Actions check (src/review/failureExcerpt.ts, #775) for the
-// push job's Verdict: the first wait every red one's, before anything is
-// re-run, and the Re-run checks' wait those that failed again. It reads them
-// with the same token, whose `actions: read` and `checks: read` its job holds.
+// each red check (src/review/failureExcerpt.ts, #775) for the push job's
+// Verdict: the first wait every red one's, before anything is re-run, an
+// outside service's among them (#777), and the Re-run checks' wait those that
+// failed again. It reads them with the same token, whose `actions: read`,
+// `checks: read` and `statuses: read` its job holds.
 import { execFile } from "node:child_process";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -332,15 +333,21 @@ async function main(productDir: string): Promise<void> {
 
 /**
  * The Failure excerpts a wait that ended red passes out (#775): one for each
- * of `names` that is a red GitHub Actions check on the head, read from the
- * job its link names now. The first wait reads every red check before
- * anything is re-run, as a re-run may replace what its link reads; the wait
- * after the re-run reads those that failed again, whose links are the
- * re-run's jobs. An outside check is named in the Verdict alone.
+ * of `names` that is a red check on the head. A GitHub Actions one is read
+ * from the job its link names now. The first wait reads every red check
+ * before anything is re-run, as a re-run may replace what its link reads;
+ * the wait after the re-run reads those that failed again, whose links are
+ * the re-run's jobs. A red check from an outside service, which the Kit
+ * never re-runs, is read for what the service wrote to GitHub (#777).
  */
 export async function redExcerpts(checks: readonly CheckDetail[], names: readonly string[], sha: string, reader: FailureReader): Promise<FailureExcerpt[]> {
   const excerpts: FailureExcerpt[] = [];
-  for (const { name, link } of redChecksOf(checks, names).rerun) excerpts.push(await readFailureExcerpt({ name, link, sha }, reader));
+  const { rerun, outside } = redChecksOf(checks, names);
+  for (const { name, link } of rerun) excerpts.push(await readFailureExcerpt({ name, link, sha }, reader));
+  for (const name of outside) {
+    const link = checks.find((check) => check.name === name && (check.bucket === "fail" || check.bucket === "cancel"))?.link ?? "";
+    excerpts.push(await readFailureExcerpt({ name, link, sha }, reader));
+  }
   return excerpts;
 }
 
