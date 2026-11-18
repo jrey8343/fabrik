@@ -159,6 +159,43 @@ export function checkFixMarksIn(commentBodies: readonly string[]): CheckFixMark[
   });
 }
 
+/**
+ * The Kit's mention of the Operator on an agent PR (#785) once its own moves
+ * on an Unrelated failure there were spent: the head it was posted on, and
+ * each check it named with the check's issue. Once per PR and check: a check
+ * any of them names isn't mentioned on that PR again, on any head.
+ */
+export interface OperatorMentionMark {
+  readonly headSha: string;
+  readonly checks: readonly { readonly name: string; readonly issue: number }[];
+}
+
+const OPERATOR_MENTION_MARKER = /^<!-- fabrik:operator-mention (\{.*?\}) -->/;
+
+export function operatorMentionMarker({ headSha, checks }: OperatorMentionMark): string {
+  return `<!-- fabrik:operator-mention ${markerJson({ headSha, checks: checks.map(({ name, issue }) => ({ name, issue })) })} -->`;
+}
+
+/** The Kit's mentions of the Operator over an Unrelated failure among these comments (#785), oldest first. */
+export function operatorMentionMarksIn(commentBodies: readonly string[]): OperatorMentionMark[] {
+  return commentBodies.flatMap((body) => {
+    const json = OPERATOR_MENTION_MARKER.exec(body)?.[1];
+    if (json === undefined) return [];
+    try {
+      const { headSha, checks } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof headSha !== "string" || !Array.isArray(checks)) return [];
+      const read = checks.flatMap((check: unknown) => {
+        const { name, issue } = (check ?? {}) as Record<string, unknown>;
+        return typeof name === "string" && typeof issue === "number" ? [{ name, issue }] : [];
+      });
+      if (read.length === 0 || read.length !== checks.length) return [];
+      return [{ headSha, checks: read }];
+    } catch {
+      return [];
+    }
+  });
+}
+
 const FLAKY_CHECK_ISSUE_MARKER =/^<!-- fabrik:flaky-check-issue (\{.*?\}) -->/;
 
 /**

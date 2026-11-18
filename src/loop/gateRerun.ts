@@ -34,6 +34,15 @@ function isRed(run: HeadCheckRun | undefined): run is HeadCheckRun {
   return run !== undefined && run.conclusion !== null && RED.includes(run.conclusion);
 }
 
+/**
+ * Whether `name` is still red among a head's check runs (#785): its latest
+ * run ended red, or it has none, as a commit status from an outside service,
+ * which the check runs can't say has turned green.
+ */
+export function stillRed(checkRuns: readonly HeadCheckRun[], name: string): boolean {
+  return !checkRuns.some((run) => run.name === name) || isRed(latestRun(checkRuns, name));
+}
+
 /** The checks a gate re-run line on this PR already names on this head, asked or done. */
 function namedOn(pullRequest: PullRequestSnapshot, headSha: string): Set<string> {
   return new Set(

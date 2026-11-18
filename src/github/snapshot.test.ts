@@ -35,6 +35,7 @@ import {
   gateRerunDoneMarker,
   gateRerunMarker,
   IMPLEMENT_RUN_FAILED_MARKER,
+  operatorMentionMarker,
   RESEARCH_RUN_FAILED_MARKER,
   verdictMarker,
 } from "../loop/markers.ts";
@@ -3843,6 +3844,18 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
         { headSha: "b".repeat(40), main: "8".repeat(40), outcome: "rebased", fixes: [{ check: "e2e", issue: 12 }] },
         { headSha: HEAD_SHA, main: "d".repeat(40), outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] },
       ]);
+    });
+
+    it("reads the Kit's mentions of the Operator over an Unrelated failure (#785), a bot's alone", async () => {
+      const mention = operatorMentionMarker({ headSha: HEAD_SHA, checks: [{ name: "e2e", issue: 12 }] });
+      const pr = held(50, [mention]);
+      const quoted = { body: `${operatorMentionMarker({ headSha: HEAD_SHA, checks: [{ name: "lint", issue: 13 }] })}\nQuoted.`, createdAt: "2026-11-18T09:00:00Z", author: { login: "mallory", __typename: "User" } };
+      const comments = (pr as { comments: { nodes: unknown[] } }).comments;
+      const { github } = githubFor([{ ...pr, comments: { ...comments, nodes: [...comments.nodes, quoted] } }]);
+
+      const snapshot = await gatherSnapshot(github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(snapshot.conflicts?.pullRequests[0]?.pullRequest.operatorMentions).toEqual([{ headSha: HEAD_SHA, checks: [{ name: "e2e", issue: 12 }] }]);
     });
   });
 
