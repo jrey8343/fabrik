@@ -202,15 +202,28 @@ export const FAILURE_EXCERPTS_FILE = "failure-excerpts.json";
 export const RERUN_FAILURE_EXCERPTS_FILE = "failure-excerpts-rerun.json";
 
 /**
- * Each red check's latest excerpt, from the files the Review's waits passed
- * out (null for one that's missing): the re-run wait's for a check that
- * failed again, else the first wait's. Read leniently: a file that doesn't
- * read, or an excerpt in it that doesn't, is none, and its check says its
- * failure couldn't be read.
+ * A red check's latest Failure excerpt and, for a check the Kit re-ran that
+ * failed again, its first attempt's, read before the re-run (#776). Rendered,
+ * the first attempt shows its failed steps' names and its annotations, with
+ * no log lines, and a line says whether the same step failed both times.
  */
-export function excerptsPassedOut(first: string | null, rerun: string | null): FailureExcerpt[] {
-  const latest = new Map<string, FailureExcerpt>();
-  for (const excerpt of [...excerptsIn(first), ...excerptsIn(rerun)]) latest.set(excerpt.check, excerpt);
+export type CheckExcerpt = FailureExcerpt & { readonly firstAttempt?: FailureExcerpt };
+
+/**
+ * Each red check's latest excerpt, from the files the Review's waits passed
+ * out (null for one that's missing), each file one attempt: the re-run
+ * wait's for a check that failed again, with the first wait's beside it as
+ * its first attempt, else the first wait's alone. Read leniently: a file
+ * that doesn't read, or an excerpt in it that doesn't, is none, and its
+ * check says its failure couldn't be read.
+ */
+export function excerptsPassedOut(first: string | null, rerun: string | null): CheckExcerpt[] {
+  const latest = new Map<string, CheckExcerpt>();
+  for (const excerpt of excerptsIn(first)) latest.set(excerpt.check, excerpt);
+  for (const excerpt of excerptsIn(rerun)) {
+    const firstAttempt = latest.get(excerpt.check);
+    latest.set(excerpt.check, firstAttempt === undefined ? excerpt : { ...excerpt, firstAttempt });
+  }
   return [...latest.values()];
 }
 
@@ -257,7 +270,9 @@ const SHORTENED = "_Shortened to fit the comment._";
  * Each excerpt as a Markdown list item under its check's name, in the order
  * given: the job link, each failed step's kept log lines, and its error
  * annotations as file, line and message. The failure text sits in fenced
- * blocks, as data a mention or a heading in it can't escape.
+ * blocks, as data a mention or a heading in it can't escape. A check that
+ * failed both times then shows its first attempt, with no log lines, and
+ * whether the same step failed both times (#776).
  *
  * The log lines share LOG_CAP equally between the excerpts that have any,
  * and a share one doesn't fill goes to no other. Each excerpt's lines are cut
@@ -268,10 +283,10 @@ const SHORTENED = "_Shortened to fit the comment._";
  * shortened, each saying so, and last each block is only its check's name
  * and job link. The text is posted as the runner masked it.
  */
-export function renderFailureExcerpts(excerpts: readonly FailureExcerpt[], { room = Number.POSITIVE_INFINITY }: { readonly room?: number } = {}): string[] {
+export function renderFailureExcerpts(excerpts: readonly CheckExcerpt[], { room = Number.POSITIVE_INFINITY }: { readonly room?: number } = {}): string[] {
   const withLines = excerpts.filter((excerpt) => excerpt.kind === "actions" && excerpt.steps.some((step) => step.lines.length > 0)).length;
   const share = withLines === 0 ? 0 : Math.floor(LOG_CAP / withLines);
-  const render = (share: number, messageMax: number) => excerpts.map((excerpt) => rendered(excerpt, share, messageMax));
+  const render = (share: number, messageMax: number) => excerpts.map((excerpt) => withFirstAttempt(excerpt, rendered(excerpt, share, messageMax), messageMax));
   const fits = (blocks: readonly string[]) => blocks.join("\n\n").length <= room;
   const whole = render(share, Number.POSITIVE_INFINITY);
   if (fits(whole)) return whole;
@@ -288,10 +303,50 @@ export function renderFailureExcerpts(excerpts: readonly FailureExcerpt[], { roo
   };
   const cutShare = most(share, (n) => fits(render(n, Number.POSITIVE_INFINITY)));
   if (cutShare !== null) return render(cutShare, Number.POSITIVE_INFINITY);
-  const longest = Math.max(0, ...excerpts.flatMap((excerpt) => (excerpt.kind === "actions" ? excerpt.annotations.map(({ message }) => message.length) : [])));
+  const messagesOf = (excerpt: FailureExcerpt | undefined) => (excerpt?.kind === "actions" ? excerpt.annotations.map(({ message }) => message.length) : []);
+  const longest = Math.max(0, ...excerpts.flatMap((excerpt) => [...messagesOf(excerpt), ...messagesOf(excerpt.firstAttempt)]));
   const messageMax = most(longest, (n) => fits(render(0, n)));
   if (messageMax !== null) return render(0, messageMax);
   return excerpts.map((excerpt) => `${headOf(excerpt)}\n\n  Its Failure excerpt didn't fit the comment.`);
+}
+
+/**
+ * A check's block with, when it failed both times, its first attempt after
+ * the re-run's excerpt (#776): the first attempt's failed steps by name and
+ * its annotations, none of its log lines, so it takes none of the cap; then
+ * one line on whether the same step failed both times.
+ */
+function withFirstAttempt(excerpt: CheckExcerpt, block: string, messageMax: number): string {
+  const first = excerpt.firstAttempt;
+  if (first === undefined) return block;
+  const job = first.link === "" ? "" : ` ([the job](${first.link}))`;
+  const parts: string[] = [];
+  if (first.kind === "unread") parts.push(`Its first attempt, before the Kit re-ran it${job}, couldn't be read: ${prose(first.why)}.`);
+  if (first.kind === "actions") {
+    const steps = first.steps.map(({ name }) => name);
+    const failed = steps.length === 0 ? "no step failed" : `the ${steps.length === 1 ? "step" : "steps"} ${listed(steps)} failed`;
+    const opening = `Its first attempt, before the Kit re-ran it${job}: ${failed}.`;
+    if (first.annotationsUnread !== undefined) parts.push(`${opening} Its annotations couldn't be read: ${prose(first.annotationsUnread)}.`);
+    else if (first.annotations.length === 0) parts.push(`${opening} It has no error annotation.`);
+    else parts.push(`${opening} Its error annotations:`, first.annotations.map((annotation) => annotationItem(annotation, messageMax)).join("\n\n"));
+    if (excerpt.kind === "actions") parts.push(sameStepLine(steps, excerpt.steps.map(({ name }) => name)));
+  }
+  return [block, ...parts.map((part) => indent(part, 2))].join("\n\n");
+}
+
+/** Whether the same step failed on the first attempt and on the re-run, naming both when they differ. */
+function sameStepLine(first: readonly string[], rerun: readonly string[]): string {
+  const same = first.length === rerun.length && first.every((name, i) => name === rerun[i]);
+  if (same && first.length === 0) return "No step failed either time.";
+  if (same) return `The same ${first.length === 1 ? "step" : "steps"}, ${listed(first)}, failed both times.`;
+  const which = (names: readonly string[]) => (names.length === 0 ? "no step" : listed(names));
+  return `Different steps failed: ${which(first)} the first time, and ${which(rerun)} on the re-run.`;
+}
+
+/** Names in backticks, as a list in prose. */
+function listed(names: readonly string[]): string {
+  const coded = names.map(checkCode);
+  return coded.length <= 1 ? (coded[0] ?? "") : `${coded.slice(0, -1).join(", ")} and ${coded.at(-1)}`;
 }
 
 /** The check's name, and its job link when the excerpt has one. */

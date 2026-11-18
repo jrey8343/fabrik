@@ -307,6 +307,125 @@ describe("Rendering Failure excerpts", () => {
   });
 });
 
+describe("Rendering a check that failed both times (#776)", () => {
+  const FIRST = "https://github.com/acme/shop/actions/runs/7/job/8";
+  const RERUN = "https://github.com/acme/shop/actions/runs/7/job/9";
+  const attempt = (link: string, steps: FailedStep[], annotations: ExcerptAnnotation[] = []): Extract<FailureExcerpt, { kind: "actions" }> => ({
+    kind: "actions",
+    check: "unit",
+    link,
+    steps,
+    annotations,
+  });
+
+  it("shows the re-run's excerpt, then the first attempt's failed step and annotations with none of its log lines, then that the same step failed both times", () => {
+    const [block] = renderFailureExcerpts([
+      {
+        ...attempt(RERUN, [{ name: "Run pnpm test", earlier: 0, lines: ["FAIL src/b.test.ts > times out"] }], [{ path: "src/b.test.ts", line: 9, message: "Test timed out in 5000ms" }]),
+        firstAttempt: attempt(
+          FIRST,
+          [{ name: "Run pnpm test", earlier: 40, lines: ["FAIL src/a.test.ts > first attempt only"] }],
+          [{ path: "src/a.test.ts", line: 3, message: "AssertionError: expected 3 to be 4" }],
+        ),
+      },
+    ]);
+
+    expect(block).toBe(
+      [
+        `- \`unit\` ([the job](${RERUN}))`,
+        "",
+        "  The step `Run pnpm test` failed. The end of its log:",
+        "",
+        "  ```text",
+        "  FAIL src/b.test.ts > times out",
+        "  ```",
+        "",
+        "  Its error annotations:",
+        "",
+        "  - `src/b.test.ts`, line 9:",
+        "",
+        "    ```text",
+        "    Test timed out in 5000ms",
+        "    ```",
+        "",
+        `  Its first attempt, before the Kit re-ran it ([the job](${FIRST})): the step \`Run pnpm test\` failed. Its error annotations:`,
+        "",
+        "  - `src/a.test.ts`, line 3:",
+        "",
+        "    ```text",
+        "    AssertionError: expected 3 to be 4",
+        "    ```",
+        "",
+        "  The same step, `Run pnpm test`, failed both times.",
+      ].join("\n"),
+    );
+  });
+
+  it("names both steps when different steps failed on the two attempts", () => {
+    const [block] = renderFailureExcerpts([
+      { ...attempt(RERUN, [{ name: "Test", earlier: 0, lines: ["test failed"] }]), firstAttempt: attempt(FIRST, [{ name: "Lint", earlier: 0, lines: ["lint failed"] }]) },
+    ]);
+
+    expect(block).toContain(`  Its first attempt, before the Kit re-ran it ([the job](${FIRST})): the step \`Lint\` failed. It has no error annotation.`);
+    expect(block!.endsWith("\n\n  Different steps failed: `Lint` the first time, and `Test` on the re-run.")).toBe(true);
+    expect(block).not.toContain("lint failed");
+  });
+
+  it("names a first attempt where no step failed when the re-run's did", () => {
+    const [block] = renderFailureExcerpts([
+      {
+        ...attempt(RERUN, [{ name: "Test", earlier: 0, lines: ["test failed"] }]),
+        firstAttempt: attempt(FIRST, [], [{ path: ".github", line: null, message: "The runner has received a shutdown signal." }]),
+      },
+    ]);
+
+    expect(block).toContain(`([the job](${FIRST})): no step failed. Its error annotations:`);
+    expect(block).toContain("The runner has received a shutdown signal.");
+    expect(block).toContain("Different steps failed: no step the first time, and `Test` on the re-run.");
+  });
+
+  it("says why a first attempt couldn't be read, still shows the re-run's excerpt, and says nothing of the same step", () => {
+    const [block] = renderFailureExcerpts([
+      {
+        ...attempt(RERUN, [{ name: "Test", earlier: 0, lines: ["test failed"] }]),
+        firstAttempt: { kind: "unread", check: "unit", link: FIRST, why: "GitHub refused the read: 403 Resource not accessible by integration" },
+      },
+    ]);
+
+    expect(block).toContain("  The step `Test` failed. The end of its log:\n\n  ```text\n  test failed\n  ```");
+    expect(block).toContain(
+      `  Its first attempt, before the Kit re-ran it ([the job](${FIRST})), couldn't be read: GitHub refused the read: 403 Resource not accessible by integration.`,
+    );
+    expect(block).not.toContain("both times");
+    expect(block).not.toContain("Different steps");
+  });
+
+  it("gives the re-run the whole 40,000 characters, the first attempt's log lines taking none of it", () => {
+    const long = (prefix: string) => Array.from({ length: 150 }, (_, i) => `${prefix} ${String(i).padStart(3, "0")} `.padEnd(400, "x"));
+    const [block] = renderFailureExcerpts([
+      { ...attempt(RERUN, [{ name: "Test", earlier: 0, lines: long("again") }]), firstAttempt: attempt(FIRST, [{ name: "Test", earlier: 0, lines: long("first") }]) },
+    ]);
+
+    // 40,000 characters hold 99 lines of 401, as for a check with one attempt.
+    expect(block!.match(/^ {2}again \d{3} x+$/gm)).toHaveLength(99);
+    expect(block).not.toMatch(/first \d{3}/);
+  });
+
+  it("shortens the first attempt's annotation messages too when the comment has no room for them", () => {
+    const message = "m".repeat(20_000);
+    const blocks = renderFailureExcerpts(
+      [{ ...attempt(RERUN, [{ name: "Test", earlier: 0, lines: ["test failed"] }]), firstAttempt: attempt(FIRST, [{ name: "Test", earlier: 0, lines: [] }], [{ path: "a.ts", line: 1, message }]) }],
+      { room: 5_000 },
+    );
+
+    expect(blocks.join("\n\n").length).toBeLessThanOrEqual(5_000);
+    expect(blocks[0]).toContain("_Shortened to fit the comment._");
+    // Shortened only as far as it must be: most of the room is the message's.
+    expect(blocks[0]).toContain("m".repeat(4_000));
+    expect(blocks[0]).toContain("The same step, `Test`, failed both times.");
+  });
+});
+
 describe("The cap on Failure excerpts' log lines", () => {
   const link = (check: string) => `https://github.com/acme/shop/actions/runs/7/job/${check}`;
   /** `count` lines of 100 characters, each 101 with its newline, numbered from 1. */
@@ -433,10 +552,14 @@ describe("The excerpts the Review's waits pass out to the push job", () => {
   const first = (check: string, why: string): FailureExcerpt => ({ kind: "unread", check, link: `https://github.com/acme/shop/actions/runs/7/job/${check}-1`, why });
   const rerun = (check: string, why: string): FailureExcerpt => ({ kind: "unread", check, link: `https://github.com/acme/shop/actions/runs/7/job/${check}-2`, why });
 
-  it("are each check's latest read: the re-run's for a check that failed again, else the first wait's", () => {
+  it("are each check's latest read: the re-run's for a check that failed again, with the first attempt's beside it, else the first wait's alone (#776)", () => {
     const passed = excerptsPassedOut(JSON.stringify([first("unit", "first"), first("lint", "first")]), JSON.stringify([rerun("unit", "again")]));
 
-    expect(passed).toEqual([rerun("unit", "again"), first("lint", "first")]);
+    expect(passed).toEqual([{ ...rerun("unit", "again"), firstAttempt: first("unit", "first") }, first("lint", "first")]);
+  });
+
+  it("are the re-run's alone for a check that failed again with no first attempt passed out", () => {
+    expect(excerptsPassedOut(JSON.stringify([]), JSON.stringify([rerun("unit", "again")]))).toEqual([rerun("unit", "again")]);
   });
 
   it("are the first wait's alone when nothing was re-run", () => {
