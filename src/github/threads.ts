@@ -91,7 +91,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, checks, ranNothing, tags, touchUp, headSha } = value as Record<string, unknown>;
+  const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, checks, unrelated, ranNothing, tags, touchUp, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
   if (source !== "reviewer" && source !== "ci" && source !== "empty-diff" && source !== "broken-run") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
@@ -102,6 +102,8 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   if (typeof headSha !== "string") return null;
   // Likewise checks (#462), which only a Verdict from red required checks carries.
   const named = Array.isArray(checks) && checks.every((name) => typeof name === "string") ? { checks: checks as string[] } : {};
+  // Likewise unrelated (#780), which only a Reviewer's Verdict on a red head that judged a check an Unrelated failure carries.
+  const unrelatedNamed = Array.isArray(unrelated) && unrelated.length > 0 && unrelated.every((name) => typeof name === "string") ? { unrelated: unrelated as string[] } : {};
   // Likewise ranNothing (#456), which only a Reviewer's Verdict on a head with checks that ran nothing carries.
   const ranNothingNamed = Array.isArray(ranNothing) && ranNothing.length > 0 && ranNothing.every((name) => typeof name === "string") ? { ranNothing: ranNothing as string[] } : {};
   // The counts of a Reviewer's Execution flaw's findings by tag (#749): ignored on any other Verdict, and dropped when unreadable, so it counts.
@@ -120,6 +122,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     ...(ticketNotReady ? { ticketNotReady: true as const } : {}),
     ...named,
+    ...unrelatedNamed,
     ...ranNothingNamed,
     ...(change === null ? {} : { change }),
     ...(counted === null ? {} : { tags: counted }),

@@ -10,7 +10,7 @@ import { upToDateBeforeMergeGate } from "./conflicts.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { digestOnPass } from "./digest.ts";
-import { flakyCheckActions } from "./flakyChecks.ts";
+import { checkCode, flakyCheckActions } from "./flakyChecks.ts";
 import { followUpsSection } from "./followUps.ts";
 import { type HeldOn, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
@@ -20,7 +20,7 @@ import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
 import { changeLine } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
-import { parseVerdict, verdictTagsOf } from "./verdict.ts";
+import { parseVerdict, type RedCheckJudgment, verdictTagsOf } from "./verdict.ts";
 import { type RedCheckHeadings, REVIEWED_RED_CHECK_HEADINGS, redChecksText } from "./redChecks.ts";
 import type {
   Action,
@@ -136,16 +136,19 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
  */
 export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConfig): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
-    const parsed = parseVerdict(event.output);
+    // On a head still red after everything the Kit could do (#779), each red check with the Reviewer's judgment (#780).
+    const red = event.redChecks;
+    const parsed = parseVerdict(event.output, red?.failed ?? []);
     if (!parsed.ok) {
       return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
     }
     const findings = withoutMentions(parsed.findings);
     // A run this Verdict starts is held while every Subscription is used up, and its note says so (#341).
     const held = heldOn(snapshot.kitIssues, config);
-    // On a head still red after everything the Kit could do (#779), the red checks that count as the PR's own: all of them.
-    const red = event.redChecks;
-    const counting = red?.failed ?? [];
+    // The red checks the Reviewer judged caused count as the PR's own; the Unrelated failures count toward nothing (#780).
+    const judged = parsed.redChecks;
+    const counting = judged.filter(({ judgment }) => judgment === "caused").map(({ check }) => check);
+    const unrelated = judged.filter(({ judgment }) => judgment === "unrelated").map(({ check }) => check);
     const verdict = verdictOnRedHead(parsed.verdict, counting);
     // A pass is what the Reviewer checked, then any Follow-ups; a flaw is its findings.
     const reviewed = parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings;
@@ -155,12 +158,14 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
     const actions = verdictActions(event, pullRequest, {
       verdict,
       source: "reviewer",
-      findings: red === undefined ? reviewed : (room) => withRedChecks(reviewed, red, { verdict, passed: parsed.verdict === "pass", headSha: event.headSha }, room),
+      findings:
+        red === undefined ? reviewed : (room) => withRedChecks(reviewed, red, { verdict, passed: parsed.verdict === "pass", headSha: event.headSha, judged }, room),
       // Only a pass carries Follow-ups.
       followUps: verdict === "pass" ? followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number) : [],
       considered: consideredSection(parsed.considered, event.operatorComments),
       ...(event.ranNothing === undefined ? {} : { ranNothing: event.ranNothing }),
-      ...(red === undefined ? {} : { checks: counting }),
+      ...(counting.length === 0 ? {} : { checks: counting }),
+      unrelated,
       tags,
     }, snapshot.operator, held);
     // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
@@ -191,22 +196,56 @@ export function verdictOnRedHead(verdict: Verdict, counting: readonly string[]):
 
 /**
  * A Reviewer's findings on a red head (#779), then its "Red Required checks"
- * part: each check under its name with its attempts, its Failure excerpt and
- * its job link, the excerpts fitted to what's left of `room`.
+ * part: each check under its name with the Reviewer's judgment and reason
+ * (#780), its attempts, its Failure excerpt and its job link, the excerpts
+ * fitted to what's left of `room`. An Execution flaw says which checks are
+ * Unrelated failures and that the run fixing it leaves them alone; a pass
+ * names each and says the Merge gate holds the pull request until it is green.
  */
 function withRedChecks(
   findings: string,
   red: RedRequiredChecks,
-  { verdict, passed, headSha }: { readonly verdict: Verdict; readonly passed: boolean; readonly headSha: string },
+  { verdict, passed, headSha, judged }: { readonly verdict: Verdict; readonly passed: boolean; readonly headSha: string; readonly judged: readonly RedCheckJudgment[] },
   room: number,
 ): string {
   const short = headSha.slice(0, 7);
-  const intro =
+  const caused = judged.filter(({ judgment }) => judgment === "caused");
+  const unrelated = judged.filter(({ judgment }) => judgment === "unrelated").map(({ check }) => check);
+  const one = unrelated.length === 1;
+  const judgedUnrelated =
+    unrelated.length === 0
+      ? []
+      : [`The Reviewer judged ${one ? `${checkCode(unrelated[0]!)} an Unrelated failure` : `each of these an Unrelated failure`}, which doesn't count${one ? "" : `: ${listed(unrelated.map(checkCode))}`}.`];
+  const intro = [
     verdict === "design-flaw"
       ? `These Required checks were still red on ${short} after everything the Kit could do.`
-      : `${passed ? "The Reviewer found no flaw in the code, but these" : "These"} Required checks are still red on ${short} after everything the Kit could do. Each counts as this pull request's own, so this Verdict is an Execution flaw that counts.`;
+      : caused.length > 0
+        ? `${passed ? "The Reviewer found no flaw in the code, but these" : "These"} Required checks are still red on ${short} after everything the Kit could do. The Reviewer judged ${listed(caused.map(({ check }) => checkCode(check)))} caused by this pull request, so this Verdict is an Execution flaw that counts.`
+        : `These Required checks are still red on ${short} after everything the Kit could do.`,
+    ...judgedUnrelated,
+    ...(unrelated.length === 0 || verdict === "design-flaw"
+      ? []
+      : [verdict === "pass" ? `The Merge gate holds this pull request until ${one ? "it is" : "each is"} green on its head.` : `The run that fixes this Verdict leaves ${one ? "it" : "them"} alone.`]),
+  ].join(" ");
+  const notesOf = (check: string): string[] => {
+    const given = judged.find((each) => each.check === check);
+    if (given === undefined) return [];
+    const reason = sentence(withoutMentions(given.reason));
+    return [given.judgment === "caused" ? `Caused by this pull request: ${reason}` : `An Unrelated failure: ${reason}`];
+  };
   const head = [...(findings === "" ? [] : [findings]), "### Red Required checks", intro, ""].join("\n\n");
-  return head + redChecksText(red, REVIEWED_RED_CHECK_HEADINGS, room - head.length);
+  return head + redChecksText(red, REVIEWED_RED_CHECK_HEADINGS, room - head.length, notesOf);
+}
+
+/** A reason as a sentence: ending in a full stop unless it ends in one already. */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/** Names as prose: `a`, `a and b`, `a, b and c`. */
+function listed(names: readonly string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once, or once more after a body-only Touch-up (#751). */
@@ -275,6 +314,7 @@ export function verdictActions(
     followUps = [],
     considered = [],
     checks,
+    unrelated = [],
     ranNothing,
     tags = null,
   }: {
@@ -284,8 +324,10 @@ export function verdictActions(
     readonly findings: string | ((room: number) => string);
     /** On a Reviewer's Execution flaw, its findings counted by tag (#749). */
     readonly tags?: VerdictTags | null;
-    /** On one from red required checks (#462), or a Reviewer's on a head still red (#779), the red checks it counts. */
+    /** On one from red required checks (#462), or a Reviewer's on a head still red (#779), the red checks it counts: the Reviewer's, those it judged caused (#780). */
     readonly checks?: readonly string[];
+    /** On a Reviewer's Verdict on a head still red, the red checks it judged Unrelated failures (#780), which count toward nothing. */
+    readonly unrelated?: readonly string[];
     /** On a Reviewer's Verdict, the Required checks that ran nothing on its head (#456). */
     readonly ranNothing?: readonly string[];
     readonly followUps?: readonly string[];
@@ -306,6 +348,7 @@ export function verdictActions(
     ...(first === null ? {} : { requestChangesFirst: first.reviews }),
     ...(next?.ticketNotReady === true ? { ticketNotReady: true as const } : {}),
     ...(checks === undefined ? {} : { checks }),
+    ...(unrelated.length === 0 ? {} : { unrelated }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     ...(tags === null ? {} : { tags }),
     ...(next?.touchUp === undefined ? {} : { touchUp: next.touchUp }),

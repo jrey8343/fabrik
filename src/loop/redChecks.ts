@@ -37,17 +37,23 @@ export function redChecksGrouped({ failed, rerun }: Pick<RedRequiredChecks, "fai
 /**
  * The red checks under `headings`, each group a heading and its checks, each
  * check its Failure excerpt's list item, and one with no excerpt saying its
- * failure couldn't be read. The excerpts take what's left of `room` around
- * them.
+ * failure couldn't be read. Under each check's name come `notesOf` its
+ * paragraphs, such as the Reviewer's judgment of it (#780). The excerpts take
+ * what's left of `room` around them.
  */
-export function redChecksText(red: RedRequiredChecks, headings: RedCheckHeadings, room = Number.POSITIVE_INFINITY): string {
+export function redChecksText(
+  red: RedRequiredChecks,
+  headings: RedCheckHeadings,
+  room = Number.POSITIVE_INFINITY,
+  notesOf: (check: string) => readonly string[] = () => [],
+): string {
   const { again, outside, plain } = redChecksGrouped(red);
   const excerpts = [...again, ...outside, ...plain].map(
     (name): CheckExcerpt => red.excerpts.find(({ check }) => check === name) ?? { kind: "unread", check: name, link: "", why: NO_EXCERPT },
   );
   const { heading: plainHeading, after = [] } = headings.plain(red.rerun?.refused ?? null);
   const text = (blocks: readonly string[]) => {
-    const blockOf = (name: string) => blocks[excerpts.findIndex(({ check }) => check === name)]!;
+    const blockOf = (name: string) => withNotes(blocks[excerpts.findIndex(({ check }) => check === name)]!, notesOf(name));
     // Each check is a list item of paragraphs, so a blank line parts them.
     const listed = (heading: string, items: readonly string[], between: string, lines: readonly string[] = []) =>
       items.length === 0 ? [] : [[heading, "", items.join(between), ...lines].join("\n")];
@@ -60,6 +66,14 @@ export function redChecksText(red: RedRequiredChecks, headings: RedCheckHeadings
   // The excerpts take what's left of the room around them, the blank lines between them counted.
   const around = text(excerpts.map(() => "")).length;
   return text(renderFailureExcerpts(excerpts, { room: room - around + 2 * Math.max(excerpts.length - 1, 0) }));
+}
+
+/** A check's list item with these paragraphs under its first line, its name, indented to stay in the item. */
+function withNotes(block: string, notes: readonly string[]): string {
+  if (notes.length === 0) return block;
+  const newline = block.indexOf("\n");
+  const [head, rest] = newline === -1 ? [block, ""] : [block.slice(0, newline), block.slice(newline)];
+  return [head, ...notes.map((note) => `  ${note}`)].join("\n\n") + rest;
 }
 
 /**

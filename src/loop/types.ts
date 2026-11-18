@@ -1204,8 +1204,19 @@ export interface VerdictRecord {
    * and started nothing; absent otherwise.
    */
   readonly ticketNotReady?: true;
-  /** On one from red required checks (#462), the ones it named as failed, which a later green on its head is read against; absent otherwise, as on every marker from before them. */
+  /**
+   * On one from red required checks (#462), the ones it named as failed; on a
+   * Reviewer's on a head still red (#779), the ones it judged caused by the
+   * pull request (#780). A later green on its head is read against them.
+   * Absent otherwise, as on every marker from before them.
+   */
   readonly checks?: readonly string[];
+  /**
+   * On a Reviewer's Verdict on a head still red (#780), the red checks it
+   * judged Unrelated failures: they count toward nothing. Absent when it
+   * judged none so, as on every marker from before them.
+   */
+  readonly unrelated?: readonly string[];
   /**
    * On a Reviewer's Verdict, the Required checks that passed on its head only
    * by being skipped or reporting neutral, so ran nothing there (#456): the
