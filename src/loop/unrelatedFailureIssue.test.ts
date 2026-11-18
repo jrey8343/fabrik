@@ -93,6 +93,22 @@ describe("The Verdict after an Unrelated failure line (#781)", () => {
   });
 });
 
+describe("A second Verdict on one head, after a Touch-up that changed only the body (#751, #781)", () => {
+  const earlier = { verdict: "execution-flaw" as const, source: "reviewer" as const, requestChanges: false, unrelated: ["e2e"], touchUp: 1, headSha: HEAD_SHA };
+  const open: KitIssueSnapshot = { number: 88, labels: ["fabrik:flaky-check"], body: '<!-- fabrik:flaky-check-issue {"check":"e2e"} -->\nFlaky.', comments: [] };
+
+  it("says nothing more of a check the first already named an Unrelated failure there, and still links its issue", () => {
+    const pullRequest = aPullRequest({ verdicts: [earlier], bodyOnlyTouchUpHead: HEAD_SHA });
+    const plan = land(`verdict: pass\n\nChecked it.\n\n${ONE_UNRELATED.replace("caused `gate`", "unrelated `gate`")}`, { pullRequest, issues: [open] });
+
+    const line = textOf(actionsOf(plan)[lineIndex(plan)]!);
+    expect(line).toContain(`<!-- fabrik:unrelated-failure {"headSha":"${HEAD_SHA}","checks":["gate"]} -->`);
+    expect(line).not.toContain("`e2e`");
+    expect(actionsOf(plan).some((action) => action.kind === "comment" && action.issue === 88)).toBe(false);
+    expect(textOf(actionsOf(plan)[verdictIndex(plan)]!)).toContain("An Unrelated failure, reported on #88: the booking journey");
+  });
+});
+
 describe("The check's issue for an Unrelated failure (#781)", () => {
   it("is filed when none is open, under the new title with both labels, the Reviewer's reason, mentioning nobody, and the red run's excerpt", () => {
     const plan = land(`verdict: execution-flaw\n\n- The empty cart throws.\n\n${ONE_UNRELATED}`);

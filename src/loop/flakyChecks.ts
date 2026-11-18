@@ -150,26 +150,34 @@ function issueActions(
  * mentioning nobody, with its marker, saying each is still red and that the
  * Reviewer judged the PR didn't cause it, and linking its issue. The Verdict
  * that follows is the event's one notification, and links each issue too, by
- * `refs`. Nothing when there is none.
+ * `refs`. A check `saidBefore`, which an earlier Verdict on this head named an
+ * Unrelated failure, as before a Touch-up that changed only the body (#751),
+ * is said once: only its open issue is linked. Nothing when there is none.
  */
 export function unrelatedFailureActions(
   pullRequest: number,
   headSha: string,
   unrelated: readonly UnrelatedFailure[],
   issues: readonly KitIssueSnapshot[],
+  saidBefore: readonly string[] = [],
 ): { actions: Action[]; refs: ReadonlyMap<string, number | CreatedIssue> } {
-  if (unrelated.length === 0) return { actions: [], refs: new Map() };
-  const { actions, refs } = issueActions(pullRequest, headSha, unrelated.map((check) => ({ kind: "unrelated", check })), issues);
+  const fresh = unrelated.filter(({ name }) => !saidBefore.includes(name));
+  const linked = new Map<string, number | CreatedIssue>(
+    unrelated.flatMap(({ name }) => {
+      const open = issues.find((issue) => flakyCheckIssueOf(issue.body) === name);
+      return open === undefined ? [] : [[name, open.number] as const];
+    }),
+  );
+  if (fresh.length === 0) return { actions: [], refs: linked };
+  const { actions, refs } = issueActions(pullRequest, headSha, fresh.map((check) => ({ kind: "unrelated", check })), issues);
   const short = headSha.slice(0, 7);
-  const body: (string | CreatedIssue)[] = [unrelatedFailureMarker({ headSha, checks: unrelated.map(({ name }) => name) }), "\n"];
-  unrelated.forEach(({ name }, at) => {
+  const body: (string | CreatedIssue)[] = [unrelatedFailureMarker({ headSha, checks: fresh.map(({ name }) => name) }), "\n"];
+  fresh.forEach(({ name }, at) => {
     body.push(`${at === 0 ? "" : " "}${checkCode(name)} is still red on ${short}, and the Reviewer judged this pull request didn't cause it: an Unrelated failure (`);
     body.push(issueRef(refs[at]!), ").");
+    linked.set(name, refs[at]!);
   });
-  return {
-    actions: [...actions, { kind: "comment-linking", issue: pullRequest, body }],
-    refs: new Map(unrelated.map(({ name }, at) => [name, refs[at]!])),
-  };
+  return { actions: [...actions, { kind: "comment-linking", issue: pullRequest, body }], refs: linked };
 }
 
 /**

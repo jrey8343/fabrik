@@ -155,7 +155,9 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
     const unrelated = judged.filter(({ judgment }) => judgment === "unrelated").map(({ check }) => check);
     const verdict = verdictOnRedHead(parsed.verdict, counting);
     // Each Unrelated failure is said on the PR ahead of the Verdict, with its check's issue, which the Verdict links too (#781).
-    const said = unrelatedFailureActions(pullRequest.number, event.headSha, unrelatedFailuresOf(judged, red, event.runUrl), snapshot.flakyCheckIssues);
+    // A second Verdict on this head, after a Touch-up that changed only the body (#751), says none again.
+    const saidBefore = pullRequest.verdicts.filter(({ headSha }) => headSha === event.headSha).flatMap((record) => record.unrelated ?? []);
+    const said = unrelatedFailureActions(pullRequest.number, event.headSha, unrelatedFailuresOf(judged, red, event.runUrl), snapshot.flakyCheckIssues, saidBefore);
     // A pass is what the Reviewer checked, then any Follow-ups; a flaw is its findings.
     const reviewed = parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings;
     // Counted as the Review that gave it was started (#749): the snapshot holds the Verdicts before this one. A pass a
