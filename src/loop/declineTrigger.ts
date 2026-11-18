@@ -3,7 +3,7 @@
 // Operator doesn't watch the label vanish with no word (#417). A trigger
 // label put on the wrong object, such as agent:review on a Ticket, comes off
 // the same way, with one line saying where it goes (#479).
-import { DIGEST_LABEL, DISPATCH_LABEL, type Label, NEEDS_TRIAGE, REVIEW_LABEL } from "./labels.ts";
+import { DIGEST_LABEL, DISPATCH_LABEL, type Label, NEEDS_TRIAGE, RERUN_CHECKS_LABEL, REVIEW_LABEL } from "./labels.ts";
 import type { Action, PullRequestSnapshot } from "./types.ts";
 
 /** Takes `label` off `issue` and says in one line why nothing started. `why` reads as a clause, with no full stop. */
@@ -22,6 +22,11 @@ export function reviewLabelOnIssue(issue: number, openPullRequests: readonly num
 /** agent:digest added to an issue: it goes on the Ticket's PR too, where the Digest writer writes. */
 export function digestLabelOnIssue(issue: number, openPullRequests: readonly number[]): Action[] {
   return pullRequestLabelOnIssue(issue, DIGEST_LABEL, openPullRequests);
+}
+
+/** agent:rerun-checks added to an issue: it goes on an agent PR at the Merge gate, where the Tick adds it (#783). */
+export function rerunChecksLabelOnIssue(issue: number, openPullRequests: readonly number[]): Action[] {
+  return pullRequestLabelOnIssue(issue, RERUN_CHECKS_LABEL, openPullRequests);
 }
 
 /** A trigger label that starts its run only on a PR, added to an issue: it comes off, naming the Ticket's open PR when it has one. */

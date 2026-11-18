@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CheckDetail, rerunOutcome, redChecksOf, settledChecksOutcome, whyNotRerun } from "./rerun.ts";
+import { type CheckDetail, rerunOutcome, redChecksOf, settledChecksOutcome, whyNotRerun, whyNotRerunRun } from "./rerun.ts";
 
 const actions = (name: string, bucket: CheckDetail["bucket"], run: number, startedAt = "2026-11-11T10:00:00Z"): CheckDetail => ({
   name,
@@ -100,6 +100,27 @@ describe("Why the Kit couldn't re-run red checks", () => {
   it("gives GitHub's own words for any other refusal", () => {
     expect(whyNotRerun("gh: Unable to retry this workflow run because it was created over a month ago (HTTP 403)\n")).toBe(
       "GitHub refused: Unable to retry this workflow run because it was created over a month ago",
+    );
+  });
+});
+
+describe("Which workflow runs the Re-run red checks job re-runs", () => {
+  const firstAttempt = { run_attempt: 1, head_sha: "c".repeat(40) };
+  const reRunAlready = { run_attempt: 2, head_sha: "c".repeat(40) };
+
+  it("re-runs nothing on a run past its first attempt for the Review's own re-run: one round per head", () => {
+    expect(whyNotRerunRun(reRunAlready, { atGate: null })).toBe("they had been re-run on this head already");
+    expect(whyNotRerunRun(firstAttempt, { atGate: null })).toBeNull();
+  });
+
+  it("re-runs a run past its first attempt this once at the Merge gate (#783), on the head the Kit's line named", () => {
+    expect(whyNotRerunRun(reRunAlready, { atGate: "c".repeat(40) })).toBeNull();
+    expect(whyNotRerunRun(firstAttempt, { atGate: "c".repeat(40) })).toBeNull();
+  });
+
+  it("re-runs nothing at the Merge gate behind a run on another head", () => {
+    expect(whyNotRerunRun(reRunAlready, { atGate: "d".repeat(40) })).toBe(
+      `a workflow run behind them is on ${"c".repeat(7)}, not ${"d".repeat(7)}, the head the Kit asked to re-run them on`,
     );
   });
 });
