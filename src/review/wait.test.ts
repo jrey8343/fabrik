@@ -3,6 +3,7 @@ import type { FailureReader } from "./failureExcerpt.ts";
 import type { CheckDetail } from "./rerun.ts";
 import {
   type ChecksWaitGitHub,
+  conflictReport,
   errorReport,
   gaveUpReport,
   type PullRequestState,
@@ -15,7 +16,11 @@ import {
 const HEAD = "a".repeat(40);
 const MINUTE = 60_000;
 
-const open: PullRequestState = { headRefOid: HEAD, isDraft: true, state: "OPEN" };
+const open: PullRequestState = { headRefOid: HEAD, isDraft: true, state: "OPEN", mergeable: "MERGEABLE" };
+/** GitHub runs no `pull_request` workflow on a PR that conflicts with its base, so a Required check that hadn't started never will (#704). */
+const conflicting: PullRequestState = { ...open, mergeable: "CONFLICTING" };
+/** GitHub hadn't yet worked out whether it merges cleanly. */
+const unknown: PullRequestState = { ...open, mergeable: "UNKNOWN" };
 
 /** A PR whose checks read as `rounds` gives them, one round per poll, the last repeating; and a clock that only moves when the wait sleeps. */
 function fakes(rounds: readonly (readonly CheckDetail[])[], states: readonly PullRequestState[] = [open]) {
@@ -89,6 +94,8 @@ describe("Waiting for an agent PR's required checks", () => {
       headSha: HEAD,
       unreported: ["e2e"],
       running: [],
+      waitedMinutes: 27,
+      mergeable: true,
     });
   });
 
@@ -100,6 +107,52 @@ describe("Waiting for an agent PR's required checks", () => {
       headSha: HEAD,
       unreported: [],
       running: ["build"],
+      waitedMinutes: 27,
+      mergeable: true,
+    });
+  });
+
+  // #704: GitHub never starts a `pull_request` check on a PR it can't merge, so waiting on one is waiting for nothing.
+  it("stops at once when the PR conflicts with its base and a Required check never reported, naming the ones that didn't", async () => {
+    const { github, logged, options } = fakes([[check("build", "pass")]], [conflicting]);
+
+    expect(await waitForRequiredChecks(github, options(["build", "e2e", "gate"]))).toEqual({
+      checks: "conflicting",
+      headSha: HEAD,
+      unreported: ["e2e", "gate"],
+      waitedMinutes: 1,
+    });
+    expect(logged).toEqual(["Stopped waiting after 1 minute: the PR conflicts with its base, so GitHub won't start e2e, gate on this head"]);
+  });
+
+  it("keeps waiting on a PR that conflicts with its base while every Required check has reported or is running, and goes green as they pass", async () => {
+    const { github, options } = fakes(
+      [
+        [check("build", "pending"), check("e2e", "pending")],
+        [check("build", "pass"), check("e2e", "pass")],
+      ],
+      [conflicting],
+    );
+
+    expect(await waitForRequiredChecks(github, options(["build", "e2e"]))).toEqual({ checks: "green", headSha: HEAD, ranNothing: [] });
+  });
+
+  it("keeps waiting on a PR that conflicts with its base while its Required checks run, and goes red on one that fails", async () => {
+    const { github, options } = fakes([[check("build", "pending")], [check("build", "fail")]], [conflicting]);
+
+    expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"] });
+  });
+
+  it("keeps waiting while GitHub hasn't worked out whether the PR merges cleanly, and gives up recording that it didn't know", async () => {
+    const { github, options } = fakes([[check("build", "pass")]], [unknown]);
+
+    expect(await waitForRequiredChecks(github, options(["build", "e2e"]))).toEqual({
+      checks: "gave-up",
+      headSha: HEAD,
+      unreported: ["e2e"],
+      running: [],
+      waitedMinutes: 27,
+      mergeable: null,
     });
   });
 
@@ -180,7 +233,7 @@ describe("The Required checks a Review waits on: those the Kit config lists plus
   });
 
   it("give up naming a check only the branch requires that never reported", async () => {
-    expect(await waitOn(["a", "b"], ["a"], [[check("a", "pass")]])).toEqual({ checks: "gave-up", headSha: HEAD, unreported: ["b"], running: [] });
+    expect(await waitOn(["a", "b"], ["a"], [[check("a", "pass")]])).toEqual({ checks: "gave-up", headSha: HEAD, unreported: ["b"], running: [], waitedMinutes: 27, mergeable: true });
   });
 
   it("still include a check the Kit config lists that the branch doesn't require", async () => {
@@ -188,7 +241,7 @@ describe("The Required checks a Review waits on: those the Kit config lists plus
   });
 
   it("give up naming a check the branch requires that never registered on the head, with nothing listed in the Kit config", async () => {
-    expect(await waitOn(["b"], [], [[]])).toEqual({ checks: "gave-up", headSha: HEAD, unreported: ["b"], running: [] });
+    expect(await waitOn(["b"], [], [[]])).toEqual({ checks: "gave-up", headSha: HEAD, unreported: ["b"], running: [], waitedMinutes: 27, mergeable: true });
   });
 
   it("never include a check on the head in neither list, such as `loop / Kit`", async () => {
@@ -210,19 +263,39 @@ describe("The Required checks a Review waits on: those the Kit config lists plus
 });
 
 describe("What a wait that gave up reports", () => {
-  it("names the Required checks that never reported, even with others still running", () => {
-    expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: ["e2e"], running: ["build"] })).toEqual({
+  it("names the Required checks that never reported, even with others still running, with the head, how long it waited and the last mergeable state it read", () => {
+    expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: ["e2e"], running: ["build"], waitedMinutes: 27, mergeable: true })).toEqual({
       failure: "unreported-checks",
       detail: "",
       checks: ["e2e"],
+      headSha: HEAD,
+      waitedMinutes: 27,
+      mergeable: true,
     });
   });
 
+  it("records a mergeable state GitHub hadn't worked out as unknown", () => {
+    expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: ["e2e"], running: [], waitedMinutes: 27, mergeable: null })).toMatchObject({ mergeable: null });
+  });
+
   it("is a timeout naming the checks still running when every Required check reported", () => {
-    expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: [], running: ["build", "lint"] })).toEqual({
+    expect(gaveUpReport({ checks: "gave-up", headSha: HEAD, unreported: [], running: ["build", "lint"], waitedMinutes: 27, mergeable: true })).toEqual({
       failure: "timeout",
       detail: "",
       checks: ["build", "lint"],
+    });
+  });
+});
+
+describe("What a wait that stopped on a conflict reports", () => {
+  it("is a merge conflict naming the Required checks that never reported, with the head and how long it waited", () => {
+    expect(conflictReport({ checks: "conflicting", headSha: HEAD, unreported: ["e2e", "gate"], waitedMinutes: 1 })).toEqual({
+      failure: "merge-conflict",
+      detail: "",
+      checks: ["e2e", "gate"],
+      headSha: HEAD,
+      waitedMinutes: 1,
+      mergeable: false,
     });
   });
 });

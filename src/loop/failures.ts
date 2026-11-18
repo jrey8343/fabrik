@@ -26,7 +26,8 @@
 // refused on a weekly limit, killed for spending usage credits or refused a
 // dead token still opens or updates that Kit-owned issue.
 import { keptBranchOff } from "./backToDesign.ts";
-import { conflictRunEnded } from "./conflicts.ts";
+import { checkNames } from "./checkNames.ts";
+import { afterConflictedReview, conflictRunEnded } from "./conflicts.ts";
 import { prototypeRole } from "./design.ts";
 import { noDigestAfter } from "./digest.ts";
 import { heldLineOn, heldRunName } from "./heldLine.ts";
@@ -50,6 +51,7 @@ import {
   type IssueContext,
   type KitConfig,
   type LoopEvent,
+  type MergeableSnapshot,
   type Plan,
   type PullRequestSnapshot,
 } from "./types.ts";
@@ -154,32 +156,56 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
       return `${run.role === "implement" ? "the Implementer" : "the agent"} built on commits its branch didn't start from, so the push job couldn't rebuild it`;
     case "left-branch":
       return `${run.role === "implement" ? "the Implementer" : "the agent"} left its branch, so its work couldn't be read off it`;
-    case "unreported-checks": {
-      const unreported = run.report?.checks ?? [];
-      // A report that lost its check names still says what to look for, without naming one.
-      if (unreported.length === 0) return "a Required check never reported on this PR; check the workflow names and `paths:` filters of the Required checks, those the default branch requires and those `sandbox.checks` lists";
-      // Setup never takes a check off the branch, so dropping one from `sandbox.checks` alone won't stop the Review waiting on it (#565).
-      const [checks, its, workflows, names, filters, it, itIs] =
-        unreported.length === 1
-          ? (["check", "its", "workflow's", "name", "filter", "it", "it's"] as const)
-          : (["checks", "their", "workflows'", "names", "filters", "them", "they're"] as const);
-      return `the Required ${checks} ${checkNames(unreported)} never reported on this PR; fix ${its} ${workflows} ${names} or \`paths:\` ${filters}, or take ${it} off the default branch's required list on github.com, and out of \`sandbox.checks\` too if ${itIs} listed there`;
-    }
+    // A Review's notice says these in its own words (unreportedChecksNotice; afterConflictedReview in src/loop/conflicts.ts); no other role's run reports them.
+    case "unreported-checks":
+      return "a Required check never started on its PR";
+    case "merge-conflict":
+      return "its PR conflicts with `main`, so GitHub didn't start its Required checks";
   }
 }
 
-/** Check names as a notice lists them: each in code, joined with commas and a last "and". */
-function checkNames(names: readonly string[]): string {
-  const quoted = names.map((name) => `\`${name.replace(/`/g, "'")}\``);
-  const last = quoted.pop();
-  return quoted.length === 0 ? (last ?? "") : `${quoted.join(", ")} and ${last}`;
+/**
+ * The notice on a Review that gave up waiting on Required checks that never
+ * started (#704), on a PR GitHub didn't say conflicts, since one that did
+ * stops the wait at once (src/review/wait.ts): what happened and the one likely
+ * cause, the workflows, first; then, in bold, that it needs the Operator, and
+ * how to go on once it's fixed. When GitHub hadn't worked out whether the PR
+ * merges cleanly, a conflict could also have stopped the checks, so it says
+ * so. A report that lost what it waited on still says where to look. That
+ * it's an Infrastructure failure, using no retry, is the Loop's to know, on
+ * a hidden line, as is which hand-back it is.
+ */
+function unreportedChecksNotice(run: FailedRun, pullRequest: number, operator: string, handBack: HandBackMark): string {
+  const { checks = [], headSha, waitedMinutes, mergeable } = run.report ?? {};
+  const pr = `#${pullRequest}`;
+  const waited = `Review waited${waitedMinutes === undefined ? "" : ` ${minutesOf(waitedMinutes)}`} on ${pr}${headSha === undefined ? "" : `'s head \`${headSha.slice(0, 7)}\``}`;
+  const never = checks.length === 0 ? "a Required check never started" : `${checkNames(checks)} never started`;
+  const [workflows, their, jobs, areNamed] = checks.length === 1 ? ["workflow", "its", "job", "is named"] : ["workflows", "their", "jobs", "are named"];
+  const named = checks.length === 0 ? "as the Required checks are" : checkNames(checks);
+  const cause = `the likely cause is the ${workflows}: check that ${their} ${jobs} ${areNamed} ${named}, and that no \`paths:\` filter skips this PR's files.`;
+  const likely = mergeable === true ? `${pr} merges cleanly with \`main\`, so ${cause}` : `${cause.charAt(0).toUpperCase()}${cause.slice(1)}`;
+  const unknown = mergeable === null ? ` GitHub hadn't yet worked out whether ${pr} merges cleanly; if it conflicts with \`main\`, that would also stop the checks.` : "";
+  return [
+    `@${operator} ${waited}, and ${never}. ${likely}${unknown}`,
+    "",
+    `**This needs you.** Once it's fixed, re-add \`${RESUME_LABELS.review}\` on ${pr}.`,
+    "",
+    `[The run](${run.runUrl})`,
+    `<!-- This is an Infrastructure failure, so ${notRetried("review")}. -->`,
+    handBackMarker(handBack),
+  ].join("\n");
+}
+
+/** A whole number of minutes, as a notice says it. */
+function minutesOf(count: number): string {
+  return `${count} minute${count === 1 ? "" : "s"}`;
 }
 
 /**
  * How the notice says to go on. GitHub refuses a refused input read again
- * each time the run goes again, so for that the Kit needs fixing first, and a
- * Required check that never reported needs its workflow or the Required
- * checks fixing; a run that hit the weekly limit waits for its reset, as the
+ * each time the run goes again, so for that the Kit needs fixing first (a
+ * Review's Required check that never reported has its own notice,
+ * unreportedChecksNotice); a run that hit the weekly limit waits for its reset, as the
  * weekly-limit issue's Steps say (#436); after any other failure, including an
  * input read GitHub failed or never answered, `resume` runs it again.
  */
@@ -189,8 +215,6 @@ function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: str
     const resetsAt = run.report?.resetsAt;
     return `Once the weekly limit resets${resetsAt === undefined ? "" : ` at ${readable(resetsAt, timeZone)}`}, ${resumeMidSentence}`;
   }
-  // A check that never reported won't on a re-run either, until its workflow or the Required checks change (#454, #565).
-  if (failure === "unreported-checks") return `Re-adding the \`${RESUME_LABELS[run.role]}\` label won't change this. After fixing the workflow or the Required checks, ${resumeMidSentence}`;
   if (failure !== "unread-inputs" || run.report?.refused !== true) return resume;
   return `GitHub refuses this request every time, so running it again won't help: the Kit needs fixing first. Once that fix is in, ${resumeMidSentence}`;
 }
@@ -221,9 +245,18 @@ function heldOnRefusal(
 /**
  * One comment on the Ticket's PR if it has one, else the issue. It carries the
  * Operator's only @-mention, unless the failure stalls the whole repo: then a
- * Kit-owned issue does the notifying, once, and the comment points there.
+ * Kit-owned issue does the notifying, once, and the comment points there. A
+ * Review that stopped because its PR conflicts with main isn't handed back:
+ * the Kit brings the PR up to date (afterConflictedReview), from `mergeable`,
+ * its own read of the PR, gathered for that failure alone.
  */
-export function failureNotice(run: FailedRun, context: IssueContext, config: KitConfig, pullRequest: PullRequestSnapshot | null = null): Plan {
+export function failureNotice(
+  run: FailedRun,
+  context: IssueContext,
+  config: KitConfig,
+  pullRequest: PullRequestSnapshot | null = null,
+  mergeable: MergeableSnapshot | null = null,
+): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
   const ranOn = ranOnOf(run, config);
@@ -235,6 +268,7 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
     const repoWide = repoWideNotice(failure, context, { run: failedRun, runUrl: run.runUrl, resetsAt: run.report?.resetsAt ?? null, ...ranOn, timeZone: config.timeZone });
     return landed.kind !== "act" || repoWide === null ? landed : { ...landed, actions: [...landed.actions, ...repoWide.actions] };
   }
+  if (run.role === "review" && failure === "merge-conflict") return conflictedReviewPlan(run, context, config, pullRequest, mergeable);
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
@@ -331,18 +365,23 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ],
     };
   }
-  const body = noticeBody({
-    marker: target === run.issue || run.role === "implement" ? FAILURE_MARKERS[run.role] : undefined,
-    mention: repoWide === null ? operator : null,
-    failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
-    detail: quotedDetail(run, failure),
-    commits: run.report?.commits === undefined ? null : commitsLeft(run.report.commits),
-    failureKind: broken === null ? `This is an Infrastructure failure, so ${notRetried(run.role)}.` : freeBrokenRun(pullRequest),
-    resume: resumeAfter(failure, run, resume, config.timeZone),
-    pointer: repoWide?.pointer ?? null,
-    runUrl: run.runUrl,
-    handBack: { kind: handBackOfFailed(run.role, broken), role: run.role, failure, ...(run.role === "design" ? namedRun(run.runUrl) : {}) },
-  });
+  const handBack: HandBackMark = { kind: handBackOfFailed(run.role, broken), role: run.role, failure, ...(run.role === "design" ? namedRun(run.runUrl) : {}) };
+  // Checks that never started on a PR that may merge cleanly: the notice says so first, and that it needs the Operator (#704).
+  const body =
+    run.role === "review" && failure === "unreported-checks"
+      ? unreportedChecksNotice(run, target, operator, handBack)
+      : noticeBody({
+          marker: target === run.issue || run.role === "implement" ? FAILURE_MARKERS[run.role] : undefined,
+          mention: repoWide === null ? operator : null,
+          failed: `${failedRun} failed: ${howItFailed(failure, run, config)}.`,
+          detail: quotedDetail(run, failure),
+          commits: run.report?.commits === undefined ? null : commitsLeft(run.report.commits),
+          failureKind: broken === null ? `This is an Infrastructure failure, so ${notRetried(run.role)}.` : freeBrokenRun(pullRequest),
+          resume: resumeAfter(failure, run, resume, config.timeZone),
+          pointer: repoWide?.pointer ?? null,
+          runUrl: run.runUrl,
+          handBack,
+        });
   return {
     kind: "act",
     actions: [
@@ -352,6 +391,29 @@ export function failureNotice(run: FailedRun, context: IssueContext, config: Kit
       ...(repoWide?.actions ?? []),
     ],
   };
+}
+
+/**
+ * After a Review whose wait stopped because its PR conflicts with main (#704,
+ * ADR-0028): the review trigger comes off, as after any failed Review, so
+ * adding it back is a fresh event, and the Kit brings the PR up to date or
+ * says why it can't. Nothing when the snapshot has no open agent draft for the
+ * Ticket, or no read of whether it conflicts: no Review weighs such a PR, and
+ * a conflict is never handed back as an Infrastructure failure (ADR-0028).
+ */
+function conflictedReviewPlan(
+  run: FailedRun,
+  { issue, operator, kitIssues }: IssueContext,
+  config: KitConfig,
+  pullRequest: PullRequestSnapshot | null,
+  mergeable: MergeableSnapshot | null,
+): Plan {
+  const open = issue.openPullRequests[0];
+  const nothing: Plan = { kind: "nothing", reason: `The Review on #${open ?? run.issue} stopped on a conflict with main, but #${run.issue} has no open agent draft PR to bring up to date` };
+  if (pullRequest === null || mergeable === null || open !== pullRequest.number) return nothing;
+  const actions = afterConflictedReview(pullRequest, mergeable, run.report?.checks ?? [], operator, heldOn(kitIssues, config));
+  if (actions === null) return nothing;
+  return { kind: "act", actions: [{ kind: "remove-label", issue: pullRequest.number, label: RESUME_LABELS.review }, ...actions] };
 }
 
 /**

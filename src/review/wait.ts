@@ -2,11 +2,15 @@
 // on its head, and tells the workflow how they ended. It holds only a
 // read-only token and runs none of the PR's code. It logs what it waits on
 // whenever that changes, and every few minutes while it doesn't, and gives up
-// a few minutes short of its job's timeout (the Review timeout). It waits on
+// a few minutes short of its job's timeout (the Review timeout), or at once
+// when the PR conflicts with its base and a Required check hasn't reported:
+// GitHub starts no `pull_request` workflow on a PR it can't merge, so that
+// check never will (#704). It waits on
 // the Required checks: those the Kit config lists plus any the default branch
 // requires, the branch's list read once before it starts (#565). Giving up, or
 // any error, fails the job and leaves a failure report for the push job's
-// notice: a Required check that never reported is named, as no re-run fixes it.
+// notice: a Required check that never reported is named, as no re-run fixes it,
+// with the head it waited on, for how long, and whether the PR merged cleanly.
 //   node src/review/wait.ts <product checkout>
 // Env: GH_TOKEN (read-only, `contents: read` enough for the branch), GITHUB_REPOSITORY, FABRIK_PULL_REQUEST, GITHUB_OUTPUT,
 //   FABRIK_REVIEW_TIMEOUT_MINUTES (the job's timeout), FABRIK_OUT_DIR (where the failure report and the Failure excerpts go).
@@ -36,6 +40,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { GitHub } from "../github/client.ts";
+import type { MergeableState } from "../github/snapshot.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { checkCode } from "../loop/flakyChecks.ts";
 import type { FailureReport } from "../loop/types.ts";
@@ -82,10 +87,12 @@ export interface PullRequestState {
   readonly headRefOid: string;
   readonly isDraft: boolean;
   readonly state: string;
+  /** Whether GitHub can merge it into its base: UNKNOWN while GitHub is still working that out. */
+  readonly mergeable: MergeableState;
 }
 
 async function pullRequestState(repo: string, number: string): Promise<PullRequestState> {
-  const { stdout, stderr, failed } = await gh("pr", "view", number, "--repo", repo, "--json", "headRefOid,isDraft,state");
+  const { stdout, stderr, failed } = await gh("pr", "view", number, "--repo", repo, "--json", "headRefOid,isDraft,mergeable,state");
   if (failed) throw new Error(`gh pr view failed: ${stderr.trim() || "no output"}`);
   return JSON.parse(stdout) as PullRequestState;
 }
@@ -107,7 +114,7 @@ export async function requiredChecksToWaitOn(readBranch: () => Promise<BranchReq
   return [...new Set([...branch.required, ...listedChecks])];
 }
 
-/** What the wait reads from GitHub: the PR's state, and its head's checks. */
+/** What the wait reads from GitHub: the PR's state, its mergeable state among it, and its head's checks. */
 export interface ChecksWaitGitHub {
   pullRequestState(): Promise<PullRequestState>;
   checks(): Promise<CheckDetail[]>;
@@ -127,13 +134,27 @@ export interface ChecksWaitOptions {
   readonly outcome?: (checks: readonly CheckDetail[], requiredChecks: readonly string[]) => ChecksOutcome;
 }
 
-/** How the wait ended. It gives up at its deadline, naming the Required checks that never reported and those still running. */
+/**
+ * How the wait ended. It gives up at its deadline, naming the Required checks
+ * that never reported and those still running, how long it waited, and the
+ * last mergeable state it read (null when GitHub hadn't worked it out). It
+ * stops at once as `conflicting` when the PR conflicts with its base while a
+ * Required check hasn't reported, naming those that hadn't.
+ */
 export type ChecksWaitOutcome =
   | { readonly checks: "stale"; readonly headSha: string }
   /** `ranNothing`: the checks that passed only by being skipped or reporting neutral. */
   | { readonly checks: "green"; readonly headSha: string; readonly ranNothing: readonly string[] }
   | { readonly checks: "red"; readonly headSha: string; readonly failed: readonly string[] }
-  | { readonly checks: "gave-up"; readonly headSha: string; readonly unreported: readonly string[]; readonly running: readonly string[] };
+  | {
+      readonly checks: "gave-up";
+      readonly headSha: string;
+      readonly unreported: readonly string[];
+      readonly running: readonly string[];
+      readonly waitedMinutes: number;
+      readonly mergeable: boolean | null;
+    }
+  | { readonly checks: "conflicting"; readonly headSha: string; readonly unreported: readonly string[]; readonly waitedMinutes: number };
 
 /** The checks it waits on, as its log names them. */
 function waitingOn(unreported: readonly string[], running: readonly string[]): string {
@@ -164,7 +185,10 @@ async function whileWaiting<T>(read: () => Promise<T>): Promise<T> {
 /**
  * Waits for the PR's Required checks on the head it started at: polls until
  * they all passed or one didn't, the PR moves on, or its deadline passes. A
- * check on the head that isn't Required never gates it.
+ * check on the head that isn't Required never gates it. On a PR that
+ * conflicts with its base, a Required check that hasn't reported never will,
+ * so it stops then; checks that started before the base moved still finish,
+ * and while every one has reported or runs, it waits on them as on any PR.
  */
 export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: ChecksWaitOptions): Promise<ChecksWaitOutcome> {
   const { requiredChecks, deadlineMs, now, sleep, log, outcome = requiredChecksOutcome } = options;
@@ -180,9 +204,14 @@ export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: C
     if (result.kind === "green") return { checks: "green", headSha, ranNothing: result.ranNothing };
     if (result.kind === "red") return { checks: "red", headSha, failed: result.failed };
     const line = waitingOn(result.unreported, result.running);
+    const waitedMinutes = Math.round((now() - started) / 60_000);
+    if (state.mergeable === "CONFLICTING" && result.unreported.length > 0) {
+      log(`Stopped waiting after ${minutes(waitedMinutes)}: the PR conflicts with its base, so GitHub won't start ${result.unreported.join(", ")} on this head`);
+      return { checks: "conflicting", headSha, unreported: result.unreported, waitedMinutes };
+    }
     if (now() - started >= deadlineMs) {
       log(`Gave up waiting after ${Math.round(deadlineMs / 60_000)} minutes, still waiting on ${line}`);
-      return { checks: "gave-up", headSha, unreported: result.unreported, running: result.running };
+      return { checks: "gave-up", headSha, unreported: result.unreported, running: result.running, waitedMinutes, mergeable: mergeableOf(state.mergeable) };
     }
     if (line !== said || now() - saidAt >= LOG_EVERY_MS) {
       log(`Waiting on ${line}`);
@@ -194,13 +223,39 @@ export async function waitForRequiredChecks(github: ChecksWaitGitHub, options: C
 }
 
 /**
+ * Whether the PR merges cleanly, as the Loop's snapshot reads it (mergeableOf
+ * in src/github/snapshot.ts, whose module this job doesn't load): null while
+ * GitHub is still working it out.
+ */
+function mergeableOf(state: MergeableState): boolean | null {
+  return state === "UNKNOWN" ? null : state === "MERGEABLE";
+}
+
+/** A whole number of minutes, as the wait's log says it. */
+function minutes(count: number): string {
+  return `${count} minute${count === 1 ? "" : "s"}`;
+}
+
+/**
  * The failure report a wait that gave up leaves for the push job's notice: the
- * Required checks that never reported, if any did not, as no re-run fixes those;
- * else a timeout naming the checks still running.
+ * Required checks that never reported, if any did not, as no re-run fixes those,
+ * with the head, how long it waited and whether the PR merged cleanly, for the
+ * notice to say what most likely kept them from starting; else a timeout naming
+ * the checks still running.
  */
 export function gaveUpReport(outcome: Extract<ChecksWaitOutcome, { checks: "gave-up" }>): FailureReport {
-  if (outcome.unreported.length > 0) return { failure: "unreported-checks", detail: "", checks: outcome.unreported };
-  return { failure: "timeout", detail: "", checks: outcome.running };
+  if (outcome.unreported.length === 0) return { failure: "timeout", detail: "", checks: outcome.running };
+  const { headSha, waitedMinutes, mergeable } = outcome;
+  return { failure: "unreported-checks", detail: "", checks: outcome.unreported, headSha, waitedMinutes, mergeable };
+}
+
+/**
+ * The failure report a wait that stopped on a conflict leaves (#704): the
+ * Required checks GitHub won't start on the head, for the Loop to bring the
+ * PR up to date with its base (ADR-0028).
+ */
+export function conflictReport({ headSha, unreported, waitedMinutes }: Extract<ChecksWaitOutcome, { checks: "conflicting" }>): FailureReport {
+  return { failure: "merge-conflict", detail: "", checks: unreported, headSha, waitedMinutes, mergeable: false };
 }
 
 async function leaveFailureReport(report: FailureReport): Promise<void> {
@@ -244,8 +299,8 @@ async function main(productDir: string): Promise<void> {
       log: (line) => console.log(line),
     },
   );
-  if (outcome.checks === "gave-up") {
-    await leaveFailureReport(gaveUpReport(outcome));
+  if (outcome.checks === "gave-up" || outcome.checks === "conflicting") {
+    await leaveFailureReport(outcome.checks === "gave-up" ? gaveUpReport(outcome) : conflictReport(outcome));
     process.exitCode = 1;
     return;
   }

@@ -629,8 +629,10 @@ export async function gatherSnapshot(
   const flakySweep = event.kind === "scheduled-tick" && conflicts !== null ? await gatherFlakySweep(github, repo, conflicts.pullRequests) : null;
   // And reports a Required check that has both failed and succeeded on a head the Reviewer passed, at the Merge gate (#693).
   const passedHeads = event.kind === "scheduled-tick" && conflicts !== null ? await gatherPassedHeads(github, repo, conflicts.pullRequests) : null;
-  // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480).
-  const mergeable = event.kind === "review-run-finished" ? await gatherMergeable(github, repo, event.pullRequest, wait) : null;
+  // A Reviewer's pass on a PR that conflicts with main brings it up to date instead of opening the Merge gate (#480), and
+  // a Review that stopped because its PR conflicts does at once (#704): the Loop reads that again itself, not trusting the wait's read.
+  const weighedForConflict = event.kind === "review-run-finished" ? event.pullRequest : stoppedOnConflict(event) ? (part?.pullRequest?.number ?? null) : null;
+  const mergeable = weighedForConflict === null ? null : await gatherMergeable(github, repo, weighedForConflict, wait);
   // By default the Operator owns the Product repos they run Fabrik in.
   const theOperator = part?.operator ?? operator ?? owner;
   // An agent pull request that merges or closes with a Roll-in unsent has that Roll-in's issue reopened for Triage (#663).
@@ -1271,7 +1273,9 @@ async function gatherEventPart(
       // A failed Implement run on a Ticket with an open PR may be a Broken Retry, which posts a Verdict there (#434).
       const ticket = await gatherIssue(github, repo, event.issue, operator, appLogin);
       // A failed Digest run's no-Digest line goes on the PR the Kit job named, closed by now or not.
-      const open = event.digest?.pullRequest ?? (event.role === "implement" && event.prototype !== true ? ticket.issue?.openPullRequests[0] : undefined);
+      // A Review that stopped on a conflict brings its PR up to date (#704), so the PR is weighed too.
+      const weighsPullRequest = (event.role === "implement" && event.prototype !== true) || stoppedOnConflict(event);
+      const open = event.digest?.pullRequest ?? (weighsPullRequest ? ticket.issue?.openPullRequests[0] : undefined);
       if (open === undefined) return ticket;
       const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);
       return { ...ticket, pullRequest };
@@ -1291,6 +1295,11 @@ async function gatherEventPart(
     default:
       return gatherIssue(github, repo, event.issue, operator, appLogin);
   }
+}
+
+/** Whether the event is a Review whose checks wait stopped because its PR conflicts with main (#704). */
+function stoppedOnConflict(event: LoopEvent): boolean {
+  return event.kind === "agent-run-failed" && event.role === "review" && event.report?.failure === "merge-conflict";
 }
 
 type EventPart = Omit<

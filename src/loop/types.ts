@@ -49,6 +49,13 @@ export type ReportedFailure =
   /** The Review gave up waiting on Required checks (those the Kit config lists plus any the default branch requires) that never reported on the PR's head, which no re-run fixes. */
   | "unreported-checks"
   /**
+   * The Review stopped waiting at once: the PR conflicts with the default
+   * branch and a Required check hadn't reported on its head, which GitHub
+   * never starts on a PR it can't merge (#704). The Loop brings the PR up to
+   * date rather than handing it back (ADR-0028).
+   */
+  | "merge-conflict"
+  /**
    * A cut branch built on commits it didn't start from, so the push job,
    * which rebuilds it from its base alone, never could (#535).
    */
@@ -97,6 +104,15 @@ export interface FailureReport {
    * reported, or for a timeout, the ones still running.
    */
   readonly checks?: readonly string[];
+  /** For a Review that gave up on Required checks that never reported, or stopped on a conflict: the PR head it waited on. */
+  readonly headSha?: string;
+  /** For the same: how long it waited, in whole minutes. */
+  readonly waitedMinutes?: number;
+  /**
+   * For the same: the last mergeable state it read of the PR, null when
+   * GitHub hadn't worked it out. Absent from a report that predates #704.
+   */
+  readonly mergeable?: boolean | null;
   /**
    * For a run that cut a branch (#431): what it had committed on it when it
    * failed, so the notice says whether any work was made and whether it was
