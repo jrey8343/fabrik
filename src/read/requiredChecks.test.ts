@@ -439,7 +439,7 @@ describe("the red checks' results on the default branch's head, as the Review's 
       },
     });
 
-    const read = await readDefaultBranchHeadChecks(client, "owner/product", ["gate", "e2e", "lint", "Vercel", "storybook"]);
+    const read = await readDefaultBranchHeadChecks(client, "owner/product", ["gate", "e2e", "lint", "Vercel", "storybook"], "check-runs-and-statuses");
 
     expect(read).toEqual({
       kind: "read",
@@ -456,15 +456,37 @@ describe("the red checks' results on the default branch's head, as the Review's 
   });
 
   it("is unread, saying why, when GitHub refuses the branch or its head's checks", async () => {
-    const branchRefused = await readDefaultBranchHeadChecks(repoWith(refusal("/repos/owner/product/branches/main")), "owner/product", ["e2e"]);
+    const branchRefused = await readDefaultBranchHeadChecks(repoWith(refusal("/repos/owner/product/branches/main")), "owner/product", ["e2e"], "check-runs-and-statuses");
     const headRefused = await readDefaultBranchHeadChecks(
       repoWith(requiring("gate"), { [MAIN_HEAD]: { checkRuns: refusal(`/repos/owner/product/commits/${MAIN_HEAD}/check-runs`) } }),
       "owner/product",
       ["e2e"],
+      "check-runs-and-statuses",
     );
 
     expect(branchRefused).toEqual({ kind: "unread", why: "GET /repos/owner/product/branches/main failed with 403: Resource not accessible by integration" });
     expect(headRefused).toEqual({ kind: "unread", why: `GitHub didn't give the checks on main's head, ${MAIN_HEAD.slice(0, 7)}` });
+  });
+
+  it("reads the head's check runs alone when told to, as on the Fabrik App's token, which GitHub refuses a commit status (#783)", async () => {
+    const client = repoWith(requiring("gate"), {
+      [MAIN_HEAD]: {
+        checkRuns: [{ id: 12, name: "e2e", status: "completed", conclusion: "failure" }],
+        statuses: refusal(`/repos/owner/product/commits/${MAIN_HEAD}/statuses`),
+      },
+    });
+
+    const read = await readDefaultBranchHeadChecks(client, "owner/product", ["e2e", "Vercel"], "check-runs");
+
+    expect(read).toEqual({
+      kind: "read",
+      branch: "main",
+      sha: MAIN_HEAD,
+      checks: [
+        { name: "e2e", is: "failing", url: "https://github.com/owner/product/runs/12", at: "2026-11-12T09:05:00Z" },
+        { name: "Vercel", is: "never-reported", url: null, at: null },
+      ],
+    });
   });
 });
 

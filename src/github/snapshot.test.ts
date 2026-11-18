@@ -15,6 +15,7 @@ import {
   retroBody,
   snapshotOf,
   snapshotOfPullRequest,
+  tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { aDigestGiven } from "../__fixtures__/digests.ts";
 import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
@@ -4145,6 +4146,26 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
 
       expect(snapshot.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, redOnMain: ["ci"] })]);
       expect(paths()).toContain(`/repos/acme/shop/commits/${MAIN}/check-runs?filter=all&per_page=100&page=1`);
+    });
+
+    // ADR-0002: the Fabrik App holds Checks: read and no Commit statuses: read, so GitHub refuses it main's statuses.
+    it("reads main's head on the App's check runs alone, never its commit statuses, and the gate re-run skips a check red there", async () => {
+      const asked: string[] = [];
+      const refused = new GitHubError(`GitHub GET /repos/acme/shop/commits/${MAIN}/statuses failed: 403`, 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }) });
+      const { github } = githubHolding([node(50, [passNaming(HEAD_SHA, ["ci"])])], (path) => {
+        asked.push(path);
+        return path.includes("/statuses") ? refused : onMain("failure")(path);
+      });
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+      // The Tick plans on what it gathered of the gate, beside the rest of a tick's snapshot.
+      const plan = planFor(TICK, { ...tickSnapshot(), conflicts: snapshot.conflicts, passedHeads: snapshot.passedHeads }, kitConfig());
+
+      expect(snapshot.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, redOnMain: ["ci"] })]);
+      expect(asked.filter((path) => path.includes("/statuses"))).toEqual([]);
+      const actions = plan.kind === "act" ? plan.actions : [];
+      expect(actions).toContainEqual(expect.objectContaining({ kind: "comment", issue: 50, body: expect.stringContaining(gateRerunDoneMarker(HEAD_SHA, ["ci"], "red-on-main")) }));
+      expect(actions).not.toContainEqual(expect.objectContaining({ kind: "add-labels", labels: ["agent:rerun-checks"] }));
     });
 
     it("gives no check red on main when it passed there", async () => {

@@ -322,7 +322,7 @@ async function main(productDir: string): Promise<void> {
   if (rerun === null && outcome.checks === "red") {
     const red = redChecksOf(last, failed);
     console.log(`The Kit can re-run ${red.rerun.length === 0 ? "none of them" : red.rerun.map(({ name }) => name).join(", ")}`);
-    lines.push(`red=${JSON.stringify(red)}`, `main=${JSON.stringify(await onMain(() => readDefaultBranchHeadChecks(client, repo, failed)))}`);
+    lines.push(`red=${JSON.stringify(red)}`, `main=${JSON.stringify(await onMain(() => readDefaultBranchHeadChecks(client, repo, failed, "check-runs-and-statuses")))}`);
     // Before anything is re-run (#775): the re-run may leave the first attempt's job readable only by its own id.
     await leaveExcerpts(FAILURE_EXCERPTS_FILE, () => redExcerpts(last, failed, outcome.headSha, reader));
   }

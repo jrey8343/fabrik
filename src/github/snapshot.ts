@@ -774,7 +774,8 @@ async function gatherPassedHeads(
     throw error;
   }
   // The Unrelated failures the Tick may ask one more re-run of are read on main's head, once for them all (#783):
-  // one red there too is skipped. Read on the Fabrik App's Checks: read; one that can't be read says so.
+  // one red there too is skipped. Read on the Fabrik App's Checks: read, its check runs alone, as the App holds no
+  // Commit statuses: read (ADR-0002) and GitHub would refuse the whole read; a commit status is skipped as outside anyway.
   const toAsk = new Map(
     heads.map((head) => {
       const pullRequest = atGate.find((gate) => gate.pullRequest.number === head.pullRequest)!.pullRequest;
@@ -783,7 +784,7 @@ async function gatherPassedHeads(
     }),
   );
   const names = [...new Set([...toAsk.values()].flat())];
-  const main = names.length === 0 ? null : await readDefaultBranchHeadChecks(github, `${repo.owner}/${repo.name}`, names);
+  const main = names.length === 0 ? null : await readDefaultBranchHeadChecks(github, `${repo.owner}/${repo.name}`, names, "check-runs");
   const redOnMain: readonly string[] | "unread" | null =
     main === null ? null : main.kind === "unread" ? "unread" : main.checks.flatMap(({ name, is }) => (is === "failing" ? [name] : []));
   return Promise.all(
