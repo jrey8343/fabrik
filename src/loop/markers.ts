@@ -12,7 +12,7 @@ import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { RequestChangesAnswers } from "./implementOutput.ts";
 import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
-import { AGENT_ROLES, type AgentRole, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
+import { AGENT_ROLES, type AgentRole, type GateRerunDone, type GateRerunMark, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -26,7 +26,7 @@ export function isReviewerFlaw({ verdict, source }: Pick<VerdictRecord, "verdict
 }
 
 export function verdictMarker(record: VerdictRecord): string {
-  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, ranNothing, tags, touchUp, headSha } = record;
+  const { verdict, source, requestChanges, conflictRun, requestChangesFirst, ticketNotReady, checks, unrelated, ranNothing, tags, touchUp, headSha } = record;
   const reviewerFlaw = isReviewerFlaw(record);
   // Only a conflict-only run's Verdict says so (#304), and only one that gave way to an undelivered Request
   // changes (#341), so every other marker reads as it always has.
@@ -38,6 +38,8 @@ export function verdictMarker(record: VerdictRecord): string {
     ...(requestChangesFirst === undefined ? {} : { requestChangesFirst }),
     ...(ticketNotReady === true ? { ticketNotReady } : {}),
     ...(checks === undefined ? {} : { checks }),
+    // Only a Reviewer's Verdict on a red head that judged a check an Unrelated failure names them (#780).
+    ...(unrelated === undefined || unrelated.length === 0 ? {} : { unrelated }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     // Only a Reviewer's Execution flaw counts its findings by tag (#749).
     ...(tags === undefined || !reviewerFlaw ? {} : { tags }),
@@ -50,8 +52,8 @@ export function verdictMarker(record: VerdictRecord): string {
 
 /**
  * A Flaky check line on an agent PR (#462): the head the checks flipped on,
- * and which. `countedBack` when the checks a ci-sourced Execution flaw named
- * have since passed on its head, so that Verdict no longer counts toward the
+ * and which. `countedBack` when the checks an Execution flaw counted back on
+ * green named (src/loop/flakyChecks.ts, countsBackOnGreen) have since passed on its head, so that Verdict no longer counts toward the
  * Ticket's Retries; absent when the Kit's own re-run found them.
  */
 export interface FlakyCheckMark {
@@ -81,9 +83,125 @@ export function flakyCheckMarksIn(commentBodies: readonly string[]): FlakyCheckM
   });
 }
 
-const FLAKY_CHECK_ISSUE_MARKER = /^<!-- fabrik:flaky-check-issue (\{.*?\}) -->/;
+/**
+ * An Unrelated failure line on an agent PR (#781): the head the Reviewer's
+ * Verdict was given on, and the red checks it judged the PR didn't cause.
+ */
+export interface UnrelatedFailureMark {
+  readonly headSha: string;
+  readonly checks: readonly string[];
+}
 
-/** A Flaky check issue's first line (#462), naming the check it's about: one issue per check. */
+const UNRELATED_FAILURE_MARKER = /^<!-- fabrik:unrelated-failure (\{.*?\}) -->/;
+
+export function unrelatedFailureMarker({ headSha, checks }: UnrelatedFailureMark): string {
+  return `<!-- fabrik:unrelated-failure ${markerJson({ headSha, checks })} -->`;
+}
+
+/** The Unrelated failure lines among these comments, oldest first. */
+export function unrelatedFailureMarksIn(commentBodies: readonly string[]): UnrelatedFailureMark[] {
+  return commentBodies.flatMap((body) => {
+    const json = UNRELATED_FAILURE_MARKER.exec(body)?.[1];
+    if (json === undefined) return [];
+    try {
+      const { headSha, checks } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof headSha !== "string" || !Array.isArray(checks) || !checks.every((name) => typeof name === "string")) return [];
+      return [{ headSha, checks }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/**
+ * The Kit's record that it brought an agent PR up to date for a check's fix
+ * (#784): the checks whose issues closed as completed, each with its issue,
+ * the PR's head when it did, the default branch's head, and how it went:
+ * `rebased` (the clean rebase pushed), `conflict-run` (a conflict-only run
+ * started) or `held-main` (the head already held `main`'s, so nothing was
+ * pushed). The move is spent for those checks on that head. It sits on a
+ * line of its own in the note, after the conflict attempt's marker when
+ * there is one.
+ */
+export interface CheckFixMark {
+  readonly headSha: string;
+  readonly main: string;
+  readonly outcome: "rebased" | "conflict-run" | "held-main";
+  readonly fixes: readonly { readonly check: string; readonly issue: number }[];
+}
+
+const CHECK_FIX_MARKER = /^<!-- fabrik:check-fix (\{.*?\}) -->$/m;
+
+export function checkFixMarker({ headSha, main, outcome, fixes }: CheckFixMark): string {
+  return `<!-- fabrik:check-fix ${markerJson({ headSha, main, outcome, fixes: fixes.map(({ check, issue }) => ({ check, issue })) })} -->`;
+}
+
+const CHECK_FIX_OUTCOMES: readonly string[] = ["rebased", "conflict-run", "held-main"];
+
+/** The Kit's records among these comments of bringing a PR up to date for a check's fix (#784), oldest first. */
+export function checkFixMarksIn(commentBodies: readonly string[]): CheckFixMark[] {
+  return commentBodies.flatMap((body) => {
+    const json = CHECK_FIX_MARKER.exec(body)?.[1];
+    if (json === undefined) return [];
+    try {
+      const { headSha, main, outcome, fixes } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof headSha !== "string" || typeof main !== "string" || typeof outcome !== "string" || !CHECK_FIX_OUTCOMES.includes(outcome)) return [];
+      if (!Array.isArray(fixes)) return [];
+      const read = fixes.flatMap((fix: unknown) => {
+        const { check, issue } = (fix ?? {}) as Record<string, unknown>;
+        return typeof check === "string" && typeof issue === "number" ? [{ check, issue }] : [];
+      });
+      if (read.length !== fixes.length) return [];
+      return [{ headSha, main, outcome: outcome as CheckFixMark["outcome"], fixes: read }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/**
+ * The Kit's mention of the Operator on an agent PR (#785) once its own moves
+ * on an Unrelated failure there were spent: the head it was posted on, and
+ * each check it named with the check's issue. Once per PR and check: a check
+ * any of them names isn't mentioned on that PR again, on any head.
+ */
+export interface OperatorMentionMark {
+  readonly headSha: string;
+  readonly checks: readonly { readonly name: string; readonly issue: number }[];
+}
+
+const OPERATOR_MENTION_MARKER = /^<!-- fabrik:operator-mention (\{.*?\}) -->/;
+
+export function operatorMentionMarker({ headSha, checks }: OperatorMentionMark): string {
+  return `<!-- fabrik:operator-mention ${markerJson({ headSha, checks: checks.map(({ name, issue }) => ({ name, issue })) })} -->`;
+}
+
+/** The Kit's mentions of the Operator over an Unrelated failure among these comments (#785), oldest first. */
+export function operatorMentionMarksIn(commentBodies: readonly string[]): OperatorMentionMark[] {
+  return commentBodies.flatMap((body) => {
+    const json = OPERATOR_MENTION_MARKER.exec(body)?.[1];
+    if (json === undefined) return [];
+    try {
+      const { headSha, checks } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof headSha !== "string" || !Array.isArray(checks)) return [];
+      const read = checks.flatMap((check: unknown) => {
+        const { name, issue } = (check ?? {}) as Record<string, unknown>;
+        return typeof name === "string" && typeof issue === "number" ? [{ name, issue }] : [];
+      });
+      if (read.length === 0 || read.length !== checks.length) return [];
+      return [{ headSha, checks: read }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+const FLAKY_CHECK_ISSUE_MARKER =/^<!-- fabrik:flaky-check-issue (\{.*?\}) -->/;
+
+/**
+ * A check's issue's first line (#462), naming the check it's about: one issue
+ * per check, holding its Flaky checks and its Unrelated failures alike (#781).
+ */
 export function flakyCheckIssueMarker(check: string): string {
   return `<!-- fabrik:flaky-check-issue ${markerJson({ check })} -->`;
 }
@@ -98,6 +216,64 @@ export function flakyCheckIssueOf(body: string): string | null {
   } catch {
     return null;
   }
+}
+
+const GATE_RERUN_MARKER = /^<!-- fabrik:gate-rerun (\{.*?\}) -->/;
+const GATE_RERUN_DONE_MARKER = /^<!-- fabrik:gate-rerun-done (\{.*?\}) -->/;
+const GATE_RERUN_DONE: readonly GateRerunDone[] = ["outside", "red-on-main", "red-again", "refused", "no-run"];
+/** A GitHub Actions job's page: …/actions/runs/<run>/job/<job>, whose workflow run the Re-run red checks job re-runs. */
+const ACTIONS_JOB = /\/actions\/runs\/(\d+)\/job\/\d+$/;
+
+/**
+ * The first line of the Kit's line asking one more re-run at the Merge gate
+ * (#783): the head and each check with its red run's job page; `started`
+ * once agent:rerun-checks came off as the re-run started.
+ */
+export function gateRerunMarker(headSha: string, checks: readonly { readonly name: string; readonly link: string }[], started = false): string {
+  return `<!-- fabrik:gate-rerun ${markerJson({ headSha, checks: checks.map(({ name, link }) => ({ name, link })), ...(started ? { started } : {}) })} -->`;
+}
+
+/** The first line of the Kit's line saying one more re-run at the Merge gate is done for these checks on this head without them reading green, and why (#783). */
+export function gateRerunDoneMarker(headSha: string, checks: readonly string[], why: GateRerunDone): string {
+  return `<!-- fabrik:gate-rerun-done ${markerJson({ headSha, checks, why })} -->`;
+}
+
+/** An ask's comment marked started, its first line alone changed; the body as it was when it's no ask, or started already. */
+export function withGateRerunStarted(body: string): string {
+  const [first = "", ...rest] = body.split("\n");
+  const [mark] = gateRerunMarksIn([{ id: "", body: first, createdAt: "" }]);
+  if (mark?.kind !== "asked" || mark.started) return body;
+  return [gateRerunMarker(mark.headSha, mark.checks, true), ...rest].join("\n");
+}
+
+/** The gate re-run lines among these comments, oldest first: an ask with its comment's node id and time, or a re-run done. */
+export function gateRerunMarksIn(comments: readonly { readonly id: string; readonly body: string; readonly createdAt: string }[]): GateRerunMark[] {
+  return comments.flatMap(({ id, body, createdAt }): GateRerunMark[] => {
+    const asked = GATE_RERUN_MARKER.exec(body)?.[1];
+    const done = GATE_RERUN_DONE_MARKER.exec(body)?.[1];
+    try {
+      if (asked !== undefined) {
+        const { headSha, checks, started } = JSON.parse(asked) as Record<string, unknown>;
+        if (typeof headSha !== "string" || !Array.isArray(checks) || checks.length === 0) return [];
+        const read = checks.map((check: unknown) => {
+          const { name, link } = (typeof check === "object" && check !== null ? check : {}) as Record<string, unknown>;
+          const run = typeof link === "string" ? ACTIONS_JOB.exec(link)?.[1] : undefined;
+          return typeof name === "string" && typeof link === "string" && run !== undefined ? { name, link, run: Number(run) } : null;
+        });
+        if (read.includes(null)) return [];
+        return [{ kind: "asked", headSha, checks: read.filter((check) => check !== null), started: started === true, node: id, postedAt: createdAt }];
+      }
+      if (done !== undefined) {
+        const { headSha, checks, why } = JSON.parse(done) as Record<string, unknown>;
+        if (typeof headSha !== "string" || !Array.isArray(checks) || !checks.every((name) => typeof name === "string")) return [];
+        if (!GATE_RERUN_DONE.includes(why as GateRerunDone)) return [];
+        return [{ kind: "done", headSha, checks, why: why as GateRerunDone }];
+      }
+    } catch {
+      return [];
+    }
+    return [];
+  });
 }
 
 /** The first line of the Kit's note on a PR that a Request-changes run pushed to it. */

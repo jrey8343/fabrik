@@ -13,7 +13,9 @@ import {
   prototypeEventFrom,
   researchEventFrom,
   retroEventFrom,
+  reviewEventFrom,
 } from "./events.ts";
+import { excerptsPassedOut, type FailureExcerpt } from "../review/failureExcerpt.ts";
 
 describe("A scheduled tick", () => {
   const NOW = new Date("2026-11-11T06:17:00Z");
@@ -187,6 +189,18 @@ describe("A pull request closing", () => {
     expect(loopEventFrom("pull_request_target", byHand)).toEqual({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: false });
     expect(loopEventFrom("pull_request_target", byTheKit)).toEqual({ kind: "pull-request-closed", pullRequest: 50, merged: false, closedByBot: true });
     expect(loopEventFrom("pull_request_target", merged)).toEqual({ kind: "pull-request-closed", pullRequest: 50, merged: true, closedByBot: false });
+  });
+});
+
+describe("An issue closing", () => {
+  it("says why GitHub says it closed, so only a check's issue closed as completed brings its fix in (#784)", () => {
+    const closed = (state_reason: unknown) => loopEventFrom("issues", { action: "closed", issue: { number: 12, state_reason } });
+
+    expect(closed("completed")).toEqual({ kind: "issue-closed", issue: 12, stateReason: "completed" });
+    expect(closed("not_planned")).toEqual({ kind: "issue-closed", issue: 12, stateReason: "not-planned" });
+    expect(closed("duplicate")).toEqual({ kind: "issue-closed", issue: 12, stateReason: "duplicate" });
+    expect(closed(null)).toEqual({ kind: "issue-closed", issue: 12, stateReason: null });
+    expect(loopEventFrom("issues", { action: "closed", issue: { number: 12 } })).toEqual({ kind: "issue-closed", issue: 12, stateReason: null });
   });
 });
 
@@ -522,6 +536,129 @@ describe("A finished prototype turn", () => {
 
     expect(() => prototypeEventFrom(noBranch, request, { changes, head: HEAD }, evidence, RUN)).toThrow(/names no branch/);
     expect(() => prototypeEventFrom(triage, request, { changes, head: HEAD }, evidence, RUN)).toThrow(/triage result/);
+  });
+});
+
+describe("A finished Review whose Required checks ended red (#775)", () => {
+  const review = {
+    pullRequest: 50,
+    headSha: "c".repeat(40),
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    repoUrl: "https://github.com/acme/shop",
+    failedChecks: ["unit"],
+    ranNothing: [],
+    result: readAgentRunResult(JSON.stringify({ role: "review", issue: 50, output: "verdict: execution-flaw\n\n- A bug." })),
+    rerun: { outside: [], failedAgain: ["unit"], flaky: [], refused: null },
+  };
+  const first: FailureExcerpt = { kind: "unread", check: "unit", link: "https://github.com/acme/shop/actions/runs/7/job/1", why: "first" };
+  const again: FailureExcerpt = {
+    kind: "actions",
+    check: "unit",
+    link: "https://github.com/acme/shop/actions/runs/7/job/2",
+    steps: [{ name: "Test", earlier: 0, lines: ["FAIL again"] }],
+    annotations: [],
+  };
+
+  it("carries each red check's latest Failure excerpt: after a re-run that failed again, the re-run's", () => {
+    const excerpts = excerptsPassedOut(JSON.stringify([first]), JSON.stringify([again]));
+
+    expect(reviewEventFrom({ ...review, excerpts })).toMatchObject({ kind: "review-run-finished", redChecks: { excerpts: [again] } });
+  });
+
+  it("carries none when the Review's waits passed none out", () => {
+    expect(reviewEventFrom({ ...review, excerpts: excerptsPassedOut(null, null) })).toMatchObject({ kind: "review-run-finished", redChecks: { excerpts: [] } });
+  });
+});
+
+// #779: a head still red after everything the Kit could do is Reviewed, and its Verdict holds the red checks too.
+describe("A finished Review of a head whose Required checks are still red (#779)", () => {
+  const result = readAgentRunResult(JSON.stringify({ role: "review", issue: 50, output: "verdict: execution-flaw\n\n- A bug." }));
+  const again: FailureExcerpt = {
+    kind: "actions",
+    check: "unit",
+    link: "https://github.com/acme/shop/actions/runs/7/job/2",
+    steps: [{ name: "Test", earlier: 0, lines: ["FAIL again"] }],
+    annotations: [],
+  };
+  const flaky = [{ name: "lint", red: "https://github.com/acme/shop/actions/runs/8/job/1", green: "https://github.com/acme/shop/actions/runs/8/job/3" }];
+  const review = {
+    pullRequest: 50,
+    headSha: "c".repeat(40),
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    repoUrl: "https://github.com/acme/shop",
+    failedChecks: ["unit", "Vercel"],
+    ranNothing: [],
+    result,
+    rerun: { outside: ["Vercel"], failedAgain: ["unit"], flaky, refused: null },
+    excerpts: [again],
+  };
+
+  it("lands the Reviewer's Verdict with the red checks, what re-running them came to and their excerpts, and the checks the re-run turned green as flaky", () => {
+    expect(reviewEventFrom(review)).toMatchObject({
+      kind: "review-run-finished",
+      output: "verdict: execution-flaw\n\n- A bug.",
+      flaky,
+      redChecks: { failed: ["unit", "Vercel"], rerun: review.rerun, excerpts: [again] },
+    });
+  });
+
+  it("carries no excerpts when the Review's waits passed none out, and no re-run when the Kit didn't try", () => {
+    expect(reviewEventFrom({ ...review, rerun: null, excerpts: [] })).toMatchObject({ redChecks: { failed: ["unit", "Vercel"], excerpts: [] } });
+    expect(reviewEventFrom({ ...review, rerun: null, excerpts: [] })).not.toHaveProperty("redChecks.rerun");
+  });
+
+  it("carries no red checks on a green head", () => {
+    expect(reviewEventFrom({ ...review, failedChecks: [], rerun: null, excerpts: [] })).not.toHaveProperty("redChecks");
+  });
+});
+
+describe("A finished Review with a check the Kit's re-run turned green (#778)", () => {
+  const E2E = { name: "e2e", red: "https://github.com/acme/shop/actions/runs/7/job/1", green: "https://github.com/acme/shop/actions/runs/7/job/3" };
+  const firstAttempt: FailureExcerpt = { kind: "actions", check: "e2e", link: E2E.red, steps: [{ name: "Test", earlier: 0, lines: ["FAIL once"] }], annotations: [] };
+  const unit: FailureExcerpt = { kind: "unread", check: "unit", link: "https://github.com/acme/shop/actions/runs/7/job/2", why: "first" };
+  const review = {
+    pullRequest: 50,
+    headSha: "c".repeat(40),
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    repoUrl: "https://github.com/acme/shop",
+    ranNothing: [],
+    // Only the first wait was red: the re-run's wait passed nothing out.
+    excerpts: excerptsPassedOut(JSON.stringify([firstAttempt, unit]), null),
+  };
+
+  it("gives the Flaky check its first attempt's excerpt, which the Review checks job read before the re-run, when the Reviewer ran", () => {
+    const event = reviewEventFrom({
+      ...review,
+      failedChecks: [],
+      result: { role: "review", issue: 50, output: "verdict: pass\n\nGood." },
+      rerun: { outside: [], failedAgain: [], flaky: [E2E], refused: null },
+    });
+
+    expect(event).toMatchObject({ kind: "review-run-finished", flaky: [{ ...E2E, excerpt: firstAttempt }] });
+  });
+
+  it("gives it the same when another check left the head red", () => {
+    const event = reviewEventFrom({
+      ...review,
+      failedChecks: ["unit"],
+      result: { role: "review", issue: 50, output: "verdict: execution-flaw\n\n- A bug." },
+      rerun: { outside: [], failedAgain: ["unit"], flaky: [E2E], refused: null },
+    });
+
+    expect(event).toMatchObject({ kind: "review-run-finished", flaky: [{ ...E2E, excerpt: firstAttempt }] });
+  });
+
+  it("leaves a Flaky check with no excerpt when its waits passed none out for it", () => {
+    const event = reviewEventFrom({
+      ...review,
+      excerpts: [],
+      failedChecks: [],
+      result: { role: "review", issue: 50, output: "verdict: pass\n\nGood." },
+      rerun: { outside: [], failedAgain: [], flaky: [E2E], refused: null },
+    });
+
+    expect(event).toMatchObject({ kind: "review-run-finished", flaky: [E2E] });
+    expect(event.kind === "review-run-finished" && event.flaky?.[0]).not.toHaveProperty("excerpt");
   });
 });
 

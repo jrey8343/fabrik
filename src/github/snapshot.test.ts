@@ -15,6 +15,7 @@ import {
   retroBody,
   snapshotOf,
   snapshotOfPullRequest,
+  tickSnapshot,
 } from "../__fixtures__/snapshots.ts";
 import { aDigestGiven } from "../__fixtures__/digests.ts";
 import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
@@ -26,7 +27,19 @@ import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { changedTestsSection } from "../loop/changedTests.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
-import { DESIGN_TURN_FAILED_MARKER, EMPTY_DIFF_MARKER, flakyCheckMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER, verdictMarker } from "../loop/markers.ts";
+import {
+  checkFixMarker,
+  DESIGN_TURN_FAILED_MARKER,
+  EMPTY_DIFF_MARKER,
+  flakyCheckIssueMarker,
+  flakyCheckMarker,
+  gateRerunDoneMarker,
+  gateRerunMarker,
+  IMPLEMENT_RUN_FAILED_MARKER,
+  operatorMentionMarker,
+  RESEARCH_RUN_FAILED_MARKER,
+  verdictMarker,
+} from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import {
@@ -2672,7 +2685,7 @@ describe("Gathering the issues and PRs held runs are on, for a scheduled tick an
       labels: { nodes: [{ name: "fabrik:usage-credits" }] },
       comments: { nodes: comments },
     });
-    const isClosedCarriersQuery = (query: string) => query.includes("states: CLOSED") && query.includes("filterBy: { since: $since }");
+    const isClosedCarriersQuery = (query: string) => query.includes("states: CLOSED") && query.includes("filterBy: { since: $since }") && !query.includes("closedAt stateReason");
 
     /** The read-only API, answering the closed-Carrier read with these nodes, the rest as githubWith does. */
     function closedCarriersGitHub(nodes: unknown[], hasNextPage = false, targets: Record<number, unknown> = {}) {
@@ -3766,6 +3779,121 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
     expect(reads()).toBe(0);
   });
 
+  describe("for a check's fix (#784)", () => {
+    const pass = verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA, unrelated: ["e2e"] });
+    const held = (number: number, kit: string[] = []) =>
+      node(number, "MERGEABLE", {
+        comments: { pageInfo: { hasPreviousPage: false }, nodes: [pass, ...kit].map((body) => ({ body: `${body}\nSaid.`, createdAt: "2026-11-18T08:00:00Z", author: { __typename: "Bot" } })) },
+      });
+    const checkIssue = {
+      repository: {
+        ...issueData(12).repository,
+        issue: { ...issueData(12).repository.issue, state: "CLOSED", author: { login: "fabrik-app[bot]", __typename: "Bot" }, body: `${flakyCheckIssueMarker("e2e")}\nThe check.` },
+      },
+    };
+
+    /** A GitHub with these open PRs and the check's issue #12. */
+    function githubFor(nodes: unknown[]) {
+      const github = {
+        [ANSWERS_CONFLICTS]: true,
+        async graphql(query: string) {
+          if (isConflictsQuery(query)) return { repository: { defaultBranchRef: { target: { oid: "d".repeat(40) } }, pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } };
+          if (query.includes("issue(number: $number)")) return checkIssue;
+          const none = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+          return { repository: { owner: { login: "acme" }, defaultBranchRef: null, issues: none, pullRequests: none } };
+        },
+      } as unknown as GitHub;
+      return { github };
+    }
+
+    const COMPLETED: LoopEvent = { kind: "issue-closed", issue: 12, stateReason: "completed" };
+
+    it("gathers the open agent PRs when a check's issue closes as completed", async () => {
+      const snapshot = await gatherSnapshot(githubFor([held(50), node(51, "MERGEABLE")]).github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(snapshot.conflicts?.main).toBe("d".repeat(40));
+      expect(snapshot.conflicts?.pullRequests.map(({ pullRequest }) => pullRequest.number)).toEqual([50, 51]);
+    });
+
+    it.each([["not-planned" as const], [null]])("gathers none when the issue closed as %s", async (stateReason) => {
+      const snapshot = await gatherSnapshot(githubFor([held(50)]).github, repo, { kind: "issue-closed", issue: 12, stateReason }, null, APP_LOGIN);
+
+      expect(snapshot.conflicts).toBeNull();
+    });
+
+    it("reads, on a tick, the check's issues the App filed that closed in the last week, newest close first, with why each closed", async () => {
+      const app = { login: "fabrik-app[bot]", __typename: "Bot" };
+      const closed = (number: number, closedAt: string, stateReason: string, author: unknown = app, check = "e2e") => ({
+        number,
+        body: `${flakyCheckIssueMarker(check)}\nThe check.`,
+        closedAt,
+        stateReason,
+        author,
+      });
+      const asked: Record<string, unknown>[] = [];
+      const { github: base } = githubReading([[]]);
+      const github = {
+        ...base,
+        async graphql(query: string, variables: Record<string, unknown>) {
+          if (!query.includes("closedAt stateReason")) return base.graphql(query, variables);
+          asked.push(variables);
+          return {
+            repository: {
+              issues: {
+                nodes: [
+                  closed(20, "2026-11-17T09:00:00Z", "NOT_PLANNED", app, "lint"),
+                  closed(21, "2026-11-18T09:00:00Z", "COMPLETED"),
+                  closed(22, "2026-11-18T09:30:00Z", "COMPLETED", { login: "mallory", __typename: "User" }),
+                  closed(23, "2026-11-01T09:00:00Z", "COMPLETED"),
+                  { ...closed(24, "2026-11-18T09:00:00Z", "COMPLETED"), body: "No marker." },
+                ],
+              },
+            },
+          };
+        },
+      } as unknown as GitHub;
+
+      const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-18T10:17:00Z" }, null, "fabrik-app[bot]");
+
+      expect(asked).toEqual([expect.objectContaining({ labels: ["fabrik:flaky-check"], since: "2026-11-11T10:17:00.000Z" })]);
+      expect(snapshot.closedCheckIssues).toEqual([
+        { number: 21, check: "e2e", closedAt: "2026-11-18T09:00:00Z", stateReason: "completed" },
+        { number: 20, check: "lint", closedAt: "2026-11-17T09:00:00Z", stateReason: "not-planned" },
+      ]);
+    });
+
+    it("reads no closed check's issue for any event but the tick", async () => {
+      const snapshot = await gatherSnapshot(githubFor([held(50)]).github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(snapshot.closedCheckIssues).toBeNull();
+    });
+
+    it("reads the Kit's records of bringing a PR up to date for a check's fix, under an attempt marker or on their own", async () => {
+      const rebased = checkFixMarker({ headSha: "b".repeat(40), main: "8".repeat(40), outcome: "rebased", fixes: [{ check: "e2e", issue: 12 }] });
+      const heldMain = checkFixMarker({ headSha: HEAD_SHA, main: "d".repeat(40), outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] });
+      const { github } = githubFor([held(50, [`<!-- fabrik:conflict-attempt ${"8".repeat(40)} rebased -->\n${rebased}`, heldMain])]);
+
+      const snapshot = await gatherSnapshot(github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(snapshot.conflicts?.pullRequests[0]?.pullRequest.checkFixMarks).toEqual([
+        { headSha: "b".repeat(40), main: "8".repeat(40), outcome: "rebased", fixes: [{ check: "e2e", issue: 12 }] },
+        { headSha: HEAD_SHA, main: "d".repeat(40), outcome: "held-main", fixes: [{ check: "e2e", issue: 12 }] },
+      ]);
+    });
+
+    it("reads the Kit's mentions of the Operator over an Unrelated failure (#785), a bot's alone", async () => {
+      const mention = operatorMentionMarker({ headSha: HEAD_SHA, checks: [{ name: "e2e", issue: 12 }] });
+      const pr = held(50, [mention]);
+      const quoted = { body: `${operatorMentionMarker({ headSha: HEAD_SHA, checks: [{ name: "lint", issue: 13 }] })}\nQuoted.`, createdAt: "2026-11-18T09:00:00Z", author: { login: "mallory", __typename: "User" } };
+      const comments = (pr as { comments: { nodes: unknown[] } }).comments;
+      const { github } = githubFor([{ ...pr, comments: { ...comments, nodes: [...comments.nodes, quoted] } }]);
+
+      const snapshot = await gatherSnapshot(github, repo, COMPLETED, null, APP_LOGIN);
+
+      expect(snapshot.conflicts?.pullRequests[0]?.pullRequest.operatorMentions).toEqual([{ headSha: HEAD_SHA, checks: [{ name: "e2e", issue: 12 }] }]);
+    });
+  });
+
   it("pages past the first open PRs, so an agent PR behind others' isn't missed (#341)", async () => {
     const afters: unknown[] = [];
     const github = {
@@ -3956,6 +4084,8 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
           { name: "ci", status: "completed", conclusion: "failure", startedAt: "2026-11-11T11:00:00Z", url: "https://github.com/acme/shop/actions/runs/8/job/99" },
         ],
         marks: [{ headSha: HEAD_SHA, checks: ["e2e"] }],
+        // No token here reads GitHub Actions: the tick's run passes its own (#778).
+        excerpts: [{ kind: "unread", check: "ci", link: "https://github.com/acme/shop/actions/runs/8/job/99", why: "the tick holds no token that reads GitHub Actions jobs" }],
       },
     ]);
     expect(paths()).toEqual([`/repos/acme/shop/commits/${HEAD_SHA}/check-runs?filter=all&per_page=100&page=1`]);
@@ -3994,6 +4124,213 @@ describe("Gathering the passed heads at the Merge gate a scheduled tick reads fo
     const { github } = githubHolding([node(50, [pass(HEAD_SHA)])]);
 
     expect((await gatherSnapshot(github, repo, { kind: "main-pushed", head: "9".repeat(40) }, null, APP_LOGIN)).passedHeads).toBeNull();
+  });
+
+  describe("for one more re-run of an Unrelated failure at the Merge gate (#783)", () => {
+    const MAIN = "9".repeat(40);
+    const passNaming = (headSha: string, unrelated: string[]) =>
+      bot(`${verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, unrelated, headSha })}\nPassed.`);
+    /** main's head, where `ci` is `conclusion`. */
+    const onMain = (conclusion: string) => (path: string) => {
+      if (path === "/repos/acme/shop/branches/main") return { protected: true, protection: { required_status_checks: { enforcement_level: "everyone", contexts: ["ci"] } }, commit: { sha: MAIN } };
+      if (path.startsWith(`/repos/acme/shop/commits/${MAIN}/check-runs?`)) {
+        return { check_runs: [{ id: 1, name: "ci", status: "completed", conclusion, started_at: "2026-11-11T08:00:00Z", completed_at: "2026-11-11T08:10:00Z", html_url: "https://github.com/acme/shop/actions/runs/5/job/50" }] };
+      }
+      return undefined;
+    };
+
+    it("reads main's head for an Unrelated failure still red on a passed head, which it skips when red there too", async () => {
+      const { github, paths } = githubHolding([node(50, [passNaming(HEAD_SHA, ["ci"])])], onMain("failure"));
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+
+      expect(snapshot.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, redOnMain: ["ci"] })]);
+      expect(paths()).toContain(`/repos/acme/shop/commits/${MAIN}/check-runs?filter=all&per_page=100&page=1`);
+    });
+
+    // ADR-0002: the Fabrik App holds Checks: read and no Commit statuses: read, so GitHub refuses it main's statuses.
+    it("reads main's head on the App's check runs alone, never its commit statuses, and the gate re-run skips a check red there", async () => {
+      const asked: string[] = [];
+      const refused = new GitHubError(`GitHub GET /repos/acme/shop/commits/${MAIN}/statuses failed: 403`, 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }) });
+      const { github } = githubHolding([node(50, [passNaming(HEAD_SHA, ["ci"])])], (path) => {
+        asked.push(path);
+        return path.includes("/statuses") ? refused : onMain("failure")(path);
+      });
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+      // The Tick plans on what it gathered of the gate, beside the rest of a tick's snapshot.
+      const plan = planFor(TICK, { ...tickSnapshot(), conflicts: snapshot.conflicts, passedHeads: snapshot.passedHeads }, kitConfig());
+
+      expect(snapshot.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, redOnMain: ["ci"] })]);
+      expect(asked.filter((path) => path.includes("/statuses"))).toEqual([]);
+      const actions = plan.kind === "act" ? plan.actions : [];
+      expect(actions).toContainEqual(expect.objectContaining({ kind: "comment", issue: 50, body: expect.stringContaining(gateRerunDoneMarker(HEAD_SHA, ["ci"], "red-on-main")) }));
+      expect(actions).not.toContainEqual(expect.objectContaining({ kind: "add-labels", labels: ["agent:rerun-checks"] }));
+    });
+
+    it("gives no check red on main when it passed there", async () => {
+      const { github } = githubHolding([node(50, [passNaming(HEAD_SHA, ["ci"])])], onMain("success"));
+
+      expect((await gatherSnapshot(github, repo, TICK, null, APP_LOGIN)).passedHeads).toEqual([expect.objectContaining({ redOnMain: [] })]);
+    });
+
+    it("reads main's head for no passed head with nothing to ask", async () => {
+      const { github, paths } = githubHolding([node(50, [pass(HEAD_SHA)])], onMain("failure"));
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+
+      expect(snapshot.passedHeads).toEqual([expect.not.objectContaining({ redOnMain: expect.anything() })]);
+      expect(paths().filter((path) => path.includes(MAIN))).toEqual([]);
+    });
+
+    it("reads the Kit's gate re-run lines on the PR, with each ask's comment and time, and none a person wrote", async () => {
+      const ask = { id: "IC_ask", body: `${gateRerunMarker(HEAD_SHA, [{ name: "ci", link: "https://github.com/acme/shop/actions/runs/8/job/99" }])}\nRe-running.`, createdAt: "2026-11-11T11:17:00Z", author: { __typename: "Bot" } };
+      const done = { ...bot(`${gateRerunDoneMarker(HEAD_SHA, ["lint"], "red-on-main")}\nSkipped.`), id: "IC_done" };
+      const forged = { id: "IC_person", body: `${gateRerunDoneMarker(HEAD_SHA, ["ci"], "refused")}\nDone.`, createdAt: "2026-11-11T11:30:00Z", author: { __typename: "User" } };
+      const { github } = githubHolding([node(50, [passNaming(HEAD_SHA, ["ci", "lint"]), ask, done, forged])], onMain("success"));
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN);
+
+      expect(snapshot.conflicts?.pullRequests[0]?.pullRequest.gateReruns).toEqual([
+        { kind: "asked", headSha: HEAD_SHA, checks: [{ name: "ci", link: "https://github.com/acme/shop/actions/runs/8/job/99", run: 8 }], started: false, node: "IC_ask", postedAt: "2026-11-11T11:17:00Z" },
+        { kind: "done", headSha: HEAD_SHA, checks: ["lint"], why: "red-on-main" },
+      ]);
+    });
+  });
+
+  describe("the Failure excerpt of each red run it reports (#778)", () => {
+    const RED_JOB = "https://github.com/acme/shop/actions/runs/8/job/99";
+    const JOB = { status: "completed", conclusion: "failure", steps: [{ name: "Set up job", number: 1, conclusion: "success" }, { name: "Test", number: 3, conclusion: "failure" }] };
+    const EXCERPT = {
+      kind: "actions",
+      check: "ci",
+      link: RED_JOB,
+      steps: [{ name: "Test", lines: ["FAIL src/a.test.ts > adds", "##[error]Process completed with exit code 1."], earlier: 0 }],
+      annotations: [{ path: "src/a.test.ts", line: 3, message: "expected 3 to be 4" }],
+    };
+    const ANNOTATIONS = [
+      { path: "src/a.test.ts", start_line: 3, annotation_level: "failure", message: "expected 3 to be 4" },
+      { path: ".github", start_line: 1, annotation_level: "notice", message: "Ubuntu 26 is coming." },
+    ];
+    /** The App's GitHub, which answers the annotations with its Checks: read; the Loop never reads a job on it. */
+    const appHolding = (nodes: unknown[], runs: unknown[] = RUNS) =>
+      githubHolding(nodes, (path) => {
+        if (path.includes("/check-runs?")) return { check_runs: runs };
+        if (path.startsWith("/repos/acme/shop/check-runs/99/annotations")) return ANNOTATIONS;
+        if (path.includes("/actions/")) return new GitHubError("GET job failed: 403", 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }) });
+        return undefined;
+      });
+    /** The tick job's own workflow token, `actions: read`, which reads the job and its step's log. */
+    function actionsToken() {
+      const read: string[] = [];
+      const actions = {
+        async rest(_method: string, path: string) {
+          read.push(path);
+          if (path === "/repos/acme/shop/actions/jobs/99") return JOB;
+          throw new GitHubError(`GET ${path} failed: 404`, 404, { body: "{}" });
+        },
+        async logText(path: string) {
+          read.push(path);
+          return "2026-11-11T11:00:01.0000000Z FAIL src/a.test.ts > adds\n2026-11-11T11:00:02.0000000Z ##[error]Process completed with exit code 1.\n";
+        },
+      };
+      return { actions: actions as unknown as GitHub, read: () => read.filter((path) => path.includes("/actions/jobs/")) };
+    }
+
+    it("reads the red run's excerpt for a Flaky check on a passed head: the job and its log on the tick's own token, the annotations on the App's", async () => {
+      const { github } = appHolding([node(50, [pass(HEAD_SHA)])]);
+      const { actions, read } = actionsToken();
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(snapshot.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, excerpts: [EXCERPT] })]);
+      expect(read()).toEqual(["/repos/acme/shop/actions/jobs/99", "/repos/acme/shop/actions/jobs/99/steps/3/logs"]);
+    });
+
+    it("reads the red run's excerpt for a Flaky check on a ci Execution flaw the sweep counts back", async () => {
+      const flaw = bot(`${verdictMarker({ verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["ci"], headSha: HEAD_SHA })}\nRed.`);
+      const redThenGreen = [
+        { name: "ci", status: "completed", conclusion: "failure", started_at: "2026-11-11T09:00:00Z", html_url: RED_JOB },
+        { name: "ci", status: "completed", conclusion: "success", started_at: "2026-11-11T11:00:00Z", html_url: "https://github.com/acme/shop/actions/runs/8/job/100" },
+      ];
+      const { github } = appHolding([node(50, [flaw], { isDraft: true })], redThenGreen);
+      const { actions } = actionsToken();
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(snapshot.flakySweep).toEqual([expect.objectContaining({ pullRequest: 50, headSha: HEAD_SHA, excerpts: [EXCERPT] })]);
+    });
+
+    it("reads none for a head with no Flaky check, nor for a check a line already names there", async () => {
+      const named = bot(`${flakyCheckMarker({ headSha: HEAD_SHA, checks: ["ci"] })}\nFlaky.`);
+      const { github } = appHolding([node(50, [pass(HEAD_SHA), named])]);
+      const green = appHolding([node(51, [pass(HEAD_SHA)])], [RUNS[0]]).github;
+      const { actions, read } = actionsToken();
+
+      const withLine = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+      const allGreen = await gatherSnapshot(green, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(withLine.passedHeads).toEqual([expect.objectContaining({ pullRequest: 50, excerpts: [] })]);
+      expect(allGreen.passedHeads).toEqual([expect.objectContaining({ pullRequest: 51, excerpts: [] })]);
+      expect(read()).toEqual([]);
+    });
+
+    it("reads an outside service's red run itself, by the check-run id in its link, on the App's Checks: read: what the service wrote to GitHub, never its green run's", async () => {
+      const outside = [
+        { name: "ci", status: "completed", conclusion: "failure", started_at: "2026-11-11T09:00:00Z", html_url: "https://github.com/acme/shop/runs/501" },
+        { name: "ci", status: "completed", conclusion: "success", started_at: "2026-11-11T11:00:00Z", html_url: "https://github.com/acme/shop/runs/502" },
+      ];
+      const runs: Record<string, unknown> = {
+        "/repos/acme/shop/check-runs/501": {
+          id: 501,
+          name: "ci",
+          app: { slug: "buildkite" },
+          details_url: "https://buildkite.com/acme/shop/builds/812",
+          html_url: "https://github.com/acme/shop/runs/501",
+          output: { title: "Build #812 failed", summary: "3 of 412 specs failed" },
+        },
+        "/repos/acme/shop/check-runs/502": { id: 502, name: "ci", app: { slug: "buildkite" }, output: { title: "Build #813 passed", summary: "" } },
+      };
+      const asked: string[] = [];
+      const { github } = githubHolding([node(50, [pass(HEAD_SHA)])], (path) => {
+        asked.push(path);
+        if (path.includes("/check-runs?")) return { check_runs: outside };
+        if (path.startsWith("/repos/acme/shop/check-runs/501/annotations")) return [{ path: "spec/cart_spec.rb", start_line: 12, annotation_level: "failure", message: "expected 3, got 4" }];
+        return runs[path];
+      });
+      const { actions, read } = actionsToken();
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, actions);
+
+      expect(snapshot.passedHeads).toEqual([
+        expect.objectContaining({
+          excerpts: [
+            {
+              kind: "outside-check-run",
+              check: "ci",
+              link: "https://buildkite.com/acme/shop/builds/812",
+              title: "Build #812 failed",
+              summary: "3 of 412 specs failed",
+              annotations: [{ path: "spec/cart_spec.rb", line: 12, message: "expected 3, got 4" }],
+            },
+          ],
+        }),
+      ]);
+      expect(asked).toContain("/repos/acme/shop/check-runs/501");
+      expect(asked).not.toContain("/repos/acme/shop/check-runs/502");
+      expect(read()).toEqual([]);
+    });
+
+    it("gives a red run it can't read as unread, with why and its link, and the tick goes on", async () => {
+      const { github } = appHolding([node(50, [pass(HEAD_SHA)])]);
+      const gone = { ...actionsToken().actions, rest: async () => Promise.reject(new GitHubError("GET job failed: 404", 404, { body: "{}" })) } as unknown as GitHub;
+
+      const snapshot = await gatherSnapshot(github, repo, TICK, null, APP_LOGIN, gone);
+
+      expect(snapshot.passedHeads).toEqual([
+        expect.objectContaining({ excerpts: [{ kind: "unread", check: "ci", link: RED_JOB, why: "GitHub holds no such job any more, as when it is past the repo's retention period" }] }),
+      ]);
+    });
   });
 });
 

@@ -20,7 +20,7 @@ inputs:
     description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
     required: true
   actions-token:
-    description: For the Dispatch job, loop.yml's Design queue job, a push to the default branch's push job, agent:implement's push job (#725) and the scheduled tick only, a token that can read workflow runs (its GITHUB_TOKEN); the Fabrik App has no Actions permission. The scheduled tick's Design queue job has none.
+    description: For the Dispatch job, loop.yml's Design queue job, a push to the default branch's push job, agent:implement's push job (#725) and the scheduled tick only, a token that can read workflow runs (its GITHUB_TOKEN), which the scheduled tick also reads a Flaky check's red run's job and step log on (#778); the Loop reads workflow runs on its job's own token, never the Fabrik App's, whose read access to Actions is the Weekly summary's (ADR-0002's addendum). The scheduled tick's Design queue job has none.
     required: false
     default: ""
   find-store:

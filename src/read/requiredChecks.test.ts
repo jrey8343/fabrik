@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
-import { type HeadCheck, headsToCheck, readDefaultBranchRequiredChecks, readRequiredChecks, type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
+import {
+  type HeadCheck,
+  headsToCheck,
+  readDefaultBranchHeadChecks,
+  readDefaultBranchRequiredChecks,
+  readRequiredChecks,
+  type RequiredChecksRead,
+  requiredChecksFactOf,
+} from "./requiredChecks.ts";
 import { rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-12T10:00:00Z";
 const head = (digit: string) => digit.repeat(40);
+/** The default branch's head in the made-up repo. */
+const MAIN_HEAD = head("f");
 
 /** A check run as the Checks API lists it: finished with its conclusion, or still `queued` or `in_progress`. */
 interface CannedCheckRun {
@@ -58,9 +68,10 @@ function repoWith(branch: CannedBranch, heads: Readonly<Record<string, CannedHea
       if (path === "/repos/owner/product") return { full_name: "owner/product", default_branch: "main" };
       if (path === "/repos/owner/product/branches/main") {
         if (branch instanceof GitHubError) throw branch;
-        if (!branch.protected) return { name: "main", protected: false, protection: { enabled: false, required_status_checks: { enforcement_level: "off", contexts: [], checks: [] } } };
+        if (!branch.protected) return { name: "main", commit: { sha: MAIN_HEAD }, protected: false, protection: { enabled: false, required_status_checks: { enforcement_level: "off", contexts: [], checks: [] } } };
         return {
           name: "main",
+          commit: { sha: MAIN_HEAD },
           protected: true,
           protection: {
             enabled: true,
@@ -412,6 +423,70 @@ describe("the default branch's own Required checks, as the Review's wait reads t
     const read = await readDefaultBranchRequiredChecks(repoWith(refusal("/repos/owner/product/branches/main")), "owner/product");
 
     expect(read).toEqual({ kind: "unread", why: "GET /repos/owner/product/branches/main failed with 403: Resource not accessible by integration" });
+  });
+});
+
+describe("the red checks' results on the default branch's head, as the Review's wait reads them (#780)", () => {
+  it("names the head and each check's result there: passed, failing with its link, running, or never reported", async () => {
+    const client = repoWith(requiring("gate"), {
+      [MAIN_HEAD]: {
+        checkRuns: [
+          { id: 11, name: "gate", status: "completed", conclusion: "success" },
+          { id: 12, name: "e2e", status: "completed", conclusion: "failure" },
+          { id: 13, name: "lint", status: "in_progress" },
+        ],
+        statuses: [{ context: "Vercel", state: "failure", url: "https://vercel.example.com/1" }],
+      },
+    });
+
+    const read = await readDefaultBranchHeadChecks(client, "owner/product", ["gate", "e2e", "lint", "Vercel", "storybook"], "check-runs-and-statuses");
+
+    expect(read).toEqual({
+      kind: "read",
+      branch: "main",
+      sha: MAIN_HEAD,
+      checks: [
+        { name: "gate", is: "passed", url: "https://github.com/owner/product/runs/11", at: "2026-11-12T09:05:00Z" },
+        { name: "e2e", is: "failing", url: "https://github.com/owner/product/runs/12", at: "2026-11-12T09:05:00Z" },
+        { name: "lint", is: "running", url: "https://github.com/owner/product/runs/13", at: "2026-11-12T09:00:00Z" },
+        { name: "Vercel", is: "failing", url: "https://vercel.example.com/1", at: "2026-11-12T09:05:00Z" },
+        { name: "storybook", is: "never-reported", url: null, at: null },
+      ],
+    });
+  });
+
+  it("is unread, saying why, when GitHub refuses the branch or its head's checks", async () => {
+    const branchRefused = await readDefaultBranchHeadChecks(repoWith(refusal("/repos/owner/product/branches/main")), "owner/product", ["e2e"], "check-runs-and-statuses");
+    const headRefused = await readDefaultBranchHeadChecks(
+      repoWith(requiring("gate"), { [MAIN_HEAD]: { checkRuns: refusal(`/repos/owner/product/commits/${MAIN_HEAD}/check-runs`) } }),
+      "owner/product",
+      ["e2e"],
+      "check-runs-and-statuses",
+    );
+
+    expect(branchRefused).toEqual({ kind: "unread", why: "GET /repos/owner/product/branches/main failed with 403: Resource not accessible by integration" });
+    expect(headRefused).toEqual({ kind: "unread", why: `GitHub didn't give the checks on main's head, ${MAIN_HEAD.slice(0, 7)}` });
+  });
+
+  it("reads the head's check runs alone when told to, as on the Fabrik App's token, which GitHub refuses a commit status (#783)", async () => {
+    const client = repoWith(requiring("gate"), {
+      [MAIN_HEAD]: {
+        checkRuns: [{ id: 12, name: "e2e", status: "completed", conclusion: "failure" }],
+        statuses: refusal(`/repos/owner/product/commits/${MAIN_HEAD}/statuses`),
+      },
+    });
+
+    const read = await readDefaultBranchHeadChecks(client, "owner/product", ["e2e", "Vercel"], "check-runs");
+
+    expect(read).toEqual({
+      kind: "read",
+      branch: "main",
+      sha: MAIN_HEAD,
+      checks: [
+        { name: "e2e", is: "failing", url: "https://github.com/owner/product/runs/12", at: "2026-11-12T09:05:00Z" },
+        { name: "Vercel", is: "never-reported", url: null, at: null },
+      ],
+    });
   });
 });
 

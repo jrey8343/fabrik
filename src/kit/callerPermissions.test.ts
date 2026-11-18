@@ -146,8 +146,8 @@ describe("A caller workflow's grants against what the pinned workflows' jobs ask
 
       const errors = checkCallerPermissions({ path, text }, workflowsAt(text));
 
-      // The tick and the Dispatch check both read workflow runs, so both jobs of schedule.yml ask for it.
-      expect(errors.map((error) => /which the (\S+) job of/.exec(error)?.[1])).toEqual(["tick", "dispatch"]);
+      // The tick and the Dispatch check both read workflow runs, and the Monitor a failed run's log (#786), so those jobs of schedule.yml ask for it.
+      expect(errors.map((error) => /which the (\S+) job of/.exec(error)?.[1])).toEqual(["tick", "dispatch", "monitor"]);
       for (const error of errors) expect(error).toContain("the tick job's permissions: lacks `actions: read`");
     });
   });

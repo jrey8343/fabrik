@@ -1,14 +1,20 @@
 // Review rules: when a Review starts on an agent PR, and how its Verdict lands.
-// Red required checks are an Execution flaw and the Reviewer doesn't run; on
-// green, the Reviewer's Verdict line decides. Every Verdict is posted as a PR
-// comment with its marker. Routing flaws onward is for later rules.
+// On green, the Reviewer's Verdict line decides. On a head whose Required
+// checks are still red after everything the Kit could do, the Reviewer runs
+// too, and its Verdict holds the red checks beside its findings (#779), each
+// with the Reviewer's judgment: a check it judged caused makes anything short
+// of a Design flaw an Execution flaw that counts, and an Unrelated failure
+// counts toward nothing (#780). Every Verdict is posted as a PR comment with
+// its marker. Routing flaws onward is for later rules.
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { backToDesignActions, backToDesignLine } from "./backToDesign.ts";
 import { upToDateBeforeMergeGate } from "./conflicts.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { digestOnPass } from "./digest.ts";
-import { checkCode, flakyCheckActions } from "./flakyChecks.ts";
+import { checkCode } from "../review/failureExcerpt.ts";
+import { flakyCheckActions } from "./flakyChecks.ts";
+import { type UnrelatedFailure, unrelatedFailureActions } from "./unrelatedFailures.ts";
 import { followUpsSection } from "./followUps.ts";
 import { type HeldOn, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
@@ -18,14 +24,19 @@ import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { verdictMarker } from "./markers.ts";
 import { changeLine } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
-import { parseVerdict, verdictTagsOf } from "./verdict.ts";
+import { parseVerdict, type RedCheckJudgment, verdictTagsOf } from "./verdict.ts";
+import { redChecksLinked } from "./redChecks.ts";
+import { issueRef } from "./checkIssue.ts";
+import { type Linked, linkedComment, linkedLength } from "./linked.ts";
 import type {
   Action,
+  CreatedIssue,
   KitConfig,
   LoopEvent,
   Plan,
   PostedComment,
   PullRequestSnapshot,
+  RedRequiredChecks,
   ReviewKind,
   Snapshot,
   Verdict,
@@ -33,7 +44,6 @@ import type {
   VerdictTags,
 } from "./types.ts";
 
-type RedChecks = Extract<LoopEvent, { kind: "required-checks-finished" }>;
 type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
 
 /**
@@ -90,36 +100,6 @@ export function startReviewOnLabel(pullRequest: PullRequestSnapshot, config: Kit
   return { kind: "act", actions: declineTrigger(pullRequest.number, REVIEW_LABEL, plan.reason) };
 }
 
-/** Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be counted from the PR alone. */
-export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: KitConfig): Plan {
-  return landVerdict(event, snapshot, (pullRequest) => {
-    if (event.failed.length === 0) {
-      return { kind: "nothing", reason: `#${pullRequest.number}'s required checks passed, so the Reviewer judges it` };
-    }
-    const red = event.failed;
-    const { rerun } = event;
-    // Re-run on the same head and red again (#462): no flake, so the Retry needn't wonder whether one is.
-    const again = red.filter((name) => rerun?.failedAgain.includes(name) === true);
-    const outside = red.filter((name) => rerun?.outside.includes(name) === true && !again.includes(name));
-    const plain = red.filter((name) => !again.includes(name) && !outside.includes(name));
-    const listed = (heading: string, names: readonly string[], after: string[] = []) =>
-      names.length === 0 ? [] : [[heading, "", ...names.map((name) => `- ${checkCode(name)}`), ...after].join("\n")];
-    const findings = [
-      ...listed("These required checks failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:", again),
-      ...listed("These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:", outside),
-      ...listed(
-        "These required checks didn't pass, so the Reviewer didn't run:",
-        plain,
-        rerun?.refused == null ? [] : ["", `The Kit couldn't re-run them: ${rerun.refused}.`],
-      ),
-    ].join("\n\n");
-    const held = heldOn(snapshot.kitIssues, config);
-    const flaky = flakyCheckActions(pullRequest.number, event.headSha, rerun?.flaky ?? [], snapshot.flakyCheckIssues);
-    const verdict = verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings, checks: red }, snapshot.operator, held);
-    return { kind: "act", actions: [...flaky, ...verdict] };
-  });
-}
-
 /**
  * The Reviewer's Verdict. A reply that breaks the contract is an
  * Infrastructure failure, never a pass. A pass starts the Digest writer,
@@ -131,28 +111,46 @@ export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: Kit
  */
 export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConfig): Plan {
   return landVerdict(event, snapshot, (pullRequest) => {
-    const parsed = parseVerdict(event.output);
+    // On a head still red after everything the Kit could do (#779), each red check with the Reviewer's judgment (#780).
+    const red = event.redChecks;
+    const parsed = parseVerdict(event.output, red?.failed ?? []);
     if (!parsed.ok) {
       return { kind: "fail", failure: "infrastructure", reason: `The Review of #${pullRequest.number} gave no valid Verdict: ${parsed.error}` };
     }
     const findings = withoutMentions(parsed.findings);
     // A run this Verdict starts is held while every Subscription is used up, and its note says so (#341).
     const held = heldOn(snapshot.kitIssues, config);
+    // The red checks the Reviewer judged caused count as the PR's own; the Unrelated failures count toward nothing (#780).
+    const judged = parsed.redChecks;
+    const counting = judged.filter(({ judgment }) => judgment === "caused").map(({ check }) => check);
+    const unrelated = judged.filter(({ judgment }) => judgment === "unrelated").map(({ check }) => check);
+    const verdict = verdictOnRedHead(parsed.verdict, counting);
+    // Each Unrelated failure is said on the PR ahead of the Verdict, with its check's issue, which the Verdict links too (#781).
+    // A second Verdict on this head, after a Touch-up that changed only the body (#751), says none again.
+    const saidBefore = pullRequest.verdicts.filter(({ headSha }) => headSha === event.headSha).flatMap((record) => record.unrelated ?? []);
+    const said = unrelatedFailureActions(pullRequest.number, event.headSha, unrelatedFailuresOf(judged, red, event.runUrl), snapshot.flakyCheckIssues, saidBefore);
+    // A pass is what the Reviewer checked, then any Follow-ups; a flaw is its findings.
+    const reviewed = parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings;
+    // Counted as the Review that gave it was started (#749): the snapshot holds the Verdicts before this one. A pass a
+    // red check made a flaw has no finding of its own: its findings are the red checks, which are never tagged ones.
+    const tags = parsed.verdict === "pass" && verdict === "execution-flaw" ? NO_FINDINGS : verdictTagsOf(parsed, reviewKindOf(pullRequest).kind === "full");
     const actions = verdictActions(event, pullRequest, {
-      verdict: parsed.verdict,
+      verdict,
       source: "reviewer",
-      // A pass is what the Reviewer checked, then any Follow-ups; a flaw is its findings.
-      findings: parsed.verdict === "pass" && findings !== "" ? `### Checked\n\n${findings}` : findings,
-      followUps: followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number),
+      findings:
+        red === undefined ? reviewed : (room) => withRedChecks(reviewed, red, { verdict, passed: parsed.verdict === "pass", headSha: event.headSha, judged, issues: said.refs }, room),
+      // Only a pass carries Follow-ups.
+      followUps: verdict === "pass" ? followUpsSection(parsed.followUps, event.repoUrl, pullRequest.number) : [],
       considered: consideredSection(parsed.considered, event.operatorComments),
       ...(event.ranNothing === undefined ? {} : { ranNothing: event.ranNothing }),
-      // Counted as the Review that gave it was started (#749): the snapshot holds the Verdicts before this one.
-      tags: verdictTagsOf(parsed, reviewKindOf(pullRequest).kind === "full"),
+      ...(counting.length === 0 ? {} : { checks: counting }),
+      unrelated,
+      tags,
     }, snapshot.operator, held);
     // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
-    actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues));
+    actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues), ...said.actions);
     // A pass that gave way to a Request changes deferred during a Retry (#427) keeps the PR in draft for its run.
-    if (parsed.verdict !== "pass" || passGivesWay(pullRequest)) return { kind: "act", actions };
+    if (verdict !== "pass" || passGivesWay(pullRequest)) return { kind: "act", actions };
     // One on a PR that conflicts with main brings it up to date first, in draft: the Operator's review couldn't land (#480).
     const bringUpToDate = upToDateBeforeMergeGate(pullRequest, snapshot.mergeable, held);
     if (bringUpToDate !== null) return { kind: "act", actions: [...actions, bringUpToDate] };
@@ -161,9 +159,107 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
   });
 }
 
+/**
+ * The red checks the Reviewer judged Unrelated failures (#781), each with its
+ * reason as a sentence that mentions nobody, and the Failure excerpt the
+ * Review read of it, linking its red run; with none read, the Review's run.
+ */
+function unrelatedFailuresOf(judged: readonly RedCheckJudgment[], red: RedRequiredChecks | undefined, runUrl: string): UnrelatedFailure[] {
+  return judged.flatMap(({ check, judgment, reason }) => {
+    if (judgment !== "unrelated") return [];
+    const excerpt = red?.excerpts.find((each) => each.check === check);
+    return [{ name: check, red: excerpt?.link ?? runUrl, reason: sentence(withoutMentions(reason)), ...(excerpt === undefined ? {} : { excerpt }) }];
+  });
+}
+
+/** The tags of a Verdict with no finding of its own: none of any kind. */
+const NO_FINDINGS: VerdictTags = { small: 0, missedEarlier: 0, counted: 0, smallBody: 0 };
+
+/**
+ * What the Reviewer's Verdict line lands as on a head whose Required checks
+ * are still red (#779), given the red checks that count as the pull
+ * request's own, those it judged caused (#780): a Design flaw as given, and
+ * anything else, a pass included, an Execution flaw while any red check
+ * counts. With none counting, as when all are Unrelated failures, the line
+ * lands as given.
+ */
+export function verdictOnRedHead(verdict: Verdict, counting: readonly string[]): Verdict {
+  return verdict === "design-flaw" || counting.length === 0 ? verdict : "execution-flaw";
+}
+
+/**
+ * A Reviewer's findings on a red head (#779), then its "Red Required checks"
+ * part: each check under its name with the Reviewer's judgment and reason
+ * (#780), an Unrelated failure's linking its check's issue (#781), its
+ * attempts, its Failure excerpt and its job link, the excerpts
+ * fitted to what's left of `room`. An Execution flaw says which checks are
+ * Unrelated failures and that the run fixing it leaves them alone; a pass
+ * names each and says the Merge gate holds the pull request until it is green.
+ */
+function withRedChecks(
+  findings: string,
+  red: RedRequiredChecks,
+  {
+    verdict,
+    passed,
+    headSha,
+    judged,
+    issues,
+  }: {
+    readonly verdict: Verdict;
+    readonly passed: boolean;
+    readonly headSha: string;
+    readonly judged: readonly RedCheckJudgment[];
+    /** Each Unrelated failure's issue (#781), which its note links. */
+    readonly issues: ReadonlyMap<string, number | CreatedIssue>;
+  },
+  room: number,
+): Linked {
+  const short = headSha.slice(0, 7);
+  const caused = judged.filter(({ judgment }) => judgment === "caused");
+  const unrelated = judged.filter(({ judgment }) => judgment === "unrelated").map(({ check }) => check);
+  const one = unrelated.length === 1;
+  const judgedUnrelated =
+    unrelated.length === 0
+      ? []
+      : [`The Reviewer judged ${one ? `${checkCode(unrelated[0]!)} an Unrelated failure` : `each of these an Unrelated failure`}, which doesn't count${one ? "" : `: ${listed(unrelated.map(checkCode))}`}.`];
+  const intro = [
+    verdict === "design-flaw"
+      ? `These Required checks were still red on ${short} after everything the Kit could do.`
+      : caused.length > 0
+        ? `${passed ? "The Reviewer found no flaw in the code, but these" : "These"} Required checks are still red on ${short} after everything the Kit could do. The Reviewer judged ${listed(caused.map(({ check }) => checkCode(check)))} caused by this pull request, so this Verdict is an Execution flaw that counts.`
+        : `These Required checks are still red on ${short} after everything the Kit could do.`,
+    ...judgedUnrelated,
+    ...(unrelated.length === 0 || verdict === "design-flaw"
+      ? []
+      : [verdict === "pass" ? `The Merge gate holds this pull request until ${one ? "it is" : "each is"} green on its head.` : `The run that fixes this Verdict leaves ${one ? "it" : "them"} alone.`]),
+  ].join(" ");
+  const notesOf = (check: string): Linked[] => {
+    const given = judged.find((each) => each.check === check);
+    if (given === undefined) return [];
+    const reason = sentence(withoutMentions(given.reason));
+    if (given.judgment === "caused") return [[`Caused by this pull request: ${reason}`]];
+    const issue = issues.get(check);
+    return [issue === undefined ? [`An Unrelated failure: ${reason}`] : ["An Unrelated failure, reported on ", issueRef(issue), `: ${reason}`]];
+  };
+  const head = [...(findings === "" ? [] : [findings]), "### Red Required checks", intro, ""].join("\n\n");
+  return [head, ...redChecksLinked(red, room - head.length, notesOf)];
+}
+
+/** A reason as a sentence: ending in a full stop unless it ends in one already. */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/** Names as prose: `a`, `a and b`, `a, b and c`. */
+function listed(names: readonly string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
 /** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once, or once more after a body-only Touch-up (#751). */
 function landVerdict(
-  event: RedChecks | Reviewed,
+  event: Reviewed,
   { pullRequest }: Snapshot,
   decide: (pullRequest: PullRequestSnapshot) => Plan,
 ): Plan {
@@ -184,8 +280,10 @@ function landVerdict(
   return decide(pullRequest);
 }
 
-const BY: Readonly<Record<VerdictRecord["source"], string>> = {
-  ci: "red required checks",
+/** Who a Verdict the Loop posts is from. One from red checks alone, source `ci`, is never posted since #779, and still reads. */
+type PostedSource = Exclude<VerdictRecord["source"], "ci">;
+
+const BY: Readonly<Record<PostedSource, string>> = {
   reviewer: "the Reviewer",
   "empty-diff": "a retry that changed nothing",
   "broken-run": "a Broken run",
@@ -227,16 +325,24 @@ export function verdictActions(
     followUps = [],
     considered = [],
     checks,
+    unrelated = [],
     ranNothing,
     tags = null,
   }: {
     readonly verdict: Verdict;
-    readonly source: VerdictRecord["source"];
-    readonly findings: string;
+    readonly source: PostedSource;
+    /**
+     * The findings, or, for findings that fit themselves to a room, them given
+     * what the comment has left around them (#775), which may link the issues
+     * the plan files (#781).
+     */
+    readonly findings: string | ((room: number) => Linked);
     /** On a Reviewer's Execution flaw, its findings counted by tag (#749). */
     readonly tags?: VerdictTags | null;
-    /** On one from red required checks, the ones it names as failed (#462). */
+    /** On a Reviewer's Verdict on a head still red (#779), the red checks it counts: those it judged caused (#780). */
     readonly checks?: readonly string[];
+    /** On a Reviewer's Verdict on a head still red, the red checks it judged Unrelated failures (#780), which count toward nothing. */
+    readonly unrelated?: readonly string[];
     /** On a Reviewer's Verdict, the Required checks that ran nothing on its head (#456). */
     readonly ranNothing?: readonly string[];
     readonly followUps?: readonly string[];
@@ -247,7 +353,8 @@ export function verdictActions(
 ): Action[] {
   const first =
     verdict === "execution-flaw" ? requestChangesFirst(pullRequest, operator, held) : verdict === "pass" ? deferredFirst(pullRequest, held) : null;
-  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest, held, tags);
+  // A Verdict naming red checks counts whatever its findings' tags (#779): it never calls for a Touch-up.
+  const next: VerdictNext | null = first ?? nextAfter(verdict, pullRequest, held, (checks?.length ?? 0) > 0 ? null : tags);
   const record: VerdictRecord = {
     verdict,
     source,
@@ -256,30 +363,34 @@ export function verdictActions(
     ...(first === null ? {} : { requestChangesFirst: first.reviews }),
     ...(next?.ticketNotReady === true ? { ticketNotReady: true as const } : {}),
     ...(checks === undefined ? {} : { checks }),
+    ...(unrelated.length === 0 ? {} : { unrelated }),
     ...(ranNothing === undefined || ranNothing.length === 0 ? {} : { ranNothing }),
     ...(tags === null ? {} : { tags }),
     ...(next?.touchUp === undefined ? {} : { touchUp: next.touchUp }),
     headSha: event.headSha,
   };
   const by = BY[source];
-  const lines = [
+  const header = [
     `## Verdict: ${HEADINGS[verdict]}`,
     "",
     `From ${by}, on ${event.headSha.slice(0, 7)}${record.requestChanges ? ", after a Request-changes run" : ""}${record.conflictRun === true ? ", after a conflict-only run" : ""}.`,
-    ...(findings === "" ? [] : ["", findings]),
-    ...followUps,
-    ...(next === null ? [] : ["", next.line]),
-    "",
-    `[The run](${event.runUrl})`,
-    ...considered,
   ];
+  const footer = [...followUps, ...(next === null ? [] : ["", next.line]), "", `[The run](${event.runUrl})`, ...considered];
+  // The lines `top`, the header, the findings after a blank line when there are any, and the footer, one to a line.
+  const composed = (top: readonly string[], findings: Linked): Linked =>
+    findings.length === 0
+      ? [[...top, ...header, ...footer].join("\n")]
+      : [`${[...top, ...header].join("\n")}\n\n`, ...findings, `\n${footer.join("\n")}`];
   // The fingerprint of the PR's own change (#643), when the push job read one at the head this Verdict is on:
   // the PR's own head, or the head a Retry that changed nothing started at, which the PR may have moved on from.
   const read = pullRequest.headSha === event.headSha ? pullRequest.change : pullRequest.changeAt?.headSha === event.headSha ? pullRequest.changeAt.change : undefined;
   const change = read === undefined ? [] : [changeLine(read)];
-  const withChange = [verdictMarker(record), ...change, ...lines].join("\n");
+  // Findings that fit themselves are given the room the rest of the comment leaves, less the blank line before them.
+  const room = GITHUB_COMMENT_LIMIT - linkedLength(composed([verdictMarker(record), ...change], [])) - 2;
+  const given = typeof findings === "string" ? (findings === "" ? [] : [findings]) : findings(room);
+  const withChange = composed([verdictMarker(record), ...change], given);
   // A Verdict never fails for want of one: a line that would take the comment past GitHub's limit is left out.
-  const body = withChange.length <= GITHUB_COMMENT_LIMIT ? withChange : [verdictMarker(record), ...lines].join("\n");
+  const body = linkedLength(withChange) <= GITHUB_COMMENT_LIMIT ? withChange : composed([verdictMarker(record)], given);
   // ready-for-human, which the Kit put on the PR when a run it started there ended without pushing, comes off too:
   // with a Verdict, the PR is back in the Loop.
   const labelsOff: Action[] = ([REVIEW_LABEL, READY_FOR_HUMAN] as const)
@@ -287,7 +398,7 @@ export function verdictActions(
     .map((label): Action => ({ kind: "remove-label", issue: pullRequest.number, label }));
   return [
     ...labelsOff,
-    { kind: "comment", issue: pullRequest.number, body, key: VERDICT_COMMENT.posted },
+    linkedComment(pullRequest.number, body, VERDICT_COMMENT.posted),
     ...(next?.actions ?? []),
   ];
 }

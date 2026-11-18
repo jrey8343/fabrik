@@ -8,6 +8,7 @@ import type {
   IssueSnapshot,
   KitConfig,
   LabelledTrigger,
+  LoopEvent,
   NamedPullRequestSnapshot,
   Plan,
   PullRequestSnapshot,
@@ -81,11 +82,33 @@ function parentOf({ parent, parentIssue }: Partial<IssueSnapshot>): Pick<IssueSn
 
 /** A snapshot of this issue in a repo the Operator (by default `operator`) runs. */
 export function snapshotOf(issue: IssueSnapshot, overrides: Partial<Omit<Snapshot, "issue">> = {}): Snapshot {
-  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, rollIns: null, held: null, closedKitIssue: null, closedCarriers: null, weekCarriers: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, flakySweep: null, passedHeads: null, ...overrides };
+  return { issue, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, rollIns: null, held: null, closedKitIssue: null, closedCarriers: null, weekCarriers: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, flakySweep: null, passedHeads: null, closedCheckIssues: null, ...overrides };
 }
 
 /** The head commit aPullRequest() is at unless a test says otherwise. */
 export const HEAD_SHA = "a".repeat(40);
+
+/** The tags of a Verdict with no finding of its own, as aCausedRedCheckReview()'s: none of any kind. */
+export const NO_TAGS = { small: 0, missedEarlier: 0, counted: 0, smallBody: 0 } as const;
+
+/**
+ * The Review of a head whose Required check `build` is still red after
+ * everything the Kit could do, which the Reviewer judged caused (#779, #780):
+ * an Execution flaw that counts and calls for a Retry, never a Touch-up, as
+ * red checks alone did before #779. Its marker records `build` in `checks`.
+ */
+export function aCausedRedCheckReview(overrides: Partial<Extract<LoopEvent, { kind: "review-run-finished" }>> = {}): LoopEvent {
+  return {
+    kind: "review-run-finished",
+    pullRequest: 50,
+    headSha: HEAD_SHA,
+    output: "verdict: pass\n\nChecked each acceptance criterion against the diff.\n\nred-checks:\n- caused `build`: the typecheck error is in a stub the change breaks.",
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    repoUrl: "https://github.com/acme/shop",
+    redChecks: { failed: ["build"], excerpts: [] },
+    ...overrides,
+  };
+}
 
 /** A pull request, by default an open agent draft PR the Fabrik App opened for a Ticket, with no Verdicts yet. */
 export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): PullRequestSnapshot {
@@ -102,6 +125,9 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     labels: [],
     verdicts: [],
     flakyCheckMarks: [],
+    checkFixMarks: [],
+    operatorMentions: [],
+    gateReruns: [],
     requestChangesRun: false,
     conflictRun: false,
     lastPushStepUpReason: null,
@@ -136,7 +162,7 @@ export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
   overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "conflicts" | "mergeable" | "reviewHasInlineComments" | "rollIns">> = {},
 ): Snapshot {
-  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, rollIns: null, held: null, closedKitIssue: null, closedCarriers: null, weekCarriers: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, flakySweep: null, passedHeads: null, ...overrides };
+  return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, rollIns: null, held: null, closedKitIssue: null, closedCarriers: null, weekCarriers: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, flakySweep: null, passedHeads: null, closedCheckIssues: null, ...overrides };
 }
 
 /** A Ticket Dispatch can release: open, ready-for-agent, unblocked, no sub-issues, no PR open or merged. */
@@ -211,7 +237,7 @@ export function dispatchSnapshotOf(
     weekCarriers: null,
     openMaps: null,
     conflicts: null,
-    flakySweep: null, passedHeads: null,
+    flakySweep: null, passedHeads: null, closedCheckIssues: null,
     mergeable: null,
     triggers: null,
     readyTickets: null,
@@ -259,7 +285,7 @@ export function designQueueSnapshotOf(
     weekCarriers: null,
     openMaps: null,
     conflicts: null,
-    flakySweep: null, passedHeads: null,
+    flakySweep: null, passedHeads: null, closedCheckIssues: null,
     mergeable: null,
     triggers: null,
     readyTickets: null,
@@ -268,7 +294,7 @@ export function designQueueSnapshotOf(
 
 /** A snapshot for an event about the repo as a whole, such as a scheduled tick. */
 export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers" | "readyTickets" | "weekCarriers" | "closedCarriers">> = {}): Snapshot {
-  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, rollIns: null, held: null, closedKitIssue: null, closedCarriers: null, weekCarriers: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, flakySweep: null, passedHeads: null, ...overrides };
+  return { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, rollIns: null, held: null, closedKitIssue: null, closedCarriers: null, weekCarriers: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, flakySweep: null, passedHeads: null, closedCheckIssues: null, ...overrides };
 }
 
 /**
@@ -280,7 +306,7 @@ export function repoSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kit
  * its trigger-sweep slice holds no trigger label, with nothing under way.
  * It reads no open ready-for-agent Ticket.
  */
-export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers" | "readyTickets" | "weekCarriers" | "closedCarriers">> = {}): Snapshot {
+export function tickSnapshot(overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "audit" | "retro" | "replay" | "held" | "conflicts" | "triggers" | "readyTickets" | "weekCarriers" | "closedCarriers" | "closedCheckIssues" | "passedHeads">> = {}): Snapshot {
   return repoSnapshot({
     conflicts: { main: HEAD_SHA, now: "2026-01-01T00:00:00Z", implementJobUnderWay: null, pullRequests: [] },
     audit: { head: HEAD_SHA, issues: [] },

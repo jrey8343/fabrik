@@ -1,11 +1,13 @@
 import { auditGate } from "./auditGate.ts";
 import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
-import { digestLabelOnIssue, issueLabelOnPullRequest, reviewLabelOnIssue } from "./declineTrigger.ts";
+import { digestLabelOnIssue, issueLabelOnPullRequest, rerunChecksLabelOnIssue, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { landDigest, startDigestOnLabel } from "./digest.ts";
 import { failureNotice } from "./failures.ts";
-import { checkConflicts } from "./conflicts.ts";
+import { bringInCheckFix, type CheckFixes, checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
+import { gateRerunGate, rerunChecksOnLabel } from "./gateRerun.ts";
+import { operatorMentionGate } from "./operatorMention.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
 import {
   DESIGN_LABEL,
@@ -22,10 +24,12 @@ import {
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
   REPLAY_TRIGGER_LABEL,
+  RERUN_CHECKS_LABEL,
   RESEARCH_LABEL,
   REVIEW_LABEL,
   WONTFIX,
 } from "./labels.ts";
+import { flakyCheckIssueOf } from "./markers.ts";
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
@@ -52,7 +56,7 @@ import { landRetro } from "./retroLanding.ts";
 import { startWeekly, weeklyRoleOf } from "./weeklyRuns.ts";
 import { dispatch } from "./dispatch.ts";
 import { sweepStuckTriggers } from "./triggerSweep.ts";
-import { applyRedChecks, applyReview, startReview, startReviewOnLabel } from "./review.ts";
+import { applyReview, startReview, startReviewOnLabel } from "./review.ts";
 import type {
   Action,
   IssueContext,
@@ -132,10 +136,13 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
     // the Dispatch check would start (#439).
     case "issue-closed":
       return withIssue(snapshot, ({ issue }) => {
-        const plan: Plan = {
-          kind: "act",
-          actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
-        };
+        const plan: Plan = alongside(
+          {
+            kind: "act",
+            actions: [...closeAgentDraftsOf(issue), ...closeSpecAfter(issue, snapshot.spec), CHECK_DISPATCH, CHECK_DESIGN_QUEUE],
+          },
+          checkFixLanded(event, issue, snapshot, config),
+        );
         return makesUnusable(issue.labels) ? resumingHeldRuns(plan, snapshot, config, issue.number) : plan;
       });
     // A push to an agent draft PR, or agent:review added to resume after a failure, starts a Review.
@@ -146,14 +153,13 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withPullRequest(snapshot, (pullRequest) => {
         if (event.label === REVIEW_LABEL) return startReviewOnLabel(pullRequest, config);
         if (event.label === DIGEST_LABEL) return startDigestOnLabel(pullRequest, snapshot, config);
+        if (event.label === RERUN_CHECKS_LABEL) return rerunChecksOnLabel(pullRequest);
         if (event.label === NEEDS_DESIGN) return sendBackToDesign(pullRequest);
         const misplaced = issueLabelOnPullRequest(event.label, pullRequest);
         return misplaced === null
           ? { kind: "nothing", reason: `The Loop doesn't act on ${event.label} being added to #${pullRequest.number}` }
           : { kind: "act", actions: misplaced };
       });
-    case "required-checks-finished":
-      return applyRedChecks(event, snapshot, config);
     case "review-run-finished":
       return applyReview(event, snapshot, config);
     case "digest-run-finished":
@@ -226,7 +232,7 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return thenCheckQueues(
         alongside(
           withDeadTickClosed(event, snapshot, config, withReasonNoted(stuckTriggers(event.now, snapshot, config))),
-          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate], event.now, snapshot, config),
+          scheduledTickWith([mergedTicketsGate, auditGate, retroGate, replayGate, conflictGate, flakyCheckGate, gateRerunGate, operatorMentionGate], event.now, snapshot, config),
         ),
       );
   }
@@ -275,7 +281,37 @@ function conflictCheck(snapshot: Snapshot, config: KitConfig): Plan {
         heldOn(snapshot.kitIssues, config),
         recoveryWaits(config),
         heldOf("implement", snapshot.kitIssues),
+        checkFixesOf(snapshot),
       );
+}
+
+/**
+ * The check's fixes the tick's conflict check brings in (#784): each check's
+ * issue it read closed as completed, and its read of the heads at the Merge
+ * gate. Null for any other event, which reads none.
+ */
+function checkFixesOf({ closedCheckIssues, passedHeads }: Snapshot): CheckFixes | null {
+  if (closedCheckIssues === null) return null;
+  return {
+    closed: closedCheckIssues.flatMap(({ number, check, closedAt, stateReason }) => (stateReason === "completed" ? [{ check, issue: number, closedAt }] : [])),
+    passedHeads: passedHeads === null || typeof passedHeads === "string" ? [] : passedHeads,
+  };
+}
+
+/**
+ * A check's issue closed as completed, so the fix for the check is on main
+ * (#784): each agent PR that check holds at the Merge gate is brought up to
+ * date (src/loop/conflicts.ts). Nothing for any other issue, or a check's
+ * issue closed as not planned, as a duplicate, or with no reason given.
+ */
+function checkFixLanded(event: Extract<LoopEvent, { kind: "issue-closed" }>, issue: IssueSnapshot, snapshot: Snapshot, config: KitConfig): Plan {
+  const check = issue.byApp && !issue.open ? flakyCheckIssueOf(issue.body) : null;
+  if (check === null) return { kind: "nothing", reason: `#${issue.number} isn't a check's issue` };
+  if (event.stateReason !== "completed") {
+    return withReasonNoted({ kind: "nothing", reason: `#${issue.number} didn't close as completed, so no fix for \`${check}\` landed to bring in` });
+  }
+  if (snapshot.conflicts === null) return withReasonNoted({ kind: "nothing", reason: `The snapshot holds no open agent PRs, so the fix for \`${check}\` was brought into none` });
+  return withReasonNoted(bringInCheckFix(snapshot.conflicts, { check, issue: issue.number, closedAt: null }, snapshot.operator, heldOn(snapshot.kitIssues, config)));
 }
 
 /** The conflict check as one of the tick's gates. */
@@ -393,6 +429,8 @@ function labelAdded(
   if (label === REVIEW_LABEL) return { kind: "act", actions: reviewLabelOnIssue(issueNumber, context.issue.openPullRequests) };
   // Nor does agent:digest start the Digest writer anywhere but on a PR.
   if (label === DIGEST_LABEL) return { kind: "act", actions: digestLabelOnIssue(issueNumber, context.issue.openPullRequests) };
+  // Nor does agent:rerun-checks re-run anything but an agent PR's checks at the Merge gate (#783).
+  if (label === RERUN_CHECKS_LABEL) return { kind: "act", actions: rerunChecksLabelOnIssue(issueNumber, context.issue.openPullRequests) };
   if (label !== NEEDS_TRIAGE) {
     return { kind: "nothing", reason: `The Loop doesn't act on ${label} being added to #${issueNumber}` };
   }

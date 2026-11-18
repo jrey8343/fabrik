@@ -11,7 +11,7 @@ import type { DigestHead } from "../loop/digestPlaces.ts";
 import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
-import { isEmptyDiffComment, withPrototypeStarted } from "../loop/markers.ts";
+import { isEmptyDiffComment, withGateRerunStarted, withPrototypeStarted } from "../loop/markers.ts";
 import { sameRepo } from "../loop/blockers.ts";
 import { closingCommentText } from "../loop/design.ts";
 import type { Action, CreatedIssue, ExistingIssue, LoopEvent, Plan, PostedComment } from "../loop/types.ts";
@@ -204,8 +204,12 @@ export async function applyPlan(
       }
       if (rebaser === null) throw new Error(`This job can't rebase ${action.branch} onto main`);
       const rebased = await rebaser.rebase(action.branch, action.onto);
-      // Neither is the core's to act on: there's nothing to bring up to date.
-      if (rebased.outcome === "up-to-date" || rebased.outcome === "gone") continue;
+      // Neither is the core's to act on: there's nothing to bring up to date. Only a check's fix records it (#784).
+      if (rebased.outcome === "up-to-date") {
+        await applyEach(action.upToDate ?? []);
+        continue;
+      }
+      if (rebased.outcome === "gone") continue;
       if (rebased.outcome === "conflicted") {
         await applyEach(action.conflicted);
         continue;
@@ -409,6 +413,9 @@ async function apply(
       return createIssue(github, repo, action, made.created);
     case "add-blocked-by":
       return addBlockedBy(github, repo, action, made);
+    case "comment-on-created":
+      await github.rest("POST", `${issues}/${createdIn(made.created, action.on).number}/comments`, { body: action.body });
+      return;
     case "close-as-superseded": {
       const body = closingCommentText(
         action.comment,
@@ -452,6 +459,22 @@ async function apply(
       if (marked !== body) await github.rest("PATCH", path, { body: marked });
       return;
     }
+    case "mark-gate-rerun-started": {
+      // Read fresh, by the comment's node id, so the edit changes only the line's marker (#783).
+      const read = (await github.graphql("query ($id: ID!) { node(id: $id) { ... on IssueComment { body } } }", { id: action.node })) as {
+        node: { body?: string } | null;
+      };
+      const body = read.node?.body;
+      if (body === undefined) throw new Error(`The Kit's line asking one more re-run on #${action.pullRequest} can't be read`);
+      const marked = withGateRerunStarted(body);
+      if (marked !== body) {
+        await github.graphql("mutation ($id: ID!, $body: String!) { updateIssueComment(input: { id: $id, body: $body }) { clientMutationId } }", { id: action.node, body: marked });
+      }
+      return;
+    }
+    case "rerun-checks":
+      // The workflow re-runs them by routing to the Re-run red checks job, which alone holds actions: write (src/kit/jobs.ts).
+      return;
     case "push-prototype-branch": {
       // Only ever the issue's own prototype branch, which the branch the push job holds fast-forwards (src/github/branch.ts).
       const branch = prototypeBranchFor(action.issue);
@@ -635,6 +658,7 @@ async function applyToIssue(
         | "link-prototype-preview"
         | "create-issue"
         | "add-blocked-by"
+        | "comment-on-created"
         | "close-as-superseded"
         | "open-issue"
         | "push-branch"
@@ -691,7 +715,8 @@ async function applyToIssue(
           return "posted" in part ? postedIn(posted, part).url : `#${createdIn(created, part).number}`;
         })
         .join("");
-      await github.rest("POST", `${issue}/comments`, { body });
+      const comment = (await github.rest("POST", `${issue}/comments`, { body })) as { html_url: string; id: number };
+      if (action.key !== undefined) posted.set(action.key, { url: comment.html_url, id: comment.id });
       return;
     }
     case "assign":

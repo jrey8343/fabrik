@@ -372,16 +372,14 @@ export function agentRunEnded(needs: Needs, eventIssue: number | null): boolean 
   return endedRun({ needs, eventIssue, failureReport: null }) !== null;
 }
 
-/** Which agent run ended, or null when none did: red checks, routing to push, or nothing to do. */
+/** Which agent run ended, or null when none did: routing to push, or nothing to do. */
 function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): EndedRun | null {
   const input = pushJobInput(end.needs, end.eventIssue);
   switch (input.kind) {
     case "agent-result":
       return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: routedJob(end.needs, input.role), failure: null, broken: null };
-    case "review": {
-      if (!input.withResult) return null;
+    case "review":
       return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null, broken: null };
-    }
     // A Digest run is recorded as any run is, on its Ticket and pull request.
     case "digest":
       return { role: "digest", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs[DIGEST_JOB], failure: null, broken: null };

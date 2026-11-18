@@ -29,6 +29,7 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
         },
       ],
       considered: [],
+      redChecks: [],
     });
   });
 
@@ -60,6 +61,7 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
       findingTags: [],
       followUps: [{ title: "Tidy the footer", body: "It was crooked already." }],
       considered: ["conversation-3"],
+      redChecks: [],
     });
   });
 
@@ -142,5 +144,103 @@ describe("Reading the tags on a Reviewer's findings", () => {
 
   it("reads findings with no items as having no tags", () => {
     expect(parseVerdict("verdict: execution-flaw\n\nThe empty cart throws.")).toMatchObject({ ok: true, findingTags: [] });
+  });
+});
+
+describe("Reading the Reviewer's judgment of each red Required check (#780)", () => {
+  const NO_JUDGMENT = "the Reviewer gave no judgment";
+
+  it("reads each red check's judgment and reason, and keeps the block out of the findings and their tags", () => {
+    const parsed = parseVerdict(
+      [
+        "verdict: execution-flaw",
+        "",
+        "- [small: comment] A stale comment in `cart.ts`.",
+        "",
+        "red-checks:",
+        "- unrelated `e2e`: the booking journey fails the same way on main's head, in code this change doesn't reach.",
+        "- caused `gate`: the typecheck error is in a stub the renamed type breaks.",
+        "",
+        "operator comments considered: conversation-3",
+      ].join("\n"),
+      ["gate", "e2e"],
+    );
+
+    expect(parsed).toEqual({
+      ok: true,
+      verdict: "execution-flaw",
+      findings: "- [small: comment] A stale comment in `cart.ts`.",
+      findingTags: ["small-comment"],
+      followUps: [],
+      considered: ["conversation-3"],
+      redChecks: [
+        { check: "gate", judgment: "caused", reason: "the typecheck error is in a stub the renamed type breaks." },
+        { check: "e2e", judgment: "unrelated", reason: "the booking journey fails the same way on main's head, in code this change doesn't reach." },
+      ],
+    });
+  });
+
+  it("reads the block after a pass's Follow-ups, and keeps both", () => {
+    const parsed = parseVerdict(
+      "verdict: pass\n\nChecked it.\n\nfollow-ups:\n- Tidy the footer\n  Crooked.\n\nred-checks:\n- unrelated `e2e`: red on main's head too.",
+      ["e2e"],
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      findings: "Checked it.",
+      followUps: [{ title: "Tidy the footer", body: "Crooked." }],
+      redChecks: [{ check: "e2e", judgment: "unrelated", reason: "red on main's head too." }],
+    });
+  });
+
+  it.each([
+    ["left out", "- unrelated `lint`: red on main too."],
+    ["misnamed", "- unrelated `e2e-tests`: red on main too."],
+    ["misspelled in its judgment", "- unrelatd `e2e`: red on main too."],
+    ["given no reason", "- unrelated `e2e`:"],
+    ["not in backticks", "- unrelated e2e: red on main too."],
+  ])("reads a red check whose item is %s as caused, the Reviewer having given no judgment", (_, item) => {
+    const parsed = parseVerdict(`verdict: pass\n\nChecked it.\n\nred-checks:\n${item}`, ["e2e"]);
+
+    expect(parsed).toMatchObject({ ok: true, findings: "Checked it.", findingTags: [], redChecks: [{ check: "e2e", judgment: "caused", reason: NO_JUDGMENT }] });
+  });
+
+  it("reads every red check as caused when the reply has no block", () => {
+    expect(parseVerdict("verdict: pass\n\nChecked it.", ["gate", "e2e"])).toMatchObject({
+      ok: true,
+      redChecks: [
+        { check: "gate", judgment: "caused", reason: NO_JUDGMENT },
+        { check: "e2e", judgment: "caused", reason: NO_JUDGMENT },
+      ],
+    });
+  });
+
+  it("ignores an item for a check that isn't red, and the whole block on a green head, whose items count as no findings", () => {
+    const block = "red-checks:\n- unrelated `e2e`: red on main too.\n- caused `gate`: the stub.";
+
+    expect(parseVerdict(`verdict: execution-flaw\n\n- A bug.\n\n${block}`, ["gate"])).toMatchObject({
+      findingTags: [null],
+      redChecks: [{ check: "gate", judgment: "caused", reason: "the stub." }],
+    });
+    expect(parseVerdict(`verdict: execution-flaw\n\n- A bug.\n\n${block}`)).toEqual(parseVerdict("verdict: execution-flaw\n\n- A bug."));
+  });
+
+  it("reads a check named twice as caused if either item says so", () => {
+    const parsed = parseVerdict("verdict: pass\n\nChecked it.\n\nred-checks:\n- unrelated `e2e`: red on main.\n- caused `e2e`: the stub breaks.", ["e2e"]);
+
+    expect(parsed).toMatchObject({ redChecks: [{ check: "e2e", judgment: "caused", reason: "the stub breaks." }] });
+  });
+
+  it("matches a check whose name holds a backtick as the prompt wrote it", () => {
+    const parsed = parseVerdict("verdict: pass\n\nChecked it.\n\nred-checks:\n- unrelated `e2e 'smoke'`: red on main.", ["e2e `smoke`"]);
+
+    expect(parsed).toMatchObject({ redChecks: [{ check: "e2e `smoke`", judgment: "unrelated", reason: "red on main." }] });
+  });
+
+  it("keeps findings that come after the block", () => {
+    const parsed = parseVerdict("verdict: execution-flaw\n\n- A bug.\n\nred-checks:\n- unrelated `e2e`: red on main.\n\nAlso, the tests are thin.", ["e2e"]);
+
+    expect(parsed).toMatchObject({ findings: "- A bug.\n\nAlso, the tests are thin.", redChecks: [{ check: "e2e", judgment: "unrelated" }] });
   });
 });

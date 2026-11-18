@@ -7,8 +7,11 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import { PENRITH_59_REPO, PENRITH_59_REQUEST, PENRITH_59_TICKET_PRACTITIONERS, penrith59 } from "../__fixtures__/requestedChanges.ts";
-import { kitConfig } from "../__fixtures__/snapshots.ts";
+import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { verdictMarker } from "../loop/markers.ts";
+import { planFor } from "../loop/rules.ts";
+import type { LoopEvent } from "../loop/types.ts";
+import type { FailureExcerpt } from "../review/failureExcerpt.ts";
 import {
   bundleAgentBranch,
   conflictContext,
@@ -95,6 +98,38 @@ describe("A Touch-up's prompt says it is one (#750)", () => {
 
     expect(text).toContain("## This run is a Touch-up");
     expect(text).not.toContain(BODY_ONLY);
+  });
+});
+
+describe("A Retry after a Verdict on red Required checks is given each check's Failure excerpt (#775)", () => {
+  it("in the findings to fix, as the Verdict carries it, with no input of its own", async () => {
+    const excerpt: FailureExcerpt = {
+      kind: "actions",
+      check: "gate",
+      link: "https://github.com/acme/shop/actions/runs/7/job/8",
+      steps: [{ name: "Run pnpm test", earlier: 0, lines: ["FAIL src/cart.test.ts > the empty cart", "##[error]Process completed with exit code 1."] }],
+      annotations: [{ path: "src/cart.test.ts", line: 12, message: "TypeError: cart.items is undefined" }],
+    };
+    const event: LoopEvent = {
+      kind: "review-run-finished",
+      pullRequest: 50,
+      headSha: HEAD_SHA,
+      output: "verdict: pass\n\nChecked each criterion.\n\nred-checks:\n- caused `gate`: the empty cart throws in the change's new guard.",
+      runUrl: "https://github.com/acme/shop/actions/runs/42",
+      repoUrl: "https://github.com/acme/shop",
+      redChecks: { failed: ["gate"], excerpts: [excerpt] },
+    };
+    const plan = planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig());
+    const verdict = plan.kind === "act" ? plan.actions.flatMap((action) => (action.kind === "comment" && action.body.includes("## Verdict") ? [action.body] : [])) : [];
+
+    const { parts } = await retryContext(await fileOf({ ...pullRequest, comments: [{ body: verdict[0], author: { __typename: "Bot" } }] }));
+
+    const findings = parts.join("\n").split("## The findings to fix")[1] ?? "";
+    expect(findings).toContain("- `gate` ([the job](https://github.com/acme/shop/actions/runs/7/job/8))");
+    expect(findings).toContain("The step `Run pnpm test` failed. The end of its log:");
+    expect(findings).toContain("  FAIL src/cart.test.ts > the empty cart");
+    expect(findings).toContain("  - `src/cart.test.ts`, line 12:");
+    expect(findings).toContain("    TypeError: cart.items is undefined");
   });
 });
 

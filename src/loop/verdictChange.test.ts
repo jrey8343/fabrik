@@ -1,7 +1,7 @@
 // The change fingerprint on a Verdict comment (#643): each of a Verdict's four
 // sources posts it as a hidden line under the marker, when the push job read one.
 import { describe, expect, it } from "vitest";
-import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
+import { aCausedRedCheckReview, anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { type ChangeFingerprint, changeIn, changeLine, MAX_FILES } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import { planFor } from "./rules.ts";
@@ -19,7 +19,6 @@ const reviewed = (output: string): LoopEvent => ({
   runUrl: RUN,
   repoUrl: "https://github.com/acme/shop",
 });
-const redChecks: LoopEvent = { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN };
 /** A Retry on #50 that committed nothing, built on `headSha`. */
 const changedNothing = (headSha = HEAD_SHA): LoopEvent => ({
   kind: "implement-run-finished",
@@ -58,7 +57,7 @@ function verdictCommentOf(plan: Plan): string {
 
 const SOURCES: readonly (readonly [string, VerdictRecord["source"], LoopEvent, (pullRequest: Partial<PullRequestSnapshot>) => Snapshot])[] = [
   ["the Reviewer's", "reviewer", reviewed("verdict: pass"), (pullRequest) => snapshotOfPullRequest(aPullRequest(pullRequest))],
-  ["one from red Required checks", "ci", redChecks, (pullRequest) => snapshotOfPullRequest(aPullRequest(pullRequest))],
+  ["the Reviewer's on a head still red, with a check it judged caused", "reviewer", aCausedRedCheckReview(), (pullRequest) => snapshotOfPullRequest(aPullRequest(pullRequest))],
   ["one from a Retry that changed nothing", "empty-diff", changedNothing(), retrySnapshot],
   ["one from a Broken run", "broken-run", brokenRun, retrySnapshot],
 ];

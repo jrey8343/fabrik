@@ -9,17 +9,34 @@ import type { CaptureOutputs, PlannedKeptBranchStart } from "../kit/pushJob.ts";
 import { type EvidenceBundle, retroEvidenceOf } from "../kit/retroEvidence.ts";
 import type { DigestGiven } from "../loop/digestContract.ts";
 import type { PrototypeRequestMarker } from "../loop/markers.ts";
+import type { CheckExcerpt } from "../review/failureExcerpt.ts";
 import type {
   AgentRole,
   BranchChanges,
   FailureReport,
+  FlakyCheck,
   GivenOperatorComment,
   ImplementEvidence,
   LoopEvent,
   RerunReport,
   PullRequestCommentPlace,
   StepUpReason,
+  CloseReason,
 } from "../loop/types.ts";
+
+/** Why GitHub says an issue closed, from its webhook's `state_reason` or its GraphQL `stateReason`, either spelling (#784). */
+export function closeReasonOf(reason: string | null | undefined): CloseReason {
+  switch (reason?.toLowerCase()) {
+    case "completed":
+      return "completed";
+    case "not_planned":
+      return "not-planned";
+    case "duplicate":
+      return "duplicate";
+    default:
+      return null;
+  }
+}
 
 /**
  * Maps an Actions event to the Loop event it stands for, or null if the Loop
@@ -65,7 +82,8 @@ export function loopEventFrom(
     };
   }
   if (eventName === "issues" && payload["action"] === "closed") {
-    return { kind: "issue-closed", issue: (payload["issue"] as { number: number }).number };
+    const issue = payload["issue"] as { number: number; state_reason?: string | null };
+    return { kind: "issue-closed", issue: issue.number, stateReason: closeReasonOf(issue.state_reason) };
   }
   // pull_request_target, so the run uses the base branch's caller workflow and
   // Kit config, never the PR's. The Loop never checks out PR code.
@@ -329,19 +347,26 @@ export interface FinishedReview {
   readonly failedChecks: readonly string[];
   /** On green checks, the ones that passed by being skipped or reporting neutral, so ran nothing on the head. */
   readonly ranNothing: readonly string[];
-  /** The Reviewer's result, null when red checks kept it from running. */
-  readonly result: AgentRunResult | null;
+  /** The Reviewer's result: on green checks, and on red ones after everything the Kit could do (#779). */
+  readonly result: AgentRunResult;
   /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
   readonly rerun: RerunReport | null;
+  /**
+   * Each red check's latest Failure excerpt the Review's waits passed out (#775), an outside one's among them (#777),
+   * with its first attempt's for one that failed again (#776); none when they passed none. A check the Kit's re-run
+   * turned green has its first attempt's alone, which its Flaky check's issue carries (#778).
+   */
+  readonly excerpts?: readonly CheckExcerpt[];
 }
 
 /** Turns a finished Review into the Loop event its push job applies. */
 export function reviewEventFrom(review: FinishedReview): LoopEvent {
   const { pullRequest, headSha, runUrl, result } = review;
-  if (result === null) {
-    const rerun = review.rerun === null ? {} : { rerun: review.rerun };
-    return { kind: "required-checks-finished", pullRequest, headSha, failed: review.failedChecks, ...rerun, runUrl };
-  }
+  // Each Flaky check's red run is its first attempt, read before the re-run, for its issue (#778).
+  const flaky = (review.rerun?.flaky ?? []).map((check): FlakyCheck => {
+    const excerpt = review.excerpts?.find(({ check: name }) => name === check.name);
+    return excerpt === undefined ? check : { ...check, excerpt };
+  });
   if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
   if (result.issue !== pullRequest) throw new Error(`The Reviewer's result is for #${result.issue}, not #${pullRequest}`);
   return {
@@ -349,11 +374,15 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     pullRequest,
     headSha,
     output: result.output,
-    ...(review.rerun === null || review.rerun.flaky.length === 0 ? {} : { flaky: review.rerun.flaky }),
+    ...(flaky.length === 0 ? {} : { flaky }),
     ...(review.ranNothing.length === 0 ? {} : { ranNothing: review.ranNothing }),
     runUrl,
     repoUrl: review.repoUrl,
     ...givenTo(result),
+    // A head still red after everything the Kit could do (#779): its Verdict holds the red checks beside the findings.
+    ...(review.failedChecks.length === 0
+      ? {}
+      : { redChecks: { failed: review.failedChecks, ...(review.rerun === null ? {} : { rerun: review.rerun }), excerpts: review.excerpts ?? [] } }),
   };
 }
 

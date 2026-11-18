@@ -5,13 +5,14 @@ import type { ChangedPath } from "../guard/trust-root.ts";
 import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
 import type { RateLimitReading } from "../kit/runRecord.ts";
+import type { CheckExcerpt, FailureExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { IssueRef } from "./blockers.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
-import type { FlakyCheckMark, PrototypeRequestMarker } from "./markers.ts";
+import type { CheckFixMark, FlakyCheckMark, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
 import type { RequestChangesText, RollInIssue } from "./owedRollIn.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
@@ -366,28 +367,24 @@ export type LoopEvent =
        */
       readonly digest?: { readonly pullRequest: number; readonly headSha: string };
     }
-  | { readonly kind: "issue-closed"; readonly issue: number }
+  | {
+      readonly kind: "issue-closed";
+      readonly issue: number;
+      /**
+       * Why it closed, from the event's payload (#784): a check's issue closed
+       * as completed brings up to date each agent PR that check holds at the
+       * Merge gate. Absent or null when GitHub gave none.
+       */
+      readonly stateReason?: CloseReason;
+    }
   /** A PR was opened or pushed to, so its required checks start; a Review waits for them. */
   | { readonly kind: "pull-request-pushed"; readonly pullRequest: number }
   | { readonly kind: "pull-request-labeled"; readonly pullRequest: number; readonly label: string }
   | {
-      /** An agent PR's required checks finished red, so the Reviewer didn't run. */
-      readonly kind: "required-checks-finished";
-      readonly pullRequest: number;
-      /** The head commit the checks ran on. */
-      readonly headSha: string;
-      /** The required checks that failed or were cancelled; empty when they all passed. */
-      readonly failed: readonly string[];
-      /** What the Kit's re-run of the red checks came to (#462); absent when it didn't try, as from a Kit before it. */
-      readonly rerun?: RerunReport;
-      /** The Review run, linked from the Verdict comment. */
-      readonly runUrl: string;
-    }
-  | {
-      /** The Reviewer finished on a green agent PR; its push job holds the Verdict, not yet posted. */
+      /** The Reviewer finished on an agent PR, green or still red (#779); its push job holds the Verdict, not yet posted. */
       readonly kind: "review-run-finished";
       readonly pullRequest: number;
-      /** The head commit the checks passed on and the Reviewer judged. */
+      /** The head commit the checks finished on and the Reviewer judged. */
       readonly headSha: string;
       /** The Reviewer's reply, unparsed: a Verdict line, then its findings (src/loop/verdict.ts). */
       readonly output: string;
@@ -400,6 +397,8 @@ export type LoopEvent =
       readonly repoUrl: string;
       /** The Operator comments the Reviewer was given; none when left out. */
       readonly operatorComments?: readonly GivenOperatorComment[];
+      /** On a head whose Required checks were still red after everything the Kit could do (#779), those checks; absent on green. */
+      readonly redChecks?: RedRequiredChecks;
     }
   | {
       /** The Digest writer finished on an agent PR; its push job holds the reply, not yet posted (ADR-0022). */
@@ -857,6 +856,20 @@ export interface PullRequestSnapshot {
   readonly verdicts: readonly VerdictRecord[];
   /** The Fabrik App's Flaky check lines on it (#462), oldest first, read from their markers. */
   readonly flakyCheckMarks: readonly FlakyCheckMark[];
+  /** The Fabrik App's lines about one more re-run at the Merge gate (#783), oldest first, read from their markers. */
+  readonly gateReruns: readonly GateRerunMark[];
+  /**
+   * The Kit's records of bringing it up to date for a check's fix (#784),
+   * oldest first, read from their markers: on a head with one, that move is
+   * spent for its checks.
+   */
+  readonly checkFixMarks: readonly CheckFixMark[];
+  /**
+   * The Kit's mentions of the Operator over an Unrelated failure on it
+   * (#785), oldest first, read from their markers: a check one names isn't
+   * mentioned on this PR again.
+   */
+  readonly operatorMentions: readonly OperatorMentionMark[];
   /**
    * The fingerprint of its own change at `headSha` (#643), which a Verdict on
    * that head records under its marker. No snapshot read from GitHub holds
@@ -1066,14 +1079,34 @@ export interface HeadCheckRun {
   readonly url: string;
 }
 
-/** An open agent PR's ci-sourced Execution flaw not yet counted back, and every check run on its head (#462). */
-export interface FlawHeadChecks {
+/**
+ * What a later green on a swept head does with its checks:
+ * - `counted-back`: an Execution flaw that counted only for its red checks
+ *   (#462, #779) is counted back once every one reads green.
+ * - `untagged-finding`: a Reviewer's flaw on a red head with an untagged
+ *   finding beside its checks (#779) counts for that, so once every check
+ *   reads green they are reported as Flaky checks and the count stands.
+ * - `unrelated`: the Unrelated failures the latest Verdict on an open draft
+ *   named (#781), which counted toward nothing: each is reported as a Flaky
+ *   check on its own once it reads green.
+ */
+export type SweptKind = "counted-back" | "untagged-finding" | "unrelated";
+
+/** A head of an open agent PR whose named checks the tick's Flaky check sweep reads (#462, #779, #781), not yet counted back or reported. */
+export interface SweptHead {
   readonly pullRequest: number;
   readonly ticket: number | null;
   readonly headSha: string;
-  /** The checks the Verdict named as failed. */
+  /** The checks the Verdict named: an Execution flaw's red ones, or a draft's Unrelated failures. */
   readonly checks: readonly string[];
+  readonly kind: SweptKind;
+}
+
+/** A swept head (#462, #779, #781) with every check run on it. */
+export interface FlawHeadChecks extends SweptHead {
   readonly checkRuns: readonly HeadCheckRun[];
+  /** The Failure excerpt of each red run the sweep reports, read by the tick before its plan (#778). */
+  readonly excerpts: readonly FailureExcerpt[];
 }
 
 /**
@@ -1092,14 +1125,95 @@ export interface PassedHeadChecks {
   readonly checkRuns: readonly HeadCheckRun[];
   /** The Flaky check lines already on the PR, so the tick names each check on each head once. */
   readonly marks: readonly FlakyCheckMark[];
+  /** The Failure excerpt of each red run the read reports, read by the tick before its plan (#778). */
+  readonly excerpts: readonly FailureExcerpt[];
+  /**
+   * The checks red on the default branch's head, of those the Tick would ask
+   * one more re-run of at the Merge gate (#783), which it skips; "unread" when
+   * GitHub didn't say, and absent when it had none to ask.
+   */
+  readonly redOnMain?: readonly string[] | "unread";
 }
+
+/**
+ * Why one more re-run of an Unrelated failure at the Merge gate (#783) is
+ * done on a head without the check reading green: it's from an outside
+ * service, it's red on the default branch's head too, it failed again when
+ * re-run, the Re-run red checks job re-ran nothing, or agent:rerun-checks
+ * sat with no run behind it.
+ */
+export type GateRerunDone = "outside" | "red-on-main" | "red-again" | "refused" | "no-run";
+
+/**
+ * A Fabrik App line on an agent PR about one more re-run at the Merge gate
+ * (#783): the ask, with the head, each check and its red run's job page,
+ * which the Re-run red checks job re-runs the workflow run of, marked started
+ * once its claim takes agent:rerun-checks off; or a re-run done without the
+ * check reading green, and why. The comment's node id and when it was posted
+ * come with an ask.
+ */
+export type GateRerunMark =
+  | {
+      readonly kind: "asked";
+      readonly headSha: string;
+      readonly checks: readonly { readonly name: string; readonly link: string; readonly run: number }[];
+      readonly started: boolean;
+      readonly node: string;
+      readonly postedAt: string;
+    }
+  | { readonly kind: "done"; readonly headSha: string; readonly checks: readonly string[]; readonly why: GateRerunDone };
 
 /** A required check that reported both failure and success on the same head commit (GLOSSARY.md), with a link to a run of each. */
 export interface FlakyCheck {
   readonly name: string;
   readonly red: string;
   readonly green: string;
+  /**
+   * The red run's Failure excerpt, which the check's issue carries (#778): for
+   * one the Kit's re-run turned green, its first attempt's, which the Review
+   * checks job read before the re-run; for one the tick finds, the one it
+   * read. Absent when none was read, which the issue says.
+   */
+  readonly excerpt?: FailureExcerpt;
 }
+
+/**
+ * The Required checks still red on the head a Reviewer judged, after
+ * everything the Kit could do (#779): the re-run's wait ended red, or the
+ * first wait ended red and nothing was re-run. Its Verdict holds them beside
+ * the Reviewer's findings, and the Reviewer was given the same.
+ */
+export interface RedRequiredChecks {
+  /** The Required checks that failed or were cancelled, as the last wait read them. */
+  readonly failed: readonly string[];
+  /** What the Kit's re-run of the red checks came to (#462); absent when its job didn't run. */
+  readonly rerun?: RerunReport;
+  /**
+   * Each red GitHub Actions check's latest Failure excerpt (#775), with its
+   * first attempt's for one that failed again (#776). A check with none here
+   * couldn't be read.
+   */
+  readonly excerpts: readonly CheckExcerpt[];
+  /**
+   * Each red check's result on the default branch's head, which the first
+   * wait read for the Reviewer (#780), or why it couldn't be read; absent
+   * where the push job reads the red checks, which doesn't carry it.
+   */
+  readonly onMain?: RedChecksOnMain;
+}
+
+/** How some checks stood on the default branch's head (#780), as the Review's first wait read them, or why that couldn't be read. */
+export type RedChecksOnMain =
+  | {
+      readonly kind: "read";
+      /** The default branch's name. */
+      readonly branch: string;
+      /** Its head, as read. */
+      readonly sha: string;
+      /** Each check by name: passed, failing, running, or never reported there, so not run there; with its report's page, when it gave one. */
+      readonly checks: readonly { readonly name: string; readonly is: "passed" | "failing" | "running" | "never-reported"; readonly url: string | null }[];
+    }
+  | { readonly kind: "unread"; readonly why: string };
 
 /**
  * What the Kit's re-run of an agent PR's red required checks came to (#462,
@@ -1165,8 +1279,19 @@ export interface VerdictRecord {
    * and started nothing; absent otherwise.
    */
   readonly ticketNotReady?: true;
-  /** On one from red required checks (#462), the ones it named as failed, which a later green on its head is read against; absent otherwise, as on every marker from before them. */
+  /**
+   * On one from red required checks (#462), the ones it named as failed; on a
+   * Reviewer's on a head still red (#779), the ones it judged caused by the
+   * pull request (#780). A later green on its head is read against them.
+   * Absent otherwise, as on every marker from before them.
+   */
   readonly checks?: readonly string[];
+  /**
+   * On a Reviewer's Verdict on a head still red (#780), the red checks it
+   * judged Unrelated failures: they count toward nothing. Absent when it
+   * judged none so, as on every marker from before them.
+   */
+  readonly unrelated?: readonly string[];
   /**
    * On a Reviewer's Verdict, the Required checks that passed on its head only
    * by being skipped or reporting neutral, so ran nothing there (#456): the
@@ -1367,8 +1492,8 @@ export interface Snapshot {
    */
   readonly flakyCheckIssues: readonly KitIssueSnapshot[];
   /**
-   * For the scheduled tick: each open agent PR's ci-sourced Execution flaws not
-   * yet counted back, with every check run on the head each was given on (#462);
+   * For the scheduled tick: each open agent PR's Execution flaws that name red
+   * checks, whatever their source (#779), not yet counted back, with every check run on the head each was given on (#462);
    * "no-permission" when the Fabrik App lacks Checks: read; null for any other event.
    */
   readonly flakySweep: readonly FlawHeadChecks[] | "no-permission" | null;
@@ -1380,6 +1505,13 @@ export interface Snapshot {
    * other event.
    */
   readonly passedHeads: readonly PassedHeadChecks[] | "no-permission" | "branch-unread" | null;
+  /**
+   * For the scheduled tick: the check's issues (#462, #781) closed in the
+   * days before it, newest close first, so the tick brings up to date a PR a
+   * check holds at the Merge gate whose issue's close the issue-closed event
+   * missed (#784). Null for any other event.
+   */
+  readonly closedCheckIssues: readonly ClosedCheckIssue[] | null;
   /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.
@@ -1563,6 +1695,19 @@ export interface ConflictSnapshot {
   readonly implementJobUnderWay: boolean | null;
   /** Every open agent PR, with whether GitHub says it merges cleanly into the default branch. */
   readonly pullRequests: readonly ConflictCandidate[];
+}
+
+/** Why GitHub says an issue closed: completed, not planned, or a duplicate; null when it gave no reason. */
+export type CloseReason = "completed" | "not-planned" | "duplicate" | null;
+
+/** A check's issue (#462, #781) that has closed, as the tick reads it (#784). */
+export interface ClosedCheckIssue {
+  readonly number: number;
+  /** The check its marker names. */
+  readonly check: string;
+  /** When it closed, as an ISO 8601 time. */
+  readonly closedAt: string;
+  readonly stateReason: CloseReason;
 }
 
 /** Whether one PR merges cleanly into the default branch, as a Reviewer's Verdict weighs it (#480). */
@@ -1836,11 +1981,19 @@ export type Action =
       readonly key?: string;
     }
   | {
+      /** Comments on an issue created earlier in the plan (#778). */
+      readonly kind: "comment-on-created";
+      readonly on: CreatedIssue;
+      readonly body: string;
+    }
+  | {
       /** Comments on an issue, linking comments posted or issues created earlier in the plan. */
       readonly kind: "comment-linking";
       readonly issue: number;
       /** The comment's Markdown, with each posted comment written as its URL and each created issue as its `#number`. */
       readonly body: readonly (string | PostedComment | CreatedIssue)[];
+      /** Names the comment for later `comment-linking` actions in the plan, as a `comment`'s key does: a Verdict linking an issue it files (#781). */
+      readonly key?: string;
     }
   | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
   | {
@@ -2033,7 +2186,9 @@ export type Action =
        * rebased, then applies `pushed`; if the push is refused, as when the
        * branch moved meanwhile, it applies `refused` instead of `pushed`.
        * When the rebase conflicts, it applies `conflicted` and pushes nothing.
-       * A branch already holding `onto`, or gone, gets none of them.
+       * A branch already holding `onto` gets only `upToDate`, when the plan
+       * gives it, as bringing in a check's fix does (#784), and pushes
+       * nothing; one gone gets none of them.
        */
       readonly kind: "rebase-onto-main";
       readonly pullRequest: number;
@@ -2043,6 +2198,7 @@ export type Action =
       readonly pushed: readonly Action[];
       readonly refused: readonly Action[];
       readonly conflicted: readonly Action[];
+      readonly upToDate?: readonly Action[];
     }
   /**
    * Push the issue's prototype branch, `prototype/<issue>`, which the push job
@@ -2051,6 +2207,30 @@ export type Action =
    * It never opens a PR, and nothing in the Kit deletes the branch.
    */
   | { readonly kind: "push-prototype-branch"; readonly issue: number }
+  | {
+      /**
+       * Marks the Kit's line asking one more re-run at the Merge gate (#783)
+       * started, on the Fabrik App's own comment, as agent:rerun-checks comes
+       * off: the label added again for that head then starts nothing. An
+       * edit, so it notifies nobody.
+       */
+      readonly kind: "mark-gate-rerun-started";
+      readonly pullRequest: number;
+      /** The line's comment, by its node id. */
+      readonly node: string;
+    }
+  | {
+      /**
+       * Re-runs the failed jobs of the workflow runs behind these red checks on
+       * the PR's head, once, past a run's first attempt (#783). Not a GitHub
+       * change here: the workflow routes it to the Re-run red checks job
+       * (src/kit/jobs.ts), which alone holds `actions: write`.
+       */
+      readonly kind: "rerun-checks";
+      readonly pullRequest: number;
+      readonly headSha: string;
+      readonly checks: readonly { readonly name: string; readonly link: string; readonly run: number }[];
+    }
   | {
       /**
        * Marks a Design session's prototype request (#155), on the Fabrik App's

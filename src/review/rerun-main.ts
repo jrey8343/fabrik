@@ -4,9 +4,14 @@
 // secret, and checks out no Product code. A run already re-run on this head
 // isn't re-run again: one round per head. A refusal, from GitHub or the token,
 // re-runs nothing and says why, so the Execution flaw lands as it would have.
+// agent:rerun-checks routes here too, for one more re-run of an Unrelated
+// failure at the Merge gate (#783): then a run past its first attempt is
+// re-run this once, on the head the Kit's line named, and later Ticks read
+// what came of it from the head's check runs.
 //   node src/review/rerun-main.ts
 // Env: GH_TOKEN (actions: write), GITHUB_REPOSITORY, GITHUB_OUTPUT,
-//   FABRIK_RED (the checks job's red output: the checks it can re-run, and the outside ones).
+//   FABRIK_RED (the checks job's red output: the checks it can re-run, and the outside ones; or the Kit job's rerun-red),
+//   FABRIK_GATE_HEAD (at the Merge gate only: the head the Kit's line named, a full sha; empty for a Review).
 // Writes step outputs:
 //   rerun     the checks it re-ran, as a JSON list for the Re-run checks' wait; empty when it re-ran none
 //   rerun-at  when it re-ran them, ISO 8601
@@ -15,7 +20,7 @@ import { execFile } from "node:child_process";
 import { appendFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { type RerunnableCheck, whyNotRerun } from "./rerun.ts";
+import { type RerunnableCheck, whyNotRerun, whyNotRerunRun, type WorkflowRunRead } from "./rerun.ts";
 
 const run = promisify(execFile);
 
@@ -39,8 +44,7 @@ async function ghApi(...args: string[]): Promise<{ ok: true; stdout: string } | 
   }
 }
 
-interface WorkflowRun {
-  readonly run_attempt: number;
+interface WorkflowRun extends WorkflowRunRead {
   readonly status: string;
 }
 
@@ -61,11 +65,15 @@ async function main(): Promise<void> {
     console.log("None of the red checks is a GitHub Actions check, so there's nothing to re-run");
     return out([], "", "");
   }
-  // One round per head: a run past its first attempt has been re-run on this head already, by the Kit or by hand.
+  // One round per head: a run past its first attempt has been re-run on this head already, by the Kit or by hand;
+  // at the Merge gate, once more, on the head the Kit's line named (#783).
+  const gateHead = process.env["FABRIK_GATE_HEAD"];
+  const atGate = gateHead === undefined || gateHead === "" ? null : gateHead;
   for (const id of runs) {
-    if ((await workflowRun(repo, id)).run_attempt > 1) {
-      console.log(`Workflow run ${id} has been re-run on this head already, so the Kit re-runs nothing`);
-      return out([], "", "they had been re-run on this head already");
+    const why = whyNotRerunRun(await workflowRun(repo, id), { atGate });
+    if (why !== null) {
+      console.log(`Workflow run ${id}: ${why}, so the Kit re-runs nothing`);
+      return out([], "", why);
     }
   }
   const rerunAt = new Date().toISOString();

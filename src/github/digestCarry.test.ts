@@ -277,7 +277,6 @@ describe("The Kit's list of asks, read for a pass that might carry the last Dige
 
   it.each<[string, LoopEvent, Snapshot, KitConfig]>([
     ["the Digest is off in Kit config", PASSED, gathered(), kitConfig({ digest: { enabled: false } })],
-    ["the Verdict is from red Required checks", { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN }, gathered(), kitConfig()],
     ["the pull request has no Digest", PASSED, gathered({ digests: [] }), kitConfig()],
     ["its last Digest does not read back", PASSED, gathered({ digests: [{ node: "IC_last", minimized: false, body: LAST_DIGEST.split("\n").toSpliced(1, 1).join("\n"), postedAt: "2026-11-10T09:00:00Z" }] }), kitConfig()],
     ["no Verdict on its last Digest's head records a fingerprint", PASSED, gathered({ verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: WRITTEN_AT }] }), kitConfig()],

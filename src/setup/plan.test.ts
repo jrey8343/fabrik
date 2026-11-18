@@ -347,6 +347,7 @@ describe("Labels", () => {
     "agent:design",
     "agent:review",
     "agent:digest",
+    "agent:rerun-checks",
     "bug",
     "enhancement",
     "fabrik:token-rotation",
@@ -382,7 +383,7 @@ describe("Labels", () => {
     const created = planSetup(aCleanProduct(), kit).actions.flatMap((a) => (a.kind === "create-label" ? [a] : []));
     const triggers = created.filter((label) => label.name.startsWith("agent:"));
 
-    expect(triggers.map((label) => label.name).sort()).toEqual(["agent:design", "agent:digest", "agent:implement", "agent:replay", "agent:research", "agent:review"]);
+    expect(triggers.map((label) => label.name).sort()).toEqual(["agent:design", "agent:digest", "agent:implement", "agent:replay", "agent:rerun-checks", "agent:research", "agent:review"]);
     for (const label of triggers) expect(label.description).toMatch(/\boff\b/);
     for (const label of created) expect(label.description.length).toBeLessThanOrEqual(100);
   });
@@ -399,6 +400,15 @@ describe("Labels", () => {
 
     expect(planSetup(before, kit).actions).toEqual([
       expect.objectContaining({ kind: "create-label", name: "fabrik:step-up", description: expect.stringMatching(/Implement runs .*Step-up/) }),
+    ]);
+  });
+
+  it("creates agent:rerun-checks with the Kit's colour and description on a re-run of an install from before it (#783)", () => {
+    const working = afterApplying(aCleanProduct(), planSetup(aCleanProduct(), kit));
+    const before = { ...working, labels: working.labels.filter((l) => l !== "agent:rerun-checks") };
+
+    expect(planSetup(before, kit).actions).toEqual([
+      expect.objectContaining({ kind: "create-label", name: "agent:rerun-checks", color: "c2e0c6", description: expect.stringMatching(/Unrelated failure .*Merge gate .*off as the run starts/) }),
     ]);
   });
 

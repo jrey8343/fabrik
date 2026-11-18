@@ -16,6 +16,7 @@ import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EV
 import { FILED_FROM_FILE, MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
+import { FAILURE_EXCERPTS_FILE, RERUN_FAILURE_EXCERPTS_FILE } from "../review/failureExcerpt.ts";
 import { RUN_BRIEF_FILE } from "../agent/transcript.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 
@@ -474,14 +475,21 @@ describe("The Kit's workflows", () => {
     const sentry = step("op://Fabrik App/Sentry token/credential");
     const run = step("run: node kit/src/monitor/main.ts");
 
-    it("checks out only the Kit, at its pinned commit, and holds no GITHUB_TOKEN permissions", () => {
+    it("checks out only the Kit, at its pinned commit", () => {
       const checkouts = steps.filter((candidate) => candidate.includes("uses: actions/checkout@"));
 
       expect(checkouts).toHaveLength(1);
       expect(checkouts[0]).toContain("repository: jrey8343/fabrik");
       expect(checkouts[0]).toContain("ref: ${{ needs.kit.outputs.sha }}");
       expect(checkouts[0]).toContain("persist-credentials: false");
-      expect(monitor).toMatch(/\n {4}permissions: \{\}\n/);
+    });
+
+    // #786: a failed run's log is read on the job's own token, whose actions: read the caller's tick job grants already.
+    it("asks for actions: read alone, and hands its workflow token to the Monitor for the logs of the failed runs it names", () => {
+      const permissions = /\n {4}permissions:\n((?: {6}.*\n)+)/.exec(monitor)?.[1] ?? "";
+
+      expect(permissions.split("\n").filter((line) => /^ {6}[a-z-]+:/.test(line))).toEqual(["      actions: read"]);
+      expect(steps[run]).toContain("FABRIK_ACTIONS_TOKEN: ${{ github.token }}");
     });
 
     // So the weekly-limit issue being open, or the tick failing, never stops it, and a Sentry outage never stops the tick.
@@ -1010,6 +1018,34 @@ describe("The Review checks job, when its wait fails", () => {
     const failure = stepsOf(job("review-checks")).find((step) => step.includes("name: fabrik-agent-failure\n")) ?? "";
     expect(failure).toContain("if: failure()\n");
     expect(failure).toContain(`path: \${{ runner.temp }}/fabrik-out/${AGENT_FAILURE_FILE}\n`);
+  });
+});
+
+// #775: a wait that ends red passes out each red check's Failure excerpt as a
+// file artifact the push job takes with the agent jobs', never as a job output.
+describe("The Review's waits, when they end red", () => {
+  it.each([
+    ["review-checks", FAILURE_EXCERPTS_FILE, "fabrik-agent-failure-excerpts"],
+    ["rerun-wait", RERUN_FAILURE_EXCERPTS_FILE, "fabrik-agent-failure-excerpts-rerun"],
+  ])("the %s job uploads its Failure excerpts, on red, where the push job takes them from", (name, file, artifact) => {
+    const upload = stepsOf(job(name)).find((step) => step.includes(`name: ${artifact}\n`)) ?? "";
+
+    expect(upload).toContain("uses: actions/upload-artifact@");
+    expect(upload).toContain("if: steps.wait.outputs.checks == 'red'\n");
+    expect(upload).toContain(`path: \${{ runner.temp }}/fabrik-out/${file}\n`);
+    expect(upload).toContain("if-no-files-found: ignore");
+    expect(job(name)).not.toMatch(/excerpt.*: \$\{\{ steps\.wait\.outputs/);
+  });
+
+  // #780: the Reviewer weighs each red check's result on the default branch's head, which the first wait reads.
+  it("the review-checks job passes out the red checks' results on the default branch's head, which the Review job is given with its jobs", () => {
+    expect(job("review-checks")).toContain("      main: ${{ steps.wait.outputs.main }}\n");
+    expect(job("review")).toContain("FABRIK_RED_CHECKS_NEEDS: ${{ needs.review-checks.outputs.checks == 'red' && toJSON(needs) || '' }}");
+  });
+
+  it.each(["review-checks", "rerun-wait"])("the %s job reads them on the token it held already", (name) => {
+    expect(job(name)).toContain("    permissions:\n      contents: read\n      pull-requests: read\n      checks: read\n      statuses: read\n");
+    expect(job(name)).toMatch(/\n      actions: read\n/);
   });
 });
 
@@ -1658,7 +1694,7 @@ describe("loop.yml's claim job", () => {
 
   it("takes agent:design off as the Design session's first turn starts, agent:research as a Research run starts and agent:replay as a replay Ticket's run starts, as it takes agent:implement off", () => {
     expect(job("implement-claim")).toContain(
-      "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
+      "if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || needs.kit.outputs.route == 'rerun-checks' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')",
     );
   });
 });
@@ -1711,7 +1747,7 @@ describe("The conflict check's turns (#341)", () => {
 });
 
 // #387: before restarting a stalled Request-changes run on a draft, the conflict check reads whether an Implement
-// job is under way, which the Fabrik App can't: it has no Actions permission (ADR-0002).
+// job is under way, on its job's own token: the Loop's reads of workflow runs never use the Fabrik App's (ADR-0002's addendum).
 describe("The conflict check's read of the Implement jobs under way (#387)", () => {
   const tick = jobIn(schedule, "tick");
   const callerTick = jobIn(readFileSync(new URL("templates/fabrik.yml", root), "utf8"), "tick");
@@ -2746,7 +2782,7 @@ describe("loop.yml's replay jobs", () => {
   });
 
   it("keeps the push job off the replay route, so the judge, score-record, Dispatch and Design queue jobs skip by themselves", () => {
-    expect(job("push")).toContain("\n    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay'\n");
+    expect(job("push")).toContain("\n    if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay' && ");
     expect(pushNeeds().filter((need) => need.startsWith("replay-"))).toEqual([]);
   });
 });
@@ -2839,7 +2875,7 @@ describe("Re-running red checks", () => {
     expect(rerun).not.toContain("create-github-app-token");
     expect(rerun.match(/uses: actions\/checkout@/g)).toHaveLength(1);
     expect(rerun).toContain("repository: jrey8343/fabrik");
-    expect(rerun).toContain("FABRIK_RED: ${{ needs.review-checks.outputs.red }}");
+    expect(rerun).toContain("|| needs.review-checks.outputs.red }}");
   });
 
   it("waits on the re-run checks read-only, on the head the first wait read, leaving a failure report as it does", () => {
@@ -2851,8 +2887,142 @@ describe("Re-running red checks", () => {
     expect(wait).toContain(`path: \${{ runner.temp }}/fabrik-out/${AGENT_FAILURE_FILE}\n`);
   });
 
-  it("lets the Reviewer run on green, at first or after the re-run, and hands both jobs to the push job", () => {
-    expect(job("review")).toContain("needs.rerun-wait.outputs.checks == 'green'");
+  it("hands both jobs to the push job", () => {
     expect(job("push")).toMatch(/needs: \[[^\]]*review-checks, rerun-checks, rerun-wait, review,/);
+  });
+});
+
+// #783: agent:rerun-checks routes to the Re-run red checks job for one more re-run of an Unrelated failure at the Merge gate.
+describe("One more re-run at the Merge gate", () => {
+  type Job = { readonly result: string; readonly outputs?: Readonly<Record<string, string>> };
+  /** A job's `if:`, evaluated as GitHub would on these jobs' results and outputs, in a run that wasn't cancelled. */
+  const runs = (name: string, jobs: Readonly<Record<string, Job>>, label = "agent:rerun-checks"): boolean => {
+    const body = job(name);
+    const condition = /\n    if: >-\n((?: {6}.*\n)+)/.exec(body)?.[1] ?? /\n    if: (.*)\n/.exec(body)?.[1];
+    if (condition === undefined) throw new Error(`${name} has no if:`);
+    const read = (needed: string, output: string | undefined) => {
+      const ran = jobs[needed] ?? { result: "skipped" };
+      return output === undefined ? ran.result : (ran.outputs?.[output] ?? "");
+    };
+    const js = condition
+      .replace(/\s+/g, " ")
+      .replace(/!cancelled\(\)/g, "true")
+      .replace(/always\(\)/g, "true")
+      .replace(/github\.event\.label\.name/g, JSON.stringify(label))
+      .replace(/needs\.([\w-]+)\.(?:result|outputs\.([\w-]+))/g, (_all, needed: string, output?: string) => JSON.stringify(read(needed, output)))
+      .replace(/([!=])=/g, "$1==");
+    if (!/^[\s"'\w\-:.[\]()&|!=]*$/.test(js)) throw new Error(`${name}'s if: has more than the test reads: ${js}`);
+    return new Function(`return (${js});`)() as boolean;
+  };
+  const gate: Readonly<Record<string, Job>> = { kit: { result: "success", outputs: { route: "rerun-checks" } } };
+
+  it("routes agent:rerun-checks to the Re-run red checks job, though the Review checks job it needs on a Review is skipped", () => {
+    expect(job("rerun-checks")).toContain("!cancelled()");
+    expect(runs("rerun-checks", gate)).toBe(true);
+  });
+
+  it("still re-runs a Review's red checks, and nothing on green or a failed Kit job", () => {
+    const review = (checks: string): Readonly<Record<string, Job>> => ({ kit: { result: "success", outputs: { route: "review" } }, "review-checks": { result: "success", outputs: { checks } } });
+
+    expect(runs("rerun-checks", review("red"))).toBe(true);
+    expect(runs("rerun-checks", review("green"))).toBe(false);
+    expect(runs("rerun-checks", { kit: { result: "failure" } })).toBe(false);
+    expect(runs("rerun-checks", { kit: { result: "success", outputs: { route: "push" } } })).toBe(false);
+  });
+
+  it("re-runs the checks the Kit's line named, past a run's first attempt on that head alone, read only through env:", () => {
+    const rerun = job("rerun-checks");
+
+    expect(rerun).toContain("FABRIK_RED: ${{ needs.kit.outputs.route == 'rerun-checks' && needs.kit.outputs.rerun-red || needs.review-checks.outputs.red }}");
+    expect(rerun).toContain("FABRIK_GATE_HEAD: ${{ needs.kit.outputs.route == 'rerun-checks' && needs.kit.outputs.head-sha || '' }}");
+  });
+
+  it("takes the label off as the run starts, in the claim job", () => {
+    expect(runs("implement-claim", gate)).toBe(true);
+  });
+
+  it("starts no wait, no Reviewer and no push job", () => {
+    const after = { ...gate, "implement-claim": { result: "success" }, "rerun-checks": { result: "success", outputs: { rerun: "e2e" } } };
+
+    expect(runs("rerun-wait", after)).toBe(false);
+    expect(runs("review", after)).toBe(false);
+    expect(runs("push", after)).toBe(false);
+  });
+
+  it("leaves the Re-run red checks job the only one with actions: write", () => {
+    const writers = loop.split(/\n(?=  [a-z-]+:\n)/).filter((section) => /\n {6}actions: write\n/.test(section)).map((section) => section.split(":")[0]!.trim());
+
+    expect(writers).toEqual(["rerun-checks"]);
+  });
+});
+
+// #779: a head still red after everything the Kit could do goes to the Reviewer, in place of an Execution flaw with no Review.
+describe("When the Reviewer runs", () => {
+  type Job = { readonly result: string; readonly outputs?: Readonly<Record<string, string>> };
+  /** The Review job's `if:`, evaluated as GitHub would on these jobs' results and outputs, in a run that wasn't cancelled. */
+  const reviewerRuns = (jobs: Readonly<Record<string, Job>>): boolean => {
+    const condition = /\n    if: >-\n((?: {6}.*\n)+)/.exec(job("review"))?.[1];
+    if (condition === undefined) throw new Error("The Review job has no folded if:");
+    const needs: Readonly<Record<string, Job>> = { kit: { result: "success", outputs: { route: "review" } }, ...jobs };
+    const read = (name: string, output: string | undefined) => {
+      const needed = needs[name] ?? { result: "skipped" };
+      return output === undefined ? needed.result : (needed.outputs?.[output] ?? "");
+    };
+    const js = condition
+      .replace(/\s+/g, " ")
+      .replace(/!cancelled\(\)/g, "true")
+      .replace(/needs\.([\w-]+)\.(?:result|outputs\.([\w-]+))/g, (_all, name: string, output?: string) => JSON.stringify(read(name, output)))
+      .replace(/([!=])=/g, "$1==");
+    if (!/^[\s"'\w\-:.[\]()&|!=]*$/.test(js)) throw new Error(`The Review job's if: has more than the test reads: ${js}`);
+    return new Function(`return (${js});`)() as boolean;
+  };
+  const wait = (checks: string, result = "success"): Job => ({ result, outputs: { checks } });
+  const reran: Job = { result: "success", outputs: { rerun: '[{"name":"e2e"}]' } };
+  const reranNothing = (refused = ""): Job => ({ result: "success", outputs: { rerun: "[]", refused } });
+  const skipped: Job = { result: "skipped" };
+
+  it("runs on green checks, at first or once the Kit's re-run went green", () => {
+    expect(reviewerRuns({ "review-checks": wait("green"), "rerun-checks": skipped, "rerun-wait": skipped })).toBe(true);
+    expect(reviewerRuns({ "review-checks": wait("red"), "rerun-checks": reran, "rerun-wait": wait("green") })).toBe(true);
+  });
+
+  it("runs on a head still red after the Kit's re-run", () => {
+    expect(reviewerRuns({ "review-checks": wait("red"), "rerun-checks": reran, "rerun-wait": wait("red") })).toBe(true);
+  });
+
+  it.each([
+    ["only outside checks are red", reranNothing()],
+    ["GitHub refused the re-run", reranNothing("GitHub refused: too old")],
+    ["the run had been re-run by hand already", reranNothing("they had been re-run on this head already")],
+    ["the Re-run red checks job failed", { result: "failure" }],
+  ])("runs on a red head where nothing was re-run: %s", (_name, rerunChecks) => {
+    expect(reviewerRuns({ "review-checks": wait("red"), "rerun-checks": rerunChecks, "rerun-wait": skipped })).toBe(true);
+  });
+
+  it("never runs when a wait gave up or errored, which is an Infrastructure failure, nor when the PR moved on", () => {
+    expect(reviewerRuns({ "review-checks": wait("", "failure"), "rerun-checks": skipped, "rerun-wait": skipped })).toBe(false);
+    expect(reviewerRuns({ "review-checks": wait("red"), "rerun-checks": reran, "rerun-wait": wait("", "failure") })).toBe(false);
+    expect(reviewerRuns({ "review-checks": wait("stale"), "rerun-checks": skipped, "rerun-wait": skipped })).toBe(false);
+    expect(reviewerRuns({ "review-checks": wait("red"), "rerun-checks": reran, "rerun-wait": wait("stale") })).toBe(false);
+  });
+
+  it("checks out the head the checks finished on", () => {
+    expect(job("review")).toContain("ref: ${{ needs.review-checks.outputs.head-sha }}");
+  });
+
+  it("on a red head gives the Reviewer the red checks and the Failure excerpts both waits passed out, and on green neither", () => {
+    const review = job("review");
+    const download = stepsOf(review).find((step) => step.includes("pattern: fabrik-agent-failure-excerpts*"));
+    expect(download).toBeDefined();
+    expect(download).toContain("if: needs.review-checks.outputs.checks == 'red'");
+    expect(download).toContain("continue-on-error: true");
+    expect(download).toContain("merge-multiple: true");
+    expect(download).toContain("path: ${{ runner.temp }}/fabrik-red-checks");
+    const reviewer = stepsOf(review).find((step) => step.includes("run: node ../kit/src/agent/run.ts review"))!;
+    expect(reviewer).toContain("FABRIK_RED_CHECKS_NEEDS: ${{ needs.review-checks.outputs.checks == 'red' && toJSON(needs) || '' }}");
+    expect(reviewer).toContain("FABRIK_RED_CHECKS_DIR: ${{ needs.review-checks.outputs.checks == 'red' && format('{0}/fabrik-red-checks', runner.temp) || '' }}");
+    // Both waits' files, under the names the Reviewer's runner reads them by, as the push job does.
+    expect(job("review-checks")).toContain(`name: fabrik-agent-failure-excerpts\n          path: \${{ runner.temp }}/fabrik-out/${FAILURE_EXCERPTS_FILE}`);
+    expect(job("rerun-wait")).toContain(`name: fabrik-agent-failure-excerpts-rerun\n          path: \${{ runner.temp }}/fabrik-out/${RERUN_FAILURE_EXCERPTS_FILE}`);
   });
 });

@@ -98,7 +98,8 @@ jobs:
     permissions:
       # For the conflict check, which reads whether an Implement job is under way before restarting a stalled
       # Request-changes run (#387), and the stuck-trigger sweep, which reads whether a trigger label has a run
-      # behind it (#419); the Fabrik App has no Actions permission. The caller's tick job grants it.
+      # behind it (#419), and the Flaky check sweep, which reads the job and step log of each red run it reports (#778);
+      # the Loop reads workflow runs on its job's own token, never the Fabrik App's, whose Actions: read is the Weekly summary's (ADR-0002's addendum). The caller's tick job grants it.
       actions: read
     # The release closing a Dead-tick issue names (#461).
     env:
@@ -158,7 +159,7 @@ jobs:
       group: fabrik-dispatch
       cancel-in-progress: false
     permissions:
-      # Only to count Implement and Research runs in flight; the Fabrik App has no Actions permission.
+      # Only to count Implement and Research runs in flight; the Loop reads workflow runs on its job's own token, never the Fabrik App's, whose Actions: read is the Weekly summary's (ADR-0002's addendum).
       # The caller's tick job grants it.
       actions: read
     env:
@@ -360,7 +361,10 @@ jobs:
     concurrency:
       group: fabrik-monitor
       cancel-in-progress: false
-    permissions: {}
+    permissions:
+      # Only to read the log of a failed run a red-main or Main check issue names, its Failure excerpt (#786);
+      # the annotations go on the Fabrik App's Checks: read. The caller's tick job grants it.
+      actions: read
     steps:
       - name: Check out the Kit (never the Product repo)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -418,4 +422,5 @@ jobs:
           FABRIK_APP_TOKEN: ${{ steps.app.outputs.token }}
           FABRIK_APP_SLUG: ${{ steps.app.outputs.app-slug }}
           FABRIK_SENTRY_TOKEN: ${{ steps.sentry.outputs.SENTRY_TOKEN }}
+          FABRIK_ACTIONS_TOKEN: ${{ github.token }}
         run: node kit/src/monitor/main.ts

@@ -18,7 +18,7 @@ import { runNamed, waitingHeldRuns } from "../loop/heldRun.ts";
 import { resetsAtOf } from "../loop/kitIssueMarks.ts";
 import { mapCapFull } from "../loop/mapCap.ts";
 import { architecturalEscapesOf, type ArchitecturalEscapes, escapesCell, escapeWindowsOf } from "./architecturalEscapes.ts";
-import { flakyCheckMarksIn, weeklyRunName, weeklyRunWaitingNoted, type WeeklyRunKind } from "../loop/markers.ts";
+import { flakyCheckMarksIn, unrelatedFailureMarksIn, weeklyRunName, weeklyRunWaitingNoted, type WeeklyRunKind } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { freeSubscriptions } from "../loop/subscriptions.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
@@ -456,6 +456,8 @@ export interface WeeklySummary {
     readonly landingsFailed: WeekOverWeek<number>;
     /** The Flaky checks found on agent PRs: by the Kit's re-run of red checks, and counted back later alike (#462). */
     readonly flakyChecks: WeekOverWeek<number>;
+    /** The Unrelated failures the Kit's lines named on agent PRs (#781), once per PR, head and check. */
+    readonly unrelatedFailures: WeekOverWeek<number>;
     /** Records of a Step-up. */
     readonly stepUps: WeekOverWeek<number>;
     /** Those records by why they Stepped up (ADR-0014). */
@@ -939,6 +941,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       brokenRuns: change("brokenRuns"),
       landingsFailed: change("landingsFailed"),
       flakyChecks: change("flakyChecks"),
+      unrelatedFailures: change("unrelatedFailures"),
       stepUps: change("stepUps"),
       stepUpsByReason: change("stepUpsByReason"),
       steppedUpStarts: change("steppedUpStarts"),
@@ -956,11 +959,34 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
  */
 function flakyChecksIn(week: Week, facts: readonly MetricFacts[]): number {
   return facts.reduce((total, repo) => {
-    const closed = repo.pullRequests.map(({ number }) => number);
-    const pullRequests = [...repo.pullRequests, ...repo.openPullRequests.filter(({ number }) => !closed.includes(number))];
-    const lines = pullRequests.flatMap(({ comments }) => comments.filter((comment) => comment.byBot && within(week, comment.at)));
+    const lines = agentPullRequestsOf(repo).flatMap(({ comments }) => comments.filter((comment) => comment.byBot && within(week, comment.at)));
     return total + flakyCheckMarksIn(lines.map(({ body }) => body)).reduce((sum, mark) => sum + mark.checks.length, 0);
   }, 0);
+}
+
+/**
+ * The Unrelated failures the Fabrik App's lines named on agent PRs in the
+ * week (#781), counted as Flaky checks are, open and closed PRs alike, each
+ * PR read once: once per PR, head and check, though a second Verdict on a
+ * head names one again.
+ */
+function unrelatedFailuresIn(week: Week, facts: readonly MetricFacts[]): number {
+  return facts.reduce((total, repo) => {
+    const named = new Set(
+      agentPullRequestsOf(repo).flatMap(({ number, comments }) =>
+        unrelatedFailureMarksIn(comments.filter((comment) => comment.byBot && within(week, comment.at)).map(({ body }) => body)).flatMap(({ headSha, checks }) =>
+          checks.map((check) => JSON.stringify([number, headSha, check])),
+        ),
+      ),
+    );
+    return total + named.size;
+  }, 0);
+}
+
+/** A repo's agent PRs, closed and open, each once. */
+function agentPullRequestsOf(repo: MetricFacts): (MetricFacts["pullRequests"][number] | MetricFacts["openPullRequests"][number])[] {
+  const closed = repo.pullRequests.map(({ number }) => number);
+  return [...repo.pullRequests, ...repo.openPullRequests.filter(({ number }) => !closed.includes(number))];
 }
 
 /** The summed cost of the Replay records that ended in the week, or null if none did. */
@@ -1001,6 +1027,7 @@ interface WeekMetrics {
   readonly brokenRuns: number;
   readonly landingsFailed: number;
   readonly flakyChecks: number;
+  readonly unrelatedFailures: number;
   readonly stepUps: number;
   readonly stepUpsByReason: StepUpCounts;
   readonly steppedUpStarts: SteppedUpStarts;
@@ -1049,6 +1076,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly
     brokenRuns: records.filter((record) => record.brokenRun !== null).length,
     landingsFailed: records.filter((record) => record.landing !== null).length,
     flakyChecks: flakyChecksIn(week, input.facts),
+    unrelatedFailures: unrelatedFailuresIn(week, input.facts),
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
     steppedUpStarts: steppedUpStartsOf(merged, input.records),
@@ -1850,6 +1878,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords,
     row("Broken runs", counts.brokenRuns, count),
     row("Landings failed", counts.landingsFailed, count),
     row("Flaky checks", counts.flakyChecks, count),
+    row("Unrelated failures", counts.unrelatedFailures, count),
     row("Step-ups", counts.stepUps, count),
     ...stepUpReasonRows(counts.stepUpsByReason),
     steppedUpStartsRow(counts.steppedUpStarts),
