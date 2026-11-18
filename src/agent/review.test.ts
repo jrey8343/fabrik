@@ -577,7 +577,7 @@ describe("A Review of a head whose Required checks are still red (#779)", () => 
     expect(section).toContain("Judge the code as on any Review");
     expect(section).toContain("A red check confirms nothing");
     expect(section).toContain("Name what you find in the code whatever the checks say");
-    expect(section).toContain("Don't list a red check as a finding by itself");
+    expect(section).toContain("don't list a red check as a finding by itself");
   });
 
   it("on a green head the prompt carries no Red Required checks section, and is otherwise the red head's", async () => {
@@ -609,6 +609,7 @@ describe("A Review of a head whose Required checks are still red (#779)", () => 
       failed: ["build", "Vercel"],
       rerun: { outside: ["Vercel"], failedAgain: ["build"], flaky: [], refused: null },
       excerpts: [{ ...again, firstAttempt: first }],
+      onMain: { kind: "unread", why: "the Review checks job passed out none" },
     });
   });
 
@@ -617,7 +618,94 @@ describe("A Review of a head whose Required checks are still red (#779)", () => 
 
     expect(await readRedChecks("", "")).toBeNull();
     expect(await readRedChecks(undefined, undefined)).toBeNull();
-    expect(await readRedChecks(JSON.stringify(needs), join(tmpdir(), "fabrik-no-such-dir"))).toEqual({ failed: ["build"], excerpts: [] });
+    expect(await readRedChecks(JSON.stringify(needs), join(tmpdir(), "fabrik-no-such-dir"))).toEqual({
+      failed: ["build"],
+      excerpts: [],
+      onMain: { kind: "unread", why: "the Review checks job passed out none" },
+    });
+  });
+});
+
+// #780: the Reviewer judges each red check as caused or an Unrelated failure, given beside its excerpt and attempts
+// the same check's result on the default branch's head, which the Review checks job read.
+describe("The red checks' results on the default branch's head, as the Reviewer of a red head is given them (#780)", () => {
+  const MAIN = "f".repeat(40);
+  const red: RedRequiredChecks = {
+    failed: ["gate", "e2e", "lint", "Vercel"],
+    rerun: { outside: ["Vercel"], failedAgain: ["gate", "e2e", "lint"], flaky: [], refused: null },
+    excerpts: [],
+    onMain: {
+      kind: "read",
+      branch: "main",
+      sha: MAIN,
+      checks: [
+        { name: "gate", is: "passed", url: "https://github.com/acme/shop/runs/1" },
+        { name: "e2e", is: "failing", url: "https://github.com/acme/shop/actions/runs/9/job/3" },
+        { name: "lint", is: "running", url: "https://github.com/acme/shop/runs/2" },
+        { name: "Vercel", is: "never-reported", url: null },
+      ],
+    },
+  };
+  const partOf = async (given: RedRequiredChecks) => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+    const text = (await reviewContext(productDir, pullRequestFile, specFile, null, null, [], null, given)).parts.join("\n");
+    return text.split("\n## The red Required checks\n")[1] ?? "";
+  };
+
+  it("names each red check's result on main's head under its name, and says so when main doesn't run it", async () => {
+    const part = await partOf(red);
+
+    expect(part).toContain("- `gate`\n\n  On `main`'s head, fffffff: it passed.");
+    expect(part).toContain("- `e2e`\n\n  On `main`'s head, fffffff: it failed ([the job](https://github.com/acme/shop/actions/runs/9/job/3)).");
+    expect(part).toContain("- `lint`\n\n  On `main`'s head, fffffff: it's still running.");
+    expect(part).toContain("- `Vercel`\n\n  On `main`'s head, fffffff: it didn't run there.");
+  });
+
+  it("says under each red check when its result on main's head couldn't be read, and why", async () => {
+    const part = await partOf({ ...red, onMain: { kind: "unread", why: "GET /repos/acme/shop failed with 502" } });
+
+    expect(part).toContain("- `gate`\n\n  Its result on the default branch's head couldn't be read: GET /repos/acme/shop failed with 502.");
+  });
+
+  it("reads them from the first wait's output, beside the red checks it read", async () => {
+    const onMain = { kind: "read", branch: "main", sha: MAIN, checks: [{ name: "build", is: "failing", url: "https://x/1", at: "2026-11-12T09:05:00Z" }] };
+    const needs = { "review-checks": { result: "success", outputs: { checks: "red", "head-sha": "c".repeat(40), failed: '["build"]', main: JSON.stringify(onMain) } } };
+
+    expect(await readRedChecks(JSON.stringify(needs), "")).toEqual({
+      failed: ["build"],
+      excerpts: [],
+      onMain: { kind: "read", branch: "main", sha: MAIN, checks: [{ name: "build", is: "failing", url: "https://x/1" }] },
+    });
+  });
+
+  it("reads an output that doesn't hold them as none passed out", async () => {
+    const needs = { "review-checks": { result: "success", outputs: { checks: "red", "head-sha": "c".repeat(40), failed: '["build"]', main: '{"kind":"read"}' } } };
+
+    expect(await readRedChecks(JSON.stringify(needs), "")).toMatchObject({ onMain: { kind: "unread", why: "the Review checks job passed out none" } });
+  });
+
+  it("the prompt tells the Reviewer to judge each red check caused or unrelated, on positive evidence, caused by default, in a red-checks: block", async () => {
+    const prompt = reviewPromptFor(await readFile(join(import.meta.dirname, "..", "..", "prompts", "review.md"), "utf8"), null, true);
+    const section = prompt.split("\n## Red Required checks\n")[1]?.split("\n## ")[0] ?? "";
+
+    expect(section).toContain("Judge each red check separately, as `caused` or `unrelated`, with a one-line reason.");
+    expect(section).toContain(
+      "Call a check `unrelated` only on positive evidence: the same check red on `main`'s head, a failure in code this change can't reach, two attempts failing on different things, or a failure from the runner or a service rather than the code.",
+    );
+    expect(section).toContain("A failing test in a file the change didn't touch is evidence to weigh, never enough alone");
+    expect(section).toContain("Without such evidence the check is `caused`, and its reason says you couldn't tell, and why.");
+    expect(section).toContain("A check from an outside service follows the same rule, on whatever can be read from it.");
+    expect(section).toContain("A criterion only a red check could confirm is no finding by itself when that check is `unrelated`");
+    expect(section).toContain("Judge each check afresh on this head");
+    expect(section).toContain("red-checks:\n- unrelated `e2e`: the booking journey fails the same way on main's head, in code this change doesn't reach.\n- caused `gate`: the typecheck error is in a stub the renamed type breaks.");
+    expect(section).toContain("after your findings and any Follow-ups and before the `operator comments considered:` line");
+  });
+
+  it("a green head's prompt says nothing of judging red checks", async () => {
+    const prompt = reviewPromptFor(await readFile(join(import.meta.dirname, "..", "..", "prompts", "review.md"), "utf8"), null);
+
+    expect(prompt).not.toContain("red-checks:");
+    expect(prompt).not.toContain("`unrelated`");
   });
 });
 
