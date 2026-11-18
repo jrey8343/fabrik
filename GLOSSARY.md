@@ -231,7 +231,7 @@ A Required check that has reported both failure and success on the same head com
 _Avoid_: flake, intermittent failure
 
 **Failure excerpt**:
-The part of a red Required check's log, with its annotations, that the Kit puts under the check's name, so whoever fixes it sees why it failed without opening GitHub.
+The part of a red Required check's log, with its annotations, that the Kit puts under the check's name, so whoever fixes it sees why it failed without opening GitHub. For a check from an outside service, whose own log GitHub doesn't hold, it is whatever that service wrote to GitHub.
 _Avoid_: log, CI output, failure log
 
 **Retry**:
