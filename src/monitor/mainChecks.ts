@@ -18,9 +18,21 @@ import {
   newestByMarker,
   oneLine,
   truncated,
-  withMonitorBlock,
 } from "./issues.ts";
-import { CHECK_NAME_MAX, type CheckRun, detailsOf, FAILING, type MainCommit, newestRunOfEach, type RedMainInput, seenGreenSince, shortSha } from "./redMain.ts";
+import {
+  blockLinesOf,
+  CHECK_NAME_MAX,
+  type CheckRun,
+  detailsRewriteOf,
+  FAILING,
+  failedRunsOf,
+  type MainCommit,
+  newestRunOfEach,
+  type RedMainInput,
+  seenGreenSince,
+  shortSha,
+} from "./redMain.ts";
+import type { FailureExcerpt } from "../review/failureExcerpt.ts";
 
 /**
  * Each Main check's part of the plan, in the order `monitor.main_checks`
@@ -32,7 +44,7 @@ import { CHECK_NAME_MAX, type CheckRun, detailsOf, FAILING, type MainCommit, new
  * notes cover a refused or rate-limited read. Its issues never count toward
  * the cap on error issues.
  */
-export function mainChecksPlan({ monitor, mainChecks, issues }: RedMainInput): MonitorPlan {
+export function mainChecksPlan({ monitor, mainChecks, issues, excerpts }: RedMainInput): MonitorPlan {
   const plan = { open: [] as IssueToOpen[], rewrite: [] as BodyRewrite[], close: [] as IssueToClose[], summary: [] as string[] };
   if (!monitor.redMain || mainChecks?.kind !== "read") return plan;
   const newest = newestByMarker(issues).byMainCheck;
@@ -56,9 +68,17 @@ export function mainChecksPlan({ monitor, mainChecks, issues }: RedMainInput): M
       continue;
     }
     if (issue?.open === true) {
-      const body = withMonitorBlock(issue, detailsOf(state.commit, [state.run]));
+      const body = detailsRewriteOf(issue, state.commit, [state.run], excerpts);
       if (body === null) plan.summary.push(`Main check ${name} is still red at ${shortSha(state.commit)}, as #${issue.number} says.`);
-      else plan.rewrite.push({ kind: "main-check", issue: issue.number, body, summary: `Refreshed the Main check ${name}'s details on #${issue.number}.` });
+      else {
+        plan.rewrite.push({
+          kind: "main-check",
+          issue: issue.number,
+          body,
+          failedRuns: failedRunsOf(state.commit, [state.run]),
+          summary: `Refreshed the Main check ${name}'s details on #${issue.number}.`,
+        });
+      }
       continue;
     }
     const hold: Hold = issue === null ? { held: false, after: null } : holdOf(issue, decided, mainChecks.commits);
@@ -66,7 +86,13 @@ export function mainChecksPlan({ monitor, mainChecks, issues }: RedMainInput): M
       plan.summary.push(`Main check ${name} is red at ${shortSha(state.commit)}, but #${issue?.number} stays closed: ${hold.why}.`);
       continue;
     }
-    plan.open.push({ sentryGroup: null, title: titleOf(check), body: bodyOf(check, state.commit, state.run, hold.after), labels: [MONITOR_LABEL] });
+    plan.open.push({
+      sentryGroup: null,
+      title: titleOf(check),
+      body: bodyOf(check, state.commit, state.run, hold.after, excerpts),
+      labels: [MONITOR_LABEL],
+      failedRuns: failedRunsOf(state.commit, [state.run]),
+    });
   }
   return plan;
 }
@@ -140,19 +166,21 @@ function titleOf(check: string): string {
 }
 
 /** A Main check's issue body: its marker, what it tracks, then the red commit's details in its Monitor block. */
-function bodyOf(check: string, commit: MainCommit, run: CheckRun, after: number | null): string {
+function bodyOf(check: string, commit: MainCommit, run: CheckRun, after: number | null, excerpts: ReadonlyMap<number, FailureExcerpt>): string {
   const name = bodyCode(check, CHECK_NAME_MAX);
-  return [
-    monitorMarkerLine({ kind: "main-check", check }),
-    ...(after === null
-      ? []
-      : [`Still failing after #${after}: that issue was closed as completed, and ${name} has failed again on a newer commit than the one it names.`, ""]),
-    `The Main check ${name} is failing on the default branch: the newest commit on it where ${name} has finished failed it. No pull request runs a Main check, so a fix is only tested once it merges. The Monitor keeps the details below current while it stays red, and closes this issue itself once ${name} passes on the default branch again.`,
-    "",
-    ...monitorBlock(detailsOf(commit, [run])),
-    "",
-    "`monitor.main_checks` in `.fabrik/config.json` names the Main checks the Monitor reads on the default branch, each with an issue of its own.",
-  ].join("\n");
+  const bodyWith = (block: readonly string[]) =>
+    [
+      monitorMarkerLine({ kind: "main-check", check }),
+      ...(after === null
+        ? []
+        : [`Still failing after #${after}: that issue was closed as completed, and ${name} has failed again on a newer commit than the one it names.`, ""]),
+      `The Main check ${name} is failing on the default branch: the newest commit on it where ${name} has finished failed it. No pull request runs a Main check, so a fix is only tested once it merges. The Monitor keeps the details below current while it stays red, and closes this issue itself once ${name} passes on the default branch again.`,
+      "",
+      ...monitorBlock(block),
+      "",
+      "`monitor.main_checks` in `.fabrik/config.json` names the Main checks the Monitor reads on the default branch, each with an issue of its own.",
+    ].join("\n");
+  return bodyWith(blockLinesOf(commit, [run], excerpts, bodyWith));
 }
 
 /** The Monitor's note closing a Main check's issue: its only comment, and its marker tells its close apart from anyone else's. */

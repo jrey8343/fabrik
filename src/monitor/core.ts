@@ -4,6 +4,7 @@
 // step summary's lines; red main's part is in ./redMain.ts and Main checks' in ./mainChecks.ts. Pure, no I/O: the
 // program (src/monitor/main.ts) gathers the facts and applies the plan.
 import type { KitConfig } from "../kit/config.ts";
+import type { FailureExcerpt } from "../review/failureExcerpt.ts";
 import { MONITOR_LABEL, READY_FOR_HUMAN, WONTFIX } from "../loop/labels.ts";
 import { monitorMarkerIn, monitorMarkerLine } from "../loop/markers.ts";
 import { readable } from "../loop/readable.ts";
@@ -11,6 +12,7 @@ import {
   ascending,
   type BodyRewrite,
   bodyCode,
+  type FailedRun,
   fenced,
   type IssueToOpen,
   monitorBlock,
@@ -37,6 +39,11 @@ export interface MonitorInput {
   readonly listedChecks: readonly string[];
   /** What reading the default branch's commits and their check runs gave this tick, or null when `monitor.redMain` is off and they weren't read. */
   readonly mainChecks: MainChecksRead | null;
+  /**
+   * The Failure excerpt of each failed run read this tick, by its check run's
+   * id (#786): only those a plan without them named (runsNeedingExcerpt).
+   */
+  readonly excerpts: ReadonlyMap<number, FailureExcerpt>;
   /**
    * The Kit config's `caps.monitor_issues`: the most open error issues the
    * Monitor keeps at once, past which new groups are held until a slot frees
@@ -102,6 +109,21 @@ export function groupsNeedingLatestEvent(plan: MonitorPlan): ReadonlySet<string>
     ...plan.open.flatMap((issue) => (issue.sentryGroup === null ? [] : [issue.sentryGroup])),
     ...plan.rewrite.flatMap((rewrite) => (rewrite.kind === "stats" ? [rewrite.sentryGroup] : [])),
   ]);
+}
+
+/**
+ * The failed runs whose Failure excerpt the program reads after this plan,
+ * planned with none read, and only those (#786): each the red-main or a Main
+ * check issue it files names, a "Still failing after" issue's among them, and
+ * each a block it rewrites names, as a block is rewritten only when its
+ * details changed. When the Monitor files, rewrites, holds and closes never
+ * depends on an excerpt, so a plan with them read does the same.
+ */
+export function runsNeedingExcerpt(plan: MonitorPlan): FailedRun[] {
+  return [
+    ...plan.open.flatMap((issue) => issue.failedRuns ?? []),
+    ...plan.rewrite.flatMap((rewrite) => (rewrite.kind === "red-main" || rewrite.kind === "main-check" ? rewrite.failedRuns : [])),
+  ];
 }
 
 /** What a cap of 0 does: every group that would be filed is held, and nothing else changes. */
