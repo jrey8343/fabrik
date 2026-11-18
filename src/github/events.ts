@@ -9,7 +9,7 @@ import type { CaptureOutputs, PlannedKeptBranchStart } from "../kit/pushJob.ts";
 import { type EvidenceBundle, retroEvidenceOf } from "../kit/retroEvidence.ts";
 import type { DigestGiven } from "../loop/digestContract.ts";
 import type { PrototypeRequestMarker } from "../loop/markers.ts";
-import type { FailureExcerpt } from "../review/failureExcerpt.ts";
+import type { CheckExcerpt } from "../review/failureExcerpt.ts";
 import type {
   AgentRole,
   BranchChanges,
@@ -334,8 +334,11 @@ export interface FinishedReview {
   readonly result: AgentRunResult | null;
   /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
   readonly rerun: RerunReport | null;
-  /** On red checks, each red GitHub Actions check's latest Failure excerpt the Review's waits passed out (#775); none when they passed none. */
-  readonly excerpts?: readonly FailureExcerpt[];
+  /**
+   * On red checks, each red GitHub Actions check's latest Failure excerpt the Review's waits passed out (#775),
+   * with its first attempt's for one that failed again (#776); none when they passed none.
+   */
+  readonly excerpts?: readonly CheckExcerpt[];
 }
 
 /** Turns a finished Review into the Loop event its push job applies. */
