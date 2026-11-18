@@ -5,7 +5,7 @@
 // replay the PR's thread: each plan's comments are posted, and the next
 // snapshot reads them back as the adapter does.
 import { describe, expect, it } from "vitest";
-import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { aCausedRedCheckReview, anIssue, aPullRequest, kitConfig, NO_TAGS, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import {
   conflictAttemptsIn,
   conflictRunIn,
@@ -114,8 +114,9 @@ function actionsOf(plan: Plan): readonly Action[] {
   return plan.kind === "act" ? plan.actions : [];
 }
 
+/** The Review of `headSha` finishes with its Required check `build` still red, which the Reviewer judged caused: an Execution flaw that counts. */
 function redChecks(headSha: string): LoopEvent {
-  return { kind: "required-checks-finished", pullRequest: 50, headSha, failed: ["build"], runUrl: RUN };
+  return aCausedRedCheckReview({ headSha, runUrl: RUN });
 }
 
 describe("A conflict-only run", () => {
@@ -178,7 +179,7 @@ describe("A conflict-only run", () => {
     thread.plan(redChecks(B), snapshotOfPullRequest(thread.pullRequest()));
 
     const verdict = thread.comments.at(-1) ?? "";
-    expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: false, conflictRun: true, checks: ["build"], headSha: B }]);
+    expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: false, conflictRun: true, checks: ["build"], tags: NO_TAGS, headSha: B }]);
     expect(verdict).toContain("after a conflict-only run");
     // The conflict-only run ran on the Step-up model, so the Retry its flaw calls for does too (#464).
     expect(verdict).toMatch(/Retry 1 of 2 starts now, stepped up:/);
@@ -324,7 +325,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
   it("after a first Implement run, gets a Verdict that counts toward the two Retries, never exempt", () => {
     const verdict = conflictRunThenRed(unreviewedAfter([]));
 
-    expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: false, checks: ["build"], headSha: "c".repeat(40) }]);
+    expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: false, checks: ["build"], tags: NO_TAGS, headSha: "c".repeat(40) }]);
     expect(verdict).not.toContain("conflict-only run");
     expect(verdict).toMatch(/Retry 1 of 2 starts now:/);
   });
@@ -339,7 +340,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
   it("after a Request-changes run, gets a Verdict marked as a Request-changes one, whose flaw counts as one on that run's push would (#393)", () => {
     const verdict = conflictRunThenRed(unreviewedAfter([PASS_ON_A, "<!-- fabrik:request-changes-run -->\nThe Implementer pushed the Operator's requested changes."]));
 
-    expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: true, checks: ["build"], headSha: "c".repeat(40) }]);
+    expect(verdictsIn([verdict])).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: true, checks: ["build"], tags: NO_TAGS, headSha: "c".repeat(40) }]);
     expect(verdict).toMatch(/Retry 1 of 2 starts now, stepped up:/);
   });
 
@@ -353,7 +354,7 @@ describe("A conflict-only run on a draft whose push GitHub never reviewed (#389)
     thread.plan(redChecks("c".repeat(40)), snapshotOfPullRequest(thread.pullRequest()));
 
     expect(thread.draft).toBe(true);
-    expect(verdictsIn([thread.comments.at(-1) ?? ""])).toEqual([{ verdict: "execution-flaw", source: "ci", requestChanges: true, checks: ["build"], headSha: "c".repeat(40) }]);
+    expect(verdictsIn([thread.comments.at(-1) ?? ""])).toEqual([{ verdict: "execution-flaw", source: "reviewer", requestChanges: true, checks: ["build"], tags: NO_TAGS, headSha: "c".repeat(40) }]);
   });
 
   it("that can't push hands the PR to the Operator the same way: says why, adds ready-for-human, out of draft, never closed", () => {

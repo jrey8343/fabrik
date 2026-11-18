@@ -23,7 +23,7 @@ import { verdictMarker } from "./markers.ts";
 import { changeLine } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import { parseVerdict, type RedCheckJudgment, verdictTagsOf } from "./verdict.ts";
-import { type RedCheckHeadings, REVIEWED_RED_CHECK_HEADINGS, redChecksText } from "./redChecks.ts";
+import { redChecksText } from "./redChecks.ts";
 import type {
   Action,
   CreatedIssue,
@@ -40,7 +40,6 @@ import type {
   VerdictTags,
 } from "./types.ts";
 
-type RedChecks = Extract<LoopEvent, { kind: "required-checks-finished" }>;
 type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
 
 /**
@@ -95,37 +94,6 @@ export function startReviewOnLabel(pullRequest: PullRequestSnapshot, config: Kit
   const plan = startReview(pullRequest, config);
   if (plan.kind !== "nothing") return plan;
   return { kind: "act", actions: declineTrigger(pullRequest.number, REVIEW_LABEL, plan.reason) };
-}
-
-/** How a Verdict from red checks alone, which no push job gives since #779, heads them: the Reviewer didn't run. */
-const UNREVIEWED_RED_CHECK_HEADINGS: RedCheckHeadings = {
-  again: "These required checks failed again when the Kit re-ran them on the same head, so the Reviewer didn't run:",
-  outside: "These required checks didn't pass and aren't GitHub Actions, so the Kit couldn't re-run them:",
-  plain: (refused) => ({ heading: "These required checks didn't pass, so the Reviewer didn't run:", after: refused === null ? [] : ["", `The Kit couldn't re-run them: ${refused}.`] }),
-};
-
-/**
- * Red CI is an Execution flaw, recorded as a Verdict from CI so retries can be
- * counted from the PR alone. Each red check carries its Failure excerpt under
- * its name, so the Retry starts from why it failed (#775): an outside
- * service's, what it wrote to GitHub, under the outside checks' heading (#777).
- * Since #779 a red head goes to the Reviewer (applyReview), and no push job
- * gives this event; it lands as it always did.
- */
-export function applyRedChecks(event: RedChecks, snapshot: Snapshot, config: KitConfig): Plan {
-  return landVerdict(event, snapshot, (pullRequest) => {
-    if (event.failed.length === 0) {
-      return { kind: "nothing", reason: `#${pullRequest.number}'s required checks passed, so the Reviewer judges it` };
-    }
-    const red = event.failed;
-    const { rerun } = event;
-    const given = { failed: red, ...(rerun === undefined ? {} : { rerun }), excerpts: event.excerpts ?? [] };
-    const findings = (room: number): string => redChecksText(given, UNREVIEWED_RED_CHECK_HEADINGS, room);
-    const held = heldOn(snapshot.kitIssues, config);
-    const flaky = flakyCheckActions(pullRequest.number, event.headSha, rerun?.flaky ?? [], snapshot.flakyCheckIssues);
-    const verdict = verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "ci", findings, checks: red }, snapshot.operator, held);
-    return { kind: "act", actions: [...flaky, ...verdict] };
-  });
 }
 
 /**
@@ -299,7 +267,7 @@ function withRedChecks(
     return [issue === undefined ? `An Unrelated failure: ${reason}` : `An Unrelated failure, reported on ${issueRef(issue)}: ${reason}`];
   };
   const head = [...(findings === "" ? [] : [findings]), "### Red Required checks", intro, ""].join("\n\n");
-  return head + redChecksText(red, REVIEWED_RED_CHECK_HEADINGS, room - head.length, notesOf);
+  return head + redChecksText(red, room - head.length, notesOf);
 }
 
 /** A reason as a sentence: ending in a full stop unless it ends in one already. */
@@ -315,7 +283,7 @@ function listed(names: readonly string[]): string {
 
 /** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once, or once more after a body-only Touch-up (#751). */
 function landVerdict(
-  event: RedChecks | Reviewed,
+  event: Reviewed,
   { pullRequest }: Snapshot,
   decide: (pullRequest: PullRequestSnapshot) => Plan,
 ): Plan {
@@ -336,8 +304,10 @@ function landVerdict(
   return decide(pullRequest);
 }
 
-const BY: Readonly<Record<VerdictRecord["source"], string>> = {
-  ci: "red required checks",
+/** Who a Verdict the Loop posts is from. One from red checks alone, source `ci`, is never posted since #779, and still reads. */
+type PostedSource = Exclude<VerdictRecord["source"], "ci">;
+
+const BY: Readonly<Record<PostedSource, string>> = {
   reviewer: "the Reviewer",
   "empty-diff": "a retry that changed nothing",
   "broken-run": "a Broken run",
@@ -385,12 +355,12 @@ export function verdictActions(
     filed = [],
   }: {
     readonly verdict: Verdict;
-    readonly source: VerdictRecord["source"];
+    readonly source: PostedSource;
     /** The findings, or, for findings that fit themselves to a room, them given what the comment has left around them (#775). */
     readonly findings: string | ((room: number) => string);
     /** On a Reviewer's Execution flaw, its findings counted by tag (#749). */
     readonly tags?: VerdictTags | null;
-    /** On one from red required checks (#462), or a Reviewer's on a head still red (#779), the red checks it counts: the Reviewer's, those it judged caused (#780). */
+    /** On a Reviewer's Verdict on a head still red (#779), the red checks it counts: those it judged caused (#780). */
     readonly checks?: readonly string[];
     /** On a Reviewer's Verdict on a head still red, the red checks it judged Unrelated failures (#780), which count toward nothing. */
     readonly unrelated?: readonly string[];

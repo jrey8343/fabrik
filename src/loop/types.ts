@@ -381,27 +381,6 @@ export type LoopEvent =
   | { readonly kind: "pull-request-pushed"; readonly pullRequest: number }
   | { readonly kind: "pull-request-labeled"; readonly pullRequest: number; readonly label: string }
   | {
-      /** An agent PR's required checks finished red, so the Reviewer didn't run. */
-      readonly kind: "required-checks-finished";
-      readonly pullRequest: number;
-      /** The head commit the checks ran on. */
-      readonly headSha: string;
-      /** The required checks that failed or were cancelled; empty when they all passed. */
-      readonly failed: readonly string[];
-      /** What the Kit's re-run of the red checks came to (#462); absent when it didn't try, as from a Kit before it. */
-      readonly rerun?: RerunReport;
-      /**
-       * The latest Failure excerpt the Review read of each red check, an outside
-       * service's among them (#775, #777): the re-run's for one that failed
-       * again, with the first wait's beside it as its first attempt (#776),
-       * else the first wait's. A check with none here couldn't be read;
-       * absent, none could.
-       */
-      readonly excerpts?: readonly CheckExcerpt[];
-      /** The Review run, linked from the Verdict comment. */
-      readonly runUrl: string;
-    }
-  | {
       /** The Reviewer finished on an agent PR, green or still red (#779); its push job holds the Verdict, not yet posted. */
       readonly kind: "review-run-finished";
       readonly pullRequest: number;

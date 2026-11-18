@@ -846,7 +846,7 @@ async function gatherClosedCheckIssues(github: Pick<ReadClient, "graphql">, repo
 }
 
 /** The events whose plan may find a Flaky check (#462). */
-const FLAKY_CHECK_EVENTS: readonly LoopEvent["kind"][] = ["required-checks-finished", "review-run-finished", "scheduled-tick"];
+const FLAKY_CHECK_EVENTS: readonly LoopEvent["kind"][] = ["review-run-finished", "scheduled-tick"];
 
 /** The events that may fail an Auditor or Retro run on its pending issue: its opening, while every Subscription is used up, and its run's ending. */
 const WEEKLY_RUN_EVENTS: readonly LoopEvent["kind"][] = ["issue-opened", "agent-run-failed", "audit-run-finished", "retro-run-finished"];
@@ -1357,7 +1357,6 @@ async function gatherEventPart(
   switch (event.kind) {
     case "pull-request-pushed":
     case "pull-request-labeled":
-    case "required-checks-finished":
     case "review-run-finished":
     case "digest-run-finished":
     case "pull-request-left-draft":

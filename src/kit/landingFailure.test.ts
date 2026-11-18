@@ -19,8 +19,8 @@ const implementRetry: PushJobInput = {
   startedBy: null,
 };
 const triage: PushJobInput = { kind: "agent-result", role: "triage", issue: 7, pullRequest: null, review: null, startedBy: null };
-const verdict: PushJobInput = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], ranNothing: [], withResult: true };
-const redChecks: PushJobInput = { ...verdict, failedChecks: ["test"], withResult: false };
+const verdict: PushJobInput = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], ranNothing: [] };
+const redHead: PushJobInput = { ...verdict, failedChecks: ["test"] };
 const agentFailure: PushJobInput = { kind: "agent-failure", role: "implement", issue: 12, jobResult: "failure", secretsStep: "success" };
 
 describe("What a push job or claim job is landing, and where its failure is said (#421)", () => {
@@ -28,7 +28,7 @@ describe("What a push job or claim job is landing, and where its failure is said
     ["an Implement retry's result: on its PR", implementRetry, 51, "the Implement run on #12"],
     ["a Triage run's result: on its issue", triage, 7, "the Triage run on #7"],
     ["a Review's Verdict: on the PR", verdict, 51, "the Review of #51"],
-    ["a Review's red checks: on the PR", redChecks, 51, "the red required checks on #51"],
+    ["a Review's Verdict on a head still red (#779): on the PR", redHead, 51, "the Review of #51"],
     ["a failed agent job's notice: on its issue", agentFailure, 12, "the failure notice of the Implement run on #12"],
     ["a push to main's plan: nowhere", { kind: "actions-event" } as const, null, "the push to the default branch"],
   ])("%s", (_case, input, target, doing) => {

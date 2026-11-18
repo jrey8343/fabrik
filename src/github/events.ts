@@ -347,12 +347,8 @@ export interface FinishedReview {
   readonly failedChecks: readonly string[];
   /** On green checks, the ones that passed by being skipped or reporting neutral, so ran nothing on the head. */
   readonly ranNothing: readonly string[];
-  /**
-   * The Reviewer's result: on green checks, and on red ones after everything
-   * the Kit could do (#779). Null lands red checks as a Verdict from CI, which
-   * no push job gives since #779.
-   */
-  readonly result: AgentRunResult | null;
+  /** The Reviewer's result: on green checks, and on red ones after everything the Kit could do (#779). */
+  readonly result: AgentRunResult;
   /** What the Kit's re-run of the red checks came to (#462), or null when it didn't try. */
   readonly rerun: RerunReport | null;
   /**
@@ -371,10 +367,6 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     const excerpt = review.excerpts?.find(({ check: name }) => name === check.name);
     return excerpt === undefined ? check : { ...check, excerpt };
   });
-  if (result === null) {
-    const rerun = review.rerun === null ? {} : { rerun: { ...review.rerun, flaky } };
-    return { kind: "required-checks-finished", pullRequest, headSha, failed: review.failedChecks, ...rerun, excerpts: review.excerpts ?? [], runUrl };
-  }
   if (result.role !== "review") throw new Error(`A Review's push job was handed a ${result.role} result`);
   if (result.issue !== pullRequest) throw new Error(`The Reviewer's result is for #${result.issue}, not #${pullRequest}`);
   return {

@@ -82,8 +82,6 @@ export type PushJobInput =
       readonly failedChecks: readonly string[];
       /** On green checks, the ones that passed by being skipped or reporting neutral, which ran nothing on the head. */
       readonly ranNothing: readonly string[];
-      /** Whether the Reviewer ran, so its result is there to apply: on green checks, or on red ones after everything the Kit could do (#779). */
-      readonly withResult: boolean;
       /** What the Kit's re-run of the red checks came to (#462); absent when its job didn't run. */
       readonly rerun?: RerunReport;
     }
@@ -228,7 +226,7 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       const rerun = report === null ? {} : { rerun: report };
       // Green, or red after everything the Kit could do (#779): the Reviewer judged the head, and no Verdict comes from red checks alone.
       if ((outcome === "green" || outcome === "red") && reviewer?.result === "success") {
-        return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, withResult: true, ...rerun };
+        return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, ...rerun };
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };
     }

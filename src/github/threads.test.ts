@@ -31,8 +31,9 @@ function commentsOf(plan: Plan): string[] {
   return plan.actions.flatMap((action) => (action.kind === "comment" ? [action.body] : []));
 }
 
-function redChecks(headSha: string): LoopEvent {
-  return { kind: "required-checks-finished", pullRequest: 50, headSha, failed: ["build"], runUrl: RUN };
+/** A Verdict from red Required checks alone, source `ci`, as a Kit from before #779 posted one: it still reads. */
+function ciVerdict(headSha: string, checks: readonly string[]): string {
+  return `${verdictMarker({ verdict: "execution-flaw", source: "ci", requestChanges: false, checks, headSha })}\n## Verdict: Execution flaw\n\nFrom red required checks, on ${headSha.slice(0, 7)}.`;
 }
 
 function reviewed(output: string, headSha = HEAD_SHA): LoopEvent {
@@ -41,7 +42,6 @@ function reviewed(output: string, headSha = HEAD_SHA): LoopEvent {
 
 describe("Reading a PR's Verdicts", () => {
   it("reads them back from a PR's comments alone, oldest first, skipping every other comment", () => {
-    const ci = planFor(redChecks("1".repeat(40)), snapshotOfPullRequest(aPullRequest({ headSha: "1".repeat(40) })), kitConfig());
     const pass = planFor(
       reviewed("verdict: pass", "2".repeat(40)),
       snapshotOfPullRequest(aPullRequest({ headSha: "2".repeat(40) })),
@@ -49,7 +49,7 @@ describe("Reading a PR's Verdicts", () => {
     );
     const comments = [
       "Nice work!",
-      ...commentsOf(ci),
+      ciVerdict("1".repeat(40), ["build"]),
       "<!-- fabrik:verdict not json -->",
       'Quoting: <!-- fabrik:verdict {"verdict":"pass","source":"reviewer","requestChanges":false,"headSha":"x"} -->',
       ...commentsOf(pass),
@@ -656,14 +656,6 @@ describe("Reading a PR's conflict attempts and conflict-only run (#304)", () => 
 });
 
 describe("A Verdict counted back for a Flaky check (#462)", () => {
-  const red = (headSha: string): LoopEvent => ({
-    kind: "required-checks-finished",
-    pullRequest: 50,
-    headSha,
-    failed: ["e2e"],
-    rerun: { outside: [], failedAgain: ["e2e"], flaky: [], refused: null },
-    runUrl: "https://github.com/acme/shop/actions/runs/1",
-  });
   const commented = (plan: Plan): string[] =>
     plan.kind === "act"
       ? plan.actions.flatMap((action) =>
@@ -671,8 +663,8 @@ describe("A Verdict counted back for a Flaky check (#462)", () => {
         )
       : [];
 
-  it("reads as flaky once the Kit's line marks its head counted back, and never from the Kit's own re-run line", () => {
-    const flaw = commented(planFor(red(HEAD_SHA), snapshotOfPullRequest(aPullRequest()), kitConfig()));
+  it("reads a Verdict from red checks alone, from before #779, as flaky once the Kit's line marks its head counted back, and never from the Kit's own re-run line", () => {
+    const flaw = [ciVerdict(HEAD_SHA, ["e2e"])];
     const rerunLine = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["unit"]} -->\n\`unit\` failed and passed.`;
     const countedBack = `<!-- fabrik:flaky-check {"headSha":"${HEAD_SHA}","checks":["e2e"],"countedBack":true} -->\n\`e2e\` has since passed.`;
 

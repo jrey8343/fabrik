@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aCausedRedCheckReview,
   anIssue,
   aPullRequest,
   HEAD_SHA,
@@ -18,10 +19,6 @@ const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 
 function reviewed(output: string): LoopEvent {
   return { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output, runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
-}
-
-function redChecks(): LoopEvent {
-  return { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN };
 }
 
 function actionsOf(plan: Plan): readonly Action[] {
@@ -76,7 +73,7 @@ const emptySecondRetry: LoopEvent = {
 describe("A third Execution flaw counts as a Design flaw", () => {
   it.each([
     ["from the Reviewer", reviewed("verdict: execution-flaw\n\nStill throws on the empty cart."), snapshotOfPullRequest(usedUp)],
-    ["from red CI", redChecks(), snapshotOfPullRequest(usedUp)],
+    ["from the Reviewer on a head still red, with a check it judged caused", aCausedRedCheckReview(), snapshotOfPullRequest(usedUp)],
     [
       "from a retry that changed nothing",
       emptySecondRetry,
@@ -128,8 +125,8 @@ describe("A Verdict that would go back to design while the Ticket is closed (#58
       "This is the Ticket's third Execution flaw, which counts as a Design flaw. The Ticket #7 is closed, so this PR stays open and no Design session starts.",
     ],
     [
-      "A third Execution flaw from red CI",
-      redChecks(),
+      "A third Execution flaw on a head still red, with a check the Reviewer judged caused",
+      aCausedRedCheckReview(),
       aPullRequest({ ...usedUp, ...ticketClosed }),
       "This is the Ticket's third Execution flaw, which counts as a Design flaw. The Ticket #7 is closed, so this PR stays open and no Design session starts.",
     ],

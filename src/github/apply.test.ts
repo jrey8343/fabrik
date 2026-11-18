@@ -1264,7 +1264,7 @@ describe("Requesting a review GitHub refuses with a 422 (#551)", () => {
     expect(error).toBeInstanceOf(PlanNotApplied);
     expect((error as PlanNotApplied).cause).toBe(refused);
     expect(github.calls).not.toContainEqual({ method: "POST", path: `${issues}/51/comments` });
-    const verdict = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], ranNothing: [], withResult: true } as const;
+    const verdict = { kind: "review", pullRequest: 51, ticket: 12, headSha: "a".repeat(40), failedChecks: [], ranNothing: [] } as const;
     const { comment } = landingFailureReport(pushLanding(verdict, "https://github.com/acme/shop/actions/runs/9001/attempts/1")!, { kind: "error", error });
     expect(comment?.body).toContain("with a 422: Validation Failed: PullRequest reviewers invalid");
   });

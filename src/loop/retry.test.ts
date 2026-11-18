@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aCausedRedCheckReview,
   anIssue,
   aPullRequest,
   HEAD_SHA,
@@ -21,10 +22,6 @@ function reviewed(output: string): LoopEvent {
   return { kind: "review-run-finished", pullRequest: 50, headSha: HEAD_SHA, output, runUrl: RUN, repoUrl: "https://github.com/acme/shop" };
 }
 
-function redChecks(): LoopEvent {
-  return { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["build"], runUrl: RUN };
-}
-
 function actionsOf(plan: Plan): readonly Action[] {
   if (plan.kind !== "act") throw new Error(`expected a plan that acts, got ${JSON.stringify(plan)}`);
   return plan.actions;
@@ -41,7 +38,7 @@ const RETRY_TRIGGER: Action = { kind: "add-labels", issue: 7, labels: ["agent:im
 describe("An Execution flaw starts a retry", () => {
   it.each([
     ["the Reviewer's Execution flaw", reviewed("verdict: execution-flaw\n\nThe empty-cart case throws.")],
-    ["red CI", redChecks()],
+    ["a Verdict on a head still red, whose check the Reviewer judged caused", aCausedRedCheckReview()],
   ])("%s adds agent:implement to the PR's Ticket, which starts the Implementer again on the PR", (_, event) => {
     const plan = planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig());
 
@@ -837,7 +834,7 @@ describe("A retry that fails for Infrastructure", () => {
 describe("Retries stay silent", () => {
   it.each([
     ["the Reviewer's first Execution flaw", [], reviewed("verdict: execution-flaw\n\nThe empty-cart case throws, @someone.")],
-    ["red CI", [], redChecks()],
+    ["a Verdict on a head still red, whose check the Reviewer judged caused", [], aCausedRedCheckReview()],
     ["the second Execution flaw, a Step-up", [earlier("execution-flaw")], reviewed("verdict: execution-flaw\n\nStill throws.")],
   ])("%s notifies nobody", (_, before, event) => {
     const pullRequest = aPullRequest({ verdicts: before, pushedSinceVerdict: true });

@@ -101,7 +101,7 @@ describe("A Touch-up's prompt says it is one (#750)", () => {
   });
 });
 
-describe("A Retry after red Required checks is given each check's Failure excerpt (#775)", () => {
+describe("A Retry after a Verdict on red Required checks is given each check's Failure excerpt (#775)", () => {
   it("in the findings to fix, as the Verdict carries it, with no input of its own", async () => {
     const excerpt: FailureExcerpt = {
       kind: "actions",
@@ -110,7 +110,15 @@ describe("A Retry after red Required checks is given each check's Failure excerp
       steps: [{ name: "Run pnpm test", earlier: 0, lines: ["FAIL src/cart.test.ts > the empty cart", "##[error]Process completed with exit code 1."] }],
       annotations: [{ path: "src/cart.test.ts", line: 12, message: "TypeError: cart.items is undefined" }],
     };
-    const event: LoopEvent = { kind: "required-checks-finished", pullRequest: 50, headSha: HEAD_SHA, failed: ["gate"], excerpts: [excerpt], runUrl: "https://github.com/acme/shop/actions/runs/42" };
+    const event: LoopEvent = {
+      kind: "review-run-finished",
+      pullRequest: 50,
+      headSha: HEAD_SHA,
+      output: "verdict: pass\n\nChecked each criterion.\n\nred-checks:\n- caused `gate`: the empty cart throws in the change's new guard.",
+      runUrl: "https://github.com/acme/shop/actions/runs/42",
+      repoUrl: "https://github.com/acme/shop",
+      redChecks: { failed: ["gate"], excerpts: [excerpt] },
+    };
     const plan = planFor(event, snapshotOfPullRequest(aPullRequest()), kitConfig());
     const verdict = plan.kind === "act" ? plan.actions.flatMap((action) => (action.kind === "comment" && action.body.includes("## Verdict") ? [action.body] : [])) : [];
 

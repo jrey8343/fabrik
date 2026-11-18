@@ -281,7 +281,7 @@ async function finishedReviewEvent(
   input: Extract<PushJobInput, { kind: "review" }>,
   agentDir: string,
 ): Promise<{ event: LoopEvent; source: string }> {
-  const result = input.withResult ? readAgentRunResult(await readFile(join(agentDir, AGENT_RESULT_FILE), "utf8")) : null;
+  const result = readAgentRunResult(await readFile(join(agentDir, AGENT_RESULT_FILE), "utf8"));
   const passedOut = (file: string) => readFile(join(agentDir, file), "utf8").catch(() => null);
   const excerpts = excerptsPassedOut(await passedOut(FAILURE_EXCERPTS_FILE), await passedOut(RERUN_FAILURE_EXCERPTS_FILE));
   const event = reviewEventFrom({
@@ -295,10 +295,7 @@ async function finishedReviewEvent(
     rerun: input.rerun ?? null,
     excerpts,
   });
-  return {
-    event,
-    source: result === null ? `the red required checks on #${input.pullRequest}` : `the Review of #${input.pullRequest}`,
-  };
+  return { event, source: `the Review of #${input.pullRequest}` };
 }
 
 /**

@@ -109,9 +109,9 @@ export function pushLanding(input: PushJobInput, runUrl: string): Landing | null
     case "review":
       return {
         ...push,
-        doing: input.withResult ? `the Review of #${input.pullRequest}` : `the red required checks on #${input.pullRequest}`,
+        doing: `the Review of #${input.pullRequest}`,
         target: input.pullRequest,
-        agentWork: input.withResult,
+        agentWork: true,
         role: "review",
       };
     case "digest":

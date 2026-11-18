@@ -547,7 +547,7 @@ describe("A finished Review whose Required checks ended red (#775)", () => {
     repoUrl: "https://github.com/acme/shop",
     failedChecks: ["unit"],
     ranNothing: [],
-    result: null,
+    result: readAgentRunResult(JSON.stringify({ role: "review", issue: 50, output: "verdict: execution-flaw\n\n- A bug." })),
     rerun: { outside: [], failedAgain: ["unit"], flaky: [], refused: null },
   };
   const first: FailureExcerpt = { kind: "unread", check: "unit", link: "https://github.com/acme/shop/actions/runs/7/job/1", why: "first" };
@@ -562,11 +562,11 @@ describe("A finished Review whose Required checks ended red (#775)", () => {
   it("carries each red check's latest Failure excerpt: after a re-run that failed again, the re-run's", () => {
     const excerpts = excerptsPassedOut(JSON.stringify([first]), JSON.stringify([again]));
 
-    expect(reviewEventFrom({ ...review, excerpts })).toMatchObject({ kind: "required-checks-finished", excerpts: [again] });
+    expect(reviewEventFrom({ ...review, excerpts })).toMatchObject({ kind: "review-run-finished", redChecks: { excerpts: [again] } });
   });
 
   it("carries none when the Review's waits passed none out", () => {
-    expect(reviewEventFrom({ ...review, excerpts: excerptsPassedOut(null, null) })).toMatchObject({ kind: "required-checks-finished", excerpts: [] });
+    expect(reviewEventFrom({ ...review, excerpts: excerptsPassedOut(null, null) })).toMatchObject({ kind: "review-run-finished", redChecks: { excerpts: [] } });
   });
 });
 
@@ -638,9 +638,14 @@ describe("A finished Review with a check the Kit's re-run turned green (#778)", 
   });
 
   it("gives it the same when another check left the head red", () => {
-    const event = reviewEventFrom({ ...review, failedChecks: ["unit"], result: null, rerun: { outside: [], failedAgain: ["unit"], flaky: [E2E], refused: null } });
+    const event = reviewEventFrom({
+      ...review,
+      failedChecks: ["unit"],
+      result: { role: "review", issue: 50, output: "verdict: execution-flaw\n\n- A bug." },
+      rerun: { outside: [], failedAgain: ["unit"], flaky: [E2E], refused: null },
+    });
 
-    expect(event).toMatchObject({ kind: "required-checks-finished", rerun: { flaky: [{ ...E2E, excerpt: firstAttempt }] } });
+    expect(event).toMatchObject({ kind: "review-run-finished", flaky: [{ ...E2E, excerpt: firstAttempt }] });
   });
 
   it("leaves a Flaky check with no excerpt when its waits passed none out for it", () => {
