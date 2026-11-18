@@ -79,7 +79,7 @@ import type {
   UnlandedImplementRun,
   WeeklyIssueSnapshot,
 } from "../loop/types.ts";
-import { flakyOnPassedHead, flippedOn, passedHeadAtGate, uncountedFlaws } from "../loop/flakyChecks.ts";
+import { flakyOnPassedHead, flippedOn, passedHeadAtGate, sweptHeadsOf } from "../loop/flakyChecks.ts";
 import { unrelatedToAsk } from "../loop/gateRerun.ts";
 import { readDefaultBranchHeadChecks, readDefaultBranchRequiredChecks } from "../read/requiredChecks.ts";
 import { type FailureExcerpt, type FailureReader, failureReaderOf, type LogClient, readFailureExcerpt } from "../review/failureExcerpt.ts";
@@ -698,7 +698,8 @@ function redRunExcerpts(app: Pick<ReadClient, "rest">, actions: (ReadClient & Pi
 /**
  * For the tick's Flaky check sweep (#462): each open agent PR's Execution
  * flaws that name red checks, whatever their source (#779), not yet counted
- * back or reported, with every check run on the head each was given on, every
+ * back or reported, and the Unrelated failures of the latest Verdict on an
+ * open draft (#781), with every check run on the head each was given on, every
  * attempt included, and the Failure excerpt of each red run the sweep reports
  * (#778). The Fabrik App reads the check runs with
  * Checks: read; without it the sweep is "no-permission", and does nothing.
@@ -712,7 +713,7 @@ async function gatherFlakySweep(
   const heads: FlawHeadChecks[] = [];
   try {
     for (const { pullRequest } of candidates) {
-      for (const flaw of uncountedFlaws(pullRequest)) heads.push({ ...flaw, checkRuns: await readHeadCheckRuns(github, repo, flaw.headSha), excerpts: [] });
+      for (const flaw of sweptHeadsOf(pullRequest)) heads.push({ ...flaw, checkRuns: await readHeadCheckRuns(github, repo, flaw.headSha), excerpts: [] });
     }
   } catch (error) {
     if (error instanceof GitHubError && refusalOf(error) === "missing-permission") return "no-permission";

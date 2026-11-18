@@ -32,16 +32,29 @@ function actionsOf(plan: Plan): readonly Action[] {
   return plan.actions;
 }
 
+/** A comment's text, an issue the plan files written as `#new` (#781). */
+function textOf(action: Action): string {
+  if (action.kind === "comment") return action.body;
+  if (action.kind === "comment-linking") return action.body.map((part) => (typeof part === "string" ? part : "#new")).join("");
+  return "";
+}
+
 function verdictOf(plan: Plan): string {
-  const bodies = actionsOf(plan).flatMap((action) => (action.kind === "comment" && action.body.includes("## Verdict") ? [action.body] : []));
+  const bodies = actionsOf(plan).flatMap((action) => (textOf(action).includes("## Verdict") ? [textOf(action)] : []));
   expect(bodies).toHaveLength(1);
   return bodies[0]!;
 }
 
 const recordOf = (plan: Plan): VerdictRecord => verdictsPostedIn([verdictOf(plan)])[0] as VerdictRecord;
 
-/** The plan's actions other than its Verdict comment. */
-const besidesVerdict = (plan: Plan) => actionsOf(plan).filter((action) => !(action.kind === "comment" && action.body.includes("## Verdict")));
+/** The plan's actions other than its Verdict comment, and the Unrelated failure line and issues before it (#781). */
+const besidesVerdict = (plan: Plan) =>
+  actionsOf(plan).filter(
+    (action) =>
+      !textOf(action).includes("## Verdict") &&
+      !textOf(action).startsWith("<!-- fabrik:unrelated-failure ") &&
+      !(action.kind === "create-issue" && action.labels.includes("fabrik:flaky-check")),
+  );
 
 const retryStarted = (plan: Plan) => actionsOf(plan).some((action) => action.kind === "add-labels" && action.issue === 7 && action.labels.includes(DISPATCH_LABEL));
 
@@ -107,7 +120,7 @@ describe("What lands from the Reviewer's line and its judgments of the red check
 
     const part = body.split("### Red Required checks")[1]!;
     expect(part).toContain("The Reviewer judged `e2e` an Unrelated failure, which doesn't count. The run that fixes this Verdict leaves it alone.");
-    expect(part).toMatch(/`e2e`[^\n]*\n\n {2}An Unrelated failure: the booking journey fails the same way on main's head\./);
+    expect(part).toMatch(/`e2e`[^\n]*\n\n {2}An Unrelated failure, reported on #new: the booking journey fails the same way on main's head\./);
   });
 
   it("a pass with every check unrelated lands as a Pass and goes to the Merge gate as any pass does, its marker carrying them", () => {
