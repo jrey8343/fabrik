@@ -12,6 +12,9 @@ export const UI: UiConfig = {
   defaultRoutes: ["/"],
 };
 
+/** A ui block whose UI evidence comes from the Evidence shots the Required check `e2e` uploads (#818). */
+export const SHOTS_UI: UiConfig = { ...UI, defaultRoutes: [], shots: { check: "e2e", artifact: "fabrik-evidence-shots" } };
+
 /** The head the Implement run built, and capture captured. */
 export const CAPTURED_SHA = "4f2b9c0e1d3a5b7c9e0f2a4b6c8d0e1f3a5b7c9d";
 

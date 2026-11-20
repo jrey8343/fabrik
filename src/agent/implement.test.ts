@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import { PENRITH_59_REPO, PENRITH_59_REQUEST, PENRITH_59_TICKET_PRACTITIONERS, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { SHOTS_UI, UI } from "../__fixtures__/uiEvidence.ts";
 import { verdictMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { LoopEvent } from "../loop/types.ts";
@@ -363,6 +364,67 @@ describe("The Implementer's context", () => {
 
     expect(text).toContain("## This Product repo's Sandbox");
     expect(text).toContain("- Required checks on the PR: `build`, `e2e`");
+  });
+
+  describe("on a Product repo that uses Evidence shots (#819)", () => {
+    const shotsConfig = () => {
+      const config = kitConfig({ ui: SHOTS_UI });
+      return { ...config, sandbox: { ...config.sandbox, checks: ["build", "e2e"] } };
+    };
+    const shotsPart = async () => {
+      const text = (await implementContext(await mkdtemp(join(tmpdir(), "fabrik-implement-")), await fileOf(null), shotsConfig())).join("\n");
+      return text.slice(text.indexOf("## Evidence shots"));
+    };
+
+    it("tells it to name the Evidence shots that show its change, found in the Journeys' code, and never another", async () => {
+      const part = await shotsPart();
+
+      expect(part).toContain("## Evidence shots");
+      expect(part).toContain("find the names by reading the Journeys");
+      expect(part).toContain("Never name a shot that isn't in a Journey's code");
+      expect(part).toContain("at most four count");
+      expect(part).toContain('"shots": ["composer: draft ready"]');
+    });
+
+    it("tells it to add a shot to the Journey that reaches a state with none, extending a Journey when none does, and to run it when the Sandbox's tests include it", async () => {
+      const part = await shotsPart();
+
+      expect(part).toContain("add a shot to the Journey that reaches it, and extend a Journey to reach it when none does");
+      expect(part).toContain("run that Journey when this Sandbox's test command includes it");
+    });
+
+    it("tells it to say in nothingVisible, and why, when nothing a person sees changes, and that the names win over it", async () => {
+      const part = await shotsPart();
+
+      expect(part).toContain('"nothingVisible"');
+      expect(part).toContain("say so in `nothingVisible`, in one sentence that says why");
+      expect(part).toContain("names win");
+    });
+
+    it("names the check whose run takes the shots, that naming neither is an Evidence miss that uses a Retry, and that routes are ignored", async () => {
+      const part = await shotsPart();
+
+      expect(part).toContain("The Required check `e2e` runs the Journeys");
+      expect(part).toContain("an Evidence miss");
+      expect(part).toContain("uses one of the Ticket's Retries");
+      expect(part).toContain("`routes` is ignored on this Product repo");
+    });
+
+    it("tells a retry or a Request-changes run to name the shots the pull request as a whole shows on", async () => {
+      expect(await shotsPart()).toContain("On a retry or a Request-changes run, name the shots the PR as a whole shows on");
+    });
+
+    it.each([
+      ["no ui block", kitConfig()],
+      ["a ui block with no shots", kitConfig({ ui: UI })],
+    ])("is left out on a Product repo with %s, whose context is as it was", async (_, config) => {
+      const productDir = await mkdtemp(join(tmpdir(), "fabrik-implement-"));
+      const parts = await implementContext(productDir, await fileOf(null), config);
+
+      expect(parts.join("\n")).not.toContain("Evidence shot");
+      expect(parts.join("\n")).not.toContain("nothingVisible");
+      expect(parts.at(-1)?.startsWith("- ")).toBe(true);
+    });
   });
 
   it("says the Kit already ran the build before it started, and when to run it again (#703)", async () => {

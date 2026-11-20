@@ -136,12 +136,13 @@ describe("The rounds Kit code builds from a pull request's thread", () => {
 
   const rows = (thread: DigestThread) => digestFactsOf(thread).rounds.map(({ who, what }) => `${who}: ${what}`);
 
-  it("name the Kit for the Verdict it gives itself, and say whether a Retry changed nothing or was a Broken run", () => {
+  it("name the Kit for the Verdict it gives itself, and say whether a Retry changed nothing, was a Broken run or was an Evidence miss (#819)", () => {
     const thread = aThread({
       kitComments: [
         aVerdict(5, { verdict: "execution-flaw", headSha: sha("a") }),
         aVerdict(10, { verdict: "execution-flaw", source: "empty-diff", headSha: sha("a") }),
         aVerdict(15, { verdict: "design-flaw", source: "broken-run", headSha: sha("a") }),
+        aVerdict(20, { verdict: "execution-flaw", source: "evidence-miss", headSha: sha("b") }),
       ],
     });
 
@@ -149,6 +150,7 @@ describe("The rounds Kit code builds from a pull request's thread", () => {
       { who: "reviewer", what: "execution-flaw" },
       { who: "kit", what: "execution-flaw", why: "retry-changed-nothing" },
       { who: "kit", what: "design-flaw", why: "broken-run" },
+      { who: "kit", what: "execution-flaw", why: "evidence-miss" },
     ]);
     expect(digestFactsOf(thread).rounds[1]).not.toHaveProperty("why");
   });

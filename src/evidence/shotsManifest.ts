@@ -139,6 +139,18 @@ function nameRuleBroken(value: unknown): "not-text" | "not-one-line" | "too-long
   return null;
 }
 
+/**
+ * Whether a value keeps the name rule a shot's name is held to: text of at
+ * most 80 characters on one line, of letters A to Z, digits, spaces and
+ * `: - _ / . ,` only. The names the Implementer gives are held to it too (#819).
+ */
+export function isShotName(value: unknown): value is string {
+  return nameRuleBroken(value) === null;
+}
+
+/** The name rule, as a clause the Kit says it in. */
+export const SHOT_NAME_RULE = `a name is at most ${SHOT_NAME_MAX_LENGTH} characters on one line, of letters A to Z, digits, spaces and \`: - _ / . ,\``;
+
 /** A manifest that can't be read at all: a failure of the Product's wiring, never of one shot. */
 export interface BadManifest {
   readonly ok: false;

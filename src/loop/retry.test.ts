@@ -650,12 +650,14 @@ describe("The evidence section on a retry's PR", () => {
     expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state.\n\nCloses #7" });
   });
 
-  it("isn't on a PR marked UI in a repo whose UI evidence comes from Evidence shots, whose Implement job captures nothing", () => {
+  it("is the Evidence shots section on a PR marked UI in a repo whose UI evidence comes from them, whose Implement job captures nothing (#819)", () => {
     const fromShots = kitConfig({ ui: { ...UI, defaultRoutes: [], shots: { check: "e2e", artifact: "fabrik-evidence-shots" } } });
 
-    const actions = actionsOf(planFor(copyingForward({ evidence: anEvidence(undefined) }), retrySnapshot(markedUi()), fromShots));
+    const [edit] = actionsOf(planFor(copyingForward({ evidence: anEvidence(undefined) }), retrySnapshot(markedUi()), fromShots));
 
-    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state.\n\nCloses #7" });
+    expect(edit).toMatchObject({ kind: "edit-issue-body", issue: 50, body: expect.stringContaining("Waiting for the `e2e` check") });
+    expect(edit).not.toMatchObject({ body: expect.stringContaining("Capture failed") });
+    expect(edit).not.toMatchObject({ body: expect.stringContaining(`"run":8000`) });
   });
 });
 

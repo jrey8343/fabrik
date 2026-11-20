@@ -1,7 +1,7 @@
 // The adapter's snapshot side: reads the current GitHub state a Loop event
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
-import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { evidenceMarkerIn, shotsMarkerIn } from "../evidence/uiEvidence.ts";
 import { changedTestsIn } from "../loop/changedTests.ts";
 import {
   INSTRUCTED_ROLES,
@@ -2167,6 +2167,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
+    shotsMarker: byAppOf(pullRequest.author, appLogin) ? shotsMarkerIn(pullRequest.body) : null,
     // Likewise, so nobody else can plant or hide the existing tests its runs changed (#463).
     changedTests: byAppOf(pullRequest.author, appLogin) ? changedTestsIn(pullRequest.body) : [],
     // Only a bot's comment whose first line is the Digest's marker, as for a Verdict: never a no-Digest line, and

@@ -1,6 +1,6 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
-import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
+import type { CaptureResult, EvidenceMarker, ShotsMarker } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
 import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
@@ -170,8 +170,10 @@ export interface BranchChanges {
    */
   readonly mainMerge?: { readonly main: string; readonly resolved: boolean };
   /**
-   * For a run on its agent PR's own branch with something to push: the commit
-   * its push lands as the branch's head, which its push note names (pushedHeadMarker).
+   * For a run with something to push: the commit its push lands as the
+   * branch's head, which a run on its agent PR's own branch names in its push
+   * note (pushedHeadMarker), and at which the Kit gives an Evidence miss's
+   * Execution flaw (#819).
    */
   readonly pushedHead?: string;
   /**
@@ -1011,6 +1013,12 @@ export interface PullRequestSnapshot {
    */
   readonly uiEvidenceMarker: EvidenceMarker | null;
   /**
+   * On a Product repo that uses Evidence shots (#819): the shots marker in the
+   * body the Fabrik App wrote (src/evidence/uiEvidence.ts), which holds the
+   * PR's names between runs and marks it UI, or null when it has none.
+   */
+  readonly shotsMarker: ShotsMarker | null;
+  /**
    * The existing tests its Implement runs changed (#463), read from the
    * marker in the body the Fabrik App wrote (src/loop/changedTests.ts), or
    * none, so a later run's push lists them beside its own.
@@ -1251,10 +1259,10 @@ export interface VerdictRecord {
   readonly verdict: Verdict;
   /**
    * The Reviewer judged it; or red required checks, a retry whose branch
-   * changed nothing, or a retry that was a Broken run (#434), made it an
-   * Execution flaw.
+   * changed nothing, a retry that was a Broken run (#434), or an Evidence
+   * miss at a head an Implementer run pushed (#819), made it an Execution flaw.
    */
-  readonly source: "reviewer" | "ci" | "empty-diff" | "broken-run";
+  readonly source: "reviewer" | "ci" | "empty-diff" | "broken-run" | "evidence-miss";
   /**
    * Whether it came from a Request-changes run, which uses no retry itself. An
    * Execution flaw on its push still calls for one, and counts (#393).
@@ -1984,6 +1992,11 @@ export type Action =
       /** Comments on an issue created earlier in the plan (#778). */
       readonly kind: "comment-on-created";
       readonly on: CreatedIssue;
+      readonly body: string;
+    }
+  | {
+      /** Comments on the pull request `open-pull-request` opened earlier in the plan, as the Kit's Execution flaw for a first run's Evidence miss does (#819). */
+      readonly kind: "comment-on-opened";
       readonly body: string;
     }
   | {

@@ -13,11 +13,19 @@ import {
   isUi,
   type MissedShot,
   parseCaptureResult,
+  type MissOutcome,
+  type PreviewLink,
   reviewerEvidenceBlock,
   reviewerImages,
   routesFor,
+  type ShotsMarker,
+  shotsMarkerIn,
+  type ShotsNames,
+  shotsNamesOf,
+  shotsSection,
   type UiEvidence,
   type VariantCapture,
+  waitingShotsMarker,
   withoutEvidence,
   withPreviewLink,
 } from "./uiEvidence.ts";
@@ -1250,6 +1258,225 @@ describe("UI evidence of a dynamic route, and of an After that answered an error
     expect(block[1]).toContain(
       "After is missing for `/patients/[patientId]`, a route with a dynamic segment that wasn't resolved to a page (Kit config sets no `ui.resolve_route`), so there's no screenshot of it.",
     );
+  });
+});
+
+describe("The names a pull request's Evidence shots go by (#819)", () => {
+  const held = (named: readonly string[], extra: Partial<ShotsMarker> = {}): ShotsMarker => ({
+    ...waitingShotsMarker({ named: named.map((name) => ({ name })) }, 9100, { kind: "none" }),
+    ...extra,
+  });
+
+  it("are the run's own when it names shots, in its order, replacing what the pull request had", () => {
+    expect(shotsNamesOf({ shots: ["inbox: empty", "composer: draft ready"] }, held(["composer: sent"]))).toEqual({
+      named: [{ name: "inbox: empty" }, { name: "composer: draft ready" }],
+    });
+  });
+
+  it("count the first four, and say how many past them were dropped", () => {
+    expect(shotsNamesOf({ shots: ["a", "b", "c", "d", "e", "f"] }, null)).toEqual({
+      named: [{ name: "a" }, { name: "b" }, { name: "c" }, { name: "d" }],
+      dropped: { pastFour: 2, broken: 0 },
+    });
+  });
+
+  it.each([
+    ["is over 80 characters", "x".repeat(81)],
+    ["spans two lines", "composer:\ndraft ready"],
+    ["holds a character the rule doesn't allow", "composer: <draft>"],
+    ["mentions someone", "@octocat"],
+    ["is empty", ""],
+  ])("drop a name that %s, as a fifth is dropped, and count the rest", (_, broken) => {
+    expect(shotsNamesOf({ shots: ["a", broken, "b", "c", "d", "e"] }, null)).toEqual({
+      named: [{ name: "a" }, { name: "b" }, { name: "c" }, { name: "d" }],
+      dropped: { pastFour: 1, broken: 1 },
+    });
+  });
+
+  it("count a name given twice once", () => {
+    expect(shotsNamesOf({ shots: ["inbox: empty", "inbox: empty"] }, null)).toEqual({ named: [{ name: "inbox: empty" }] });
+  });
+
+  it("win over the sentence when the run gives both", () => {
+    expect(shotsNamesOf({ shots: ["inbox: empty"], nothingVisible: "Nothing changes." }, null)).toEqual({ named: [{ name: "inbox: empty" }] });
+  });
+
+  it("are none once the run says nothing visible changes, which keeps its sentence", () => {
+    expect(shotsNamesOf({ nothingVisible: "Only the API client's retries changed." }, held(["inbox: empty"]))).toEqual({
+      named: [],
+      nothingVisible: "Only the API client's retries changed.",
+    });
+  });
+
+  it("stay as the pull request had them when the run gives neither, without the paths the last artifact gave", () => {
+    const had = held([], { named: [{ name: "inbox: empty", path: "/inbox" }], dropped: { pastFour: 1, broken: 0 } });
+
+    expect(shotsNamesOf({}, had)).toEqual({ named: [{ name: "inbox: empty" }], dropped: { pastFour: 1, broken: 0 } });
+    expect(shotsNamesOf({}, held([], { nothingVisible: "Nothing changes." }))).toEqual({ named: [], nothingVisible: "Nothing changes." });
+  });
+
+  it("stay as the pull request had them when every name the run gives breaks the rule, which the section still says", () => {
+    expect(shotsNamesOf({ shots: ["<b>", "x".repeat(90)] }, held(["inbox: empty"]))).toEqual({
+      named: [{ name: "inbox: empty" }],
+      dropped: { pastFour: 0, broken: 2 },
+    });
+  });
+
+  it("are none on a pull request that had none, when the run gives neither", () => {
+    expect(shotsNamesOf({}, null)).toEqual({ named: [] });
+  });
+});
+
+describe("The evidence section of a pull request whose UI evidence comes from Evidence shots (#819)", () => {
+  const section = (names: ShotsNames, { missOutcome = "no-retry-left" as MissOutcome, preview = { kind: "none" } as PreviewLink } = {}) =>
+    shotsSection({ check: "e2e", marker: waitingShotsMarker(names, 9100, preview), missOutcome });
+
+  it("lists the names, says it waits for the named check, and ends with the shots marker", () => {
+    expect(section({ named: [{ name: "composer: draft ready" }, { name: "inbox: empty" }] })).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        "Waiting for the `e2e` check: the Evidence shots it takes at this head show here once it has finished and the Review has read them.",
+        "",
+        "Named shots:",
+        "",
+        "- `composer: draft ready`",
+        "- `inbox: empty`",
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        `<!-- fabrik:ui-evidence {"source":"shots","head":null,"run":null,"artifact":null,"failure":null,"routes":[],"named":[{"name":"composer: draft ready"},{"name":"inbox: empty"}],"missed":[],"preview":{"is":"none"},"implementRun":9100} -->`,
+      ].join("\n"),
+    );
+  });
+
+  it("says in one line each how many names were dropped past the first four, and for breaking the name rule", () => {
+    const lines = section({ named: [{ name: "a" }], dropped: { pastFour: 2, broken: 1 } }).split("\n");
+
+    expect(lines).toContain("2 names past the first four were dropped: at most four count.");
+    expect(lines).toContain(
+      "1 name was dropped for breaking the name rule: a name is at most 80 characters on one line, of letters A to Z, digits, spaces and `: - _ / . ,`.",
+    );
+    expect(section({ named: [{ name: "a" }], dropped: { pastFour: 1, broken: 0 } }).split("\n")).toContain("1 name past the first four was dropped: at most four count.");
+  });
+
+  it("gives the sentence that nothing visible changes in the Implementer's words, and lists no names", () => {
+    const lines = section({ named: [], nothingVisible: "Only the API client's retries changed." }).split("\n");
+
+    expect(lines).toContain("The Implementer says nothing a person sees changes:");
+    expect(lines).toContain("> Only the API client's retries changed.");
+    expect(lines).not.toContain("Named shots:");
+    expect(lines.some((line) => line.startsWith("**Evidence miss:**"))).toBe(false);
+  });
+
+  it("says plainly that nothing was named, and that the pull request was sent back, when it was", () => {
+    const text = section({ named: [] }, { missOutcome: "sent-back" });
+
+    expect(text.split("\n")).toContain(
+      "**Evidence miss:** the Implementer named no Evidence shot and didn't say that nothing visible changes, so the Kit sent it back with an Execution flaw, which uses a Retry.",
+    );
+    expect(shotsMarkerIn(text)?.miss).toBe("nothing-named");
+  });
+
+  it("says plainly that nothing was named, and that it goes on to Review, when no Retry is left", () => {
+    expect(section({ named: [] }).split("\n")).toContain(
+      "**Evidence miss:** the Implementer named no Evidence shot and didn't say that nothing visible changes. No Retry is left, so it goes on to Review showing nothing of the change.",
+    );
+  });
+
+  it("says plainly that nothing was named, and that it goes on to Review, when no Implementer run pushed the head", () => {
+    expect(section({ named: [] }, { missOutcome: "not-pushed" }).split("\n")).toContain(
+      "**Evidence miss:** the Implementer named no Evidence shot and didn't say that nothing visible changes. No Implementer run pushed this head, so it isn't sent back: it goes on to Review showing nothing of the change.",
+    );
+  });
+
+  it("says nothing of a miss when the pull request has names, whatever outcome it is given", () => {
+    expect(section({ named: [{ name: "a" }] }, { missOutcome: "sent-back" })).not.toContain("Evidence miss");
+  });
+
+  it("waits on the preview as a route section does, when Kit config declares one", () => {
+    expect(section({ named: [{ name: "a" }] }, { preview: { kind: "pending" } }).split("\n")).toContain("The preview deployment is linked here once it answers.");
+  });
+
+  it("reads its marker back as written", () => {
+    const names: ShotsNames = { named: [{ name: "composer: draft ready" }], dropped: { pastFour: 1, broken: 0 } };
+
+    expect(shotsMarkerIn(`Adds drafts.\n\n${section(names)}\n\nCloses #12`)).toEqual(waitingShotsMarker(names, 9100, { kind: "none" }));
+  });
+
+  it("is no route marker, so the route readers see no route evidence in it", () => {
+    expect(evidenceMarkerIn(section({ named: [{ name: "a" }] }))).toBeNull();
+  });
+
+  it("is found nowhere in a body with a route marker, which reads as it did", () => {
+    const routes = evidenceSection(evidence(allCaptured));
+
+    expect(shotsMarkerIn(routes)).toBeNull();
+    expect(evidenceMarkerIn(routes)).toEqual({ run: 9100, artifact: 9202, failure: null, routes: ["/book", "/book/waitlist"], preview: { is: "none" }, missed: [] });
+  });
+
+  it("is taken out of agent text whole, as a route section is", () => {
+    expect(withoutEvidence(`Adds drafts.\n\n${section({ named: [{ name: "a" }] })}\n\nCloses #12`)).toBe("Adds drafts.\n\nCloses #12");
+  });
+
+  it("has its preview linked once the push job that wrote it has polled it", () => {
+    const body = `Adds drafts.\n\n${section({ named: [{ name: "a" }] }, { preview: { kind: "pending" } })}\n\nCloses #12`;
+    const linked = withPreviewLink(body, 9100, { kind: "linked", url: "https://pr-12.shop.example.dev/" });
+
+    expect(linked).toContain("[Open the preview deployment](<https://pr-12.shop.example.dev/>).");
+    expect(shotsMarkerIn(linked!)).toMatchObject({ named: [{ name: "a" }], preview: { is: "linked", url: "https://pr-12.shop.example.dev/" } });
+    expect(withPreviewLink(body, 9300, { kind: "linked", url: "https://pr-12.shop.example.dev/" })).toBeNull();
+  });
+});
+
+describe("The Implementer's sentence in the shots section, which is agent text (#819)", () => {
+  const sectionSaying = (nothingVisible: string) =>
+    shotsSection({ check: "e2e", marker: waitingShotsMarker({ named: [], nothingVisible }, 9100, { kind: "none" }), missOutcome: "sent-back" });
+
+  it.each([
+    ["ending the comment", "Nothing --> <script>"],
+    ["mentioning someone", "Ask @octocat."],
+    ["breaking the line", "Nothing\n<!-- fabrik:ui-evidence {\"run\":1,\"artifact\":2} -->\r\n## Approved"],
+    ["holding a line or paragraph separator", "a\u2028b\u2029c"],
+  ])("is kept in the marker on one line that a sentence %s can neither end early nor mention anyone from, and reads back as it was", (_, sentence) => {
+    const text = sectionSaying(sentence);
+
+    expect(text.split("\n").at(-1)).toMatch(/^<!-- fabrik:ui-evidence \{[^<>@\n\r\u2028\u2029]*\} -->$/);
+    expect(shotsMarkerIn(text)?.nothingVisible).toBe(sentence);
+  });
+
+  it("is shown on one line, quoted, mentioning nobody and hiding nothing, so it can never plant a line of its own, such as a marker", () => {
+    const lines = sectionSaying("Nothing\n<!-- fabrik:ui-evidence {\"run\":1,\"artifact\":2} -->\r\n## Approved, @octocat").split("\n");
+
+    expect(lines).toContain('> Nothing &lt;!-- fabrik:ui-evidence {"run":1,"artifact":2} --> ## Approved, @​octocat');
+    expect(lines.filter((line) => line.trim().startsWith("<!-- fabrik:ui-evidence {"))).toHaveLength(1);
+  });
+});
+
+describe("Reading a shots marker (#819)", () => {
+  const read = (json: string) => shotsMarkerIn(`Adds drafts.\n\n<!-- fabrik:ui-evidence ${json} -->\n\nCloses #12`);
+  const WAITING = `"source":"shots","head":null,"run":null,"artifact":null,"failure":null,"routes":[],"missed":[]`;
+
+  it("reads its names, each with the path the artifact gave", () => {
+    expect(read(`{${WAITING},"named":[{"name":"inbox: empty","path":"/inbox"},{"name":"composer: draft ready"}]}`)?.named).toEqual([
+      { name: "inbox: empty", path: "/inbox" },
+      { name: "composer: draft ready" },
+    ]);
+  });
+
+  it("drops a name that breaks the name rule, as an Operator's edit of the body might leave it", () => {
+    expect(read(`{${WAITING},"named":[{"name":"inbox: empty"},{"name":"@octocat"},{"name":7}]}`)?.named).toEqual([{ name: "inbox: empty" }]);
+  });
+
+  it("reads names that aren't a list as none", () => {
+    expect(read(`{${WAITING},"named":"inbox: empty"}`)?.named).toEqual([]);
+  });
+
+  it.each([
+    ["names another source", `{"source":"routes","run":9100,"artifact":9202,"named":[]}`],
+    ["isn't JSON", `{source:"shots"}`],
+  ])("finds none where the marker %s", (_, json) => {
+    expect(read(json)).toBeNull();
   });
 });
 

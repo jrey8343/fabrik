@@ -9,8 +9,19 @@
 // evidence section ever shows it. The Evidence pages, the PR's and the
 // prototype's, are beside it (src/evidence/evidencePage.ts). Pure, no I/O.
 import { posix } from "node:path";
-import { type CaptureIdentity, isCaptureIdentity, isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import {
+  type CaptureIdentity,
+  isCaptureIdentity,
+  isRoute,
+  NAMED_SHOT_CAP,
+  REVIEWER_IMAGE_CAP,
+  UI_ROUTE_CAP,
+  UI_VIEWPORTS,
+  type UiConfig,
+  type Viewport,
+} from "../kit/config.ts";
 import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
+import { isShotName, SHOT_NAME_RULE, type ShotMiss } from "./shotsManifest.ts";
 import { linesOutsideCode, markerJson } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
@@ -962,6 +973,259 @@ export function capturedRoutesOf(marker: EvidenceMarker | null): readonly string
   return marker === null || marker.artifact === null ? [] : (marker.routes ?? []);
 }
 
+/** A name a pull request's shots marker holds: the Implementer's, with the path the artifact's entry gave once it has been read. */
+export interface NamedShot {
+  readonly name: string;
+  readonly path?: string;
+}
+
+/** How many names the run that gave a pull request its names dropped: past the first four, and for breaking the name rule. */
+export interface DroppedNames {
+  readonly pastFour: number;
+  readonly broken: number;
+}
+
+/** The failures of a whole collection of Evidence shots: the Product's wiring, the Operator's to fix, which never send back. */
+export const SHOTS_FAILURES = ["no-artifact", "bad-manifest"] as const;
+
+export type ShotsFailure = (typeof SHOTS_FAILURES)[number];
+
+/**
+ * What a pull request shows of its change by Evidence shots (#819): the
+ * names, in the Implementer's order, or its sentence that nothing a person
+ * sees changes, and what its run dropped of the names it gave.
+ */
+export interface ShotsNames {
+  /** The names: none when it has the sentence, or neither. */
+  readonly named: readonly NamedShot[];
+  readonly nothingVisible?: string;
+  /** Absent when the run that gave the names dropped none. */
+  readonly dropped?: DroppedNames;
+}
+
+/**
+ * The marker of a pull request whose UI evidence comes from Evidence shots:
+ * the second shape of the evidence marker, told apart by its `source`. A
+ * marker without one is a route marker (EvidenceMarker). It carries the
+ * pull request's names between runs, and is read only from a body the
+ * Fabrik App wrote (src/github/snapshot.ts).
+ */
+export interface ShotsMarker extends ShotsNames {
+  readonly source: "shots";
+  /** The head the named check ran at, whose shots the section shows; null while it waits. */
+  readonly head: string | null;
+  /** The Review run that holds the Evidence page; null while it waits. */
+  readonly run: number | null;
+  readonly artifact: number | null;
+  readonly failure: ShotsFailure | null;
+  /** Always empty, for a reader from a release before Evidence shots, which reads it as capturing no route. */
+  readonly routes: readonly [];
+  /** That the pull request has neither names nor the sentence: an Evidence miss (GLOSSARY.md). */
+  readonly miss?: "nothing-named";
+  /** Each named shot the check's run didn't produce, and each size a produced one lacks. */
+  readonly missed: readonly ShotMiss[];
+  readonly preview?: MarkerPreview;
+  /** The Actions run whose Implement push job wrote the names, whose preview step links the preview (withPreviewLink). */
+  readonly implementRun?: number;
+}
+
+/**
+ * The names rule (#819): what a pull request shows of its change once an
+ * Implementer run has given `given`, its marker holding `held` before it.
+ * The latest run that says anything wins. Names it gives, held to the name
+ * rule and once each, replace the pull request's, the first four counting;
+ * its sentence, given without a name that counts, clears them and is kept;
+ * and a run that gives neither keeps what the pull request had, without the
+ * paths an earlier head's artifact gave. Names it gave that were dropped are
+ * counted either way.
+ */
+export function shotsNamesOf(
+  given: { readonly shots?: readonly string[]; readonly nothingVisible?: string },
+  held: ShotsMarker | null,
+): ShotsNames {
+  if (given.shots !== undefined) {
+    const kept = given.shots.filter(isShotName);
+    const valid = kept.filter((name, at) => kept.indexOf(name) === at);
+    const counted = valid.slice(0, NAMED_SHOT_CAP);
+    const pastFour = valid.length - counted.length;
+    const broken = given.shots.length - kept.length;
+    const dropped = pastFour + broken === 0 ? {} : { dropped: { pastFour, broken } };
+    if (counted.length > 0) return { named: counted.map((name) => ({ name })), ...dropped };
+    // Every name it gave was dropped, so it named nothing that counts.
+    const { dropped: _, ...rest } = shotsNamesOf({ ...(given.nothingVisible === undefined ? {} : { nothingVisible: given.nothingVisible }) }, held);
+    return { ...rest, ...dropped };
+  }
+  if (given.nothingVisible !== undefined) return { named: [], nothingVisible: given.nothingVisible };
+  if (held === null) return { named: [] };
+  return {
+    named: held.named.map(({ name }) => ({ name })),
+    ...(held.nothingVisible === undefined ? {} : { nothingVisible: held.nothingVisible }),
+    ...(held.dropped === undefined ? {} : { dropped: held.dropped }),
+  };
+}
+
+/** Whether a pull request with these names shows nothing of its change: no name and no sentence, an Evidence miss's `nothing-named`. */
+export function namesNothing({ named, nothingVisible }: ShotsNames): boolean {
+  return named.length === 0 && nothingVisible === undefined;
+}
+
+/**
+ * The shots marker an Implement run's push job writes: the pull request's
+ * names, waiting for the named check, with no head, Review run or artifact
+ * yet, and `miss` when it names nothing.
+ */
+export function waitingShotsMarker(names: ShotsNames, implementRun: number | null, preview: PreviewLink): ShotsMarker {
+  return {
+    source: "shots",
+    head: null,
+    run: null,
+    artifact: null,
+    failure: null,
+    routes: [],
+    named: names.named,
+    ...(names.nothingVisible === undefined ? {} : { nothingVisible: names.nothingVisible }),
+    ...(names.dropped === undefined ? {} : { dropped: names.dropped }),
+    ...(namesNothing(names) ? { miss: "nothing-named" as const } : {}),
+    missed: [],
+    preview: markerPreview(preview),
+    ...(implementRun === null ? {} : { implementRun }),
+  };
+}
+
+/**
+ * What came of a pull request's Evidence miss: the Kit sent it back with its
+ * own Execution flaw, or it goes on to Review with the miss shown, because no
+ * Retry is left or because no Implementer run pushed the head it is at, as
+ * when a body-only Touch-up pushed nothing or the Operator pushed it.
+ */
+export type MissOutcome = "sent-back" | "no-retry-left" | "not-pushed";
+
+/** What the shots section needs: the named check's name, the marker it ends with, and what came of the marker's `miss`. */
+export interface ShotsSectionOf {
+  readonly check: string;
+  readonly marker: ShotsMarker;
+  /** What came of the marker's `miss`; read only when it has one. */
+  readonly missOutcome: MissOutcome;
+}
+
+/**
+ * The evidence section of a pull request whose UI evidence comes from
+ * Evidence shots, between the start line and its marker: an Evidence miss,
+ * when it has one, and what came of it; that it waits for the named check;
+ * the names, or the Implementer's sentence in its own words; the names its
+ * run dropped; and the preview link. The sentence is agent text, so it shows
+ * quoted on one line, mentions nobody and hides nothing.
+ */
+export function shotsSection({ check, marker, missOutcome }: ShotsSectionOf): string {
+  const { named, nothingVisible, dropped, miss } = marker;
+  return [
+    SECTION_START,
+    "## UI evidence",
+    ...(miss === "nothing-named" ? ["", nothingNamedLine(missOutcome)] : []),
+    "",
+    `Waiting for the ${code(check)} check: the Evidence shots it takes at this head show here once it has finished and the Review has read them.`,
+    ...(named.length === 0 ? [] : ["", "Named shots:", "", ...named.map(({ name }) => `- ${code(name)}`)]),
+    ...(nothingVisible === undefined ? [] : ["", "The Implementer says nothing a person sees changes:", "", `> ${quotedSentence(nothingVisible)}`]),
+    ...droppedLines(dropped).flatMap((line) => ["", line]),
+    "",
+    previewLine(previewLinkOf(marker.preview)),
+    markerLine(marker),
+  ].join("\n");
+}
+
+/** The section's line for a pull request that names nothing, sent back or going on to Review, and why. */
+function nothingNamedLine(outcome: MissOutcome): string {
+  const lead = "**Evidence miss:** the Implementer named no Evidence shot and didn't say that nothing visible changes";
+  switch (outcome) {
+    case "sent-back":
+      return `${lead}, so the Kit sent it back with an Execution flaw, which uses a Retry.`;
+    case "no-retry-left":
+      return `${lead}. No Retry is left, so it goes on to Review showing nothing of the change.`;
+    case "not-pushed":
+      return `${lead}. No Implementer run pushed this head, so it isn't sent back: it goes on to Review showing nothing of the change.`;
+  }
+}
+
+/** The lines saying what the run dropped of the names it gave: none when it dropped none. */
+function droppedLines(dropped: DroppedNames | undefined): string[] {
+  if (dropped === undefined) return [];
+  const names = (count: number) => `${count} ${count === 1 ? "name" : "names"}`;
+  const were = (count: number) => (count === 1 ? "was" : "were");
+  return [
+    ...(dropped.pastFour === 0 ? [] : [`${names(dropped.pastFour)} past the first four ${were(dropped.pastFour)} dropped: at most four count.`]),
+    ...(dropped.broken === 0 ? [] : [`${names(dropped.broken)} ${were(dropped.broken)} dropped for breaking the name rule: ${SHOT_NAME_RULE}.`]),
+  ];
+}
+
+/** Agent text shown on one line, mentioning nobody, with each `<` escaped so no HTML or comment in it hides anything. */
+function quotedSentence(text: string): string {
+  return withoutMentions(text.replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim()).replaceAll("<", "&lt;");
+}
+
+/** A marker's preview as the section's preview line says it: none when the marker records none. */
+function previewLinkOf(preview: MarkerPreview | undefined): PreviewLink {
+  if (preview === undefined) return { kind: "none" };
+  return preview.is === "linked" || preview.is === "never-answered" ? { kind: preview.is, url: preview.url } : { kind: preview.is };
+}
+
+/**
+ * The shots marker in this body (ShotsMarker), or null when it has none. Read
+ * only from a body the Fabrik App wrote (src/github/snapshot.ts). The last
+ * counts, and a field that doesn't read is left out or read as none.
+ */
+export function shotsMarkerIn(body: string): ShotsMarker | null {
+  const markers = body.split("\n").flatMap((line) => {
+    const marker = shotsMarkerOf(EVIDENCE_MARKER.exec(line.trim())?.[1]);
+    return marker === null ? [] : [marker];
+  });
+  return markers.at(-1) ?? null;
+}
+
+function shotsMarkerOf(json: string | undefined): ShotsMarker | null {
+  if (json === undefined) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!isObject(value) || value.source !== "shots") return null;
+  const { head, run, artifact, failure, named, nothingVisible, dropped, miss, missed, preview, implementRun } = value;
+  return {
+    source: "shots",
+    head: typeof head === "string" && FULL_SHA.test(head) ? head : null,
+    run: isId(run) ? run : null,
+    artifact: isId(artifact) ? artifact : null,
+    failure: isOneOf(SHOTS_FAILURES, failure) ? failure : null,
+    routes: [],
+    // A name that breaks the rule, as an edit of the body might leave it, is dropped: names reach the Reviewer's prompt.
+    named: Array.isArray(named) ? named.flatMap((shot) => (isObject(shot) && isShotName(shot.name) ? [namedShotOf(shot.name, shot.path)] : [])) : [],
+    ...(typeof nothingVisible === "string" && nothingVisible.trim() !== "" ? { nothingVisible } : {}),
+    ...(isObject(dropped) && isCount(dropped.pastFour) && isCount(dropped.broken) ? { dropped: { pastFour: dropped.pastFour, broken: dropped.broken } } : {}),
+    ...(miss === "nothing-named" ? { miss } : {}),
+    missed: Array.isArray(missed) ? missed.flatMap((each) => shotMissOf(each)) : [],
+    ...(markerPreviewOf(preview) ?? {}),
+    ...(isId(implementRun) ? { implementRun } : {}),
+  };
+}
+
+function namedShotOf(name: string, path: unknown): NamedShot {
+  return isRoute(path) ? { name, path } : { name };
+}
+
+/** A shots marker's missed shot, when it reads, as a list of none or one. */
+function shotMissOf(value: unknown): ShotMiss[] {
+  if (!isObject(value) || !isShotName(value.name)) return [];
+  const { name, why, viewport } = value;
+  if (why === "size-missing") return isOneOf(VIEWPORT_NAMES, viewport) ? [{ name, viewport, why }] : [];
+  return why === "not-produced" || why === "ambiguous-name" || why === "refused" ? [{ name, why }] : [];
+}
+
+/** A count: a whole number, zero or more. */
+function isCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
 /**
  * The body with what came of its preview deployment, once the push job has
  * polled it (src/kit/previewLink.ts): the evidence section run `run` wrote
@@ -974,9 +1238,14 @@ export function capturedRoutesOf(marker: EvidenceMarker | null): readonly string
  */
 export function withPreviewLink(body: string, run: number, preview: PreviewLink): string | null {
   const lines = body.split("\n");
-  const markers = lines.map((line) => markerOf(EVIDENCE_MARKER.exec(line.trim())?.[1]));
+  // A shots section's marker names the Implement run that wrote it apart from the Review run whose Evidence page it links.
+  const markers = lines.map((line) => {
+    const json = EVIDENCE_MARKER.exec(line.trim())?.[1];
+    const marker = markerOf(json) ?? shotsMarkerOf(json);
+    return marker === null ? null : "source" in marker ? (marker.implementRun ?? null) : marker.run;
+  });
   const markerAt = markers.findLastIndex((marker) => marker !== null);
-  if (markerAt === -1 || markers[markerAt]?.run !== run) return null;
+  if (markerAt === -1 || markers[markerAt] !== run) return null;
   const startAt = lines.findLastIndex((line, at) => at < markerAt && SECTION_START_LINE.test(line.trim()));
   const waiting = previewLine({ kind: "pending" });
   const at = lines.findIndex((line, i) => startAt !== -1 && i > startAt && i < markerAt && line.trim() === waiting);
@@ -999,7 +1268,8 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
   } catch {
     return null;
   }
-  if (!isObject(value)) return null;
+  // A marker with a source is another shape of it (a shots marker), never a route marker.
+  if (!isObject(value) || value.source !== undefined) return null;
   const { run, artifact, failure, routes, preview, missed, resolved } = value;
   if (!isId(run) || !(artifact === null || isId(artifact))) return null;
   // A field it doesn't record, or that doesn't read, leaves where the evidence is kept, and the other fields, as they were.

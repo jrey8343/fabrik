@@ -93,7 +93,7 @@ function readVerdictMarker(body: string): VerdictRecord | null {
   if (typeof value !== "object" || value === null) return null;
   const { verdict, source, requestChanges, conflictRun = false, requestChangesFirst, ticketNotReady = false, checks, unrelated, ranNothing, tags, touchUp, headSha } = value as Record<string, unknown>;
   if (!VERDICTS.includes(verdict as Verdict)) return null;
-  if (source !== "reviewer" && source !== "ci" && source !== "empty-diff" && source !== "broken-run") return null;
+  if (source !== "reviewer" && source !== "ci" && source !== "empty-diff" && source !== "broken-run" && source !== "evidence-miss") return null;
   // A marker from before conflict-only runs (#304) has no conflictRun, and none came from one; likewise requestChangesFirst (#341).
   if (typeof requestChanges !== "boolean" || typeof conflictRun !== "boolean") return null;
   if (requestChangesFirst !== undefined && !isReviewIds(requestChangesFirst)) return null;

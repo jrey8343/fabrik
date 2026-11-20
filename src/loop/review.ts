@@ -287,6 +287,7 @@ const BY: Readonly<Record<PostedSource, string>> = {
   reviewer: "the Reviewer",
   "empty-diff": "a retry that changed nothing",
   "broken-run": "a Broken run",
+  "evidence-miss": "an Evidence miss",
 };
 
 const HEADINGS: Readonly<Record<Verdict, string>> = {

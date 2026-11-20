@@ -1,13 +1,13 @@
 // Implementation rules: when an Implementer starts on a Ticket, and how the
 // branch it built lands as one draft PR, or doesn't.
-import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
+import { evidenceSection, isUi, type MissOutcome, namesNothing, shotsNamesOf, shotsSection, waitingShotsMarker, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { changedTestsSection, together, withoutChangedTests } from "./changedTests.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { keptBranchOff } from "./backToDesign.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { keptBranchGone, keptBranchStartOn, stopForGoneKeptBranch } from "./keptBranch.ts";
-import { type ImplementerAnswers, parseImplementOutput } from "./implementOutput.ts";
+import { type ImplementerAnswers, type ImplementOutput, parseImplementOutput } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
@@ -31,7 +31,19 @@ import {
 } from "./markers.ts";
 import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
 import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
-import { bodyOnly, fixRunName, implementSettings, isRetryOrTouchUp, MAX_RETRIES, owedRetry, type RunInFlight, runInFlight, runName, stepUpReasonFor } from "./retry.ts";
+import {
+  bodyOnly,
+  fixRunName,
+  implementSettings,
+  isRetryOrTouchUp,
+  MAX_RETRIES,
+  owedRetry,
+  retryNumber,
+  type RunInFlight,
+  runInFlight,
+  runName,
+  stepUpReasonFor,
+} from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { type AnswerLines, verdictActions } from "./review.ts";
 import type {
@@ -188,7 +200,10 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
   const { title, summary } = parsed.output;
   // A Kept-branch start's PR is the whole branch, not only the run's own commits (#536).
   const whole = changes.wholeBranch;
-  const evidence = evidenceFor(event, config, false, whole?.net);
+  // The PR it opens has no Verdicts yet, so the Retry its Evidence miss would call for comes after the Ticket's empty diffs and Broken runs.
+  const pushed = changes.pushedHead;
+  const evidence = evidenceFor(event, config, parsed.output, null, pushed === undefined ? null : 1 + issue.landedNothing <= MAX_RETRIES, whole?.net);
+  const section = evidence?.section ?? null;
   return withStaleDispatchOff({
     kind: "act",
     actions: [
@@ -199,12 +214,102 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        body: pullRequestBody(summary, issueNumber, evidence, whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
+        body: pullRequestBody(summary, issueNumber, section, whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
         draft: true,
       },
-      ...previewToLink(evidence, config, branch, null),
+      ...previewToLink(section, config, branch, null),
+      ...(evidence?.sendsBack === true && pushed !== undefined
+        ? onOpened(nothingNamedFlaw({ headSha: pushed, runUrl: event.runUrl }, opening(issueNumber, issue, pushed), operator, heldOn(kitIssues, config)))
+        : []),
     ],
   }, issueNumber, issue);
+}
+
+/** Stands for the number of the PR a first run's plan opens, which is known only once it is open. */
+const OPENING = 0;
+
+/**
+ * The PR a first run's plan opens, at `headSha`, as a snapshot would read it
+ * once open: an agent draft for the Ticket, with no Verdict, label, run or
+ * Request changes yet, so a Verdict given on it in the same plan counts the
+ * Ticket's Retries from its empty diffs and Broken runs alone (#819).
+ */
+function opening(ticket: number, issue: IssueSnapshot, headSha: string): PullRequestSnapshot {
+  return {
+    number: OPENING,
+    isAgent: true,
+    ticket,
+    ticketLabels: issue.labels,
+    ticketState: "open",
+    ticketLandedNothing: issue.landedNothing,
+    open: true,
+    draft: true,
+    headSha,
+    labels: [],
+    verdicts: [],
+    flakyCheckMarks: [],
+    gateReruns: [],
+    checkFixMarks: [],
+    operatorMentions: [],
+    requestChangesRun: false,
+    conflictRun: false,
+    lastPushStepUpReason: null,
+    conflictAttempts: [],
+    conflictRunInFlight: null,
+    conflictRunOnUnreviewedDraft: false,
+    pushedSinceVerdict: false,
+    bodyOnlyTouchUpHead: null,
+    retryNoteSinceVerdict: null,
+    verdictPostedAt: null,
+    headPushedAt: null,
+    unbuiltChangesRequests: [],
+    notedChangesRequests: [],
+    requestChangesRunInFlight: null,
+    requestChangesRunReviews: [],
+    requestChangesRunSince: null,
+    requestChangesRunFailed: false,
+    orphanedChangesRequests: [],
+    requestChangesRunDismissed: false,
+    deferredChangesRequests: [],
+    leftDraftSinceVerdict: false,
+    url: "",
+    uiEvidenceMarker: null,
+    shotsMarker: null,
+    changedTests: [],
+    digests: [],
+  };
+}
+
+/** A plan's actions on the PR it opens (OPENING), each comment posted on that PR once it is open; the rest, on the Ticket, as they were. */
+function onOpened(actions: readonly Action[]): Action[] {
+  return actions.map((action): Action => {
+    if (action.kind === "comment" && action.issue === OPENING) return { kind: "comment-on-opened", body: action.body };
+    if ("issue" in action && (action as { readonly issue: unknown }).issue === OPENING) throw new Error(`A ${action.kind} on the PR the plan opens can't be applied`);
+    return action;
+  });
+}
+
+/**
+ * The Kit's own Execution flaw for an Evidence miss (#819, ADR-0033): a UI
+ * PR an Implementer run pushed to `event.headSha` with no names and no
+ * sentence that nothing visible changes. It's given at that head, so the
+ * Reviewer never judges it, and calls for a Retry, never a Touch-up, as its
+ * marker counts no tags. Its comment is the Retry's prompt, whole.
+ */
+function nothingNamedFlaw(
+  event: { readonly headSha: string; readonly runUrl: string },
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+  held: HeldOn | null,
+): Action[] {
+  const findings = [
+    "This pull request changes the UI and shows nothing of the change: its Implementer named no Evidence shot and didn't say that nothing visible changes. That is an Evidence miss.",
+    "",
+    "- Name up to four Evidence shots that show the change, in `shots`, each as its Journey names it.",
+    "- Where the state the change reaches has no shot, add one to the Journey that reaches it, extending a Journey when none does.",
+    "- Or, when nothing a person sees changes, say why in `nothingVisible`.",
+  ].join("\n");
+  return verdictActions(event, pullRequest, { verdict: "execution-flaw", source: "evidence-miss", findings }, operator, held);
 }
 
 /**
@@ -253,7 +358,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (stale !== null) {
     return conflictEnds(`${stale}, so the Kit didn't push it`) ?? { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
   }
-  if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config);
+  if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config, held);
   const requestChanges = fixes.review !== undefined;
   // A Request-changes run lands only while it's the one in flight (#341): one started twice for the same review,
   // whose run already had its outcome, or left over for a review a later run took over from, pushes nothing over it.
@@ -331,8 +436,12 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded, parsed.output.summary) };
     // A Touch-up whose findings were all about the body is told to commit nothing (#751): that's no empty diff.
     if (inFlight?.kind === "touch-up" && bodyOnly(pullRequest.verdicts.at(-1)?.tags)) {
-      const evidence = evidenceFor(event, config, pullRequest.uiEvidenceMarker !== null);
-      return { kind: "act", actions: bodyOnlyTouchUpLanded(pullRequest, inFlight.touchUp, issueNumber, branch, parsed.output, evidence, changedTestsOf(pullRequest, changes), fixes.operatorComments) };
+      // It pushes no head, so an Evidence miss on it is shown and never sent back.
+      const evidence = evidenceFor(event, config, parsed.output, pullRequest, null);
+      return {
+        kind: "act",
+        actions: bodyOnlyTouchUpLanded(pullRequest, inFlight.touchUp, issueNumber, branch, parsed.output, evidence?.section ?? null, changedTestsOf(pullRequest, changes), fixes.operatorComments),
+      };
     }
     return {
       kind: "act",
@@ -353,7 +462,9 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       ),
     };
   }
-  const evidence = evidenceFor(event, config, pullRequest.uiEvidenceMarker !== null);
+  const pushed = changes.pushedHead;
+  const evidence = evidenceFor(event, config, parsed.output, pullRequest, retryLeftAt(pullRequest, pushed));
+  const section = evidence?.section ?? null;
   // The body and the note go first: the push starts a Review, which must see the run's outcome (or it posts no
   // Verdict) and the body as it now stands.
   return {
@@ -364,7 +475,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       {
         kind: "edit-issue-body",
         issue: pullRequest.number,
-        body: pullRequestBody(parsed.output.summary, issueNumber, evidence, changedTestsOf(pullRequest, changes)),
+        body: pullRequestBody(parsed.output.summary, issueNumber, section, changedTestsOf(pullRequest, changes)),
       },
       {
         kind: "comment",
@@ -389,9 +500,28 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         ].join("\n"),
       },
       { kind: "push-branch", branch },
-      ...previewToLink(evidence, config, branch, pullRequest.number),
+      ...previewToLink(section, config, branch, pullRequest.number),
+      // After the push note, so the flaw judges the head it names, and the Retry it calls for is in flight from it.
+      ...(evidence?.sendsBack === true && pushed !== undefined
+        ? nothingNamedFlaw({ headSha: pushed, runUrl: fixes.runUrl }, pushedBy(pullRequest, pushed, { requestChanges }), operator, held)
+        : []),
     ],
   };
+}
+
+/**
+ * Whether the Ticket has a Retry left for an Evidence miss at the head a run
+ * pushes to its PR, counted as retryAfterFlaw counts it; null when the push
+ * job names no head the push lands (#819).
+ */
+function retryLeftAt(pullRequest: PullRequestSnapshot, pushed: string | undefined): boolean | null {
+  return pushed === undefined ? null : retryNumber(pullRequest.verdicts, pullRequest.ticketLandedNothing) <= MAX_RETRIES;
+}
+
+/** The PR as the run's push leaves it, at `headSha`, pushed by a Request-changes run, a conflict-only run, or neither: what a Verdict on that head reads. */
+function pushedBy(pullRequest: PullRequestSnapshot, headSha: string, { requestChanges = false, conflict = false }: { readonly requestChanges?: boolean; readonly conflict?: boolean }): PullRequestSnapshot {
+  const { change: _change, changeAt: _changeAt, ...rest } = pullRequest;
+  return { ...rest, headSha, requestChangesRun: requestChanges, conflictRun: conflict };
 }
 
 /**
@@ -505,8 +635,9 @@ function applyConflictRun(
   main: string,
   pullRequest: PullRequestSnapshot,
   operator: string,
-  output: { readonly summary: string; readonly fix?: string; readonly operatorCommentsConsidered?: readonly string[] },
+  output: ImplementOutput,
   config: KitConfig,
+  held: HeldOn | null,
 ): Plan {
   const { changes, branch, fixes } = event;
   if (fixes === undefined) throw new Error("A conflict-only run lands on the PR it fixes");
@@ -525,12 +656,14 @@ function applyConflictRun(
   }
   if (changes.net.length === 0 && changes.updatedFromMain !== true) return handOff(`it committed no change to \`${branch}\``);
   if (changes.updatedFromMain !== true) return handOff(`it didn't rebase onto \`main\`, so \`${branch}\` still doesn't hold it`);
-  const evidence = evidenceFor(event, config, pullRequest.uiEvidenceMarker !== null);
+  const pushed = changes.pushedHead;
+  const evidence = evidenceFor(event, config, output, pullRequest, retryLeftAt(pullRequest, pushed));
+  const section = evidence?.section ?? null;
   // As for a retry, the body and the note go first: the push starts a Review, which must see the run's outcome.
   return {
     kind: "act",
     actions: [
-      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(output.summary, event.issue, evidence, changedTestsOf(pullRequest, changes)) },
+      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(output.summary, event.issue, section, changedTestsOf(pullRequest, changes)) },
       {
         kind: "comment",
         issue: pullRequest.number,
@@ -551,7 +684,10 @@ function applyConflictRun(
         ].join("\n"),
       },
       { kind: "push-branch", branch },
-      ...previewToLink(evidence, config, branch, pullRequest.number),
+      ...previewToLink(section, config, branch, pullRequest.number),
+      ...(evidence?.sendsBack === true && pushed !== undefined
+        ? nothingNamedFlaw({ headSha: pushed, runUrl: fixes.runUrl }, pushedBy(pullRequest, pushed, { conflict: true }), operator, held)
+        : []),
     ],
   };
 }
@@ -597,28 +733,51 @@ function changedTestsOf(pullRequest: PullRequestSnapshot, changes: BranchChanges
   return together(pullRequest.changedTests, changes.changedTests ?? []);
 }
 
+/** A run's evidence section for its PR's body, and whether the PR's Evidence miss goes back to the Implementer with the Kit's Execution flaw (#819). */
+interface RunEvidence {
+  readonly section: string;
+  readonly sendsBack: boolean;
+}
+
 /**
- * The evidence section for the run's PR, or null when the run isn't UI, or
- * when its UI evidence comes from Evidence shots, which no capture here takes. The
+ * The evidence section for the run's PR, or null when the run isn't UI. The
  * push job decides that, never the agent job, whose runner the agent could
  * have changed: the run is UI when its changes match `ui.paths`, or when its
- * PR is `marked` UI already, a retry's changes holding only its own commits.
- * A Kept-branch start's PR is judged on `paths`, the whole branch's (#536).
+ * PR, `pullRequest` for a run on one, is marked UI already, a retry's changes
+ * holding only its own commits. A Kept-branch start's PR is judged on
+ * `paths`, the whole branch's (#536). When its UI evidence comes from
+ * Evidence shots, no capture here takes any (#818): the section holds the
+ * PR's names by the names rule, and a PR left naming nothing is sent back
+ * when `retryLeft`, so the Ticket has a Retry for it, and isn't otherwise,
+ * nor when it's null, as the run pushes no head (#819).
  */
-function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boolean, paths: readonly { readonly path: string }[] = event.changes.net): string | null {
+function evidenceFor(
+  event: ImplementRunFinished,
+  config: KitConfig,
+  output: ImplementOutput,
+  pullRequest: PullRequestSnapshot | null,
+  retryLeft: boolean | null,
+  paths: readonly { readonly path: string }[] = event.changes.net,
+): RunEvidence | null {
   const { evidence } = event;
-  // With Evidence shots, the Implement job captures nothing, so no capture of its own is missing (#818).
-  if (evidence === undefined || config.ui?.shots !== undefined) return null;
-  if (!marked && !isUi(paths.map(({ path }) => path), config.ui)) return null;
+  // The push job polls a declared preview once it has pushed, and links it if it answers.
+  const preview = config.preview === null ? ({ kind: "none" } as const) : ({ kind: "pending" } as const);
+  const ui = (marked: boolean) => marked || isUi(paths.map(({ path }) => path), config.ui);
+  const shots = config.ui?.shots;
+  if (shots !== undefined) {
+    if (!ui(pullRequest !== null && (pullRequest.shotsMarker !== null || pullRequest.uiEvidenceMarker !== null))) return null;
+    const names = shotsNamesOf(output, pullRequest?.shotsMarker ?? null);
+    const missOutcome: MissOutcome = retryLeft === null ? "not-pushed" : retryLeft ? "sent-back" : "no-retry-left";
+    // The push job's run, which its preview step links the preview from.
+    const marker = waitingShotsMarker(names, evidence?.run ?? null, preview);
+    return { section: shotsSection({ check: shots.check, marker, missOutcome }), sendsBack: namesNothing(names) && missOutcome === "sent-back" };
+  }
+  if (evidence === undefined || !ui((pullRequest?.uiEvidenceMarker ?? null) !== null)) return null;
   const { result, headSha, run, artifact, evidencePage } = evidence;
-  return evidenceSection({
-    result: result ?? { outcome: "failed", reason: "no-result", headSha, captures: [] },
-    run,
-    artifact,
-    evidencePage,
-    // The push job polls a declared preview once it has pushed, and links it if it answers.
-    preview: config.preview === null ? { kind: "none" } : { kind: "pending" },
-  });
+  return {
+    section: evidenceSection({ result: result ?? { outcome: "failed", reason: "no-result", headSha, captures: [] }, run, artifact, evidencePage, preview }),
+    sendsBack: false,
+  };
 }
 
 /**

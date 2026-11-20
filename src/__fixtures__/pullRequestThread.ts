@@ -23,6 +23,8 @@ export type Fixes = NonNullable<ImplementRunFinished["fixes"]>;
 export class PullRequestOnGitHub {
   commits: string[] = [A];
   draft = true;
+  /** Its body, as the Fabrik App opened it and the Kit's plans have edited it since. */
+  body = "";
   readonly comments: { body: string; createdAt: string; author: { __typename: string } }[] = [];
   readonly changesRequests: { databaseId: number; submittedAt: string; author: { login: string; __typename: string } }[] = [];
   readonly draftEvents: { __typename: string; createdAt: string }[] = [];
@@ -42,6 +44,7 @@ export class PullRequestOnGitHub {
   apply(plan: Plan, { pushLands, tip }: { pushLands: boolean; tip: string }): void {
     for (const action of actionsOf(plan)) {
       if (action.kind === "comment" && action.issue === 50) this.kitSays(action.body);
+      if (action.kind === "edit-issue-body" && action.issue === 50) this.body = action.body;
       if (action.kind === "push-branch" && pushLands) this.commits = [...this.commits, tip];
     }
   }
@@ -60,7 +63,7 @@ export class PullRequestOnGitHub {
             headRefName: "fabrik/ticket-7",
             headRefOid: this.commits.at(-1),
             author: { login: "fabrik-app[bot]", __typename: "Bot" },
-            body: "",
+            body: this.body,
             url: "https://github.com/acme/shop/pull/50",
             labels: { nodes: [] },
             comments: { pageInfo: { hasPreviousPage: false }, nodes: this.comments },

@@ -587,5 +587,33 @@ export async function implementContext(productDir: string, specFile: string, con
     ...(checks.length === 0 ? [] : [`- Required checks on the PR: ${checks.map((check) => `\`${check}\``).join(", ")}`]),
   ];
   parts.push("## This Product repo's Sandbox", ...commands);
+  // Only a Product repo that uses Evidence shots is told of them, so every other repo's prompt is as it was (#819).
+  const shots = config.ui?.shots;
+  if (shots !== undefined) parts.push(...evidenceShotsPart(shots.check));
   return parts;
+}
+
+/**
+ * What an Implement run on a Product repo that uses Evidence shots is told
+ * (#819): to name the shots that show its change, or say nothing visible
+ * changes, in two more output fields, which the Kit's names rule and the
+ * Evidence miss read (src/evidence/uiEvidence.ts, src/loop/implement.ts).
+ */
+function evidenceShotsPart(check: string): string[] {
+  return [
+    "## Evidence shots",
+    `This Product repo's UI evidence comes from Evidence shots: screenshots its Journeys, the paths its end-to-end tests drive through the product, take at moments they name. The Required check \`${check}\` runs the Journeys at the PR's head and uploads the shots, and the Kit shows the ones you name on the PR. \`routes\` is ignored on this Product repo, and so are routes the Ticket names: name shots instead.`,
+    "- When your change touches what a person sees, find the names by reading the Journeys: a shot's name is the text its Journey gives it, such as `composer: draft ready`, matched exactly. Never name a shot that isn't in a Journey's code.",
+    "- When the state you changed has no shot, add a shot to the Journey that reaches it, and extend a Journey to reach it when none does. Then run that Journey when this Sandbox's test command includes it.",
+    "- Name up to four shots in `shots`, the ones that best show the change, in the order to show them: at most four count, and a name longer than 80 characters, or with a character other than letters A to Z, digits, spaces and `: - _ / . ,`, is dropped.",
+    "- When nothing a person sees changes, say so in `nothingVisible`, in one sentence that says why. The Reviewer checks it against the diff. When you give both, the names win.",
+    "- On a retry or a Request-changes run, name the shots the PR as a whole shows on. A run that gives neither field keeps the names the PR already has.",
+    "- A UI pull request with no names and no `nothingVisible` is an Evidence miss: the Kit sends it back with an Execution flaw, which uses one of the Ticket's Retries.",
+    "",
+    "Add them to your output object beside the other fields:",
+    "",
+    '"shots": ["composer: draft ready"]',
+    "",
+    'or, when nothing visible changes, "nothingVisible": "Only the API client\'s retry timing changed; no screen shows it."',
+  ];
 }

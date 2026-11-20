@@ -421,6 +421,7 @@ const WHO: Readonly<Record<Round["who"], string>> = {
 /** What the Kit gave a Verdict of its own for. */
 const KIT_VERDICT_FOR: Readonly<Record<NonNullable<Round["why"]>, string>> = {
   "retry-changed-nothing": "a Retry that changed nothing",
+  "evidence-miss": "an Evidence miss",
   "broken-run": "a Broken run",
 };
 

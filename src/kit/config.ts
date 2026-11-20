@@ -240,6 +240,12 @@ export const UI_VIEWPORTS: readonly Viewport[] = [
 export const UI_ROUTE_CAP = 4;
 
 /**
+ * The most Evidence shots a pull request names (#819): the first this many
+ * names the Implementer gives count, and the rest are dropped. A Kit constant.
+ */
+export const NAMED_SHOT_CAP = 4;
+
+/**
  * The most UI evidence images a Reviewer gets, so the ones that matter most fit
  * in its context: a Kit constant, not Kit config. The Operator's Evidence page is uncapped.
  */

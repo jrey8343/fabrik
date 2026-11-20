@@ -60,6 +60,8 @@ export function actionPhrase(action: Action): string {
       return `make ${action.issue.repo}#${action.issue.number} blocked by ${action.blocker.created}`;
     case "comment-on-created":
       return `comment on ${action.on.created}`;
+    case "comment-on-opened":
+      return "comment on the PR it opens";
     case "close-as-superseded":
       return `close #${action.issue} as superseded`;
     case "start-agent-run":

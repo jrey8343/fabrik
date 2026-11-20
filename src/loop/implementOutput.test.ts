@@ -41,6 +41,65 @@ describe("The routes the Implementer names", () => {
   });
 });
 
+describe("The Evidence shots the Implementer names, or its word that nothing visible changes (#819)", () => {
+  it("are read from its output as it gave them, in its order, the name rule being the push job's to apply", () => {
+    expect(parseImplementOutput(output({ shots: ["composer: draft ready", "inbox: empty", "Café"] }))).toMatchObject({
+      ok: true,
+      output: { shots: ["composer: draft ready", "inbox: empty", "Café"] },
+    });
+  });
+
+  it("read the sentence that nothing a person sees changes, trimmed", () => {
+    expect(parseImplementOutput(output({ nothingVisible: "  Only the retry logic in the API client changed.\n" }))).toMatchObject({
+      ok: true,
+      output: { nothingVisible: "Only the retry logic in the API client changed." },
+    });
+  });
+
+  it("are read from a retry's or a Request-changes run's output too", () => {
+    expect(parseImplementOutput(output({ fix: "Fixes the draft's save.", shots: ["composer: draft ready"] }), "pull-request")).toMatchObject({
+      ok: true,
+      output: { shots: ["composer: draft ready"] },
+    });
+  });
+
+  it("keep both when both are given, so the push job's names rule decides", () => {
+    expect(parseImplementOutput(output({ shots: ["inbox: empty"], nothingVisible: "Nothing changes." }))).toMatchObject({
+      ok: true,
+      output: { shots: ["inbox: empty"], nothingVisible: "Nothing changes." },
+    });
+  });
+
+  it.each([
+    ["a bare name", "composer: draft ready"],
+    ["an empty list", []],
+    ["a list with a non-string in it", ["composer: draft ready", 3]],
+    ["an object", { name: "composer: draft ready" }],
+  ])("read as no names when the output gives %s, and the output still reads", (_, shots) => {
+    const parsed = parseImplementOutput(output({ shots }));
+
+    expect(parsed).toMatchObject({ ok: true, output: { title: "Let patients join a waitlist" } });
+    expect(parsed.ok && parsed.output.shots).toBeUndefined();
+  });
+
+  it.each([
+    ["a blank sentence", "  "],
+    ["a list", ["Nothing changes."]],
+    ["true", true],
+  ])("read as no sentence when the output gives %s, and the output still reads", (_, nothingVisible) => {
+    const parsed = parseImplementOutput(output({ nothingVisible }));
+
+    expect(parsed).toMatchObject({ ok: true, output: { summary: "Adds a waitlist to full days." } });
+    expect(parsed.ok && parsed.output.nothingVisible).toBeUndefined();
+  });
+
+  it("read as neither when the output gives neither, as on a Product repo without Evidence shots", () => {
+    const parsed = parseImplementOutput(output({ routes: ["/book"] }));
+
+    expect(parsed).toEqual({ ok: true, output: { title: "Let patients join a waitlist", summary: "Adds a waitlist to full days.", routes: ["/book"] } });
+  });
+});
+
 describe("A Request-changes run's two answers about the review it was started for", () => {
   const answered = (fields: Record<string, unknown> = {}) =>
     output({ fix: "Moves the waitlist button.", reviewMiss: false, amendsTicket: true, ...fields });

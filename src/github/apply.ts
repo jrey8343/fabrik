@@ -416,6 +416,10 @@ async function apply(
     case "comment-on-created":
       await github.rest("POST", `${issues}/${createdIn(made.created, action.on).number}/comments`, { body: action.body });
       return;
+    case "comment-on-opened":
+      if (made.opened === null) throw new Error("The plan comments on a PR it hasn't opened");
+      await github.rest("POST", `${issues}/${made.opened}/comments`, { body: action.body });
+      return;
     case "close-as-superseded": {
       const body = closingCommentText(
         action.comment,
@@ -659,6 +663,7 @@ async function applyToIssue(
         | "create-issue"
         | "add-blocked-by"
         | "comment-on-created"
+        | "comment-on-opened"
         | "close-as-superseded"
         | "open-issue"
         | "push-branch"

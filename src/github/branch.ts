@@ -373,6 +373,8 @@ async function cutFromMain(git: Git, url: string, branch: BuiltBranch, bundlePat
       commits,
       updatedFromMain: false,
       changedTests: await existingTests(git, commits, [branch.base.sha]),
+      // What the push lands, at which a first run's Evidence miss is given (#819).
+      pushedHead: tip,
     },
     head: tip,
     async push(name) {
