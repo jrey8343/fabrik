@@ -7,8 +7,7 @@
 // facts it hands the writer (src/agent/inputs.ts), and the Digest's rounds
 // table is rendered from the push job's own call, never from what the agent
 // job passed out.
-import type { ShotMiss } from "../evidence/shotsManifest.ts";
-import { capturedRoutesOf, type EvidenceMarker, type ShotsMarker } from "../evidence/uiEvidence.ts";
+import { capturedRoutesOf, type EvidenceMarker, producedNamedShots, type ShotsMarker } from "../evidence/uiEvidence.ts";
 import { ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { type DigestGiven, parseDigestReply } from "../loop/digestContract.ts";
 import { type DigestThread, digestFactsOf } from "../loop/digestFacts.ts";
@@ -70,28 +69,13 @@ export async function readDigestGiven(github: ReadClient, repo: Repo, written: D
  * What a Digest item of a pull request may name as its picture, from the
  * markers in a body the Fabrik App wrote, the caller having read them only
  * from one: with a shots marker, the named shots that were produced, as
- * Evidence shots; otherwise the routes its evidence marker names, as
- * captured routes (capturedRoutesOf). The agent job's inputs step tells the
- * writer these, and the push job checks each picture against them.
+ * Evidence shots (producedNamedShots); otherwise the routes its evidence
+ * marker names, as captured routes (capturedRoutesOf). The agent job's
+ * inputs step tells the writer these, and the push job checks each picture
+ * against them.
  */
 export function digestPicturesOf(uiEvidenceMarker: EvidenceMarker | null, shotsMarker: ShotsMarker | null): Pick<DigestGiven, "pictureOf" | "pictures"> {
-  return shotsMarker === null ? { pictureOf: "route", pictures: capturedRoutesOf(uiEvidenceMarker) } : { pictureOf: "shot", pictures: producedShotsOf(shotsMarker) };
-}
-
-/** Why a named shot missed was never produced; one only lacking a size was. */
-const NOT_PRODUCED: readonly ShotMiss["why"][] = ["not-produced", "ambiguous-name", "refused"];
-
-/**
- * The named shots a shots marker says the check's run produced, in the names'
- * order: each name but those missed as not produced, an ambiguous name or
- * refused, one lacking only a size among them. None before the Review's jobs
- * have read the artifact, while the marker waits with no head, and none when
- * nothing of it could be read, as when the run uploaded no artifact.
- */
-function producedShotsOf({ head, failure, named, missed }: ShotsMarker): readonly string[] {
-  if (head === null || failure !== null) return [];
-  const notProduced = new Set(missed.filter(({ why }) => NOT_PRODUCED.includes(why)).map(({ name }) => name));
-  return named.map(({ name }) => name).filter((name) => !notProduced.has(name));
+  return shotsMarker === null ? { pictureOf: "route", pictures: capturedRoutesOf(uiEvidenceMarker) } : { pictureOf: "shot", pictures: producedNamedShots(shotsMarker) };
 }
 
 /** When the pull request opened, its branch, and the comments on each issue it closes, as the Loop's snapshot reads a Ticket's (src/github/snapshot.ts). */
