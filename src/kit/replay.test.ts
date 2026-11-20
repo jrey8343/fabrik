@@ -178,7 +178,8 @@ describe("Reading a replay request", () => {
   });
 
   describe("refuses a model the Kit never runs", () => {
-    it.each(["fable", "claude-fable-5", "best"])("refuses %j with Kit config's reason", (model) => {
+    // Until a Replay follows allow_fable, its variable may name Fable in no repo, a full Fable id included.
+    it.each(["fable", "claude-fable-5", "claude-fable-5-2", "best"])("refuses %j, as it can bill metered usage", (model) => {
       expect(readReplayRequest(bodyWith(`implement.model: ${model}`))).toEqual({
         ok: false,
         errors: [`implement.model is ${JSON.stringify(model)}: Fable can bill metered usage, so the Kit never runs it in an AFK role`],
