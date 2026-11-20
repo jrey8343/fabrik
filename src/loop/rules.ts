@@ -3,6 +3,7 @@ import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
 import { digestLabelOnIssue, issueLabelOnPullRequest, rerunChecksLabelOnIssue, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { landDigest, startDigestOnLabel } from "./digest.ts";
+import { fableCapsInForce, onFableLeft } from "./fableCap.ts";
 import { failureNotice } from "./failures.ts";
 import { bringInCheckFix, type CheckFixes, checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
@@ -78,7 +79,9 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
   // A Kit-owned issue the Plan closes, as the scheduled tick closes a weekly-limit
   // issue at its reset, no longer stands in the way of the runs it starts.
   const kitIssues = snapshot.kitIssues.filter((issue) => !closes(planned, issue.number));
-  return onChosenSubscription(heldWhileUsedUp(planned, kitIssues, config), kitIssues, config);
+  const chosen = onChosenSubscription(heldWhileUsedUp(planned, kitIssues, config), kitIssues, config);
+  // A run on a role naming Fable starts where Fable is left, or falls back to Opus (ADR-0034).
+  return onFableLeft(chosen, fableCapsInForce(snapshot.fableCaps), kitIssues, config);
 }
 
 function closes(plan: Plan, issue: number): boolean {
@@ -128,7 +131,11 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
         ? withIssue(snapshot, (context) => applyImplementation(event, context, config))
         : applyRetryImplementation(event, snapshot, config);
     case "agent-run-failed":
-      return withIssue(snapshot, (context) => failureNotice(event, context, config, snapshot.pullRequest, snapshot.mergeable));
+      return withIssue(snapshot, (context) => failureNotice(event, context, config, {
+          pullRequest: snapshot.pullRequest,
+          mergeable: snapshot.mergeable,
+          ...(snapshot.fableCaps === undefined ? {} : { fableCaps: snapshot.fableCaps }),
+        }));
     // A closed issue may finish its Spec, free a slot or unblock a Ticket, or end a
     // Design session by hand. Merging an agent PR closes its Ticket through
     // `Closes #n`, so it lands here. A closed Ticket's agent draft PR closes

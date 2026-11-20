@@ -8,7 +8,7 @@ import { isObject } from "../agent/stream.ts";
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { isTestPath } from "../loop/changedTests.ts";
 import { spelled } from "../loop/readable.ts";
-import { checkEffort, type KitConfig, refuseFable } from "./config.ts";
+import { AS_IF_OPTED_IN_TO_FABLE, checkEffort, type KitConfig, refuseRoleModel } from "./config.ts";
 import { checkCandidateKit, type ReplayRequest, type ReplayVariable, settingOf } from "./replayRequest.ts";
 import { firstRunOf, isLive, type ReplayArm, type ReplayRole, type RunRecord } from "./runRecord.ts";
 
@@ -255,8 +255,10 @@ export const REPLAY_FLAGS: readonly ReplayFlag[] = ["human-touches", "edited-inp
 /**
  * Each arm's settings as the Kit writes them, the Kit job's `replay-arms`
  * output among them (src/kit/jobs.ts), or null for anything else: each
- * role's model and effort as Kit config could give them, and a candidate Kit
- * sha a request could name, or none.
+ * role's model and effort as Kit config could give them, a Fable model by its
+ * full id as one that opts in could, and a candidate Kit sha a request could
+ * name, or none. Whether this repo opts in is weighed where its Kit config is
+ * read: as the request is accepted, and as each arm runs (ADR-0034).
  */
 export function readReplayArms(value: unknown): ReplayArms | null {
   if (!isObject(value)) return null;
@@ -276,11 +278,12 @@ export function readArmSettings(value: unknown): ReplayArmSettings | null {
   return { implement, review, candidateSha };
 }
 
-/** A role's model and effort as Kit config could give them, or null. */
+/** A role's model and effort as Kit config could give them, opted in to Fable or not, or null. */
 function readRoleSettings(value: unknown): ReplayRoleSettings | null {
   if (!isObject(value)) return null;
   const { model, effort } = value;
-  if (typeof model !== "string" || model.trim() === "" || refuseFable(model) !== null) return null;
+  // An arm's settings come from Kit config at a baseSha, or a request accepted in a repo that opted in: each run weighs the opt-in itself.
+  if (typeof model !== "string" || model.trim() === "" || refuseRoleModel(model, AS_IF_OPTED_IN_TO_FABLE) !== null) return null;
   if (!(effort === null || (typeof effort === "string" && checkEffort(effort) === null))) return null;
   return { model, effort };
 }

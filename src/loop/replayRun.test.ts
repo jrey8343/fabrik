@@ -138,7 +138,7 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
       end,
       runUrl: RUN,
       subscription,
-      ...(end.kind === "weekly-limit" ? { resetsAt: RESETS_AT } : {}),
+      ...(end.kind === "weekly-limit" || end.kind === "fable-cap" ? { resetsAt: RESETS_AT } : {}),
       outcomes: null,
     };
   }
@@ -187,6 +187,15 @@ describe("A replay Ticket's run ending, as its replay-record job lands it", () =
       expect(JSON.stringify(plan)).not.toContain("fabrik:held");
       expect(progressIn(plan)).toEqual({ ticket: 12, state: "pending" });
     });
+  });
+
+  // A Fable cap holds no Subscription and no other role (ADR-0034), and a Replay arm never falls back.
+  it("puts a Ticket refused on its Subscription's Fable cap back to pending, opening no issue and running nothing in its place", () => {
+    const plan = planFor(ended({ kind: "fable-cap" }), snapshotOf(running), TWO_SUBSCRIPTIONS);
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "edit-issue-body", issue: 140, body: expect.any(String) }] });
+    expect(progressIn(plan)).toEqual({ ticket: 12, state: "pending" });
+    expect(notificationsOf(plan)).toEqual([]);
   });
 
   it("leaves a closed replay issue's body as it is, its Replay cancelled, but still opens the weekly-limit issue", () => {

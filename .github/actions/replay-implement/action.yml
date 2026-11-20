@@ -30,6 +30,7 @@
 #       ticket: ${{ needs.kit.outputs.ticket }}
 #       base-sha: ${{ needs.kit.outputs.base-sha }}
 #       replay-arms: ${{ needs.kit.outputs.replay-arms }}
+#       allow-fable: ${{ needs.kit.outputs.allow-fable }}
 #       subscription: ${{ needs.kit.outputs.subscription }}
 name: Run a replay arm's Implementer
 description: Runs the Implementer on a replayed Ticket from its baseSha with one arm's settings, passing its diff out as a patch, with no write credential.
@@ -52,6 +53,9 @@ inputs:
     required: true
   replay-arms:
     description: Each arm's settings as one line of JSON (needs.kit.outputs.replay-arms). Its model names come from the replay issue's body, so it's read only through `with:` and `env:`.
+    required: true
+  allow-fable:
+    description: Whether the Product repo's own Kit config opts in to Fable, true or false (needs.kit.outputs.allow-fable, ADR-0034), which the arm's run holds its model to, as Kit config at baseSha can predate the opt-in.
     required: true
   subscription:
     description: The Subscription whose Claude token the arm runs on, the Fabrik vault item name the Kit job chose (needs.kit.outputs.subscription).
@@ -107,6 +111,7 @@ runs:
         FABRIK_BASE_SHA: ${{ inputs.base-sha }}
         FABRIK_MODEL: ${{ fromJSON(inputs.replay-arms)[inputs.arm].implement.model }}
         FABRIK_EFFORT: ${{ fromJSON(inputs.replay-arms)[inputs.arm].implement.effort }}
+        FABRIK_ALLOW_FABLE: ${{ inputs.allow-fable }}
       run: node ../kit/src/agent/run.ts replay-implement
 
     # How the run went, for its Run record: the matrix's legs overwrite each other's job outputs.

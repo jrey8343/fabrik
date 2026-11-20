@@ -76,7 +76,9 @@
 // the agent-inputs step gathered it for the Digest writer (src/agent/digest.ts),
 // and its result is for the pull request.
 // A Replay arm's runs (#156, src/agent/replay.ts) take FABRIK_BASE_SHA, the
-// replayed Ticket's baseSha, and leave the Product repo untouched.
+// replayed Ticket's baseSha, and leave the Product repo untouched, and
+// FABRIK_ALLOW_FABLE, "true" when the Product repo's own Kit config opts in
+// to Fable, which Kit config at baseSha can predate (ADR-0034).
 // `replay-implement` is a first Implement run in a checkout at baseSha, with an
 // Implement run's env and inputs but no PR or review file, and passes its
 // commits out as replay.patch, its diff from baseSha, beside agent-result.json.
@@ -90,7 +92,7 @@ import { claudeCode, Output, run } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { captureFailureOf } from "../evidence/uiEvidence.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
-import type { KitConfig } from "../kit/config.ts";
+import { type KitConfig, refuseRoleModel } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
 import type { ReplayRole } from "../kit/runRecord.ts";
 import { writeOutputs, writeSummary } from "../kit/stepFiles.ts";
@@ -386,14 +388,28 @@ function keptBranchFromEnv(): KeptBranchStart | null {
   return { pullRequest: Number.isInteger(pullRequest) && pullRequest > 0 ? pullRequest : null };
 }
 
-/** The model and effort to run: what the Kit job's plan chose, else the role's own. */
-function modelFor(role: { model: string; effort: string | null }): { model: string; effort: string | null } {
+/**
+ * The model and effort to run: what the Kit job's plan chose, else the role's
+ * own. A Fable model runs only in a repo whose Kit config opts in
+ * (`allowFable`, ADR-0034).
+ */
+export function modelFor(role: { model: string; effort: string | null }, allowFable: boolean): { model: string; effort: string | null } {
   const model = process.env["FABRIK_MODEL"];
   if (model === undefined || model === "") return role;
-  // Kit config already refuses Fable; this keeps a bad route from ever reaching the CLI.
-  if (/fable/i.test(model) || model.trim().toLowerCase() === "best") throw new Error(`Refusing to run ${model} in an AFK role`);
+  // Kit config already holds its roles to this; it keeps a bad route from ever reaching the CLI.
+  if (refuseRoleModel(model, allowFable) !== null) throw new Error(`Refusing to run ${model} in an AFK role`);
   const effort = process.env["FABRIK_EFFORT"];
   return { model, effort: effort === undefined || effort === "" ? null : effort };
+}
+
+/**
+ * Whether the run may be given Fable: what the checkout's Kit config opts in
+ * to, or on a Replay arm (`replay`), whose checkout is the Ticket's baseSha,
+ * what the Product repo's own Kit config does now, as the Kit job passed it
+ * out (FABRIK_ALLOW_FABLE), so an arm runs Fable only while the repo opts in.
+ */
+export function allowFableFor(replay: ReplayRole | undefined, config: Pick<KitConfig, "allowFable">): boolean {
+  return replay === undefined ? config.allowFable : process.env["FABRIK_ALLOW_FABLE"] === "true";
 }
 
 /**
@@ -419,7 +435,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const config = await loadConfig(productDir);
   const prototypeTurn = spec.prompt === "prototype";
   const own = prototypeTurn ? prototypeRole(config.roles) : config.roles[name];
-  const role = { ...own, ...modelFor(own) };
+  const role = { ...own, ...modelFor(own, allowFableFor(spec.replay, config)) };
   // For the run's record (src/kit/runRecord.ts): the model and effort passed to the CLI.
   await writeOutputs({ model: role.model, effort: role.effort ?? "" });
 
@@ -570,8 +586,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   setAgentEnv(claudeArgs(role.model, role.effort));
 
   const abort = new AbortController();
-  // With rotation on, a run that shows overage is stopped, so no Subscription spends usage credits.
-  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: rotationIsOn(config) });
+  // With rotation on, or on a Fable run (ADR-0034), a run that shows overage is stopped, so no Subscription spends usage credits.
+  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: rotationIsOn(config), model: role.model });
   const timeoutMs = role.timeoutMinutes * 60_000;
   // The bundle of what the run committed, once made, so a failure after it still reports it kept (#431).
   let built: BuiltBranch | null = null;

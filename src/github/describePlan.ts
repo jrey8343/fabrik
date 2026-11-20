@@ -96,6 +96,8 @@ export function actionPhrase(action: Action): string {
       return `push ${prototypeBranchFor(action.issue)}, only as a fast-forward`;
     case "mark-prototype-request":
       return `mark #${action.issue}'s prototype request ${action.started ? "as its prototype turn started" : "as waiting for its prototype turn again"}`;
+    case "mark-fable-cap":
+      return `mark the \`${action.subscription}\` Subscription's Fable cap on #${action.issue}`;
     case "mark-gate-rerun-started":
       return `mark the Kit's line on #${action.pullRequest} asking one more re-run at the Merge gate as started`;
     case "rerun-checks":

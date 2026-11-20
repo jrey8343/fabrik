@@ -4,7 +4,8 @@
 // `review.model`, `review.effort`, or `kit` for a candidate Fabrik commit)
 // and, if the Operator likes, `tickets`: up to 10 Ticket numbers to replay in
 // place of the default pick. A model or effort is held to Kit config's own
-// rules, and a plan's variable is read back by the same rules. The "Replay
+// rules, a Fable model held to the repo's opt-in (`allow_fable`, ADR-0034),
+// and a plan's variable is read back by the same rules. The "Replay
 // this" link files a replay issue whose request names one variable. The
 // Replay module (src/kit/replay.ts) holds the rest. Pure, no I/O.
 import { isObject } from "../agent/stream.ts";
@@ -12,7 +13,7 @@ import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
 import { spelled } from "../loop/readable.ts";
 import { FULL_SHA } from "../skills/lock.ts";
-import { checkEffort, refuseFable } from "./config.ts";
+import { AS_IF_OPTED_IN_TO_FABLE, checkEffort, refuseRoleModel } from "./config.ts";
 import { REPLAY_ROLES, type ReplayRole } from "./runRecord.ts";
 
 /**
@@ -35,8 +36,12 @@ export type ReplayRequestResult =
   | { readonly ok: true; readonly request: ReplayRequest }
   | { readonly ok: false; readonly errors: readonly string[] };
 
-/** Reads the request block in a replay issue's body, or says every way it's invalid. */
-export function readReplayRequest(body: string): ReplayRequestResult {
+/**
+ * Reads the request block in a replay issue's body, or says every way it's
+ * invalid. `allowFable` is the Product repo's Kit config's: its variable may
+ * name Fable only where that opts in, by a full id, as a role's model may.
+ */
+export function readReplayRequest(body: string, allowFable: boolean): ReplayRequestResult {
   const block = requestBlock(body);
   if (typeof block === "string") return { ok: false, errors: [block] };
   const errors: string[] = [];
@@ -63,7 +68,7 @@ export function readReplayRequest(body: string): ReplayRequestResult {
       tickets = readTickets(value, errors);
       continue;
     }
-    const field = variableField(key);
+    const field = variableField(key, allowFable);
     if (typeof field === "string") {
       errors.push(field);
       unread = true;
@@ -188,13 +193,13 @@ function readVariable(key: string, value: string, field: VariableField, errors: 
   return field.variable(value);
 }
 
-/** How the field `key` reads its value, or why no variable field is named `key`. */
-function variableField(key: string): VariableField | string {
+/** How the field `key` reads its value in a repo whose Kit config gives `allowFable`, or why no variable field is named `key`. */
+function variableField(key: string, allowFable: boolean): VariableField | string {
   if (key === KIT_FIELD) return { check: checkCandidateKit, variable: (sha) => ({ kind: "kit", sha }) };
   const [role = "", setting, ...rest] = key.split(".");
   if (rest.length === 0 && (setting === "model" || setting === "effort")) {
     if (!isReplayRole(role)) return `${key} names the ${role} role, but a replay changes only ${spelled(REPLAY_ROLES)}`;
-    if (setting === "model") return { check: refuseModel, variable: (model) => ({ kind: "model", role, model }) };
+    if (setting === "model") return { check: (model) => refuseModel(model, allowFable), variable: (model) => ({ kind: "model", role, model }) };
     return { check: checkEffort, variable: (effort) => ({ kind: "effort", role, effort }) };
   }
   return `${key} isn't a request field: give ${spelled(VARIABLE_FIELDS)}, and ${TICKETS_FIELD} if you like`;
@@ -212,18 +217,24 @@ export function checkCandidateKit(sha: string): string | null {
 /** A Claude model's full name, such as claude-sonnet-5-5, never an alias the CLI resolves. */
 const CLAUDE_MODEL = /^claude-[a-z0-9][a-z0-9.[\]-]*$/;
 
-/** Why a replay won't run `model`: Kit config's rule first, then only Claude models, each named in full. */
-function refuseModel(model: string): string | null {
-  return refuseFable(model) ?? (CLAUDE_MODEL.test(model) ? null : "a replay runs only a Claude model, named in full, such as claude-sonnet-5-5");
+/** Why a replay won't run `model`: Kit config's rule for a role's model first, then only Claude models, each named in full. */
+function refuseModel(model: string, allowFable: boolean): string | null {
+  return refuseRoleModel(model, allowFable) ?? (CLAUDE_MODEL.test(model) ? null : "a replay runs only a Claude model, named in full, such as claude-sonnet-5-5");
 }
 
-/** A variable as a plan holds it, held to the same rules as the request's own, or null. */
+/**
+ * A variable as a plan holds it, held to the same rules as the request's
+ * own in a repo that opted in to Fable, or null: whether this one has is
+ * weighed where its Kit config is read, as the request is accepted and as
+ * each arm runs.
+ */
 export function readReplayVariable(value: unknown): ReplayVariable | null {
   if (!isObject(value)) return null;
   const { kind, role, model, effort, sha } = value;
   // Read back through the request field that names it, so it's held to that field's own rules.
   const [key, given] = kind === "kit" ? [KIT_FIELD, sha] : kind === "model" || kind === "effort" ? [`${String(role)}.${kind}`, kind === "model" ? model : effort] : [null, null];
   if (key === null || typeof given !== "string") return null;
-  const field = variableField(key);
+  // A plan's variable was accepted where the repo's Kit config was read, so it reads as any repo could accept it.
+  const field = variableField(key, AS_IF_OPTED_IN_TO_FABLE);
   return typeof field === "string" || field.check(given) !== null ? null : field.variable(given);
 }

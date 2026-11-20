@@ -129,12 +129,13 @@ describe("The replay implement action", () => {
     expect(at(steps, "uses: ./kit/.github/actions/prepare-agent")).toBeLessThan(at(steps, "1password/load-secrets-action@"));
   });
 
-  it("runs the replay Implementer from the checkout, on the arm's model and effort, read only through env", () => {
+  it("runs the replay Implementer from the checkout, on the arm's model and effort, read only through env, held to the repo's own allow_fable", () => {
     expect(agent).toMatch(/\n\s+working-directory: product\n/);
     expect(agent).toContain("run: node ../kit/src/agent/run.ts replay-implement");
     expect(agent).toContain("FABRIK_BASE_SHA: ${{ inputs.base-sha }}");
     expect(agent).toContain("FABRIK_MODEL: ${{ fromJSON(inputs.replay-arms)[inputs.arm].implement.model }}");
     expect(agent).toContain("FABRIK_EFFORT: ${{ fromJSON(inputs.replay-arms)[inputs.arm].implement.effort }}");
+    expect(agent).toContain("FABRIK_ALLOW_FABLE: ${{ inputs.allow-fable }}");
     expect(agent).toContain("FABRIK_SECRETS: ${{ toJSON(steps.op.outputs) }}");
     expect(agent).not.toMatch(/FABRIK_PULL_REQUEST_FILE|FABRIK_REVIEW_FILE/);
     expect(text.split("\n").filter((line) => line.includes("inputs.replay-arms") && /\brun: /.test(line))).toEqual([]);
@@ -234,11 +235,12 @@ describe("The replay review action", () => {
     expect(prepare).not.toContain("pull-request");
   });
 
-  it("runs the replay Reviewer on the arm's model and effort, read only through env, with no PR file", () => {
+  it("runs the replay Reviewer on the arm's model and effort, read only through env, held to the repo's own allow_fable, with no PR file", () => {
     expect(agent).toContain("run: node ../kit/src/agent/run.ts replay-review");
     expect(agent).toContain("FABRIK_BASE_SHA: ${{ inputs.base-sha }}");
     expect(agent).toContain("FABRIK_MODEL: ${{ fromJSON(inputs.replay-arms)[inputs.arm].review.model }}");
     expect(agent).toContain("FABRIK_EFFORT: ${{ fromJSON(inputs.replay-arms)[inputs.arm].review.effort }}");
+    expect(agent).toContain("FABRIK_ALLOW_FABLE: ${{ inputs.allow-fable }}");
     expect(agent).toContain("CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.op.outputs.CLAUDE_CODE_OAUTH_TOKEN }}");
     expect(agent).not.toContain("FABRIK_PULL_REQUEST_FILE");
   });

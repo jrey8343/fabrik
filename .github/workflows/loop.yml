@@ -95,6 +95,9 @@ jobs:
       # For a replay: each arm's settings, as one line of JSON. Its model names come from the replay
       # issue's body, so a job reads it only through an action's inputs, never in a `run:` script.
       replay-arms: ${{ steps.route.outputs.replay-arms }}
+      # For a replay: "true" when this repo's Kit config opts in to Fable (ADR-0034), which each arm's run holds
+      # its model to, as Kit config at the Ticket's baseSha can predate the opt-in; empty otherwise.
+      allow-fable: ${{ steps.route.outputs.allow-fable }}
       # For a replay whose variant's candidate Kit sha this job couldn't lay (#449): why, so neither arm runs and the
       # replay-record job fails the Ticket once, naming it; empty otherwise.
       replay-kit-sha-unavailable: ${{ steps.route.outputs.replay-kit-sha-unavailable }}
@@ -124,6 +127,10 @@ jobs:
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
+      # For its Run record (ADR-0034): the model Kit config named, and "fable-cap" when the run falls back to Opus
+      # from it because no Subscription has Fable left (empty otherwise).
+      configured-model: ${{ steps.route.outputs.configured-model }}
+      fallback: ${{ steps.route.outputs.fallback }}
       # Which run the plan started, for its Run record: its Retry number (0 for none), "true"
       # or "false" for whether it Steps up and whether it's the Operator's Request-changes run,
       # and why it Steps up (retry, marked, request-changes or conflict-only; empty for none).
@@ -224,10 +231,23 @@ jobs:
         with:
           node-version: 24
 
+      # In a repo whose Kit config opts in to Fable (ADR-0034), the store's Run records from its last two months,
+      # read-only, whose Fable cap readings the plan weighs, so a run due while no Subscription has Fable left starts
+      # on Opus with no refusal first. A repo that didn't opt in loads no secret here. A store that can't be read
+      # fails nothing: every Subscription then counts as having Fable left.
+      - name: Check out the store for the Fable cap readings
+        id: fable-store
+        continue-on-error: true
+        uses: ./kit/.github/actions/fable-store
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          product-dir: ${{ github.workspace }}/product
+
       - name: Check the Kit config and caller workflow, and route the event
         id: route
         env:
           GH_TOKEN: ${{ github.token }}
+          FABRIK_STORE_DIR: ${{ steps.fable-store.outputs.store-dir }}
         run: node kit/src/kit/jobs.ts product
 
       # Says what the routing step routed, held and declined included, in its name, for a reader of Actions while
@@ -303,6 +323,9 @@ jobs:
           # The open issues and those closed in the last 30 days, which Triage compares the issue against for a duplicate (#363).
           FABRIK_RECENT_ISSUES_FILE: ${{ runner.temp }}/recent-issues.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          # The model the Kit job's plan chose, a Fable fallback's Opus included (ADR-0034).
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
         run: node ../kit/src/agent/run.ts triage
 
       - name: Pass the Triage output to the push job
@@ -439,6 +462,9 @@ jobs:
           FABRIK_SPEC_TICKETS_FILE: ${{ runner.temp }}/spec-tickets.json
           FABRIK_FILED_FROM_FILE: ${{ runner.temp }}/filed-from.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          # The model the Kit job's plan chose, a Fable fallback's Opus included (ADR-0034).
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
         run: node ../kit/src/agent/run.ts design
 
       - name: Pass the turn's output to the push job
@@ -2012,6 +2038,7 @@ jobs:
           ticket: ${{ needs.kit.outputs.ticket }}
           base-sha: ${{ needs.kit.outputs.base-sha }}
           replay-arms: ${{ needs.kit.outputs.replay-arms }}
+          allow-fable: ${{ needs.kit.outputs.allow-fable }}
           subscription: ${{ needs.kit.outputs.subscription }}
 
   # A replay arm's gates (#156): the Sandbox's setup, build and tests from Kit
@@ -2093,6 +2120,7 @@ jobs:
           ticket: ${{ needs.kit.outputs.ticket }}
           base-sha: ${{ needs.kit.outputs.base-sha }}
           replay-arms: ${{ needs.kit.outputs.replay-arms }}
+          allow-fable: ${{ needs.kit.outputs.allow-fable }}
           subscription: ${{ needs.kit.outputs.subscription }}
 
   # A replay arm's judge (#156): the scoring plan, which picks every replay

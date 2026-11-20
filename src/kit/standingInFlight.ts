@@ -562,15 +562,21 @@ export interface GivenUpWeek {
  * the Weekly summary both read, so the two can't disagree.
  */
 export function givenUpWeeksOf({ audits, retros }: Pick<GitHubFacts, "audits" | "retros">, appLogin: string): GivenUpWeek[] {
-  const weeksOf = (role: GivenUpWeek["role"], issues: readonly WeeklyRunIssueFacts[], failed: (body: string) => boolean): GivenUpWeek[] => {
-    const runs = issues.filter(({ author }) => author === appLogin).map((issue) => ({ issue, number: issue.number, createdAt: issue.createdAt, failed: failed(issue.body) }));
+  const weeksOf = (
+    role: GivenUpWeek["role"],
+    issues: readonly WeeklyRunIssueFacts[],
+    failed: (body: string) => { readonly failed: boolean; readonly fableCapped: boolean },
+  ): GivenUpWeek[] => {
+    const runs = issues
+      .filter(({ author }) => author === appLogin)
+      .map((issue) => ({ issue, number: issue.number, createdAt: issue.createdAt, ...failed(issue.body) }));
     const weeks = new Set(runs.map(({ createdAt }) => weekStart(createdAt)));
     return [...weeks].flatMap((start) => {
       const givenUp = failedInWeek(runs, start).slice(0, FAILED_RUNS_A_WEEK);
       return givenUp.length < FAILED_RUNS_A_WEEK ? [] : [{ role, until: new Date(start + 7 * DAY).toISOString(), failed: givenUp.map(({ issue }) => issue) }];
     });
   };
-  return [...weeksOf("audit", audits, (body) => auditMarksIn(body).failed), ...weeksOf("retro", retros, (body) => retroMarksIn(body).failed)];
+  return [...weeksOf("audit", audits, auditMarksIn), ...weeksOf("retro", retros, retroMarksIn)];
 }
 
 /**

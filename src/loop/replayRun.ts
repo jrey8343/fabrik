@@ -7,8 +7,8 @@
 // for a later tick. When the run ends, its replay-record job lands it: the
 // Ticket's progress and the results as the store holds them, one comment
 // once the last Ticket is in, and for a weekly-limit refusal the weekly-limit
-// issue, as any refused run opens it, with the Ticket back to pending. Pure,
-// no I/O.
+// issue, as any refused run opens it, with the Ticket back to pending, as it
+// goes back for a Fable cap refusal, which opens nothing. Pure, no I/O.
 import {
   isOperatorsReplay,
   nextReplayTicket,
@@ -73,9 +73,10 @@ export function startReplay(issueNumber: number, { issue, operator, kitIssues }:
  * Operator closed the issue, which cancels the Replay. Once every Ticket is
  * done or failed, one comment tells the Operator the results are in. A
  * weekly-limit refusal opens or comments on the weekly-limit issue, a fact
- * about the Subscription, as any refused run does. Never a hold, and never
- * the trigger label again: the Ticket waits, pending, for a later tick with
- * spare capacity.
+ * about the Subscription, as any refused run does; a Fable cap refusal opens
+ * nothing, as a live run's doesn't, and never falls back (ADR-0034). Never a
+ * hold, and never the trigger label again: the Ticket waits, pending, for a
+ * later tick with spare capacity.
  */
 export function landReplayRun(run: Extract<LoopEvent, { kind: "replay-run-finished" }>, context: IssueContext, config: KitConfig): Plan {
   const { issue } = context;

@@ -33,6 +33,7 @@ import { noDigestAfter } from "./digest.ts";
 import { heldLineOn, heldRunName } from "./heldLine.ts";
 import { heldInOrder, heldLineIssue, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
 import { heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
+import { fableCapsInForce } from "./fableCap.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, type HandBackMark, handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
@@ -45,6 +46,7 @@ import {
   type Action,
   type AgentRole,
   type BrokenRun,
+  type FableCapSnapshot,
   type FailedRunCommits,
   type InfrastructureFailure,
   isBrokenRun,
@@ -55,7 +57,7 @@ import {
   type Plan,
   type PullRequestSnapshot,
 } from "./types.ts";
-import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
+import { fableCappedWeekly, failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
@@ -142,6 +144,9 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
     }
     case "weekly-limit":
       return "it hit the weekly usage limit";
+    // Only a refusal the Kit had marked reached already fails as one, on any role (refusedAgain).
+    case "fable-cap":
+      return `it hit the Fable cap on the \`${subscriptionOfRun(run, config)}\` Subscription again, though the Kit had marked it reached, so it isn't re-run on its own`;
     case "metered-billing":
       return "the preflight found a route that would bill metered API usage, so it refused to start the agent";
     case "usage-credits":
@@ -223,7 +228,9 @@ function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: str
  * With rotation on, the run a weekly-limit refusal, a kill for spending usage
  * credits or a dead token holds rather than fails, or null: a run of any role
  * but the Auditor's or the Retro's, which are never held, while no other
- * Subscription is free.
+ * Subscription is free. With rotation off, only a kill for spending usage
+ * credits holds its run, on the usage-credits issue that keeps the Kit off its
+ * one Subscription until the Operator closes it (ADR-0034).
  */
 function heldOnRefusal(
   run: FailedRun,
@@ -231,7 +238,7 @@ function heldOnRefusal(
   { issue, kitIssues }: IssueContext,
   ranOn: RanOn,
 ): HoldableRun | null {
-  if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
+  if (!RERUN_FAILURES.includes(failure) || (!ranOn.rotation && failure !== "usage-credits")) return null;
   // The tick can't start an Auditor or Retro run at the reset, so its issue fails, and the tick opens the next one.
   if (isWeeklyRole(run.role)) return null;
   if (anotherSubscriptionFree(kitIssues, ranOn)) return null;
@@ -248,14 +255,18 @@ function heldOnRefusal(
  * Kit-owned issue does the notifying, once, and the comment points there. A
  * Review that stopped because its PR conflicts with main isn't handed back:
  * the Kit brings the PR up to date (afterConflictedReview), from `mergeable`,
- * its own read of the PR, gathered for that failure alone.
+ * its own read of the PR, gathered for that failure alone. A Fable cap is
+ * weighed against the Fable cap readings the snapshot holds (`fableCaps`).
  */
 export function failureNotice(
   run: FailedRun,
   context: IssueContext,
   config: KitConfig,
-  pullRequest: PullRequestSnapshot | null = null,
-  mergeable: MergeableSnapshot | null = null,
+  {
+    pullRequest = null,
+    mergeable = null,
+    fableCaps,
+  }: { readonly pullRequest?: PullRequestSnapshot | null; readonly mergeable?: MergeableSnapshot | null; readonly fableCaps?: FableCapSnapshot } = {},
 ): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
@@ -275,6 +286,8 @@ export function failureNotice(
     return landed.kind !== "act" || repoWide === null ? landed : { ...landed, actions: [...landed.actions, ...repoWide.actions] };
   }
   if (run.role === "review" && failure === "merge-conflict") return conflictedReviewPlan(run, context, config, pullRequest, mergeable);
+  // An Audit or a Retro isn't re-run: its Fable cap closes it quietly, below.
+  if (failure === "fable-cap" && !isWeeklyRole(run.role) && !refusedAgain(run, ranOn, fableCaps)) return fableCapRerun(run, context, ranOn);
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
@@ -298,6 +311,15 @@ export function failureNotice(
     // After the weekly-limit issue's own actions, since it may link the one they open.
     const line = repoWide?.heldOn === undefined ? [] : [heldLineOn(held, name, repoWide.heldOn, { until: firstReset, reset: true, timeZone: config.timeZone })];
     return { kind: "act", actions: [...holding(held, firstReset), ...notice, ...line] };
+  }
+  // A Fable cap is no failure of an Audit's or a Retro's week: the next one falls back at its start (ADR-0034).
+  if (failure === "fable-cap" && isWeeklyRole(run.role) && !refusedAgain(run, ranOn, fableCaps)) {
+    return fableCappedWeekly(run.role, context, {
+      subscription: ranOn.subscription,
+      resetsAt: run.report?.resetsAt ?? null,
+      weeklyResetsAt: run.report?.weeklyResetsAt ?? null,
+      runUrl: run.runUrl,
+    });
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
   if (isWeeklyRole(run.role)) {
@@ -394,6 +416,56 @@ export function failureNotice(
       ...(label === null ? [] : [{ kind: "remove-label" as const, issue: labelled, label }]),
       { kind: "comment", issue: target, body },
       ...(repoWide?.actions ?? []),
+    ],
+  };
+}
+
+/**
+ * Whether a Fable run refused on its Subscription's Fable cap was refused on
+ * one the Fable cap readings already mark (ADR-0034): one still in force, or
+ * one with the same reset, though that has passed. A re-run would start where
+ * this one did, and be refused again, so it isn't re-run: as a weekly-limit
+ * refusal is re-run only while another Subscription is free, its re-run never
+ * repeats. Its notice says so, as for any Infrastructure failure.
+ */
+function refusedAgain(run: FailedRun, { subscription }: RanOn, caps: FableCapSnapshot | undefined): boolean {
+  if (caps === undefined) return false;
+  const resetsAt = run.report?.resetsAt;
+  const live = new Set(fableCapsInForce(caps));
+  return caps.readings.some(
+    (reading) =>
+      reading.subscription === subscription && (live.has(reading) || (resetsAt !== undefined && Date.parse(reading.until) === Date.parse(resetsAt))),
+  );
+}
+
+/**
+ * A Fable run refused on its Subscription's Fable cap (ADR-0034): an
+ * Infrastructure failure that uses none of the Ticket's retries. It is re-run
+ * once, quietly, through its trigger label, as a weekly-limit refusal is while
+ * another Subscription is free, with one Subscription listed too, since the
+ * re-run can fall back to Opus. The cap is marked where the label goes, before
+ * it, so the re-run starts where Fable is left (src/loop/fableCap.ts). No
+ * comment, no Kit-owned issue, no held run: nothing asks anything of the Operator.
+ */
+function fableCapRerun(run: FailedRun, { issue }: IssueContext, { subscription }: RanOn): Plan {
+  // The review trigger lives on the PR; every other role's on the issue.
+  const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
+  const rerun = RESUME_LABELS[run.role];
+  if (rerun === null) return { kind: "nothing", reason: `The ${runNamed(run.role)} on #${run.issue} has no trigger label to re-run it through` };
+  return {
+    kind: "act",
+    actions: [
+      { kind: "remove-label", issue: labelled, label: rerun },
+      // Before the label, whose Loop run reads both.
+      ...waitingAgain(run, issue),
+      {
+        kind: "mark-fable-cap",
+        issue: labelled,
+        subscription,
+        resetsAt: run.report?.resetsAt ?? null,
+        ...(run.report?.weeklyResetsAt === undefined ? {} : { weeklyResetsAt: run.report.weeklyResetsAt }),
+      },
+      { kind: "add-labels", issue: labelled, labels: [rerun] },
     ],
   };
 }

@@ -28,6 +28,7 @@ import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { changedTestsSection } from "../loop/changedTests.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
+import { fableCapMarker } from "../loop/fableCap.ts";
 import {
   checkFixMarker,
   DESIGN_TURN_FAILED_MARKER,
@@ -94,8 +95,8 @@ function gatherSnapshot(github: GitHub, ...rest: Parameters<typeof gatherFrom> e
             return github.graphql(query, variables);
           },
         } as unknown as GitHub);
-  const [repoArg, event, operator, appLogin, actions = null, store = null, replayStore = null, wait = async () => undefined] = rest;
-  return gatherFrom(answering, repoArg, event, operator, appLogin, actions, store, replayStore, wait);
+  const [repoArg, event, operator, appLogin, actions = null, options = {}] = rest;
+  return gatherFrom(answering, repoArg, event, operator, appLogin, actions, { wait: async () => undefined, ...options });
 }
 
 const repo = { owner: "acme", name: "shop" };
@@ -1497,6 +1498,51 @@ function pullRequestGitHub({
   } as unknown as GitHub;
 }
 
+describe("Gathering the Fable cap readings marked where a refused run's trigger label went (ADR-0034)", () => {
+  const ahead = { subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" };
+  const passed = { subscription: "Claude token 2", until: "2020-01-01T00:00:00.000Z" };
+  const body = (...lines: string[]) => [...lines, "", fableCapMarker(ahead), fableCapMarker(passed)].join("\n");
+
+  it("reads every one off the event's issue, in force or not, with when it read them: the Loop weighs which are in force", async () => {
+    const github = issueGitHub({ body: body("Sort this out."), labels: ["needs-triage"] });
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 98, label: "needs-triage" }, null, null);
+
+    expect(snapshot.fableCaps).toEqual({ readings: [ahead, passed], now: expect.any(String) });
+  });
+
+  it("reads them off a PR the Fabrik App opened, and none off anyone else's", async () => {
+    const labeled = { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" } as const;
+    const text = body("Adds a waitlist.", "", "Closes #7");
+
+    const byApp = await gatherSnapshot(pullRequestGitHub({ body: text }), repo, labeled, null, APP_LOGIN);
+    const byOther = await gatherSnapshot(pullRequestGitHub({ body: text, author: { login: "someone", __typename: "User" } }), repo, labeled, null, APP_LOGIN);
+
+    expect(byApp.fableCaps?.readings).toEqual([ahead, passed]);
+    expect(byOther.fableCaps?.readings).toEqual([]);
+  });
+
+  it("adds the readings the Kit job read in the store, beside the ones marked", async () => {
+    const github = issueGitHub({ body: ["Sort this out.", "", fableCapMarker(ahead)].join("\n"), labels: ["needs-triage"] });
+    const store = [
+      { subscription: "Claude token 2", until: "2099-02-01T00:00:00.000Z" },
+      { subscription: "Claude token 3", until: "2020-01-01T00:00:00.000Z" },
+    ];
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 98, label: "needs-triage" }, null, null, null, { storeFableCaps: store });
+
+    expect(snapshot.fableCaps?.readings).toEqual([ahead, ...store]);
+  });
+
+  it("gives the store's readings to an event with no issue or PR of its own, which can still start runs", async () => {
+    const store = [{ subscription: "Claude token", until: "2099-02-01T00:00:00.000Z" }];
+
+    const snapshot = await gatherSnapshot(issueGitHub(), repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, null, null, { storeFableCaps: store });
+
+    expect(snapshot.fableCaps?.readings).toEqual(store);
+  });
+});
+
 describe("Gathering the labels of the Ticket a pull request was cut for", () => {
   const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
   const gathered = async (closing: readonly ClosingIssue[]) =>
@@ -2471,7 +2517,7 @@ describe("Gathering a scheduled tick's retro slice", () => {
   }
 
   const gather = (github: GitHub, store: GitHub | null = storeThatIs("private"), operator: string | null = null) =>
-    gatherSnapshot(github, repo, tick, operator, "fabrik-app[bot]", null, store);
+    gatherSnapshot(github, repo, tick, operator, "fabrik-app[bot]", null, { store });
 
   it("holds each Retro issue, open or closed, with its title, telling the Fabrik App's from a person's or another bot's", async () => {
     const { github } = githubWith({
@@ -2574,7 +2620,7 @@ describe("Gathering a scheduled tick's retro slice", () => {
   });
 
   it("isn't gathered for any other event", async () => {
-    const snapshot = await gatherSnapshot(githubWith().github, repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]", null, storeThatIs("private"));
+    const snapshot = await gatherSnapshot(githubWith().github, repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, "fabrik-app[bot]", null, { store: storeThatIs("private") });
 
     expect(snapshot.retro).toBeNull();
   });
@@ -3478,7 +3524,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
     const { github, asked } = githubWith([anIssueNode(41, ["fabrik:weekly-limit"])]);
     const store = storeHolding([]);
 
-    const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, store);
+    const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, { replayStore: store });
 
     expect(snapshot.replay).toEqual({ issues: [], capacity: null, acceptance: null });
     expect(asked).toEqual(without.asked);
@@ -3489,7 +3535,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
     const many = Array.from({ length: 20 }, (_, at) => anIssueNode(41 + at, ["fabrik:audit"]));
     const { github, asked } = githubWith(many, [anIssueNode(140, ["fabrik:replay"], { body: acceptedBody() })]);
 
-    const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
+    const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, { replayStore: storeHolding([]) });
 
     expect(snapshot.replay).toEqual({ issues: [], capacity: null, acceptance: null });
     expect(asked.some((query) => query.includes("$replay"))).toBe(false);
@@ -3511,7 +3557,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
     it("holds each one with its body whole, though the Operator filed it, the App's comments only, and its labels", async () => {
       const { github } = githubWith([replayNode, someoneElses]);
 
-      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
+      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, { replayStore: storeHolding([]) });
 
       expect(snapshot.replay?.issues).toEqual([
         { number: 140, open: true, author: "jrey8343", body: acceptedBody(), comments: ["This replay can't run."], labels: ["fabrik:replay", "agent:replay"], gaveUp: false },
@@ -3529,7 +3575,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
         anIssueNode(142, ["fabrik:replay"], { body: acceptedBody(), ...timeline({ __typename: "IssueComment", body: gaveUp, author: OPERATOR }) }),
       ]);
 
-      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding([]));
+      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, { replayStore: storeHolding([]) });
 
       expect(snapshot.replay?.issues.map(({ number, gaveUp }) => [number, gaveUp])).toEqual([
         [140, true],
@@ -3538,16 +3584,25 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       ]);
     });
 
-    it("holds what the spare-capacity gate weighs: what Dispatch weighs, and each Subscription's newest weekly-limit reading in the store", async () => {
-      const records = [aRunRecord({ repo: "acme/clinic", endedAt: "2026-11-10T10:00:00Z", rateLimit: aReading(0.3) })];
+    it("holds what the spare-capacity gate weighs: what Dispatch weighs, each Subscription's newest weekly-limit reading in the store, and its Fable cap readings", async () => {
+      const capped = aRunRecord({
+        repo: "acme/clinic",
+        endedAt: "2026-11-10T09:00:00Z",
+        model: "claude-fable-5-2",
+        jobResult: "failure",
+        infrastructureFailure: "fable-cap",
+        refusal: { rateLimitType: "seven_day_fable", resetsAt: Date.parse("2026-11-14T04:00:00Z") / 1000 },
+      });
+      const records = [capped, aRunRecord({ repo: "acme/clinic", endedAt: "2026-11-10T10:00:00Z", rateLimit: aReading(0.3) })];
 
-      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(records));
+      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, { replayStore: storeHolding(records) });
 
       expect(snapshot.replay?.capacity).toEqual({
         tickets: [{ number: 31, open: true, labels: ["ready-for-agent"], openBlockers: [], notPlannedBlockers: [], hiddenBlockers: 0, subIssues: 0, openLinkedPullRequests: [], mergedLinkedPullRequests: [], lastRunFailed: false }],
         researchDecisions: [],
         implementRunTickets: [],
         weeklyLimits: { "Claude token": aReading(0.3) },
+        fableCaps: [{ subscription: "Claude token", until: "2026-11-14T04:00:00.000Z" }],
       });
       expect(snapshot.replay?.acceptance).toBeNull();
     });
@@ -3558,21 +3613,22 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
         { id: 2, status: "queued", jobs: [{ name: "fabrik / Implement", status: "queued" }] },
       ]);
 
-      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", actions as unknown as GitHub, null, storeHolding([]));
+      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", actions as unknown as GitHub, { replayStore: storeHolding([]) });
 
       expect(snapshot.replay?.capacity?.implementRunTickets).toEqual([31]);
     });
 
     it("holds no reading when the store can't be read", async () => {
-      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(null));
+      const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, { replayStore: storeHolding(null) });
 
       expect(snapshot.replay?.capacity?.weeklyLimits).toBeNull();
+      expect(snapshot.replay?.capacity?.fableCaps).toBeNull();
     });
 
     it("reads nothing more when only someone else's replay issue is open", async () => {
       const store = storeHolding([]);
 
-      const snapshot = await gatherSnapshot(githubWith([someoneElses]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, store);
+      const snapshot = await gatherSnapshot(githubWith([someoneElses]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, { replayStore: store });
 
       expect(snapshot.replay).toMatchObject({ capacity: null, acceptance: null });
       expect(store.reads).toBe(0);
@@ -3583,7 +3639,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       const records = [aRunRecord({ repo: "acme/clinic", issue: 12, endedAt: "2026-11-10T10:00:00Z" })];
       const { github, asked } = githubWith([waiting]);
 
-      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(records));
+      const snapshot = await gatherSnapshot(github, repo, tick, "jrey8343", "fabrik-app[bot]", null, { replayStore: storeHolding(records) });
 
       expect(snapshot.replay?.acceptance).toEqual({ candidates: [], baseConfigs: {}, fabrikCommits: {} });
       expect(asked.some((query) => query.includes("mergedAt"))).toBe(false);
@@ -3741,7 +3797,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
   it("reads again while GitHub is still working out whether a PR conflicts, until it knows", async () => {
     const { github, waits, wait } = githubReading([[node(50, "UNKNOWN")], [node(50, "UNKNOWN")], [node(50, "CONFLICTING")]]);
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, null, null, wait);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, { wait });
 
     expect(snapshot.conflicts?.pullRequests[0]?.mergeable).toBe(false);
     expect(waits).toEqual([MERGEABLE_WAIT_MS, MERGEABLE_WAIT_MS]);
@@ -3750,7 +3806,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
   it("stops after a bounded number of reads, leaving a PR still unknown as unknown, for the scheduled tick", async () => {
     const { github, waits, wait, reads } = githubReading([[node(50, "UNKNOWN")]]);
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, null, null, wait);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, { wait });
 
     expect(snapshot.conflicts?.pullRequests[0]?.mergeable).toBeNull();
     expect(reads()).toBe(MERGEABLE_READS);
@@ -4408,7 +4464,7 @@ describe("Gathering whether a Reviewer's Verdict's PR merges cleanly (#480)", ()
     const wait = async (ms: number) => void waits.push(ms);
     const unknown = githubReading(["UNKNOWN"]);
 
-    const snapshot = await gatherSnapshot(unknown.github, repo, reviewed, null, APP_LOGIN, null, null, null, wait);
+    const snapshot = await gatherSnapshot(unknown.github, repo, reviewed, null, APP_LOGIN, null, { wait });
 
     expect(snapshot.mergeable).toEqual({ main: "d".repeat(40), mergeable: null });
     expect(unknown.reads()).toBe(MERGEABLE_READS);
@@ -4474,6 +4530,44 @@ describe("Gathering whether the PR of a Review that stopped on a conflict still 
     expect(snapshot.mergeable).toBeNull();
     expect(snapshot.pullRequest).toBeNull();
     expect(mergeableReads).toEqual([]);
+  });
+});
+
+// Its re-run's cap is marked on the PR, where the review trigger goes, so a refusal again reads it there (ADR-0034).
+describe("Gathering the Fable cap readings on the PR of a Review refused on its Fable cap", () => {
+  const capped = (failure: "fable-cap" | "crash"): LoopEvent => ({
+    kind: "agent-run-failed",
+    role: "review",
+    issue: 98,
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    jobResult: "failure",
+    secretsStep: "success",
+    report: { failure, detail: "seven_day_fable" },
+    subscription: "Claude token",
+  });
+  const reading = { subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" };
+  function ticketWithMarkedPullRequest(author = { login: APP_LOGIN, __typename: "Bot" }) {
+    const issues = issueGitHub({ labels: ["ready-for-agent"], openPullRequests: [50] });
+    const pullRequests = pullRequestGitHub({ body: ["Adds a waitlist.", "", "Closes #98", "", fableCapMarker(reading)].join("\n"), author });
+    return {
+      async graphql(query: string, variables: Record<string, unknown>) {
+        return (query.includes("pullRequest(number: $number)") ? pullRequests : issues).graphql(query, variables);
+      },
+    } as unknown as GitHub;
+  }
+
+  it("reads the caps marked on the Ticket's open PR, which the Fabrik App opened", async () => {
+    const snapshot = await gatherSnapshot(ticketWithMarkedPullRequest(), repo, capped("fable-cap"), null, APP_LOGIN);
+
+    expect(snapshot.fableCaps?.readings).toEqual([reading]);
+  });
+
+  it("reads none off a PR anyone else opened, nor for a Review that failed any other way", async () => {
+    const byOther = await gatherSnapshot(ticketWithMarkedPullRequest({ login: "someone", __typename: "User" }), repo, capped("fable-cap"), null, APP_LOGIN);
+    const crashed = await gatherSnapshot(ticketWithMarkedPullRequest(), repo, capped("crash"), null, APP_LOGIN);
+
+    expect(byOther.fableCaps?.readings).toEqual([]);
+    expect(crashed.fableCaps?.readings).toEqual([]);
   });
 });
 

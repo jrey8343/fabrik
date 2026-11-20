@@ -39,8 +39,13 @@ describe("The Kit job's routing of a replay Ticket (#156)", () => {
     });
   });
 
+  // Each arm runs in a checkout of the Ticket's baseSha, whose Kit config may predate the repo's opt-in (ADR-0034).
+  it.each([true, false])("passes out this repo's own allow_fable (%j) for the arms' runs", (allowFable) => {
+    expect(kitJobOutputs(started, null, kitConfig({ allowFable }))).toMatchObject({ route: "replay", "allow-fable": String(allowFable) });
+  });
+
   it("passes out no replay for any other run", () => {
-    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "replay-issue": "", "base-sha": "", "replay-arms": "" });
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "replay-issue": "", "base-sha": "", "replay-arms": "", "allow-fable": "" });
   });
 });
 
@@ -220,6 +225,27 @@ describe("The Kit job's routing", () => {
     expect(JSON.parse(later["last-judged-change"] ?? "")).toEqual(change);
     expect(later["last-judged-change"]).not.toContain("\n");
     expect(kitJobOutputs(review(), 7, kitConfig())).toMatchObject({ "last-judged-head": "", "last-judged-change": "" });
+  });
+});
+
+describe("The Kit job's outputs for a Fable fallback (ADR-0034)", () => {
+  const start = (run: Partial<Extract<Action, { kind: "start-agent-run" }>>): Plan => ({
+    kind: "act",
+    actions: [{ kind: "start-agent-run", role: "review", issue: 50, model: "claude-opus-5-5", effort: "high", timeoutMinutes: 30, subscription: "Claude token", ...run }],
+  });
+
+  it("passes out the model it runs on, the model Kit config named and why they differ", () => {
+    expect(kitJobOutputs(start({ configuredModel: "claude-fable-5-2", fallback: "fable-cap" }), 7, kitConfig())).toMatchObject({
+      model: "claude-opus-5-5",
+      effort: "high",
+      "configured-model": "claude-fable-5-2",
+      fallback: "fable-cap",
+    });
+  });
+
+  it("passes out the model it runs on as Kit config's, with no fallback, for any other run", () => {
+    expect(kitJobOutputs(start({}), 7, kitConfig())).toMatchObject({ model: "claude-opus-5-5", "configured-model": "claude-opus-5-5", fallback: "" });
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "configured-model": "", fallback: "" });
   });
 });
 

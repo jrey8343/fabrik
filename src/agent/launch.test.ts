@@ -8,7 +8,7 @@ import {
   parseImplementOutput,
   readRequestChangesRunOutput,
 } from "../loop/implementOutput.ts";
-import { type Checked, leaveFailureReport, readyHook, replySchemaOf, settleReply, streamWatch } from "./launch.ts";
+import { type Checked, leaveFailureReport, readyHook, replySchemaOf, settleReply, streamWatch, type StreamWatchOptions } from "./launch.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 const init = line({ type: "system", subtype: "init", apiKeySource: "none" });
@@ -35,7 +35,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function watching(lines: readonly string[], options?: { rotation: boolean }) {
+function watching(lines: readonly string[], options?: StreamWatchOptions) {
   const abort = new AbortController();
   const watch = streamWatch(join(dir, "transcript.jsonl"), abort, options);
   for (const text of lines) watch.onAgentStreamEvent({ type: "raw", line: text, iteration: 1, timestamp: new Date() });
@@ -66,6 +66,27 @@ describe("The stream watch", () => {
 
   it.each(OVERAGE_SIGNALS)("lets the run go on after %s, with rotation off", (_, overage) => {
     const { abort } = watching([init, assistant, overage], { rotation: false });
+
+    expect(abort.signal.aborted).toBe(false);
+  });
+
+  it.each(OVERAGE_SIGNALS)("aborts a Fable run on %s, with rotation off (ADR-0034)", (_, overage) => {
+    const { abort } = watching([init, assistant, overage], { rotation: false, model: "claude-fable-5-2" });
+
+    expect(abort.signal.aborted).toBe(true);
+  });
+
+  it.each(OVERAGE_SIGNALS)("lets a run that isn't Fable go on after %s, with rotation off, as before", (_, overage) => {
+    const { abort } = watching([init, assistant, overage], { rotation: false, model: "claude-opus-5-5" });
+
+    expect(abort.signal.aborted).toBe(false);
+  });
+
+  it("lets a Fable run whose stream shows no overage go on, with rotation off", () => {
+    const { abort } = watching(
+      [init, assistant, line({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day", isUsingOverage: false } })],
+      { rotation: false, model: "claude-fable-5-2" },
+    );
 
     expect(abort.signal.aborted).toBe(false);
   });
@@ -113,13 +134,56 @@ describe("The failure report an overage abort leaves", () => {
     expect(JSON.parse(await readFile(path, "utf8")).failure).toBe("usage-credits");
   });
 
-  it("isn't usage-credits with rotation off, where the stream watch kills nothing", async () => {
+  it("is usage-credits for a Fable run with rotation off", async () => {
+    const { abort, watch } = watching([init, assistant, OVERAGE_SIGNALS[0]?.[1] ?? ""], { rotation: false, model: "claude-fable-5-2" });
+    const path = join(dir, "agent-failure.json");
+
+    await leaveFailureReport(abort.signal.reason, watch, { path, title: "Infrastructure failure" });
+
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      failure: "usage-credits",
+      detail: "stopped for spending usage credits: isUsingOverage was true",
+    });
+  });
+
+  it("isn't usage-credits with rotation off, where the stream watch kills no run that isn't Fable", async () => {
     const { watch } = watching([init, OVERAGE_SIGNALS[1]?.[1] ?? ""], { rotation: false });
     const path = join(dir, "agent-failure.json");
 
     await leaveFailureReport(new Error("agent exited 1"), watch, { path, title: "Infrastructure failure" });
 
     expect(JSON.parse(await readFile(path, "utf8")).failure).toBe("crash");
+  });
+});
+
+describe("The failure report a refused Fable run leaves (ADR-0034)", () => {
+  const capped = [
+    init,
+    line({ type: "rate_limit_event", rate_limit_info: { status: "rejected", rateLimitType: "seven_day_fable", resetsAt: 1_798_000_000 } }),
+    line({ type: "result", subtype: "success", is_error: true, result: "API Error" }),
+  ];
+
+  it("is the Fable cap, read for the model the run started on", async () => {
+    const { watch } = watching(capped, { rotation: true, model: "claude-fable-5-2" });
+    const path = join(dir, "agent-failure.json");
+
+    await leaveFailureReport(new Error("agent exited 1"), watch, { path, title: "Infrastructure failure" });
+
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      failure: "fable-cap",
+      detail: "seven_day_fable, resets at 2026-12-23T04:26:40.000Z",
+      resetsAt: "2026-12-23T04:26:40.000Z",
+      refusal: { rateLimitType: "seven_day_fable", resetsAt: 1_798_000_000 },
+    });
+  });
+
+  it("is the weekly limit on a run that isn't Fable", async () => {
+    const { watch } = watching(capped, { rotation: true, model: "claude-opus-5-5" });
+    const path = join(dir, "agent-failure.json");
+
+    await leaveFailureReport(new Error("agent exited 1"), watch, { path, title: "Infrastructure failure" });
+
+    expect(JSON.parse(await readFile(path, "utf8")).failure).toBe("weekly-limit");
   });
 });
 

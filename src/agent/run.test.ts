@@ -1,5 +1,59 @@
-import { describe, expect, it } from "vitest";
-import { RUNS } from "./run.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { allowFableFor, modelFor, RUNS } from "./run.ts";
+
+describe("The model a run is given, from the Kit job's plan (FABRIK_MODEL)", () => {
+  const role = { model: "claude-opus-5-5", effort: "medium" };
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("in a repo that opted in to Fable, gives a Step-up its Fable model and effort", () => {
+    vi.stubEnv("FABRIK_MODEL", "claude-fable-5-2");
+    vi.stubEnv("FABRIK_EFFORT", "high");
+
+    expect(modelFor(role, true)).toEqual({ model: "claude-fable-5-2", effort: "high" });
+  });
+
+  it.each([
+    ["claude-fable-5-2", false],
+    ["fable", true],
+    ["best", true],
+  ])("refuses %j with allow_fable %s, as Kit config would, so a bad route never reaches the CLI", (model, allowFable) => {
+    vi.stubEnv("FABRIK_MODEL", model);
+
+    expect(() => modelFor(role, allowFable)).toThrow(`Refusing to run ${model} in an AFK role`);
+  });
+
+  it("gives the role's own model when the plan chose none", () => {
+    vi.stubEnv("FABRIK_MODEL", "");
+
+    expect(modelFor(role, false)).toEqual(role);
+  });
+});
+
+describe("Whether a run may be given Fable (ADR-0034)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([true, false])("is the checkout's own Kit config's allow_fable (%j) for a live run", (allowFable) => {
+    vi.stubEnv("FABRIK_ALLOW_FABLE", String(!allowFable));
+
+    expect(allowFableFor(undefined, { allowFable })).toBe(allowFable);
+  });
+
+  // Its checkout is the Ticket's baseSha, whose Kit config can predate the opt-in, or outlast it.
+  it.each([
+    ["true", false, true],
+    ["false", true, false],
+    ["", true, false],
+  ])("is the repo's own on a Replay arm, as the Kit job passed it out (FABRIK_ALLOW_FABLE %j), whatever baseSha's Kit config says (%j)", (given, atBase, allowed) => {
+    vi.stubEnv("FABRIK_ALLOW_FABLE", given);
+
+    expect(allowFableFor("review", { allowFable: atBase })).toBe(allowed);
+    expect(allowFableFor("implement", { allowFable: atBase })).toBe(allowed);
+  });
+});
 
 describe("What each run's ready hook readies before the agent starts (#703)", () => {
   it("runs setup then build for every run that builds a branch: an Implement run, a replay arm's and a prototype turn", () => {

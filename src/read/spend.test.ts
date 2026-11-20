@@ -86,8 +86,8 @@ describe("The Spend read", () => {
     const { brokenRun: _left, landing: _landing, pushed: _pushed, fullReview: _fullReview, ...schema7 } = aRunRecord({ runId: 1001 });
     const { client } = storeOf({
       [`${SHOP}/1001-1-implement.json`]: JSON.stringify({ ...schema7, schema: 7 }),
-      [`${SHOP}/1002-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 1002 }), schema: 13 }),
-      [`${SHOP}/1003-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 1003 }), schema: 12 }),
+      [`${SHOP}/1002-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 1002 }), schema: 14 }),
+      [`${SHOP}/1003-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 1003 }), schema: 13 }),
       [`${SHOP}/1004-1-implement.json`]: "not JSON",
     });
 
@@ -96,7 +96,7 @@ describe("The Spend read", () => {
     expect(read).toMatchObject({
       kind: "read",
       records: { [`${SHOP}/1001-1-implement.json`]: aRunRecord({ runId: 1001, brokenRun: null }) },
-      unreadable: { count: 3, newestSchema: 13 },
+      unreadable: { count: 3, newestSchema: 14 },
     });
     expect(Object.keys(read.kind === "read" ? read.records : {})).toEqual([`${SHOP}/1001-1-implement.json`]);
   });

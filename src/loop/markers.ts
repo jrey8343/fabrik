@@ -10,6 +10,7 @@
 // beside its rules (src/kit/replay.ts).
 import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
 import type { RequestChangesAnswers } from "./implementOutput.ts";
+import { fableCapsIn } from "./fableCap.ts";
 import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
 import { AGENT_ROLES, type AgentRole, type GateRerunDone, type GateRerunMark, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
@@ -1230,12 +1231,14 @@ export interface AuditMarks {
   readonly commit: string | null;
   readonly pending: boolean;
   readonly failed: boolean;
+  /** Whether its run failed on a Fable cap, which a hidden line on it marks (ADR-0034): no failed run of its week. */
+  readonly fableCapped: boolean;
 }
 
 /** The Audit marker lines in `body`, each matched against a whole line with its outer whitespace trimmed. */
 export function auditMarksIn(body: string): AuditMarks {
-  const { value: commit, pending, failed } = weeklyMarksIn(body, AUDIT_MARKER, AUDIT_PENDING_MARKER, AUDIT_FAILED_MARKER);
-  return { commit, pending, failed };
+  const { value: commit, pending, failed, fableCapped } = weeklyMarksIn(body, AUDIT_MARKER, AUDIT_PENDING_MARKER, AUDIT_FAILED_MARKER);
+  return { commit, pending, failed, fableCapped };
 }
 
 /**
@@ -1262,23 +1265,27 @@ export interface RetroMarks {
   readonly windowEnd: string | null;
   readonly pending: boolean;
   readonly failed: boolean;
+  /** Whether its run failed on a Fable cap, which a hidden line on it marks (ADR-0034): no failed run of its week. */
+  readonly fableCapped: boolean;
 }
 
 /** The Retro marker lines in `body`, each matched against a whole line with its outer whitespace trimmed. */
 export function retroMarksIn(body: string): RetroMarks {
-  const { value, pending, failed } = weeklyMarksIn(body, RETRO_MARKER, RETRO_PENDING_MARKER, RETRO_FAILED_MARKER);
+  const { value, pending, failed, fableCapped } = weeklyMarksIn(body, RETRO_MARKER, RETRO_PENDING_MARKER, RETRO_FAILED_MARKER);
   const windowEnd = value === null || Number.isNaN(Date.parse(value)) ? null : value;
-  return { windowEnd, pending, failed };
+  return { windowEnd, pending, failed, fableCapped };
 }
 
 /**
  * The marker lines in `body` of an issue a weekly gate opens pending for its
  * run (src/loop/weeklyGate.ts), an Audit or a Retro: the value its own
- * `marker` captures, and whether it has the pending or the failed line. Each
- * is matched against a whole line with its outer whitespace trimmed.
+ * `marker` captures, and whether it has the pending or the failed line, and,
+ * failed, a Fable cap's hidden line. Each is matched against a whole line with
+ * its outer whitespace trimmed.
  */
 function weeklyMarksIn(body: string, marker: RegExp, pending: string, failed: string) {
   const lines = body.split("\n").map((line) => line.trim());
   const value = lines.map((line) => marker.exec(line)?.[1]).find((each) => each !== undefined) ?? null;
-  return { value, pending: lines.includes(pending), failed: lines.includes(failed) };
+  const hasFailed = lines.includes(failed);
+  return { value, pending: lines.includes(pending), failed: hasFailed, fableCapped: hasFailed && fableCapsIn(body).length > 0 };
 }

@@ -523,7 +523,7 @@ async function main(landing: Landing | null): Promise<void> {
   // summary does, and only while a replay issue the Operator filed is open (gatherReplaySlice). The tick
   // job checks the store out only while a replay issue is open (.github/actions/replay-store).
   const replayStore = storeCheckoutAt(process.env["FABRIK_STORE_DIR"], config);
-  const gathered = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, store, replayStore);
+  const gathered = await gatherSnapshot(github, repo, event, config.operator, appLogin, actions, { store, replayStore });
   // A Reviewer's pass carries the last Digest forward when only main moved (ADR-0022), which takes the Kit's list of
   // asks on the PR now: read only where its last Digest might be carried, and a Verdict never fails for want of it.
   const { snapshot, unread: asksUnread } = await snapshotWithAsks(github, repo, event, gathered, config);

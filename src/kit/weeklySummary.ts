@@ -21,6 +21,8 @@ import { architecturalEscapesOf, type ArchitecturalEscapes, escapesCell, escapeW
 import { flakyCheckMarksIn, unrelatedFailureMarksIn, weeklyRunName, weeklyRunWaitingNoted, type WeeklyRunKind } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { freeSubscriptions } from "../loop/subscriptions.ts";
+import { inForce } from "../loop/fableCap.ts";
+import { fableCapReadingsOf } from "./fableCapFacts.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
@@ -57,8 +59,8 @@ import {
   type RunRecord,
   runKey,
   type UnreadableRunRecords,
-  WEEKLY_LIMIT,
 } from "./runRecord.ts";
+import { WEEKLY_LIMIT } from "../agent/failure.ts";
 import { NOT_APPLICABLE, type ScoreEntry, type ScoreFile, type ScoreSkip } from "./scorer.ts";
 import { YIELD_KINDS, type YieldKind, type Yields, type YieldShare, yieldsOf } from "./yield.ts";
 
@@ -464,6 +466,12 @@ export interface WeeklySummary {
     readonly stepUpsByReason: WeekOverWeek<StepUpCounts>;
     /** The Tickets merged in the week whose first Implement run was a Stepped-up start, and how many of them needed no Retry. */
     readonly steppedUpStarts: WeekOverWeek<SteppedUpStarts>;
+    /**
+     * The Fable fallbacks (ADR-0034) in the Product repos that opted in to
+     * Fable (fableFallbacksIn), or null when none did, so a Kit that never
+     * runs Fable shows no row.
+     */
+    readonly fableFallbacks: WeekOverWeek<number> | null;
   };
   /** What the score files of the week's runs say. */
   readonly scores: WeekOverWeek<WeekScores>;
@@ -865,6 +873,12 @@ export interface SubscriptionUsage {
   readonly subscription: string;
   readonly cost: number;
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
+  /**
+   * When its Fable cap resets (ADR-0034), ISO 8601, while a Fable cap reading
+   * for it has its reset still ahead at the filing, in a Kit with a repo that
+   * opted in to Fable; else null.
+   */
+  readonly fableResetsAt: string | null;
 }
 
 /** The summary to file for the week that just ended, or skip. */
@@ -873,9 +887,12 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   const { records, scoreFiles } = everything;
   const input: WeeklySummaryInput = { ...everything, records: records.filter(isLive), scoreFiles: scoreFiles.filter(isLive) };
   const replays = records.filter((record) => !isLive(record));
+  // A Fable cap is the Subscription's, whatever run reached it, a Replay arm's included.
+  const fable = optedInToFable(input.kits);
+  const fableResets = fableResetsOf(records, fable, input.now);
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
-  const thisWeek = metricsOf(weeks.thisWeek, input, { latest: true });
-  const lastWeek = metricsOf(weeks.lastWeek, input, { latest: false });
+  const thisWeek = metricsOf(weeks.thisWeek, input, { latest: true, fable });
+  const lastWeek = metricsOf(weeks.lastWeek, input, { latest: false, fable });
   const replaySpend = { thisWeek: replaySpendOf(weeks.thisWeek, replays), lastWeek: replaySpendOf(weeks.lastWeek, replays) };
   const healthOf = (repo: string): LoopHealth | null => {
     const read = input.health.find((health) => health.repo === repo);
@@ -916,11 +933,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     costPerSpec: change("costPerSpec"),
     spendNeverMerged: change("spendNeverMerged"),
     weeklyLimit: change("weeklyLimit"),
-    subscriptions: thisWeek.subscriptions.map(({ subscription, cost, weeklyLimit }) => ({
-      subscription,
-      cost,
-      weeklyLimit: { thisWeek: weeklyLimit, lastWeek: lastWeek.subscriptions.find((other) => other.subscription === subscription)?.weeklyLimit ?? null },
-    })),
+    subscriptions: subscriptionUsageOf(thisWeek.subscriptions, lastWeek.subscriptions, fableResets),
     humanTouches: change("humanTouches"),
     retriesPerMergedPullRequest: change("retriesPerMergedPullRequest"),
     touchUpsPerMergedPullRequest: change("touchUpsPerMergedPullRequest"),
@@ -945,6 +958,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       stepUps: change("stepUps"),
       stepUpsByReason: change("stepUpsByReason"),
       steppedUpStarts: change("steppedUpStarts"),
+      fableFallbacks: fable.size === 0 ? null : change("fableFallbacks"),
     },
     scores: change("scores"),
     scoringCost: change("scoringCost"),
@@ -1031,11 +1045,16 @@ interface WeekMetrics {
   readonly stepUps: number;
   readonly stepUpsByReason: StepUpCounts;
   readonly steppedUpStarts: SteppedUpStarts;
+  readonly fableFallbacks: number;
   readonly scores: WeekScores;
   readonly scoringCost: ScoringCost;
 }
 
-function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly latest: boolean }): WeekMetrics {
+function metricsOf(
+  week: Week,
+  input: WeeklySummaryInput,
+  { latest, fable }: { readonly latest: boolean; readonly fable: ReadonlySet<string> },
+): WeekMetrics {
   const records = input.records
     .filter((record) => within(week, record.endedAt))
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
@@ -1080,6 +1099,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
     steppedUpStarts: steppedUpStartsOf(merged, input.records),
+    fableFallbacks: fableFallbacksIn(records, fable),
     scores: scoresOf(week, input),
     scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
@@ -1155,6 +1175,23 @@ function retriesIn(records: readonly RunRecord[]): number {
 function touchUpsIn(records: readonly RunRecord[]): number {
   const touchUps = records.filter((record) => record.role === "implement" && record.touchUp > 0 && record.infrastructureFailure === null);
   return new Set(touchUps.map(({ repo, issue, pullRequest, touchUp }) => JSON.stringify([repo, issue, pullRequest, touchUp]))).size;
+}
+
+/**
+ * How many Fable fallbacks (ADR-0034) these records hold in the repos given:
+ * every record with `fallback` `fable-cap`, each a run started on Opus 5.5
+ * because no Subscription had Fable left, one that ended in an
+ * Infrastructure failure included (#832). The Fable run's own refusal on its
+ * Fable cap ran on Fable, so it is never a fallback: only the run that fell
+ * back counts.
+ */
+function fableFallbacksIn(records: readonly RunRecord[], repos: ReadonlySet<string>): number {
+  return records.filter((record) => repos.has(record.repo) && record.fallback === "fable-cap").length;
+}
+
+/** The Product repos whose Kit config, as read at their default branch's head, opts in to Fable with `allow_fable` (ADR-0034). */
+function optedInToFable(kits: readonly RepoKitFacts[]): ReadonlySet<string> {
+  return new Set(kits.flatMap(({ repo, config }) => (config.ok && config.config.allowFable ? [repo] : [])));
 }
 
 /**
@@ -1387,6 +1424,41 @@ function leftDesignIn(week: Week, spec: SpecFacts, appLogin: string): boolean {
 /** The latest weekly-limit reading among these records, sorted by when they ended, or null if none read one. */
 function lastWeeklyLimitOf(records: readonly RunRecord[]): RateLimitReading | null {
   return records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null;
+}
+
+/**
+ * Each Subscription the week's records ran on, and each with its Fable cap in
+ * force, in name order: its cost and weekly-limit readings this week and last,
+ * and when its Fable cap resets.
+ */
+function subscriptionUsageOf(
+  thisWeek: WeekMetrics["subscriptions"],
+  lastWeek: WeekMetrics["subscriptions"],
+  fableResets: ReadonlyMap<string, string>,
+): SubscriptionUsage[] {
+  const capped = [...fableResets.keys()].filter((subscription) => !thisWeek.some((ran) => ran.subscription === subscription));
+  return [...thisWeek, ...capped.map((subscription) => ({ subscription, cost: 0, weeklyLimit: null }))]
+    .toSorted((a, b) => (a.subscription < b.subscription ? -1 : a.subscription > b.subscription ? 1 : 0))
+    .map(({ subscription, cost, weeklyLimit }) => ({
+      subscription,
+      cost,
+      weeklyLimit: { thisWeek: weeklyLimit, lastWeek: lastWeek.find((other) => other.subscription === subscription)?.weeklyLimit ?? null },
+      fableResetsAt: fableResets.get(subscription) ?? null,
+    }));
+}
+
+/**
+ * When each Subscription's Fable cap resets (ADR-0034), by name, for those
+ * with a Fable cap reading still in force at `now`, read off the Run records
+ * of the repos given (fableCapReadingsOf). The latest reading in force counts.
+ */
+function fableResetsOf(records: readonly RunRecord[], repos: ReadonlySet<string>, now: string): Map<string, string> {
+  const resets = new Map<string, string>();
+  for (const { subscription, until } of inForce(fableCapReadingsOf(records, (record) => repos.has(record.repo)), now)) {
+    const seen = resets.get(subscription);
+    if (seen === undefined || Date.parse(until) > Date.parse(seen)) resets.set(subscription, until);
+  }
+  return resets;
 }
 
 /** Each Subscription these records ran on, in name order, with their cost and latest weekly-limit reading. */
@@ -1882,6 +1954,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords,
     row("Step-ups", counts.stepUps, count),
     ...stepUpReasonRows(counts.stepUpsByReason),
     steppedUpStartsRow(counts.steppedUpStarts),
+    ...(counts.fableFallbacks === null ? [] : [row("Fable fallbacks", counts.fableFallbacks, count)]),
     row("Human touches per merged PR", humanTouches, (value) => value.toFixed(1)),
     ...requestChangesRows(summary.requestChanges),
     row("Cycle time (median)", cycleTimeMs, hours),
@@ -2244,14 +2317,28 @@ function subscriptionUsageLines(
   subscriptions: readonly SubscriptionUsage[],
   timeZone: string,
 ): string[] {
-  if (subscriptions.length < 2) return [`Subscription usage: ${limitReading(weeklyLimit, timeZone)}`];
+  if (subscriptions.length < 2) {
+    const [only] = subscriptions;
+    const fable = only === undefined ? "" : fableReset(only.fableResetsAt, timeZone, only.subscription);
+    return [`Subscription usage: ${limitReading(weeklyLimit, timeZone)}${fable}`];
+  }
   return [
     "Subscription usage:",
     "",
     ...subscriptions.map(
-      ({ subscription, cost, weeklyLimit: reading }) => `- ${subscription}: ${dollars(cost)} API-equivalent cost, ${limitReading(reading, timeZone)}`,
+      ({ subscription, cost, weeklyLimit: reading, fableResetsAt }) =>
+        `- ${subscription}: ${dollars(cost)} API-equivalent cost, ${limitReading(reading, timeZone)}${fableReset(fableResetsAt, timeZone)}`,
     ),
   ];
+}
+
+/**
+ * When a Subscription's Fable cap resets (ADR-0034), after its weekly-limit
+ * reading, naming it on a line that doesn't, or nothing while it has Fable left.
+ */
+function fableReset(resetsAt: string | null, timeZone: string, unnamed: string | null = null): string {
+  if (resetsAt === null) return "";
+  return ` Fable cap reached${unnamed === null ? "" : ` on ${unnamed}`}, resetting ${readable(Date.parse(resetsAt), timeZone)}.`;
 }
 
 /** A weekly-limit reading this week, when it resets, and last week's beside it. */

@@ -2,6 +2,7 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { type FableCapReading, fableCapsIn } from "../loop/fableCap.ts";
 import { shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { changedTestsIn } from "../loop/changedTests.ts";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../kit/config.ts";
 import type { ActionsStep } from "../kit/kitSaid.ts";
 import { isOperatorsReplay } from "../kit/replay.ts";
+import { fableCapReadingsOf } from "../kit/fableCapFacts.ts";
 import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
@@ -551,6 +553,14 @@ export const KIT_JOB_NAME = "Kit";
 export const REPLAY_ARM_JOB_NAMES = ["Replay implement", "Replay gates", "Replay review", "Replay score"] as const;
 export const REPLAY_RECORD_JOB_NAME = "Replay record";
 
+/** What gatherSnapshot reads beside GitHub, each only where its caller has it (see gatherSnapshot). */
+export interface GatherOptions {
+  readonly store?: Pick<ReadClient, "rest"> | null;
+  readonly replayStore?: ReplayStore | null;
+  readonly storeFableCaps?: readonly FableCapReading[];
+  readonly wait?: (ms: number) => Promise<void>;
+}
+
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
  * event payload. The Operator is the Kit config's `operator`, or else the
@@ -572,6 +582,9 @@ export const REPLAY_RECORD_JOB_NAME = "Replay record";
  * claim weighs, and nothing of the store. The tick reads the Failure excerpt
  * of each Flaky check's red run it will report (#778): the job and its step's
  * log through `actions`, the annotations on the Fabrik App's Checks: read.
+ * The Kit job of a repo that opted in to Fable passes the Fable cap readings
+ * it read in the store (`storeFableCaps`, ADR-0034), and a test passes its
+ * own `wait` for GitHub's mergeable state.
  */
 export async function gatherSnapshot(
   client: ReadClient,
@@ -580,9 +593,7 @@ export async function gatherSnapshot(
   operator: string | null,
   appLogin: string | null,
   actions: (ReadClient & Pick<LogClient, "logText">) | null = null,
-  store: Pick<ReadClient, "rest"> | null = null,
-  replayStore: ReplayStore | null = null,
-  wait: (ms: number) => Promise<void> = sleep,
+  { store = null, replayStore = null, storeFableCaps = [], wait = sleep }: GatherOptions = {},
 ): Promise<Snapshot> {
   // A held line is never read as activity or a reply (#471).
   const github = leavingOutHeldLines(client);
@@ -659,9 +670,18 @@ export async function gatherSnapshot(
         event.kind === "label-added" && event.label === REPLAY_TRIGGER_LABEL
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
+  // The Fable cap readings (ADR-0034): those a refused run's re-run reads back, marked where its trigger label went, on
+  // the event's issue or its PR, and those the Kit job read in the store's newest Run records (storeFableCaps). Which
+  // are still in force is the Loop's to weigh (src/loop/fableCap.ts), at the time they were read.
+  // An issue's lines are read with no author check, unlike a PR's, by choice: the Fabrik App marks them on an issue
+  // someone else opened, so its author says nothing of who wrote them, and GitHub keeps only a body's last editor, which
+  // any later edit of the description replaces, so a check on it would drop the App's own line. Reading a forged line
+  // fails safe: it can only move a Fable run to another Subscription, or to Opus, never make one bill.
+  const marked = [...fableCapsIn(part?.issue?.body ?? ""), ...(part?.fableCaps ?? [])];
+  const fableCaps = { readings: [...marked, ...storeFableCaps], now: event.kind === "scheduled-tick" ? event.now : new Date().toISOString() };
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -1394,6 +1414,11 @@ async function gatherEventPart(
       // A failed Digest run's no-Digest line goes on the PR the Kit job named, closed by now or not.
       // A Review that stopped on a conflict brings its PR up to date (#704), so the PR is weighed too.
       const weighsPullRequest = (event.role === "implement" && event.prototype !== true) || stoppedOnConflict(event);
+      // A Review refused on its Fable cap had its re-run's cap marked on its PR, which the Loop weighs before re-running it again (ADR-0034).
+      if (event.role === "review" && event.report?.failure === "fable-cap") {
+        const marked = ticket.issue?.openPullRequests[0];
+        return marked === undefined ? ticket : { ...ticket, fableCaps: (await gatherPullRequest(github, repo, marked, operator, appLogin)).fableCaps ?? [] };
+      }
       const open = event.digest?.pullRequest ?? (weighsPullRequest ? ticket.issue?.openPullRequests[0] : undefined);
       if (open === undefined) return ticket;
       const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);
@@ -1446,7 +1471,11 @@ type EventPart = Omit<
   | "flakySweep"
   | "passedHeads"
   | "closedCheckIssues"
->;
+  | "fableCaps"
+> & {
+  /** The Fable cap readings marked on the event's PR, in force or not, which gatherSnapshot adds to the snapshot's. */
+  readonly fableCaps?: readonly FableCapReading[];
+};
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
 
@@ -1790,7 +1819,8 @@ async function gatherReplaySlice(
     store.records(),
   ]);
   const acceptance = await gatherReplayAcceptance(github, repo, now, { operator, issues }, records);
-  return { issues, capacity: { ...dispatch, implementRunTickets, weeklyLimits: records === null ? null : newestWeeklyLimits(records, now) }, acceptance };
+  const read = records === null ? { weeklyLimits: null, fableCaps: null } : { weeklyLimits: newestWeeklyLimits(records, now), fableCaps: fableCapReadingsOf(records) };
+  return { issues, capacity: { ...dispatch, implementRunTickets, ...read }, acceptance };
 }
 
 /**
@@ -2120,6 +2150,8 @@ async function gatherPullRequest(
     dispatch: null,
     designQueue: null,
     operator: operator ?? data.repository.owner.login,
+    // Every Fable cap marked on it, in force or not, which gatherSnapshot weighs. Only a body the App wrote counts, as for its other markers.
+    fableCaps: byAppOf(pullRequest.author, appLogin) ? fableCapsIn(pullRequest.body) : [],
   };
 }
 

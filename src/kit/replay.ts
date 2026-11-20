@@ -18,7 +18,8 @@ import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
 import type { Verdict } from "../loop/types.ts";
 import { FULL_SHA, shortSha } from "../skills/lock.ts";
-import type { KitConfig } from "./config.ts";
+import { armsRunFable } from "../loop/fableCap.ts";
+import { AS_IF_OPTED_IN_TO_FABLE, type KitConfig, refuseRoleModel } from "./config.ts";
 import {
   eligibleOf,
   type LeftOutTicket,
@@ -35,7 +36,7 @@ import {
 } from "./replayPick.ts";
 import { readReplayRequest, readReplayVariable, type ReplayRequest, type ReplayVariable, settingOf, variableLine } from "./replayRequest.ts";
 import { rubricId, rubricName, SCORERS, scorerName } from "./rubrics.ts";
-import { firstRunOf, isLive, isReplayArm, REPLAY_ARMS, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
+import { firstRunOf, isLive, isReplayArm, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
 import { storeFileUrl } from "./runStore.ts";
 import { NOT_APPLICABLE, type ScoreFile } from "./scorer.ts";
 
@@ -97,9 +98,17 @@ export interface ReplayAcceptance {
 export interface ReplayTick {
   /** The Operator's GitHub login. */
   readonly operator: string;
+  /** Whether this Product repo's Kit config opts in to Fable (`allow_fable`, ADR-0034), which a request's variable is held to. */
+  readonly allowFable: boolean;
   /** The `fabrik:replay` issues, in any order. */
   readonly issues: readonly ReplayIssue[];
   readonly capacity: ReplayCapacity;
+  /**
+   * The spare capacity for a Ticket whose arms run Fable (armsRunFable,
+   * ADR-0034): as `capacity`, on the first free Subscription with Fable left,
+   * and none while none has any, since an arm never falls back.
+   */
+  readonly fableCapacity: ReplayCapacity;
   /** What accepting a waiting request weighs, or null when the adapter read none. */
   readonly acceptance: ReplayAcceptance | null;
   /** The tick's time, ISO 8601. */
@@ -151,18 +160,19 @@ export function nextReplayStep(tick: ReplayTick): ReplayStep {
       accepted.push({ issue: issue.number, marks });
       continue;
     }
-    const step = requestStep(issue, tick.acceptance);
+    const step = requestStep(issue, tick.acceptance, tick.allowFable);
     if (step !== null) return step;
   }
   const running = replayInProgress(tick);
   if (running !== null) return neverLanded(running, tick) ?? { kind: "nothing", reason: oneAtATime(running) };
   const next = accepted.flatMap(({ issue, marks }) => {
     const planned = nextReplayTicket(marks);
-    return planned === null ? [] : [{ issue, ticket: planned.ticket }];
+    return planned === null ? [] : [{ issue, planned }];
   })[0];
   if (next === undefined) return { kind: "nothing", reason: "No replay Ticket is waiting to run" };
-  if (!tick.capacity.spare) return { kind: "nothing", reason: tick.capacity.why };
-  return { kind: "start", ...next };
+  const capacity = armsRunFable(next.planned.arms) ? tick.fableCapacity : tick.capacity;
+  if (!capacity.spare) return { kind: "nothing", reason: capacity.why };
+  return { kind: "start", issue: next.issue, ticket: next.planned.ticket };
 }
 
 /** The Ticket a Replay runs next: the first in its plan still waiting to run, or null when none is. */
@@ -195,7 +205,8 @@ export interface ReplayReads {
  */
 export function replayReads(tick: Pick<ReplayTick, "operator" | "issues">, candidates: readonly ReplayCandidate[] | null): ReplayReads {
   const requests = operatorsOpenIssues(tick).flatMap((issue) => {
-    const read = replayMarksIn(issue.body) === null ? readReplayRequest(issue.body) : null;
+    // The adapter reads no Kit config of the repo's own, so it reads for a request any repo could accept: the tick weighs the opt-in.
+    const read = replayMarksIn(issue.body) === null ? readReplayRequest(issue.body, AS_IF_OPTED_IN_TO_FABLE) : null;
     return read?.ok === true ? [read.request] : [];
   });
   const fabrikShas = requests.flatMap(({ variable }) => (variable.kind === "kit" ? [variable.sha] : []));
@@ -258,8 +269,8 @@ export function oneAtATime({ issue, progress }: ReplayRunning): string {
  * was rejected already for the same problem. Nothing, when the acceptance
  * facts lack one that replayReads names.
  */
-function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null): ReplayStep | null {
-  const read = readReplayRequest(issue.body);
+function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null, allowFable: boolean): ReplayStep | null {
+  const read = readReplayRequest(issue.body, allowFable);
   if (!read.ok) return rejection(issue, rejectedRequest(read.errors));
   const { request } = read;
   const missing = (fact: string): ReplayStep => ({ kind: "nothing", reason: `Replay #${issue.number}'s request waits on ${fact}, which the tick didn't read` });
@@ -272,7 +283,7 @@ function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null): R
   }
   const unread = eligibleOf(request, acceptance.candidates).find(({ picked }) => acceptance.baseConfigs[picked.baseSha] === undefined);
   if (unread !== undefined) return missing(`the Kit config at ${shortSha(unread.picked.baseSha)}`);
-  const { plan, ruledOut } = planOf(request, acceptance);
+  const { plan, ruledOut } = planOf(request, acceptance, allowFable);
   if (plan.tickets.length === 0) return rejection(issue, noEligibleTicket(plan, ruledOut));
   const progress = plan.tickets.map(({ ticket }): TicketProgress => ({ ticket, state: "pending" }));
   return { kind: "accept", issue: issue.number, body: replayBody(issue.body, { plan, progress }) };
@@ -316,11 +327,16 @@ const EDIT_TO_FIX = "Edit the request in the issue body, and the Kit reads it ag
 
 /**
  * The request's plan, from the Tickets it picks and each one's Kit config at
- * its baseSha, which its baseline runs: a Ticket whose Kit config there no
- * longer resolves, or already runs the variable as the variant would, so that
- * its two arms would be the same, is left out with why.
+ * its baseSha, which its baseline runs, Fable included: a Ticket whose Kit
+ * config there no longer resolves, runs Fable in a repo whose own Kit config
+ * (`allowFable`) no longer opts in, or already runs the variable as the
+ * variant would, so that its two arms would be the same, is left out with why.
  */
-function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonly plan: ReplayPlan; readonly ruledOut: readonly LeftOutTicket[] } {
+function planOf(
+  request: ReplayRequest,
+  acceptance: ReplayAcceptance,
+  allowFable: boolean,
+): { readonly plan: ReplayPlan; readonly ruledOut: readonly LeftOutTicket[] } {
   const { variable } = request;
   const { picked, leftOut, ruledOut } = pickWith(request, acceptance.candidates, (ticket) => {
     const { baseSha } = ticket;
@@ -328,7 +344,10 @@ function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonl
     // Never unread: requestStep weighs no request until every base it picks from is read.
     if (base === undefined) return null;
     if (!base.ok) return `its Kit config at ${shortSha(baseSha)} doesn't resolve under this Kit release: ${base.errors.join("; ")}`;
-    const runs = alreadyRuns(replayArms(base.config, variable, ticket.steppedUp).baseline, variable);
+    const { baseline } = replayArms(base.config, variable, ticket.steppedUp);
+    const refused = refusedBaselineModel(baseline, allowFable);
+    if (refused !== null) return `its Kit config at ${shortSha(baseSha)} runs ${refused}, but this repo's Kit config doesn't opt in to Fable (allow_fable)`;
+    const runs = alreadyRuns(baseline, variable);
     return runs === null ? null : `its Kit config at ${shortSha(baseSha)} already runs ${runs}, so its two arms would be the same`;
   });
   const tickets = picked.flatMap((ticket) => {
@@ -338,6 +357,16 @@ function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonl
     return base?.ok === true ? [{ ...planned, arms: replayArms(base.config, variable, steppedUp) }] : [];
   });
   return { plan: { variable, tickets, leftOut }, ruledOut };
+}
+
+/**
+ * The baseline's role run on a model this repo's Kit config refuses, in
+ * words, such as Fable once it no longer opts in, or `best`; null when
+ * there's none.
+ */
+function refusedBaselineModel(baseline: ReplayArmSettings, allowFable: boolean): string | null {
+  const role = REPLAY_ROLES.find((each) => refuseRoleModel(baseline[each].model, allowFable) !== null);
+  return role === undefined ? null : `${RUN_NAMES[role]} on ${baseline[role].model}`;
 }
 
 /** What the baseline already runs as the variable's variant would, in words; null when the variant changes it. */
@@ -398,6 +427,12 @@ export type ReplayTicketEnd =
   | { readonly kind: "done" }
   /** It was refused on a Subscription's weekly limit, which costs the Replay time, never the Ticket. */
   | { readonly kind: "weekly-limit" }
+  /**
+   * It was refused on a Subscription's Fable cap, which, like a weekly limit,
+   * costs the Replay time, never the Ticket. Unlike a live run, a Replay arm
+   * never falls back, since another model would spoil the comparison (ADR-0034).
+   */
+  | { readonly kind: "fable-cap" }
   /** Any other Infrastructure failure, with why. */
   | { readonly kind: "infrastructure"; readonly reason: string }
   /**
@@ -421,7 +456,7 @@ export function withTicketStarted(body: string, ticket: number, run: number, sta
 
 /**
  * The body with run `run` of Ticket `ticket` ended so: done; back to pending
- * after a weekly-limit refusal; after any other Infrastructure failure,
+ * after a weekly-limit or Fable cap refusal; after any other Infrastructure failure,
  * waiting to run again the first time and failed the second. Null when the
  * Ticket isn't in progress in that run.
  */
@@ -433,6 +468,7 @@ export function withTicketFinished(body: string, ticket: number, run: number, en
       case "done":
         return { state: "done", run };
       case "weekly-limit":
+      case "fable-cap":
         return retrying === null ? { state: "pending" } : { state: "retried", reason: retrying };
       case "infrastructure":
         return retrying === null ? { state: "retried", reason: end.reason } : { state: "failed", run, reason: end.reason };

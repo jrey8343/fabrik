@@ -47,11 +47,11 @@ describe("Reading a replay request", () => {
     ["review.effort: low", { kind: "effort", role: "review", effort: "low" }],
     [`kit: ${CANDIDATE}`, { kind: "kit", sha: CANDIDATE }],
   ])("reads %j as its variable, with the default pick of Tickets", (line, variable) => {
-    expect(readReplayRequest(bodyWith(line))).toEqual({ ok: true, request: { variable, tickets: null } });
+    expect(readReplayRequest(bodyWith(line), false)).toEqual({ ok: true, request: { variable, tickets: null } });
   });
 
   it("reads the Tickets the Operator listed, in their order, with or without a #", () => {
-    expect(readReplayRequest(bodyWith("tickets: #41, 12 #7", "review.effort: high"))).toEqual({
+    expect(readReplayRequest(bodyWith("tickets: #41, 12 #7", "review.effort: high"), false)).toEqual({
       ok: true,
       request: { variable: { kind: "effort", role: "review", effort: "high" }, tickets: [41, 12, 7] },
     });
@@ -59,35 +59,35 @@ describe("Reading a replay request", () => {
 
   describe("finds the request in the body's one replay block", () => {
     it("refuses a body with no replay block", () => {
-      expect(readReplayRequest("Try Review at a higher effort.\n\n```\nreview.effort: high\n```\n")).toEqual({
+      expect(readReplayRequest("Try Review at a higher effort.\n\n```\nreview.effort: high\n```\n", false)).toEqual({
         ok: false,
         errors: ["the body has no ```replay block: put the request in one, naming one variable, such as review.effort: high"],
       });
     });
 
     it("refuses a body with two, since which one is the request is unclear", () => {
-      expect(readReplayRequest(`${bodyWith("review.effort: high")}\n${bodyWith("review.effort: low")}`)).toEqual({
+      expect(readReplayRequest(`${bodyWith("review.effort: high")}\n${bodyWith("review.effort: low")}`, false)).toEqual({
         ok: false,
         errors: ["the body has 2 ```replay blocks, but a request is one"],
       });
     });
 
     it("refuses a block that's never closed", () => {
-      expect(readReplayRequest("```replay\nreview.effort: high\n")).toEqual({
+      expect(readReplayRequest("```replay\nreview.effort: high\n", false)).toEqual({
         ok: false,
         errors: ["the ```replay block is never closed with ```"],
       });
     });
 
     it("reads a body GitHub saved with Windows line endings", () => {
-      expect(readReplayRequest(bodyWith("tickets: 3, 4", "review.effort: high").replaceAll("\n", "\r\n"))).toEqual({
+      expect(readReplayRequest(bodyWith("tickets: 3, 4", "review.effort: high").replaceAll("\n", "\r\n"), false)).toEqual({
         ok: true,
         request: { variable: { kind: "effort", role: "review", effort: "high" }, tickets: [3, 4] },
       });
     });
 
     it("skips blank lines in the block", () => {
-      expect(readReplayRequest(bodyWith("", "review.effort: high", "  "))).toEqual({
+      expect(readReplayRequest(bodyWith("", "review.effort: high", "  "), false)).toEqual({
         ok: true,
         request: { variable: { kind: "effort", role: "review", effort: "high" }, tickets: null },
       });
@@ -98,13 +98,13 @@ describe("Reading a replay request", () => {
     const listing = (count: number) => `tickets: ${Array.from({ length: count }, (_, i) => `#${101 + i}`).join(", ")}`;
 
     it("takes 10", () => {
-      const read = readReplayRequest(bodyWith("kit: " + CANDIDATE, listing(10)));
+      const read = readReplayRequest(bodyWith("kit: " + CANDIDATE, listing(10)), false);
 
       expect(read.ok && read.request.tickets).toEqual([101, 102, 103, 104, 105, 106, 107, 108, 109, 110]);
     });
 
     it("refuses 11", () => {
-      expect(readReplayRequest(bodyWith("kit: " + CANDIDATE, listing(11)))).toEqual({
+      expect(readReplayRequest(bodyWith("kit: " + CANDIDATE, listing(11)), false)).toEqual({
         ok: false,
         errors: ["tickets lists 11 Tickets, but a replay takes at most 10"],
       });
@@ -115,7 +115,7 @@ describe("Reading a replay request", () => {
       ["a zero", "tickets: #0", `tickets lists "#0", which isn't a Ticket number`],
       ["a Ticket twice", "tickets: 12, 15, #12", "tickets lists #12 twice"],
     ])("refuses a list with %s", (_, line, error) => {
-      expect(readReplayRequest(bodyWith("review.effort: high", line))).toEqual({ ok: false, errors: [error] });
+      expect(readReplayRequest(bodyWith("review.effort: high", line), false)).toEqual({ ok: false, errors: [error] });
     });
   });
 
@@ -123,16 +123,16 @@ describe("Reading a replay request", () => {
     ["the variable", "review.effort: low", "review.effort is given twice"],
     ["the Tickets", "tickets: 5", "tickets is given twice"],
   ])("refuses %s given twice", (_, line, error) => {
-    expect(readReplayRequest(bodyWith("review.effort: high", "tickets: 4", line))).toEqual({ ok: false, errors: [error] });
+    expect(readReplayRequest(bodyWith("review.effort: high", "tickets: 4", line), false)).toEqual({ ok: false, errors: [error] });
   });
 
   it("says every way a request is invalid at once", () => {
-    const read = readReplayRequest(bodyWith("review.model: best", "implement.effort: extreme", "tickets: 1 2 3 4 5 6 7 8 9 10 11"));
+    const read = readReplayRequest(bodyWith("review.model: best", "implement.effort: extreme", "tickets: 1 2 3 4 5 6 7 8 9 10 11"), false);
 
     expect(read).toEqual({
       ok: false,
       errors: [
-        `review.model is "best": Fable can bill metered usage, so the Kit never runs it in an AFK role`,
+        `review.model is "best": the CLI can resolve best to any model, Fable included, so the Kit never runs it in an AFK role`,
         `implement.effort is "extreme": effort must be one of low, medium, high, xhigh, max`,
         "tickets lists 11 Tickets, but a replay takes at most 10",
         "the request names 2 variables, review.model and implement.effort, but a replay changes exactly one",
@@ -142,14 +142,14 @@ describe("Reading a replay request", () => {
 
   describe("refuses a request that doesn't name exactly one variable", () => {
     it("refuses one naming none", () => {
-      expect(readReplayRequest(bodyWith("tickets: 12"))).toEqual({
+      expect(readReplayRequest(bodyWith("tickets: 12"), false)).toEqual({
         ok: false,
         errors: ["the request names no variable: give one of implement.model, implement.effort, review.model, review.effort or kit"],
       });
     });
 
     it("refuses one naming two, and names both", () => {
-      expect(readReplayRequest(bodyWith("implement.model: claude-opus-5-5", "review.effort: high"))).toEqual({
+      expect(readReplayRequest(bodyWith("implement.model: claude-opus-5-5", "review.effort: high"), false)).toEqual({
         ok: false,
         errors: ["the request names 2 variables, implement.model and review.effort, but a replay changes exactly one"],
       });
@@ -160,33 +160,56 @@ describe("Reading a replay request", () => {
     ["design.model: claude-opus-5-5", "design.model names the design role, but a replay changes only implement or review"],
     ["triage.effort: high", "triage.effort names the triage role, but a replay changes only implement or review"],
   ])("refuses %j, a role a replay doesn't run", (line, error) => {
-    expect(readReplayRequest(bodyWith(line))).toEqual({ ok: false, errors: [error] });
+    expect(readReplayRequest(bodyWith(line), false)).toEqual({ ok: false, errors: [error] });
   });
 
   it.each([
     ["implement.timeout_minutes: 90", "implement.timeout_minutes isn't a request field: give implement.model, implement.effort, review.model, review.effort or kit, and tickets if you like"],
     ["sha: " + CANDIDATE, "sha isn't a request field: give implement.model, implement.effort, review.model, review.effort or kit, and tickets if you like"],
   ])("refuses %j, a field a request doesn't have", (line, error) => {
-    expect(readReplayRequest(bodyWith(line, "review.effort: high"))).toEqual({ ok: false, errors: [error] });
+    expect(readReplayRequest(bodyWith(line, "review.effort: high"), false)).toEqual({ ok: false, errors: [error] });
   });
 
   it.each([
     ["a line with no colon", "review.effort high", `"review.effort high" isn't a field: write each one as name: value`],
     ["a field with no value", "review.effort:", "review.effort has no value"],
   ])("refuses %s", (_, line, error) => {
-    expect(readReplayRequest(bodyWith(line, "tickets: 4"))).toEqual({ ok: false, errors: [error] });
+    expect(readReplayRequest(bodyWith(line, "tickets: 4"), false)).toEqual({ ok: false, errors: [error] });
   });
 
-  describe("refuses a model the Kit never runs", () => {
-    it.each(["fable", "claude-fable-5", "best"])("refuses %j with Kit config's reason", (model) => {
-      expect(readReplayRequest(bodyWith(`implement.model: ${model}`))).toEqual({
+  describe("holds a Fable model to the repo's opt-in, as Kit config does (ADR-0034)", () => {
+    it.each(["claude-fable-5-2", "claude-fable-5"])("reads %j, a Fable model's full id, in a repo that opted in", (model) => {
+      expect(readReplayRequest(bodyWith(`review.model: ${model}`), true)).toEqual({ ok: true, request: { variable: { kind: "model", role: "review", model }, tickets: null } });
+    });
+
+    it.each(["claude-fable-5-2", "fable"])("refuses %j in a repo that hasn't opted in, with Kit config's reason", (model) => {
+      expect(readReplayRequest(bodyWith(`review.model: ${model}`), false)).toEqual({
         ok: false,
-        errors: [`implement.model is ${JSON.stringify(model)}: Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+        errors: [`review.model is ${JSON.stringify(model)}: Fable can bill metered usage, so the Kit never runs it in an AFK role; set allow_fable to true to opt in (ADR-0034)`],
       });
     });
 
+    it("refuses the bare fable alias in a repo that opted in, as it can resolve to another model", () => {
+      expect(readReplayRequest(bodyWith("implement.model: fable"), true)).toEqual({
+        ok: false,
+        errors: [
+          'implement.model is "fable": with allow_fable, the Kit runs Fable only by its full id, such as claude-fable-5-2, never the fable alias, which can resolve to another model',
+        ],
+      });
+    });
+
+    it.each([true, false])("refuses best whether or not the repo opted in (allow_fable %j), as the CLI can resolve it to Fable", (allowFable) => {
+      expect(readReplayRequest(bodyWith("implement.model: best"), allowFable)).toEqual({
+        ok: false,
+        errors: ['implement.model is "best": the CLI can resolve best to any model, Fable included, so the Kit never runs it in an AFK role'],
+      });
+    });
+  });
+
+  describe("refuses a model the Kit never runs", () => {
+
     it.each(["gpt-5", "gemini-3-pro", "sonnet"])("refuses %j, which isn't a Claude model named in full", (model) => {
-      expect(readReplayRequest(bodyWith(`review.model: ${model}`))).toEqual({
+      expect(readReplayRequest(bodyWith(`review.model: ${model}`), false)).toEqual({
         ok: false,
         errors: [`review.model is ${JSON.stringify(model)}: a replay runs only a Claude model, named in full, such as claude-sonnet-5-5`],
       });
@@ -194,7 +217,7 @@ describe("Reading a replay request", () => {
   });
 
   it.each(["extreme", "High", "none"])("refuses %j as an effort, with Kit config's reason", (effort) => {
-    expect(readReplayRequest(bodyWith(`review.effort: ${effort}`))).toEqual({
+    expect(readReplayRequest(bodyWith(`review.effort: ${effort}`), false)).toEqual({
       ok: false,
       errors: [`review.effort is ${JSON.stringify(effort)}: effort must be one of low, medium, high, xhigh, max`],
     });
@@ -206,7 +229,7 @@ describe("Reading a replay request", () => {
     ["an uppercase sha", CANDIDATE.toUpperCase()],
     ["a branch name", "retro/prompt-change"],
   ])("refuses %s as the candidate Kit", (_, sha) => {
-    expect(readReplayRequest(bodyWith(`kit: ${sha}`))).toEqual({
+    expect(readReplayRequest(bodyWith(`kit: ${sha}`), false)).toEqual({
       ok: false,
       errors: [`kit is ${JSON.stringify(sha)}: a candidate Kit must be a Fabrik commit's full 40-character lowercase SHA`],
     });
@@ -227,7 +250,7 @@ describe("The Replay this link", () => {
 
     expect(`${url.origin}${url.pathname}`).toBe(`${PRODUCT}/issues/new`);
     expect(url.searchParams.get("labels")).toBe("fabrik:replay");
-    expect(readReplayRequest(url.searchParams.get("body") ?? "")).toEqual({ ok: true, request: { variable, tickets: null } });
+    expect(readReplayRequest(url.searchParams.get("body") ?? "", false)).toEqual({ ok: true, request: { variable, tickets: null } });
   });
 });
 
@@ -585,12 +608,18 @@ function acceptanceOf(candidates: readonly ReplayCandidate[]): ReplayAcceptance 
 const NOW = "2026-11-11T04:00:00.000Z";
 const STARTED = "2026-11-11T03:00:00.000Z";
 
-/** A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20 to pick from, at NOW, a replay Ticket's run lasting up to 210 minutes. */
+/**
+ * A tick with spare capacity, these replay issues, and Tickets 7, 12 and 20
+ * to pick from, at NOW, a replay Ticket's run lasting up to 210 minutes, in a
+ * repo that hasn't opted in to Fable.
+ */
 function aTick(issues: readonly ReplayIssue[], overrides: Partial<ReplayTick> = {}): ReplayTick {
   return {
     operator: OPERATOR,
+    allowFable: false,
     issues,
     capacity: { spare: true },
+    fableCapacity: { spare: true },
     acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]),
     now: NOW,
     runLimitMinutes: 210,
@@ -735,7 +764,7 @@ describe("A Replay's next step on the tick", () => {
       const accepted = acceptedBody(nextReplayStep(aTick([aReplayIssue(140, { body })])));
 
       expect(accepted.startsWith(body)).toBe(true);
-      expect(readReplayRequest(accepted)).toEqual(readReplayRequest(body));
+      expect(readReplayRequest(accepted, false)).toEqual(readReplayRequest(body, false));
     });
   });
 
@@ -769,6 +798,51 @@ describe("A Replay's next step on the tick", () => {
       const fixed = { ...invalid, body: bodyWith("review.effort: high", "tickets: 12"), comments: [comment] };
 
       expect(nextReplayStep(aTick([fixed]))).toMatchObject({ kind: "accept", issue: 140 });
+    });
+  });
+
+  describe("holds a variable naming Fable to this repo's opt-in (ADR-0034)", () => {
+    const fable = aReplayIssue(140, { body: bodyWith("review.model: claude-fable-5-2", "tickets: 12") });
+
+    it("accepting it in a repo that opted in, its variant's Review on Fable", () => {
+      const plan = replayMarksIn(acceptedBody(nextReplayStep(aTick([fable], { allowFable: true }))))?.plan;
+
+      expect(plan?.tickets.map(({ ticket, arms }) => [ticket, arms.baseline.review.model, arms.variant.review.model])).toEqual([[12, "claude-opus-5-5", "claude-fable-5-2"]]);
+    });
+
+    describe("running a Ticket's baseline as its Kit config at its base names its roles, Fable included", () => {
+      /** BASE in a repo that opted in, Review on Fable. */
+      const reviewOnFable = { ok: true, config: { roles: { ...BASE.roles, review: { ...BASE.roles.review, model: "claude-fable-5-2" } } } } as const;
+      const acceptance = acceptanceOf([aCandidate(7), aCandidate(12)]);
+      const baseConfigs = { ...acceptance.baseConfigs, [baseOf(12)]: reviewOnFable };
+      const issue = aReplayIssue(140, { body: bodyWith("implement.effort: high", "tickets: 12, 7") });
+
+      it("in a repo that opted in, both arms' Review on Fable", () => {
+        const plan = replayMarksIn(acceptedBody(nextReplayStep(aTick([issue], { allowFable: true, acceptance: { ...acceptance, baseConfigs } }))))?.plan;
+
+        expect(plan?.tickets.map(({ ticket, arms }) => [ticket, arms.baseline.review.model, arms.variant.review.model])).toEqual([
+          [12, "claude-fable-5-2", "claude-fable-5-2"],
+          [7, "claude-opus-5-5", "claude-opus-5-5"],
+        ]);
+      });
+
+      it("leaving it out, with why, in a repo that has since stopped opting in", () => {
+        const plan = replayMarksIn(acceptedBody(nextReplayStep(aTick([issue], { allowFable: false, acceptance: { ...acceptance, baseConfigs } }))))?.plan;
+
+        expect(plan?.tickets.map(({ ticket }) => ticket)).toEqual([7]);
+        expect(plan?.leftOut).toEqual([
+          { ticket: 12, reason: "its Kit config at 000000c runs Review on claude-fable-5-2, but this repo's Kit config doesn't opt in to Fable (allow_fable)" },
+        ]);
+      });
+    });
+
+    it("rejecting it in one that hasn't, with Kit config's reason", () => {
+      const step = nextReplayStep(aTick([fable], { allowFable: false }));
+
+      expect(step).toMatchObject({ kind: "reject", issue: 140 });
+      expect((step as Extract<ReplayStep, { kind: "reject" }>).comment).toContain(
+        'review.model is "claude-fable-5-2": Fable can bill metered usage, so the Kit never runs it in an AFK role; set allow_fable to true to opt in (ADR-0034)',
+      );
     });
   });
 
@@ -824,6 +898,13 @@ describe("A Replay's next step on the tick", () => {
       expect(replayReads(tick, null)).toEqual({ acceptance: true, fabrikShas: [CANDIDATE], baseShas: [] });
       expect(replayReads(tick, candidates)).toEqual({ acceptance: true, fabrikShas: [CANDIDATE], baseShas: [baseOf(12), baseOf(7)] });
       expect(replayReads(aTick([byDefault]), candidates).baseShas).toEqual([baseOf(7), baseOf(12), baseOf(20)]);
+    });
+
+    // The adapter reads no Kit config of the repo's own, so a request an opted-in repo accepts is read for too.
+    it("for a request whose variable names Fable by its full id, which only the tick weighs against the repo's opt-in", () => {
+      const fable = aReplayIssue(140, { body: bodyWith("review.model: claude-fable-5-2", "tickets: 12") });
+
+      expect(replayReads(aTick([fable]), candidates)).toEqual({ acceptance: true, fabrikShas: [], baseShas: [baseOf(12)] });
     });
 
     it.each<[string, ReplayIssue[]]>([
@@ -961,6 +1042,19 @@ describe("A Replay's next step on the tick", () => {
       expect(replayMarksIn(refused.body)?.progress[0]).toEqual({ ticket: 12, state: "retried", reason: "the model provider failed" });
     });
 
+    // A Replay arm never falls back (ADR-0034), so a Fable cap costs the Replay time, as a weekly limit does, never the Ticket.
+    it("returning a Ticket whose run was refused on a Fable cap to pending, as a weekly-limit refusal does, its one retry kept", () => {
+      const refused = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "fable-cap" });
+      const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+
+      expect(replayMarksIn(refused.body)?.progress[0]).toEqual({ ticket: 12, state: "pending" });
+      expect(replayMarksIn(finished(started(once, 12, 9002), 12, 9002, { kind: "fable-cap" }).body)?.progress[0]).toEqual({
+        ticket: 12,
+        state: "retried",
+        reason: "the model provider failed",
+      });
+    });
+
     // #448: a run its replay-record job couldn't land is released by that job at once, not left to the tick's 210-minute release.
     describe("releasing a Ticket whose run's landing failed, from the replay-record job itself", () => {
       const running = started(anAcceptedIssue(140), 12, 9001);
@@ -1038,7 +1132,9 @@ describe("A Replay's next step on the tick", () => {
     });
 
     it.each([
-      ["a model the Kit never runs", (plan: string) => plan.replace('"model":"claude-opus-5-5"', '"model":"claude-fable-5"')],
+      // A Fable model's full id reads, as an opted-in repo's plan holds it; that repo's opt-in is weighed as each arm runs.
+      ["the fable alias, which no Kit config runs", (plan: string) => plan.replace('"model":"claude-opus-5-5"', '"model":"fable"')],
+      ["best, which no Kit config runs", (plan: string) => plan.replace('"model":"claude-opus-5-5"', '"model":"best"')],
       ["an effort Kit config doesn't take", (plan: string) => plan.replace('"effort":"medium"', '"effort":"extreme"')],
       ["a base that isn't a full sha", (plan: string) => plan.replace(/"baseSha":"[0-9a-f]{40}"/, '"baseSha":"main"')],
       ["a variable no request names", (plan: string) => plan.replace('"role":"review"', '"role":"design"')],
@@ -1433,7 +1529,7 @@ describe("A Replay's results", () => {
 
     expect(body.startsWith(request)).toBe(true);
     expect(body.slice(0, body.indexOf("<!-- fabrik:replay-start -->"))).toBe(done.body.slice(0, done.body.indexOf("<!-- fabrik:replay-start -->")));
-    expect(readReplayRequest(body)).toEqual(readReplayRequest(request));
+    expect(readReplayRequest(body, false)).toEqual(readReplayRequest(request, false));
     expect(replayMarksIn(body)).toEqual(replayMarksIn(done.body));
   });
 

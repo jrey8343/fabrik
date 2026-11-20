@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aReading, acceptedBody, aReplayIssue, baseOf, replaySlice, requestBody } from "../__fixtures__/replay.ts";
+import { aReading, acceptedBody, aReplayIssue, baseOf, fableReplayBody, replaySlice, requestBody } from "../__fixtures__/replay.ts";
 import { aResearchDecision, aTicket, issueRef, kitConfig, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
 import { aRunRecord } from "../read/builders.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
@@ -157,6 +157,40 @@ describe("The scheduled tick's replay step", () => {
   });
 });
 
+// A Replay arm never falls back (ADR-0034), so one whose arms run Fable starts only where Fable is left.
+describe("The scheduled tick's replay step, on a Replay whose arms run Fable", () => {
+  const OPTED_IN = kitConfig({ allowFable: true });
+  const TWO_OPTED_IN = kitConfig({ allowFable: true, subscriptions: ["Claude token", "Claude token 2"] });
+  const fable = (capacity: Partial<ReplayCapacitySnapshot> = {}) => replaySlice([aReplayIssue({ body: fableReplayBody() })], capacity);
+  const capped = (subscription: string, until = LATER) => ({ subscription, until });
+
+  it("starts none while no listed Subscription has Fable left, so the cap costs the Replay time only", () => {
+    expect(tick(fable({ fableCaps: [capped("Claude token")] }), [], OPTED_IN)).toEqual(STARTS_NOTHING);
+    expect(tick(fable({ fableCaps: [capped("Claude token"), capped("Claude token 2")] }), [], TWO_OPTED_IN)).toEqual(STARTS_NOTHING);
+  });
+
+  it("says why it starts none", () => {
+    const plan = planFor({ kind: "scheduled-tick", now: WEDNESDAY }, tickSnapshot({ replay: fable({ fableCaps: [capped("Claude token")] }) }), OPTED_IN);
+
+    expect(plan.kind === "act" ? plan.notes : []).toContainEqual(expect.stringContaining("No listed Subscription has Fable left"));
+  });
+
+  it("starts one where a reading's time has passed", () => {
+    expect(tick(fable({ fableCaps: [capped("Claude token", EARLIER)] }), [], OPTED_IN)).toEqual(STARTS_140);
+  });
+
+  it("weighs the weekly-limit reading of the first free Subscription with Fable left, not the first listed", () => {
+    const fableCaps = [capped("Claude token")];
+
+    expect(tick(fable({ fableCaps, weeklyLimits: { "Claude token": aReading(0.9, "allowed_warning"), "Claude token 2": aReading(0.2) } }), [], TWO_OPTED_IN)).toEqual(STARTS_140);
+    expect(tick(fable({ fableCaps, weeklyLimits: { "Claude token": aReading(0.2), "Claude token 2": aReading(0.9, "allowed_warning") } }), [], TWO_OPTED_IN)).toEqual(STARTS_NOTHING);
+  });
+
+  it("leaves a Replay whose arms don't run Fable as it was, whatever the Fable cap readings", () => {
+    expect(tick(replaySlice(undefined, { fableCaps: [capped("Claude token")] }), [], OPTED_IN)).toEqual(STARTS_140);
+  });
+});
+
 describe("The scheduled tick's replay step, beside its gates", () => {
   it.each([
     ["on the issue it would start", [aReplayIssue({ body: acceptedBody([12, 7], [{ ticket: 12, state: "in-progress", run: 9001, retrying: null, startedAt: EARLIER }]) })]],
@@ -239,6 +273,17 @@ describe("The scheduled tick's replay step, beside its gates", () => {
         kind: "act",
         actions: [{ kind: "comment", issue: 140, body: expect.stringContaining('review.effort is "highest"') }, { kind: "check-dispatch" }, { kind: "check-design-queue" }],
       });
+    });
+
+    it.each([
+      [true, "edit-issue-body"],
+      [false, "comment"],
+    ])("weighs one naming Fable against this repo's allow_fable (%j), accepting it only where the repo opted in", (allowFable, kind) => {
+      const fable = aReplayIssue({ body: requestBody("review.model: claude-fable-5-2", "12") });
+
+      const [step] = actionsOf(tick(replaySlice([fable], {}, acceptance), [], kitConfig({ allowFable })));
+
+      expect(step).toMatchObject({ kind, issue: 140 });
     });
   });
 

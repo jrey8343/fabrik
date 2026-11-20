@@ -22,6 +22,7 @@ const DEFAULTS = {
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: "claude-opus-5-5", effort: "medium" },
   },
+  allowFable: false,
   maxInFlight: 2,
   caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
   monitor: { errors: null, redMain: true, mainChecks: [] },
@@ -93,25 +94,87 @@ describe("Kit config", () => {
     expect(result.ok && result.config.roles.dispatch).toEqual({ timeoutMinutes: 3 });
   });
 
-  it.each(["triage", "design", "implement", "review", "step_up"])(
-    "refuses fable as the %s model, because it can bill metered usage",
+  it.each(["triage", "design", "implement", "review", "audit", "retro", "research", "digest", "step_up"])(
+    "with no allow_fable, refuses fable as the %s model, because it can bill metered usage, and says how to opt in",
     (role) => {
       const result = resolveKitConfig({ config: JSON.stringify({ roles: { [role]: { model: "fable" } } }) });
 
       expect(result).toEqual({
         ok: false,
         errors: [
-          `roles.${role}.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`,
+          `roles.${role}.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role; set allow_fable to true to opt in (ADR-0034)`,
         ],
       });
     },
   );
 
-  it.each(["Fable", "claude-fable-5", "best"])("refuses %j as a model too, because it is or can resolve to Fable", (model) => {
+  it.each(["Fable", "claude-fable-5-2"])("with no allow_fable, refuses %j as a model too, saying how to opt in", (model) => {
     const result = resolveKitConfig({ config: JSON.stringify({ roles: { review: { model } } }) });
 
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.errors[0]).toContain("roles.review.model");
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        `roles.review.model is ${JSON.stringify(model)}: Fable can bill metered usage, so the Kit never runs it in an AFK role; set allow_fable to true to opt in (ADR-0034)`,
+      ],
+    });
+  });
+
+  it("with allow_fable true, gives Design, Review and the Step-up a Fable model named by its full id", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        allow_fable: true,
+        roles: {
+          design: { model: "claude-fable-5-2", effort: "high" },
+          review: { model: "claude-fable-5-2", effort: "high" },
+          step_up: { model: "claude-fable-5-2", effort: "high" },
+        },
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: {
+        ...DEFAULTS,
+        allowFable: true,
+        roles: {
+          ...DEFAULTS.roles,
+          design: { model: "claude-fable-5-2", effort: "high", timeoutMinutes: 30 },
+          review: { model: "claude-fable-5-2", effort: "high", timeoutMinutes: 30 },
+          // The Digest writer follows the Reviewer's model and the effort this repo set for it.
+          digest: { model: "claude-fable-5-2", effort: "high", timeoutMinutes: 10 },
+          stepUp: { model: "claude-fable-5-2", effort: "high" },
+        },
+      },
+    });
+  });
+
+  it.each([
+    ["fable", "with allow_fable, the Kit runs Fable only by its full id, such as claude-fable-5-2, never the fable alias, which can resolve to another model"],
+    ["Fable", "with allow_fable, the Kit runs Fable only by its full id, such as claude-fable-5-2, never the fable alias, which can resolve to another model"],
+    ["best", "the CLI can resolve best to any model, Fable included, so the Kit never runs it in an AFK role"],
+  ])("with allow_fable true, still refuses %j", (model, reason) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ allow_fable: true, roles: { design: { model } } }) });
+
+    expect(result).toEqual({ ok: false, errors: [`roles.design.model is ${JSON.stringify(model)}: ${reason}`] });
+  });
+
+  it("with no allow_fable, refuses best for its own reason, since opting in to Fable wouldn't let it run", () => {
+    const result = resolveKitConfig({ config: JSON.stringify({ roles: { review: { model: "best" } } }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: ['roles.review.model is "best": the CLI can resolve best to any model, Fable included, so the Kit never runs it in an AFK role'],
+    });
+  });
+
+  it.each([`"yes"`, "1", "null"])("refuses a non-boolean allow_fable, %s, naming the field", (value) => {
+    expect(resolveKitConfig({ config: `{ "allow_fable": ${value} }` })).toEqual({ ok: false, errors: ["allow_fable must be true or false"] });
+  });
+
+  it("with allow_fable true and no role naming Fable, resolves as it would without it", () => {
+    const result = resolveKitConfig({ config: `{ "allow_fable": true }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, allowFable: true } });
   });
 
   it.each([
@@ -722,7 +785,7 @@ describe("The Audit's Kit config", () => {
   });
 
   it.each([
-    [`{ "roles": { "audit": { "model": "fable" } } }`, `roles.audit.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "audit": { "model": "fable" } } }`, `roles.audit.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role; set allow_fable to true to opt in (ADR-0034)`],
     [`{ "roles": { "audit": { "effort": "extreme" } } }`, `roles.audit.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
     [`{ "roles": { "audit": { "timeout_minutes": 0 } } }`, "roles.audit.timeout_minutes must be a whole number of at least 1"],
     [`{ "roles": { "audit": { "focus": "src/billing" } } }`, "roles.audit.focus is not a Kit config field"],
@@ -804,7 +867,7 @@ describe("The Retro's Kit config", () => {
   });
 
   it.each([
-    [`{ "roles": { "retro": { "model": "fable" } } }`, `roles.retro.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "retro": { "model": "fable" } } }`, `roles.retro.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role; set allow_fable to true to opt in (ADR-0034)`],
     [`{ "roles": { "retro": { "effort": "extreme" } } }`, `roles.retro.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
     [`{ "roles": { "retro": { "timeout_minutes": 0 } } }`, "roles.retro.timeout_minutes must be a whole number of at least 1"],
     [`{ "roles": { "retro": { "proposals": 3 } } }`, "roles.retro.proposals is not a Kit config field"],
@@ -848,7 +911,7 @@ describe("The Researcher's Kit config", () => {
   });
 
   it.each([
-    [`{ "roles": { "research": { "model": "fable" } } }`, `roles.research.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "research": { "model": "fable" } } }`, `roles.research.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role; set allow_fable to true to opt in (ADR-0034)`],
     [`{ "roles": { "research": { "effort": "extreme" } } }`, `roles.research.effort is "extreme": effort must be one of low, medium, high, xhigh, max`],
     [`{ "roles": { "research": { "timeout_minutes": 0 } } }`, "roles.research.timeout_minutes must be a whole number of at least 1"],
     [`{ "roles": { "research": { "sources": ["docs.github.com"] } } }`, "roles.research.sources is not a Kit config field"],
@@ -938,7 +1001,7 @@ describe("The Digest's Kit config (ADR-0022)", () => {
   });
 
   it.each([
-    [`{ "roles": { "digest": { "model": "fable" } } }`, `roles.digest.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role`],
+    [`{ "roles": { "digest": { "model": "fable" } } }`, `roles.digest.model is "fable": Fable can bill metered usage, so the Kit never runs it in an AFK role; set allow_fable to true to opt in (ADR-0034)`],
     [`{ "roles": { "digest": { "timeout_minutes": 0 } } }`, "roles.digest.timeout_minutes must be a whole number of at least 1"],
     [`{ "roles": { "digest": { "skills": ["jrey8343/skills/event-storming"] } } }`, "roles.digest.skills is not a Kit config field"],
     [`{ "digest": { "enabled": "no" } }`, "digest.enabled must be true or false"],
@@ -1032,11 +1095,23 @@ describe("The Kit config template", () => {
     expect(section).toMatch(/Every role's `effort` defaults to `medium`, except the Review's and Design's, which default to `high`/);
   });
 
-  it("is the defaults block the README's Kit config section shows", () => {
+  it("is the defaults block the README's Kit config section shows, but for allow_fable, which the starter never sets (ADR-0034)", () => {
     const section = readme.slice(readme.indexOf("## Kit config"));
-    const block = /```json\n([\s\S]*?)```/.exec(section)?.[1];
+    const block = /```json\n([\s\S]*?)```/.exec(section)?.[1] ?? "";
+    const optIn = '  "allow_fable": false,\n';
 
-    expect(block).toBe(template);
+    expect(block).toContain(optIn);
+    expect(block.replace(optIn, "")).toBe(template);
+    expect(template).not.toContain("allow_fable");
+  });
+
+  it("documents the Fable opt-in in the README's Kit config section, with its guards and ADR-0034", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
+
+    expect(section).toMatch(/^- `allow_fable` \(default `false`\) opts this repo in to Fable/m);
+    expect(section).toContain("`claude-fable-5-2`");
+    expect(section).toContain("ADR-0034");
+    expect(section).not.toContain("A model naming Fable (or the `best` alias) is refused in every role");
   });
 });
 

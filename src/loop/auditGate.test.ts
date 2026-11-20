@@ -86,6 +86,34 @@ describe("The audit gate opens a pending Audit", () => {
     ]);
   });
 
+  it("on the next tick after this week's Audit hit a Fable cap, carrying the cap still in force, so its run starts where Fable is left (ADR-0034)", () => {
+    const marker = "<!-- fabrik:fable-cap Claude token until 2026-11-09T04:00:00.000Z -->";
+    const capped = (number: number, createdAt: string, until = "2026-11-09T04:00:00.000Z") =>
+      anAuditIssue({
+        number,
+        createdAt,
+        stateReason: "not_planned",
+        body: [auditBody(HEAD, "failed"), "", `<!-- fabrik:fable-cap Claude token until ${until} -->`].join("\n"),
+      });
+
+    // Two capped this week are no two failed runs, and a cap whose time has passed is carried no further.
+    const plan = tick("2026-11-08T02:05:00.000Z", { issues: [anAuditIssue(), capped(95, "2026-11-08T00:05:00Z"), capped(96, "2026-11-08T01:05:00Z"), capped(94, "2026-11-08T00:00:00Z", "2026-11-08T01:00:00.000Z")] });
+
+    expect(opened(plan)).toEqual([
+      expect.objectContaining({
+        title: "Audit: week of 2026-11-02",
+        body: [
+          "The Auditor is reading the default branch up to `c0ffee5`, and this issue fills in when it's done.",
+          "",
+          `<!-- fabrik:audit ${HEAD} -->`,
+          "<!-- fabrik:audit-pending -->",
+          "",
+          marker,
+        ].join("\n"),
+      }),
+    ]);
+  });
+
   it("when only a failed Audit read the head: a failed Audit is never the last Audit", () => {
     const failedLastWeek = anAuditIssue({
       number: 91,

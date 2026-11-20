@@ -40,6 +40,14 @@ _Avoid_: failover, load balancing, round-robin
 Of a Subscription: unusable until something changes, because it has reached its weekly limit, has been caught spending usage credits, or its token was refused as dead.
 _Avoid_: exhausted, rate-limited, out
 
+**Fable cap**:
+A Subscription's separate weekly limit on Fable, apart from its weekly limit across all models. Reaching it holds no run: the Kit falls back.
+_Avoid_: Fable limit, Fable quota
+
+**Fable fallback**:
+A run whose role names Fable, started on Opus 5.5 at the same effort because no Subscription has Fable left.
+_Avoid_: downgrade, model failover
+
 **Product repo**:
 A repository holding a real product that has adopted the Kit, where the Loop's work actually lands.
 _Avoid_: target repo, client repo, project

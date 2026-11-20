@@ -10,6 +10,7 @@ import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { CheckExcerpt, FailureExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { IssueRef } from "./blockers.ts";
+import type { FableCapReading, ModelFallback } from "./fableCap.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven, PictureOf } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
@@ -42,8 +43,13 @@ export type ReportedFailure =
   | "provider-error"
   | "dead-token"
   | "weekly-limit"
+  /**
+   * A Fable run refused on its Subscription's Fable cap (ADR-0034): a rejected
+   * `rateLimitType` that starts `seven_day_`, on a run whose model names Fable.
+   */
+  | "fable-cap"
   | "metered-billing"
-  /** With rotation on, the stream watch stopped a run whose stream showed overage. */
+  /** With rotation on, or on a Fable run (ADR-0034), the stream watch stopped a run whose stream showed overage. */
   | "usage-credits"
   /** The Kit's input step couldn't read the agent's inputs from GitHub, so the agent never started (#328). */
   | "unread-inputs"
@@ -88,13 +94,34 @@ export function isBrokenRun(value: unknown): value is BrokenRun {
 /** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
 export type InfrastructureFailure = ReportedFailure | "unreachable-1password";
 
+/**
+ * A rate limit the provider refused a run on, raw, as its stream gave it: the
+ * limit's type, and its reset in epoch seconds, each null when it gave none.
+ */
+export interface RateLimitRefusal {
+  readonly rateLimitType: string | null;
+  readonly resetsAt: number | null;
+}
+
 /** What a failed agent job left for the push job, when it got far enough to leave anything. */
 export interface FailureReport {
   readonly failure: ReportedFailure;
   /** One line on what went wrong, for the failure comment. */
   readonly detail: string;
-  /** For the weekly limit, when it resets (an ISO 8601 time), if the stream said. */
+  /** For the weekly limit or a Fable cap, when it resets (an ISO 8601 time), if the stream said. */
   readonly resetsAt?: string;
+  /**
+   * For a run the provider refused on a rate limit, Fable cap or not: that
+   * limit as the stream gave it, raw, so the first real Fable cap shows how
+   * the Kit read it (ADR-0034).
+   */
+  readonly refusal?: RateLimitRefusal;
+  /**
+   * For a Fable cap, when its Subscription's weekly limit resets (an ISO 8601
+   * time), from the stream's last weekly-limit reading, if one gave a reset:
+   * what a cap with no reset of its own counts until (src/loop/fableCap.ts).
+   */
+  readonly weeklyResetsAt?: string;
   /**
    * For unread inputs: true when GitHub refused the request (a 4xx that isn't
    * a rate limit), which it does again each time the run goes again, until the Kit is fixed.
@@ -563,7 +590,7 @@ export type LoopEvent =
       readonly runUrl: string;
       /** The Subscription both arms ran on, from the Kit job's `subscription` output. Absent, it is read as the first listed. */
       readonly subscription?: string;
-      /** For a weekly-limit refusal, when the limit resets (an ISO 8601 time), if the stream said. */
+      /** For a weekly-limit or Fable cap refusal, when the limit resets (an ISO 8601 time), if the stream said. */
       readonly resetsAt?: string;
       /**
        * What the store holds of the Replay once the job wrote this run's files,
@@ -1544,6 +1571,18 @@ export interface Snapshot {
    */
   readonly closedCheckIssues: readonly ClosedCheckIssue[] | null;
   /**
+   * The Fable cap readings (ADR-0034), in force or not, and when the adapter
+   * read them: those marked on the body of the event's issue or PR, where a
+   * run refused on its Subscription's Fable cap had its trigger label
+   * re-added, and, in the Kit job of a repo that opted in, those in the
+   * store's Run records (src/kit/fableCapFacts.ts). The Loop weighs which are
+   * still in force at `now` (src/loop/fableCap.ts): a run it starts on a role
+   * naming Fable starts on a Subscription with Fable left, or on Opus. Absent,
+   * or with none, as when the store can't be read, every Subscription has
+   * Fable left.
+   */
+  readonly fableCaps?: FableCapSnapshot;
+  /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.
    */
@@ -1709,6 +1748,14 @@ export interface LabelledTrigger {
   readonly lastAddedAt: string | null;
   /** Whether the Kit's stuck-trigger re-add comment for it came after it last came off: the Kit has re-added it once already. */
   readonly readded: boolean;
+}
+
+/** The Fable cap readings the adapter read (ADR-0034), and when. */
+export interface FableCapSnapshot {
+  /** Every reading, in force or not. */
+  readonly readings: readonly FableCapReading[];
+  /** When the adapter read them, as an ISO 8601 time: the tick's own time on a scheduled tick. */
+  readonly now: string;
 }
 
 /** What the conflict check weighs (src/loop/conflicts.ts, #304). */
@@ -1888,6 +1935,12 @@ export interface ReplayCapacitySnapshot {
    * the store couldn't be read.
    */
   readonly weeklyLimits: Readonly<Record<string, RateLimitReading>> | null;
+  /**
+   * The Fable cap readings in those Run records (ADR-0034), in force or not,
+   * which a Replay whose arms run Fable weighs, since an arm never falls back.
+   * Null when the store couldn't be read.
+   */
+  readonly fableCaps: readonly FableCapReading[] | null;
 }
 
 /** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */
@@ -2131,6 +2184,13 @@ export type Action =
       readonly effort: string | null;
       readonly timeoutMinutes: number;
       /**
+       * For a Fable fallback (ADR-0034): the model Kit config named, which
+       * `model` falls back from, and why. Absent on any other run, whose
+       * `model` is Kit config's.
+       */
+      readonly configuredModel?: string;
+      readonly fallback?: ModelFallback;
+      /**
        * The Subscription it runs on: the `Fabrik` vault item name its job loads
        * the Claude token from. `planFor` gives it to every run it starts, in one
        * place for every role, so the builders of a run leave it out.
@@ -2296,6 +2356,24 @@ export type Action =
       /** The request's comment. */
       readonly comment: number;
       readonly started: boolean;
+    }
+  | {
+      /**
+       * Marks a Subscription's Fable cap (ADR-0034) on the body of the issue or
+       * PR a refused run's trigger label is re-added on, before the label, so
+       * the re-run's Kit job reads it back: until `resetsAt`, else until
+       * `weeklyResetsAt` while that is ahead, else for a week from when it is
+       * marked (fableCapUntil, src/loop/fableCap.ts). The adapter
+       * reads the body fresh, so an edit since the plan was made stays. An
+       * edit, so it notifies nobody.
+       */
+      readonly kind: "mark-fable-cap";
+      readonly issue: number;
+      readonly subscription: string;
+      /** When the cap resets, ISO 8601, or null when the stream didn't say. */
+      readonly resetsAt: string | null;
+      /** When the Subscription's weekly limit resets, ISO 8601, which a cap with no reset counts until while it is ahead; absent when the stream didn't say. */
+      readonly weeklyResetsAt?: string;
     }
   | {
       /** Opens a PR as the Fabrik App, which starts CI on it. */

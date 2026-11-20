@@ -109,6 +109,100 @@ describe("A run killed for spending usage credits, with rotation on", () => {
   });
 });
 
+describe("A Fable run killed for spending usage credits, with rotation off (ADR-0034)", () => {
+  const ONE_SUBSCRIPTION = kitConfig({ allowFable: true });
+  const opened = () => kitIssueOpenedBy(planFor(killed("triage"), snapshotOf(anIssue({ number: 7 })), ONE_SUBSCRIPTION), 60);
+
+  it("opens its Subscription's usage-credits issue, assigned to the Operator as the one notification", () => {
+    const plan = planFor(killed("review"), snapshotOf(anIssue({ number: 7 })), ONE_SUBSCRIPTION);
+
+    expect(actionsOf(plan)).toContainEqual(
+      expect.objectContaining({
+        kind: "open-issue",
+        title: "Turn off usage credits on the `Claude token` Subscription",
+        body: expect.stringContaining("- [ ] Turn usage credits off on the Claude account whose token is the `Claude token` item"),
+        labels: ["ready-for-human", "fabrik:usage-credits"],
+        assignees: ["operator"],
+      }),
+    );
+    expect(notificationsOf(plan)).toEqual(['assign new "Turn off usage credits on the `Claude token` Subscription"']);
+  });
+
+  it("names the Subscription in the issue's marker, and says the Kit runs nothing on it until the Operator closes the issue", () => {
+    const issue = opened();
+
+    expect(issue.body).toContain("<!-- fabrik:subscription Claude token -->");
+    expect(issue.body).toContain("Until this issue is closed the Kit runs no agent on that Subscription");
+    expect(issue.body).toContain("- [ ] Close this issue, so that the Kit runs agents on that Subscription again.");
+    expect(issue.body).not.toContain("other Subscription");
+  });
+
+  it("is held on the issue its kill opens, not re-run, with only a quiet held line on its own issue and no failure comment", () => {
+    const plan = planFor(killed("implement"), snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"] })), ONE_SUBSCRIPTION);
+
+    const actions = actionsOf(plan);
+    expect(actions.filter((action) => action.kind === "add-labels" || action.kind === "comment")).toEqual([]);
+    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "implement", issue: 7, label: "agent:implement", until: null });
+    expect(actions).toContainEqual(expect.objectContaining({ kind: "open-issue", key: "carrier", body: expect.stringContaining(heldMarker(7, "implement", "agent:implement")) }));
+    expect(actions.at(-1)).toEqual(expect.objectContaining({ kind: "comment-linking", issue: 7 }));
+  });
+
+  it("while its usage-credits issue is open, a run due is held on it, not started, mentioning nobody", () => {
+    const plan = planFor(
+      { kind: "label-added", issue: 8, label: "needs-triage" },
+      snapshotOf(anIssue({ number: 8, labels: ["needs-triage"] }), { kitIssues: [opened()] }),
+      ONE_SUBSCRIPTION,
+    );
+
+    const actions = actionsOf(plan);
+    expect(actions.filter((action) => action.kind === "start-agent-run")).toEqual([]);
+    expect(actions).toContainEqual({ kind: "hold-agent-run", role: "triage", issue: 8, label: "needs-triage", until: null });
+    expect(actions).toContainEqual({ kind: "comment", issue: 60, body: expect.stringContaining(heldMarker(8, "triage", "needs-triage", 2)) });
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("the Operator closing the issue resumes the runs held on it", () => {
+    const closed = { ...opened(), comments: [heldMarker(8, "triage", "needs-triage", 2)] };
+
+    const plan = planFor(
+      { kind: "issue-closed", issue: 60 },
+      snapshotOf(anIssue({ number: 60, labels: ["ready-for-human", "fabrik:usage-credits"] }), {
+        kitIssues: [],
+        closedKitIssue: closed,
+        held: [
+          { number: 7, open: true, labels: [], draft: null, byApp: false, body: "" },
+          { number: 8, open: true, labels: [], draft: null, byApp: false, body: "" },
+        ],
+      }),
+      ONE_SUBSCRIPTION,
+    );
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["needs-triage"] });
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 8, labels: ["needs-triage"] });
+  });
+
+  it("a second kill comments quietly on the open usage-credits issue, and opens none", () => {
+    const plan = planFor(killed("triage", { issue: 8 }), snapshotOf(anIssue({ number: 8 }), { kitIssues: [opened()] }), ONE_SUBSCRIPTION);
+
+    expect(notificationsOf(plan)).toEqual([]);
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "comment",
+      issue: 60,
+      body: `The Triage run on #8 was killed for spending usage credits too. [The run](${RUN})`,
+    });
+  });
+});
+
+describe("A weekly-limit issue with rotation off, as before (ADR-0034 leaves it)", () => {
+  it("holds no run due: the run starts, and is refused, as V1's one Subscription is", () => {
+    const limit = { number: 41, labels: ["fabrik:weekly-limit"], body: "The weekly limit.\n\n<!-- fabrik:subscription Claude token -->", comments: [] };
+
+    const plan = planFor({ kind: "label-added", issue: 8, label: "needs-triage" }, snapshotOf(anIssue({ number: 8, labels: ["needs-triage"] }), { kitIssues: [limit] }), kitConfig());
+
+    expect(actionsOf(plan)).toContainEqual(expect.objectContaining({ kind: "start-agent-run", role: "triage", issue: 8 }));
+  });
+});
+
 /** An open weekly-limit issue on `subscription`, the one that buzzed the Operator. */
 function weeklyLimitIssue(number: number, subscription: string): KitIssueSnapshot {
   return {
@@ -444,14 +538,5 @@ describe("Scenario: an Implement run killed for spending while no other Subscrip
     );
 
     expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
-  });
-});
-
-describe("A run killed for spending usage credits, with one Subscription listed", () => {
-  it("gets a V1 failure comment that @-mentions the Operator, and no Kit-owned issue", () => {
-    const plan = planFor(killed("triage"), snapshotOf(anIssue({ number: 7 })), kitConfig());
-
-    expect(notificationsOf(plan)).toEqual(["mention on #7"]);
-    expect(actionsOf(plan).filter((action) => action.kind === "open-issue")).toEqual([]);
   });
 });

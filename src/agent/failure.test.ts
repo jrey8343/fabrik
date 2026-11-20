@@ -64,6 +64,102 @@ describe("How an agent job reports its own failure", () => {
       failure: "weekly-limit",
       detail: "resets at 2026-12-23T04:26:40.000Z",
       resetsAt: "2026-12-23T04:26:40.000Z",
+      refusal: { rateLimitType: "seven_day", resetsAt: 1_798_000_000 },
+    });
+  });
+
+  describe("on a Fable run (ADR-0034)", () => {
+    const fable = "claude-fable-5-2";
+    const rejected = (rateLimitType: string, resetsAt?: number) =>
+      line({ type: "rate_limit_event", rate_limit_info: { status: "rejected", rateLimitType, ...(resetsAt === undefined ? {} : { resetsAt }) } });
+    const reportOn = (model: string, ...lines: string[]) =>
+      failureReportFor({ error: new Error("agent exited 1"), lines: [init, ...lines], initRefused: [], model });
+
+    it("a rejected seven_day is still the weekly limit, as the Kit can't tell it from the cap", () => {
+      const report = reportOn(fable, rejected("seven_day", 1_798_000_000));
+
+      expect(report).toEqual({
+        failure: "weekly-limit",
+        detail: "resets at 2026-12-23T04:26:40.000Z",
+        resetsAt: "2026-12-23T04:26:40.000Z",
+        refusal: { rateLimitType: "seven_day", resetsAt: 1_798_000_000 },
+      });
+    });
+
+    it.each(["seven_day_fable", "seven_day_opus"])("a rejected %s is the Subscription's Fable cap, with when it resets", (type) => {
+      const report = reportOn(fable, rejected(type, 1_798_000_000));
+
+      expect(report).toEqual({
+        failure: "fable-cap",
+        detail: `${type}, resets at 2026-12-23T04:26:40.000Z`,
+        resetsAt: "2026-12-23T04:26:40.000Z",
+        refusal: { rateLimitType: type, resetsAt: 1_798_000_000 },
+      });
+    });
+
+    it.each([
+      ["last", ["seven_day_fable", "seven_day"]],
+      ["first", ["seven_day", "seven_day_fable"]],
+    ])("a rejected seven_day beside a rejected seven_day_* is the weekly limit, with the seven_day %s", (_, types) => {
+      const report = reportOn(fable, ...types.map((type) => rejected(type, 1_798_000_000)));
+
+      expect(report).toEqual({
+        failure: "weekly-limit",
+        detail: "resets at 2026-12-23T04:26:40.000Z",
+        resetsAt: "2026-12-23T04:26:40.000Z",
+        refusal: { rateLimitType: "seven_day", resetsAt: 1_798_000_000 },
+      });
+    });
+
+    it("a Fable cap the stream gives no reset for is a Fable cap all the same", () => {
+      expect(reportOn(fable, rejected("seven_day_fable"))).toEqual({
+        failure: "fable-cap",
+        detail: "seven_day_fable",
+        refusal: { rateLimitType: "seven_day_fable", resetsAt: null },
+      });
+    });
+
+    it("a Fable cap the stream gives no reset for carries its Subscription's weekly-limit reset, from the stream's last weekly-limit reading", () => {
+      const allowed = (rateLimitType: string, resetsAt: number) => line({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType, resetsAt } });
+
+      const report = reportOn(fable, allowed("seven_day", 1_797_000_000), allowed("seven_day", 1_798_000_000), allowed("five_hour", 1_796_000_000), rejected("seven_day_fable"));
+
+      expect(report).toEqual({
+        failure: "fable-cap",
+        detail: "seven_day_fable",
+        refusal: { rateLimitType: "seven_day_fable", resetsAt: null },
+        weeklyResetsAt: "2026-12-23T04:26:40.000Z",
+      });
+      expect(readFailureReport(JSON.stringify(report))).toEqual(report);
+    });
+  });
+
+  it("a rejected seven_day_opus on a run that isn't Fable is the weekly limit, as before", () => {
+    const report = failureReportFor({
+      error: new Error("agent exited 1"),
+      lines: [init, line({ type: "rate_limit_event", rate_limit_info: { status: "rejected", rateLimitType: "seven_day_opus", resetsAt: 1_798_000_000 } })],
+      initRefused: [],
+      model: "claude-opus-5-5",
+    });
+
+    expect(report).toEqual({
+      failure: "weekly-limit",
+      detail: "resets at 2026-12-23T04:26:40.000Z",
+      resetsAt: "2026-12-23T04:26:40.000Z",
+      refusal: { rateLimitType: "seven_day_opus", resetsAt: 1_798_000_000 },
+    });
+  });
+
+  it("the push job reads back a Fable cap, and the raw refusal of any report", () => {
+    const capped = { failure: "fable-cap", detail: "seven_day_fable", resetsAt: "2026-12-23T04:26:40.000Z", refusal: { rateLimitType: "seven_day_fable", resetsAt: 1_798_000_000 } };
+    const noReset = { failure: "provider-error", detail: "rate limit (five_hour)", refusal: { rateLimitType: "five_hour", resetsAt: null } };
+
+    expect(readFailureReport(JSON.stringify(capped))).toEqual(capped);
+    expect(readFailureReport(JSON.stringify(noReset))).toEqual(noReset);
+    expect(readFailureReport(JSON.stringify({ ...noReset, refusal: { rateLimitType: 7, resetsAt: "soon" } }))).toEqual({
+      failure: "provider-error",
+      detail: "rate limit (five_hour)",
+      refusal: { rateLimitType: null, resetsAt: null },
     });
   });
 
@@ -81,6 +177,7 @@ describe("How an agent job reports its own failure", () => {
     });
 
     expect(report.failure).toBe("provider-error");
+    expect(report.refusal).toEqual({ rateLimitType: "five_hour", resetsAt: null });
   });
 
   it.each(["overloaded", "server_error", "rate_limit", "billing_error"])(

@@ -33,6 +33,8 @@
 //                            {implement: {model, effort}, review: {model, effort}, candidateSha}; else empty.
 //                            Its model names come from the replay issue's body, so a job reads it only
 //                            through `env:`, never in a `run:` script
+//   allow-fable              for a replay, "true" when this repo's Kit config opts in to Fable (ADR-0034), which
+//                            each arm's run holds its model to, as Kit config at baseSha can predate it; else empty
 //   replay-kit-sha-unavailable for a replay whose variant's candidate Kit sha this job read and couldn't lay
 //                            (src/kit/overlay.ts), why, so neither arm runs and the replay-record job fails
 //                            the Ticket once (#449); else empty
@@ -90,7 +92,9 @@
 //                            holds no text a person or an agent wrote. The job's last step takes it for its name
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
-// Env: GH_TOKEN, a read-only token for gathering the snapshot, which for agent:implement also reads the Actions runs (#725).
+// Env: GH_TOKEN, a read-only token for gathering the snapshot, which for agent:implement also reads the Actions runs (#725);
+// FABRIK_STORE_DIR, in a repo that opted in to Fable, the fable-store action's checkout of the store, whose Fable cap
+// readings the plan weighs (ADR-0034), empty when it couldn't check one out, which the step summary then says.
 import { appendFile, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { agentRunIn, replayRunIn } from "../github/apply.ts";
@@ -107,6 +111,9 @@ import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { callerChangeErrors } from "./callerPermissions.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import type { KitConfig } from "./config.ts";
+import { fableCapReadingsOf } from "./fableCapFacts.ts";
+import { configuredModelOf, type FableCapReading } from "../loop/fableCap.ts";
+import { readStoreRunRecords } from "./storeCheckout.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
 import { kitSaidOf, routeOf } from "./kitSaid.ts";
 import { readCandidate } from "./overlay.ts";
@@ -186,10 +193,12 @@ async function main(productDir: string): Promise<void> {
     // which holds actions: read; no other event's snapshot reads the Actions runs here, so none plans other than before.
     // A caller that grants no actions: read fails the read, and the run starts as before.
     const actions = event.kind === "label-added" && event.label === DISPATCH_LABEL ? github : null;
-    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null, actions);
+    // In a repo that opted in to Fable, the store's Fable cap readings, from the fable-store action's checkout (ADR-0034).
+    const storeFableCaps = config.allowFable ? await storeFableCapsAt(process.env["FABRIK_STORE_DIR"], config) : { caps: [], unread: false };
+    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null, actions, { storeFableCaps: storeFableCaps.caps });
     plan = planFor(event, snapshot, config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
-    summary = kitJobSummary(plan, config, snapshot.kitIssues);
+    summary = kitJobSummary(plan, config, snapshot.kitIssues, { storeUnread: storeFableCaps.unread });
     ticket = snapshot.pullRequest?.ticket ?? null;
     // A run on an agent PR's branch may bring main in: the push job takes main as this job read it, before the
     // run started, for one of the heads it may have brought in (#341), as the agent job can't write this job's outputs.
@@ -215,6 +224,22 @@ async function main(productDir: string): Promise<void> {
 }
 
 /**
+ * The Fable cap readings in the store's checkout at `dir` (fableCapReadingsOf),
+ * a schema 1 record as on the first listed Subscription, or none, unread, when
+ * there's no checkout, as when the Fabrik App isn't on the store, or it can't
+ * be read: every Subscription then counts as having Fable left (ADR-0034).
+ */
+async function storeFableCapsAt(dir: string | undefined, config: KitConfig): Promise<{ caps: readonly FableCapReading[]; unread: boolean }> {
+  if (dir === undefined || dir === "") return { caps: [], unread: true };
+  try {
+    return { caps: fableCapReadingsOf(Object.values((await readStoreRunRecords(dir, config.subscriptions)).records)), unread: false };
+  } catch (error) {
+    console.log(`::warning title=Fable cap readings unread::${error instanceof Error ? error.message : String(error)}`);
+    return { caps: [], unread: true };
+  }
+}
+
+/**
  * The Kit job's step outputs, as the header lists them: where `plan` routes
  * (null for an event the Loop doesn't act on), every role's timeout, and what
  * the routed agent job needs before it starts. `ticket` is the Ticket the
@@ -237,7 +262,7 @@ export function kitJobOutputs(
   const said = JSON.stringify(kitSaidOf(plan, ticket));
   // One more re-run at the Merge gate (#783) starts no agent: the Re-run red checks job re-runs the checks the Kit's line asked.
   const rerun = plan?.kind === "act" ? plan.actions.find((action): action is Extract<Action, { kind: "rerun-checks" }> => action.kind === "rerun-checks") : undefined;
-  if (replay !== null) return { ...kitJobOutputs(null, null, config), ...replayOutputs(replay), "kit-said": said };
+  if (replay !== null) return { ...kitJobOutputs(null, null, config), ...replayOutputs(replay, config), "kit-said": said };
   return {
     route: routeOf(plan),
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
@@ -274,6 +299,9 @@ export function kitJobOutputs(
     "rerun-red": rerun === undefined ? "" : JSON.stringify({ rerun: rerun.checks.map(({ name, link, run: id }) => ({ name, link, run: id })), outside: [] }),
     model: run?.model ?? "",
     effort: run?.effort ?? "",
+    // For its Run record (ADR-0034): the model Kit config named, which a Fable fallback runs Opus in place of, and why.
+    "configured-model": run === null ? "" : configuredModelOf(run),
+    fallback: run?.fallback ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.
     retry: run?.role === "implement" ? String(run.retry ?? 0) : "",
     // A Touch-up (#750) is no Retry: its own number, which its push note and its Run record carry.
@@ -313,6 +341,7 @@ export function kitJobOutputs(
     "replay-issue": "",
     "base-sha": "",
     "replay-arms": "",
+    "allow-fable": "",
     "replay-kit-sha-unavailable": "",
     "kit-said": said,
   };
@@ -336,9 +365,10 @@ async function candidateOutputs(plan: Plan | null, github: GitHub): Promise<Read
  * The outputs a replay Ticket's jobs read, from the replay issue's plan the
  * Kit wrote and read back (src/kit/replay.ts), never from an agent: the
  * replay issue, the Ticket, its merged PR, its baseSha, each arm's settings
- * and the Subscription both arms run on.
+ * and the Subscription both arms run on; and from this repo's Kit config,
+ * whether it opts in to Fable, which each arm's run holds its model to.
  */
-function replayOutputs({ issue, ticket, subscription }: Extract<Action, { kind: "start-replay" }>): Readonly<Record<string, string>> {
+function replayOutputs({ issue, ticket, subscription }: Extract<Action, { kind: "start-replay" }>, config: Pick<KitConfig, "allowFable">): Readonly<Record<string, string>> {
   if (subscription === undefined) throw new Error(`The replay of #${ticket.ticket} on #${issue} was given no Subscription`);
   return {
     route: "replay",
@@ -349,6 +379,8 @@ function replayOutputs({ issue, ticket, subscription }: Extract<Action, { kind: 
     "base-sha": ticket.baseSha,
     // One line of JSON, whose model names come from the issue's body, so a job reads it only through `env:`.
     "replay-arms": JSON.stringify(ticket.arms),
+    // Each arm runs in a checkout of baseSha, whose Kit config can predate the opt-in, or outlast it (ADR-0034).
+    "allow-fable": String(config.allowFable),
     subscription,
   };
 }

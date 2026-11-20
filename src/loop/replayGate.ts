@@ -12,6 +12,7 @@ import { waitingForDispatch } from "./dispatch.ts";
 import { heldOf } from "./heldRun.ts";
 import { REPLAY_TRIGGER_LABEL, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { spelled } from "./readable.ts";
+import { inForce, withFableLeft } from "./fableCap.ts";
 import { chosenSubscription } from "./subscriptions.ts";
 import type { KitConfig, KitIssueSnapshot, Plan, ReplaySnapshot, Snapshot } from "./types.ts";
 
@@ -27,11 +28,12 @@ export function replayGate(now: string, snapshot: Snapshot, config: KitConfig): 
   if (slice === null) {
     return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the replay slice the replay step weighs" };
   }
-  const capacity = capacityOf(now, slice, snapshot, config);
   const step = nextReplayStep({
     operator: snapshot.operator,
+    allowFable: config.allowFable,
     issues: slice.issues,
-    capacity,
+    capacity: capacityOf(now, slice, snapshot, config, { fable: false }),
+    fableCapacity: capacityOf(now, slice, snapshot, config, { fable: true }),
     acceptance: slice.acceptance,
     now,
     runLimitMinutes: replayRunLimitMinutes(config),
@@ -78,9 +80,13 @@ export const REPLAY_UTILIZATION_LIMIT = 0.5;
  * live work always goes first; while no Subscription is used up; and while
  * the newest weekly-limit reading on the Subscription the run would use is
  * under REPLAY_UTILIZATION_LIMIT, and `allowed`. No reading counts as spare,
- * and so does one whose limit has reset since: the week it read is over.
+ * and so does one whose limit has reset since: the week it read is over. For
+ * a Replay whose arms run Fable (`fable`), that Subscription is the first
+ * free one with Fable left, by the store's Fable cap readings in force, and
+ * with none left there's no spare capacity: an arm never falls back to Opus,
+ * so the cap costs the Replay time only (ADR-0034).
  */
-function capacityOf(now: string, { capacity }: ReplaySnapshot, { kitIssues }: Snapshot, config: KitConfig): ReplayCapacity {
+function capacityOf(now: string, { capacity }: ReplaySnapshot, { kitIssues }: Snapshot, config: KitConfig, { fable }: { readonly fable: boolean }): ReplayCapacity {
   if (capacity === null) return { spare: false, why: "No open replay issue is the Operator's" };
   const held = { implement: heldOf("implement", kitIssues), research: heldOf("research", kitIssues) };
   const waiting = waitingForDispatch(capacity, held);
@@ -90,8 +96,10 @@ function capacityOf(now: string, { capacity }: ReplaySnapshot, { kitIssues }: Sn
   const usedUp = whyUsedUp(kitIssues);
   if (usedUp !== null) return { spare: false, why: usedUp };
   if (capacity.weeklyLimits === null) return { spare: false, why: "The fabrik-runs store couldn't be read, so the weekly limit's utilization isn't known" };
-  // With every Subscription free, the first listed.
-  const subscription = chosenSubscription(kitIssues, config);
+  // With every Subscription free, the first listed; for Fable arms, the first with Fable left.
+  const [left] = fable ? withFableLeft(inForce(capacity.fableCaps ?? [], now), kitIssues, config) : [chosenSubscription(kitIssues, config)];
+  if (left === undefined) return { spare: false, why: "No listed Subscription has Fable left, and a replay arm that runs Fable never falls back to Opus" };
+  const subscription = left;
   const reading = capacity.weeklyLimits[subscription];
   if (reading === undefined || (reading.resetsAt !== null && reading.resetsAt * 1000 <= Date.parse(now))) return { spare: true };
   if (atOrOver(reading, REPLAY_UTILIZATION_LIMIT)) {

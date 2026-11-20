@@ -260,6 +260,17 @@ describe("A replay Ticket's run, read from the Kit job's outputs", () => {
 
     expect(() => replayRunContextOf(outputs, { repo: "acme/shop", runId: 9001, runAttempt: 1 })).toThrow(/replay-arms/);
   });
+
+  it("reads arms that run Review on Fable by its full id, as an opted-in repo's Kit config gives it (ADR-0034)", () => {
+    const onFable = { kind: "model", role: "review", model: "claude-fable-5-2" } as const;
+    const arms = replayArms({ roles: { ...DEFAULT_KIT_CONFIG.roles, review: { ...DEFAULT_KIT_CONFIG.roles.review, model: "claude-fable-5-2" } } }, REVIEW_XHIGH);
+    const outputs = { "replay-issue": "140", ticket: "12", "pull-request": "112", "base-sha": BASE_SHA, "replay-arms": JSON.stringify(arms), subscription: "Claude token", sha: KIT_SHA };
+
+    expect(replayRunContextOf(outputs, { repo: "acme/shop", runId: 9001, runAttempt: 1 }).arms).toEqual(arms);
+    expect(replayRunContextOf({ ...outputs, "replay-arms": JSON.stringify(replayArms(DEFAULT_KIT_CONFIG, onFable)) }, { repo: "acme/shop", runId: 9001, runAttempt: 1 }).arms.variant.review.model).toBe(
+      "claude-fable-5-2",
+    );
+  });
 });
 
 describe("How a replay Ticket's run ended, for the Loop to land on the replay issue", () => {
@@ -279,6 +290,31 @@ describe("How a replay Ticket's run ended, for the Loop to land on the replay is
     const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline"), variant: armRan("variant", { review: refused }) }, KIT, ENDED_AT);
 
     expect(files.ended).toMatchObject({ end: { kind: "weekly-limit" }, resetsAt: "2026-11-09T04:00:00.000Z" });
+  });
+
+  // A Replay arm never falls back (ADR-0034): another model would spoil the comparison.
+  it("is a Fable cap refusal when any arm's run was refused on its Subscription's Fable cap, with when it resets, and nothing fell back", () => {
+    const refused = failed({ failure: "fable-cap", detail: "You've hit your Fable limit", resetsAt: "2026-11-09T04:00:00.000Z", rateLimitType: "seven_day_fable" });
+    const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline"), variant: armRan("variant", { review: refused }) }, KIT, ENDED_AT);
+    const record = files.writes.flatMap((group) => group.files).find(({ path }) => path === "runs/acme/shop/2026-11/9001-1-review-replay-variant.json");
+
+    expect(files.ended).toMatchObject({ end: { kind: "fable-cap" }, resetsAt: "2026-11-09T04:00:00.000Z" });
+    expect(JSON.parse(Buffer.from(record?.content ?? []).toString("utf8"))).toMatchObject({ infrastructureFailure: "fable-cap", fallback: null });
+    expect(written(files).filter((path) => path.startsWith("replays/"))).toEqual([]);
+  });
+
+  it("is a weekly-limit refusal, a fact about the whole Subscription, when one arm's run met the weekly limit and another its Fable cap", () => {
+    const weekly = failed({ failure: "weekly-limit", detail: "You've hit your weekly limit", resetsAt: "2026-11-09T04:00:00.000Z" });
+    const fable = failed({ failure: "fable-cap", detail: "You've hit your Fable limit", resetsAt: "2026-11-10T04:00:00.000Z", rateLimitType: "seven_day_fable" });
+    const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline", { review: fable }), variant: armRan("variant", { review: weekly }) }, KIT, ENDED_AT);
+
+    expect(files.ended).toMatchObject({ end: { kind: "weekly-limit" }, resetsAt: "2026-11-09T04:00:00.000Z" });
+  });
+
+  it("reads back a Fable cap end as the replay-record job leaves it", () => {
+    const ended = { issue: 140, ticket: 12, run: 9001, end: { kind: "fable-cap" }, subscription: "Claude token", resetsAt: "2026-11-09T04:00:00.000Z" };
+
+    expect(readReplayRunEnded(JSON.stringify(ended))).toEqual(ended);
   });
 
   it("is an Infrastructure failure, naming the arm and the run, when any arm's run ended in any other", () => {

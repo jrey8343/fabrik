@@ -440,6 +440,125 @@ describe("the Weekly summary", () => {
     expect(result.kind === "summary" ? result.body : "").toMatch(/\| Landings failed \| 0 \| 0 \|/);
   });
 
+  // #832, ADR-0034
+  describe("Fable fallbacks", () => {
+    const OPTED_IN = aRepoKit({ config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, allowFable: true } } });
+    const fellBack = { model: "claude-opus-5-5", configuredModel: "claude-fable-5-2", fallback: "fable-cap" } as const;
+    const refusedOnTheCap = {
+      model: "claude-fable-5-2",
+      jobResult: "failure",
+      infrastructureFailure: "fable-cap",
+      refusal: { rateLimitType: "seven_day_fable", resetsAt: 1_794_000_000 },
+    } as const;
+
+    it("counts the week's Run records started on Opus in Fable's place, against last week's, one that ended in an Infrastructure failure included", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ ...refusedOnTheCap, endedAt: "2026-11-03T00:00:00Z" }),
+            aRunRecord({ ...fellBack, endedAt: "2026-11-03T00:05:00Z" }),
+            aRunRecord({ ...fellBack, endedAt: "2026-11-05T00:00:00Z", role: "review" }),
+            // A fallback refused on the weekly limit is a fallback all the same: every Run record with fable-cap counts.
+            aRunRecord({ ...fellBack, endedAt: "2026-11-06T00:00:00Z", jobResult: "failure", infrastructureFailure: "weekly-limit" }),
+            aRunRecord({ endedAt: "2026-11-06T00:00:00Z" }),
+            aRunRecord({ ...fellBack, endedAt: "2026-10-29T00:00:00Z" }), // last week
+          ],
+          kits: [OPTED_IN],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: { thisWeek: 3, lastWeek: 1 } } } });
+      expect(result.kind === "summary" ? result.body : "").toContain("| Fable fallbacks | 3 | 1 | +2 |");
+    });
+
+    it("counts only the repos that opted in to Fable", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ ...fellBack, endedAt: "2026-11-03T00:00:00Z" }),
+            aRunRecord({ ...fellBack, endedAt: "2026-11-04T00:00:00Z", repo: "owner/other" }),
+          ],
+          facts: [factsOf(), factsOf({ repo: "owner/other" })],
+          kits: [OPTED_IN, aRepoKit({ repo: "owner/other" })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: { thisWeek: 1, lastWeek: 0 } } } });
+    });
+
+    it.each([
+      ["allow_fable unset", [aRepoKit()]],
+      ["an invalid Kit config", [aRepoKit({ config: { ok: false, errors: [".fabrik/config.json is not valid JSON"] }, dispatch: null })]],
+      ["no Kit config read", []],
+    ])("shows no Fable row with %s", (_, kits) => {
+      const result = weeklySummary(input({ records: [aRunRecord({ ...fellBack, endedAt: "2026-11-03T00:00:00Z" })], kits }));
+
+      expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: null } } });
+      expect(result.kind === "summary" ? result.body : "").not.toContain("Fable");
+    });
+
+    describe("each Subscription's Fable reset", () => {
+      const capped = (subscription: string, endedAt: string, resetsAt: number | null) =>
+        aRunRecord({ ...refusedOnTheCap, subscription, endedAt, refusal: { rateLimitType: "seven_day_fable", resetsAt } });
+      const bodyOf = (records: readonly RunRecord[], kits: readonly RepoKitFacts[] = [OPTED_IN]) => {
+        const result = weeklySummary(input({ records, kits }));
+        return result.kind === "summary" ? result.body : "";
+      };
+
+      it("shows on a Subscription's line while a Fable cap reading for it has its reset ahead, and not once it has passed", () => {
+        const body = bodyOf([
+          capped("Claude token", "2026-11-03T00:00:00Z", 1_794_132_000), // reset before the filing
+          capped("Claude token 2", "2026-11-07T00:00:00Z", 1_794_348_000),
+        ]);
+        expect(body).toContain(
+          [
+            "Subscription usage:",
+            "",
+            "- Claude token: $1.00 API-equivalent cost, no weekly-limit reading this week.",
+            "- Claude token 2: $1.00 API-equivalent cost, no weekly-limit reading this week. Fable cap reached, resetting 2026-11-11 09:00 Australia/Sydney.",
+          ].join("\n"),
+        );
+      });
+
+      it("names the Subscription on today's one line for a week on one Subscription", () => {
+        const body = bodyOf([capped("Claude token", "2026-11-07T00:00:00Z", 1_794_348_000)]);
+
+        expect(body).toContain(
+          "\nSubscription usage: no weekly-limit reading this week. Fable cap reached on Claude token, resetting 2026-11-11 09:00 Australia/Sydney.\n",
+        );
+      });
+
+      it("gives a Subscription whose cap is still ahead its line, though it ran nothing this week", () => {
+        const body = bodyOf([capped("Claude token 2", "2026-10-30T00:00:00Z", 1_794_348_000), aRunRecord({ endedAt: "2026-11-04T00:00:00Z" })]);
+
+        expect(body).toContain(
+          "- Claude token 2: $0.00 API-equivalent cost, no weekly-limit reading this week. Fable cap reached, resetting 2026-11-11 09:00 Australia/Sydney.",
+        );
+      });
+
+      it("holds a reading with no reset until its Subscription's weekly-limit reset", () => {
+        const weekly = { status: "allowed", rateLimitType: "seven_day", utilization: 0.4, resetsAt: 1_794_452_400 };
+        const body = bodyOf([
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", rateLimit: weekly }),
+          capped("Claude token", "2026-11-05T00:00:00Z", null),
+        ]);
+
+        expect(body).toContain("Fable cap reached on Claude token, resetting 2026-11-12 14:00 Australia/Sydney.");
+      });
+
+      it("holds a reading with no reset, on a Subscription whose weekly-limit reset isn't known, for 7 days", () => {
+        const body = bodyOf([capped("Claude token", "2026-11-05T00:00:00Z", null)]);
+
+        expect(body).toContain("Fable cap reached on Claude token, resetting 2026-11-12 11:00 Australia/Sydney.");
+      });
+
+      it("shows no Fable reset in a Kit with no repo opted in", () => {
+        const body = bodyOf([capped("Claude token", "2026-11-07T00:00:00Z", 1_794_348_000), capped("Claude token 2", "2026-11-07T00:00:00Z", 1_794_348_000)], [aRepoKit()]);
+
+        expect(body).toContain("Subscription usage:");
+        expect(body).not.toContain("Fable");
+      });
+    });
+  });
+
   it("counts the week's Flaky checks, found by the Kit's re-run and counted back alike, on open and closed agent PRs (#462)", () => {
     const line = (checks: string[], countedBack = false) =>
       `<!-- fabrik:flaky-check ${JSON.stringify({ headSha: "a".repeat(40), checks, ...(countedBack ? { countedBack } : {}) })} -->\nflaky`;
