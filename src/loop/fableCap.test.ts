@@ -7,6 +7,13 @@ import type { AgentRole, IssueSnapshot, KitConfig, LoopEvent, Plan, Snapshot } f
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const FABLE = "claude-fable-5-2";
 const RESETS_AT = "2026-11-27T04:00:00.000Z";
+/** When the adapter read the readings: before RESETS_AT. */
+const READ_AT = "2026-11-20T04:00:00.000Z";
+
+/** The Fable cap readings as the adapter read them at READ_AT, in force or not. */
+function readAt(readings: readonly { subscription: string; until: string }[]): NonNullable<Snapshot["fableCaps"]> {
+  return { readings, now: READ_AT };
+}
 
 /** A Product repo that opted in to Fable (ADR-0034), with Fable for Triage, Design, Implement and Review, on these Subscriptions. */
 function fableConfig(subscriptions: readonly string[]): KitConfig {
@@ -130,7 +137,7 @@ describe("A run due on a role that names Fable, with a Fable cap marked where it
   it("starts on the first listed Subscription with Fable left, on Fable", () => {
     const plan = planFor(
       { kind: "label-added", issue: 7, label: "needs-triage" },
-      snapshotOf(issue, { fableCaps: [{ subscription: "Claude token", until }] }),
+      snapshotOf(issue, { fableCaps: readAt([{ subscription: "Claude token", until }]) }),
       TWO_SUBSCRIPTIONS,
     );
 
@@ -141,7 +148,7 @@ describe("A run due on a role that names Fable, with a Fable cap marked where it
   it("starts on Opus 5.5 at the role's effort, on the Subscription it would have had, once no Subscription has Fable left", () => {
     const plan = planFor(
       { kind: "label-added", issue: 7, label: "needs-triage" },
-      snapshotOf(issue, { fableCaps: [{ subscription: "Claude token", until }, { subscription: "Claude token 2", until }] }),
+      snapshotOf(issue, { fableCaps: readAt([{ subscription: "Claude token", until }, { subscription: "Claude token 2", until }]) }),
       TWO_SUBSCRIPTIONS,
     );
 
@@ -153,7 +160,7 @@ describe("A run due on a role that names Fable, with a Fable cap marked where it
   it("starts on Opus 5.5 with one Subscription listed, once it has no Fable left", () => {
     const plan = planFor(
       { kind: "label-added", issue: 7, label: "needs-triage" },
-      snapshotOf(issue, { fableCaps: [{ subscription: "Claude token", until }] }),
+      snapshotOf(issue, { fableCaps: readAt([{ subscription: "Claude token", until }]) }),
       ONE_SUBSCRIPTION,
     );
 
@@ -166,7 +173,7 @@ describe("A run due on a role that names Fable, with a Fable cap marked where it
 
     const plan = planFor(
       { kind: "label-added", issue: 7, label: "needs-triage" },
-      snapshotOf(issue, { kitIssues: [limit], fableCaps: [{ subscription: "Claude token", until }] }),
+      snapshotOf(issue, { kitIssues: [limit], fableCaps: readAt([{ subscription: "Claude token", until }]) }),
       three,
     );
 
@@ -176,11 +183,22 @@ describe("A run due on a role that names Fable, with a Fable cap marked where it
   it("a Review started on its PR's label reads the cap marked on the PR", () => {
     const plan = planFor(
       { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" },
-      snapshotOfPullRequest(aPullRequest({ number: 50, labels: ["agent:review"] }), { fableCaps: [{ subscription: "Claude token", until }] }),
+      snapshotOfPullRequest(aPullRequest({ number: 50, labels: ["agent:review"] }), { fableCaps: readAt([{ subscription: "Claude token", until }]) }),
       TWO_SUBSCRIPTIONS,
     );
 
     expect(start(plan)).toEqual(expect.objectContaining({ role: "review", subscription: "Claude token 2", model: FABLE }));
+  });
+
+  it("counts a reading whose time had passed when the adapter read it as Fable left", () => {
+    const plan = planFor(
+      { kind: "label-added", issue: 7, label: "needs-triage" },
+      snapshotOf(issue, { fableCaps: { readings: [{ subscription: "Claude token", until }], now: "2026-11-28T04:00:00.000Z" } }),
+      ONE_SUBSCRIPTION,
+    );
+
+    expect(start(plan)).toEqual(expect.objectContaining({ subscription: "Claude token", model: FABLE }));
+    expect(start(plan)).not.toHaveProperty("fallback");
   });
 
   it("leaves a role that doesn't name Fable as it was", () => {
@@ -188,7 +206,7 @@ describe("A run due on a role that names Fable, with a Fable cap marked where it
 
     const plan = planFor(
       { kind: "label-added", issue: 7, label: "needs-triage" },
-      snapshotOf(issue, { fableCaps: [{ subscription: "Claude token", until }, { subscription: "Claude token 2", until }] }),
+      snapshotOf(issue, { fableCaps: readAt([{ subscription: "Claude token", until }, { subscription: "Claude token 2", until }]) }),
       config,
     );
 
@@ -214,8 +232,7 @@ describe("A Design, Review or Step-up run due while no listed Subscription has F
   const { roles } = TWO_SUBSCRIPTIONS;
   const config = { ...TWO_SUBSCRIPTIONS, roles: { ...roles, implement: DEFAULT_KIT_CONFIG.roles.implement, stepUp: { model: FABLE, effort: "xhigh" } } };
   const start = (plan: Plan) => actionsOf(plan).find((action) => action.kind === "start-agent-run");
-  type Caps = typeof everywhere;
-  const runs: readonly (readonly [string, LoopEvent, (fableCaps: Caps) => Snapshot, string])[] = [
+  const runs: readonly (readonly [string, LoopEvent, (fableCaps: NonNullable<Snapshot["fableCaps"]>) => Snapshot, string])[] = [
     [
       "a Design-session turn",
       { kind: "label-added", issue: 7, label: "agent:design" },
@@ -237,13 +254,13 @@ describe("A Design, Review or Step-up run due while no listed Subscription has F
   ];
 
   it.each(runs)("%s starts on Opus 5.5 at the role's effort, with no refusal first, recorded as a fable-cap fallback", (_, event, snapshot, effort) => {
-    expect(start(planFor(event, snapshot(everywhere), config))).toEqual(
+    expect(start(planFor(event, snapshot(readAt(everywhere)), config))).toEqual(
       expect.objectContaining({ subscription: "Claude token", model: "claude-opus-5-5", effort, configuredModel: FABLE, fallback: "fable-cap" }),
     );
   });
 
   it.each(runs)("%s starts on Fable on another Subscription, with a reading on one only", (_, event, snapshot, effort) => {
-    expect(start(planFor(event, snapshot(everywhere.slice(0, 1)), config))).toEqual(
+    expect(start(planFor(event, snapshot(readAt(everywhere.slice(0, 1))), config))).toEqual(
       expect.objectContaining({ subscription: "Claude token 2", model: FABLE, effort }),
     );
   });
@@ -256,6 +273,6 @@ describe("A repo that hasn't opted in to Fable", () => {
     const caps = [{ subscription: "Claude token", until: RESETS_AT }];
     const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
 
-    expect(planFor(event, snapshotOf(issue, { fableCaps: caps }), config)).toEqual(planFor(event, snapshotOf(issue), config));
+    expect(planFor(event, snapshotOf(issue, { fableCaps: readAt(caps) }), config)).toEqual(planFor(event, snapshotOf(issue), config));
   });
 });

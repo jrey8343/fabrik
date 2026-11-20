@@ -1499,30 +1499,31 @@ function pullRequestGitHub({
 }
 
 describe("Gathering the Fable cap readings marked where a refused run's trigger label went (ADR-0034)", () => {
-  const ahead = fableCapMarker({ subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" });
-  const passed = fableCapMarker({ subscription: "Claude token 2", until: "2020-01-01T00:00:00.000Z" });
+  const ahead = { subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" };
+  const passed = { subscription: "Claude token 2", until: "2020-01-01T00:00:00.000Z" };
+  const body = (...lines: string[]) => [...lines, "", fableCapMarker(ahead), fableCapMarker(passed)].join("\n");
 
-  it("reads those still in force off the event's issue", async () => {
-    const github = issueGitHub({ body: ["Sort this out.", "", ahead, passed].join("\n"), labels: ["needs-triage"] });
+  it("reads every one off the event's issue, in force or not, with when it read them: the Loop weighs which are in force", async () => {
+    const github = issueGitHub({ body: body("Sort this out."), labels: ["needs-triage"] });
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 98, label: "needs-triage" }, null, null);
 
-    expect(snapshot.fableCaps).toEqual([{ subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" }]);
+    expect(snapshot.fableCaps).toEqual({ readings: [ahead, passed], now: expect.any(String) });
   });
 
-  it("reads those still in force off a PR the Fabrik App opened, and none off anyone else's", async () => {
+  it("reads them off a PR the Fabrik App opened, and none off anyone else's", async () => {
     const labeled = { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" } as const;
-    const body = ["Adds a waitlist.", "", "Closes #7", "", ahead, passed].join("\n");
+    const text = body("Adds a waitlist.", "", "Closes #7");
 
-    const byApp = await gatherSnapshot(pullRequestGitHub({ body }), repo, labeled, null, APP_LOGIN);
-    const byOther = await gatherSnapshot(pullRequestGitHub({ body, author: { login: "someone", __typename: "User" } }), repo, labeled, null, APP_LOGIN);
+    const byApp = await gatherSnapshot(pullRequestGitHub({ body: text }), repo, labeled, null, APP_LOGIN);
+    const byOther = await gatherSnapshot(pullRequestGitHub({ body: text, author: { login: "someone", __typename: "User" } }), repo, labeled, null, APP_LOGIN);
 
-    expect(byApp.fableCaps).toEqual([{ subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" }]);
-    expect(byOther.fableCaps).toEqual([]);
+    expect(byApp.fableCaps?.readings).toEqual([ahead, passed]);
+    expect(byOther.fableCaps?.readings).toEqual([]);
   });
 
-  it("adds those still in force of the readings the Kit job read in the store, beside the ones marked", async () => {
-    const github = issueGitHub({ body: ["Sort this out.", "", ahead].join("\n"), labels: ["needs-triage"] });
+  it("adds the readings the Kit job read in the store, beside the ones marked", async () => {
+    const github = issueGitHub({ body: ["Sort this out.", "", fableCapMarker(ahead)].join("\n"), labels: ["needs-triage"] });
     const store = [
       { subscription: "Claude token 2", until: "2099-02-01T00:00:00.000Z" },
       { subscription: "Claude token 3", until: "2020-01-01T00:00:00.000Z" },
@@ -1530,10 +1531,7 @@ describe("Gathering the Fable cap readings marked where a refused run's trigger 
 
     const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 98, label: "needs-triage" }, null, null, null, null, null, store);
 
-    expect(snapshot.fableCaps).toEqual([
-      { subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" },
-      { subscription: "Claude token 2", until: "2099-02-01T00:00:00.000Z" },
-    ]);
+    expect(snapshot.fableCaps?.readings).toEqual([ahead, ...store]);
   });
 
   it("gives the store's readings to an event with no issue or PR of its own, which can still start runs", async () => {
@@ -1541,7 +1539,7 @@ describe("Gathering the Fable cap readings marked where a refused run's trigger 
 
     const snapshot = await gatherSnapshot(issueGitHub(), repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, null, null, null, null, store);
 
-    expect(snapshot.fableCaps).toEqual(store);
+    expect(snapshot.fableCaps?.readings).toEqual(store);
   });
 });
 

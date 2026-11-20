@@ -2,7 +2,7 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
-import { type FableCapReading, fableCapsIn, inForce } from "../loop/fableCap.ts";
+import { type FableCapReading, fableCapsIn } from "../loop/fableCap.ts";
 import { shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { changedTestsIn } from "../loop/changedTests.ts";
 import {
@@ -661,10 +661,11 @@ export async function gatherSnapshot(
         event.kind === "label-added" && event.label === REPLAY_TRIGGER_LABEL
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
-  // The Fable caps still in force (ADR-0034): those a refused run's re-run reads back, marked where its trigger label
-  // went, on the event's issue or its PR, and those the Kit job read in the store's newest Run records (storeFableCaps).
+  // The Fable cap readings (ADR-0034): those a refused run's re-run reads back, marked where its trigger label went, on
+  // the event's issue or its PR, and those the Kit job read in the store's newest Run records (storeFableCaps). Which
+  // are still in force is the Loop's to weigh (src/loop/fableCap.ts), at the time they were read.
   const marked = [...fableCapsIn(part?.issue?.body ?? ""), ...(part?.fableCaps ?? [])];
-  const fableCaps = inForce([...marked, ...storeFableCaps], new Date().toISOString());
+  const fableCaps = { readings: [...marked, ...storeFableCaps], now: event.kind === "scheduled-tick" ? event.now : new Date().toISOString() };
   return part === null
     ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
     : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
@@ -1452,7 +1453,11 @@ type EventPart = Omit<
   | "flakySweep"
   | "passedHeads"
   | "closedCheckIssues"
->;
+  | "fableCaps"
+> & {
+  /** The Fable cap readings marked on the event's PR, in force or not, which gatherSnapshot adds to the snapshot's. */
+  readonly fableCaps?: readonly FableCapReading[];
+};
 
 const KIT_ISSUE_COMMENTS = "pageInfo { hasPreviousPage startCursor } nodes { body createdAt author { login __typename } }";
 

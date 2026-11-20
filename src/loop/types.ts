@@ -1565,16 +1565,17 @@ export interface Snapshot {
    */
   readonly closedCheckIssues: readonly ClosedCheckIssue[] | null;
   /**
-   * The Fable cap readings still in force as the adapter read them (ADR-0034):
-   * those marked on the body of the event's issue or PR, where a run refused
-   * on its Subscription's Fable cap had its trigger label re-added, and, in
-   * the Kit job of a repo that opted in, those in the store's Run records
-   * (src/kit/fableCapFacts.ts). A run it starts on a role naming Fable starts
-   * on a Subscription with Fable left, or on Opus (src/loop/fableCap.ts).
-   * Absent or empty, as when the store can't be read, every Subscription has
+   * The Fable cap readings (ADR-0034), in force or not, and when the adapter
+   * read them: those marked on the body of the event's issue or PR, where a
+   * run refused on its Subscription's Fable cap had its trigger label
+   * re-added, and, in the Kit job of a repo that opted in, those in the
+   * store's Run records (src/kit/fableCapFacts.ts). The Loop weighs which are
+   * still in force at `now` (src/loop/fableCap.ts): a run it starts on a role
+   * naming Fable starts on a Subscription with Fable left, or on Opus. Absent,
+   * or with none, as when the store can't be read, every Subscription has
    * Fable left.
    */
-  readonly fableCaps?: readonly FableCapReading[];
+  readonly fableCaps?: FableCapSnapshot;
   /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.
@@ -1741,6 +1742,14 @@ export interface LabelledTrigger {
   readonly lastAddedAt: string | null;
   /** Whether the Kit's stuck-trigger re-add comment for it came after it last came off: the Kit has re-added it once already. */
   readonly readded: boolean;
+}
+
+/** The Fable cap readings the adapter read (ADR-0034), and when. */
+export interface FableCapSnapshot {
+  /** Every reading, in force or not. */
+  readonly readings: readonly FableCapReading[];
+  /** When the adapter read them, as an ISO 8601 time: the tick's own time on a scheduled tick. */
+  readonly now: string;
 }
 
 /** What the conflict check weighs (src/loop/conflicts.ts, #304). */

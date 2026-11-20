@@ -13,7 +13,7 @@
 // the reading's time has passed. Pure, no I/O.
 import { namesFable } from "../kit/config.ts";
 import { freeSubscriptions, type Subscription } from "./subscriptions.ts";
-import type { Action, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
+import type { Action, FableCapSnapshot, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
 
 /** The model a Fable fallback starts on, at the effort the role names. */
 export const FABLE_FALLBACK_MODEL = "claude-opus-5-5";
@@ -54,6 +54,11 @@ export function fableCapsIn(body: string): FableCapReading[] {
 /** The readings still in force at `now`: those whose time is still ahead. */
 export function inForce(readings: readonly FableCapReading[], now: string): FableCapReading[] {
   return readings.filter(({ until }) => Date.parse(until) > Date.parse(now));
+}
+
+/** The readings a snapshot holds that were still in force when the adapter read them; none when it holds none. */
+export function fableCapsInForce(caps: FableCapSnapshot | undefined): FableCapReading[] {
+  return caps === undefined ? [] : inForce(caps.readings, caps.now);
 }
 
 /**

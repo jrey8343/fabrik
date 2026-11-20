@@ -3,7 +3,7 @@ import { landAudit } from "./auditLanding.ts";
 import { answerRound, applyTurn, startQueuedSession, startSession, turnStartFrom, whyNoPrototype } from "./design.ts";
 import { digestLabelOnIssue, issueLabelOnPullRequest, rerunChecksLabelOnIssue, reviewLabelOnIssue } from "./declineTrigger.ts";
 import { landDigest, startDigestOnLabel } from "./digest.ts";
-import { onFableLeft } from "./fableCap.ts";
+import { fableCapsInForce, onFableLeft } from "./fableCap.ts";
 import { failureNotice } from "./failures.ts";
 import { bringInCheckFix, type CheckFixes, checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
@@ -81,7 +81,7 @@ export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig)
   const kitIssues = snapshot.kitIssues.filter((issue) => !closes(planned, issue.number));
   const chosen = onChosenSubscription(heldWhileUsedUp(planned, kitIssues, config), kitIssues, config);
   // A run on a role naming Fable starts where Fable is left, or falls back to Opus (ADR-0034).
-  return onFableLeft(chosen, snapshot.fableCaps ?? [], kitIssues, config);
+  return onFableLeft(chosen, fableCapsInForce(snapshot.fableCaps), kitIssues, config);
 }
 
 function closes(plan: Plan, issue: number): boolean {
