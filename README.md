@@ -13,7 +13,7 @@ Status: building v1. See the Spec in GitHub Issues (#28).
 - `src/read/` holds the **read library**: `index.ts`, its one entry, re-exports what another program may use to read the Kit, and nothing else (see [Reading the Kit from another program](#reading-the-kit-from-another-program)). `exports.fixture.ts` names every export with a call or a value of each, and the tests beside it hold the entry to it, walk the entry's imports, and run every call as a Worker would.
 - `src/main.ts` is what the push, claim and Dispatch jobs run (`node src/main.ts`, Node 24, no build step and no runtime dependencies). In the push job (`FABRIK_NEEDS`), it applies an agent job's output, or its failure notice, instead of the Actions event.
 - `src/agent/` holds the **agent job** runner (`node src/agent/run.ts triage`, `design`, `prototype`, `implement`, `review`, `audit`, `retro`, `research` or `digest`): Sandcastle with `noSandbox()` on the runner VM, the metered-billing preflight as the last `onSandboxReady` step, the `init` check, the step summary, and the role's output passed out as `agent-result.json`. Only agent jobs install the runtime dependencies (Sandcastle, the Claude Code CLI and Playwright, pinned exactly).
-- `src/evidence/` holds **Visual evidence** (see `ui` in the [Kit config](#kit-config)): `uiEvidence.ts` is the pure UI evidence module (whether a PR is UI, which routes to capture and why, the capture result every later reader shares, the Reviewer's images, and the PR body's evidence section and its marker), `evidencePage.ts` the Evidence page and a Prototype's, `capture.ts` the pure capture core, and `capture-main.ts` the capture step of the Implement job and of a prototype turn, the one Kit program that imports Playwright. `src/kit/previewLink.ts` is the push job's preview steps, which its `link-preview` action runs for a UI PR (`src/kit/preview-main.ts`) and its `link-prototype-preview` action for a prototype round, the same program given the round.
+- `src/evidence/` holds **Visual evidence** (see `ui` in the [Kit config](#kit-config)): `uiEvidence.ts` is the pure UI evidence module (whether a PR is UI, which routes to capture and why, the capture result every later reader shares, the Reviewer's images, and the PR body's evidence section and its marker), `evidencePage.ts` the Evidence page and a Prototype's, `shotsManifest.ts` the pure reader of an Evidence shots manifest and the artifact's rules (see [Evidence shots](#evidence-shots)), `capture.ts` the pure capture core, and `capture-main.ts` the capture step of the Implement job and of a prototype turn, the one Kit program that imports Playwright. `src/kit/previewLink.ts` is the push job's preview steps, which its `link-preview` action runs for a UI PR (`src/kit/preview-main.ts`) and its `link-prototype-preview` action for a prototype round, the same program given the round.
 - `src/review/` holds the Review checks job's step (`node src/review/wait.ts`), which waits for an agent PR's required checks, and the pure rule for how they ended.
 - `src/preflight/` holds the metered-billing preflight (pure) and the command the hook runs.
 - `src/skills/` and `skills.lock.json` pin Matt Pocock's skills, the Base skills, at a commit SHA and install them into a Product checkout's gitignored `.claude/skills/` (ADR-0003), beside the Extra skills a Product repo picks from its own Skills sources (ADR-0008, see [Extra skills](#extra-skills)). `src/skills/fetch.ts <product checkout> [role]` installs them; `src/skills/pinnedManifests.ts` is the Kit job's check of the picks against each source's manifest at its pin.
@@ -540,6 +540,97 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
 - Per-phase instructions are optional Markdown files: `.fabrik/triage.md`, `.fabrik/design.md`, `.fabrik/implement.md` and `.fabrik/review.md`, the Auditor's `.fabrik/audit.md`, the Retro's `.fabrik/retro.md`, the Researcher's `.fabrik/research.md` and the Digest writer's `.fabrik/digest.md`.
 - `CODING_STANDARDS.md` at the repo root is optional too, though it isn't Kit config: it holds the repo's coding standards. The Reviewer judges every PR against it when it's there (see [Review](#review)), every Implement run is given it inline, and the Retro proposes Judgement lessons as lines for it. It's a Trust-root file, so only the Operator changes it, and the Kit ships no template for it.
 - `roles.triage`, `roles.design`, `roles.implement` and `roles.review` each take an optional `skills` list of Extra skills (see [Extra skills](#extra-skills)). `roles.dispatch`, `roles.step_up`, `roles.audit`, `roles.retro`, `roles.research` and `roles.digest` don't: a Step-up run is an Implement run and gets implement's, and the Auditor, the Retro, the Researcher and the Digest writer get the Base skills alone (ADR-0008).
+
+### Evidence shots
+
+UI evidence can come from Evidence shots instead of captured routes (ADR-0032): a Journey, one of the Product repo's end-to-end tests, takes an Evidence shot at a moment it names, and the Required check that runs the Journeys uploads the shots with a manifest as an artifact. This is the contract a Product repo builds to. The helper, the shots and the upload step are the Product repo's own code: the Kit documents them here, and nothing the Kit versions runs inside a Product's tests.
+
+- **The artifact** is named `fabrik-evidence-shots` by default (Kit config can name another), and holds `manifest.json` and the images at its root:
+
+  ```
+  fabrik-evidence-shots
+    manifest.json
+    composer-draft-ready.mobile.png
+    composer-draft-ready.desktop.png
+  ```
+
+- **The manifest**, one entry per shot:
+
+  ```json
+  {
+    "version": 1,
+    "shots": [
+      {
+        "name": "composer: draft ready",
+        "journey": "write-a-clinical-note",
+        "path": "/patients/6f1b2c3d/notes/new",
+        "images": {
+          "mobile": "composer-draft-ready.mobile.png",
+          "desktop": "composer-draft-ready.desktop.png"
+        }
+      }
+    ]
+  }
+  ```
+
+  `version` is `1`. `name` and `images` are required, with at least one of `mobile` and `desktop`. `journey` (the Journey's own name for itself) and `path` (where the page was at that moment) are optional and only shown. The name alone says which shot it is: free text as the Journey wrote it, one line, unique in the run, and always compared exactly, with no trimming and no folding of case.
+- **The two sizes** are the Kit's: `mobile` is 390 by 844 and `desktop` is 1440 by 900, each image one screen high. The Kit takes the manifest's word for which size an image is and does not measure it. A shot with only one of its images still counts, with the other size listed as missing.
+- **The upload step runs whether the Journeys passed or failed**, and keeps the artifact 30 days, as the Kit keeps a pull request's captures. A green check that uploaded no artifact is a failure of the wiring, the Operator's to fix. For example, after the step that runs the Journeys:
+
+  ```yaml
+  - name: Upload Evidence shots for Fabrik
+    if: ${{ !cancelled() }}
+    uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+    with:
+      name: fabrik-evidence-shots
+      path: evidence-shots/
+      retention-days: 30
+  ```
+
+- **The artifact is untrusted**, since the pull request's own code writes it. The Kit reads `manifest.json` and the images the manifest lists, and nothing else in the artifact, and runs none of it. An entry that breaks one of these rules is dropped, with its reason kept, and the other shots are read:
+  - An image's file name is flat: letters, digits, `.`, `_` and `-`, starting with a letter or digit, with no folder and no `..`, and ending `.png`. The file starts as a PNG does. An image is at most 1 MB (1,048,576 bytes). A listed image that isn't in the artifact is that size missing; an entry none of whose images is there is dropped.
+  - A name is at most 80 characters on one line, of letters A to Z, digits, spaces and `: - _ / . ,` only. `journey` is held to the same rule, and `path` to the rule a route is held to: a path starting with one `/`.
+  - At most 100 shots. Past that the manifest's first 100 are kept, and the rest are counted as dropped.
+  - Two entries with one name make that name ambiguous: neither is shown under it. Other shots are unaffected.
+  - A manifest that is missing, isn't JSON, has another `version` or has no `shots` list can't be read at all, and no shot of it is.
+- **No Before.** A shot is of the pull request's head only.
+- **A reference helper for Playwright**, to copy into the Product repo and change as it likes. It takes a page and a name, takes the shot at both sizes one screen high, puts the page's size back as it was, and adds the entry to the manifest. It reads and rewrites `manifest.json`, so run the Journeys that call it in one worker, or give each worker its own folder and join their manifests before the upload step. The Kit ships and runs none of it.
+
+  ```ts
+  // e2e/evidenceShot.ts: this Product's own helper, copied from the Fabrik README.
+  import { mkdir, readFile, writeFile } from "node:fs/promises";
+  import { join } from "node:path";
+  import type { Page } from "@playwright/test";
+
+  const FOLDER = "evidence-shots";
+  const SIZES = { mobile: { width: 390, height: 844 }, desktop: { width: 1440, height: 900 } };
+
+  /** Takes the Evidence shot `name` of `page` at both of Fabrik's sizes, and adds it to the manifest. */
+  export async function evidenceShot(page: Page, name: string, options: { journey?: string } = {}): Promise<void> {
+    await mkdir(FOLDER, { recursive: true });
+    const manifestFile = join(FOLDER, "manifest.json");
+    const manifest = await readFile(manifestFile, "utf8").then(JSON.parse, () => ({ version: 1, shots: [] }));
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const stem = `${String(manifest.shots.length + 1).padStart(3, "0")}-${slug}`;
+    const was = page.viewportSize();
+    const images: Record<string, string> = {};
+    try {
+      for (const [size, viewport] of Object.entries(SIZES)) {
+        await page.setViewportSize(viewport);
+        images[size] = `${stem}.${size}.png`;
+        await page.screenshot({ path: join(FOLDER, images[size]) });
+      }
+    } finally {
+      if (was !== null) await page.setViewportSize(was);
+    }
+    const { pathname, search } = new URL(page.url());
+    const path = pathname.startsWith("/") ? { path: `${pathname}${search}` } : {};
+    manifest.shots.push({ name, ...options, ...path, images });
+    await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+  ```
+
+  A Journey then marks its moment in one line, such as `await evidenceShot(page, "composer: draft ready", { journey: "write-a-clinical-note" });`.
 
 ### Extra skills
 

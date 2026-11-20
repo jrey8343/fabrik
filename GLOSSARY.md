@@ -379,8 +379,16 @@ A comment the Operator leaves on an agent pull request, which every later agent 
 _Avoid_: PR feedback, reply
 
 **UI evidence**:
-The screenshots, and preview link if the Product repo has one, that the Kit captures for a pull request changing a Product repo's UI, so the Operator and the Reviewer can see what was built.
+The screenshots, and preview link if the Product repo has one, that the Kit gathers for a pull request changing a Product repo's UI, by capturing its routes or collecting its Evidence shots, so the Operator and the Reviewer can see what was built.
 _Avoid_: visual proof, screenshots, artifacts
+
+**Journey**:
+A named path a person takes through a Product repo's product, which that repo's end-to-end tests drive.
+_Avoid_: e2e test, scenario, spec, flow
+
+**Evidence shot**:
+A screenshot a Journey takes at a moment it names, which UI evidence collects. Its name alone says which shot it is.
+_Avoid_: snapshot, journey screenshot, checkpoint
 
 **Digest**:
 The Kit's plain-English account of an agent pull request as it stands at one head, written each time it arrives at the Merge gate and kept on the pull request for the Operator: what was decided and why, what was left out of scope, what needs follow-up, and which parts deserve the Operator's own eyes.
