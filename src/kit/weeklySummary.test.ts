@@ -451,14 +451,14 @@ describe("the Weekly summary", () => {
       refusal: { rateLimitType: "seven_day_fable", resetsAt: 1_794_000_000 },
     } as const;
 
-    it("counts the week's runs started on Opus in Fable's place, against last week's, apart from the Fable cap refusals and other Infrastructure failures", () => {
+    it("counts the week's Run records started on Opus in Fable's place, against last week's, one that ended in an Infrastructure failure included", () => {
       const result = weeklySummary(
         input({
           records: [
             aRunRecord({ ...refusedOnTheCap, endedAt: "2026-11-03T00:00:00Z" }),
             aRunRecord({ ...fellBack, endedAt: "2026-11-03T00:05:00Z" }),
             aRunRecord({ ...fellBack, endedAt: "2026-11-05T00:00:00Z", role: "review" }),
-            // Refused on the weekly limit, and resumed: counted once, by the run that ran.
+            // A fallback refused on the weekly limit is a fallback all the same: every Run record with fable-cap counts.
             aRunRecord({ ...fellBack, endedAt: "2026-11-06T00:00:00Z", jobResult: "failure", infrastructureFailure: "weekly-limit" }),
             aRunRecord({ endedAt: "2026-11-06T00:00:00Z" }),
             aRunRecord({ ...fellBack, endedAt: "2026-10-29T00:00:00Z" }), // last week
@@ -466,8 +466,8 @@ describe("the Weekly summary", () => {
           kits: [OPTED_IN],
         }),
       );
-      expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: { thisWeek: 2, lastWeek: 1 } } } });
-      expect(result.kind === "summary" ? result.body : "").toContain("| Fable fallbacks | 2 | 1 | +1 |");
+      expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: { thisWeek: 3, lastWeek: 1 } } } });
+      expect(result.kind === "summary" ? result.body : "").toContain("| Fable fallbacks | 3 | 1 | +2 |");
     });
 
     it("counts only the repos that opted in to Fable", () => {

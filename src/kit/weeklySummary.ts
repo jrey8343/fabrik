@@ -1174,14 +1174,14 @@ function touchUpsIn(records: readonly RunRecord[]): number {
 
 /**
  * How many Fable fallbacks (ADR-0034) these records hold in the repos given:
- * records with `fallback` `fable-cap`, each a run started on Opus 5.5 because
- * no Subscription had Fable left, and no Infrastructure failure, so a
- * fallback refused on the weekly limit and then resumed counts once. The Fable
- * run's own refusal on its Fable cap is an Infrastructure failure, never a
- * fallback: only the run that fell back counts.
+ * every record with `fallback` `fable-cap`, each a run started on Opus 5.5
+ * because no Subscription had Fable left, one that ended in an
+ * Infrastructure failure included (#832). The Fable run's own refusal on its
+ * Fable cap ran on Fable, so it is never a fallback: only the run that fell
+ * back counts.
  */
 function fableFallbacksIn(records: readonly RunRecord[], repos: ReadonlySet<string>): number {
-  return records.filter((record) => repos.has(record.repo) && record.fallback === "fable-cap" && record.infrastructureFailure === null).length;
+  return records.filter((record) => repos.has(record.repo) && record.fallback === "fable-cap").length;
 }
 
 /** The Product repos whose Kit config, as read at their default branch's head, opts in to Fable with `allow_fable` (ADR-0034). */
