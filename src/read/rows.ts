@@ -6,15 +6,17 @@
 // those facts, so a reader holds no rule of its own. A row also carries what a
 // reader needs to show a change (#639): the routes UI evidence captured, with
 // each one's page on the preview and, once merged, in production, and where
-// an issue's Prototype is kept. The Kit builds every address, so a reader
-// holds no rule about addresses either. An open agent pull request's row
-// carries the Digest of its head as data (#655), and each Roll-in owed on it
-// with the Kit's text as data (#664), so a reader parses no hidden line and
-// no Markdown. Pure, no I/O, and plain data: written as JSON and read back a
-// row is equal.
-import { type CaptureFailure, captureFailureSentence } from "../evidence/uiEvidence.ts";
+// an issue's Prototype is kept, or, where the evidence is Evidence shots, each
+// named shot with its pages built from its path (#822). The Kit builds every
+// address, so a reader holds no rule about addresses either. An open agent
+// pull request's row carries the Digest of its head as data (#655), and each
+// Roll-in owed on it with the Kit's text as data (#664), so a reader parses
+// no hidden line and no Markdown. Pure, no I/O, and plain data: written as
+// JSON and read back a row is equal.
+import type { ShotNotProduced, ShotSize } from "../evidence/shotsManifest.ts";
+import { type CaptureFailure, captureFailureSentence, producedNamedShots, type ShotsFailure } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { productionPageUrl, withRouteOn } from "../kit/config.ts";
+import { type ProductionConfig, productionPageUrl, withRouteOn } from "../kit/config.ts";
 import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
 import { plainSinceOf } from "../kit/standingPlain.ts";
 import { isProductionStanding } from "../kit/standingProduction.ts";
@@ -82,6 +84,15 @@ export interface Row {
    * read from GitHub by whoever fetches it.
    */
   readonly evidence: RowEvidence | null;
+  /**
+   * On a row whose agent pull request, open or merged in the last 24 hours,
+   * carries the shots marker the Kit writes on a UI pull request whose
+   * evidence is Evidence shots (#822): its named shots, where a route
+   * marker's row carries its captured routes under `evidence`, which is then
+   * null. Null on any other row, a Plain pull request's among them: a reader
+   * gets its shots from the named check's artifact at its head.
+   */
+  readonly shots: RowShots | null;
   /**
    * On a merged agent pull request's row, whatever its name: where its
    * change goes live. Which links a reader shows, and when, is the reader's.
@@ -169,6 +180,46 @@ export interface RowEvidence {
   readonly missed: readonly { readonly route: string; readonly viewport: string; readonly side: "before" | "after" }[] | null;
 }
 
+/** An agent pull request's Evidence shots, as its shots marker records them (#822). */
+export interface RowShots {
+  /** The head the pictures are from, the one the named check ran at; null while the marker waits for it. */
+  readonly head: string | null;
+  /** The Review run whose artifact holds the Evidence page, or null while the marker waits. */
+  readonly run: number | null;
+  /** The id of that run's Evidence page artifact, or null when it kept none. */
+  readonly artifact: number | null;
+  /** Why nothing of the check's run could be read, the Product repo's wiring, or null. */
+  readonly failure: ShotsFailure | null;
+  /** What came of the preview deployment: `unknown` from a marker whose preview doesn't read. */
+  readonly preview: "none" | "pending" | "linked" | "never-answered" | "unknown";
+  /** The Implementer's sentence that nothing a person sees changes, in its own words, or null when it gave none. */
+  readonly nothingVisible: string | null;
+  /** That the pull request gives neither names nor the sentence: an Evidence miss. */
+  readonly nothingNamed: boolean;
+  /** Each name the pull request gave, in its order: none when it has the sentence. */
+  readonly named: readonly RowNamedShot[];
+}
+
+/** One of an agent pull request's named shots, with its pages when the artifact's entry gave it a path. */
+export interface RowNamedShot {
+  readonly name: string;
+  /** The Journey the artifact's entry gave it, or null. */
+  readonly journey: string | null;
+  /** The path the artifact's entry gave it, or null: a shot with no path has no page. */
+  readonly path: string | null;
+  /** Whether the check's run at `head` produced it (producedNamedShots); false while the marker waits and when nothing of the run could be read. */
+  readonly produced: boolean;
+  /** Why the run didn't produce it, or each size it lacks; empty when it missed nothing or nothing has been read. */
+  readonly missed: readonly RowShotMiss[];
+  /** The page at its path on the preview when the preview was linked, else null. */
+  readonly preview: string | null;
+  /** The live page at its path on a merged pull request's row when Kit config declares `production`, else null. */
+  readonly production: string | null;
+}
+
+/** Why a named shot wasn't produced, or a size it lacks, as its row says it: its name is the shot's own. */
+type RowShotMiss = { readonly why: ShotNotProduced } | { readonly viewport: ShotSize; readonly why: "size-missing" };
+
 /** The last runs read (./runs.ts), or null when none is held. */
 type RowsRuns = RunsRead | null;
 /** The last Required checks read, or null when none was made: every head is then unread. */
@@ -216,7 +267,7 @@ function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredCheck
  * Ticket's state.
  */
 export function bareRowOf(standing: Standing, title: string, lastWord: Row["lastWord"]): Row {
-  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null, prototype: null, digest: null };
+  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, shots: null, production: null, prototype: null, digest: null };
 }
 
 /**
@@ -236,6 +287,7 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
     ticketClosed: pullRequest === null ? null : ticketClosedOf(facts, pullRequest),
     plainPullRequest: pullRequest === null ? null : plainPullRequestOf(facts, pullRequest, standing.detail.pullRequest === undefined ? null : (owns.get(pullRequest) ?? null)),
     evidence: pullRequest === null ? null : evidenceOf(facts, pullRequest),
+    shots: pullRequest === null ? null : shotsOf(facts, pullRequest, isProductionStanding(standing)),
     production: pullRequest !== null && isProductionStanding(standing) ? productionOf(facts, pullRequest) : null,
     prototype: issue === null ? null : prototypeOf(facts, issue),
     digest: pullRequest === null ? null : digestOn(facts, pullRequest),
@@ -300,6 +352,38 @@ function evidenceOf({ evidenceMarkers }: Facts, pullRequest: number): RowEvidenc
     pages: routes === undefined ? null : routes.map((route) => ({ route, preview: linked === null ? null : pageOn(linked, route) })),
     failureSentence: failure === undefined || failure === null ? null : captureFailureSentence(failure),
     missed: missed ?? null,
+  };
+}
+
+/**
+ * Agent pull request `pullRequest`'s named shots, from its shots marker, each
+ * page built as a captured route's is, its live page only on a merged pull
+ * request's row (`merged`); null when the facts hold none for it.
+ */
+function shotsOf({ kit, shotsMarkers }: Facts, pullRequest: number, merged: boolean): RowShots | null {
+  const marker = shotsMarkers.find((held) => held.pullRequest === pullRequest)?.marker;
+  if (marker === undefined) return null;
+  const { head, run, artifact, failure, preview, nothingVisible, miss, named, missed } = marker;
+  const linked = preview?.is === "linked" ? preview.url : null;
+  const production: ProductionConfig | null = merged && kit.config.ok ? kit.config.config.production : null;
+  const produced = producedNamedShots(marker);
+  return {
+    head,
+    run,
+    artifact,
+    failure,
+    preview: preview?.is ?? "unknown",
+    nothingVisible: nothingVisible ?? null,
+    nothingNamed: miss === "nothing-named",
+    named: named.map(({ name, journey, path }) => ({
+      name,
+      journey: journey ?? null,
+      path: path ?? null,
+      produced: produced.includes(name),
+      missed: missed.flatMap((each): RowShotMiss[] => (each.name !== name ? [] : each.why === "size-missing" ? [{ viewport: each.viewport, why: each.why }] : [{ why: each.why }])),
+      preview: path === undefined || linked === null ? null : pageOn(linked, path),
+      production: path === undefined || production === null ? null : productionPageUrl(production, path),
+    })),
   };
 }
 

@@ -160,6 +160,39 @@ export { CAPTURE_RESULT_FILE, parseCaptureResult } from "../evidence/uiEvidence.
 export { productionPageUrl } from "../kit/config.ts";
 export type { CaptureResult, CaptureResultRead } from "../evidence/uiEvidence.ts";
 
+// Evidence shots
+
+export { DEFAULT_SHOTS_ARTIFACT } from "../kit/config.ts";
+export {
+  DROP_REASONS,
+  droppedShotSentence,
+  isShotName,
+  namedShots,
+  readShotsManifest,
+  SHOT_IMAGE_MAX_BYTES,
+  SHOT_LIMIT,
+  SHOT_NAME_MAX_LENGTH,
+  SHOT_NAME_RULE,
+  SHOTS_MANIFEST_FILE,
+  SHOTS_MANIFEST_VERSION,
+} from "../evidence/shotsManifest.ts";
+export { producedNamedShots, SHOTS_FAILURES, shotMissSentence, shotsFailureSentence, shotsMarkerIn } from "../evidence/uiEvidence.ts";
+export type {
+  ArtifactFile,
+  BadManifest,
+  DropReason,
+  DroppedShot,
+  EvidenceShot,
+  NamedShotAnswer,
+  NamedShots,
+  ShotMiss,
+  ShotNotProduced,
+  ShotSize,
+  ShotsManifest,
+  ShotsManifestRead,
+} from "../evidence/shotsManifest.ts";
+export type { DroppedNames, NamedShot, ShotsFailure, ShotsMarker } from "../evidence/uiEvidence.ts";
+
 // The Digest read
 
 export { aDigestComment, aNoDigestLine } from "./builders.ts";

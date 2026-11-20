@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CAPTURE_FAILURES, captureFailureSentence, type EvidenceMarker } from "../evidence/uiEvidence.ts";
+import { CAPTURE_FAILURES, captureFailureSentence, type EvidenceMarker, type ShotsMarker } from "../evidence/uiEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";
@@ -361,6 +362,141 @@ describe("a Product repo's rows", () => {
 
       expect(evidenceOf(null)).toEqual([null]);
       expect(rowsOf(facts, null, null, null, NOW).map(({ evidence }) => evidence)).toEqual([null, null]);
+    });
+  });
+
+  describe("an agent pull request's named Evidence shots (#822)", () => {
+    const PREVIEW = "https://fabrik-ticket-7.shop.example.dev/";
+    const READ_AT = "c".repeat(40);
+    /** The shots marker once the Review's jobs read the `e2e` check's artifact at READ_AT: three names, one with no path, one missed outright, one lacking its desktop size. */
+    const READ: ShotsMarker = {
+      source: "shots",
+      head: READ_AT,
+      run: 9300,
+      artifact: 9301,
+      failure: null,
+      routes: [],
+      named: [{ name: "composer: draft ready", journey: "write-a-clinical-note", path: "/patients/6f1b2c3d/notes/new?tab=draft" }, { name: "inbox: empty" }, { name: "sign in: form", path: "/sign-in" }],
+      missed: [
+        { name: "inbox: empty", why: "not-produced" },
+        { name: "sign in: form", viewport: "desktop", why: "size-missing" },
+      ],
+      preview: { is: "linked", url: PREVIEW },
+      implementRun: 9100,
+    };
+    const shotsOf = (marker: ShotsMarker, overrides: Partial<Omit<Facts, "kind">> = {}) => {
+      const facts = homeFactsOf({ github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }), shotsMarkers: [{ pullRequest: 50, marker }], ...overrides });
+      return rowsOf(facts, null, null, null, NOW)
+        .filter(({ standing }) => standing.pullRequest === 50)
+        .map(({ shots }) => shots);
+    };
+
+    it("carries each named shot in the pull request's order, with its path, whether it was produced and why not, and its page on the linked preview", () => {
+      expect(shotsOf(READ)).toEqual([
+        {
+          head: READ_AT,
+          run: 9300,
+          artifact: 9301,
+          failure: null,
+          preview: "linked",
+          nothingVisible: null,
+          nothingNamed: false,
+          named: [
+            {
+              name: "composer: draft ready",
+              journey: "write-a-clinical-note",
+              path: "/patients/6f1b2c3d/notes/new?tab=draft",
+              produced: true,
+              missed: [],
+              preview: "https://fabrik-ticket-7.shop.example.dev/patients/6f1b2c3d/notes/new?tab=draft",
+              production: null,
+            },
+            { name: "inbox: empty", journey: null, path: null, produced: false, missed: [{ why: "not-produced" }], preview: null, production: null },
+            { name: "sign in: form", journey: null, path: "/sign-in", produced: true, missed: [{ viewport: "desktop", why: "size-missing" }], preview: "https://fabrik-ticket-7.shop.example.dev/sign-in", production: null },
+          ],
+        },
+      ]);
+    });
+
+    it("gives no shot a preview page when the preview isn't linked", () => {
+      const [shots] = shotsOf({ ...READ, preview: { is: "never-answered", url: PREVIEW } });
+
+      expect(shots?.preview).toBe("never-answered");
+      expect(shots?.named.map(({ preview }) => preview)).toEqual([null, null, null]);
+    });
+
+    it("carries the names as unproduced, with no head, while the marker waits for the named check", () => {
+      const waiting: ShotsMarker = { ...READ, head: null, run: null, artifact: null, named: READ.named.map(({ name }) => ({ name })), missed: [], preview: { is: "pending" } };
+
+      expect(shotsOf(waiting)).toMatchObject([{ head: null, run: null, artifact: null, preview: "pending", named: [{ produced: false, path: null }, { produced: false, path: null }, { produced: false, path: null }] }]);
+    });
+
+    it("carries why nothing of the run could be read, with every name unproduced", () => {
+      const [shots] = shotsOf({ ...READ, failure: "no-artifact", named: READ.named.map(({ name }) => ({ name })), missed: [] });
+
+      expect(shots?.failure).toBe("no-artifact");
+      expect(shots?.named.map(({ produced }) => produced)).toEqual([false, false, false]);
+    });
+
+    it("carries the Implementer's sentence that nothing a person sees changes, and no shots", () => {
+      expect(shotsOf({ ...READ, named: [], missed: [], nothingVisible: "Only the API's error codes changed." })).toMatchObject([{ nothingVisible: "Only the API's error codes changed.", nothingNamed: false, named: [] }]);
+    });
+
+    it("says a pull request that names nothing and gives no sentence named nothing", () => {
+      expect(shotsOf({ ...READ, named: [], missed: [], miss: "nothing-named" })).toMatchObject([{ nothingVisible: null, nothingNamed: true, named: [] }]);
+    });
+
+    it("gives a merged pull request's shot with a path its live page, built as a route's is, and one with no path none", () => {
+      const kit = homeFactsOf().kit;
+      const [shots] = shotsOf(READ, {
+        github: factsOf(),
+        kit: { ...kit, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://example.dev/shop/", environment: null } } } },
+        mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")],
+      });
+
+      expect(shots?.named.map(({ name, production }) => ({ name, production }))).toEqual([
+        { name: "composer: draft ready", production: "https://example.dev/shop/patients/6f1b2c3d/notes/new?tab=draft" },
+        { name: "inbox: empty", production: null },
+        { name: "sign in: form", production: "https://example.dev/shop/sign-in" },
+      ]);
+    });
+
+    it("are null on a pull request with a route marker, whose evidence is what it was, and on one with no marker", () => {
+      const ROUTE_MARKER = { run: 4410, artifact: 901, failure: null, routes: ["/book"], preview: { is: "linked", url: PREVIEW }, missed: [] } as const;
+      const facts = homeFactsOf({
+        github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 }), anOpenPullRequest({ number: 51, ticket: 8 })] }),
+        evidenceMarkers: [{ pullRequest: 50, marker: ROUTE_MARKER }],
+      });
+
+      expect(rowsOf(facts, null, null, null, NOW).flatMap(({ standing, evidence, shots }) => (standing.pullRequest === null ? [] : [{ pullRequest: standing.pullRequest, evidence, shots }]))).toEqual([
+        {
+          pullRequest: 50,
+          evidence: { run: 4410, artifact: 901, failure: null, preview: "linked", pages: [{ route: "/book", preview: "https://fabrik-ticket-7.shop.example.dev/book" }], failureSentence: null, missed: [] },
+          shots: null,
+        },
+        { pullRequest: 51, evidence: null, shots: null },
+      ]);
+    });
+
+    describe("as the README's section on reading the Kit says it", () => {
+      const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+      const section = readme.split("\n## Reading the Kit from another program\n")[1]?.split("\n## ")[0] ?? "";
+      const lines = section.split("\n");
+      const at = lines.findIndex((line) => line.startsWith("- **Evidence shots.**"));
+      /** The bullet with the bullets under it. */
+      const bullet = at === -1 ? "" : [lines[at], ...lines.slice(at + 1).filter((line, index, rest) => rest.slice(0, index + 1).every((under) => under.startsWith("  - ")))].join("\n");
+
+      it("names what the row carries under shots, and that a shot with no path has no link", () => {
+        for (const named of ["`shots`", "`head`", "`nothingVisible`", "`named`", "`path`", "`produced`", "`missed`", "`preview`", "`production`"]) expect(bullet).toContain(named);
+        expect(bullet).toContain("a shot with no `path` has neither");
+      });
+
+      it("says a pull request with no section has no named shots on its row, and how a reader finds and reads a head's shots itself", () => {
+        expect(bullet).toMatch(/a Plain pull request[^.]*has no named shots on its row/);
+        expect(bullet).toContain("the newest attempt of the check `ui.shots.check` names");
+        for (const named of ["`ui.shots.artifact`", "`DEFAULT_SHOTS_ARTIFACT`", "`readShotsManifest`", "`SHOTS_MANIFEST_FILE`", "`namedShots`", "`shotsMarkerIn`", "`producedNamedShots`"]) expect(bullet).toContain(named);
+        expect(bullet).toContain("with its own credential");
+      });
     });
   });
 

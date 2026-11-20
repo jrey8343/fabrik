@@ -1226,6 +1226,19 @@ export function readShotsMarker(held: ShotsMarker, { collected, run, artifact }:
 }
 
 /**
+ * The names of the named shots the check's run produced at the marker's head
+ * (#822), in the pull request's order: its names less each the run didn't
+ * produce, had two entries of, or refused. A shot that lacks one size was
+ * still produced. Names are compared exactly. None while the marker waits
+ * for the named check, and none when nothing of the run could be read.
+ */
+export function producedNamedShots(marker: ShotsMarker): readonly string[] {
+  if (marker.head === null || marker.failure !== null) return [];
+  const notProduced = new Set(marker.missed.flatMap((miss) => (miss.why === "size-missing" ? [] : [miss.name])));
+  return marker.named.flatMap(({ name }) => (notProduced.has(name) ? [] : [name]));
+}
+
+/**
  * What came of a pull request's Evidence miss: the Kit sent it back with its
  * own Execution flaw, or it goes on to Review with the miss shown, because no
  * Retry is left or because no Implementer run pushed the head it is at, as

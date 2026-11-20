@@ -622,6 +622,40 @@ describe("a gather shaped for Home", () => {
           expect(calls.queries.filter((query) => query.includes(asked))).toEqual([expect.stringMatching(/\bnumber title\b[^{}]*\bbody\b/)]);
         }
       });
+
+      describe("and its shots marker, where its evidence is Evidence shots (#822)", () => {
+        const SHOTS = { source: "shots", head: "c".repeat(40), run: 9300, artifact: 9301, failure: null, routes: [], named: [{ name: "inbox: empty", path: "/inbox" }], missed: [], preview: { is: "none" } };
+
+        it("is held for the Fabrik App's open and merged agent pull requests, keyed by pull request, beside the evidence markers of the others", async () => {
+          const facts = await factsOf(
+            {
+              openPullRequests: [aRawOpenPullRequest({ number: 50, body: body(SHOTS) }), aRawOpenPullRequest({ number: 51, headRefName: "fabrik/ticket-9", body: body(OPEN) })],
+              mergedPullRequests: [aRawMergedPullRequest({ number: 49, headRefName: "fabrik/ticket-8", mergedAt: "2026-11-09T10:00:00Z", body: body({ ...SHOTS, named: [], nothingVisible: "Only the API changed." }) })],
+            },
+            "fabrik-app[bot]",
+          );
+
+          expect(facts.shotsMarkers).toEqual([
+            { pullRequest: 50, marker: SHOTS },
+            { pullRequest: 49, marker: { ...SHOTS, named: [], nothingVisible: "Only the API changed." } },
+          ]);
+          expect(facts.evidenceMarkers).toEqual([{ pullRequest: 51, marker: OPEN }]);
+        });
+
+        it("is read only from a pull request the Fabrik App opened, never another bot's or a Plain one's", async () => {
+          const facts = await factsOf(
+            {
+              openPullRequests: [
+                aRawOpenPullRequest({ number: 50, author: { __typename: "Bot", login: "helper" }, body: body(SHOTS) }),
+                aRawOpenPullRequest({ number: 70, headRefName: "fix-typo", author: OPERATOR, body: body(SHOTS) }),
+              ],
+            },
+            "fabrik-app[bot]",
+          );
+
+          expect(facts.shotsMarkers).toEqual([]);
+        });
+      });
     });
 
     it("hold each comment's id on an open issue and an open agent pull request (#639)", async () => {
