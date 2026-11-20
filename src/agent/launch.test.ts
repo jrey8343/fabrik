@@ -156,6 +156,37 @@ describe("The failure report an overage abort leaves", () => {
   });
 });
 
+describe("The failure report a refused Fable run leaves (ADR-0034)", () => {
+  const capped = [
+    init,
+    line({ type: "rate_limit_event", rate_limit_info: { status: "rejected", rateLimitType: "seven_day_fable", resetsAt: 1_798_000_000 } }),
+    line({ type: "result", subtype: "success", is_error: true, result: "API Error" }),
+  ];
+
+  it("is the Fable cap, read for the model the run started on", async () => {
+    const { watch } = watching(capped, { rotation: true, model: "claude-fable-5-2" });
+    const path = join(dir, "agent-failure.json");
+
+    await leaveFailureReport(new Error("agent exited 1"), watch, { path, title: "Infrastructure failure" });
+
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      failure: "fable-cap",
+      detail: "seven_day_fable, resets at 2026-12-23T04:26:40.000Z",
+      resetsAt: "2026-12-23T04:26:40.000Z",
+      refusal: { rateLimitType: "seven_day_fable", resetsAt: 1_798_000_000 },
+    });
+  });
+
+  it("is the weekly limit on a run that isn't Fable", async () => {
+    const { watch } = watching(capped, { rotation: true, model: "claude-opus-5-5" });
+    const path = join(dir, "agent-failure.json");
+
+    await leaveFailureReport(new Error("agent exited 1"), watch, { path, title: "Infrastructure failure" });
+
+    expect(JSON.parse(await readFile(path, "utf8")).failure).toBe("weekly-limit");
+  });
+});
+
 const IMPLEMENT_REPLIES: Readonly<Record<ImplementRunKind, Record<string, unknown>>> = {
   first: { title: "Add the booking page", summary: "Adds the page.", routes: ["/book"] },
   "pull-request": { title: "Add the booking page", summary: "Adds the page.", fix: "Fixed the failing test." },

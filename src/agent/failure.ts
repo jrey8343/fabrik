@@ -4,7 +4,8 @@
 // works that out itself (src/loop/failures.ts). The Review checks job leaves
 // one too (src/review/wait.ts). Pure, no I/O.
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
-import type { FailedRunCommits, FailureReport, ReportedFailure } from "../loop/types.ts";
+import { namesFable } from "../kit/config.ts";
+import type { FailedRunCommits, FailureReport, RateLimitRefusal, ReportedFailure } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import type { BuiltBranch } from "./result.ts";
 import { readStream, streamMessageOf, type AgentStream } from "./stream.ts";
@@ -24,6 +25,11 @@ export interface FailureEvidence {
    * it for that (only with rotation on); null or absent otherwise.
    */
   readonly overage?: string | null;
+  /**
+   * The model the run was started on, which tells a Fable cap from the weekly
+   * limit (ADR-0034); absent, the run is read as not a Fable run.
+   */
+  readonly model?: string;
 }
 
 /** The Reviewer replied without a valid Verdict line, which is never a pass. */
@@ -70,22 +76,32 @@ function nameOf(error: unknown): string {
 const PREFLIGHT_REFUSAL = /Metered-billing preflight (refused the run|could not run)/;
 const ROUTE_LINE = /::error title=Metered-billing route::(.*)/g;
 
+/** The `rateLimitType` of the Subscription's weekly limit across every model. */
+const WEEKLY_LIMIT_TYPE = "seven_day";
+
 /** A provider error the stream reported, if the run never recovered from it. */
-function providerError({
-  result: last,
-  rateLimits,
-  apiRetries: retries,
-}: AgentStream): { error: string; detail: string; resetsAt?: string } | null {
+function providerError(
+  { result: last, rateLimits, apiRetries: retries }: AgentStream,
+  fable: boolean,
+): { error: string; detail: string; resetsAt?: string; refusal?: RateLimitRefusal } | null {
   // A run that ended in a clean result recovered from any retries along the way.
   if (last !== null && last["is_error"] !== true) return null;
 
   const rejected = rateLimits.filter((info) => info["status"] === "rejected");
-  const weekly = rejected.find((info) => String(info["rateLimitType"] ?? "").startsWith("seven_day"));
+  const weekly = rejected.find((info) => String(info["rateLimitType"] ?? "").startsWith(WEEKLY_LIMIT_TYPE));
   if (weekly !== undefined) {
-    const resetsAt = weekly["resetsAt"];
-    if (typeof resetsAt !== "number") return { error: "weekly_limit", detail: "" };
-    const at = new Date(resetsAt * 1000).toISOString();
-    return { error: "weekly_limit", detail: `resets at ${at}`, resetsAt: at };
+    const refusal = refusalIn(weekly);
+    // Only a Fable run's seven_day_* is its Fable cap. Plain seven_day, and any on a run that isn't Fable, is the weekly
+    // limit, so a cap that reads as plain seven_day holds its Subscription: it costs time, never money (ADR-0034).
+    const capped = fable && refusal.rateLimitType !== WEEKLY_LIMIT_TYPE;
+    const at = refusal.resetsAt === null ? null : new Date(refusal.resetsAt * 1000).toISOString();
+    const resets = at === null ? "" : `resets at ${at}`;
+    return {
+      error: capped ? "fable_cap" : "weekly_limit",
+      detail: capped ? [refusal.rateLimitType ?? "", resets].filter((part) => part !== "").join(", ") : resets,
+      ...(at === null ? {} : { resetsAt: at }),
+      refusal,
+    };
   }
 
   const auth = retries.find((m) => m["error"] === "authentication_failed");
@@ -98,7 +114,7 @@ function providerError({
 
   const limit = rejected.at(-1);
   if (limit !== undefined) {
-    return { error: "rate_limit", detail: `rate limit (${String(limit["rateLimitType"] ?? "unknown")})` };
+    return { error: "rate_limit", detail: `rate limit (${String(limit["rateLimitType"] ?? "unknown")})`, refusal: refusalIn(limit) };
   }
 
   if (last !== null) {
@@ -107,8 +123,17 @@ function providerError({
   return null;
 }
 
+/** A refused rate limit, raw, as the stream or a report gave it, each part that doesn't read as null. */
+function refusalIn(info: Readonly<Record<string, unknown>>): RateLimitRefusal {
+  const { rateLimitType, resetsAt } = info;
+  return {
+    rateLimitType: typeof rateLimitType === "string" ? rateLimitType : null,
+    resetsAt: typeof resetsAt === "number" && Number.isFinite(resetsAt) ? resetsAt : null,
+  };
+}
+
 /** Classifies a failed agent run. Anything it can't place is a crash. */
-export function failureReportFor({ error, lines, initRefused, overage = null }: FailureEvidence): FailureReport {
+export function failureReportFor({ error, lines, initRefused, overage = null, model }: FailureEvidence): FailureReport {
   if (initRefused !== null && initRefused.length > 0) {
     return { failure: "metered-billing", detail: initRefused.join("; ") };
   }
@@ -122,18 +147,21 @@ export function failureReportFor({ error, lines, initRefused, overage = null }: 
     return { failure: "metered-billing", detail: routes.join("; ") };
   }
 
-  const provider = providerError(readStream(lines));
+  const provider = providerError(readStream(lines), model !== undefined && namesFable(model));
   if (provider !== null) {
     const failure: ReportedFailure =
       provider.error === "authentication_failed"
         ? "dead-token"
         : provider.error === "weekly_limit"
           ? "weekly-limit"
-          : "provider-error";
+          : provider.error === "fable_cap"
+            ? "fable-cap"
+            : "provider-error";
     return {
       failure,
       detail: provider.detail,
       ...(provider.resetsAt === undefined ? {} : { resetsAt: provider.resetsAt }),
+      ...(provider.refusal === undefined ? {} : { refusal: provider.refusal }),
     };
   }
 
@@ -165,6 +193,7 @@ const REPORTED: readonly ReportedFailure[] = [
   "provider-error",
   "dead-token",
   "weekly-limit",
+  "fable-cap",
   "metered-billing",
   "usage-credits",
   "unread-inputs",
@@ -190,10 +219,17 @@ export function readFailureReport(text: string): FailureReport {
     detail: typeof detail === "string" ? detail : "",
     ...(typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? { resetsAt } : {}),
     ...(value?.["refused"] === true ? { refused: true as const } : {}),
+    ...withRefusal(value?.["refusal"]),
     ...withChecks(value?.["checks"]),
     ...withWait(value),
     ...withCommits(value?.["commits"]),
   };
+}
+
+/** A refusal's raw rate limit, as the report gives it; nothing if it isn't one. */
+function withRefusal(value: unknown): { refusal?: RateLimitRefusal } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  return { refusal: refusalIn(value as Record<string, unknown>) };
 }
 
 /** The checks a Review gave up waiting on, as the report names them; nothing if they aren't a list of names. */

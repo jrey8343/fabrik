@@ -143,6 +143,8 @@ export interface StreamWatch {
   checkInit(): void;
   /** What showed the run spending usage credits, if the watch stopped it for that, or null. */
   overage(): string | null;
+  /** The model the run was started on, as the watch was told it, which tells a Fable cap from the weekly limit. */
+  readonly model?: string;
   /** Sandcastle's stream handler. */
   onAgentStreamEvent(event: AgentStreamEvent): void;
 }
@@ -190,6 +192,7 @@ export function streamWatch(
     lines,
     initRefused: () => refused,
     overage: () => overage,
+    ...(model === undefined ? {} : { model }),
     checkInit() {
       if (refused === null) throw new Error("The agent's stream had no init message, so its API key source is unchecked");
       if (refused.length > 0) throw new Error(`Refused at init: ${refused.join("; ")}`);
@@ -245,6 +248,7 @@ export async function leaveFailureReport(
       lines: watch.lines,
       initRefused: watch.initRefused(),
       overage: watch.overage(),
+      ...(watch.model === undefined ? {} : { model: watch.model }),
     }),
     ...(commits === null ? {} : { commits }),
   };

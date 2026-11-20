@@ -142,6 +142,8 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
     }
     case "weekly-limit":
       return "it hit the weekly usage limit";
+    case "fable-cap":
+      return `it hit the Fable cap on the \`${subscriptionOfRun(run, config)}\` Subscription`;
     case "metered-billing":
       return "the preflight found a route that would bill metered API usage, so it refused to start the agent";
     case "usage-credits":

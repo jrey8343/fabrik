@@ -42,6 +42,11 @@ export type ReportedFailure =
   | "provider-error"
   | "dead-token"
   | "weekly-limit"
+  /**
+   * A Fable run refused on its Subscription's Fable cap (ADR-0034): a rejected
+   * `rateLimitType` that starts `seven_day_`, on a run whose model names Fable.
+   */
+  | "fable-cap"
   | "metered-billing"
   /** With rotation on, or on a Fable run (ADR-0034), the stream watch stopped a run whose stream showed overage. */
   | "usage-credits"
@@ -88,13 +93,28 @@ export function isBrokenRun(value: unknown): value is BrokenRun {
 /** Every kind of Infrastructure failure: what the agent job reported, or what the push job saw. */
 export type InfrastructureFailure = ReportedFailure | "unreachable-1password";
 
+/**
+ * A rate limit the provider refused a run on, raw, as its stream gave it: the
+ * limit's type, and its reset in epoch seconds, each null when it gave none.
+ */
+export interface RateLimitRefusal {
+  readonly rateLimitType: string | null;
+  readonly resetsAt: number | null;
+}
+
 /** What a failed agent job left for the push job, when it got far enough to leave anything. */
 export interface FailureReport {
   readonly failure: ReportedFailure;
   /** One line on what went wrong, for the failure comment. */
   readonly detail: string;
-  /** For the weekly limit, when it resets (an ISO 8601 time), if the stream said. */
+  /** For the weekly limit or a Fable cap, when it resets (an ISO 8601 time), if the stream said. */
   readonly resetsAt?: string;
+  /**
+   * For a run the provider refused on a rate limit, Fable cap or not: that
+   * limit as the stream gave it, raw, so the first real Fable cap shows how
+   * the Kit read it (ADR-0034).
+   */
+  readonly refusal?: RateLimitRefusal;
   /**
    * For unread inputs: true when GitHub refused the request (a 4xx that isn't
    * a rate limit), which it does again each time the run goes again, until the Kit is fixed.
