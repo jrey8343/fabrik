@@ -2933,6 +2933,86 @@ describe("The replay-store action, which checks out the store for the tick's rep
   });
 });
 
+// ADR-0034: a run due while no Subscription has Fable left starts on Opus, from the store's Fable cap readings.
+describe("loop.yml's Kit job's Fable store step", () => {
+  const steps = () => stepsOf(jobIn(loop, "kit"));
+  const at = (pattern: string) => steps().findIndex((step) => step.includes(pattern));
+
+  it("checks out the store after the Product's Kit config and before routing, and hands the routing step that checkout", () => {
+    const store = at("uses: ./kit/.github/actions/fable-store");
+
+    expect(store).toBeGreaterThan(at("Check out the Product's Kit config"));
+    expect(store).toBeLessThan(at("id: route"));
+    expect(steps()[store]).toContain("id: fable-store\n");
+    expect(steps()[store]).toContain("op-push-token: ${{ secrets.OP_PUSH_TOKEN }}");
+    expect(steps()[store]).toContain("product-dir: ${{ github.workspace }}/product");
+    expect(steps()[at("id: route")]).toContain("FABRIK_STORE_DIR: ${{ steps.fable-store.outputs.store-dir }}");
+  });
+
+  it("never fails the Kit job on it: a store it can't read counts every Subscription as having Fable left", () => {
+    expect(steps()[at("uses: ./kit/.github/actions/fable-store")]).toContain("continue-on-error: true");
+  });
+
+  it("is the only job that checks the store out for the Fable cap readings", () => {
+    expect([...workflows.map(({ text }) => text).join("\n").matchAll(/actions\/fable-store\b/g)]).toHaveLength(1);
+  });
+});
+
+describe("The fable-store action, which checks out the store for the Kit job's Fable cap readings", () => {
+  const { text, steps } = actionNamed("fable-store");
+  const at = (pattern: string) => steps.findIndex((step) => step.includes(pattern));
+  const look = () => steps[at("fable-store-main.ts")] ?? "";
+  const checkout = () => steps[at("uses: actions/checkout@")] ?? "";
+
+  it("first reads whether the Product's Kit config opted in to Fable, from its checkout, with no secret, so a repo that didn't reads nothing new", () => {
+    expect(look()).toContain("id: look\n");
+    expect(look()).toContain("${{ inputs.product-dir }}");
+    expect(look()).not.toMatch(/token|KEY/i);
+    expect(at("fable-store-main.ts")).toBeLessThan(at("1password/load-secrets-action@"));
+    expect(steps[at("1password/load-secrets-action@")]).toContain("if: steps.look.outputs.opted-in == 'true'");
+  });
+
+  it("loads the Fabrik App key through the push service account, and nothing else", () => {
+    const loads = steps.filter((step) => step.includes("1password/load-secrets-action@"));
+
+    expect(loads).toHaveLength(1);
+    expect(loads[0]).toContain("OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}");
+    expect(loads[0]).toContain("export-env: false");
+    expect([...loads[0]!.matchAll(/: (op:\/\/\S.*)$/gm)].map((match) => match[1])).toEqual([
+      "op://Fabrik App/Fabrik App/client-id",
+      "op://Fabrik App/Fabrik App/private-key",
+    ]);
+  });
+
+  it("finds the store as the App, and mints a token that only reads it, once it has found the App on it", () => {
+    const store = steps[at("id: store\n")];
+
+    expect(steps[at("find-store-main.ts")]).toContain("if: steps.look.outputs.opted-in == 'true'");
+    expect(store).toContain("if: steps.find-store.outputs.installed == 'true'");
+    expect(store).toContain("repositories: fabrik-runs");
+    expect(permissionsOf(store)).toEqual(["contents: read"]);
+    expect(text).not.toMatch(/permission-[a-z-]+: write/);
+  });
+
+  it("checks out only the Run records the first look named, with that token and no credential left behind", () => {
+    expect(checkout()).toContain("if: steps.store.outputs.token != ''");
+    expect(checkout()).toContain("repository: jrey8343/fabrik-runs");
+    expect(checkout()).toContain("token: ${{ steps.store.outputs.token }}");
+    expect(checkout()).toContain("sparse-checkout: ${{ steps.look.outputs.paths }}");
+    expect(checkout()).toContain("sparse-checkout-cone-mode: false");
+    expect(checkout()).toContain("persist-credentials: false");
+    expect(text).toMatch(/\n  store-dir:\n\s+description: .*\n\s+value: \$\{\{ steps\.checked-out\.outputs\.store-dir \}\}\n/);
+    expect(steps[at("id: checked-out\n")]).toContain("if: steps.checkout.outcome == 'success'");
+    expect(steps[at("id: checked-out\n")]).toContain('run: echo "store-dir=$GITHUB_WORKSPACE/store" >>"$GITHUB_OUTPUT"');
+  });
+
+  it("never fails the Kit job on a store that isn't there or can't be read: each step goes on", () => {
+    for (const pattern of ["fable-store-main.ts", "1password/load-secrets-action@", "find-store-main.ts", "id: store\n", "uses: actions/checkout@"]) {
+      expect(steps[at(pattern)], pattern).toContain("continue-on-error: true");
+    }
+  });
+});
+
 // #462, ADR-0018: red checks are re-run once, by a job holding only actions: write.
 describe("Re-running red checks", () => {
   it("holds actions: write on the workflow token and nothing else: no secret, no App token, no Product checkout", () => {

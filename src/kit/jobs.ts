@@ -90,7 +90,9 @@
 //                            holds no text a person or an agent wrote. The job's last step takes it for its name
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
-// Env: GH_TOKEN, a read-only token for gathering the snapshot, which for agent:implement also reads the Actions runs (#725).
+// Env: GH_TOKEN, a read-only token for gathering the snapshot, which for agent:implement also reads the Actions runs (#725);
+// FABRIK_STORE_DIR, in a repo that opted in to Fable, the fable-store action's checkout of the store, whose Fable cap
+// readings the plan weighs (ADR-0034), empty when it couldn't check one out, which the step summary then says.
 import { appendFile, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { agentRunIn, replayRunIn } from "../github/apply.ts";
@@ -107,6 +109,9 @@ import { callerWorkflowPath, checkKit } from "./caller.ts";
 import { callerChangeErrors } from "./callerPermissions.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import type { KitConfig } from "./config.ts";
+import { fableCapReadingsOf } from "./fableCapFacts.ts";
+import type { FableCapReading } from "../loop/fableCap.ts";
+import { readStoreRunRecords } from "./storeCheckout.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
 import { kitSaidOf, routeOf } from "./kitSaid.ts";
 import { readCandidate } from "./overlay.ts";
@@ -186,10 +191,12 @@ async function main(productDir: string): Promise<void> {
     // which holds actions: read; no other event's snapshot reads the Actions runs here, so none plans other than before.
     // A caller that grants no actions: read fails the read, and the run starts as before.
     const actions = event.kind === "label-added" && event.label === DISPATCH_LABEL ? github : null;
-    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null, actions);
+    // In a repo that opted in to Fable, the store's Fable cap readings, from the fable-store action's checkout (ADR-0034).
+    const fable = config.allowFable ? await storeFableCapsAt(process.env["FABRIK_STORE_DIR"], config) : { caps: [], unread: false };
+    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null, actions, null, null, fable.caps);
     plan = planFor(event, snapshot, config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
-    summary = kitJobSummary(plan, config, snapshot.kitIssues);
+    summary = kitJobSummary(plan, config, snapshot.kitIssues, { storeUnread: fable.unread });
     ticket = snapshot.pullRequest?.ticket ?? null;
     // A run on an agent PR's branch may bring main in: the push job takes main as this job read it, before the
     // run started, for one of the heads it may have brought in (#341), as the agent job can't write this job's outputs.
@@ -212,6 +219,22 @@ async function main(productDir: string): Promise<void> {
   console.log(`Route: ${outputs["route"]}`);
   const summaryPath = process.env["GITHUB_STEP_SUMMARY"];
   if (summary !== null && summaryPath !== undefined && summaryPath !== "") await appendFile(summaryPath, summary);
+}
+
+/**
+ * The Fable cap readings in the store's checkout at `dir` (fableCapReadingsOf),
+ * a schema 1 record as on the first listed Subscription, or none, unread, when
+ * there's no checkout, as when the Fabrik App isn't on the store, or it can't
+ * be read: every Subscription then counts as having Fable left (ADR-0034).
+ */
+async function storeFableCapsAt(dir: string | undefined, config: KitConfig): Promise<{ caps: readonly FableCapReading[]; unread: boolean }> {
+  if (dir === undefined || dir === "") return { caps: [], unread: true };
+  try {
+    return { caps: fableCapReadingsOf(Object.values((await readStoreRunRecords(dir, config.subscriptions)).records)), unread: false };
+  } catch (error) {
+    console.log(`::warning title=Fable cap readings unread::${error instanceof Error ? error.message : String(error)}`);
+    return { caps: [], unread: true };
+  }
 }
 
 /**

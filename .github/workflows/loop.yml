@@ -228,10 +228,23 @@ jobs:
         with:
           node-version: 24
 
+      # In a repo whose Kit config opts in to Fable (ADR-0034), the store's Run records from its last two months,
+      # read-only, whose Fable cap readings the plan weighs, so a run due while no Subscription has Fable left starts
+      # on Opus with no refusal first. A repo that didn't opt in loads no secret here. A store that can't be read
+      # fails nothing: every Subscription then counts as having Fable left.
+      - name: Check out the store for the Fable cap readings
+        id: fable-store
+        continue-on-error: true
+        uses: ./kit/.github/actions/fable-store
+        with:
+          op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+          product-dir: ${{ github.workspace }}/product
+
       - name: Check the Kit config and caller workflow, and route the event
         id: route
         env:
           GH_TOKEN: ${{ github.token }}
+          FABRIK_STORE_DIR: ${{ steps.fable-store.outputs.store-dir }}
         run: node kit/src/kit/jobs.ts product
 
       # Says what the routing step routed, held and declined included, in its name, for a reader of Actions while
