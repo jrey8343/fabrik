@@ -18,7 +18,7 @@ import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
 import type { Verdict } from "../loop/types.ts";
 import { FULL_SHA, shortSha } from "../skills/lock.ts";
-import type { KitConfig } from "./config.ts";
+import { type KitConfig, refuseRoleModel } from "./config.ts";
 import {
   eligibleOf,
   type LeftOutTicket,
@@ -35,7 +35,7 @@ import {
 } from "./replayPick.ts";
 import { readReplayRequest, readReplayVariable, type ReplayRequest, type ReplayVariable, settingOf, variableLine } from "./replayRequest.ts";
 import { rubricId, rubricName, SCORERS, scorerName } from "./rubrics.ts";
-import { firstRunOf, isLive, isReplayArm, REPLAY_ARMS, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
+import { firstRunOf, isLive, isReplayArm, REPLAY_ARMS, REPLAY_ROLES, type ReplayArm, type ReplayRole, replayPatchPath, type RunRecord } from "./runRecord.ts";
 import { storeFileUrl } from "./runStore.ts";
 import { NOT_APPLICABLE, type ScoreFile } from "./scorer.ts";
 
@@ -275,7 +275,7 @@ function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null, al
   }
   const unread = eligibleOf(request, acceptance.candidates).find(({ picked }) => acceptance.baseConfigs[picked.baseSha] === undefined);
   if (unread !== undefined) return missing(`the Kit config at ${shortSha(unread.picked.baseSha)}`);
-  const { plan, ruledOut } = planOf(request, acceptance);
+  const { plan, ruledOut } = planOf(request, acceptance, allowFable);
   if (plan.tickets.length === 0) return rejection(issue, noEligibleTicket(plan, ruledOut));
   const progress = plan.tickets.map(({ ticket }): TicketProgress => ({ ticket, state: "pending" }));
   return { kind: "accept", issue: issue.number, body: replayBody(issue.body, { plan, progress }) };
@@ -319,11 +319,16 @@ const EDIT_TO_FIX = "Edit the request in the issue body, and the Kit reads it ag
 
 /**
  * The request's plan, from the Tickets it picks and each one's Kit config at
- * its baseSha, which its baseline runs: a Ticket whose Kit config there no
- * longer resolves, or already runs the variable as the variant would, so that
- * its two arms would be the same, is left out with why.
+ * its baseSha, which its baseline runs, Fable included: a Ticket whose Kit
+ * config there no longer resolves, runs Fable in a repo whose own Kit config
+ * (`allowFable`) no longer opts in, or already runs the variable as the
+ * variant would, so that its two arms would be the same, is left out with why.
  */
-function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonly plan: ReplayPlan; readonly ruledOut: readonly LeftOutTicket[] } {
+function planOf(
+  request: ReplayRequest,
+  acceptance: ReplayAcceptance,
+  allowFable: boolean,
+): { readonly plan: ReplayPlan; readonly ruledOut: readonly LeftOutTicket[] } {
   const { variable } = request;
   const { picked, leftOut, ruledOut } = pickWith(request, acceptance.candidates, (ticket) => {
     const { baseSha } = ticket;
@@ -331,7 +336,10 @@ function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonl
     // Never unread: requestStep weighs no request until every base it picks from is read.
     if (base === undefined) return null;
     if (!base.ok) return `its Kit config at ${shortSha(baseSha)} doesn't resolve under this Kit release: ${base.errors.join("; ")}`;
-    const runs = alreadyRuns(replayArms(base.config, variable, ticket.steppedUp).baseline, variable);
+    const { baseline } = replayArms(base.config, variable, ticket.steppedUp);
+    const refused = refusedFable(baseline, allowFable);
+    if (refused !== null) return `its Kit config at ${shortSha(baseSha)} runs ${refused}, but this repo's Kit config doesn't opt in to Fable (allow_fable)`;
+    const runs = alreadyRuns(baseline, variable);
     return runs === null ? null : `its Kit config at ${shortSha(baseSha)} already runs ${runs}, so its two arms would be the same`;
   });
   const tickets = picked.flatMap((ticket) => {
@@ -341,6 +349,12 @@ function planOf(request: ReplayRequest, acceptance: ReplayAcceptance): { readonl
     return base?.ok === true ? [{ ...planned, arms: replayArms(base.config, variable, steppedUp) }] : [];
   });
   return { plan: { variable, tickets, leftOut }, ruledOut };
+}
+
+/** The baseline's role run on a model this repo's Kit config refuses, as Fable once it no longer opts in, in words; null when there's none. */
+function refusedFable(baseline: ReplayArmSettings, allowFable: boolean): string | null {
+  const role = REPLAY_ROLES.find((each) => refuseRoleModel(baseline[each].model, allowFable) !== null);
+  return role === undefined ? null : `${RUN_NAMES[role]} on ${baseline[role].model}`;
 }
 
 /** What the baseline already runs as the variable's variant would, in words; null when the variant changes it. */

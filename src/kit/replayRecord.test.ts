@@ -260,6 +260,17 @@ describe("A replay Ticket's run, read from the Kit job's outputs", () => {
 
     expect(() => replayRunContextOf(outputs, { repo: "acme/shop", runId: 9001, runAttempt: 1 })).toThrow(/replay-arms/);
   });
+
+  it("reads arms that run Review on Fable by its full id, as an opted-in repo's Kit config gives it (ADR-0034)", () => {
+    const onFable = { kind: "model", role: "review", model: "claude-fable-5-2" } as const;
+    const arms = replayArms({ roles: { ...DEFAULT_KIT_CONFIG.roles, review: { ...DEFAULT_KIT_CONFIG.roles.review, model: "claude-fable-5-2" } } }, REVIEW_XHIGH);
+    const outputs = { "replay-issue": "140", ticket: "12", "pull-request": "112", "base-sha": BASE_SHA, "replay-arms": JSON.stringify(arms), subscription: "Claude token", sha: KIT_SHA };
+
+    expect(replayRunContextOf(outputs, { repo: "acme/shop", runId: 9001, runAttempt: 1 }).arms).toEqual(arms);
+    expect(replayRunContextOf({ ...outputs, "replay-arms": JSON.stringify(replayArms(DEFAULT_KIT_CONFIG, onFable)) }, { repo: "acme/shop", runId: 9001, runAttempt: 1 }).arms.variant.review.model).toBe(
+      "claude-fable-5-2",
+    );
+  });
 });
 
 describe("How a replay Ticket's run ended, for the Loop to land on the replay issue", () => {

@@ -809,6 +809,32 @@ describe("A Replay's next step on the tick", () => {
       expect(plan?.tickets.map(({ ticket, arms }) => [ticket, arms.baseline.review.model, arms.variant.review.model])).toEqual([[12, "claude-opus-5-5", "claude-fable-5-2"]]);
     });
 
+    describe("running a Ticket's baseline as its Kit config at its base names its roles, Fable included", () => {
+      /** BASE in a repo that opted in, Review on Fable. */
+      const reviewOnFable = { ok: true, config: { roles: { ...BASE.roles, review: { ...BASE.roles.review, model: "claude-fable-5-2" } } } } as const;
+      const acceptance = acceptanceOf([aCandidate(7), aCandidate(12)]);
+      const baseConfigs = { ...acceptance.baseConfigs, [baseOf(12)]: reviewOnFable };
+      const issue = aReplayIssue(140, { body: bodyWith("implement.effort: high", "tickets: 12, 7") });
+
+      it("in a repo that opted in, both arms' Review on Fable", () => {
+        const plan = replayMarksIn(acceptedBody(nextReplayStep(aTick([issue], { allowFable: true, acceptance: { ...acceptance, baseConfigs } }))))?.plan;
+
+        expect(plan?.tickets.map(({ ticket, arms }) => [ticket, arms.baseline.review.model, arms.variant.review.model])).toEqual([
+          [12, "claude-fable-5-2", "claude-fable-5-2"],
+          [7, "claude-opus-5-5", "claude-opus-5-5"],
+        ]);
+      });
+
+      it("leaving it out, with why, in a repo that has since stopped opting in", () => {
+        const plan = replayMarksIn(acceptedBody(nextReplayStep(aTick([issue], { allowFable: false, acceptance: { ...acceptance, baseConfigs } }))))?.plan;
+
+        expect(plan?.tickets.map(({ ticket }) => ticket)).toEqual([7]);
+        expect(plan?.leftOut).toEqual([
+          { ticket: 12, reason: "its Kit config at 000000c runs Review on claude-fable-5-2, but this repo's Kit config doesn't opt in to Fable (allow_fable)" },
+        ]);
+      });
+    });
+
     it("rejecting it in one that hasn't, with Kit config's reason", () => {
       const step = nextReplayStep(aTick([fable], { allowFable: false }));
 
@@ -1092,7 +1118,9 @@ describe("A Replay's next step on the tick", () => {
     });
 
     it.each([
-      ["a model the Kit never runs", (plan: string) => plan.replace('"model":"claude-opus-5-5"', '"model":"claude-fable-5"')],
+      // A Fable model's full id reads, as an opted-in repo's plan holds it; that repo's opt-in is weighed as each arm runs.
+      ["the fable alias, which no Kit config runs", (plan: string) => plan.replace('"model":"claude-opus-5-5"', '"model":"fable"')],
+      ["best, which no Kit config runs", (plan: string) => plan.replace('"model":"claude-opus-5-5"', '"model":"best"')],
       ["an effort Kit config doesn't take", (plan: string) => plan.replace('"effort":"medium"', '"effort":"extreme"')],
       ["a base that isn't a full sha", (plan: string) => plan.replace(/"baseSha":"[0-9a-f]{40}"/, '"baseSha":"main"')],
       ["a variable no request names", (plan: string) => plan.replace('"role":"review"', '"role":"design"')],
