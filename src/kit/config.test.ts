@@ -1095,11 +1095,23 @@ describe("The Kit config template", () => {
     expect(section).toMatch(/Every role's `effort` defaults to `medium`, except the Review's and Design's, which default to `high`/);
   });
 
-  it("is the defaults block the README's Kit config section shows", () => {
+  it("is the defaults block the README's Kit config section shows, but for allow_fable, which the starter never sets (ADR-0034)", () => {
     const section = readme.slice(readme.indexOf("## Kit config"));
-    const block = /```json\n([\s\S]*?)```/.exec(section)?.[1];
+    const block = /```json\n([\s\S]*?)```/.exec(section)?.[1] ?? "";
+    const optIn = '  "allow_fable": false,\n';
 
-    expect(block).toBe(template);
+    expect(block).toContain(optIn);
+    expect(block.replace(optIn, "")).toBe(template);
+    expect(template).not.toContain("allow_fable");
+  });
+
+  it("documents the Fable opt-in in the README's Kit config section, with its guards and ADR-0034", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
+
+    expect(section).toMatch(/^- `allow_fable` \(default `false`\) opts this repo in to Fable/m);
+    expect(section).toContain("`claude-fable-5-2`");
+    expect(section).toContain("ADR-0034");
+    expect(section).not.toContain("A model naming Fable (or the `best` alias) is refused in every role");
   });
 });
 

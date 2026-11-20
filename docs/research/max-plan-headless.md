@@ -114,7 +114,7 @@ Fabrik can use this unchanged. That fits the standing decision to consume Sandca
 | Trigger | Effect | Status | Kit guard |
 |---|---|---|---|
 | **Usage credits enabled** on the Operator's claude.ai account | Every run past the weekly (or Fable) limit continues at API rates, unattended | documented | Keep usage credits **disabled** (Settings › Usage), or set a hard monthly spend cap |
-| **Fable selected in `-p` or SDK** after its included share is used, with credits on | Billed "without asking" | documented | Don't run Fable AFK, or keep credits off so the run blocks instead |
+| **Fable selected in `-p` or SDK** after its included share is used, with credits on | Billed "without asking" | documented | Don't run Fable AFK, or keep credits off so the run blocks instead. The Kit now runs Fable only in a Product repo that opts in with `allow_fable`, behind the overage stop and the Fable fallback (ADR-0034) |
 | **`ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN` / `apiKeyHelper`) visible in the Sandbox** | Outranks the OAuth token. In `-p` it is "always used when present", which means API billing | documented | Allow-list Sandbox env and fail a run if any such variable is present (Sandcastle's env-leak check does this) |
 | **`--bare`** (and a future release where `-p` defaults to bare) | Cannot use the OAuth token; needs an API key | documented | Never pass `--bare`; re-check when `-p` defaults change |
 | **Org-wide or shared tokens** | Docs steer shared CI secrets to API keys | documented | Not needed with one Operator |
