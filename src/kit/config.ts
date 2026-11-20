@@ -1097,9 +1097,9 @@ function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"], checkM
 const FABLE_BILLS = "Fable can bill metered usage, so the Kit never runs it in an AFK role";
 
 /**
- * Why a role in Kit config may not run `model`, or null when it may. Fable
- * can bill metered usage, so no role may run it unless the repo opts in with
- * `allowFable` (ADR-0034).
+ * Why a role in Kit config, or a Replay arm (src/kit/replayRequest.ts), may
+ * not run `model`, or null when it may. Fable can bill metered usage, so no
+ * role may run it unless the repo opts in with `allowFable` (ADR-0034).
  */
 export function refuseRoleModel(model: string, allowFable: boolean): string | null {
   if (isBest(model)) return BEST_RESOLVES;
@@ -1124,17 +1124,6 @@ function isBest(model: string): boolean {
 /** Whether `model` names Fable, by any spelling or id. */
 export function namesFable(model: string): boolean {
   return model.trim().toLowerCase().includes("fable");
-}
-
-/**
- * Why a Replay may not run `model`, or null when it may. Fable can bill
- * metered usage, so a Replay's variable model may not name it, in any repo
- * (src/kit/replayRequest.ts). `best` is refused too, because the CLI can
- * resolve it to Fable.
- */
-export function refuseFable(model: string): string | null {
-  if (namesFable(model) || isBest(model)) return FABLE_BILLS;
-  return null;
 }
 
 /** The Claude Code CLI's --effort levels. */
