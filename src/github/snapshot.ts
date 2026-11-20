@@ -1414,6 +1414,11 @@ async function gatherEventPart(
       // A failed Digest run's no-Digest line goes on the PR the Kit job named, closed by now or not.
       // A Review that stopped on a conflict brings its PR up to date (#704), so the PR is weighed too.
       const weighsPullRequest = (event.role === "implement" && event.prototype !== true) || stoppedOnConflict(event);
+      // A Review refused on its Fable cap had its re-run's cap marked on its PR, which the Loop weighs before re-running it again (ADR-0034).
+      if (event.role === "review" && event.report?.failure === "fable-cap") {
+        const marked = ticket.issue?.openPullRequests[0];
+        return marked === undefined ? ticket : { ...ticket, fableCaps: (await gatherPullRequest(github, repo, marked, operator, appLogin)).fableCaps ?? [] };
+      }
       const open = event.digest?.pullRequest ?? (weighsPullRequest ? ticket.issue?.openPullRequests[0] : undefined);
       if (open === undefined) return ticket;
       const { pullRequest } = await gatherPullRequest(github, repo, open, operator, appLogin);

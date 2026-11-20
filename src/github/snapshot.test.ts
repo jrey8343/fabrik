@@ -4533,6 +4533,44 @@ describe("Gathering whether the PR of a Review that stopped on a conflict still 
   });
 });
 
+// Its re-run's cap is marked on the PR, where the review trigger goes, so a refusal again reads it there (ADR-0034).
+describe("Gathering the Fable cap readings on the PR of a Review refused on its Fable cap", () => {
+  const capped = (failure: "fable-cap" | "crash"): LoopEvent => ({
+    kind: "agent-run-failed",
+    role: "review",
+    issue: 98,
+    runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
+    jobResult: "failure",
+    secretsStep: "success",
+    report: { failure, detail: "seven_day_fable" },
+    subscription: "Claude token",
+  });
+  const reading = { subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" };
+  function ticketWithMarkedPullRequest(author = { login: APP_LOGIN, __typename: "Bot" }) {
+    const issues = issueGitHub({ labels: ["ready-for-agent"], openPullRequests: [50] });
+    const pullRequests = pullRequestGitHub({ body: ["Adds a waitlist.", "", "Closes #98", "", fableCapMarker(reading)].join("\n"), author });
+    return {
+      async graphql(query: string, variables: Record<string, unknown>) {
+        return (query.includes("pullRequest(number: $number)") ? pullRequests : issues).graphql(query, variables);
+      },
+    } as unknown as GitHub;
+  }
+
+  it("reads the caps marked on the Ticket's open PR, which the Fabrik App opened", async () => {
+    const snapshot = await gatherSnapshot(ticketWithMarkedPullRequest(), repo, capped("fable-cap"), null, APP_LOGIN);
+
+    expect(snapshot.fableCaps?.readings).toEqual([reading]);
+  });
+
+  it("reads none off a PR anyone else opened, nor for a Review that failed any other way", async () => {
+    const byOther = await gatherSnapshot(ticketWithMarkedPullRequest({ login: "someone", __typename: "User" }), repo, capped("fable-cap"), null, APP_LOGIN);
+    const crashed = await gatherSnapshot(ticketWithMarkedPullRequest(), repo, capped("crash"), null, APP_LOGIN);
+
+    expect(byOther.fableCaps?.readings).toEqual([]);
+    expect(crashed.fableCaps?.readings).toEqual([]);
+  });
+});
+
 describe("The names of the jobs a trigger label's run shows up as (#419)", () => {
   it.each([
     ["implement-claim", () => CLAIM_JOB_NAME],
