@@ -1,6 +1,7 @@
 // Implementation rules: when an Implementer starts on a Ticket, and how the
 // branch it built lands as one draft PR, or doesn't.
-import { evidenceSection, isUi, missOutcomeOf, namesNothing, shotsNamesOf, shotsSection, waitingShotsMarker, withoutEvidence } from "../evidence/uiEvidence.ts";
+import { evidenceSection, isUi, withoutEvidence } from "../evidence/uiEvidence.ts";
+import { missOutcomeOf, namesNothing, shotsNamesOf, shotsSection, waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import { changedTestsSection, together, withoutChangedTests } from "./changedTests.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { keptBranchOff } from "./backToDesign.ts";

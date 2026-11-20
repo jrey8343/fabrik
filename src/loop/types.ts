@@ -1,7 +1,8 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
 import type { ReviewShots } from "../evidence/shotsCollect.ts";
-import type { CaptureResult, EvidenceMarker, ShotsMarker, ShotsRead } from "../evidence/uiEvidence.ts";
+import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
+import type { ShotsMarker, ShotsRead } from "../evidence/shotsEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
 import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";

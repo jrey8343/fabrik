@@ -5,7 +5,8 @@
 // Execution flaw for a named shot the check didn't produce. The rules that
 // land them are in src/loop/review.ts.
 import type { ReviewShots, ShotsCollected } from "../evidence/shotsCollect.ts";
-import { code, missOutcomeOf, readShotsMarker, shotMissSentence, shotsSection, type ShotsRead, waitingAgainShotsMarker } from "../evidence/uiEvidence.ts";
+import { code } from "../evidence/uiEvidence.ts";
+import { missOutcomeOf, readShotsMarker, shotMissSentence, type ShotsRead, shotsSection, waitingAgainShotsMarker } from "../evidence/shotsEvidence.ts";
 import { spelled } from "./readable.ts";
 import { MAX_RETRIES, retryNumber } from "./retry.ts";
 import type { Action, KitConfig, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";

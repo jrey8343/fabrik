@@ -14,7 +14,8 @@
 // no hidden line and no Markdown. Pure, no I/O, and plain data: written as
 // JSON and read back a row is equal.
 import type { ShotNotProduced, ShotSize } from "../evidence/shotsManifest.ts";
-import { type CaptureFailure, captureFailureSentence, producedNamedShots, type ShotsFailure } from "../evidence/uiEvidence.ts";
+import { type CaptureFailure, captureFailureSentence } from "../evidence/uiEvidence.ts";
+import { producedNamedShots, type ShotsFailure } from "../evidence/shotsEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { type ProductionConfig, productionPageUrl, withRouteOn } from "../kit/config.ts";
 import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";

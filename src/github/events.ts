@@ -2,7 +2,7 @@
 // passed out to its push job, into the Loop event it stands for.
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult, BuiltBranch } from "../agent/result.ts";
-import type { ShotsRead } from "../evidence/uiEvidence.ts";
+import type { ShotsRead } from "../evidence/shotsEvidence.ts";
 import { splitWorkflowRef } from "../kit/caller.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { FULL_SHA } from "../skills/lock.ts";

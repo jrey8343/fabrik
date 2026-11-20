@@ -1,7 +1,8 @@
 // The adapter's snapshot side: reads the current GitHub state a Loop event
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
-import { evidenceMarkerIn, shotsMarkerIn } from "../evidence/uiEvidence.ts";
+import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { changedTestsIn } from "../loop/changedTests.ts";
 import {
   INSTRUCTED_ROLES,

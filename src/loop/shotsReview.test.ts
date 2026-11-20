@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { aShotsCollected, SHOTS_UI } from "../__fixtures__/uiEvidence.ts";
 import type { ShotsCollected } from "../evidence/shotsCollect.ts";
-import { readShotsMarker, type ShotsMarker, shotsMarkerIn, waitingShotsMarker } from "../evidence/uiEvidence.ts";
+import { readShotsMarker, type ShotsMarker, shotsMarkerIn, waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, VerdictRecord } from "./types.ts";
 

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { A, B, C, finished, PullRequestOnGitHub } from "../__fixtures__/pullRequestThread.ts";
 import { anEvidence, SHOTS_UI, UI } from "../__fixtures__/uiEvidence.ts";
-import { type ShotsMarker, shotsMarkerIn, shotsSection, waitingShotsMarker } from "../evidence/uiEvidence.ts";
+import { type ShotsMarker, shotsMarkerIn, shotsSection, waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import { verdictMarker } from "./markers.ts";
 import { runInFlight } from "./retry.ts";
 import { planFor } from "./rules.ts";

@@ -7,7 +7,7 @@
 import { isRoute, VIEWPORT_NAMES } from "../kit/config.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import { FLAT_FILE_NAME, isShotName, namedShots, SHOT_NOT_PRODUCED, type ShotMiss, shotMissOf, type ShotSize, type ShotsManifestRead } from "./shotsManifest.ts";
-import { SHOTS_FAILURES, type ShotsFailure } from "./uiEvidence.ts";
+import { SHOTS_FAILURES, type ShotsFailure } from "./shotsEvidence.ts";
 
 /**
  * What a Review of a UI pull request on a Product repo that uses Evidence

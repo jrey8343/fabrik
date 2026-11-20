@@ -6,7 +6,7 @@ import { type ChangeFingerprint, changeLine } from "../loop/changeFingerprint.ts
 import { aDigestFacts, aDigestGiven } from "../__fixtures__/digests.ts";
 import { aShotsCollected } from "../__fixtures__/uiEvidence.ts";
 import type { ShotsCollected } from "../evidence/shotsCollect.ts";
-import { readShotsMarker, type ShotsMarker, shotsSection, waitingShotsMarker } from "../evidence/uiEvidence.ts";
+import { readShotsMarker, type ShotsMarker, shotsSection, waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import {
   ASK_ANSWERS,
   CHECKED_BY,

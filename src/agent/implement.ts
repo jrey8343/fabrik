@@ -597,7 +597,7 @@ export async function implementContext(productDir: string, specFile: string, con
  * What an Implement run on a Product repo that uses Evidence shots is told
  * (#819): to name the shots that show its change, or say nothing visible
  * changes, in two more output fields, which the Kit's names rule and the
- * Evidence miss read (src/evidence/uiEvidence.ts, src/loop/implement.ts).
+ * Evidence miss read (src/evidence/shotsEvidence.ts, src/loop/implement.ts).
  */
 function evidenceShotsPart(check: string): string[] {
   return [

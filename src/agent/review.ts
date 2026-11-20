@@ -12,8 +12,8 @@
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  CAPTURE_RESULT_FILE,
   type Capture,
+  CAPTURE_RESULT_FILE,
   type CaptureFailure,
   type CaptureResult,
   parseCaptureResult,
@@ -21,10 +21,8 @@ import {
   type ReviewerEvidence,
   reviewerEvidenceBlock,
   reviewerImages,
-  type ReviewerShotImage,
-  reviewerShotImages,
-  reviewerShotsBlock,
 } from "../evidence/uiEvidence.ts";
+import { type ReviewerShotImage, reviewerShotImages, reviewerShotsBlock } from "../evidence/shotsEvidence.ts";
 import { type ShotsCollected, shotsCollectedOf } from "../evidence/shotsCollect.ts";
 import { type Needs, reviewChecksOf } from "../kit/pushJob.ts";
 import { changedTestsIn, reviewerChangedTestsBlock } from "../loop/changedTests.ts";

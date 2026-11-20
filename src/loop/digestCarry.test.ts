@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { aDigestFacts, aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
-import { waitingShotsMarker } from "../evidence/uiEvidence.ts";
+import { waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { carriedDigest, placedFilesIn } from "./digestCarry.ts";
 import { type DigestCommentRead, type DigestItem, digestCommentOf, digestMarkIn, digestTop, noDigestLine, readDigestComment } from "./digestContract.ts";

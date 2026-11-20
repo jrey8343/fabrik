@@ -176,7 +176,7 @@ export {
   SHOTS_MANIFEST_FILE,
   SHOTS_MANIFEST_VERSION,
 } from "../evidence/shotsManifest.ts";
-export { producedNamedShots, SHOTS_FAILURES, shotMissSentence, shotsFailureSentence, shotsMarkerIn } from "../evidence/uiEvidence.ts";
+export { producedNamedShots, shotMissSentence, SHOTS_FAILURES, shotsFailureSentence, shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 export type {
   ArtifactFile,
   BadManifest,
@@ -191,7 +191,7 @@ export type {
   ShotsManifest,
   ShotsManifestRead,
 } from "../evidence/shotsManifest.ts";
-export type { DroppedNames, NamedShot, ShotsFailure, ShotsMarker } from "../evidence/uiEvidence.ts";
+export type { DroppedNames, NamedShot, ShotsFailure, ShotsMarker } from "../evidence/shotsEvidence.ts";
 
 // The Digest read
 

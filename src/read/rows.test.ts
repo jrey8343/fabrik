@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CAPTURE_FAILURES, captureFailureSentence, type EvidenceMarker, type ShotsMarker } from "../evidence/uiEvidence.ts";
+import { CAPTURE_FAILURES, captureFailureSentence, type EvidenceMarker } from "../evidence/uiEvidence.ts";
+import { type ShotsMarker } from "../evidence/shotsEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";

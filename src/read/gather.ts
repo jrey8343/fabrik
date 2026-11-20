@@ -18,7 +18,8 @@ import { gatherWeeklyRunIssues, isAgent, openIssueOf, openKitIssueOf, openPullRe
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { byAppOf, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
-import { type EvidenceMarker, evidenceMarkerIn, type ShotsMarker, shotsMarkerIn } from "../evidence/uiEvidence.ts";
+import { type EvidenceMarker, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { type ShotsMarker, shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
 import { KIT_CONFIG_PATH, type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";

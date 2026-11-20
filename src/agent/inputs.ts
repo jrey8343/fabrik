@@ -30,7 +30,8 @@ import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
 import { leavingOutDigests } from "../github/digestComments.ts";
 import { digestPicturesOf, readDigestThread } from "../github/digestGiven.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
-import { capturedRoutesOf, evidenceMarkerIn, shotsMarkerIn } from "../evidence/uiEvidence.ts";
+import { capturedRoutesOf, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
 import {
   byTime,

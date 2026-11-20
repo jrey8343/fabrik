@@ -7,7 +7,8 @@
 // facts it hands the writer (src/agent/inputs.ts), and the Digest's rounds
 // table is rendered from the push job's own call, never from what the agent
 // job passed out.
-import { capturedRoutesOf, type EvidenceMarker, producedNamedShots, type ShotsMarker } from "../evidence/uiEvidence.ts";
+import { capturedRoutesOf, type EvidenceMarker } from "../evidence/uiEvidence.ts";
+import { producedNamedShots, type ShotsMarker } from "../evidence/shotsEvidence.ts";
 import { ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { type DigestGiven, parseDigestReply } from "../loop/digestContract.ts";
 import { type DigestThread, digestFactsOf } from "../loop/digestFacts.ts";
