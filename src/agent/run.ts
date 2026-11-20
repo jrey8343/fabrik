@@ -574,8 +574,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   setAgentEnv(claudeArgs(role.model, role.effort));
 
   const abort = new AbortController();
-  // With rotation on, a run that shows overage is stopped, so no Subscription spends usage credits.
-  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: rotationIsOn(config) });
+  // With rotation on, or on a Fable run (ADR-0034), a run that shows overage is stopped, so no Subscription spends usage credits.
+  const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: rotationIsOn(config), model: role.model });
   const timeoutMs = role.timeoutMinutes * 60_000;
   // The bundle of what the run committed, once made, so a failure after it still reports it kept (#431).
   let built: BuiltBranch | null = null;

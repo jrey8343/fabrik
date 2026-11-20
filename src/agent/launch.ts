@@ -3,14 +3,14 @@
 // `claude` arguments the metered-billing preflight checks and the
 // onSandboxReady hook that runs it, the Standard Schema a structured output is
 // checked with, the stream watch that keeps the transcript and stops a run
-// whose init message fails the backstop check, or, with rotation on, whose
-// stream shows it spending usage credits, and the failure report a failed
-// run leaves. The step summary and outputs it writes are src/kit/stepFiles.ts's.
+// whose init message fails the backstop check, or, with rotation on or on a
+// Fable run, whose stream shows it spending usage credits, and the failure
+// report a failed run leaves. The step summary and outputs it writes are src/kit/stepFiles.ts's.
 import { writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type { AgentStreamEvent } from "@ai-hero/sandcastle";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import type { KitConfig } from "../kit/config.ts";
+import { type KitConfig, namesFable } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
 import type { FailedRunCommits, FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
@@ -151,6 +151,8 @@ export interface StreamWatch {
 export interface StreamWatchOptions {
   /** Whether rotation is on, so that a run whose stream shows overage is stopped. Off unless told. */
   readonly rotation: boolean;
+  /** The model the run was started on: a run whose model names Fable is stopped on overage, rotation or not (ADR-0034). */
+  readonly model?: string;
 }
 
 /** What in one stream message shows overage, in itself or in its rate-limit info, or null. */
@@ -167,20 +169,22 @@ function overageIn(message: StreamMessage): string | null {
 /**
  * Watches the agent's stream: keeps every line, checks the init message
  * against metered billing and stops the run through `abort` if it refuses,
- * and, with rotation on, stops it on the first message showing overage, so a
- * Subscription with usage credits on spends no more. Then it appends the
- * line to the transcript at `transcriptPath`.
+ * and, with rotation on or on a Fable run, stops it on the first message
+ * showing overage, so a Subscription with usage credits on spends no more.
+ * Then it appends the line to the transcript at `transcriptPath`.
  */
 export function streamWatch(
   transcriptPath: string,
   abort: AbortController,
-  { rotation }: StreamWatchOptions = { rotation: false },
+  { rotation, model }: StreamWatchOptions = { rotation: false },
 ): StreamWatch {
   const lines: string[] = [];
   const transcript = transcriptWriter(transcriptPath);
   // null until the init message arrives, then the routes it refused (empty when it passed).
   let refused: readonly string[] | null = null;
-  // null until a message shows overage, with rotation on.
+  // Every Fable run stops on overage, so credits left on by mistake spend nothing (ADR-0034).
+  const stopsOnOverage = rotation || (model !== undefined && namesFable(model));
+  // null until a message shows overage, on a run that stops on it.
   let overage: string | null = null;
   return {
     lines,
@@ -200,7 +204,7 @@ export function streamWatch(
         refused = check.kind === "refuse" ? check.routes : [];
         if (check.kind === "refuse") abort.abort(new Error(check.routes.join("; ")));
       }
-      const message = rotation && overage === null ? streamMessageOf(event.line) : null;
+      const message = stopsOnOverage && overage === null ? streamMessageOf(event.line) : null;
       const shown = message === null ? null : overageIn(message);
       if (shown !== null) {
         overage = shown;
