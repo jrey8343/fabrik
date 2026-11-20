@@ -21,7 +21,8 @@ import {
   type Viewport,
 } from "../kit/config.ts";
 import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
-import { isShotName, SHOT_NAME_RULE, type ShotMiss } from "./shotsManifest.ts";
+import { isShotName, SHOT_LIMIT, SHOT_NAME_RULE, type ShotMiss, type ShotSize, SHOTS_MANIFEST_FILE } from "./shotsManifest.ts";
+import type { ShotsCollected } from "./shotsCollect.ts";
 import { linesOutsideCode, markerJson } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
@@ -560,6 +561,89 @@ export function reviewerEvidenceBlock({ result, given, head, recorded }: Reviewe
   ];
 }
 
+/** One image of a named Evidence shot a Reviewer gets (#820): the shot, its size, and its file in the artifact and in REVIEWER_IMAGES_DIR. */
+export interface ReviewerShotImage {
+  readonly name: string;
+  readonly size: ShotSize;
+  readonly file: string;
+}
+
+/**
+ * The images of Evidence shots a Reviewer gets (#820): the named shots the
+ * run produced, mobile before desktop, each size in the Implementer's order,
+ * at most REVIEWER_IMAGE_CAP. Four names at two sizes are eight, so the cap
+ * never trims below the named shots' own. Unnamed shots are the Evidence page's alone.
+ */
+export function reviewerShotImages({ named }: Pick<ShotsCollected, "named">): ReviewerShotImage[] {
+  return UI_VIEWPORTS.flatMap(({ name: size }) =>
+    named.flatMap(({ name, images }) => {
+      const file = images[size];
+      return file === undefined ? [] : [{ name, size, file }];
+    }),
+  ).slice(0, REVIEWER_IMAGE_CAP);
+}
+
+/** What a Reviewer is given of a pull request's Evidence shots (#820), for its prompt's block. */
+export interface ReviewerShots {
+  /** What the Review's jobs collected at the head. */
+  readonly collected: ShotsCollected;
+  /** The images copied into REVIEWER_IMAGES_DIR, in reviewerShotImages' order. */
+  readonly given: readonly ReviewerShotImage[];
+}
+
+/**
+ * The UI evidence block of a Reviewer whose pull request's evidence is
+ * Evidence shots (#820): the images it was given, each by shot and size,
+ * with its Journey and path, and what to judge in them; that the shots are
+ * from a run that failed, when the named check is red; each miss and
+ * failure, in the Kit's own sentence; and the Implementer's sentence that
+ * nothing visible changes, to check against the diff. With no pictures it
+ * reviews the code as usual.
+ */
+export function reviewerShotsBlock({ collected, given }: ReviewerShots): string[] {
+  const { check, artifact, head, failure, red, missed, nothingVisible, named } = collected;
+  const opening = `${UI_PR}, and its UI evidence is the Evidence shots the Implementer named, which the Journeys of the Required check ${code(check)} took at \`${head.slice(0, 7)}\`.`;
+  const redLine = red ? [`The ${code(check)} check is still red on this head after the Kit's re-run, so these shots are from a run that failed.`] : [];
+  const failed = failure === null ? [] : [shotsFailureSentence(failure, { check, artifact })];
+  const misses = missed.length === 0 ? [] : ["The Kit found these misses among the named shots:", missed.map((miss) => `- ${shotMissSentence(miss, check)}`).join("\n")];
+  const sentence =
+    nothingVisible === undefined
+      ? []
+      : [
+          "The Implementer named no Evidence shot and says nothing a person sees changes, in its own words:",
+          `> ${quotedSentence(nothingVisible)}`,
+          "Check it against the diff: a diff that plainly changes what a person sees is an `execution-flaw`, whatever the sentence says.",
+        ];
+  const nothingNamed =
+    failure === null && named.length === 0 && missed.length === 0 && nothingVisible === undefined
+      ? ["The Implementer named no Evidence shot and didn't say that nothing visible changes, so there are no pictures: review the code as usual."]
+      : [];
+  const told = ["## UI evidence", [opening, ...redLine, ...failed].join(" "), ...misses, ...sentence, ...nothingNamed];
+  if (given.length === 0) return nothingNamed.length > 0 ? told : [...told, "There are no pictures, so review the code as usual."];
+  const where = given.length === 1 ? "It's" : `These ${given.length} are`;
+  return [
+    ...told,
+    `Each shows one screen high, where its Journey was at the moment it names. ${where} in \`${REVIEWER_IMAGES_DIR}/\` in your working directory: open each with your Read tool to see it.`,
+    given.map((image) => reviewerShotLine(image, named)).join("\n"),
+    "Judge them as part of the PR:",
+    [
+      "- Do they show what the Ticket asked for?",
+      "- Is there plain breakage: a blank or error page, content spilling over at mobile width, or overlapping or cut-off content?",
+    ].join("\n"),
+    "Taste is the Operator's: don't fail the PR over a design choice the Ticket didn't settle. A visual failure is an `execution-flaw` like any other: name the shot and its size in the finding, so the Implementer knows what to fix.",
+  ];
+}
+
+/** One image of a shot the Reviewer is given: its file, then its shot, size, Journey and path. */
+function reviewerShotLine({ name, size, file }: ReviewerShotImage, named: ShotsCollected["named"]): string {
+  const viewport = UI_VIEWPORTS.find((each) => each.name === size);
+  const width = viewport === undefined ? "" : ` (${viewport.width}×${viewport.height})`;
+  const shot = named.find((each) => each.name === name);
+  const journey = shot?.journey === undefined ? "" : `, from the Journey ${code(shot.journey)}`;
+  const path = shot?.path === undefined ? "" : `, at ${code(shot.path)}`;
+  return `- \`${REVIEWER_IMAGES_DIR}/${file}\`: the shot ${code(name)} at ${size} width${width}${journey}${path}`;
+}
+
 /** What the Reviewer's block says of a signed-in screenshot's Before, when it's given one. */
 const NO_SIGNED_IN_BEFORE = "A screenshot signed in as a Capture identity, a fake user of the Sandbox's own server, has no Before, since Before is never signed in.";
 
@@ -973,9 +1057,13 @@ export function capturedRoutesOf(marker: EvidenceMarker | null): readonly string
   return marker === null || marker.artifact === null ? [] : (marker.routes ?? []);
 }
 
-/** A name a pull request's shots marker holds: the Implementer's, with the path the artifact's entry gave once it has been read. */
+/**
+ * A name a pull request's shots marker holds: the Implementer's, with the
+ * Journey and path the artifact's entry gave once it has been read (#820).
+ */
 export interface NamedShot {
   readonly name: string;
+  readonly journey?: string;
   readonly path?: string;
 }
 
@@ -1027,6 +1115,16 @@ export interface ShotsMarker extends ShotsNames {
   readonly preview?: MarkerPreview;
   /** The Actions run whose Implement push job wrote the names, whose preview step links the preview (withPreviewLink). */
   readonly implementRun?: number;
+  /**
+   * The head the Implementer run that wrote the names pushed (#820): an
+   * Evidence miss is sent back only at it, never at a head the Operator
+   * pushed or the Kit's plain rebase made. Absent when that run pushed none.
+   */
+  readonly pushed?: string;
+  /** That the named check was still red after the Kit's re-run, so the shots are from a run that failed (#820). */
+  readonly red?: true;
+  /** How many of the run's manifest entries were past the first 100, which the Kit doesn't read (#820); absent for none. */
+  readonly pastLimit?: number;
 }
 
 /**
@@ -1072,9 +1170,9 @@ export function namesNothing({ named, nothingVisible }: ShotsNames): boolean {
 /**
  * The shots marker an Implement run's push job writes: the pull request's
  * names, waiting for the named check, with no head, Review run or artifact
- * yet, and `miss` when it names nothing.
+ * yet, `miss` when it names nothing, and the head its run `pushed`, if any.
  */
-export function waitingShotsMarker(names: ShotsNames, implementRun: number | null, preview: PreviewLink): ShotsMarker {
+export function waitingShotsMarker(names: ShotsNames, implementRun: number | null, preview: PreviewLink, pushed: string | null = null): ShotsMarker {
   return {
     source: "shots",
     head: null,
@@ -1089,6 +1187,41 @@ export function waitingShotsMarker(names: ShotsNames, implementRun: number | nul
     missed: [],
     preview: markerPreview(preview),
     ...(implementRun === null ? {} : { implementRun }),
+    ...(pushed === null ? {} : { pushed }),
+  };
+}
+
+/** What the Review's jobs read of a head's Evidence shots (src/evidence/shotsCollect.ts), in the Review run `run`, whose Evidence page is its artifact `artifact`. */
+export interface ShotsRead {
+  readonly collected: ShotsCollected;
+  readonly run: number;
+  /** The Evidence page's artifact, unzipped, or null when the run kept none. */
+  readonly artifact: number | null;
+}
+
+/**
+ * The shots marker once the Review's jobs have read the named check's
+ * artifact (#820): `held`, the pull request's, with the head the check ran
+ * at, the Review run and its Evidence page, each named shot with the Journey
+ * and path its entry gave, what was missed, why nothing could be read, that
+ * the check was red, and how many shots were past the first 100. The names
+ * stay the pull request's own.
+ */
+export function readShotsMarker(held: ShotsMarker, { collected, run, artifact }: ShotsRead): ShotsMarker {
+  const names = held.named.map(({ name }) => name);
+  return {
+    ...held,
+    head: collected.head,
+    run,
+    artifact,
+    failure: collected.failure,
+    named: names.map((name) => {
+      const shot = collected.named.find((each) => each.name === name);
+      return { name, ...(shot?.journey === undefined ? {} : { journey: shot.journey }), ...(shot?.path === undefined ? {} : { path: shot.path }) };
+    }),
+    missed: collected.missed.filter(({ name }) => names.includes(name)),
+    ...(collected.red ? { red: true as const } : {}),
+    ...(collected.pastLimit === 0 ? {} : { pastLimit: collected.pastLimit }),
   };
 }
 
@@ -1100,50 +1233,163 @@ export function waitingShotsMarker(names: ShotsNames, implementRun: number | nul
  */
 export type MissOutcome = "sent-back" | "no-retry-left" | "not-pushed";
 
-/** What the shots section needs: the named check's name, the marker it ends with, and what came of the marker's `miss`. */
+/** What came of a named shot the check's run didn't produce (#820): as for any miss, or nothing sent back because the named check is still red. */
+export type ShotMissOutcome = MissOutcome | "check-red";
+
+/** What the shots section needs: the named check and artifact, the marker it ends with, what came of its miss, and the Evidence page. */
 export interface ShotsSectionOf {
   readonly check: string;
+  /** The artifact's name, as Kit config names it. */
+  readonly artifact: string;
   readonly marker: ShotsMarker;
-  /** What came of the marker's `miss`; read only when it has one. */
-  readonly missOutcome: MissOutcome;
+  /** What came of the marker's `miss`, or of a named shot it records as missed; read only when it has one. */
+  readonly missOutcome: ShotMissOutcome;
+  /** The Evidence page's web address, once the Review's jobs have kept one. */
+  readonly evidencePage?: string | null;
 }
 
 /**
  * The evidence section of a pull request whose UI evidence comes from
  * Evidence shots, between the start line and its marker: an Evidence miss,
- * when it has one, and what came of it; that it waits for the named check;
- * the names, or the Implementer's sentence in its own words; the names its
- * run dropped; and the preview link. The sentence is agent text, so it shows
- * quoted on one line, mentions nobody and hides nothing.
+ * when it has one, and what came of it; that it waits for the named check,
+ * or, once the Review's jobs have read it (#820), why it couldn't be read,
+ * that the check is red, the head the shots are from and the Evidence page;
+ * the names, each with its Journey and path, or why it was missed; or the
+ * Implementer's sentence in its own words; the names its run dropped, and the
+ * shots past the first 100; and the preview link. The sentence is agent
+ * text, so it shows quoted on one line, mentions nobody and hides nothing.
  */
-export function shotsSection({ check, marker, missOutcome }: ShotsSectionOf): string {
-  const { named, nothingVisible, dropped, miss } = marker;
+export function shotsSection({ check, artifact, marker, missOutcome, evidencePage = null }: ShotsSectionOf): string {
+  const { named, nothingVisible, dropped, miss, missed, head } = marker;
+  const sendsBack = missed.some(({ why }) => why !== "size-missing");
   return [
     SECTION_START,
     "## UI evidence",
     ...(miss === "nothing-named" ? ["", nothingNamedLine(missOutcome)] : []),
+    ...(sendsBack ? ["", namedMissLine(check, missOutcome)] : []),
+    ...(marker.failure === null ? [] : ["", `**No Evidence shots:** ${lowerFirst(shotsFailureSentence(marker.failure, { check, artifact }))}`]),
+    ...(marker.red === true ? ["", `**The ${code(check)} check is red:** it is still red after the Kit's re-run, so these Evidence shots are from a run that failed.`] : []),
     "",
-    `Waiting for the ${code(check)} check: the Evidence shots it takes at this head show here once it has finished and the Review has read them.`,
-    ...(named.length === 0 ? [] : ["", "Named shots:", "", ...named.map(({ name }) => `- ${code(name)}`)]),
+    head === null
+      ? `Waiting for the ${code(check)} check: the Evidence shots it takes at this head show here once it has finished and the Review has read them.`
+      : readLine(check, head, evidencePage),
+    ...(named.length === 0 ? [] : ["", "Named shots:", "", ...named.map((shot) => namedShotLine(shot, missed, check))]),
     ...(nothingVisible === undefined ? [] : ["", "The Implementer says nothing a person sees changes:", "", `> ${quotedSentence(nothingVisible)}`]),
     ...droppedLines(dropped).flatMap((line) => ["", line]),
+    ...(marker.pastLimit === undefined ? [] : ["", `The run's manifest lists ${marker.pastLimit} ${marker.pastLimit === 1 ? "shot" : "shots"} past the first ${SHOT_LIMIT}, which the Kit doesn't read.`]),
     "",
     previewLine(previewLinkOf(marker.preview)),
     markerLine(marker),
   ].join("\n");
 }
 
+/** The section's line naming the head the shots are from, and the Evidence page when the Review kept one. */
+function readLine(check: string, head: string, evidencePage: string | null): string {
+  const at = `\`${head.slice(0, 7)}\``;
+  if (evidencePage === null) return `The Review read the ${code(check)} check's run at ${at}.`;
+  return `Evidence shots the ${code(check)} check took at ${at}: ${link("Open the Evidence page", evidencePage)}, which holds every shot of its run, the named ones first.`;
+}
+
+/** A named shot's line: its name, with its Journey and path once read, or why the run didn't produce it, and any size it lacks. */
+function namedShotLine({ name, journey, path }: NamedShot, missed: readonly ShotMiss[], check: string): string {
+  const notProduced = missed.find((miss) => miss.name === name && miss.why !== "size-missing");
+  if (notProduced !== undefined) return `- ${shotMissSentence(notProduced, check)}`;
+  const shown = `- ${code(name)}${journey === undefined ? "" : `, from the Journey ${code(journey)}`}${path === undefined ? "" : `, at ${code(path)}`}`;
+  const lacks = missed.filter((miss) => miss.name === name).map((miss) => ` It ${missWords(miss, check)}.`);
+  return lacks.length === 0 ? shown : `${shown}.${lacks.join("")}`;
+}
+
+/** The section's line for a named shot the check's run didn't produce: what came of it. */
+function namedMissLine(check: string, outcome: ShotMissOutcome): string {
+  const lead = `**Evidence miss:** a named shot isn't among the Evidence shots the ${code(check)} check took at this head`;
+  switch (outcome) {
+    case "sent-back":
+      return `${lead}, so the Kit sent it back with an Execution flaw, which uses a Retry.`;
+    case "no-retry-left":
+      return `${lead}. No Retry is left, so it goes on to Review with the miss shown.`;
+    case "not-pushed":
+      return `${lead}. No Implementer run pushed this head, so it isn't sent back: it goes on to Review with the miss shown.`;
+    case "check-red":
+      return `${lead}. The check is still red after the Kit's re-run, so nothing is sent back for evidence: the Reviewer's judgment of the check decides.`;
+  }
+}
+
 /** The section's line for a pull request that names nothing, sent back or going on to Review, and why. */
-function nothingNamedLine(outcome: MissOutcome): string {
+function nothingNamedLine(outcome: ShotMissOutcome): string {
   const lead = "**Evidence miss:** the Implementer named no Evidence shot and didn't say that nothing visible changes";
   switch (outcome) {
     case "sent-back":
       return `${lead}, so the Kit sent it back with an Execution flaw, which uses a Retry.`;
     case "no-retry-left":
       return `${lead}. No Retry is left, so it goes on to Review showing nothing of the change.`;
+    // A red check never decides a pull request that names nothing, which is judged as its Implement run's push lands.
     case "not-pushed":
+    case "check-red":
       return `${lead}. No Implementer run pushed this head, so it isn't sent back: it goes on to Review showing nothing of the change.`;
   }
+}
+
+/**
+ * Why a named shot has no shot in the check's run, or lacks a size, as a
+ * clause after the shot: the one place each reason is worded, which the
+ * section, the Reviewer's block and an Evidence miss's Execution flaw share.
+ */
+function missWords(miss: ShotMiss, check: string): string {
+  switch (miss.why) {
+    case "not-produced":
+      return `wasn't produced: the ${code(check)} check's run took no shot of that name`;
+    case "ambiguous-name":
+      return "is ambiguous: two or more of the run's shots have that name, so none is shown under it";
+    case "refused":
+      return "was refused: its entry in the run's manifest broke the artifact's rules, so the Kit dropped it";
+    case "size-missing":
+      return `has no ${miss.viewport} image, so it shows at ${miss.viewport === "mobile" ? "desktop" : "mobile"} alone`;
+  }
+}
+
+/**
+ * A named shot the check's run missed, or a size it lacks, as one sentence a
+ * reader shows as it is (#820): the shot's name, which the name rule holds to
+ * safe characters, then the Kit's own words for why.
+ */
+export function shotMissSentence(miss: ShotMiss, check: string): string {
+  return `${code(miss.name)} ${missWords(miss, check)}.`;
+}
+
+/**
+ * Why nothing of a head's Evidence shots could be read, as sentences a reader
+ * shows as they are (#820): the Kit's own words, naming the check and the
+ * artifact Kit config names, and that it is the Operator's wiring to fix.
+ */
+export function shotsFailureSentence(failure: ShotsFailure, { check, artifact }: { readonly check: string; readonly artifact: string }): string {
+  const wiring = "That is the Product repo's wiring, the Operator's to fix, so nothing is sent back.";
+  switch (failure) {
+    case "no-artifact":
+      return `The ${code(check)} check's run at this head uploaded no artifact named ${code(artifact)}, which its workflow must upload whether its Journeys pass or fail. ${wiring}`;
+    case "bad-manifest":
+      return `The ${code(artifact)} artifact's \`${SHOTS_MANIFEST_FILE}\` couldn't be read: it is missing, isn't JSON, has another \`version\` or has no \`shots\` list. ${wiring}`;
+  }
+}
+
+function lowerFirst(text: string): string {
+  return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+}
+
+/**
+ * The body with its evidence section replaced by `section` (#820): the last
+ * section, from its start line through the marker after it, so a section the
+ * push job wrote at waiting is replaced whole once the Review's jobs have
+ * read the shots. The rest of the body stays as it was, whatever the
+ * Operator changed. Null when the body has no section, which it never gets
+ * one added to.
+ */
+export function withEvidenceSection(body: string, section: string): string | null {
+  const lines = body.split("\n");
+  const startAt = lines.findLastIndex((line) => SECTION_START_LINE.test(line.trim()));
+  if (startAt === -1) return null;
+  const endAt = lines.findIndex((line, at) => at > startAt && EVIDENCE_MARKER.test(line.trim()));
+  if (endAt === -1) return null;
+  return [...lines.slice(0, startAt), section, ...lines.slice(endAt + 1)].join("\n");
 }
 
 /** The lines saying what the run dropped of the names it gave: none when it dropped none. */
@@ -1190,7 +1436,7 @@ function shotsMarkerOf(json: string | undefined): ShotsMarker | null {
     return null;
   }
   if (!isObject(value) || value.source !== "shots") return null;
-  const { head, run, artifact, failure, named, nothingVisible, dropped, miss, missed, preview, implementRun } = value;
+  const { head, run, artifact, failure, named, nothingVisible, dropped, miss, missed, preview, implementRun, pushed, red, pastLimit } = value;
   return {
     source: "shots",
     head: typeof head === "string" && FULL_SHA.test(head) ? head : null,
@@ -1199,18 +1445,22 @@ function shotsMarkerOf(json: string | undefined): ShotsMarker | null {
     failure: isOneOf(SHOTS_FAILURES, failure) ? failure : null,
     routes: [],
     // A name that breaks the rule, as an edit of the body might leave it, is dropped: names reach the Reviewer's prompt.
-    named: Array.isArray(named) ? named.flatMap((shot) => (isObject(shot) && isShotName(shot.name) ? [namedShotOf(shot.name, shot.path)] : [])) : [],
+    named: Array.isArray(named) ? named.flatMap((shot) => (isObject(shot) && isShotName(shot.name) ? [namedShotOf(shot.name, shot.journey, shot.path)] : [])) : [],
     ...(typeof nothingVisible === "string" && nothingVisible.trim() !== "" ? { nothingVisible } : {}),
     ...(isObject(dropped) && isCount(dropped.pastFour) && isCount(dropped.broken) ? { dropped: { pastFour: dropped.pastFour, broken: dropped.broken } } : {}),
     ...(miss === "nothing-named" ? { miss } : {}),
     missed: Array.isArray(missed) ? missed.flatMap((each) => shotMissOf(each)) : [],
     ...(markerPreviewOf(preview) ?? {}),
     ...(isId(implementRun) ? { implementRun } : {}),
+    ...(typeof pushed === "string" && FULL_SHA.test(pushed) ? { pushed } : {}),
+    ...(red === true ? { red } : {}),
+    ...(isCount(pastLimit) && pastLimit > 0 ? { pastLimit } : {}),
   };
 }
 
-function namedShotOf(name: string, path: unknown): NamedShot {
-  return isRoute(path) ? { name, path } : { name };
+/** A named shot as its marker reads, with its Journey and path when each keeps the rule the artifact's entry was held to. */
+function namedShotOf(name: string, journey: unknown, path: unknown): NamedShot {
+  return { name, ...(isShotName(journey) ? { journey } : {}), ...(isRoute(path) ? { path } : {}) };
 }
 
 /** A shots marker's missed shot, when it reads, as a list of none or one. */

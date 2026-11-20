@@ -2,6 +2,7 @@
 // at a time, as the token the job holds. It holds no Loop rules, only how
 // GitHub carries them out: a trigger label left on is cycled so adding it
 // fires its event (#417), since GitHub fires none for a label already on.
+import { withEvidenceSection } from "../evidence/uiEvidence.ts";
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
 import type { Pushed } from "../kit/runRecord.ts";
@@ -737,6 +738,13 @@ async function applyToIssue(
     case "edit-issue-body":
       await github.rest("PATCH", issue, { body: action.body });
       return;
+    case "replace-evidence-section": {
+      // Read right before the write, so what the Operator edited after the plan was made stays (#820).
+      const pullRequest = (await github.rest("GET", issue)) as { body: string | null };
+      const body = withEvidenceSection(pullRequest.body ?? "", action.section);
+      if (body !== null) await github.rest("PATCH", issue, { body });
+      return;
+    }
     case "append-to-decisions-so-far": {
       // Read right before the write, so what the Operator edited after the plan was made stays.
       const line = action.line.map((part) => (typeof part === "string" ? part : postedIn(posted, part).url)).join("");

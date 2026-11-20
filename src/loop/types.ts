@@ -1,6 +1,7 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
-import type { CaptureResult, EvidenceMarker, ShotsMarker } from "../evidence/uiEvidence.ts";
+import type { ReviewShots } from "../evidence/shotsCollect.ts";
+import type { CaptureResult, EvidenceMarker, ShotsMarker, ShotsRead } from "../evidence/uiEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
 import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
@@ -401,6 +402,27 @@ export type LoopEvent =
       readonly operatorComments?: readonly GivenOperatorComment[];
       /** On a head whose Required checks were still red after everything the Kit could do (#779), those checks; absent on green. */
       readonly redChecks?: RedRequiredChecks;
+      /**
+       * On a UI PR in a Product repo that uses Evidence shots (#820): what the
+       * Review's jobs read of the named check's artifact at the head, which the
+       * push job writes the evidence section from. Absent when they read none.
+       */
+      readonly shots?: ShotsRead;
+    }
+  | {
+      /**
+       * The Review's jobs found an Evidence miss that sends back at the head
+       * (#820): a named shot the green named check didn't produce, at a head
+       * an Implementer run pushed, with a Retry left. The Reviewer didn't run;
+       * its push job gives the Kit's own Execution flaw in its place.
+       */
+      readonly kind: "evidence-miss-found";
+      readonly pullRequest: number;
+      /** The head the named check ran at, which the Review's waits read. */
+      readonly headSha: string;
+      readonly runUrl: string;
+      readonly repoUrl: string;
+      readonly shots: ShotsRead;
     }
   | {
       /** The Digest writer finished on an agent PR; its push job holds the reply, not yet posted (ADR-0022). */
@@ -2011,6 +2033,16 @@ export type Action =
   | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
   | {
       /**
+       * Replaces the evidence section of a PR's body with `section`, keeping
+       * the rest of the body as it is when applied (#820): a body with no
+       * section is left as it is.
+       */
+      readonly kind: "replace-evidence-section";
+      readonly issue: number;
+      readonly section: string;
+    }
+  | {
+      /**
        * Appends one line to a Map's Decisions so far. The core never sends the
        * Map's body: the adapter reads it as it stands right before it writes,
        * and inserts the line at the end of that section, or under the heading
@@ -2081,6 +2113,12 @@ export type Action =
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.
        */
       readonly evidence?: EvidenceMarker;
+      /**
+       * For a Review of a UI PR in a Product repo that uses Evidence shots
+       * (#820): the check and artifact its shots come from, its names, and
+       * the head a miss is sent back at, for the Review's jobs.
+       */
+      readonly shots?: ReviewShots;
       /**
        * For a Design session's prototype turn (#155): the pending prototype
        * request it builds, and the Operator's reply that started the turn

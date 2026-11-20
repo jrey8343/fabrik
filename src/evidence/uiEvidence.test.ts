@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
+import { aShotsCollected } from "../__fixtures__/uiEvidence.ts";
 import type { UiConfig } from "../kit/config.ts";
 import {
   CAPTURE_FAILURES,
@@ -16,8 +17,12 @@ import {
   type MissOutcome,
   type PreviewLink,
   reviewerEvidenceBlock,
+  readShotsMarker,
   reviewerImages,
+  reviewerShotImages,
+  reviewerShotsBlock,
   routesFor,
+  type ShotMissOutcome,
   type ShotsMarker,
   shotsMarkerIn,
   type ShotsNames,
@@ -26,9 +31,11 @@ import {
   type UiEvidence,
   type VariantCapture,
   waitingShotsMarker,
+  withEvidenceSection,
   withoutEvidence,
   withPreviewLink,
 } from "./uiEvidence.ts";
+import type { ShotsCollected } from "./shotsCollect.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -1329,7 +1336,7 @@ describe("The names a pull request's Evidence shots go by (#819)", () => {
 
 describe("The evidence section of a pull request whose UI evidence comes from Evidence shots (#819)", () => {
   const section = (names: ShotsNames, { missOutcome = "no-retry-left" as MissOutcome, preview = { kind: "none" } as PreviewLink } = {}) =>
-    shotsSection({ check: "e2e", marker: waitingShotsMarker(names, 9100, preview), missOutcome });
+    shotsSection({ check: "e2e", artifact: "fabrik-evidence-shots", marker: waitingShotsMarker(names, 9100, preview), missOutcome });
 
   it("lists the names, says it waits for the named check, and ends with the shots marker", () => {
     expect(section({ named: [{ name: "composer: draft ready" }, { name: "inbox: empty" }] })).toBe(
@@ -1431,7 +1438,7 @@ describe("The evidence section of a pull request whose UI evidence comes from Ev
 
 describe("The Implementer's sentence in the shots section, which is agent text (#819)", () => {
   const sectionSaying = (nothingVisible: string) =>
-    shotsSection({ check: "e2e", marker: waitingShotsMarker({ named: [], nothingVisible }, 9100, { kind: "none" }), missOutcome: "sent-back" });
+    shotsSection({ check: "e2e", artifact: "fabrik-evidence-shots", marker: waitingShotsMarker({ named: [], nothingVisible }, 9100, { kind: "none" }), missOutcome: "sent-back" });
 
   it.each([
     ["ending the comment", "Nothing --> <script>"],
@@ -1477,6 +1484,238 @@ describe("Reading a shots marker (#819)", () => {
     ["isn't JSON", `{source:"shots"}`],
   ])("finds none where the marker %s", (_, json) => {
     expect(read(json)).toBeNull();
+  });
+});
+
+describe("The shots section once the Review's jobs have read the named check's artifact (#820)", () => {
+  const HEAD = "c".repeat(40);
+  const PAGE = "https://github.com/acme/shop/actions/runs/9300/artifacts/9301";
+  const names: ShotsNames = { named: [{ name: "composer: draft ready" }, { name: "inbox: empty" }] };
+  const held = (extra: Partial<ShotsMarker> = {}): ShotsMarker => ({ ...waitingShotsMarker(names, 9100, { kind: "none" }, HEAD), ...extra });
+  const collected = (overrides: Partial<ShotsCollected> = {}): ShotsCollected => aShotsCollected({ head: HEAD, ...overrides });
+  const read =(overrides: Partial<ShotsCollected> = {}, marker = held()) => readShotsMarker(marker, { collected: collected(overrides), run: 9300, artifact: 9301 });
+  const section = (marker: ShotsMarker, missOutcome: ShotMissOutcome = "no-retry-left") =>
+    shotsSection({ check: "e2e", artifact: "fabrik-evidence-shots", marker, missOutcome, evidencePage: marker.artifact === null ? null : PAGE });
+
+  it("records the head the check ran at, the Review run and its Evidence page, and each named shot with its Journey and path", () => {
+    expect(read()).toEqual({
+      ...held(),
+      head: HEAD,
+      run: 9300,
+      artifact: 9301,
+      failure: null,
+      named: [{ name: "composer: draft ready", journey: "write-a-clinical-note", path: "/patients/6f1b2c3d/notes/new" }, { name: "inbox: empty" }],
+      missed: [],
+    });
+  });
+
+  it("lists the named shots with the head they are from, and links the Evidence page", () => {
+    expect(section(read())).toBe(
+      [
+        "<!-- fabrik:ui-evidence-start -->",
+        "## UI evidence",
+        "",
+        `Evidence shots the \`e2e\` check took at \`ccccccc\`: [Open the Evidence page](<${PAGE}>), which holds every shot of its run, the named ones first.`,
+        "",
+        "Named shots:",
+        "",
+        "- `composer: draft ready`, from the Journey `write-a-clinical-note`, at `/patients/6f1b2c3d/notes/new`",
+        "- `inbox: empty`",
+        "",
+        "No preview link: Kit config declares no `preview.url`.",
+        `<!-- fabrik:ui-evidence {"source":"shots","head":"${HEAD}","run":9300,"artifact":9301,"failure":null,"routes":[],"named":[{"name":"composer: draft ready","journey":"write-a-clinical-note","path":"/patients/6f1b2c3d/notes/new"},{"name":"inbox: empty"}],"missed":[],"preview":{"is":"none"},"implementRun":9100,"pushed":"${HEAD}"} -->`,
+      ].join("\n"),
+    );
+  });
+
+  it("reads its marker back as written", () => {
+    const marker = read({ missed: [{ name: "inbox: empty", viewport: "desktop", why: "size-missing" }], pastLimit: 3, red: true });
+
+    expect(shotsMarkerIn(`Adds drafts.\n\n${section(marker)}\n\nCloses #12`)).toEqual(marker);
+    expect(marker).toMatchObject({ pastLimit: 3, red: true });
+  });
+
+  it.each([
+    ["sent-back", "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at this head, so the Kit sent it back with an Execution flaw, which uses a Retry."],
+    ["no-retry-left", "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at this head. No Retry is left, so it goes on to Review with the miss shown."],
+    [
+      "not-pushed",
+      "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at this head. No Implementer run pushed this head, so it isn't sent back: it goes on to Review with the miss shown.",
+    ],
+    [
+      "check-red",
+      "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at this head. The check is still red after the Kit's re-run, so nothing is sent back for evidence: the Reviewer's judgment of the check decides.",
+    ],
+  ] as const)("says plainly what came of a named shot the run didn't produce, when it was %s, and why it was missed", (outcome, line) => {
+    const lines = section(read({ named: [collected().named[1]!], missed: [{ name: "composer: draft ready", why: "not-produced" }] }), outcome).split("\n");
+
+    expect(lines).toContain(line);
+    expect(lines).toContain("- `composer: draft ready` wasn't produced: the `e2e` check's run took no shot of that name.");
+  });
+
+  it.each([
+    ["ambiguous-name", "- `composer: draft ready` is ambiguous: two or more of the run's shots have that name, so none is shown under it."],
+    ["refused", "- `composer: draft ready` was refused: its entry in the run's manifest broke the artifact's rules, so the Kit dropped it."],
+  ] as const)("names a shot missed as %s in the Kit's own sentence", (why, line) => {
+    expect(section(read({ named: [], missed: [{ name: "composer: draft ready", why }] })).split("\n")).toContain(line);
+  });
+
+  it("shows a shot with one size, listing the missing size, and says no miss", () => {
+    const lines = section(read({ missed: [{ name: "inbox: empty", viewport: "desktop", why: "size-missing" }] }), "sent-back").split("\n");
+
+    expect(lines).toContain("- `inbox: empty`. It has no desktop image, so it shows at mobile alone.");
+    expect(lines.some((line) => line.startsWith("**Evidence miss:**"))).toBe(false);
+  });
+
+  it("says the shots are from a run that failed when the check is still red", () => {
+    expect(section(read({ red: true })).split("\n")).toContain("**The `e2e` check is red:** it is still red after the Kit's re-run, so these Evidence shots are from a run that failed.");
+  });
+
+  it.each([
+    [
+      "no-artifact",
+      "**No Evidence shots:** the `e2e` check's run at this head uploaded no artifact named `fabrik-evidence-shots`, which its workflow must upload whether its Journeys pass or fail. That is the Product repo's wiring, the Operator's to fix, so nothing is sent back.",
+    ],
+    [
+      "bad-manifest",
+      "**No Evidence shots:** the `fabrik-evidence-shots` artifact's `manifest.json` couldn't be read: it is missing, isn't JSON, has another `version` or has no `shots` list. That is the Product repo's wiring, the Operator's to fix, so nothing is sent back.",
+    ],
+  ] as const)("says plainly when the collection failed as %s, links no Evidence page, and still lists the names", (failure, line) => {
+    const marker = readShotsMarker(held(), { collected: collected({ failure, named: [], produced: [] }), run: 9300, artifact: null });
+    const lines = section(marker).split("\n");
+
+    expect(lines).toContain(line);
+    expect(lines).toContain("The Review read the `e2e` check's run at `ccccccc`.");
+    expect(lines).toContain("- `composer: draft ready`");
+    expect(marker.failure).toBe(failure);
+  });
+
+  it("says how many shots were dropped past the first 100", () => {
+    expect(section(read({ pastLimit: 3 })).split("\n")).toContain("The run's manifest lists 3 shots past the first 100, which the Kit doesn't read.");
+  });
+
+  it("gives the Implementer's sentence when that is what the pull request has", () => {
+    const marker = readShotsMarker(waitingShotsMarker({ named: [], nothingVisible: "Only the API changed." }, 9100, { kind: "none" }, HEAD), {
+      collected: collected({ named: [] }),
+      run: 9300,
+      artifact: 9301,
+    });
+
+    expect(section(marker).split("\n")).toEqual(expect.arrayContaining(["The Implementer says nothing a person sees changes:", "> Only the API changed."]));
+  });
+
+  it("goes back to waiting on a new head, with the names kept and the paths dropped", () => {
+    expect(waitingShotsMarker(shotsNamesOf({}, read()), 9400, { kind: "none" }, "d".repeat(40))).toMatchObject({
+      head: null,
+      run: null,
+      artifact: null,
+      named: [{ name: "composer: draft ready" }, { name: "inbox: empty" }],
+      missed: [],
+    });
+  });
+});
+
+describe("Replacing a pull request body's evidence section (#820)", () => {
+  const waiting = shotsSection({
+    check: "e2e",
+    artifact: "fabrik-evidence-shots",
+    marker: waitingShotsMarker({ named: [{ name: "a" }] }, 9100, { kind: "none" }, null),
+    missOutcome: "not-pushed",
+  });
+  const after = '<!-- fabrik:ui-evidence-start -->\n## UI evidence\n\nRead.\n<!-- fabrik:ui-evidence {"source":"shots"} -->';
+
+  it("replaces the last section whole, from its start line through its marker, and keeps the rest of the body", () => {
+    expect(withEvidenceSection(`Adds drafts.\n\n${waiting}\n\nCloses #12`, after)).toBe(`Adds drafts.\n\n${after}\n\nCloses #12`);
+  });
+
+  it("is null for a body with no section, which it never adds one to", () => {
+    expect(withEvidenceSection("Adds drafts.\n\nCloses #12", after)).toBeNull();
+  });
+});
+
+describe("The images a Reviewer gets of Evidence shots (#820)", () => {
+  const shot = (name: string) => ({ name, images: { mobile: `${name}.mobile.png`, desktop: `${name}.desktop.png` } });
+
+  it("are the named shots the run produced, mobile before desktop, in the Implementer's order", () => {
+    expect(reviewerShotImages(aShotsCollected({ named: [shot("b"), shot("a")] }))).toEqual([
+      { name: "b", size: "mobile", file: "b.mobile.png" },
+      { name: "a", size: "mobile", file: "a.mobile.png" },
+      { name: "b", size: "desktop", file: "b.desktop.png" },
+      { name: "a", size: "desktop", file: "a.desktop.png" },
+    ]);
+  });
+
+  it("are never trimmed below the four names' own, and never more than 8", () => {
+    const images = reviewerShotImages(aShotsCollected({ named: ["a", "b", "c", "d", "e"].map(shot) }));
+
+    expect(images).toHaveLength(8);
+    expect(reviewerShotImages(aShotsCollected({ named: ["a", "b", "c", "d"].map(shot) }))).toHaveLength(8);
+  });
+
+  it("leave out the size a shot lacks", () => {
+    expect(reviewerShotImages(aShotsCollected({ named: [{ name: "a", images: { desktop: "a.desktop.png" } }] }))).toEqual([{ name: "a", size: "desktop", file: "a.desktop.png" }]);
+  });
+});
+
+describe("The UI evidence block of a Reviewer whose pull request's evidence is Evidence shots (#820)", () => {
+  const block = (overrides: Partial<ShotsCollected> = {}, given = reviewerShotImages(aShotsCollected(overrides))) =>
+    reviewerShotsBlock({ collected: aShotsCollected(overrides), given }).join("\n\n");
+
+  it("names each image's shot and size, says where they are, and what to judge in them", () => {
+    const text = block();
+
+    expect(text).toContain("the Evidence shots the Implementer named, which the Journeys of the Required check `e2e` took at `aaaaaaa`");
+    expect(text).toContain("- `fabrik-ui-evidence/draft.mobile.png`: the shot `composer: draft ready` at mobile width (390×844), from the Journey `write-a-clinical-note`, at `/patients/6f1b2c3d/notes/new`");
+    expect(text).toContain("- `fabrik-ui-evidence/inbox.desktop.png`: the shot `inbox: empty` at desktop width (1440×900)");
+    expect(text).toContain("These 4 are in `fabrik-ui-evidence/` in your working directory: open each with your Read tool to see it.");
+    expect(text).toContain("Do they show what the Ticket asked for?");
+  });
+
+  it("is told each miss in the Kit's own sentence", () => {
+    const text = block({
+      named: [aShotsCollected().named[1]!],
+      missed: [
+        { name: "composer: draft ready", why: "not-produced" },
+        { name: "inbox: empty", viewport: "desktop", why: "size-missing" },
+      ],
+    });
+
+    expect(text).toContain("- `composer: draft ready` wasn't produced: the `e2e` check's run took no shot of that name.");
+    expect(text).toContain("- `inbox: empty` has no desktop image, so it shows at mobile alone.");
+  });
+
+  it("is told the shots are from a run that failed when the check is red", () => {
+    expect(block({ red: true })).toContain("The `e2e` check is still red on this head after the Kit's re-run, so these shots are from a run that failed.");
+  });
+
+  it.each([
+    ["no-artifact", "The `e2e` check's run at this head uploaded no artifact named `fabrik-evidence-shots`"],
+    ["bad-manifest", "The `fabrik-evidence-shots` artifact's `manifest.json` couldn't be read"],
+  ] as const)("is told of a %s failure, that there are no pictures, and to review the code as usual", (failure, sentence) => {
+    const text = block({ failure, named: [], produced: [] });
+
+    expect(text).toContain(sentence);
+    expect(text).toContain("There are no pictures, so review the code as usual.");
+    expect(text).not.toContain("Read tool");
+  });
+
+  it("gives the sentence that nothing visible changes, to check against the diff", () => {
+    const text = block({ named: [], nothingVisible: "Only the API client's retries changed, @octocat." });
+
+    expect(text).toContain("> Only the API client's retries changed, @​octocat.");
+    expect(text).toContain("Check it against the diff: a diff that plainly changes what a person sees is an `execution-flaw`, whatever the sentence says.");
+    expect(text).toContain("There are no pictures, so review the code as usual.");
+  });
+
+  it("is told when nothing was named and no sentence given", () => {
+    expect(block({ named: [] })).toContain("The Implementer named no Evidence shot and didn't say that nothing visible changes, so there are no pictures: review the code as usual.");
+  });
+
+  it("names only the images that were copied for it", () => {
+    const text = block({}, [{ name: "inbox: empty", size: "mobile", file: "inbox.mobile.png" }]);
+
+    expect(text).toContain("It's in `fabrik-ui-evidence/`");
+    expect(text).not.toContain("draft.mobile.png");
   });
 });
 

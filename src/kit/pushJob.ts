@@ -3,6 +3,7 @@
 // its own: the Actions event itself, an agent job's result, a Review's red
 // checks or Verdict, or, when the routed agent job failed or was cancelled,
 // its failure notice, or for a Digest run its no-Digest line. Pure, no I/O.
+import { type ShotsCollected, shotsCollectedOf } from "../evidence/shotsCollect.ts";
 import { type CaptureResult, parseCaptureResult } from "../evidence/uiEvidence.ts";
 import { parsePrototypeRequest, type PrototypeRequestMarker } from "../loop/markers.ts";
 import { type AgentRole, type FlakyCheck, isStepUpReason, type KeptBranchStart, type RerunReport, type StepUpReason } from "../loop/types.ts";
@@ -84,6 +85,10 @@ export type PushJobInput =
       readonly ranNothing: readonly string[];
       /** What the Kit's re-run of the red checks came to (#462); absent when its job didn't run. */
       readonly rerun?: RerunReport;
+      /** What the Review's jobs read of the head's Evidence shots (#820), and the Evidence page they kept; absent when they read none. */
+      readonly shots?: ReviewShotsOutputs;
+      /** That the Reviewer didn't run, for an Evidence miss that sends back (#820): the push job gives the Kit's Execution flaw in its place. */
+      readonly reviewerSkipped?: true;
     }
   | {
       /** The Digest writer's reply is there to land (ADR-0022). */
@@ -226,7 +231,12 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
       const rerun = report === null ? {} : { rerun: report };
       // Green, or red after everything the Kit could do (#779): the Reviewer judged the head, and no Verdict comes from red checks alone.
       if ((outcome === "green" || outcome === "red") && reviewer?.result === "success") {
-        return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, ...rerun };
+        // On a Product repo that uses Evidence shots, what the Review's jobs read of them at the head (#820).
+        const shots = reviewShotsOutputs(reviewer.outputs);
+        // A miss that sends back stopped the Reviewer, so the push job gives the Kit's Execution flaw on what was read.
+        const skipped = reviewer.outputs["shots-reviewer"] === "skip";
+        if (skipped && shots === null) return { kind: "nothing", reason: `#${pullRequest}'s Reviewer didn't run, and the Evidence shots its Review read don't read` };
+        return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, ...rerun, ...(shots === null ? {} : { shots }), ...(skipped ? { reviewerSkipped: true as const } : {}) };
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };
     }
@@ -315,6 +325,19 @@ function failure(role: AgentRole, issue: number, job: NeededJob, kit: NeededJob)
     secretsStep: job.outputs["secrets-step"] ?? "",
     ...(subscription === "" ? {} : { subscription }),
   };
+}
+
+/** What the review job passed out about a head's Evidence shots (#820): what its read step collected, and the Evidence page artifact it uploaded. */
+export interface ReviewShotsOutputs {
+  readonly collected: ShotsCollected;
+  /** The id of the unzipped Evidence page artifact (`shots-page-artifact`), or null when it kept none. */
+  readonly artifact: number | null;
+}
+
+/** The review job's Evidence shots outputs, read leniently: none when its read step passed out nothing that reads. */
+function reviewShotsOutputs(outputs: NeededJob["outputs"]): ReviewShotsOutputs | null {
+  const collected = shotsCollectedOf(outputs["shots"]);
+  return collected === null ? null : { collected, artifact: numberOr(outputs["shots-page-artifact"]) };
 }
 
 function captureOutputs(outputs: NeededJob["outputs"]): CaptureOutputs {

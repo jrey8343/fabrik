@@ -19,6 +19,7 @@ import {
   checkBuiltAsPlanned,
   auditEventFrom,
   digestEventFrom,
+  evidenceMissEventFrom,
   loopEventFrom,
   prototypeEventFrom,
   researchEventFrom,
@@ -281,6 +282,13 @@ async function finishedReviewEvent(
   input: Extract<PushJobInput, { kind: "review" }>,
   agentDir: string,
 ): Promise<{ event: LoopEvent; source: string }> {
+  // What the Review's jobs read of the head's Evidence shots (#820), in this run, whose Evidence page artifact they kept.
+  const shots = input.shots === undefined ? undefined : { ...input.shots, run: Number(required("GITHUB_RUN_ID")) };
+  // An Evidence miss that sends back stopped the Reviewer, so there's no result: the Kit's Execution flaw lands in its place.
+  if (input.reviewerSkipped === true && shots !== undefined) {
+    const event = evidenceMissEventFrom({ pullRequest: input.pullRequest, headSha: input.headSha, runUrl: thisRunUrl(), repoUrl: thisRepoUrl(), shots });
+    return { event, source: `the Evidence miss the Review of #${input.pullRequest} found` };
+  }
   const result = readAgentRunResult(await readFile(join(agentDir, AGENT_RESULT_FILE), "utf8"));
   const passedOut = (file: string) => readFile(join(agentDir, file), "utf8").catch(() => null);
   const excerpts = excerptsPassedOut(await passedOut(FAILURE_EXCERPTS_FILE), await passedOut(RERUN_FAILURE_EXCERPTS_FILE));
@@ -294,6 +302,7 @@ async function finishedReviewEvent(
     result,
     rerun: input.rerun ?? null,
     excerpts,
+    ...(shots === undefined ? {} : { shots }),
   });
   return { event, source: `the Review of #${input.pullRequest}` };
 }

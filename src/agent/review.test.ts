@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PENRITH_59_REPO, PENRITH_59_REQUEST, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { aPullRequest, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
-import { CAPTURED, CAPTURED_SHA } from "../__fixtures__/uiEvidence.ts";
+import { aShotsCollected, CAPTURED, CAPTURED_SHA } from "../__fixtures__/uiEvidence.ts";
 import type { CaptureFailure, CaptureResult } from "../evidence/uiEvidence.ts";
 import { reviewEventFrom } from "../github/events.ts";
 import { changedTestsSection } from "../loop/changedTests.ts";
@@ -237,6 +237,42 @@ async function downloaded(result: CaptureResult | string): Promise<string> {
 
 /** A UI PR whose head is the commit its Implement run captured. */
 const uiPullRequest = { ...pullRequest, headRefOid: CAPTURED_SHA };
+
+describe("A Review's UI evidence of Evidence shots (#820)", () => {
+  /** The folder the review job downloaded the named check's artifact into, holding these images. */
+  async function shotsDownloaded(files: readonly string[]): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "fabrik-evidence-shots-"));
+    for (const file of files) await writeFile(join(dir, file), PNG);
+    return dir;
+  }
+
+  it("copies the named shots' images into its working directory, and names each by shot and size", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(uiPullRequest);
+    const dir = await shotsDownloaded(["draft.mobile.png", "draft.desktop.png", "inbox.mobile.png", "inbox.desktop.png", "unnamed.png"]);
+
+    const { parts } = await reviewContext(productDir, pullRequestFile, specFile, null, null, [], null, null, { collected: aShotsCollected(), dir });
+    const block = parts.slice(parts.indexOf("## UI evidence")).join("\n\n");
+
+    expect(block).toContain("- `fabrik-ui-evidence/draft.mobile.png`: the shot `composer: draft ready` at mobile width (390×844)");
+    expect(block).toContain("These 4 are in `fabrik-ui-evidence/`");
+    expect((await readdir(join(productDir, "fabrik-ui-evidence"))).toSorted()).toEqual(["draft.desktop.png", "draft.mobile.png", "inbox.desktop.png", "inbox.mobile.png"]);
+  });
+
+  it("names only the images the download holds", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(uiPullRequest);
+
+    const { parts } = await reviewContext(productDir, pullRequestFile, specFile, null, null, [], null, null, { collected: aShotsCollected(), dir: await shotsDownloaded(["inbox.mobile.png"]) });
+
+    expect(parts.join("\n")).toContain("It's in `fabrik-ui-evidence/`");
+    expect(parts.join("\n")).not.toContain("draft.mobile.png");
+  });
+
+  it("says nothing of UI evidence on a PR given none", async () => {
+    const { productDir, pullRequestFile, specFile } = await inputs(pullRequest);
+
+    expect((await reviewContext(productDir, pullRequestFile, specFile)).parts).not.toContain("## UI evidence");
+  });
+});
 
 describe("A Review's UI evidence", () => {
   it("on a UI PR names every screenshot it was given by route, viewport and side, each in its working directory, and says what to judge", async () => {

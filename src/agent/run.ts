@@ -52,7 +52,10 @@
 // since the last judged head (src/agent/laterReview.ts, #748). A Review of a
 // head whose Required checks are still red (#779) takes FABRIK_RED_CHECKS_NEEDS,
 // the Review's jobs as JSON, and FABRIK_RED_CHECKS_DIR, where both waits'
-// Failure excerpts were downloaded; on green both are empty.
+// Failure excerpts were downloaded; on green both are empty. A UI PR's Review
+// on a Product repo that uses Evidence shots (#820) takes FABRIK_SHOTS, what
+// the review job's read step collected at the head, and FABRIK_SHOTS_DIR,
+// where the named check's artifact was downloaded.
 // An Auditor run is in a checkout of the default branch at its pending Audit's
 // marked commit: FABRIK_ISSUE_FILE is the Audit and FABRIK_AUDIT_FILE what the
 // agent-inputs step gathered for it (src/agent/inputs.ts), and its result
@@ -126,7 +129,7 @@ import {
   streamWatch,
 } from "./launch.ts";
 import { type LaterReviewGiven, readLaterReviewFile } from "./laterReview.ts";
-import { isFullReview, ranNothingOf, readRedChecks, reviewContext, reviewPromptFor } from "./review.ts";
+import { downloadedShotsOf, isFullReview, ranNothingOf, readRedChecks, reviewContext, reviewPromptFor } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
 import { missingSkills, runSummary } from "./summary.ts";
@@ -538,6 +541,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       ranNothingOf(process.env["FABRIK_RAN_NOTHING"]),
       reviewKind.later,
       red,
+      // Set only on a Product repo that uses Evidence shots (#820): what the Review's jobs collected at the head, and where.
+      downloadedShotsOf(process.env["FABRIK_SHOTS"], process.env["FABRIK_SHOTS_DIR"]),
     );
     subject = review.pullRequest;
     extra.push(...review.parts);

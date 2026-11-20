@@ -26,6 +26,7 @@ import { changeLine } from "./changeFingerprint.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import { parseVerdict, type RedCheckJudgment, verdictTagsOf } from "./verdict.ts";
 import { redChecksLinked } from "./redChecks.ts";
+import { evidenceMissFindings, missSendsBackAt, readShotsSectionActions, reviewShotsOf, whyNothingNamedSentBack } from "./shotsReview.ts";
 import { issueRef } from "./checkIssue.ts";
 import { type Linked, linkedComment, linkedLength } from "./linked.ts";
 import type {
@@ -45,6 +46,7 @@ import type {
 } from "./types.ts";
 
 type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
+type MissFound = Extract<LoopEvent, { kind: "evidence-miss-found" }>;
 
 /**
  * A push to an agent draft PR, or agent:review added to it, starts a Review,
@@ -54,10 +56,13 @@ type Reviewed = Extract<LoopEvent, { kind: "review-run-finished" }>;
  * evidence is kept, so the Reviewer sees the screenshots; the Verdict is the same.
  */
 export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig): Plan {
-  const why = whyNotReviewable(pullRequest) ?? whyAwaitingRun(pullRequest);
+  // A UI PR whose Implement run's push sent it back for naming no Evidence shot gets no Reviewer at that head (#820).
+  const why = whyNotReviewable(pullRequest) ?? whyAwaitingRun(pullRequest) ?? whyNothingNamedSentBack(pullRequest, config);
   if (why !== null) return { kind: "nothing", reason: why };
   const { model, effort, timeoutMinutes } = config.roles.review;
   const { number, uiEvidenceMarker } = pullRequest;
+  // On a Product repo that uses Evidence shots, what the Review's jobs collect the head's shots by (#820).
+  const shots = reviewShotsOf(pullRequest, config);
   return {
     kind: "act",
     actions: [
@@ -67,6 +72,7 @@ export function startReview(pullRequest: PullRequestSnapshot, config: KitConfig)
         issue: number,
         reviewKind: reviewKindOf(pullRequest),
         ...(uiEvidenceMarker === null ? {} : { evidence: uiEvidenceMarker }),
+        ...(shots === null ? {} : { shots }),
         model,
         effort,
         timeoutMinutes,
@@ -148,7 +154,12 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
       tags,
     }, snapshot.operator, held);
     // Checks that passed when the Kit re-ran them (#462) are said ahead of the Verdict, which stays the one notification.
-    actions.unshift(...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues), ...said.actions);
+    actions.unshift(
+      // The evidence section, once the Review's jobs have read the head's Evidence shots (#820), goes first, as a run's body does.
+      ...readShotsSectionActions(pullRequest, event.shots, config, event.repoUrl, false),
+      ...flakyCheckActions(pullRequest.number, event.headSha, event.flaky ?? [], snapshot.flakyCheckIssues),
+      ...said.actions,
+    );
     // A pass that gave way to a Request changes deferred during a Retry (#427) keeps the PR in draft for its run.
     if (verdict !== "pass" || passGivesWay(pullRequest)) return { kind: "act", actions };
     // One on a PR that conflicts with main brings it up to date first, in draft: the Operator's review couldn't land (#480).
@@ -156,6 +167,35 @@ export function applyReview(event: Reviewed, snapshot: Snapshot, config: KitConf
     if (bringUpToDate !== null) return { kind: "act", actions: [...actions, bringUpToDate] };
     // A pass that would open the Merge gate starts the Digest writer in its place, where the Digest is on (ADR-0022).
     return { kind: "act", actions: [...actions, ...digestOnPass(event, pullRequest, snapshot, config)] };
+  });
+}
+
+/**
+ * An Evidence miss the Review's jobs found at the head (#820, ADR-0033): a
+ * named shot the green named check didn't produce, at a head an Implementer
+ * run pushed, with a Retry left, so the Reviewer didn't run. The push job
+ * writes the section and gives the Kit's own Execution flaw at that head, its
+ * comment naming each missed name and listing the names the run produced.
+ * It calls for a Retry, never a Touch-up, as its marker counts no tags, and
+ * counts in the pool. Landed as a Verdict is, once per head; a pull request
+ * the rules no longer send back, as when its Retries were used up since the
+ * Review started, gets the section and a fresh Review in place of the flaw.
+ */
+export function applyEvidenceMiss(event: MissFound, snapshot: Snapshot, config: KitConfig): Plan {
+  return landVerdict(event, snapshot, (pullRequest) => {
+    const sendsBack = missSendsBackAt(pullRequest) === event.headSha;
+    const section = readShotsSectionActions(pullRequest, event.shots, config, event.repoUrl, sendsBack);
+    if (!sendsBack) {
+      return { kind: "act", actions: [...section, { kind: "add-labels", issue: pullRequest.number, labels: [REVIEW_LABEL] }] };
+    }
+    const flaw = verdictActions(
+      event,
+      pullRequest,
+      { verdict: "execution-flaw", source: "evidence-miss", findings: evidenceMissFindings(event.shots.collected) },
+      snapshot.operator,
+      heldOn(snapshot.kitIssues, config),
+    );
+    return { kind: "act", actions: [...section, ...flaw] };
   });
 }
 
@@ -259,7 +299,7 @@ function listed(names: readonly string[]): string {
 
 /** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once, or once more after a body-only Touch-up (#751). */
 function landVerdict(
-  event: Reviewed,
+  event: Reviewed | MissFound,
   { pullRequest }: Snapshot,
   decide: (pullRequest: PullRequestSnapshot) => Plan,
 ): Plan {

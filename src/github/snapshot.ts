@@ -1364,6 +1364,7 @@ async function gatherEventPart(
     case "pull-request-pushed":
     case "pull-request-labeled":
     case "review-run-finished":
+    case "evidence-miss-found":
     case "digest-run-finished":
     case "pull-request-left-draft":
     case "pull-request-closed":

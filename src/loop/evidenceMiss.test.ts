@@ -316,7 +316,7 @@ describe("The head an Evidence miss was sent back from, on the PR's thread (#819
   /** PR #50 named nothing on A, and the Kit's flaw on A started Retry 1. */
   function sentBackOnA(): PullRequestOnGitHub {
     const thread = new PullRequestOnGitHub();
-    thread.body = `Shows the empty state.\n\n${shotsSection({ check: "e2e", marker: markerNaming([]), missOutcome: "sent-back" })}\n\nCloses #7`;
+    thread.body = `Shows the empty state.\n\n${shotsSection({ check: "e2e", artifact: "fabrik-evidence-shots", marker: markerNaming([]), missOutcome: "sent-back" })}\n\nCloses #7`;
     thread.kitSays(verdictMarker({ verdict: "execution-flaw", source: "evidence-miss", requestChanges: false, headSha: A }));
     return thread;
   }

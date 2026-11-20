@@ -56,7 +56,7 @@ import { landRetro } from "./retroLanding.ts";
 import { startWeekly, weeklyRoleOf } from "./weeklyRuns.ts";
 import { dispatch } from "./dispatch.ts";
 import { sweepStuckTriggers } from "./triggerSweep.ts";
-import { applyReview, startReview, startReviewOnLabel } from "./review.ts";
+import { applyEvidenceMiss, applyReview, startReview, startReviewOnLabel } from "./review.ts";
 import type {
   Action,
   IssueContext,
@@ -162,6 +162,8 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       });
     case "review-run-finished":
       return applyReview(event, snapshot, config);
+    case "evidence-miss-found":
+      return applyEvidenceMiss(event, snapshot, config);
     case "digest-run-finished":
       return landDigest(event, snapshot);
     case "audit-run-finished":

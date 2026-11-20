@@ -768,9 +768,13 @@ function evidenceFor(
     if (!ui(pullRequest !== null && (pullRequest.shotsMarker !== null || pullRequest.uiEvidenceMarker !== null))) return null;
     const names = shotsNamesOf(output, pullRequest?.shotsMarker ?? null);
     const missOutcome: MissOutcome = retryLeft === null ? "not-pushed" : retryLeft ? "sent-back" : "no-retry-left";
-    // The push job's run, which its preview step links the preview from.
-    const marker = waitingShotsMarker(names, evidence?.run ?? null, preview);
-    return { section: shotsSection({ check: shots.check, marker, missOutcome }), sendsBack: namesNothing(names) && missOutcome === "sent-back" };
+    // The push job's run, which its preview step links the preview from, and the head its push lands, at which alone
+    // a miss the Review's jobs find is sent back (#820): none for a run that pushes no head.
+    const marker = waitingShotsMarker(names, evidence?.run ?? null, preview, retryLeft === null ? null : (event.changes.pushedHead ?? null));
+    return {
+      section: shotsSection({ check: shots.check, artifact: shots.artifact, marker, missOutcome }),
+      sendsBack: namesNothing(names) && missOutcome === "sent-back",
+    };
   }
   if (evidence === undefined || !ui((pullRequest?.uiEvidenceMarker ?? null) !== null)) return null;
   const { result, headSha, run, artifact, evidencePage } = evidence;

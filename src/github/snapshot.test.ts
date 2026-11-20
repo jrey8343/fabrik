@@ -1733,7 +1733,7 @@ describe("Gathering a pull request's Evidence shots names (#819)", () => {
   /** A UI PR's body on a Product repo that uses Evidence shots, as the push job writes it. */
   const body = [
     "Adds drafts to the composer.",
-    shotsSection({ check: "e2e", marker: waitingShotsMarker({ named: [{ name: "composer: draft ready" }] }, 9100, { kind: "none" }), missOutcome: "sent-back" }),
+    shotsSection({ check: "e2e", artifact: "fabrik-evidence-shots", marker: waitingShotsMarker({ named: [{ name: "composer: draft ready" }] }, 9100, { kind: "none" }), missOutcome: "sent-back" }),
     "Closes #7",
   ].join("\n\n");
 

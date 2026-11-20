@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { aShotsCollected } from "../__fixtures__/uiEvidence.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Needs } from "./pushJob.ts";
@@ -924,6 +925,13 @@ describe("The Run record a run's end yields", () => {
       expect(agentRunEnded(needs("review", { "review-checks": red, review: { result: "skipped", outputs: {} } }, { ticket: "7", "pull-request": "50" }), 50)).toBe(false);
       expect(agentRunEnded(needs("triage", { triage: job("success") }), 12)).toBe(true);
       expect(agentRunEnded(needs("triage", { triage: job("cancelled") }), 12)).toBe(true);
+    });
+
+    it("has no run to record when an Evidence miss stopped the Reviewer (#820)", () => {
+      const green = { result: "success", outputs: { checks: "green", "head-sha": HEAD_SHA, failed: "[]" } };
+      const skipped = job("success", { "shots-reviewer": "skip", shots: JSON.stringify(aShotsCollected({ sendsBack: true })) });
+
+      expect(agentRunEnded(needs("review", { "review-checks": green, review: skipped }, { ticket: "7", "pull-request": "50" }), 50)).toBe(false);
     });
   });
 

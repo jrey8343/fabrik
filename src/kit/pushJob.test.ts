@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { aShotsCollected } from "../__fixtures__/uiEvidence.ts";
 import { type Needs, pushJobInput } from "./pushJob.ts";
 
 /** The push job's `needs`, as `toJSON(needs)` gives it: the Kit job routed to `route`, and the other jobs as given. */
@@ -558,5 +559,32 @@ describe("What the push job applies", () => {
   it("does nothing when the Kit job routed nowhere, or failed", () => {
     expect(pushJobInput(needs("none"), 12).kind).toBe("nothing");
     expect(pushJobInput({ kit: { result: "failure", outputs: {} } }, 12).kind).toBe("nothing");
+  });
+});
+
+describe("What the push job applies of a Review's Evidence shots (#820)", () => {
+  const sha = "a".repeat(40);
+  const green = { result: "success", outputs: { checks: "green", "head-sha": sha, failed: "[]" } };
+  const collected = aShotsCollected({ head: sha });
+  const review = (outputs: Record<string, string>) => pushJobInput(needs("review", { "review-checks": green, review: ok(outputs) }, { ticket: "7", "pull-request": "50" }), 50);
+
+  it("carries what the Review's jobs read of the shots, with the Evidence page they kept, to the Reviewer's Verdict", () => {
+    expect(review({ shots: JSON.stringify(collected), "shots-page-artifact": "9301" })).toMatchObject({ kind: "review", shots: { collected, artifact: 9301 } });
+    expect(review({ shots: JSON.stringify(collected), "shots-page-artifact": "" })).toMatchObject({ shots: { artifact: null } });
+  });
+
+  it("applies the Kit's Execution flaw in place of a Verdict when the Reviewer didn't run for an Evidence miss", () => {
+    const missed = JSON.stringify({ ...collected, sendsBack: true });
+
+    expect(review({ shots: missed, "shots-reviewer": "skip", "shots-page-artifact": "9301" })).toMatchObject({ kind: "review", reviewerSkipped: true, shots: { artifact: 9301 } });
+  });
+
+  it("lands nothing when the Reviewer didn't run and what was read of the shots doesn't read", () => {
+    expect(review({ shots: "{", "shots-reviewer": "skip" })).toMatchObject({ kind: "nothing" });
+  });
+
+  it("carries no shots on a Review whose jobs read none, as on a Product repo without them", () => {
+    expect(review({})).not.toHaveProperty("shots");
+    expect(review({ shots: "{" })).not.toHaveProperty("shots");
   });
 });

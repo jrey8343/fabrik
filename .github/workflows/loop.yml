@@ -148,6 +148,11 @@ jobs:
       ui-evidence-run: ${{ steps.route.outputs.ui-evidence-run }}
       ui-evidence-artifact: ${{ steps.route.outputs.ui-evidence-artifact }}
       ui-evidence-failure: ${{ steps.route.outputs.ui-evidence-failure }}
+      # For a Review of a UI PR on a Product repo that uses Evidence shots (#820): what the Review job collects the
+      # head's shots by, as one line of JSON: the check and artifact Kit config names, the PR's names and its sentence
+      # that nothing visible changes, and the head a miss is sent back at. Agent text, so a job reads it only through
+      # `env:`. Empty for any other run.
+      ui-shots: ${{ steps.route.outputs.ui-shots }}
       # For a Review (#747): "true" for a Full Review, whose Reviewer is given the Full Review section, "false"
       # for a later Review. Its Run record names it. Empty for any other run.
       full-review: ${{ steps.route.outputs.full-review }}
@@ -1286,6 +1291,12 @@ jobs:
       model: ${{ steps.agent.outputs.model }}
       effort: ${{ steps.agent.outputs.effort }}
       base-sha: ${{ steps.base.outputs.sha }}
+      # On a Product repo that uses Evidence shots (#820), for the push job: what the read step collected at the head,
+      # as JSON holding agent and artifact text, so the push job reads it only through `env:`; "skip" when a miss that
+      # sends back stopped the Reviewer; and the id of the Evidence page it kept, unzipped.
+      shots: ${{ steps.shots.outputs.shots }}
+      shots-reviewer: ${{ steps.shots.outputs.reviewer }}
+      shots-page-artifact: ${{ steps.shots-page.outputs.artifact-id }}
     steps:
       - name: Check out the PR's head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1362,8 +1373,62 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/fabrik-red-checks
 
+      # A UI PR's Evidence shots (#820), on a Product repo whose Kit config has ui.shots: the newest attempt of the
+      # check it names at the head the waits read, and the artifact it uploaded, read through Actions with the job's
+      # read-only token, which needs no permission it didn't hold (src/review/shotsRun.ts).
+      - name: Find the Evidence shots
+        id: shots-find
+        if: needs.kit.outputs.ui-shots != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FABRIK_UI_SHOTS: ${{ needs.kit.outputs.ui-shots }}
+          FABRIK_HEAD_SHA: ${{ needs.review-checks.outputs.head-sha }}
+        run: node kit/src/review/shots-main.ts find
+
+      # The artifact, read as data and never run, outside the working directory. continue-on-error: a download
+      # that fails is read as no artifact, never a failed Review.
+      - name: Download the Evidence shots
+        if: steps.shots-find.outputs.artifact != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          run-id: ${{ steps.shots-find.outputs.run }}
+          artifact-ids: ${{ steps.shots-find.outputs.artifact }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/fabrik-evidence-shots
+
+      # The manifest and the images it lists, by the artifact's rules, against the PR's names, whether the named
+      # check is still red after the Kit's re-run, and the Evidence page of every shot (src/review/shotsRead.ts).
+      # A miss that sends back stops the Reviewer: the push job gives the Kit's Execution flaw in its place.
+      - name: Read the Evidence shots
+        id: shots
+        if: needs.kit.outputs.ui-shots != ''
+        env:
+          FABRIK_UI_SHOTS: ${{ needs.kit.outputs.ui-shots }}
+          FABRIK_HEAD_SHA: ${{ needs.review-checks.outputs.head-sha }}
+          FABRIK_SHOTS_DIR: ${{ runner.temp }}/fabrik-evidence-shots
+          FABRIK_SHOTS_ARTIFACT: ${{ steps.shots-find.outputs.artifact }}
+          FABRIK_REVIEW_NEEDS: ${{ toJSON(needs) }}
+          FABRIK_TICKET: ${{ needs.kit.outputs.ticket }}
+          FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-shots-page
+        run: node kit/src/review/shots-main.ts read
+
+      # The Evidence page, unzipped, in this Review's own run, so it opens in the browser in one click, kept as
+      # the Implement job keeps a capture's. continue-on-error: keeping it must never fail the Review.
+      - name: Keep the Evidence page of the shots
+        id: shots-page
+        if: steps.shots.outputs.page == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/fabrik-shots-page/fabrik-ui-evidence-page.html
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Load the Claude token
         id: op
+        if: steps.shots.outputs.reviewer != 'skip'
         uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
         with:
           export-env: false
@@ -1372,6 +1437,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: op://Fabrik/${{ needs.kit.outputs.subscription }}/credential
 
       - name: Run the Reviewer
+        if: steps.shots.outputs.reviewer != 'skip'
         id: agent
         working-directory: product
         env:
@@ -1396,9 +1462,14 @@ jobs:
           # re-running them came to as the push job does, and where their Failure excerpts were downloaded.
           FABRIK_RED_CHECKS_NEEDS: ${{ needs.review-checks.outputs.checks == 'red' && toJSON(needs) || '' }}
           FABRIK_RED_CHECKS_DIR: ${{ needs.review-checks.outputs.checks == 'red' && format('{0}/fabrik-red-checks', runner.temp) || '' }}
+          # Only on a UI PR whose evidence is Evidence shots (#820): what the read step collected at the head, and where
+          # the artifact was downloaded, which the runner copies the named shots' images from.
+          FABRIK_SHOTS: ${{ steps.shots.outputs.shots }}
+          FABRIK_SHOTS_DIR: ${{ needs.kit.outputs.ui-shots != '' && format('{0}/fabrik-evidence-shots', runner.temp) || '' }}
         run: node ../kit/src/agent/run.ts review
 
       - name: Pass the Verdict to the push job
+        if: steps.shots.outputs.reviewer != 'skip'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fabrik-agent-result
