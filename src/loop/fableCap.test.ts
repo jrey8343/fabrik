@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, kitConfig, notificationsOf, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
-import type { AgentRole, IssueSnapshot, KitConfig, LoopEvent, Plan } from "./types.ts";
+import type { AgentRole, IssueSnapshot, KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const FABLE = "claude-fable-5-2";
@@ -201,5 +201,61 @@ describe("A run due on a role that names Fable, with a Fable cap marked where it
 
     expect(start(plan)).toEqual(expect.objectContaining({ subscription: "Claude token", model: FABLE }));
     expect(start(plan)).not.toHaveProperty("fallback");
+  });
+});
+
+describe("A Design, Review or Step-up run due while no listed Subscription has Fable left, by the store's newest Run records", () => {
+  const until = RESETS_AT;
+  const everywhere = [
+    { subscription: "Claude token", until },
+    { subscription: "Claude token 2", until },
+  ];
+  // Design, Review and the Step-up on Fable, as the Operator sets them; Implement on its default.
+  const { roles } = TWO_SUBSCRIPTIONS;
+  const config = { ...TWO_SUBSCRIPTIONS, roles: { ...roles, implement: DEFAULT_KIT_CONFIG.roles.implement, stepUp: { model: FABLE, effort: "xhigh" } } };
+  const start = (plan: Plan) => actionsOf(plan).find((action) => action.kind === "start-agent-run");
+  type Caps = typeof everywhere;
+  const runs: readonly (readonly [string, LoopEvent, (fableCaps: Caps) => Snapshot, string])[] = [
+    [
+      "a Design-session turn",
+      { kind: "label-added", issue: 7, label: "agent:design" },
+      (fableCaps) => snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design", "agent:design"], designRounds: 1 }), { fableCaps }),
+      "high",
+    ],
+    [
+      "a Review",
+      { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" },
+      (fableCaps) => snapshotOfPullRequest(aPullRequest({ number: 50, labels: ["agent:review"] }), { fableCaps }),
+      "high",
+    ],
+    [
+      "a Stepped-up Implement run",
+      { kind: "label-added", issue: 7, label: "agent:implement" },
+      (fableCaps) => snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent", "agent:implement", "fabrik:step-up"] }), { fableCaps }),
+      "xhigh",
+    ],
+  ];
+
+  it.each(runs)("%s starts on Opus 5.5 at the role's effort, with no refusal first, recorded as a fable-cap fallback", (_, event, snapshot, effort) => {
+    expect(start(planFor(event, snapshot(everywhere), config))).toEqual(
+      expect.objectContaining({ subscription: "Claude token", model: "claude-opus-5-5", effort, configuredModel: FABLE, fallback: "fable-cap" }),
+    );
+  });
+
+  it.each(runs)("%s starts on Fable on another Subscription, with a reading on one only", (_, event, snapshot, effort) => {
+    expect(start(planFor(event, snapshot(everywhere.slice(0, 1)), config))).toEqual(
+      expect.objectContaining({ subscription: "Claude token 2", model: FABLE, effort }),
+    );
+  });
+});
+
+describe("A repo that hasn't opted in to Fable", () => {
+  it("runs exactly as before, whatever Fable cap readings there are", () => {
+    const issue = anIssue({ number: 7, labels: ["needs-triage"] });
+    const event = { kind: "label-added", issue: 7, label: "needs-triage" } as const;
+    const caps = [{ subscription: "Claude token", until: RESETS_AT }];
+    const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"] });
+
+    expect(planFor(event, snapshotOf(issue, { fableCaps: caps }), config)).toEqual(planFor(event, snapshotOf(issue), config));
   });
 });

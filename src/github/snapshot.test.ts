@@ -95,8 +95,8 @@ function gatherSnapshot(github: GitHub, ...rest: Parameters<typeof gatherFrom> e
             return github.graphql(query, variables);
           },
         } as unknown as GitHub);
-  const [repoArg, event, operator, appLogin, actions = null, store = null, replayStore = null, wait = async () => undefined] = rest;
-  return gatherFrom(answering, repoArg, event, operator, appLogin, actions, store, replayStore, wait);
+  const [repoArg, event, operator, appLogin, actions = null, store = null, replayStore = null, storeFableCaps = [], wait = async () => undefined] = rest;
+  return gatherFrom(answering, repoArg, event, operator, appLogin, actions, store, replayStore, storeFableCaps, wait);
 }
 
 const repo = { owner: "acme", name: "shop" };
@@ -1519,6 +1519,29 @@ describe("Gathering the Fable cap readings marked where a refused run's trigger 
 
     expect(byApp.fableCaps).toEqual([{ subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" }]);
     expect(byOther.fableCaps).toEqual([]);
+  });
+
+  it("adds those still in force of the readings the Kit job read in the store, beside the ones marked", async () => {
+    const github = issueGitHub({ body: ["Sort this out.", "", ahead].join("\n"), labels: ["needs-triage"] });
+    const store = [
+      { subscription: "Claude token 2", until: "2099-02-01T00:00:00.000Z" },
+      { subscription: "Claude token 3", until: "2020-01-01T00:00:00.000Z" },
+    ];
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 98, label: "needs-triage" }, null, null, null, null, null, store);
+
+    expect(snapshot.fableCaps).toEqual([
+      { subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" },
+      { subscription: "Claude token 2", until: "2099-02-01T00:00:00.000Z" },
+    ]);
+  });
+
+  it("gives the store's readings to an event with no issue or PR of its own, which can still start runs", async () => {
+    const store = [{ subscription: "Claude token", until: "2099-02-01T00:00:00.000Z" }];
+
+    const snapshot = await gatherSnapshot(issueGitHub(), repo, { kind: "kit-config-changed", head: "f".repeat(40) }, null, null, null, null, null, store);
+
+    expect(snapshot.fableCaps).toEqual(store);
   });
 });
 
@@ -3766,7 +3789,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
   it("reads again while GitHub is still working out whether a PR conflicts, until it knows", async () => {
     const { github, waits, wait } = githubReading([[node(50, "UNKNOWN")], [node(50, "UNKNOWN")], [node(50, "CONFLICTING")]]);
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, null, null, wait);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, null, null, [], wait);
 
     expect(snapshot.conflicts?.pullRequests[0]?.mergeable).toBe(false);
     expect(waits).toEqual([MERGEABLE_WAIT_MS, MERGEABLE_WAIT_MS]);
@@ -3775,7 +3798,7 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
   it("stops after a bounded number of reads, leaving a PR still unknown as unknown, for the scheduled tick", async () => {
     const { github, waits, wait, reads } = githubReading([[node(50, "UNKNOWN")]]);
 
-    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, null, null, wait);
+    const snapshot = await gatherSnapshot(github, repo, { kind: "main-pushed", head: MAIN }, null, APP_LOGIN, null, null, null, [], wait);
 
     expect(snapshot.conflicts?.pullRequests[0]?.mergeable).toBeNull();
     expect(reads()).toBe(MERGEABLE_READS);
@@ -4433,7 +4456,7 @@ describe("Gathering whether a Reviewer's Verdict's PR merges cleanly (#480)", ()
     const wait = async (ms: number) => void waits.push(ms);
     const unknown = githubReading(["UNKNOWN"]);
 
-    const snapshot = await gatherSnapshot(unknown.github, repo, reviewed, null, APP_LOGIN, null, null, null, wait);
+    const snapshot = await gatherSnapshot(unknown.github, repo, reviewed, null, APP_LOGIN, null, null, null, [], wait);
 
     expect(snapshot.mergeable).toEqual({ main: "d".repeat(40), mergeable: null });
     expect(unknown.reads()).toBe(MERGEABLE_READS);
