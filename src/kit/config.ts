@@ -44,6 +44,12 @@ export interface KitConfig {
     readonly dispatch: { readonly timeoutMinutes: number };
     readonly stepUp: { readonly model: string; readonly effort: string | null };
   };
+  /**
+   * Whether this repo opts in to Fable for its AFK roles (ADR-0034): a role
+   * may then name a Fable model by its full id, such as claude-fable-5-2.
+   * Setup and the starter Kit config never set it.
+   */
+  readonly allowFable: boolean;
   /** How many Tickets and research Decisions may be in flight at once; 0 pauses Dispatch. PRs at the Merge gate fall under caps.mergeGate. */
   readonly maxInFlight: number;
   /** Attention caps the Operator can only lower below the Kit defaults (#147). */
@@ -475,6 +481,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
     dispatch: { timeoutMinutes: 10 },
     stepUp: { model: OPUS, effort: "medium" },
   },
+  allowFable: false,
   maxInFlight: 2,
   caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
   monitor: { errors: null, redMain: true, mainChecks: [] },
@@ -672,8 +679,11 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
   const defaults = DEFAULT_KIT_CONFIG;
   const sandbox = file.object("sandbox");
   const roles = file.object("roles");
+  // Read before the roles, whose models it lets name Fable (ADR-0034).
+  const allowFable = file.boolean("allow_fable") ?? defaults.allowFable;
+  const checkModel = (model: string) => refuseRoleModel(model, allowFable);
   // Read with no default effort, so a null effort here is one this repo didn't set.
-  const reviewAsSet = readPickingRole(roles.object("review"), { ...defaults.roles.review, effort: null }, picks, "review");
+  const reviewAsSet = readPickingRole(roles.object("review"), { ...defaults.roles.review, effort: null }, picks, "review", checkModel);
   const review = { ...reviewAsSet, effort: reviewAsSet.effort ?? defaults.roles.review.effort };
   // The Digest writer follows a Review effort this repo sets itself, but not the Kit's default for the Review (#759).
   const digestDefaults = {
@@ -693,18 +703,19 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
       secrets: sandbox.envMap("secrets", requireOpReference) ?? defaults.sandbox.secrets,
     },
     roles: {
-      triage: readPickingRole(roles.object("triage"), defaults.roles.triage, picks, "triage"),
-      design: readPickingRole(roles.object("design"), defaults.roles.design, picks, "design"),
-      implement: readPickingRole(roles.object("implement"), defaults.roles.implement, picks, "implement"),
+      triage: readPickingRole(roles.object("triage"), defaults.roles.triage, picks, "triage", checkModel),
+      design: readPickingRole(roles.object("design"), defaults.roles.design, picks, "design", checkModel),
+      implement: readPickingRole(roles.object("implement"), defaults.roles.implement, picks, "implement", checkModel),
       review,
-      audit: readAgentRole(roles.object("audit"), defaults.roles.audit),
-      retro: readAgentRole(roles.object("retro"), defaults.roles.retro),
-      research: readAgentRole(roles.object("research"), defaults.roles.research),
+      audit: readAgentRole(roles.object("audit"), defaults.roles.audit, checkModel),
+      retro: readAgentRole(roles.object("retro"), defaults.roles.retro, checkModel),
+      research: readAgentRole(roles.object("research"), defaults.roles.research, checkModel),
       // The Digest writer runs on this repo's Reviewer's model and own effort unless it sets its own, within its own time limit.
-      digest: readAgentRole(roles.object("digest"), digestDefaults),
+      digest: readAgentRole(roles.object("digest"), digestDefaults, checkModel),
       dispatch: readDispatch(roles.object("dispatch"), defaults.roles.dispatch),
-      stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp),
+      stepUp: readStepUp(roles.object("step_up"), defaults.roles.stepUp, checkModel),
     },
+    allowFable,
     maxInFlight: file.wholeNumber("max_in_flight", 0) ?? defaults.maxInFlight,
     caps: readCaps(file.object("caps"), defaults.caps),
     monitor: readMonitor(file.object("monitor"), defaults.monitor, requiredChecks),
@@ -754,17 +765,20 @@ function effortOf(role: Reader, fallback: string | null): string | null {
 }
 
 /** A role that takes Extra skill picks (ADR-0008), collecting its `skills` into `picks`. */
-function readPickingRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase): AgentRole {
+function readPickingRole(role: Reader, defaults: AgentRole, picks: Picks, phase: Phase, checkModel: ModelCheck): AgentRole {
   const skills = role.stringList("skills");
   if (skills !== undefined) picks[phase] = skills;
   else if (role.has("skills")) picks[phase] = null;
-  return readAgentRole(role, defaults);
+  return readAgentRole(role, defaults, checkModel);
 }
 
+/** Why a role may not run a model, or null when it may: refuseRoleModel, with this repo's `allow_fable`. */
+type ModelCheck = (model: string) => string | null;
+
 /** An AFK role's model, effort and timeout. A role that doesn't read `skills` refuses it as unknown. */
-function readAgentRole(role: Reader, defaults: AgentRole): AgentRole {
+function readAgentRole(role: Reader, defaults: AgentRole, checkModel: ModelCheck): AgentRole {
   return {
-    model: role.string("model", refuseFable) ?? defaults.model,
+    model: role.string("model", checkModel) ?? defaults.model,
     effort: effortOf(role, defaults.effort),
     timeoutMinutes: role.positiveInteger("timeout_minutes") ?? defaults.timeoutMinutes,
   };
@@ -1072,24 +1086,54 @@ function checkRetroDay(day: string): string | null {
   return `the Retro day must be one of ${RETRO_DAYS.join(", ")}, or null to turn the Retro off`;
 }
 
-function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"]): KitConfig["roles"]["stepUp"] {
+function readStepUp(role: Reader, defaults: KitConfig["roles"]["stepUp"], checkModel: ModelCheck): KitConfig["roles"]["stepUp"] {
   return {
-    model: role.string("model", refuseFable) ?? defaults.model,
+    model: role.string("model", checkModel) ?? defaults.model,
     effort: effortOf(role, defaults.effort),
   };
 }
 
+/** Why the Kit refuses Fable, wherever it does. */
+const FABLE_BILLS = "Fable can bill metered usage, so the Kit never runs it in an AFK role";
+
 /**
- * Why an AFK role may not run `model`, or null when it may. Fable can bill
- * metered usage, so no AFK role may run it, even through an override. `best`
- * is refused too, because the CLI can resolve it to Fable. A Replay's
- * variable model is held to it too (src/kit/replayRequest.ts).
+ * Why a role in Kit config may not run `model`, or null when it may. Fable
+ * can bill metered usage, so no role may run it unless the repo opts in with
+ * `allowFable` (ADR-0034).
+ */
+export function refuseRoleModel(model: string, allowFable: boolean): string | null {
+  if (isBest(model)) return BEST_RESOLVES;
+  if (!namesFable(model)) return null;
+  if (!allowFable) return `${FABLE_BILLS}; set allow_fable to true to opt in (ADR-0034)`;
+  // An alias can resolve to another model on a CLI upgrade or through ANTHROPIC_DEFAULT_FABLE_MODEL, unseen.
+  if (!FABLE_ID.test(model)) {
+    return "with allow_fable, the Kit runs Fable only by its full id, such as claude-fable-5-2, never the fable alias, which can resolve to another model";
+  }
+  return null;
+}
+
+/** A Fable model's full id, `claude-fable-<version>`, such as claude-fable-5-2. */
+const FABLE_ID = /^claude-fable-\d+(?:-\d+)*$/;
+
+const BEST_RESOLVES = "the CLI can resolve best to any model, Fable included, so the Kit never runs it in an AFK role";
+
+function isBest(model: string): boolean {
+  return model.trim().toLowerCase() === "best";
+}
+
+/** Whether `model` names Fable, by any spelling or id. */
+export function namesFable(model: string): boolean {
+  return model.trim().toLowerCase().includes("fable");
+}
+
+/**
+ * Why a Replay may not run `model`, or null when it may. Fable can bill
+ * metered usage, so a Replay's variable model may not name it, in any repo
+ * (src/kit/replayRequest.ts). `best` is refused too, because the CLI can
+ * resolve it to Fable.
  */
 export function refuseFable(model: string): string | null {
-  const name = model.trim().toLowerCase();
-  if (name.includes("fable") || name === "best") {
-    return "Fable can bill metered usage, so the Kit never runs it in an AFK role";
-  }
+  if (namesFable(model) || isBest(model)) return FABLE_BILLS;
   return null;
 }
 
