@@ -5,10 +5,10 @@
 // Execution flaw for a named shot the check didn't produce. The rules that
 // land them are in src/loop/review.ts.
 import type { ReviewShots, ShotsCollected } from "../evidence/shotsCollect.ts";
-import { code, readShotsMarker, type ShotMissOutcome, shotMissSentence, shotsSection, type ShotsRead } from "../evidence/uiEvidence.ts";
+import { code, readShotsMarker, type ShotMissOutcome, shotMissSentence, shotsSection, type ShotsRead, waitingAgainShotsMarker } from "../evidence/uiEvidence.ts";
 import { spelled } from "./readable.ts";
 import { MAX_RETRIES, retryNumber } from "./retry.ts";
-import type { Action, KitConfig, PullRequestSnapshot } from "./types.ts";
+import type { Action, KitConfig, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
 /**
  * The head an Evidence miss sends the pull request back at (ADR-0033): its
@@ -74,6 +74,30 @@ export function readShotsSectionActions(pullRequest: PullRequestSnapshot, read: 
     evidencePage: read.artifact === null ? null : `${repoUrl}/actions/runs/${read.run}/artifacts/${read.artifact}`,
   });
   return [{ kind: "replace-evidence-section", issue: pullRequest.number, section }];
+}
+
+/**
+ * The plan with each of the Kit's plain rebases of a pull request whose
+ * shots marker has read a head (#813) sending its section back to waiting
+ * once the rebase is pushed, the names kept (waitingAgainShotsMarker): the
+ * rebased head is one the named check hasn't run at, and the Review that
+ * follows it reads the shots again. No Implementer run pushed that head, so
+ * a pull request that names nothing isn't sent back at it. The section is
+ * written only on a push, never when the rebase is refused or conflicts, and
+ * not at all on a Product repo without `ui.shots`.
+ */
+export function withShotsWaitingAfterRebase(plan: Plan, snapshot: Pick<Snapshot, "pullRequest" | "conflicts">, config: KitConfig): Plan {
+  const shots = config.ui?.shots;
+  if (shots === undefined || plan.kind !== "act") return plan;
+  const pullRequests = [...(snapshot.pullRequest === null ? [] : [snapshot.pullRequest]), ...(snapshot.conflicts?.pullRequests.map(({ pullRequest }) => pullRequest) ?? [])];
+  const actions = plan.actions.map((action): Action => {
+    if (action.kind !== "rebase-onto-main") return action;
+    const held = pullRequests.find(({ number }) => number === action.pullRequest)?.shotsMarker ?? null;
+    if (held === null || held.head === null) return action;
+    const section = shotsSection({ check: shots.check, artifact: shots.artifact, marker: waitingAgainShotsMarker(held), missOutcome: "not-pushed" });
+    return { ...action, pushed: [{ kind: "replace-evidence-section", issue: action.pullRequest, section }, ...action.pushed] };
+  });
+  return { ...plan, actions };
 }
 
 /**

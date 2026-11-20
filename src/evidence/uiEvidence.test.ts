@@ -1537,17 +1537,17 @@ describe("The shots section once the Review's jobs have read the named check's a
   });
 
   it.each([
-    ["sent-back", "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at this head, so the Kit sent it back with an Execution flaw, which uses a Retry."],
-    ["no-retry-left", "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at this head. No Retry is left, so it goes on to Review with the miss shown."],
+    ["sent-back", "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at `ccccccc`, so the Kit sent it back with an Execution flaw, which uses a Retry."],
+    ["no-retry-left", "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at `ccccccc`. No Retry is left, so it goes on to Review with the miss shown."],
     [
       "not-pushed",
-      "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at this head. No Implementer run pushed this head, so it isn't sent back: it goes on to Review with the miss shown.",
+      "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at `ccccccc`. No Implementer run pushed `ccccccc`, so it isn't sent back: it goes on to Review with the miss shown.",
     ],
     [
       "check-red",
-      "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at this head. The check is still red after the Kit's re-run, so nothing is sent back for evidence: the Reviewer's judgment of the check decides.",
+      "**Evidence miss:** a named shot isn't among the Evidence shots the `e2e` check took at `ccccccc`. The check is still red after the Kit's re-run, so nothing is sent back for evidence: the Reviewer's judgment of the check decides.",
     ],
-  ] as const)("says plainly what came of a named shot the run didn't produce, when it was %s, and why it was missed", (outcome, line) => {
+  ] as const)("says plainly what came of a named shot the run didn't produce, when it was %s, and why it was missed, naming the head it was read at", (outcome, line) => {
     const lines = section(read({ named: [collected().named[1]!], missed: [{ name: "composer: draft ready", why: "not-produced" }] }), outcome).split("\n");
 
     expect(lines).toContain(line);
@@ -1575,13 +1575,13 @@ describe("The shots section once the Review's jobs have read the named check's a
   it.each([
     [
       "no-artifact",
-      "**No Evidence shots:** the `e2e` check's run at this head uploaded no artifact named `fabrik-evidence-shots`, which its workflow must upload whether its Journeys pass or fail. That is the Product repo's wiring, the Operator's to fix, so nothing is sent back.",
+      "**No Evidence shots:** the `e2e` check's run at `ccccccc` uploaded no artifact named `fabrik-evidence-shots`, which its workflow must upload whether its Journeys pass or fail. That is the Product repo's wiring, the Operator's to fix, so nothing is sent back.",
     ],
     [
       "bad-manifest",
       "**No Evidence shots:** the `fabrik-evidence-shots` artifact's `manifest.json` couldn't be read: it is missing, isn't JSON, has another `version` or has no `shots` list. That is the Product repo's wiring, the Operator's to fix, so nothing is sent back.",
     ],
-  ] as const)("says plainly when the collection failed as %s, links no Evidence page, and still lists the names", (failure, line) => {
+  ] as const)("says plainly when the collection failed as %s, naming the head it was read at, links no Evidence page, and still lists the names", (failure, line) => {
     const marker = readShotsMarker(held(), { collected: collected({ failure, named: [], produced: [] }), run: 9300, artifact: null });
     const lines = section(marker).split("\n");
 

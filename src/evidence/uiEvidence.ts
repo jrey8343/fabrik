@@ -1226,6 +1226,20 @@ export function readShotsMarker(held: ShotsMarker, { collected, run, artifact }:
 }
 
 /**
+ * The shots marker once the pull request has moved on to a head the Kit
+ * pushed without reading its shots (#813), as its plain rebase does: back to
+ * waiting for the named check, with no head, Review run or artifact, and
+ * nothing missed, red or past the first 100, while the names, their sentence
+ * and what was dropped of them, the preview, and the head the naming run
+ * pushed all stay. The Journey and path an earlier head's artifact gave are
+ * dropped with it, as a run that names nothing drops them (shotsNamesOf).
+ */
+export function waitingAgainShotsMarker(held: ShotsMarker): ShotsMarker {
+  const { red: _red, pastLimit: _pastLimit, ...kept } = held;
+  return { ...kept, head: null, run: null, artifact: null, failure: null, named: held.named.map(({ name }) => ({ name })), missed: [] };
+}
+
+/**
  * The names of the named shots the check's run produced at the marker's head
  * (#822), in the pull request's order: its names less each the run didn't
  * produce, had two entries of, or refused. A shot that lacks one size was
@@ -1275,12 +1289,14 @@ export interface ShotsSectionOf {
 export function shotsSection({ check, artifact, marker, missOutcome, evidencePage = null }: ShotsSectionOf): string {
   const { named, nothingVisible, dropped, miss, missed, head } = marker;
   const sendsBack = missed.some(({ why }) => why !== "size-missing");
+  // Once read, the head the shots are from by its sha, never "this head": the Kit writes nothing when the Operator pushes at the Merge gate.
+  const at = head === null ? "this head" : `\`${head.slice(0, 7)}\``;
   return [
     SECTION_START,
     "## UI evidence",
-    ...(miss === "nothing-named" ? ["", nothingNamedLine(missOutcome)] : []),
-    ...(sendsBack ? ["", namedMissLine(check, missOutcome)] : []),
-    ...(marker.failure === null ? [] : ["", `**No Evidence shots:** ${lowerFirst(shotsFailureSentence(marker.failure, { check, artifact }))}`]),
+    ...(miss === "nothing-named" ? ["", nothingNamedLine(missOutcome, at)] : []),
+    ...(sendsBack ? ["", namedMissLine(check, missOutcome, at)] : []),
+    ...(marker.failure === null ? [] : ["", `**No Evidence shots:** ${lowerFirst(shotsFailureSentence(marker.failure, { check, artifact, ...(head === null ? {} : { head }) }))}`]),
     ...(marker.red === true ? ["", `**The ${code(check)} check is red:** it is still red after the Kit's re-run, so these Evidence shots are from a run that failed.`] : []),
     "",
     head === null
@@ -1312,23 +1328,23 @@ function namedShotLine({ name, journey, path }: NamedShot, missed: readonly Shot
   return lacks.length === 0 ? shown : `${shown}.${lacks.join("")}`;
 }
 
-/** The section's line for a named shot the check's run didn't produce: what came of it. */
-function namedMissLine(check: string, outcome: ShotMissOutcome): string {
-  const lead = `**Evidence miss:** a named shot isn't among the Evidence shots the ${code(check)} check took at this head`;
+/** The section's line for a named shot the check's run didn't produce at the head `at`, as the section words it: what came of it. */
+function namedMissLine(check: string, outcome: ShotMissOutcome, at: string): string {
+  const lead = `**Evidence miss:** a named shot isn't among the Evidence shots the ${code(check)} check took at ${at}`;
   switch (outcome) {
     case "sent-back":
       return `${lead}, so the Kit sent it back with an Execution flaw, which uses a Retry.`;
     case "no-retry-left":
       return `${lead}. No Retry is left, so it goes on to Review with the miss shown.`;
     case "not-pushed":
-      return `${lead}. No Implementer run pushed this head, so it isn't sent back: it goes on to Review with the miss shown.`;
+      return `${lead}. No Implementer run pushed ${at}, so it isn't sent back: it goes on to Review with the miss shown.`;
     case "check-red":
       return `${lead}. The check is still red after the Kit's re-run, so nothing is sent back for evidence: the Reviewer's judgment of the check decides.`;
   }
 }
 
-/** The section's line for a pull request that names nothing, sent back or going on to Review, and why. */
-function nothingNamedLine(outcome: ShotMissOutcome): string {
+/** The section's line for a pull request that names nothing, sent back or going on to Review, and why, at the head `at`, as the section words it. */
+function nothingNamedLine(outcome: ShotMissOutcome, at: string): string {
   const lead = "**Evidence miss:** the Implementer named no Evidence shot and didn't say that nothing visible changes";
   switch (outcome) {
     case "sent-back":
@@ -1338,7 +1354,7 @@ function nothingNamedLine(outcome: ShotMissOutcome): string {
     // A red check never decides a pull request that names nothing, which is judged as its Implement run's push lands.
     case "not-pushed":
     case "check-red":
-      return `${lead}. No Implementer run pushed this head, so it isn't sent back: it goes on to Review showing nothing of the change.`;
+      return `${lead}. No Implementer run pushed ${at}, so it isn't sent back: it goes on to Review showing nothing of the change.`;
   }
 }
 
@@ -1372,13 +1388,17 @@ export function shotMissSentence(miss: ShotMiss, check: string): string {
 /**
  * Why nothing of a head's Evidence shots could be read, as sentences a reader
  * shows as they are (#820): the Kit's own words, naming the check and the
- * artifact Kit config names, and that it is the Operator's wiring to fix.
+ * artifact Kit config names, the `head` the check ran at when given, else
+ * "this head", and that it is the Operator's wiring to fix.
  */
-export function shotsFailureSentence(failure: ShotsFailure, { check, artifact }: { readonly check: string; readonly artifact: string }): string {
+export function shotsFailureSentence(
+  failure: ShotsFailure,
+  { check, artifact, head }: { readonly check: string; readonly artifact: string; readonly head?: string },
+): string {
   const wiring = "That is the Product repo's wiring, the Operator's to fix, so nothing is sent back.";
   switch (failure) {
     case "no-artifact":
-      return `The ${code(check)} check's run at this head uploaded no artifact named ${code(artifact)}, which its workflow must upload whether its Journeys pass or fail. ${wiring}`;
+      return `The ${code(check)} check's run at ${head === undefined ? "this head" : `\`${head.slice(0, 7)}\``} uploaded no artifact named ${code(artifact)}, which its workflow must upload whether its Journeys pass or fail. ${wiring}`;
     case "bad-manifest":
       return `The ${code(artifact)} artifact's \`${SHOTS_MANIFEST_FILE}\` couldn't be read: it is missing, isn't JSON, has another \`version\` or has no \`shots\` list. ${wiring}`;
   }

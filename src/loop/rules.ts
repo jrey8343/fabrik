@@ -57,6 +57,7 @@ import { startWeekly, weeklyRoleOf } from "./weeklyRuns.ts";
 import { dispatch } from "./dispatch.ts";
 import { sweepStuckTriggers } from "./triggerSweep.ts";
 import { applyEvidenceMiss, applyReview, startReview, startReviewOnLabel } from "./review.ts";
+import { withShotsWaitingAfterRebase } from "./shotsReview.ts";
 import type {
   Action,
   IssueContext,
@@ -72,7 +73,8 @@ import type {
 export function planFor(event: LoopEvent, snapshot: Snapshot, config: KitConfig): Plan {
   // Every run the Plan starts is given its Subscription here, whichever role it is,
   // or held, with rotation on, while every Subscription is used up.
-  const planned = planOnAnySubscription(event, snapshot, config);
+  // A plain rebase sends an Evidence shots section back to waiting once pushed, wherever the Plan rebases (#813).
+  const planned = withShotsWaitingAfterRebase(planOnAnySubscription(event, snapshot, config), snapshot, config);
   // A Kit-owned issue the Plan closes, as the scheduled tick closes a weekly-limit
   // issue at its reset, no longer stands in the way of the runs it starts.
   const kitIssues = snapshot.kitIssues.filter((issue) => !closes(planned, issue.number));

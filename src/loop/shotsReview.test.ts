@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { aShotsCollected, SHOTS_UI } from "../__fixtures__/uiEvidence.ts";
 import type { ShotsCollected } from "../evidence/shotsCollect.ts";
-import { type ShotsMarker, shotsMarkerIn, waitingShotsMarker } from "../evidence/uiEvidence.ts";
+import { readShotsMarker, type ShotsMarker, shotsMarkerIn, waitingShotsMarker } from "../evidence/uiEvidence.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, VerdictRecord } from "./types.ts";
 
@@ -123,7 +123,7 @@ describe("The section a Review's push job writes once the Review's jobs have rea
 
   it.each([
     ["no Retry is left", pullRequestOf({ verdicts: [flawAt("1".repeat(40)), flawAt("2".repeat(40))], pushedSinceVerdict: true }), "No Retry is left, so it goes on to Review with the miss shown."],
-    ["the Operator pushed the head", pullRequestOf({ headSha: OPERATOR_PUSH }), "No Implementer run pushed this head, so it isn't sent back"],
+    ["the Operator pushed the head", pullRequestOf({ headSha: OPERATOR_PUSH }), "No Implementer run pushed `bbbbbbb`, so it isn't sent back"],
   ])("says what was missed when %s, and lands the Reviewer's Verdict", (_, pullRequest, said) => {
     const plan = planFor(reviewed(missMissing({ sendsBack: false, head: pullRequest.headSha }), { headSha: pullRequest.headSha }), snapshotOfPullRequest(pullRequest), SHOTS);
 
@@ -196,5 +196,40 @@ describe("A named shot the green check didn't produce, at a head an Implementer 
 
     expect(verdictsPostedIn(commentsOf(plan))).toEqual([]);
     expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:review"] });
+  });
+});
+
+describe("The Kit's plain rebase of a UI pull request whose UI evidence is Evidence shots (#813)", () => {
+  const MAIN = "9".repeat(40);
+  const READ = readShotsMarker(waiting(), read(missMissing({ sendsBack: false })));
+  const atMergeGate = (shotsMarker: ShotsMarker | null) =>
+    aPullRequest({ draft: false, verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }], shotsMarker });
+  const rebaseOf = (pullRequest: PullRequestSnapshot, config = SHOTS) => {
+    const snapshot = { ...snapshotOfPullRequest(aPullRequest()), pullRequest: null, conflicts: { main: MAIN, now: "2026-01-01T00:00:00Z", implementJobUnderWay: null, pullRequests: [{ pullRequest, mergeable: false }] } };
+    const rebase = actionsOf(planFor({ kind: "main-pushed", head: MAIN }, snapshot, config)).find((action) => action.kind === "rebase-onto-main");
+    if (rebase?.kind !== "rebase-onto-main") throw new Error("expected a rebase");
+    return rebase;
+  };
+  const sectionsIn = (actions: readonly Action[]) => actions.flatMap((action) => (action.kind === "replace-evidence-section" ? [action.section] : []));
+
+  it("sends the section back to waiting once the rebase is pushed, keeping the names", () => {
+    const [section, ...others] = sectionsIn(rebaseOf(atMergeGate(READ)).pushed);
+
+    expect(others).toEqual([]);
+    expect(section).toContain("Waiting for the `e2e` check");
+    expect(section).not.toContain("Open the Evidence page");
+    expect(shotsMarkerIn(section ?? "")).toEqual(waiting());
+  });
+
+  it("writes no section when the rebase is refused or conflicts, nor when the section already waits", () => {
+    const rebase = rebaseOf(atMergeGate(READ));
+
+    expect(sectionsIn([...rebase.clean, ...rebase.refused, ...rebase.conflicted])).toEqual([]);
+    expect(sectionsIn(rebaseOf(atMergeGate(waiting())).pushed)).toEqual([]);
+  });
+
+  it("writes no section on a pull request with no shots marker, or a Product repo without ui.shots", () => {
+    expect(sectionsIn(rebaseOf(atMergeGate(null)).pushed)).toEqual([]);
+    expect(sectionsIn(rebaseOf(atMergeGate(READ), kitConfig()).pushed)).toEqual([]);
   });
 });
