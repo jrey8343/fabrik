@@ -12,8 +12,14 @@
 // fallback is per run: it never changes Kit config, and ends on its own once
 // the reading's time has passed. Pure, no I/O.
 import { namesFable } from "../kit/config.ts";
+import type { ReplayArms } from "../kit/replayPick.ts";
 import { freeSubscriptions, type Subscription } from "./subscriptions.ts";
 import type { Action, FableCapSnapshot, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
+
+/** Whether either arm of a Replay runs a role on Fable, so it starts only where Fable is left, and never falls back. */
+export function armsRunFable(arms: ReplayArms): boolean {
+  return Object.values(arms).some(({ implement, review }) => namesFable(implement.model) || namesFable(review.model));
+}
 
 /** The model a Fable fallback starts on, at the effort the role names. */
 export const FABLE_FALLBACK_MODEL = "claude-opus-5-5";
@@ -114,8 +120,9 @@ export function withFableLeft(
  * The Plan with each agent run it starts on a model naming Fable given the
  * first listed Subscription with Fable left, or, while none has any, Opus 5.5
  * at the same effort, on the Subscription it was given, its Kit config's
- * model kept as `configuredModel`. Every other run, and a Replay, which
- * never falls back, is left as it was.
+ * model kept as `configuredModel`. A Replay whose arms run Fable is given
+ * that Subscription too, but never falls back: with none left it is left as
+ * it was. Every other run is left as it was.
  */
 export function onFableLeft(
   plan: Plan,
@@ -126,6 +133,8 @@ export function onFableLeft(
   if (plan.kind !== "act" || readings.length === 0) return plan;
   const [left] = withFableLeft(readings, kitIssues, config);
   const given = (action: Action): Action => {
+    // A Replay never falls back, so its arms start where Fable is left, or where they'd start, to be refused and end the run.
+    if (action.kind === "start-replay") return left !== undefined && armsRunFable(action.ticket.arms) ? { ...action, subscription: left } : action;
     if (action.kind !== "start-agent-run" || !namesFable(action.model)) return action;
     if (left !== undefined) return { ...action, subscription: left };
     return { ...action, model: FABLE_FALLBACK_MODEL, configuredModel: action.model, fallback: "fable-cap" };

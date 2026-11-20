@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, kitConfig, notificationsOf, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { acceptedBody, fableReplayBody } from "../__fixtures__/replay.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { planFor } from "./rules.ts";
 import type { AgentRole, IssueSnapshot, KitConfig, LoopEvent, Plan, Snapshot } from "./types.ts";
@@ -331,6 +332,25 @@ describe("A Design, Review or Step-up run due while no listed Subscription has F
     expect(start(planFor(event, snapshot(readAt(everywhere.slice(0, 1))), config))).toEqual(
       expect.objectContaining({ subscription: "Claude token 2", model: FABLE, effort }),
     );
+  });
+});
+
+describe("A Replay Ticket's claim, on a Replay whose arms run Fable (ADR-0034)", () => {
+  const replayIssue = (body: string) => ({ number: 140, open: true, author: "operator", body, comments: [], labels: ["fabrik:replay", "agent:replay"], gaveUp: false });
+  const claim = (body: string, fableCaps: NonNullable<Snapshot["fableCaps"]>) => {
+    const snapshot = snapshotOf(anIssue({ number: 140, byApp: false, author: "operator", labels: ["fabrik:replay", "agent:replay"], body }), {
+      fableCaps,
+      replay: { issues: [replayIssue(body)], capacity: null, acceptance: null },
+    });
+    return actionsOf(planFor({ kind: "label-added", issue: 140, label: "agent:replay" }, snapshot, TWO_SUBSCRIPTIONS)).find((action) => action.kind === "start-replay");
+  };
+
+  it("starts both arms on the first listed Subscription with Fable left, never on Opus", () => {
+    expect(claim(fableReplayBody(), readAt([{ subscription: "Claude token", until: RESETS_AT }]))).toEqual(expect.objectContaining({ subscription: "Claude token 2" }));
+  });
+
+  it("leaves a Replay whose arms don't run Fable on the first free Subscription", () => {
+    expect(claim(acceptedBody(), readAt([{ subscription: "Claude token", until: RESETS_AT }]))).toEqual(expect.objectContaining({ subscription: "Claude token" }));
   });
 });
 

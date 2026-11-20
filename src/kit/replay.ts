@@ -18,6 +18,7 @@ import { withoutMentions } from "../loop/mentions.ts";
 import { spelled } from "../loop/readable.ts";
 import type { Verdict } from "../loop/types.ts";
 import { FULL_SHA, shortSha } from "../skills/lock.ts";
+import { armsRunFable } from "../loop/fableCap.ts";
 import { type KitConfig, refuseRoleModel } from "./config.ts";
 import {
   eligibleOf,
@@ -102,6 +103,12 @@ export interface ReplayTick {
   /** The `fabrik:replay` issues, in any order. */
   readonly issues: readonly ReplayIssue[];
   readonly capacity: ReplayCapacity;
+  /**
+   * The spare capacity for a Ticket whose arms run Fable (armsRunFable,
+   * ADR-0034): as `capacity`, on the first free Subscription with Fable left,
+   * and none while none has any, since an arm never falls back.
+   */
+  readonly fableCapacity: ReplayCapacity;
   /** What accepting a waiting request weighs, or null when the adapter read none. */
   readonly acceptance: ReplayAcceptance | null;
   /** The tick's time, ISO 8601. */
@@ -160,11 +167,12 @@ export function nextReplayStep(tick: ReplayTick): ReplayStep {
   if (running !== null) return neverLanded(running, tick) ?? { kind: "nothing", reason: oneAtATime(running) };
   const next = accepted.flatMap(({ issue, marks }) => {
     const planned = nextReplayTicket(marks);
-    return planned === null ? [] : [{ issue, ticket: planned.ticket }];
+    return planned === null ? [] : [{ issue, planned }];
   })[0];
   if (next === undefined) return { kind: "nothing", reason: "No replay Ticket is waiting to run" };
-  if (!tick.capacity.spare) return { kind: "nothing", reason: tick.capacity.why };
-  return { kind: "start", ...next };
+  const capacity = armsRunFable(next.planned.arms) ? tick.fableCapacity : tick.capacity;
+  if (!capacity.spare) return { kind: "nothing", reason: capacity.why };
+  return { kind: "start", issue: next.issue, ticket: next.planned.ticket };
 }
 
 /** The Ticket a Replay runs next: the first in its plan still waiting to run, or null when none is. */

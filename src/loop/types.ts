@@ -1935,6 +1935,12 @@ export interface ReplayCapacitySnapshot {
    * the store couldn't be read.
    */
   readonly weeklyLimits: Readonly<Record<string, RateLimitReading>> | null;
+  /**
+   * The Fable cap readings in those Run records (ADR-0034), in force or not,
+   * which a Replay whose arms run Fable weighs, since an arm never falls back.
+   * Null when the store couldn't be read.
+   */
+  readonly fableCaps: readonly FableCapReading[] | null;
 }
 
 /** The Operator's reply that started a Design-session turn, as the adapter found it when the turn finished. */

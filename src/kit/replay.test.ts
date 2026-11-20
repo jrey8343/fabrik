@@ -619,6 +619,7 @@ function aTick(issues: readonly ReplayIssue[], overrides: Partial<ReplayTick> = 
     allowFable: false,
     issues,
     capacity: { spare: true },
+    fableCapacity: { spare: true },
     acceptance: acceptanceOf([aCandidate(7), aCandidate(12), aCandidate(20)]),
     now: NOW,
     runLimitMinutes: 210,

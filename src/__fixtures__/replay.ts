@@ -22,20 +22,29 @@ export function requestBody(variable = "review.effort: xhigh", tickets = "12, 7"
  * with the v1 default roles at its base, and each one's progress as given,
  * pending by default.
  */
-export function acceptedBody(tickets: readonly number[] = [12, 7], progress: readonly TicketProgress[] = []): string {
+export function acceptedBody(
+  tickets: readonly number[] = [12, 7],
+  progress: readonly TicketProgress[] = [],
+  { variable = REVIEW_XHIGH, line = "review.effort: xhigh" }: { readonly variable?: ReplayVariable; readonly line?: string } = {},
+): string {
   const plan: ReplayPlan = {
-    variable: REVIEW_XHIGH,
+    variable,
     tickets: tickets.map((ticket) => ({
       ticket,
       pullRequest: ticket + 100,
       baseSha: baseOf(ticket),
       flags: [],
-      arms: replayArms(DEFAULT_KIT_CONFIG, REVIEW_XHIGH),
+      arms: replayArms(DEFAULT_KIT_CONFIG, variable),
     })),
     leftOut: [],
   };
   const each = tickets.map((ticket): TicketProgress => progress.find((one) => one.ticket === ticket) ?? { ticket, state: "pending" });
-  return replayBody(requestBody("review.effort: xhigh", tickets.join(", ")), { plan, progress: each });
+  return replayBody(requestBody(line, tickets.join(", ")), { plan, progress: each });
+}
+
+/** The body of a replay whose variant runs Review on Fable (ADR-0034), accepted in a repo that opted in. */
+export function fableReplayBody(tickets: readonly number[] = [12, 7]): string {
+  return acceptedBody(tickets, [], { variable: { kind: "model", role: "review", model: "claude-fable-5-2" }, line: "review.model: claude-fable-5-2" });
 }
 
 /** Replay issue #140, open, filed by the Operator (`operator`) and accepted, with both its Tickets pending, and never given up on. */
@@ -58,5 +67,5 @@ export function replaySlice(
   capacity: Partial<NonNullable<ReplaySnapshot["capacity"]>> = {},
   acceptance: ReplaySnapshot["acceptance"] = null,
 ): ReplaySnapshot {
-  return { issues, capacity: { tickets: [], researchDecisions: [], implementRunTickets: [], weeklyLimits: {}, ...capacity }, acceptance };
+  return { issues, capacity: { tickets: [], researchDecisions: [], implementRunTickets: [], weeklyLimits: {}, fableCaps: [], ...capacity }, acceptance };
 }

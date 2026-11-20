@@ -14,6 +14,7 @@ import {
 } from "../kit/config.ts";
 import type { ActionsStep } from "../kit/kitSaid.ts";
 import { isOperatorsReplay } from "../kit/replay.ts";
+import { fableCapReadingsOf } from "../kit/fableCapFacts.ts";
 import { newestWeeklyLimits } from "../kit/replayFacts.ts";
 import { storeIsPrivate } from "../kit/runStore.ts";
 import { agentBranchFor, isAgentPullRequest, ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
@@ -1805,7 +1806,8 @@ async function gatherReplaySlice(
     store.records(),
   ]);
   const acceptance = await gatherReplayAcceptance(github, repo, now, { operator, issues }, records);
-  return { issues, capacity: { ...dispatch, implementRunTickets, weeklyLimits: records === null ? null : newestWeeklyLimits(records, now) }, acceptance };
+  const read = records === null ? { weeklyLimits: null, fableCaps: null } : { weeklyLimits: newestWeeklyLimits(records, now), fableCaps: fableCapReadingsOf(records) };
+  return { issues, capacity: { ...dispatch, implementRunTickets, ...read }, acceptance };
 }
 
 /**

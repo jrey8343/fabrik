@@ -3584,8 +3584,16 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       ]);
     });
 
-    it("holds what the spare-capacity gate weighs: what Dispatch weighs, and each Subscription's newest weekly-limit reading in the store", async () => {
-      const records = [aRunRecord({ repo: "acme/clinic", endedAt: "2026-11-10T10:00:00Z", rateLimit: aReading(0.3) })];
+    it("holds what the spare-capacity gate weighs: what Dispatch weighs, each Subscription's newest weekly-limit reading in the store, and its Fable cap readings", async () => {
+      const capped = aRunRecord({
+        repo: "acme/clinic",
+        endedAt: "2026-11-10T09:00:00Z",
+        model: "claude-fable-5-2",
+        jobResult: "failure",
+        infrastructureFailure: "fable-cap",
+        refusal: { rateLimitType: "seven_day_fable", resetsAt: Date.parse("2026-11-14T04:00:00Z") / 1000 },
+      });
+      const records = [capped, aRunRecord({ repo: "acme/clinic", endedAt: "2026-11-10T10:00:00Z", rateLimit: aReading(0.3) })];
 
       const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(records));
 
@@ -3594,6 +3602,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
         researchDecisions: [],
         implementRunTickets: [],
         weeklyLimits: { "Claude token": aReading(0.3) },
+        fableCaps: [{ subscription: "Claude token", until: "2026-11-14T04:00:00.000Z" }],
       });
       expect(snapshot.replay?.acceptance).toBeNull();
     });
@@ -3613,6 +3622,7 @@ describe("Gathering a scheduled tick's replay slice (#156)", () => {
       const snapshot = await gatherSnapshot(githubWith([replayNode]).github, repo, tick, "jrey8343", "fabrik-app[bot]", null, null, storeHolding(null));
 
       expect(snapshot.replay?.capacity?.weeklyLimits).toBeNull();
+      expect(snapshot.replay?.capacity?.fableCaps).toBeNull();
     });
 
     it("reads nothing more when only someone else's replay issue is open", async () => {
