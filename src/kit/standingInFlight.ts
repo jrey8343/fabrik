@@ -8,7 +8,7 @@ import { dispatchedRunsOf, implementRunsWithoutPullRequestOf, type RunInFlightFa
 import { bodyOnlyTouchUpHeadIn, conflictRunInFlightIn } from "../github/threads.ts";
 import { inBlockerOrder } from "../loop/blockers.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
-import { agentPullRequestsByGate, inFlightOf, mergeGateLoadOf, waitingForDispatch } from "../loop/dispatch.ts";
+import { agentPullRequestsByGate, checksFixesOf, inFlightOf, mergeGateLoadOf, waitingForDispatch } from "../loop/dispatch.ts";
 import { heldOf, waitingHeldRuns } from "../loop/heldRun.ts";
 import {
   DIGEST_LABEL,
@@ -107,16 +107,19 @@ export interface MergeGateHold {
   /** The Tickets on their way with no PR yet the facts name, lowest first: a running one, a dispatched one, a held one. */
   readonly onItsWayIssues: readonly number[];
   readonly runsUnread: boolean;
-  /** The Tickets it holds, lowest first. */
+  /** The Tickets it holds, lowest first: never a check's fix, which passes the cap (#838). */
   readonly waiting: readonly number[];
+  /** The open check's fixes, lowest first, which go first and pass the cap (#838). */
+  readonly checksFixes: readonly number[];
 }
 
 export function mergeGateHoldOf(facts: Pick<StandingFacts, "github" | "kit">): MergeGateHold | null {
   const dispatch = dispatchFactsOf(facts);
   if (dispatch === null || dispatch.config.maxInFlight === 0) return null;
   const { config, candidates, heldRuns, runs, runsInFlight, snapshot } = dispatch;
-  const tickets = new Set(candidates.tickets.map(({ number }) => number));
-  const waiting = waitingForDispatch(snapshot, heldRuns).filter((number) => tickets.has(number));
+  const checksFixes = checksFixesOf(candidates.tickets);
+  const tickets = new Set(candidates.tickets.map(({ number }) => number).filter((number) => !checksFixes.includes(number)));
+  const waiting = waitingForDispatch(snapshot, heldRuns).filter((number) => tickets.has(number)).sort((a, b) => a - b);
   if (waiting.length === 0) return null;
   const gate = mergeGateLoadOf(snapshot, heldRuns, config.caps.mergeGate);
   if (gate.free > 0) return null;
@@ -129,6 +132,7 @@ export function mergeGateHoldOf(facts: Pick<StandingFacts, "github" | "kit">): M
     onItsWayIssues: [...new Set([...running, ...gate.tickets])].sort((a, b) => a - b),
     runsUnread: runs === null,
     waiting,
+    checksFixes,
   };
 }
 
@@ -203,7 +207,7 @@ function slotStandingsOf({ github, kit }: StandingFacts): StandingNamed<"waiting
     // The Merge gate wins when both caps hold a Ticket, as it's the one the Operator can clear.
     const detail =
       gate !== null && gate.waiting.includes(number)
-        ? ({ slot: "merge-gate", mergeGate: gate.mergeGate } as const)
+        ? ({ slot: "merge-gate", mergeGate: gate.mergeGate, ...(gate.checksFixes.length === 0 ? {} : { checksFixes: gate.checksFixes }) } as const)
         : hold === null
           ? null
           : ({ slot: "max-in-flight", maxInFlight: hold.maxInFlight } as const);

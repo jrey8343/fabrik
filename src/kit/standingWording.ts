@@ -3,6 +3,7 @@
 // Standing and a clock, so "40 minutes ago" is true then and the Standing
 // itself holds no relative time. The wording never quotes a repo's text.
 import { blockersPhrase } from "../loop/blockers.ts";
+import { checksFixesReason } from "../loop/dispatch.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import { RUN_NAMES, runNamed } from "../loop/heldRun.ts";
 import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, type TriggerLabel } from "../loop/labels.ts";
@@ -119,11 +120,12 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     case "waiting-for-slot": {
       const { detail } = standing;
       if (detail.slot === "merge-gate") {
-        const sentence =
+        const waiting =
           detail.mergeGate === 0
             ? `Waiting for ${age} while an agent PR is at or on its way to the Merge gate: \`caps.merge_gate\` is 0.`
             : `Waiting for room at the Merge gate for ${age}: \`caps.merge_gate\` is ${detail.mergeGate}.`;
-        return { pill: "Waiting for a slot", sentence, remedy: null };
+        const fixes = checksFixesReason(detail.checksFixes ?? []);
+        return { pill: "Waiting for a slot", sentence: fixes === null ? waiting : `${waiting} ${fixes}.`, remedy: null };
       }
       const { slot, maxInFlight } = detail;
       if (slot === "design-session") return { pill: "Waiting for a slot", sentence: `Waiting for a Design session slot for ${age}.`, remedy: null };

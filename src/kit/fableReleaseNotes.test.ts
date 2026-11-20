@@ -27,7 +27,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Fable opt-in's release notes, wh
     expect(notes).toContain("Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.");
     const releasing = await read("docs/releasing.md");
     const drafted = releasing.split("\n").find((line) => line.includes("Notes drafted ahead of a release are in `docs/release-notes/`"));
-    expect(drafted).toContain("[UI evidence from Evidence shots](release-notes/evidence-shots.md), and the Fable opt-in minor's ([#828](https://github.com/jrey8343/fabrik/issues/828)) are [Fable for a Product repo that opts in](release-notes/fable-opt-in.md).");
+    expect(drafted).toContain("[UI evidence from Evidence shots](release-notes/evidence-shots.md), the Fable opt-in minor's ([#828](https://github.com/jrey8343/fabrik/issues/828)) are [Fable for a Product repo that opts in](release-notes/fable-opt-in.md)");
   });
 
   it("say how to turn it on: usage credits off on every listed Subscription first, then allow_fable and a Fable model by its full id, the Pilot's bump first", async () => {

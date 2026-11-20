@@ -250,6 +250,10 @@ _Avoid_: flake, intermittent failure
 A Required check still red on an agent pull request's head after the Kit's re-run, which the Reviewer judged the pull request didn't cause. It never counts toward a Ticket's Retries. If it later reads green on that head, it is a Flaky check.
 _Avoid_: flake, pre-existing failure
 
+**Check's issue**:
+The one issue the Kit files for a Required check, holding that check's Flaky checks and its Unrelated failures alike. Triage routes it, and the Kit files nothing else for the check.
+_Avoid_: Flaky check issue, flake issue
+
 **Failure excerpt**:
 The part of a red Required check's log, with its annotations, that the Kit puts under the check's name, so whoever fixes it sees why it failed without opening GitHub.
 _Avoid_: log, CI output, failure log
@@ -347,7 +351,7 @@ Ticket work that will reach the Merge gate unless it fails: an open agent draft 
 _Avoid_: pending, in the pipeline
 
 **Gate load**:
-What `caps.merge_gate` weighs: the open agent PRs out of draft, at the Merge gate, plus the work on its way to it. Dispatch releases a Ticket only while the Gate load is under the cap (ADR-0023).
+What `caps.merge_gate` weighs: the open agent PRs out of draft, at the Merge gate, plus the work on its way to it. Dispatch releases a Ticket only while the Gate load is under the cap (ADR-0023). A check's fix, a `ready-for-agent` Ticket carrying `fabrik:flaky-check`, is released past the cap, and its work then counts toward the Gate load like any Ticket's (ADR-0035).
 _Avoid_: review queue, backlog
 
 **Required check**:

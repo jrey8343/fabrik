@@ -16,7 +16,7 @@ import {
 import type { HeldRun } from "../loop/heldRun.ts";
 import { conflictAttemptMarker, touchUpBodyOnlyMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
-import { maxInFlightHoldOf } from "./standingInFlight.ts";
+import { maxInFlightHoldOf, mergeGateHoldOf } from "./standingInFlight.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { wordStanding } from "./standingWording.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
@@ -522,6 +522,47 @@ describe("work that goes on without the Operator", () => {
         { issue: 14, detail: { slot: "merge-gate", mergeGate: 0 } },
       ]);
       expect(slots(standingsIn({ openIssues: [ready(14)] }, dispatching([{ number: 14 }], zero)))).toEqual([]);
+    });
+
+    describe("with a check's fix open (#838)", () => {
+      const fixLabels = ["ready-for-agent", "fabrik:flaky-check"];
+      const fullGate = [atGate(41, 1), anOpenPullRequest({ number: 42, ticket: 2 }), anOpenPullRequest({ number: 43, ticket: 3 })];
+      const roomy = withMaxInFlight(4);
+      const slots = (standings: readonly Standing[]) => standings.filter(({ name }) => name === "waiting-for-slot").map(({ issue, detail }) => ({ issue, detail }));
+
+      it("names the fix on each Ticket waiting for room at the gate, and gives the fix none, as the gate doesn't hold it", () => {
+        const standings = standingsIn(
+          { openIssues: [ready(50), ready(60)], openPullRequests: fullGate },
+          dispatching([{ number: 50, labels: fixLabels }, { number: 60 }], roomy),
+        );
+        expect(slots(standings)).toEqual([{ issue: 60, detail: { slot: "merge-gate", mergeGate: 3, checksFixes: [50] } }]);
+        expect(mergeGateHoldOf({ github: factsOf({ openIssues: [ready(50), ready(60)], openPullRequests: fullGate }), kit: dispatching([{ number: 50, labels: fixLabels }, { number: 60 }], roomy) })).toMatchObject({
+          waiting: [60],
+          checksFixes: [50],
+        });
+      });
+
+      it("gives the fix the max_in_flight Standing when that cap holds it", () => {
+        const standings = standingsIn(
+          { openIssues: [ready(50), ready(60)], openPullRequests: fullGate },
+          dispatching([{ number: 50, labels: fixLabels }, { number: 60 }], withMaxInFlight(2)),
+        );
+        expect(slots(standings)).toEqual([
+          { issue: 50, detail: { slot: "max-in-flight", maxInFlight: 2 } },
+          { issue: 60, detail: { slot: "merge-gate", mergeGate: 3, checksFixes: [50] } },
+        ]);
+      });
+
+      it("words the waiting Ticket's Standing naming the fix", () => {
+        const [standing] = standingsIn(
+          { openIssues: [ready(50), ready(60)], openPullRequests: fullGate },
+          dispatching([{ number: 50, labels: fixLabels }, { number: 60 }], roomy),
+        ).filter(({ issue }) => issue === 60);
+        expect(standing === undefined ? null : wordStanding(standing, "2026-11-08T12:00:00Z", "UTC")).toMatchObject({
+          pill: "Waiting for a slot",
+          sentence: "Waiting for room at the Merge gate for 3 days: `caps.merge_gate` is 3. #50 fixes a red check and goes first.",
+        });
+      });
     });
 
     it("words a Ticket waiting for the Merge gate with its cap", () => {
