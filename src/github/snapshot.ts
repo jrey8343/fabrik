@@ -664,6 +664,10 @@ export async function gatherSnapshot(
   // The Fable cap readings (ADR-0034): those a refused run's re-run reads back, marked where its trigger label went, on
   // the event's issue or its PR, and those the Kit job read in the store's newest Run records (storeFableCaps). Which
   // are still in force is the Loop's to weigh (src/loop/fableCap.ts), at the time they were read.
+  // An issue's lines are read with no author check, unlike a PR's, by choice: the Fabrik App marks them on an issue
+  // someone else opened, so its author says nothing of who wrote them, and GitHub keeps only a body's last editor, which
+  // any later edit of the description replaces, so a check on it would drop the App's own line. Reading a forged line
+  // fails safe: it can only move a Fable run to another Subscription, or to Opus, never make one bill.
   const marked = [...fableCapsIn(part?.issue?.body ?? ""), ...(part?.fableCaps ?? [])];
   const fableCaps = { readings: [...marked, ...storeFableCaps], now: event.kind === "scheduled-tick" ? event.now : new Date().toISOString() };
   return part === null
