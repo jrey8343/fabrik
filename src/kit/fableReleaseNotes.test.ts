@@ -40,6 +40,14 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Fable opt-in's release notes, wh
     expect(turnOn.indexOf("usage credits off")).toBeLessThan(turnOn.indexOf('"allow_fable": true'));
   });
 
+  // The Spec leaves the Pilot as it is (#828's first user story), so the opt-in is the one step the Pilot doesn't take first.
+  it("say that leaving the Pilot off Fable is an exception to the releasing guide's Pilot-first rule, and why", async () => {
+    const turnOn = section(await read(NOTES), "To turn it on");
+    expect(await read("docs/releasing.md")).toContain("to turn it on for the Pilot first");
+    expect(turnOn).toContain("This is an exception to the releasing guide's rule to turn a release's opt-in on for the Pilot first");
+    expect(turnOn).toContain("leave the Pilot as it is");
+  });
+
   it("give the Kit's own words and figures for the opt-in, the fallback, the hidden line, the Run record and an unread store", async () => {
     const notes = await read(NOTES);
     const day = 24 * 60 * 60 * 1000;

@@ -31,7 +31,7 @@ A Product repo can opt in to Fable for its AFK roles with `"allow_fable": true`,
 
 ## To turn it on
 
-Merging the bump changes nothing: no Product repo runs Fable until its Kit config says so. Take the bump on the Pilot first, as for every release, and leave the Pilot as it is: it doesn't opt in. Then opt in only the repo that wants Fable, `gradually-core` first.
+Merging the bump changes nothing: no Product repo runs Fable until its Kit config says so. Take the bump on the Pilot first, as for every release, and leave the Pilot as it is: it doesn't opt in. Then opt in only the repo that wants Fable, `gradually-core` first. This is an exception to the releasing guide's rule to turn a release's opt-in on for the Pilot first, and a deliberate one: the Spec keeps the Pilot as it is ([#828](https://github.com/jrey8343/fabrik/issues/828)'s first user story), since the opt-in turns on Fable, with its precondition of usage credits off, in one repo the Operator chose, not a behaviour every repo is meant to take. The Pilot still validates the release itself, in a repo that doesn't opt in, where nothing changes: what's new behind the opt-in is first exercised in `gradually-core`, so watch its first runs (step 4 below).
 
 1. Merge this release's bump PR in the Pilot, then in the repo to opt in, and bump the store's pin with the Pilot (see Upgrading).
 2. **Check usage credits off on every listed Subscription** of that repo (each account's Settings, Usage), every name in its `subscriptions`, the first one included. The Kit can't read that setting: the overage stop is the backstop, not the guard.
