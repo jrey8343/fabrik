@@ -97,6 +97,20 @@ describe("How an agent job reports its own failure", () => {
       });
     });
 
+    it.each([
+      ["last", ["seven_day_fable", "seven_day"]],
+      ["first", ["seven_day", "seven_day_fable"]],
+    ])("a rejected seven_day beside a rejected seven_day_* is the weekly limit, with the seven_day %s", (_, types) => {
+      const report = reportOn(fable, ...types.map((type) => rejected(type, 1_798_000_000)));
+
+      expect(report).toEqual({
+        failure: "weekly-limit",
+        detail: "resets at 2026-12-23T04:26:40.000Z",
+        resetsAt: "2026-12-23T04:26:40.000Z",
+        refusal: { rateLimitType: "seven_day", resetsAt: 1_798_000_000 },
+      });
+    });
+
     it("a Fable cap the stream gives no reset for is a Fable cap all the same", () => {
       expect(reportOn(fable, rejected("seven_day_fable"))).toEqual({
         failure: "fable-cap",

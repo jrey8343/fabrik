@@ -88,7 +88,10 @@ function providerError(
   if (last !== null && last["is_error"] !== true) return null;
 
   const rejected = rateLimits.filter((info) => info["status"] === "rejected");
-  const weekly = rejected.find((info) => String(info["rateLimitType"] ?? "").startsWith(WEEKLY_LIMIT_TYPE));
+  // The weekly limit across every model wins over any seven_day_* beside it, whatever their order: it holds every run.
+  const weekly =
+    rejected.find((info) => info["rateLimitType"] === WEEKLY_LIMIT_TYPE) ??
+    rejected.find((info) => String(info["rateLimitType"] ?? "").startsWith(WEEKLY_LIMIT_TYPE));
   if (weekly !== undefined) {
     const refusal = refusalIn(weekly);
     // Only a Fable run's seven_day_* is its Fable cap. Plain seven_day, and any on a run that isn't Fable, is the weekly
