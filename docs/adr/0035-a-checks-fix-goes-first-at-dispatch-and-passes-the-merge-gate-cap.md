@@ -8,7 +8,7 @@ A **check's fix** is an open `ready-for-agent` Ticket that carries `fabrik:flaky
 - **It passes `caps.merge_gate`, at any value, `0` included.** So the cap is a hard bound but for at most one fix per Required check with an open Check's issue.
 - **It is still counted.** Once released, its work counts toward the Gate load like any Ticket's, so the Gate load can stand over the cap, and the Tickets behind it wait until it is back under.
 - **Everything else still holds it.** `max_in_flight` holds it, and `0` pauses it. Every other eligibility test holds it as it holds any Ticket, and a held run of it resumes in the order it was first held.
-- **The Operator is told.** While a Ticket waits for room at the Merge gate and a check's fix is open, the waiting Ticket's Standing, Dispatch's reason and the Weekly summary's Merge-gate line name the fix ("#50 fixes a red check and goes first"). The fix itself never waits for the Merge gate.
+- **The Operator is told.** While a Ticket waits for room at the Merge gate, the waiting Ticket's Standing, Dispatch's reason and the Weekly summary's Merge-gate line name each check's fix Dispatch would release now ("#50 fixes a red check and goes first") and each already under way: dispatched, with an Implement run under way or held, or with an open pull request ("#50 fixes a red check and is under way"). A fix that is neither, as one a Blocker holds or whose last run failed, isn't named, since saying it goes first would be untrue. The fix itself never waits for the Merge gate.
 
 ## Considered options
 
@@ -19,7 +19,7 @@ A **check's fix** is an open `ready-for-agent` Ticket that carries `fabrik:flaky
 ## Consequences
 
 - The Gate load can stand over `caps.merge_gate`, by at most one fix per Required check with an open Check's issue, while a red check holds the gate.
-- A `waiting-for-slot` Standing with `slot: "merge-gate"` carries `checksFixes` while a check's fix is open: a new field on the read library, removing nothing.
+- A `waiting-for-slot` Standing with `slot: "merge-gate"` carries `checksFixes`, with the fixes that go first and those under way, while there is either: a new field on the read library, removing nothing.
 - The Monitor's red-`main` and Main-check issues get no place at the front (ADR-0025). If Triage closes a Check's issue as a duplicate of the Monitor's issue, the fix has no place, and ADR-0031 has the Kit mention the Operator.
 - A Spec a Design session writes from a Check's issue gets no place for its Tickets unless they carry the label (#839).
 

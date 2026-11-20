@@ -535,10 +535,10 @@ describe("work that goes on without the Operator", () => {
           { openIssues: [ready(50), ready(60)], openPullRequests: fullGate },
           dispatching([{ number: 50, labels: fixLabels }, { number: 60 }], roomy),
         );
-        expect(slots(standings)).toEqual([{ issue: 60, detail: { slot: "merge-gate", mergeGate: 3, checksFixes: [50] } }]);
+        expect(slots(standings)).toEqual([{ issue: 60, detail: { slot: "merge-gate", mergeGate: 3, checksFixes: { first: [50], underWay: [] } } }]);
         expect(mergeGateHoldOf({ github: factsOf({ openIssues: [ready(50), ready(60)], openPullRequests: fullGate }), kit: dispatching([{ number: 50, labels: fixLabels }, { number: 60 }], roomy) })).toMatchObject({
           waiting: [60],
-          checksFixes: [50],
+          checksFixes: { first: [50], underWay: [] },
         });
       });
 
@@ -549,7 +549,7 @@ describe("work that goes on without the Operator", () => {
         );
         expect(slots(standings)).toEqual([
           { issue: 50, detail: { slot: "max-in-flight", maxInFlight: 2 } },
-          { issue: 60, detail: { slot: "merge-gate", mergeGate: 3, checksFixes: [50] } },
+          { issue: 60, detail: { slot: "merge-gate", mergeGate: 3, checksFixes: { first: [50], underWay: [] } } },
         ]);
       });
 
@@ -562,6 +562,26 @@ describe("work that goes on without the Operator", () => {
           pill: "Waiting for a slot",
           sentence: "Waiting for room at the Merge gate for 3 days: `caps.merge_gate` is 3. #50 fixes a red check and goes first.",
         });
+      });
+
+      it("words a fix already under way as under way, and names no fix a Blocker holds", () => {
+        const standings = standingsIn(
+          { openIssues: [ready(50), ready(51), ready(60)], openPullRequests: fullGate },
+          dispatching([{ number: 50, labels: [...fixLabels, "agent:implement"] }, { number: 51, labels: fixLabels, openBlockers: [issueRef(9)] }, { number: 60 }], roomy),
+        );
+        const [standing] = standings.filter(({ issue, name }) => issue === 60 && name === "waiting-for-slot");
+        expect(standing?.detail).toEqual({ slot: "merge-gate", mergeGate: 3, checksFixes: { first: [], underWay: [50] } });
+        expect(standing === undefined ? null : wordStanding(standing, "2026-11-08T12:00:00Z", "UTC")).toMatchObject({
+          sentence: "Waiting for room at the Merge gate for 3 days: `caps.merge_gate` is 3. #50 fixes a red check and is under way.",
+        });
+      });
+
+      it("leaves the detail as it is today when the only fix neither goes first nor is under way", () => {
+        const standings = standingsIn(
+          { openIssues: [ready(50), ready(60)], openPullRequests: fullGate },
+          dispatching([{ number: 50, labels: fixLabels, lastRunFailed: true }, { number: 60 }], roomy),
+        );
+        expect(slots(standings)).toEqual([{ issue: 60, detail: { slot: "merge-gate", mergeGate: 3 } }]);
       });
     });
 

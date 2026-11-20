@@ -4047,7 +4047,7 @@ describe("the Weekly summary", () => {
           expect(result.body).toContain(
             `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)}, ${pull(22)} are at it, ${pull(23)} on its way; ${issue(50)} fixes a red check and goes first · ${issue(14)} (3 days)`,
           );
-          expect(result.summary.repos[0]?.held?.mergeGate).toMatchObject({ checksFixes: [50], waiting: [{ number: 14 }] });
+          expect(result.summary.repos[0]?.held?.mergeGate).toMatchObject({ checksFixes: { first: [50], underWay: [] }, waiting: [{ number: 14 }] });
         });
 
         it("says what a caps.merge_gate of 0 holds", () => {

@@ -374,15 +374,34 @@ describe("A check's fix: a ready-for-agent Ticket carrying fabrik:flaky-check (#
     expect(plan).toEqual({ kind: "nothing", reason: "Dispatch is paused because max_in_flight is 0, so #50 wait" });
   });
 
-  it("names a fix already on its way when the gate holds the Tickets behind it", () => {
+  it("names a fix already under way as under way when the gate holds the Tickets behind it", () => {
     const working = fix(50, { labels: ["ready-for-agent", "fabrik:flaky-check", "agent:implement"] });
 
     const plan = planFor(check, dispatchSnapshotOf([working, aTicket({ number: 60 })], fullGate), roomy);
 
     expect(plan).toEqual({
       kind: "nothing",
-      reason: "caps.merge_gate is 3 and #41 is at the Merge gate and #42, #43, #50 are on their way; #50 fixes a red check and goes first, so #60 wait",
+      reason: "caps.merge_gate is 3 and #41 is at the Merge gate and #42, #43, #50 are on their way; #50 fixes a red check and is under way, so #60 wait",
     });
+  });
+
+  it.each([
+    ["its open PR", { openLinkedPullRequests: [44] }, { openAgentPullRequestsAtMergeGate: [41], openAgentDraftPullRequests: [42, 44] }],
+    ["its Implement run under way", {}, { ...fullGate, implementRunsInProgress: 1, implementRunsWithoutPullRequest: 1, implementRunTickets: [50] }],
+  ])("counts a fix as under way by %s", (_, overrides, inFlight) => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50, overrides), aTicket({ number: 60 })], inFlight), kitConfig({ maxInFlight: 5 }));
+
+    expect(plan.kind === "nothing" ? plan.reason : null).toContain("; #50 fixes a red check and is under way, so #60 wait");
+  });
+
+  it.each([
+    ["a Blocker", { openBlockers: [issueRef(9)] }],
+    ["a failed last run", { lastRunFailed: true }],
+    ["sub-issues", { subIssues: 2 }],
+  ])("doesn't name a fix that neither goes first nor is under way, held by %s", (_, overrides) => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50, overrides), aTicket({ number: 60 })], fullGate), roomy);
+
+    expect(plan).toEqual({ kind: "nothing", reason: "caps.merge_gate is 3 and #41 is at the Merge gate and #42, #43 are on their way, so #60 wait" });
   });
 
   it.each([

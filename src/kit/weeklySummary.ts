@@ -671,8 +671,8 @@ export interface HeldMergeGate {
   /** Whether the runs in progress couldn't be read, so `onItsWay` leaves them out. */
   readonly runsUnread: boolean;
   readonly waiting: readonly WaitingForSlot[];
-  /** The open check's fixes, lowest first, which go first and pass the cap, so none is listed as waiting (#838). */
-  readonly checksFixes: readonly number[];
+  /** The check's fixes that go first, past the cap, so none is listed as waiting, and those under way, lowest first in each (#838). */
+  readonly checksFixes: { readonly first: readonly number[]; readonly underWay: readonly number[] };
 }
 
 /** A Ticket or research Decision waiting for Dispatch. */

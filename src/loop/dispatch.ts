@@ -33,9 +33,34 @@ export function isChecksFix(ticket: Pick<TicketSnapshot, "open" | "labels">): bo
   return ticket.open && ticket.labels.includes(READY_FOR_AGENT) && ticket.labels.includes(FLAKY_CHECK_LABEL);
 }
 
-/** The open check's fixes among these Tickets, lowest issue number first (#838). */
-export function checksFixesOf(tickets: readonly TicketSnapshot[]): number[] {
-  return tickets.filter(isChecksFix).map(({ number }) => number).sort((a, b) => a - b);
+/**
+ * The check's fixes a Ticket the Merge gate holds is told of (#838), lowest
+ * issue number first in each: those Dispatch would release now, slots aside,
+ * which go first, and those already under way, dispatched, with a run under
+ * way or held, or with an open PR. A fix that is neither, as one a Blocker
+ * holds or whose last run failed, goes nowhere yet, so it is named in neither.
+ */
+export interface ChecksFixes {
+  readonly first: readonly number[];
+  readonly underWay: readonly number[];
+}
+
+export function checksFixesOf(snapshot: DispatchCandidates, held: HeldDispatched): ChecksFixes {
+  const first = candidatesOf(snapshot, held, null).flatMap(({ number, why, checksFix }) => (checksFix && why === null ? [number] : []));
+  const underWay = snapshot.tickets
+    .filter((ticket) => isChecksFix(ticket) && ticket.mergedLinkedPullRequests.length === 0 && isUnderWay(ticket, snapshot.implementRunTickets, held))
+    .map(({ number }) => number);
+  return { first: first.toSorted((a, b) => a - b), underWay: underWay.toSorted((a, b) => a - b) };
+}
+
+/** Whether a Ticket's work is under way: dispatched, with an Implement run under way or held, or with an open PR. */
+function isUnderWay(ticket: TicketSnapshot, runTickets: readonly number[], held: HeldDispatched): boolean {
+  return (
+    ticket.labels.includes(DISPATCH_LABEL) ||
+    runTickets.includes(ticket.number) ||
+    held.implement.includes(ticket.number) ||
+    ticket.openLinkedPullRequests.length > 0
+  );
 }
 
 /**
@@ -100,7 +125,7 @@ function releasing(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDisp
   const gateHolds = gate.free === 0 && eligible.some(({ label, checksFix }) => label === DISPATCH_LABEL && !checksFix);
   const reasons = [
     ...(config.maxInFlight - inFlight.total > 0 ? [] : [maxInFlightReason(config.maxInFlight, inFlight)]),
-    ...(gateHolds ? [mergeGateReason(gate), checksFixesReason(checksFixesOf(snapshot.tickets))].filter((reason) => reason !== null) : []),
+    ...(gateHolds ? [mergeGateReason(gate), checksFixesReason(checksFixesOf(snapshot, held))].filter((reason) => reason !== null) : []),
   ];
   return { kind: "nothing", reason: `${reasons.join("; ")}, so ${list(waitingNumbers, "and")} wait` };
 }
@@ -131,12 +156,21 @@ function mergeGateReason(gate: MergeGateLoad): string {
 }
 
 /**
- * What the open check's fixes say beside a full caps.merge_gate (#838): that
- * each goes first, each named by `name`; nothing when none is open.
+ * What the check's fixes say beside a full caps.merge_gate (#838): which go
+ * first and which are under way, each named by `name`; null when neither has one.
  */
-export function checksFixesReason(fixes: readonly number[], name?: (number: number) => string): string | null {
-  if (fixes.length === 0) return null;
-  return `${list(fixes, "and", name)} ${fixes.length === 1 ? "fixes a red check and goes first" : "fix red checks and go first"}`;
+export function checksFixesReason({ first, underWay }: ChecksFixes, name?: (number: number) => string): string | null {
+  const said = (fixes: readonly number[], one: string, many: string) => (fixes.length === 0 ? [] : [`${list(fixes, "and", name)} ${fixes.length === 1 ? one : many}`]);
+  const parts = [
+    ...said(first, "fixes a red check and goes first", "fix red checks and go first"),
+    ...said(underWay, "fixes a red check and is under way", "fix red checks and are under way"),
+  ];
+  return parts.length === 0 ? null : parts.join("; ");
+}
+
+/** Whether there is a check's fix to name. */
+export function hasChecksFixes({ first, underWay }: ChecksFixes): boolean {
+  return first.length + underWay.length > 0;
 }
 
 /**

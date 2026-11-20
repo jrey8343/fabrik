@@ -124,7 +124,7 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
           detail.mergeGate === 0
             ? `Waiting for ${age} while an agent PR is at or on its way to the Merge gate: \`caps.merge_gate\` is 0.`
             : `Waiting for room at the Merge gate for ${age}: \`caps.merge_gate\` is ${detail.mergeGate}.`;
-        const fixes = checksFixesReason(detail.checksFixes ?? []);
+        const fixes = detail.checksFixes === undefined ? null : checksFixesReason(detail.checksFixes);
         return { pill: "Waiting for a slot", sentence: fixes === null ? waiting : `${waiting} ${fixes}.`, remedy: null };
       }
       const { slot, maxInFlight } = detail;
