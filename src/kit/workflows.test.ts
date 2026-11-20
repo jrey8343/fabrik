@@ -2760,11 +2760,11 @@ describe("loop.yml's replay jobs", () => {
       expect(codeOf(implement())).not.toMatch(WRITE_CREDENTIALS);
     });
 
-    it("runs within the Implement role's timeout, on the Kit job's Ticket, baseSha, arms and Subscription", () => {
+    it("runs within the Implement role's timeout, on the Kit job's Ticket, baseSha, arms, allow_fable and Subscription", () => {
       const step = stepsOf(implement()).find((one) => one.includes("uses: ./kit/.github/actions/replay-implement"));
 
       expect(implement()).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}\n");
-      for (const input of ["ticket", "base-sha", "replay-arms", "subscription"]) expect(step).toContain(`${input}: \${{ needs.kit.outputs.${input} }}`);
+      for (const input of ["ticket", "base-sha", "replay-arms", "allow-fable", "subscription"]) expect(step).toContain(`${input}: \${{ needs.kit.outputs.${input} }}`);
       expect(step).toContain("op-implement-token: ${{ secrets.OP_IMPLEMENT_TOKEN }}");
       expect(step).toContain("github-token: ${{ github.token }}");
     });
@@ -2797,11 +2797,11 @@ describe("loop.yml's replay jobs", () => {
       expect(codeOf(review())).not.toMatch(WRITE_CREDENTIALS);
     });
 
-    it("runs within the Review role's timeout, on the Kit job's Ticket, baseSha, arms and Subscription", () => {
+    it("runs within the Review role's timeout, on the Kit job's Ticket, baseSha, arms, allow_fable and Subscription", () => {
       const step = stepsOf(review()).find((one) => one.includes("uses: ./kit/.github/actions/replay-review"));
 
       expect(review()).toContain("\n    timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}\n");
-      for (const input of ["ticket", "base-sha", "replay-arms", "subscription"]) expect(step).toContain(`${input}: \${{ needs.kit.outputs.${input} }}`);
+      for (const input of ["ticket", "base-sha", "replay-arms", "allow-fable", "subscription"]) expect(step).toContain(`${input}: \${{ needs.kit.outputs.${input} }}`);
     });
   });
 

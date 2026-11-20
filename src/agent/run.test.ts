@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { modelFor, RUNS } from "./run.ts";
+import { allowFableFor, modelFor, RUNS } from "./run.ts";
 
 describe("The model a run is given, from the Kit job's plan (FABRIK_MODEL)", () => {
   const role = { model: "claude-opus-5-5", effort: "medium" };
@@ -28,6 +28,30 @@ describe("The model a run is given, from the Kit job's plan (FABRIK_MODEL)", () 
     vi.stubEnv("FABRIK_MODEL", "");
 
     expect(modelFor(role, false)).toEqual(role);
+  });
+});
+
+describe("Whether a run may be given Fable (ADR-0034)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([true, false])("is the checkout's own Kit config's allow_fable (%j) for a live run", (allowFable) => {
+    vi.stubEnv("FABRIK_ALLOW_FABLE", String(!allowFable));
+
+    expect(allowFableFor(undefined, { allowFable })).toBe(allowFable);
+  });
+
+  // Its checkout is the Ticket's baseSha, whose Kit config can predate the opt-in, or outlast it.
+  it.each([
+    ["true", false, true],
+    ["false", true, false],
+    ["", true, false],
+  ])("is the repo's own on a Replay arm, as the Kit job passed it out (FABRIK_ALLOW_FABLE %j), whatever baseSha's Kit config says (%j)", (given, atBase, allowed) => {
+    vi.stubEnv("FABRIK_ALLOW_FABLE", given);
+
+    expect(allowFableFor("review", { allowFable: atBase })).toBe(allowed);
+    expect(allowFableFor("implement", { allowFable: atBase })).toBe(allowed);
   });
 });
 

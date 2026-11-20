@@ -76,7 +76,9 @@
 // the agent-inputs step gathered it for the Digest writer (src/agent/digest.ts),
 // and its result is for the pull request.
 // A Replay arm's runs (#156, src/agent/replay.ts) take FABRIK_BASE_SHA, the
-// replayed Ticket's baseSha, and leave the Product repo untouched.
+// replayed Ticket's baseSha, and leave the Product repo untouched, and
+// FABRIK_ALLOW_FABLE, "true" when the Product repo's own Kit config opts in
+// to Fable, which Kit config at baseSha can predate (ADR-0034).
 // `replay-implement` is a first Implement run in a checkout at baseSha, with an
 // Implement run's env and inputs but no PR or review file, and passes its
 // commits out as replay.patch, its diff from baseSha, beside agent-result.json.
@@ -401,6 +403,16 @@ export function modelFor(role: { model: string; effort: string | null }, allowFa
 }
 
 /**
+ * Whether the run may be given Fable: what the checkout's Kit config opts in
+ * to, or on a Replay arm (`replay`), whose checkout is the Ticket's baseSha,
+ * what the Product repo's own Kit config does now, as the Kit job passed it
+ * out (FABRIK_ALLOW_FABLE), so an arm runs Fable only while the repo opts in.
+ */
+export function allowFableFor(replay: ReplayRole | undefined, config: Pick<KitConfig, "allowFable">): boolean {
+  return replay === undefined ? config.allowFable : process.env["FABRIK_ALLOW_FABLE"] === "true";
+}
+
+/**
  * The Kit's prompt for the run, a Review's for its kind: the Full Review
  * section only on a Full Review (#747), the later-Review section only on a
  * later one (#748). `review` is null for every other role.
@@ -423,7 +435,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   const config = await loadConfig(productDir);
   const prototypeTurn = spec.prompt === "prototype";
   const own = prototypeTurn ? prototypeRole(config.roles) : config.roles[name];
-  const role = { ...own, ...modelFor(own, config.allowFable) };
+  const role = { ...own, ...modelFor(own, allowFableFor(spec.replay, config)) };
   // For the run's record (src/kit/runRecord.ts): the model and effort passed to the CLI.
   await writeOutputs({ model: role.model, effort: role.effort ?? "" });
 

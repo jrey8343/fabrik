@@ -39,8 +39,13 @@ describe("The Kit job's routing of a replay Ticket (#156)", () => {
     });
   });
 
+  // Each arm runs in a checkout of the Ticket's baseSha, whose Kit config may predate the repo's opt-in (ADR-0034).
+  it.each([true, false])("passes out this repo's own allow_fable (%j) for the arms' runs", (allowFable) => {
+    expect(kitJobOutputs(started, null, kitConfig({ allowFable }))).toMatchObject({ route: "replay", "allow-fable": String(allowFable) });
+  });
+
   it("passes out no replay for any other run", () => {
-    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "replay-issue": "", "base-sha": "", "replay-arms": "" });
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "replay-issue": "", "base-sha": "", "replay-arms": "", "allow-fable": "" });
   });
 });
 

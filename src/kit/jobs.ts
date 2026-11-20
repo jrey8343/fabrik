@@ -33,6 +33,8 @@
 //                            {implement: {model, effort}, review: {model, effort}, candidateSha}; else empty.
 //                            Its model names come from the replay issue's body, so a job reads it only
 //                            through `env:`, never in a `run:` script
+//   allow-fable              for a replay, "true" when this repo's Kit config opts in to Fable (ADR-0034), which
+//                            each arm's run holds its model to, as Kit config at baseSha can predate it; else empty
 //   replay-kit-sha-unavailable for a replay whose variant's candidate Kit sha this job read and couldn't lay
 //                            (src/kit/overlay.ts), why, so neither arm runs and the replay-record job fails
 //                            the Ticket once (#449); else empty
@@ -237,7 +239,7 @@ export function kitJobOutputs(
   const said = JSON.stringify(kitSaidOf(plan, ticket));
   // One more re-run at the Merge gate (#783) starts no agent: the Re-run red checks job re-runs the checks the Kit's line asked.
   const rerun = plan?.kind === "act" ? plan.actions.find((action): action is Extract<Action, { kind: "rerun-checks" }> => action.kind === "rerun-checks") : undefined;
-  if (replay !== null) return { ...kitJobOutputs(null, null, config), ...replayOutputs(replay), "kit-said": said };
+  if (replay !== null) return { ...kitJobOutputs(null, null, config), ...replayOutputs(replay, config), "kit-said": said };
   return {
     route: routeOf(plan),
     "triage-timeout-minutes": String(config.roles.triage.timeoutMinutes),
@@ -316,6 +318,7 @@ export function kitJobOutputs(
     "replay-issue": "",
     "base-sha": "",
     "replay-arms": "",
+    "allow-fable": "",
     "replay-kit-sha-unavailable": "",
     "kit-said": said,
   };
@@ -339,9 +342,10 @@ async function candidateOutputs(plan: Plan | null, github: GitHub): Promise<Read
  * The outputs a replay Ticket's jobs read, from the replay issue's plan the
  * Kit wrote and read back (src/kit/replay.ts), never from an agent: the
  * replay issue, the Ticket, its merged PR, its baseSha, each arm's settings
- * and the Subscription both arms run on.
+ * and the Subscription both arms run on; and from this repo's Kit config,
+ * whether it opts in to Fable, which each arm's run holds its model to.
  */
-function replayOutputs({ issue, ticket, subscription }: Extract<Action, { kind: "start-replay" }>): Readonly<Record<string, string>> {
+function replayOutputs({ issue, ticket, subscription }: Extract<Action, { kind: "start-replay" }>, config: Pick<KitConfig, "allowFable">): Readonly<Record<string, string>> {
   if (subscription === undefined) throw new Error(`The replay of #${ticket.ticket} on #${issue} was given no Subscription`);
   return {
     route: "replay",
@@ -352,6 +356,8 @@ function replayOutputs({ issue, ticket, subscription }: Extract<Action, { kind: 
     "base-sha": ticket.baseSha,
     // One line of JSON, whose model names come from the issue's body, so a job reads it only through `env:`.
     "replay-arms": JSON.stringify(ticket.arms),
+    // Each arm runs in a checkout of baseSha, whose Kit config can predate the opt-in, or outlast it (ADR-0034).
+    "allow-fable": String(config.allowFable),
     subscription,
   };
 }
