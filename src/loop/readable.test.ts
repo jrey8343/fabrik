@@ -13,6 +13,18 @@ describe("readable", () => {
     expect(readable("2026-11-08T13:00:00Z", "Australia/Sydney")).toBe("2026-11-09 00:00 Australia/Sydney");
     expect(readable("2026-07-01T12:00:00Z", "Europe/London")).toBe("2026-07-01 13:00 Europe/London");
   });
+
+  it("reads each zone by its own clock when zones are asked for in turn, and a zone again as it was read first", () => {
+    const at = "2026-11-08T21:20:00Z";
+    const first = { sydney: readable(at, "Australia/Sydney"), london: readable(at, "Europe/London"), utc: readable(at, null) };
+    expect(first).toEqual({ sydney: "2026-11-09 08:20 Australia/Sydney", london: "2026-11-08 21:20 Europe/London", utc: "2026-11-08 21:20 UTC" });
+    expect({ sydney: readable(at, "Australia/Sydney"), london: readable(at, "Europe/London"), utc: readable(at, null) }).toEqual(first);
+  });
+
+  it("refuses a zone the runtime does not know each time it is asked for", () => {
+    expect(() => readable("2026-11-08T21:20:00Z", "Mars/Olympus")).toThrow(RangeError);
+    expect(() => readable("2026-11-08T21:20:00Z", "Mars/Olympus")).toThrow(RangeError);
+  });
 });
 
 describe("isTimeZone", () => {

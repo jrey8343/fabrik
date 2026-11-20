@@ -40,9 +40,17 @@ export interface WallClock {
   readonly asUtc: number;
 }
 
-/** The wall clock in `timeZone`, an IANA zone, at `time` in milliseconds. */
-export function wallClock(time: number, timeZone: string): WallClock {
-  const parts = new Intl.DateTimeFormat("en-US", {
+/**
+ * The formatter that reads the wall clock in each time zone asked for so far.
+ * Building one costs about ten times what a read with it does, and a week's
+ * bounds alone take nine reads.
+ */
+const wallClockFormats = new Map<string, Intl.DateTimeFormat>();
+
+function wallClockFormatOf(timeZone: string): Intl.DateTimeFormat {
+  const kept = wallClockFormats.get(timeZone);
+  if (kept !== undefined) return kept;
+  const format = new Intl.DateTimeFormat("en-US", {
     timeZone,
     hourCycle: "h23",
     year: "numeric",
@@ -52,7 +60,14 @@ export function wallClock(time: number, timeZone: string): WallClock {
     minute: "numeric",
     second: "numeric",
     weekday: "short",
-  }).formatToParts(time);
+  });
+  wallClockFormats.set(timeZone, format);
+  return format;
+}
+
+/** The wall clock in `timeZone`, an IANA zone, at `time` in milliseconds. */
+export function wallClock(time: number, timeZone: string): WallClock {
+  const parts = wallClockFormatOf(timeZone).formatToParts(time);
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
   const [year, month, day, hour, minute, second] = (["year", "month", "day", "hour", "minute", "second"] as const).map((type) =>
     Number(part(type)),
