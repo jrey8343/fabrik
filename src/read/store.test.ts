@@ -55,6 +55,7 @@ describe("the store's rows", () => {
         ticketClosed: null,
         plainPullRequest: null,
         evidence: null,
+        shots: null,
         production: null,
         prototype: null,
         digest: null,

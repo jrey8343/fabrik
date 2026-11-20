@@ -52,6 +52,9 @@ import {
   costOf,
   costPerMergedPullRequestOf,
   DEFAULT_KIT_CONFIG,
+  DEFAULT_SHOTS_ARTIFACT,
+  DROP_REASONS,
+  droppedShotSentence,
   evidenceMarkerIn,
   gatherRepo,
   GitHub,
@@ -61,6 +64,7 @@ import {
   headsToCheck,
   homeFactsOf,
   isLive,
+  isShotName,
   joinChecks,
   joinDeployments,
   joinRuns,
@@ -68,10 +72,12 @@ import {
   kitSaidIn,
   MERGED_STANDS_HOURS,
   mergesToRead,
+  namedShots,
   newerSchemaOf,
   owedRollInsOf,
   NO_DEPLOY_SEEN_MINUTES,
   parseCaptureResult,
+  producedNamedShots,
   productionPageUrl,
   readCaller,
   readDeployments,
@@ -83,6 +89,7 @@ import {
   readRequiredChecks,
   readRound,
   readRuns,
+  readShotsManifest,
   readSpend,
   refusalOf,
   requiredChecksFactOf,
@@ -93,6 +100,16 @@ import {
   runnerTimeOf,
   runsInFlightFactOf,
   runwayOf,
+  SHOT_IMAGE_MAX_BYTES,
+  SHOT_LIMIT,
+  SHOT_NAME_MAX_LENGTH,
+  SHOT_NAME_RULE,
+  shotMissSentence,
+  SHOTS_FAILURES,
+  SHOTS_MANIFEST_FILE,
+  SHOTS_MANIFEST_VERSION,
+  shotsFailureSentence,
+  shotsMarkerIn,
   STANDING_NAMES,
   STANDING_SCHEMA,
   standingAt,
@@ -106,6 +123,8 @@ import {
 } from "./index.ts";
 import type {
   ActionsStep,
+  ArtifactFile,
+  BadManifest,
   CallerCheck,
   CallerRead,
   CaptureResult,
@@ -115,7 +134,11 @@ import type {
   DeployOf,
   DigestData,
   DigestRead,
+  DropReason,
+  DroppedNames,
+  DroppedShot,
   EvidenceMarker,
+  EvidenceShot,
   Facts,
   HeadCheck,
   IssuesToRollIn,
@@ -127,6 +150,9 @@ import type {
   MergedInWeek,
   MergedLastDayFacts,
   MergeToRead,
+  NamedShot,
+  NamedShotAnswer,
+  NamedShots,
   OutcomesRead,
   OwedRollIn,
   PlaceShown,
@@ -143,6 +169,13 @@ import type {
   RunRecord,
   RunsRead,
   Runway,
+  ShotMiss,
+  ShotNotProduced,
+  ShotsFailure,
+  ShotSize,
+  ShotsManifest,
+  ShotsManifestRead,
+  ShotsMarker,
   SpendRead,
   Standing,
   StandingFacts,
@@ -376,6 +409,72 @@ const A_UI_PULL_REQUEST_BODY = [
   "## UI evidence",
   `<!-- fabrik:ui-evidence ${JSON.stringify(A_UI_EVIDENCE_MARKER)} -->`,
 ].join("\n");
+
+/** The first 8 bytes of every PNG file. */
+const PNG_START = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** An Evidence shots artifact's files beside its manifest: three small PNGs. */
+const SHOTS_ARTIFACT_FILES = [
+  { name: "draft.mobile.png", size: 20_480, start: PNG_START },
+  { name: "draft.desktop.png", size: 40_960, start: PNG_START },
+  { name: "inbox.mobile.png", size: 10_240, start: PNG_START },
+] as const satisfies readonly ArtifactFile[];
+
+/** An Evidence shots manifest: a shot at both sizes with its Journey and path, one at mobile alone, and one whose name breaks the rule. */
+const A_SHOTS_MANIFEST = JSON.stringify({
+  version: 1,
+  shots: [
+    { name: "composer: draft ready", journey: "write-a-clinical-note", path: "/patients/6f1b2c3d/notes/new", images: { mobile: "draft.mobile.png", desktop: "draft.desktop.png" } },
+    { name: "inbox: empty", images: { mobile: "inbox.mobile.png" } },
+    { name: "@octocat", images: { mobile: "inbox.mobile.png" } },
+  ],
+});
+
+/** That manifest as it reads against those files. */
+const A_SHOTS_READING = {
+  ok: true,
+  shots: [
+    { name: "composer: draft ready", journey: "write-a-clinical-note", path: "/patients/6f1b2c3d/notes/new", images: { mobile: "draft.mobile.png", desktop: "draft.desktop.png" } },
+    { name: "inbox: empty", images: { mobile: "inbox.mobile.png" } },
+  ],
+  dropped: [{ at: 2, name: "@octocat", reason: "name-bad-character" }],
+  ambiguous: [],
+  pastLimit: 0,
+} as const satisfies ShotsManifest;
+
+/** A shots marker once the Review's jobs read the `e2e` check's artifact at the head: three names, one missed and one lacking its desktop size. */
+const A_SHOTS_MARKER = {
+  source: "shots",
+  head: "c".repeat(40),
+  run: 9300,
+  artifact: 9301,
+  failure: null,
+  routes: [],
+  named: [{ name: "composer: draft ready", journey: "write-a-clinical-note", path: "/patients/6f1b2c3d/notes/new" }, { name: "inbox: empty" }, { name: "sign in: form" }],
+  missed: [
+    { name: "inbox: empty", viewport: "desktop", why: "size-missing" },
+    { name: "sign in: form", why: "not-produced" },
+  ],
+  preview: { is: "linked", url: "https://fabrik-ticket-7.shop.example.dev/" },
+  implementRun: 9100,
+  pushed: "c".repeat(40),
+} as const satisfies ShotsMarker;
+
+/** The body of a UI pull request whose evidence is Evidence shots, its section closed by its shots marker. */
+const A_SHOTS_PULL_REQUEST_BODY = [
+  "The Implementer built the drafts.",
+  "",
+  "<!-- fabrik:ui-evidence-start -->",
+  "## UI evidence",
+  `<!-- fabrik:ui-evidence ${JSON.stringify(A_SHOTS_MARKER)} -->`,
+].join("\n");
+
+/** Pull request 50 merged half an hour before NOW, in a repo with a production site, its shots marker held. */
+const A_MERGED_SHOTS_PULL_REQUEST = homeFactsOf({
+  kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } }, dispatch: null },
+  mergedLastDay: [aMergedLastDay("2026-11-09T11:30:00Z")],
+  shotsMarkers: [{ pullRequest: 50, marker: A_SHOTS_MARKER }],
+});
 
 /** A prototype round as the Fabrik App posts it: the Round's marker, the prototype round's, then its line. */
 const A_PROTOTYPE_ROUND = [
@@ -767,7 +866,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     homeFactsOf(
       { github: factsOf({ openIssues: [A_TICKET_WAITING] }) },
     ),
-  rowsOf: () =>
+  rowsOf: () => [
     rowsOf(
       homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }),
       A_RUNS_READ,
@@ -775,12 +874,20 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       A_DEPLOYMENTS_READ,
       NOW,
     ),
+    rowsOf(
+      A_MERGED_SHOTS_PULL_REQUEST,
+      null,
+      null,
+      A_DEPLOYMENTS_READ,
+      NOW,
+    ),
+  ],
 
   // The join with runs
 
   joinRuns: () =>
     joinRuns(
-      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, production: null, prototype: null, digest: null }],
+      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, shots: null, production: null, prototype: null, digest: null }],
       { ...A_RUNS_READ, runs: [{ ...A_RUN_IN_FLIGHT, issue: 7, pullRequest: null, kind: "first", retry: null }] },
       NOW,
     ),
@@ -1017,6 +1124,59 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       "/book?when=today",
     ),
 
+  // Evidence shots
+
+  DEFAULT_SHOTS_ARTIFACT: () => DEFAULT_SHOTS_ARTIFACT,
+  SHOTS_MANIFEST_FILE: () => SHOTS_MANIFEST_FILE,
+  SHOTS_MANIFEST_VERSION: () => SHOTS_MANIFEST_VERSION,
+  SHOT_LIMIT: () => SHOT_LIMIT,
+  SHOT_IMAGE_MAX_BYTES: () => SHOT_IMAGE_MAX_BYTES,
+  SHOT_NAME_MAX_LENGTH: () => SHOT_NAME_MAX_LENGTH,
+  SHOT_NAME_RULE: () => SHOT_NAME_RULE,
+  DROP_REASONS: () => DROP_REASONS,
+  SHOTS_FAILURES: () => SHOTS_FAILURES,
+  readShotsManifest: () => [
+    readShotsManifest(
+      A_SHOTS_MANIFEST,
+      SHOTS_ARTIFACT_FILES,
+    ),
+    readShotsManifest(
+      null,
+      [],
+    ),
+  ],
+  namedShots: () =>
+    namedShots(
+      A_SHOTS_READING,
+      ["composer: draft ready", "inbox: empty", "@octocat", "sign in: form"],
+    ),
+  isShotName: () =>
+    isShotName(
+      "composer: draft ready",
+    ),
+  droppedShotSentence: () =>
+    droppedShotSentence(
+      "image-too-large",
+    ),
+  shotsMarkerIn: () =>
+    shotsMarkerIn(
+      A_SHOTS_PULL_REQUEST_BODY,
+    ),
+  producedNamedShots: () =>
+    producedNamedShots(
+      A_SHOTS_MARKER,
+    ),
+  shotMissSentence: () =>
+    shotMissSentence(
+      { name: "sign in: form", why: "not-produced" },
+      "e2e",
+    ),
+  shotsFailureSentence: () =>
+    shotsFailureSentence(
+      "no-artifact",
+      { check: "e2e", artifact: DEFAULT_SHOTS_ARTIFACT },
+    ),
+
   // The Digest read
 
   aDigestComment: () =>
@@ -1140,6 +1300,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
       failureSentence: "Capture failed: it ran out of time.",
       missed: [{ route: "/book?when=today", viewport: "mobile", side: "before" }],
     },
+    shots: null,
     production: { site: "https://shop.example", tracked: true, pages: [{ route: "/book?when=today", url: "https://shop.example/book?when=today" }] },
     prototype: { round: 2, comment: 5003, postedAt: "2026-11-08T21:00:00Z", waiting: true, route: "/book", captures: { run: 4420, artifact: 902 } },
     digest: A_READABLE_DIGEST,
@@ -1278,6 +1439,30 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   CaptureResult: A_PROTOTYPE_CAPTURE_RESULT satisfies CaptureResult,
   CaptureResultRead: { ok: true, result: A_CAPTURE_RESULT } satisfies CaptureResultRead,
 
+  // Evidence shots
+
+  ArtifactFile: SHOTS_ARTIFACT_FILES[0] satisfies ArtifactFile,
+  EvidenceShot: A_SHOTS_READING.shots[0] satisfies EvidenceShot,
+  ShotSize: "mobile" satisfies ShotSize,
+  DropReason: "duplicate-name" satisfies DropReason,
+  DroppedShot: A_SHOTS_READING.dropped[0] satisfies DroppedShot,
+  ShotsManifest: A_SHOTS_READING satisfies ShotsManifest,
+  BadManifest: { ok: false, failure: "bad-manifest", why: "the artifact has no manifest.json" } satisfies BadManifest,
+  // One of each: read, and not.
+  ShotsManifestRead: [A_SHOTS_READING, { ok: false, failure: "bad-manifest", why: "manifest.json's version must be 1" }] satisfies readonly ShotsManifestRead[],
+  ShotNotProduced: "refused" satisfies ShotNotProduced,
+  // One of each: produced, and not.
+  NamedShotAnswer: [
+    { name: "inbox: empty", produced: true, shot: A_SHOTS_READING.shots[1], sizes: ["mobile"] },
+    { name: "@octocat", produced: false, why: "refused" },
+  ] satisfies readonly NamedShotAnswer[],
+  ShotMiss: A_SHOTS_MARKER.missed satisfies readonly ShotMiss[],
+  NamedShots: { answers: [{ name: "sign in: form", produced: false, why: "not-produced" }], missed: [{ name: "sign in: form", why: "not-produced" }] } satisfies NamedShots,
+  ShotsMarker: A_SHOTS_MARKER satisfies ShotsMarker,
+  NamedShot: A_SHOTS_MARKER.named[0] satisfies NamedShot,
+  DroppedNames: { pastFour: 1, broken: 0 } satisfies DroppedNames,
+  ShotsFailure: "bad-manifest" satisfies ShotsFailure,
+
   // The Digest read
 
   DigestData: A_DIGEST_DATA satisfies DigestData,
@@ -1303,8 +1488,9 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
 
 /**
  * The exports that are not plain data, by name: the client, which is calls,
- * and the two classes, whose calls make instances. Everything else in the
- * fixture, and everything a call of anything else returns, survives being
- * written as JSON and read back.
+ * the two classes, whose calls make instances, and a file of an Evidence
+ * shots artifact, which a reader hands in with its first bytes. Everything
+ * else in the fixture, and everything a call of anything else returns,
+ * survives being written as JSON and read back.
  */
-export const NOT_DATA: readonly string[] = ["GitHub", "GitHubError", "ReadClient"];
+export const NOT_DATA: readonly string[] = ["GitHub", "GitHubError", "ReadClient", "ArtifactFile"];

@@ -14,6 +14,7 @@ import {
   isUi,
   type MissedShot,
   parseCaptureResult,
+  producedNamedShots,
   type MissOutcome,
   type PreviewLink,
   reviewerEvidenceBlock,
@@ -1612,6 +1613,44 @@ describe("The shots section once the Review's jobs have read the named check's a
       named: [{ name: "composer: draft ready" }, { name: "inbox: empty" }],
       missed: [],
     });
+  });
+});
+
+describe("The named shots a head's check produced (#822)", () => {
+  const HEAD = "c".repeat(40);
+  const names: ShotsNames = { named: [{ name: "composer: draft ready" }, { name: "inbox: empty" }, { name: "sign in: form" }] };
+  const read = (overrides: Partial<ShotsCollected> = {}) =>
+    readShotsMarker(waitingShotsMarker(names, 9100, { kind: "none" }, HEAD), { collected: aShotsCollected({ head: HEAD, ...overrides }), run: 9300, artifact: 9301 });
+
+  it("are the pull request's names in its order, less each the run didn't produce, had two of, or refused", () => {
+    const marker = read({
+      missed: [
+        { name: "inbox: empty", why: "not-produced" },
+        { name: "sign in: form", why: "refused" },
+      ],
+    });
+
+    expect(producedNamedShots(marker)).toEqual(["composer: draft ready"]);
+    expect(producedNamedShots(read({ missed: [{ name: "composer: draft ready", why: "ambiguous-name" }] }))).toEqual(["inbox: empty", "sign in: form"]);
+  });
+
+  it("keep a shot that lacks one size, which was still produced", () => {
+    expect(producedNamedShots(read({ missed: [{ name: "inbox: empty", viewport: "desktop", why: "size-missing" }] }))).toEqual(["composer: draft ready", "inbox: empty", "sign in: form"]);
+  });
+
+  it("compare names exactly, so a miss of a name differing in case or spacing leaves the name as it was", () => {
+    const marker: ShotsMarker = { ...read(), missed: [{ name: "Inbox: empty", why: "not-produced" }, { name: "sign in:  form", why: "not-produced" }] };
+
+    expect(producedNamedShots(marker)).toEqual(["composer: draft ready", "inbox: empty", "sign in: form"]);
+  });
+
+  it.each([
+    ["while the marker waits for the named check", waitingShotsMarker(names, 9100, { kind: "none" }, HEAD)],
+    ["when the run uploaded no artifact", read({ failure: "no-artifact", named: [], missed: [] })],
+    ["when the artifact's manifest couldn't be read", read({ failure: "bad-manifest", named: [], missed: [] })],
+    ["when the pull request says nothing a person sees changes", { ...read({ named: [] }), named: [], nothingVisible: "Only the API changed." }],
+  ])("are none %s", (_, marker) => {
+    expect(producedNamedShots(marker)).toEqual([]);
   });
 });
 

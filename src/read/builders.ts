@@ -484,7 +484,7 @@ export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> 
  * Kit config the default at `main`, nothing for Dispatch to weigh, the
  * Operator `operator`, the Fabrik App `fabrik-app[bot]`, and no GitHub facts,
  * issue bodies, merges, cross-references, closed issues' comments, Tickets'
- * states or evidence markers unless a test says so.
+ * states, evidence markers or shots markers unless a test says so.
  */
 export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts {
   return {
@@ -499,6 +499,7 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
     closedIssueComments: [],
     ticketStates: [],
     evidenceMarkers: [],
+    shotsMarkers: [],
     ...overrides,
   };
 }

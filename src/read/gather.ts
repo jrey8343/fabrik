@@ -18,7 +18,7 @@ import { gatherWeeklyRunIssues, isAgent, openIssueOf, openKitIssueOf, openPullRe
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { byAppOf, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
-import { type EvidenceMarker, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { type EvidenceMarker, evidenceMarkerIn, type ShotsMarker, shotsMarkerIn } from "../evidence/uiEvidence.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
 import { KIT_CONFIG_PATH, type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
@@ -137,6 +137,12 @@ export interface EvidenceMarkerFacts {
   readonly marker: EvidenceMarker;
 }
 
+/** The shots marker in the body of an agent pull request the Fabrik App opened, open or merged in the last 24 hours (#822): a UI pull request's whose evidence is Evidence shots. */
+export interface ShotsMarkerFacts {
+  readonly pullRequest: number;
+  readonly marker: ShotsMarker;
+}
+
 /**
  * What a gather reads of one Product repo: the facts the Standing rule reads,
  * and what a reader shows beside a Standing. Plain data: written as JSON and
@@ -171,6 +177,12 @@ export interface Facts {
    * open or merged in the last 24 hours, that has one: a UI pull request's.
    */
   readonly evidenceMarkers: readonly EvidenceMarkerFacts[];
+  /**
+   * The shots marker of each of those pull requests that has one (#822): a
+   * UI pull request's whose evidence is Evidence shots, which has no evidence
+   * marker of the other shape.
+   */
+  readonly shotsMarkers: readonly ShotsMarkerFacts[];
 }
 
 /**
@@ -304,6 +316,10 @@ async function gatherFacts(
     // A marker counts only in a body the Fabrik App wrote, as the Kit's other readers of it take it.
     evidenceMarkers: [...agent, ...mergedLastDay].flatMap(({ number, body, author }) => {
       const marker = byAppOf(author, appLogin) ? evidenceMarkerIn(body) : null;
+      return marker === null ? [] : [{ pullRequest: number, marker }];
+    }),
+    shotsMarkers: [...agent, ...mergedLastDay].flatMap(({ number, body, author }) => {
+      const marker = byAppOf(author, appLogin) ? shotsMarkerIn(body) : null;
       return marker === null ? [] : [{ pullRequest: number, marker }];
     }),
   };
