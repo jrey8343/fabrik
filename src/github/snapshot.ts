@@ -3131,12 +3131,15 @@ export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, rep
   const listed = await workflowRunsListed(github, `${base}/runs?created=${encodeURIComponent(`>=${since}`)}&exclude_pull_requests=true`);
   // A run listed on two pages, as one created while paging shifts the rest along, is read once.
   const runs = new Map(listed.filter(({ status }) => status !== "completed").map((run) => [run.id, run]));
-  const pages = await Promise.all(
-    [...runs.keys()].map(async (id) => (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] }),
+  const listings = await Promise.all(
+    [...runs.values()].map(async (run) => ({
+      run,
+      page: (await github.rest("GET", `${base}/runs/${run.id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] },
+    })),
   );
-  return [...runs.values()].flatMap((run, i) => {
+  return listings.flatMap(({ run, page }) => {
     const runUrl = run.html_url ?? `https://github.com/${repo.owner}/${repo.name}/actions/runs/${run.id}`;
-    return (pages[i]?.jobs ?? []).map((job) => ({
+    return page.jobs.map((job) => ({
       run: run.id,
       attempt: run.run_attempt ?? 1,
       createdAt: run.created_at,
@@ -3155,7 +3158,7 @@ export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, rep
 const RUNS_PER_PAGE = 100;
 
 /** The most pages of runs GitHub lists for a `created` bound, 1,000 runs, whatever its `total_count` says. */
-const MOST_RUNS_PAGES = 10;
+const RUNS_LISTING_MOST_PAGES = 10;
 
 /**
  * Every run the listing at `path` gives, page after page, as `allPages` reads
@@ -3172,7 +3175,7 @@ async function workflowRunsListed(github: Pick<ReadClient, "rest">, path: string
   const first = await pageAt(1);
   const pages = [first.workflow_runs];
   if (typeof first.total_count === "number" && first.workflow_runs.length === RUNS_PER_PAGE) {
-    const counted = Math.min(Math.ceil(first.total_count / RUNS_PER_PAGE), MOST_RUNS_PAGES);
+    const counted = Math.min(Math.ceil(first.total_count / RUNS_PER_PAGE), RUNS_LISTING_MOST_PAGES);
     const rest = Array.from({ length: counted - 1 }, (_, i) => i + 2);
     pages.push(...(await Promise.all(rest.map(async (page) => (await pageAt(page)).workflow_runs))));
   }
