@@ -21,6 +21,7 @@ import { architecturalEscapesOf, type ArchitecturalEscapes, escapesCell, escapeW
 import { flakyCheckMarksIn, unrelatedFailureMarksIn, weeklyRunName, weeklyRunWaitingNoted, type WeeklyRunKind } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { freeSubscriptions } from "../loop/subscriptions.ts";
+import { type FableCapReading, inForce, UNTIMED_CAP_MS } from "../loop/fableCap.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
@@ -871,6 +872,12 @@ export interface SubscriptionUsage {
   readonly subscription: string;
   readonly cost: number;
   readonly weeklyLimit: WeekOverWeek<RateLimitReading | null>;
+  /**
+   * When its Fable cap resets (ADR-0034), ISO 8601, while a Fable cap reading
+   * for it has its reset still ahead at the filing, in a Kit with a repo that
+   * opted in to Fable; else null.
+   */
+  readonly fableResetsAt: string | null;
 }
 
 /** The summary to file for the week that just ended, or skip. */
@@ -879,6 +886,8 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   const { records, scoreFiles } = everything;
   const input: WeeklySummaryInput = { ...everything, records: records.filter(isLive), scoreFiles: scoreFiles.filter(isLive) };
   const replays = records.filter((record) => !isLive(record));
+  // A Fable cap is the Subscription's, whatever run reached it, a Replay arm's included.
+  const fableResets = fableResetsOf(records, optedInToFable(input.kits), input.now);
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
   const thisWeek = metricsOf(weeks.thisWeek, input, { latest: true });
   const lastWeek = metricsOf(weeks.lastWeek, input, { latest: false });
@@ -922,11 +931,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
     costPerSpec: change("costPerSpec"),
     spendNeverMerged: change("spendNeverMerged"),
     weeklyLimit: change("weeklyLimit"),
-    subscriptions: thisWeek.subscriptions.map(({ subscription, cost, weeklyLimit }) => ({
-      subscription,
-      cost,
-      weeklyLimit: { thisWeek: weeklyLimit, lastWeek: lastWeek.subscriptions.find((other) => other.subscription === subscription)?.weeklyLimit ?? null },
-    })),
+    subscriptions: subscriptionUsageOf(thisWeek.subscriptions, lastWeek.subscriptions, fableResets),
     humanTouches: change("humanTouches"),
     retriesPerMergedPullRequest: change("retriesPerMergedPullRequest"),
     touchUpsPerMergedPullRequest: change("touchUpsPerMergedPullRequest"),
@@ -1413,6 +1418,66 @@ function leftDesignIn(week: Week, spec: SpecFacts, appLogin: string): boolean {
 /** The latest weekly-limit reading among these records, sorted by when they ended, or null if none read one. */
 function lastWeeklyLimitOf(records: readonly RunRecord[]): RateLimitReading | null {
   return records.findLast((record) => record.rateLimit?.rateLimitType === WEEKLY_LIMIT)?.rateLimit ?? null;
+}
+
+/**
+ * Each Subscription the week's records ran on, and each with its Fable cap in
+ * force, in name order: its cost and weekly-limit readings this week and last,
+ * and when its Fable cap resets.
+ */
+function subscriptionUsageOf(
+  thisWeek: WeekMetrics["subscriptions"],
+  lastWeek: WeekMetrics["subscriptions"],
+  fableResets: ReadonlyMap<string, string>,
+): SubscriptionUsage[] {
+  const capped = [...fableResets.keys()].filter((subscription) => !thisWeek.some((ran) => ran.subscription === subscription));
+  return [...thisWeek, ...capped.map((subscription) => ({ subscription, cost: 0, weeklyLimit: null }))]
+    .toSorted((a, b) => (a.subscription < b.subscription ? -1 : a.subscription > b.subscription ? 1 : 0))
+    .map(({ subscription, cost, weeklyLimit }) => ({
+      subscription,
+      cost,
+      weeklyLimit: { thisWeek: weeklyLimit, lastWeek: lastWeek.find((other) => other.subscription === subscription)?.weeklyLimit ?? null },
+      fableResetsAt: fableResets.get(subscription) ?? null,
+    }));
+}
+
+/**
+ * When each Subscription's Fable cap resets (ADR-0034), by name, for those
+ * with a Fable cap reading still in force at `now`, read off the Run records
+ * of the repos given: a record of a run refused on its Fable cap is a reading
+ * for its Subscription, until its refusal's `resetsAt`, or, with none, its
+ * Subscription's weekly-limit reset, or for UNTIMED_CAP_MS from when the run
+ * ended when that isn't known either. The latest reading in force counts.
+ */
+function fableResetsOf(records: readonly RunRecord[], repos: ReadonlySet<string>, now: string): Map<string, string> {
+  const readings = records
+    .filter((record) => repos.has(record.repo) && record.infrastructureFailure === "fable-cap")
+    .map((record): FableCapReading => ({ subscription: record.subscription, until: fableCapUntil(record, records) }));
+  const resets = new Map<string, string>();
+  for (const { subscription, until } of inForce(readings, now)) {
+    const seen = resets.get(subscription);
+    if (seen === undefined || Date.parse(until) > Date.parse(seen)) resets.set(subscription, until);
+  }
+  return resets;
+}
+
+/**
+ * Until when a run refused on its Fable cap holds that cap, ISO 8601: its
+ * refusal's reset; else the reset of its Subscription's newest weekly-limit
+ * reading by then, among `records`, when that is still ahead of the
+ * refusal; else UNTIMED_CAP_MS from when it ended.
+ */
+function fableCapUntil(refused: RunRecord, records: readonly RunRecord[]): string {
+  const at = Date.parse(refused.endedAt);
+  const resetsAt = refused.refusal?.resetsAt ?? null;
+  if (resetsAt !== null) return new Date(resetsAt * 1000).toISOString();
+  const weekly = lastWeeklyLimitOf(
+    records
+      .filter((record) => record.subscription === refused.subscription && Date.parse(record.endedAt) <= at)
+      .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)),
+  )?.resetsAt;
+  if (weekly !== undefined && weekly !== null && weekly * 1000 > at) return new Date(weekly * 1000).toISOString();
+  return new Date(at + UNTIMED_CAP_MS).toISOString();
 }
 
 /** Each Subscription these records ran on, in name order, with their cost and latest weekly-limit reading. */
@@ -2271,14 +2336,28 @@ function subscriptionUsageLines(
   subscriptions: readonly SubscriptionUsage[],
   timeZone: string,
 ): string[] {
-  if (subscriptions.length < 2) return [`Subscription usage: ${limitReading(weeklyLimit, timeZone)}`];
+  if (subscriptions.length < 2) {
+    const [only] = subscriptions;
+    const fable = only === undefined ? "" : fableReset(only.fableResetsAt, timeZone, only.subscription);
+    return [`Subscription usage: ${limitReading(weeklyLimit, timeZone)}${fable}`];
+  }
   return [
     "Subscription usage:",
     "",
     ...subscriptions.map(
-      ({ subscription, cost, weeklyLimit: reading }) => `- ${subscription}: ${dollars(cost)} API-equivalent cost, ${limitReading(reading, timeZone)}`,
+      ({ subscription, cost, weeklyLimit: reading, fableResetsAt }) =>
+        `- ${subscription}: ${dollars(cost)} API-equivalent cost, ${limitReading(reading, timeZone)}${fableReset(fableResetsAt, timeZone)}`,
     ),
   ];
+}
+
+/**
+ * When a Subscription's Fable cap resets (ADR-0034), after its weekly-limit
+ * reading, naming it on a line that doesn't, or nothing while it has Fable left.
+ */
+function fableReset(resetsAt: string | null, timeZone: string, unnamed: string | null = null): string {
+  if (resetsAt === null) return "";
+  return ` Fable cap reached${unnamed === null ? "" : ` on ${unnamed}`}, resetting ${readable(Date.parse(resetsAt), timeZone)}.`;
 }
 
 /** A weekly-limit reading this week, when it resets, and last week's beside it. */

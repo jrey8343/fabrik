@@ -494,6 +494,69 @@ describe("the Weekly summary", () => {
       expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: null } } });
       expect(result.kind === "summary" ? result.body : "").not.toContain("Fable");
     });
+
+    describe("each Subscription's Fable reset", () => {
+      const capped = (subscription: string, endedAt: string, resetsAt: number | null) =>
+        aRunRecord({ ...refusedOnTheCap, subscription, endedAt, refusal: { rateLimitType: "seven_day_fable", resetsAt } });
+      const bodyOf = (records: readonly RunRecord[], kits: readonly RepoKitFacts[] = [OPTED_IN]) => {
+        const result = weeklySummary(input({ records, kits }));
+        return result.kind === "summary" ? result.body : "";
+      };
+
+      it("shows on a Subscription's line while a Fable cap reading for it has its reset ahead, and not once it has passed", () => {
+        const body = bodyOf([
+          capped("Claude token", "2026-11-03T00:00:00Z", 1_794_132_000), // reset before the filing
+          capped("Claude token 2", "2026-11-07T00:00:00Z", 1_794_348_000),
+        ]);
+        expect(body).toContain(
+          [
+            "Subscription usage:",
+            "",
+            "- Claude token: $1.00 API-equivalent cost, no weekly-limit reading this week.",
+            "- Claude token 2: $1.00 API-equivalent cost, no weekly-limit reading this week. Fable cap reached, resetting 2026-11-11 09:00 Australia/Sydney.",
+          ].join("\n"),
+        );
+      });
+
+      it("names the Subscription on today's one line for a week on one Subscription", () => {
+        const body = bodyOf([capped("Claude token", "2026-11-07T00:00:00Z", 1_794_348_000)]);
+
+        expect(body).toContain(
+          "\nSubscription usage: no weekly-limit reading this week. Fable cap reached on Claude token, resetting 2026-11-11 09:00 Australia/Sydney.\n",
+        );
+      });
+
+      it("gives a Subscription whose cap is still ahead its line, though it ran nothing this week", () => {
+        const body = bodyOf([capped("Claude token 2", "2026-10-30T00:00:00Z", 1_794_348_000), aRunRecord({ endedAt: "2026-11-04T00:00:00Z" })]);
+
+        expect(body).toContain(
+          "- Claude token 2: $0.00 API-equivalent cost, no weekly-limit reading this week. Fable cap reached, resetting 2026-11-11 09:00 Australia/Sydney.",
+        );
+      });
+
+      it("holds a reading with no reset until its Subscription's weekly-limit reset", () => {
+        const weekly = { status: "allowed", rateLimitType: "seven_day", utilization: 0.4, resetsAt: 1_794_452_400 };
+        const body = bodyOf([
+          aRunRecord({ endedAt: "2026-11-04T00:00:00Z", rateLimit: weekly }),
+          capped("Claude token", "2026-11-05T00:00:00Z", null),
+        ]);
+
+        expect(body).toContain("Fable cap reached on Claude token, resetting 2026-11-12 14:00 Australia/Sydney.");
+      });
+
+      it("holds a reading with no reset, on a Subscription whose weekly-limit reset isn't known, for 7 days", () => {
+        const body = bodyOf([capped("Claude token", "2026-11-05T00:00:00Z", null)]);
+
+        expect(body).toContain("Fable cap reached on Claude token, resetting 2026-11-12 11:00 Australia/Sydney.");
+      });
+
+      it("shows no Fable reset in a Kit with no repo opted in", () => {
+        const body = bodyOf([capped("Claude token", "2026-11-07T00:00:00Z", 1_794_348_000), capped("Claude token 2", "2026-11-07T00:00:00Z", 1_794_348_000)], [aRepoKit()]);
+
+        expect(body).toContain("Subscription usage:");
+        expect(body).not.toContain("Fable");
+      });
+    });
   });
 
   it("counts the week's Flaky checks, found by the Kit's re-run and counted back alike, on open and closed agent PRs (#462)", () => {
