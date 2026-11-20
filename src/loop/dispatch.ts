@@ -2,7 +2,7 @@
 // and when a research Decision does.
 import { blockersPhrase } from "./blockers.ts";
 import { keptBranchGone, stopForGoneKeptBranch } from "./keptBranch.ts";
-import { DISPATCH_LABEL, type Label, READY_FOR_AGENT, RESEARCH_LABEL } from "./labels.ts";
+import { DISPATCH_LABEL, FLAKY_CHECK_LABEL, type Label, READY_FOR_AGENT, RESEARCH_LABEL } from "./labels.ts";
 import { mergedReason } from "./mergedTickets.ts";
 import { whyNotResearchable } from "./research.ts";
 import type { DispatchSnapshot, KitConfig, Plan, ResearchDecisionSnapshot, TicketSnapshot } from "./types.ts";
@@ -18,12 +18,55 @@ interface Candidate {
   readonly number: number;
   readonly label: Label;
   readonly why: string | null;
+  /** Whether it is a check's fix (isChecksFix): it goes first and passes caps.merge_gate. */
+  readonly checksFix: boolean;
+}
+
+/**
+ * Whether this Ticket is a check's fix (#838): an open `ready-for-agent`
+ * Ticket carrying fabrik:flaky-check, so a Check's issue Triage routed. The
+ * label is the whole test: Dispatch weighs it ahead of every other candidate
+ * and releases it past caps.merge_gate, as the pull requests its red check
+ * holds are what fill the gate.
+ */
+export function isChecksFix(ticket: Pick<TicketSnapshot, "open" | "labels">): boolean {
+  return ticket.open && ticket.labels.includes(READY_FOR_AGENT) && ticket.labels.includes(FLAKY_CHECK_LABEL);
+}
+
+/**
+ * The check's fixes a Ticket the Merge gate holds is told of (#838), lowest
+ * issue number first in each: those Dispatch would release now, slots aside,
+ * which go first, and those already under way, dispatched, with a run under
+ * way or held, or with an open PR. A fix that is neither, as one a Blocker
+ * holds or whose last run failed, goes nowhere yet, so it is named in neither.
+ */
+export interface ChecksFixes {
+  readonly first: readonly number[];
+  readonly underWay: readonly number[];
+}
+
+export function checksFixesOf(snapshot: DispatchCandidates, held: HeldDispatched): ChecksFixes {
+  const first = candidatesOf(snapshot, held, null).flatMap(({ number, why, checksFix }) => (checksFix && why === null ? [number] : []));
+  const underWay = snapshot.tickets
+    .filter((ticket) => isChecksFix(ticket) && ticket.mergedLinkedPullRequests.length === 0 && isUnderWay(ticket, snapshot.implementRunTickets, held))
+    .map(({ number }) => number);
+  return { first: first.toSorted((a, b) => a - b), underWay: underWay.toSorted((a, b) => a - b) };
+}
+
+/** Whether a Ticket's work is under way: dispatched, with an Implement run under way or held, or with an open PR. */
+function isUnderWay(ticket: TicketSnapshot, runTickets: readonly number[], held: HeldDispatched): boolean {
+  return (
+    ticket.labels.includes(DISPATCH_LABEL) ||
+    runTickets.includes(ticket.number) ||
+    held.implement.includes(ticket.number) ||
+    ticket.openLinkedPullRequests.length > 0
+  );
 }
 
 /**
  * Releases eligible Tickets to Implementers and eligible research Decisions
- * to the Researcher, lowest issue number first across both, up to the free
- * slots. A max_in_flight of 0 pauses it; resuming an agent PR's run doesn't
+ * to the Researcher, each check's fix first, then lowest issue number first
+ * across both, up to the free slots (#838). A max_in_flight of 0 pauses it; resuming an agent PR's run doesn't
  * go through here. `held` names the Tickets and Decisions whose run is held:
  * dispatched already, each keeps its slot until it resumes once a Subscription is free.
  */
@@ -65,22 +108,24 @@ function releasing(snapshot: DispatchSnapshot, config: KitConfig, held: HeldDisp
 
   const inFlight = inFlightOf(snapshot, held);
   const gate = mergeGateLoadOf(snapshot, held, config.caps.mergeGate);
-  // Lowest issue number first: a research Decision takes a max_in_flight slot, a Ticket one under each cap.
+  // In candidatesOf's order: a research Decision takes a max_in_flight slot, a Ticket one under each cap.
   let free = Math.max(0, config.maxInFlight - inFlight.total);
   let gateFree = gate.free;
-  const released = eligible.filter(({ label }) => {
+  // A check's fix passes the Merge-gate cap, though its work then counts toward the Gate load (#838).
+  const released = eligible.filter(({ label, checksFix }) => {
     const ticket = label === DISPATCH_LABEL;
-    if (free === 0 || (ticket && gateFree === 0)) return false;
+    if (free === 0 || (ticket && !checksFix && gateFree === 0)) return false;
     free -= 1;
-    if (ticket) gateFree -= 1;
+    if (ticket) gateFree = Math.max(0, gateFree - 1);
     return true;
   });
   if (released.length > 0) {
     return { kind: "act", actions: released.map(({ number, label }) => ({ kind: "add-labels", issue: number, labels: [label] })) };
   }
+  const gateHolds = gate.free === 0 && eligible.some(({ label, checksFix }) => label === DISPATCH_LABEL && !checksFix);
   const reasons = [
     ...(config.maxInFlight - inFlight.total > 0 ? [] : [maxInFlightReason(config.maxInFlight, inFlight)]),
-    ...(gate.free > 0 || !eligible.some(({ label }) => label === DISPATCH_LABEL) ? [] : [mergeGateReason(gate)]),
+    ...(gateHolds ? [mergeGateReason(gate), checksFixesReason(checksFixesOf(snapshot, held))].filter((reason) => reason !== null) : []),
   ];
   return { kind: "nothing", reason: `${reasons.join("; ")}, so ${list(waitingNumbers, "and")} wait` };
 }
@@ -108,6 +153,24 @@ function mergeGateReason(gate: MergeGateLoad): string {
   const one = numbers.length + gate.implementRuns === 1;
   const way = onItsWay === null ? null : `${onItsWay} ${one ? "is on its way" : "are on their way"}${at === null ? " to the Merge gate" : ""}`;
   return `caps.merge_gate is ${gate.cap} and ${[at, way].filter((part) => part !== null).join(" and ")}`;
+}
+
+/**
+ * What the check's fixes say beside a full caps.merge_gate (#838): which go
+ * first and which are under way, each named by `name`; null when neither has one.
+ */
+export function checksFixesReason({ first, underWay }: ChecksFixes, name?: (number: number) => string): string | null {
+  const said = (fixes: readonly number[], one: string, many: string) => (fixes.length === 0 ? [] : [`${list(fixes, "and", name)} ${fixes.length === 1 ? one : many}`]);
+  const parts = [
+    ...said(first, "fixes a red check and goes first", "fix red checks and go first"),
+    ...said(underWay, "fixes a red check and is under way", "fix red checks and are under way"),
+  ];
+  return parts.length === 0 ? null : parts.join("; ");
+}
+
+/** Whether there is a check's fix to name. */
+export function hasChecksFixes({ first, underWay }: ChecksFixes): boolean {
+  return first.length + underWay.length > 0;
 }
 
 /**
@@ -243,7 +306,7 @@ export function waitingForDispatch(
 export type DispatchCandidates = Pick<DispatchSnapshot, "tickets" | "researchDecisions" | "implementRunTickets">;
 
 /**
- * Every issue Dispatch weighs, lowest issue number first, with why it can't be
+ * Every issue Dispatch weighs, each check's fix first (#838), then lowest issue number first, with why it can't be
  * released, or null; a blocker named from `here`, the repo, by number alone
  * when it is there, or by its repo everywhere when `here` is null.
  */
@@ -253,13 +316,15 @@ function candidatesOf(snapshot: DispatchCandidates, held: HeldDispatched, here: 
       number: ticket.number,
       label: DISPATCH_LABEL,
       why: held.implement.includes(ticket.number) && ticket.open ? `#${ticket.number} is held` : whyNotEligible(ticket, snapshot.implementRunTickets, here),
+      checksFix: isChecksFix(ticket),
     })),
     ...snapshot.researchDecisions.map((decision): Candidate => ({
       number: decision.number,
       label: RESEARCH_LABEL,
       why: held.research.includes(decision.number) && decision.open ? `#${decision.number} is held` : whyNotReleasable(decision, here),
+      checksFix: false,
     })),
-  ].sort((a, b) => a.number - b.number);
+  ].sort((a, b) => Number(b.checksFix) - Number(a.checksFix) || a.number - b.number);
 }
 
 function count(n: number, one: string, many: string): string {
@@ -332,9 +397,9 @@ function whyBlocked(name: string, { openBlockers, notPlannedBlockers, hiddenBloc
   return null;
 }
 
-/** `#1, #2`, or with a conjunction `#1, #2 and #3`. */
-function list(numbers: readonly number[], conjunction?: string): string {
-  const names = numbers.map((n) => `#${n}`);
+/** `#1, #2`, or with a conjunction `#1, #2 and #3`; each named by `name` when given. */
+function list(numbers: readonly number[], conjunction?: string, name: (number: number) => string = (n) => `#${n}`): string {
+  const names = numbers.map(name);
   if (conjunction === undefined || names.length < 2) return names.join(", ");
   return `${names.slice(0, -1).join(", ")} ${conjunction} ${names.at(-1)}`;
 }

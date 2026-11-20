@@ -14,9 +14,9 @@ import {
   tickSnapshot,
   withoutNotes,
 } from "../__fixtures__/snapshots.ts";
-import { waitingForDispatch } from "./dispatch.ts";
+import { dispatch, mergeGateLoadOf, waitingForDispatch } from "./dispatch.ts";
 import { planFor } from "./rules.ts";
-import type { LoopEvent } from "./types.ts";
+import type { DispatchSnapshot, LoopEvent, TicketSnapshot } from "./types.ts";
 
 const check = { kind: "dispatch-check" } as const;
 
@@ -305,6 +305,140 @@ describe("A caps.merge_gate of 0", () => {
       kind: "nothing",
       reason: "Dispatch holds Tickets while any agent PR is at or on its way to the Merge gate (caps.merge_gate is 0), so #14, #15 and #16 wait",
     });
+  });
+});
+
+describe("A check's fix: a ready-for-agent Ticket carrying fabrik:flaky-check (#838)", () => {
+  const fix = (number: number, overrides: Parameters<typeof aTicket>[0] = {}) => aTicket({ number, labels: ["ready-for-agent", "fabrik:flaky-check"], ...overrides });
+  const dispatched = (plan: ReturnType<typeof planFor>) =>
+    plan.kind === "act" ? plan.actions.map((action) => ("issue" in action ? action.issue : null)) : [];
+  // The Product in #838: one agent PR held at the gate by the red check, two drafts on their way.
+  const fullGate = { openAgentPullRequestsAtMergeGate: [41], openAgentDraftPullRequests: [42, 43] };
+  const roomy = kitConfig({ maxInFlight: 4 });
+  const dispatchOf = (tickets: readonly TicketSnapshot[], inFlight: Partial<Omit<DispatchSnapshot, "tickets">>): DispatchSnapshot => {
+    const snapshot = dispatchSnapshotOf(tickets, inFlight).dispatch;
+    if (snapshot === null || snapshot === undefined) throw new Error("no Dispatch snapshot");
+    return snapshot;
+  };
+
+  it("is released past a full Merge gate, and no other Ticket is", () => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50), aTicket({ number: 60 })], fullGate), roomy);
+
+    expect(plan).toEqual({ kind: "act", actions: [{ kind: "add-labels", issue: 50, labels: ["agent:implement"] }] });
+  });
+
+  it("is released past a caps.merge_gate of 0 while an agent PR is at or on its way to the gate", () => {
+    const zero = kitConfig({ maxInFlight: 4, caps: { ...kitConfig().caps, mergeGate: 0 } });
+
+    expect(dispatched(planFor(check, dispatchSnapshotOf([fix(50), aTicket({ number: 60 })], { openAgentPullRequestsAtMergeGate: [41] }), zero))).toEqual([50]);
+    expect(dispatched(planFor(check, dispatchSnapshotOf([fix(50), aTicket({ number: 60 })], { openAgentDraftPullRequests: [42] }), zero))).toEqual([50]);
+  });
+
+  it("is released ahead of a lower-numbered Ticket and research Decision when one slot is free", () => {
+    const candidates = { tickets: [aTicket({ number: 30 }), fix(50)], researchDecisions: [aResearchDecision({ number: 20 })], implementRunTickets: [] };
+
+    expect(dispatched(planFor(check, dispatchSnapshotOf(candidates.tickets, { researchDecisions: candidates.researchDecisions }), kitConfig({ maxInFlight: 1 })))).toEqual([50]);
+    expect(waitingForDispatch(candidates, { implement: [], research: [] })).toEqual([50, 20, 30]);
+  });
+
+  it("goes lowest issue number first among check's fixes, each passing a full gate while max_in_flight has room", () => {
+    const tickets = [aTicket({ number: 30 }), fix(52), fix(51)];
+
+    expect(dispatched(planFor(check, dispatchSnapshotOf(tickets, fullGate), kitConfig({ maxInFlight: 5 })))).toEqual([51, 52]);
+    expect(dispatched(planFor(check, dispatchSnapshotOf(tickets), kitConfig({ maxInFlight: 1 })))).toEqual([51]);
+  });
+
+  it("is held by a full max_in_flight, which Dispatch names, naming the fix beside the gate that holds the rest", () => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50), aTicket({ number: 60 })], fullGate), kitConfig({ maxInFlight: 2 }));
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason:
+        "max_in_flight is 2 and 2 are in flight (2 open agent draft PRs, 0 Implement runs in progress, 0 dispatched and waiting); " +
+        "caps.merge_gate is 3 and #41 is at the Merge gate and #42, #43 are on their way; #50 fixes a red check and goes first, so #50 and #60 wait",
+    });
+  });
+
+  it("names only max_in_flight when the fix is all that waits", () => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50)], fullGate), kitConfig({ maxInFlight: 2 }));
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "max_in_flight is 2 and 2 are in flight (2 open agent draft PRs, 0 Implement runs in progress, 0 dispatched and waiting), so #50 wait",
+    });
+  });
+
+  it("is paused by a max_in_flight of 0", () => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50)], fullGate), kitConfig({ maxInFlight: 0 }));
+
+    expect(plan).toEqual({ kind: "nothing", reason: "Dispatch is paused because max_in_flight is 0, so #50 wait" });
+  });
+
+  it("names a fix already under way as under way when the gate holds the Tickets behind it", () => {
+    const working = fix(50, { labels: ["ready-for-agent", "fabrik:flaky-check", "agent:implement"] });
+
+    const plan = planFor(check, dispatchSnapshotOf([working, aTicket({ number: 60 })], fullGate), roomy);
+
+    expect(plan).toEqual({
+      kind: "nothing",
+      reason: "caps.merge_gate is 3 and #41 is at the Merge gate and #42, #43, #50 are on their way; #50 fixes a red check and is under way, so #60 wait",
+    });
+  });
+
+  it.each([
+    ["its open PR", { openLinkedPullRequests: [44] }, { openAgentPullRequestsAtMergeGate: [41], openAgentDraftPullRequests: [42, 44] }],
+    ["its Implement run under way", {}, { ...fullGate, implementRunsInProgress: 1, implementRunsWithoutPullRequest: 1, implementRunTickets: [50] }],
+  ])("counts a fix as under way by %s", (_, overrides, inFlight) => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50, overrides), aTicket({ number: 60 })], inFlight), kitConfig({ maxInFlight: 5 }));
+
+    expect(plan.kind === "nothing" ? plan.reason : null).toContain("; #50 fixes a red check and is under way, so #60 wait");
+  });
+
+  it.each([
+    ["a Blocker", { openBlockers: [issueRef(9)] }],
+    ["a failed last run", { lastRunFailed: true }],
+    ["sub-issues", { subIssues: 2 }],
+  ])("doesn't name a fix that neither goes first nor is under way, held by %s", (_, overrides) => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50, overrides), aTicket({ number: 60 })], fullGate), roomy);
+
+    expect(plan).toEqual({ kind: "nothing", reason: "caps.merge_gate is 3 and #41 is at the Merge gate and #42, #43 are on their way, so #60 wait" });
+  });
+
+  it.each([
+    ["a Blocker", { openBlockers: [issueRef(9)] }, "#50 is blocked by #9"],
+    ["an open PR", { openLinkedPullRequests: [70] }, "#50 already has the open PR #70"],
+    ["a failed last run", { lastRunFailed: true }, "#50's last Implement run failed, so only adding agent:implement again runs it"],
+  ])("isn't released with %s", (_, overrides, why) => {
+    const plan = planFor(check, dispatchSnapshotOf([fix(50, overrides)], fullGate), roomy);
+
+    expect(plan).toEqual({ kind: "nothing", reason: `No Ticket can be dispatched: ${why}` });
+  });
+
+  it("isn't released while its run is held", () => {
+    const plan = dispatch(dispatchOf([fix(50)], fullGate), roomy, { implement: [50], research: [] }, "operator");
+
+    expect(plan).toEqual({ kind: "nothing", reason: "No Ticket can be dispatched: #50 is held" });
+  });
+
+  it("counts toward the Gate load once released, so the Ticket behind it waits until the load is under the cap", () => {
+    const released = fix(50, { labels: ["ready-for-agent", "fabrik:flaky-check", "agent:implement"] });
+    const gate = mergeGateLoadOf(dispatchOf([released], fullGate), { implement: [], research: [] }, 3);
+
+    expect({ load: gate.load, free: gate.free }).toEqual({ load: 4, free: 0 });
+    expect(dispatched(planFor(check, dispatchSnapshotOf([released, aTicket({ number: 60 })], { openAgentDraftPullRequests: [42, 43] }), roomy))).toEqual([]);
+    expect(dispatched(planFor(check, dispatchSnapshotOf([released, aTicket({ number: 60 })], { openAgentDraftPullRequests: [42] }), roomy))).toEqual([60]);
+  });
+
+  it("gives an issue carrying fabrik:flaky-check that isn't ready-for-agent no place", () => {
+    const untriaged = aTicket({ number: 50, labels: ["needs-triage", "fabrik:flaky-check"] });
+    const candidates = { tickets: [untriaged, aTicket({ number: 60 })], researchDecisions: [], implementRunTickets: [] };
+
+    expect(planFor(check, dispatchSnapshotOf(candidates.tickets, fullGate), roomy)).toEqual({
+      kind: "nothing",
+      reason: "caps.merge_gate is 3 and #41 is at the Merge gate and #42, #43 are on their way, so #60 wait",
+    });
+    expect(planFor(check, dispatchSnapshotOf([untriaged], {}), roomy)).toEqual({ kind: "nothing", reason: "No Ticket can be dispatched: #50 isn't ready-for-agent" });
+    expect(waitingForDispatch(candidates, { implement: [], research: [] })).toEqual([60]);
   });
 });
 

@@ -5,6 +5,7 @@
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { AGENT_BRANCH_PREFIX } from "../loop/agentPullRequest.ts";
 import type { IssueRef } from "../loop/blockers.ts";
+import { checksFixesReason } from "../loop/dispatch.ts";
 import type { HandBack } from "../loop/handBacks.ts";
 import {
   DISPATCH_LABEL,
@@ -670,6 +671,8 @@ export interface HeldMergeGate {
   /** Whether the runs in progress couldn't be read, so `onItsWay` leaves them out. */
   readonly runsUnread: boolean;
   readonly waiting: readonly WaitingForSlot[];
+  /** The check's fixes that go first, past the cap, so none is listed as waiting, and those under way, lowest first in each (#838). */
+  readonly checksFixes: { readonly first: readonly number[]; readonly underWay: readonly number[] };
 }
 
 /** A Ticket or research Decision waiting for Dispatch. */
@@ -1646,8 +1649,8 @@ function heldMergeGateOf(facts: GitHubFacts, kit: RepoKitFacts | null, standings
     return since === undefined ? [] : [{ number, since, age: now - Date.parse(since) }];
   });
   if (hold === null || waiting.length === 0) return null;
-  const { mergeGate, atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread } = hold;
-  return { mergeGate, atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread, waiting };
+  const { mergeGate, atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread, checksFixes } = hold;
+  return { mergeGate, atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread, waiting, checksFixes };
 }
 
 /**
@@ -2110,13 +2113,16 @@ function heldDispatchLine(repo: string, held: HeldDispatch): string {
 
 /**
  * What caps.merge_gate holds: the PRs at the gate and the Ticket work on its
- * way there; then each waiting Ticket with how long it has waited.
+ * way there, and each open check's fix, which goes first (#838); then each
+ * waiting Ticket with how long it has waited.
  */
 function heldMergeGateLine(repo: string, held: HeldMergeGate): string {
   const link = (number: number) => `[#${number}](https://github.com/${repo}/issues/${number})`;
   const waiting = held.waiting.map(({ number, age }) => (age === null ? link(number) : `${link(number)} (${duration(age)})`)).join(", ");
+  const fixesReason = checksFixesReason(held.checksFixes, link);
+  const fixes = fixesReason === null ? "" : `; ${fixesReason}`;
   if (held.mergeGate === 0) {
-    return `- ${repo}: waiting for the Merge gate: Dispatch holds Tickets while any agent PR is at or on its way to it (\`caps.merge_gate\` is 0) · ${waiting}`;
+    return `- ${repo}: waiting for the Merge gate: Dispatch holds Tickets while any agent PR is at or on its way to it (\`caps.merge_gate\` is 0)${fixes} · ${waiting}`;
   }
   const { atGate, onItsWay, onItsWayPullRequests, onItsWayIssues, runsUnread } = held;
   const pull = (number: number) => `[#${number}](https://github.com/${repo}/pull/${number})`;
@@ -2127,7 +2133,7 @@ function heldMergeGateLine(repo: string, held: HeldMergeGate): string {
   const way =
     onItsWay === 0 ? null : at === null ? `${counted} ${onItsWay === 1 ? "is on its way to it" : "are on their way to it"}` : `${counted} ${onItsWay === 1 ? "on its way" : "on their way"}`;
   const unread = runsUnread ? " (runs in progress unread)" : "";
-  return `- ${repo}: waiting for the Merge gate: \`caps.merge_gate\` is ${held.mergeGate} and ${[at, way].filter((part) => part !== null).join(", ")}${unread} · ${waiting}`;
+  return `- ${repo}: waiting for the Merge gate: \`caps.merge_gate\` is ${held.mergeGate} and ${[at, way].filter((part) => part !== null).join(", ")}${unread}${fixes} · ${waiting}`;
 }
 
 /** The Held runs, each with its role and the weekly-limit issues holding it, then each open weekly-limit issue with its reset. */

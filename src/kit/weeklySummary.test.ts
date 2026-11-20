@@ -4036,6 +4036,20 @@ describe("the Weekly summary", () => {
           );
         });
 
+        it("names an open check's fix beside the Tickets it holds, and doesn't list the fix as held (#838)", () => {
+          const result = summaryWith(
+            factsOf({ openPullRequests: [atGate(21, 1), atGate(22, 2), anOpenPullRequest({ number: 23, ticket: 11 })], openIssues: [ready(14, 80), ready(50, 7)] }),
+            aRepoKit({
+              config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight: 4 } },
+              dispatch: { candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 50, labels: ["ready-for-agent", "fabrik:flaky-check"] })], researchDecisions: [] } },
+            }),
+          );
+          expect(result.body).toContain(
+            `- owner/product: waiting for the Merge gate: \`caps.merge_gate\` is 3 and ${pull(21)}, ${pull(22)} are at it, ${pull(23)} on its way; ${issue(50)} fixes a red check and goes first · ${issue(14)} (3 days)`,
+          );
+          expect(result.summary.repos[0]?.held?.mergeGate).toMatchObject({ checksFixes: { first: [50], underWay: [] }, waiting: [{ number: 14 }] });
+        });
+
         it("says what a caps.merge_gate of 0 holds", () => {
           const result = summaryWith(
             factsOf({ openPullRequests: [atGate(21, 1)], openIssues: [ready(14, 80)] }),

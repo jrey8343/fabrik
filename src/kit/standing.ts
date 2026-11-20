@@ -128,10 +128,16 @@ export interface StandingDetails {
   readonly held:
     | { readonly carrier: number | null; readonly role: AgentRole }
     | { readonly carrier: null; readonly role: "audit" | "retro"; readonly failed: readonly number[]; readonly until: string };
-  /** A Ticket caps.merge_gate holds names that cap (#459); it wins over max_in_flight when both hold, as the Operator can clear it. */
+  /**
+   * A Ticket caps.merge_gate holds names that cap (#459); it wins over
+   * max_in_flight when both hold, as the Operator can clear it. While a check's
+   * fix goes first, past the cap, or is under way, `checksFixes` names it
+   * under `first` or `underWay`, lowest first in each (#838). With neither,
+   * the field is left out.
+   */
   readonly "waiting-for-slot":
     | { readonly slot: "max-in-flight" | "design-session"; readonly maxInFlight: number | null }
-    | { readonly slot: "merge-gate"; readonly mergeGate: number };
+    | { readonly slot: "merge-gate"; readonly mergeGate: number; readonly checksFixes?: { readonly first: readonly number[]; readonly underWay: readonly number[] } };
   readonly "waiting-for-reset": { readonly resetsAt: string | null };
   readonly "not-started": NotStartedDetail;
   readonly "waiting-on-kit": WaitingOnKitDetail;
