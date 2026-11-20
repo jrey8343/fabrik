@@ -51,7 +51,7 @@ describe("The picture an item of the Digest writer's reply names", () => {
   ])("breaks the reply's shape when it %s, naming it", (_what, broken) => {
     expect(readDigestReply(aDigestReply({ items: [anItem("not-proven"), { ...anItem("yours-to-judge"), ...broken } as unknown as DigestItem] }))).toEqual({
       ok: false,
-      errors: ["items[1].picture must be a route as text, or null"],
+      errors: ["items[1].picture must be one route or one named shot, as text, or null"],
     });
   });
 
@@ -244,7 +244,7 @@ describe("A Digest with a picture, as the push job lands it", () => {
     expect(comment).toEqual({
       kind: "comment",
       issue: 50,
-      body: noDigestLine({ head: HEAD_SHA, how: "refused", reason: "items[0].picture must be a route as text, or null", runUrl: aDigestGiven().runUrl }),
+      body: noDigestLine({ head: HEAD_SHA, how: "refused", reason: "items[0].picture must be one route or one named shot, as text, or null", runUrl: aDigestGiven().runUrl }),
     });
     expect(rest.map(({ kind }) => kind)).toEqual(GATE_OPENS);
   });

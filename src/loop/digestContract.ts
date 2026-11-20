@@ -313,8 +313,8 @@ function readItem(value: unknown, where: string, errors: string[]): DigestItem |
   if (!isText(sentence)) errors.push(`${where}.sentence must be non-empty text`);
   if (!Array.isArray(asks) || !asks.every(isText)) errors.push(`${where}.asks must be a list of ask ids`);
   const places = readPlaces(value["places"], `${where}.places`, errors);
-  // One route at most: a list of them is no picture.
-  if (picture !== null && typeof picture !== "string") errors.push(`${where}.picture must be a route as text, or null`);
+  // One route or one named shot at most: a list of them is no picture.
+  if (picture !== null && typeof picture !== "string") errors.push(`${where}.picture must be one route or one named shot, as text, or null`);
   if (suggestedRequest !== null && typeof suggestedRequest !== "string") errors.push(`${where}.suggestedRequest must be text or null`);
   if (errors.length > errorsBefore || kind === undefined) return null;
   return {
