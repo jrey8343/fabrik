@@ -3,7 +3,7 @@
 // artifact's rules, and the question a caller asks of a reading. It touches no
 // network and no disk: the caller hands in the manifest's text and the files
 // beside it.
-import { isRoute, UI_VIEWPORTS, type Viewport } from "../kit/config.ts";
+import { isRoute, VIEWPORT_NAMES, type Viewport } from "../kit/config.ts";
 
 // The artifact's default name, which Kit config's ui.shots.artifact can change.
 // Kit config defines it, since this module reads config.ts and not the other way.
@@ -56,32 +56,6 @@ export const DROP_REASONS = [
 
 export type DropReason = (typeof DROP_REASONS)[number];
 
-/** Each rule's reason in words, as the Kit says it of an entry it dropped. */
-const DROP_SENTENCES: Readonly<Record<DropReason, string>> = {
-  "not-an-entry": "It is not an object.",
-  "name-not-text": "It has no name: a name must be text, and not empty.",
-  "name-not-one-line": "Its name spans more than one line.",
-  "name-too-long": "Its name is over 80 characters.",
-  "name-bad-character": "Its name has a character other than letters A to Z, digits, spaces and `: - _ / . ,`.",
-  "journey-not-text": "Its journey is given but is not text, or is empty.",
-  "journey-not-one-line": "Its journey spans more than one line.",
-  "journey-too-long": "Its journey is over 80 characters.",
-  "journey-bad-character": "Its journey has a character other than letters A to Z, digits, spaces and `: - _ / . ,`.",
-  "path-not-a-route": "Its path is not a path starting with one /.",
-  "no-images": "It lists no image: images must give a mobile or a desktop file, or both.",
-  "image-name-not-flat": "An image's file name is not a plain file name: it has a folder, a `..`, or a character other than letters, digits, `.`, `_` and `-`.",
-  "image-name-not-png": "An image's file name doesn't end .png.",
-  "images-not-found": "None of its images is in the artifact.",
-  "image-not-a-png": "An image doesn't start as a PNG file does.",
-  "image-too-large": "An image is over 1 MB.",
-  "duplicate-name": "Another entry has the same name, so neither is shown under it.",
-};
-
-/** Why an entry was dropped, as a sentence a caller can show. */
-export function droppedShotSentence(reason: DropReason): string {
-  return DROP_SENTENCES[reason];
-}
-
 /** An entry of the manifest that broke one of the artifact's rules. */
 export interface DroppedShot {
   /** Where it sits in the manifest's shots list, from 0. */
@@ -112,17 +86,17 @@ export interface ShotsManifest {
 /** The most shots a manifest's reading keeps: the first this many entries. */
 export const SHOT_LIMIT = 100;
 
-/** The two sizes, in the order the Kit shows them: UI evidence's viewports. */
-const SHOT_SIZES: readonly ShotSize[] = UI_VIEWPORTS.map(({ name }) => name);
-
 /** The most bytes an image may have: 1 MB. */
 export const SHOT_IMAGE_MAX_BYTES = 1_048_576;
+
+/** SHOT_IMAGE_MAX_BYTES as a sentence says it. */
+const IMAGE_MAX_SIZE = `${SHOT_IMAGE_MAX_BYTES / 1_048_576} MB`;
 
 /** How every PNG file starts. */
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 /** A flat file name: letters, digits, `.`, `_` and `-`, starting with a letter or digit, so no folder and no hidden file. */
-const FLAT_FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+export const FLAT_FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** The most characters a shot's name, or its Journey, may have. */
 export const SHOT_NAME_MAX_LENGTH = 80;
@@ -150,6 +124,32 @@ export function isShotName(value: unknown): value is string {
 
 /** The name rule, as a clause the Kit says it in. */
 export const SHOT_NAME_RULE = `a name is at most ${SHOT_NAME_MAX_LENGTH} characters on one line, of letters A to Z, digits, spaces and \`: - _ / . ,\``;
+
+/** Each rule's reason in words, as the Kit says it of an entry it dropped. */
+const DROP_SENTENCES: Readonly<Record<DropReason, string>> = {
+  "not-an-entry": "It is not an object.",
+  "name-not-text": "It has no name: a name must be text, and not empty.",
+  "name-not-one-line": "Its name spans more than one line.",
+  "name-too-long": `Its name is over ${SHOT_NAME_MAX_LENGTH} characters.`,
+  "name-bad-character": "Its name has a character other than letters A to Z, digits, spaces and `: - _ / . ,`.",
+  "journey-not-text": "Its journey is given but is not text, or is empty.",
+  "journey-not-one-line": "Its journey spans more than one line.",
+  "journey-too-long": `Its journey is over ${SHOT_NAME_MAX_LENGTH} characters.`,
+  "journey-bad-character": "Its journey has a character other than letters A to Z, digits, spaces and `: - _ / . ,`.",
+  "path-not-a-route": "Its path is not a path starting with one /.",
+  "no-images": "It lists no image: images must give a mobile or a desktop file, or both.",
+  "image-name-not-flat": "An image's file name is not a plain file name: it has a folder, a `..`, or a character other than letters, digits, `.`, `_` and `-`.",
+  "image-name-not-png": "An image's file name doesn't end .png.",
+  "images-not-found": "None of its images is in the artifact.",
+  "image-not-a-png": "An image doesn't start as a PNG file does.",
+  "image-too-large": `An image is over ${IMAGE_MAX_SIZE}.`,
+  "duplicate-name": "Another entry has the same name, so neither is shown under it.",
+};
+
+/** Why an entry was dropped, as a sentence a caller can show. */
+export function droppedShotSentence(reason: DropReason): string {
+  return DROP_SENTENCES[reason];
+}
 
 /** A manifest that can't be read at all: a failure of the Product's wiring, never of one shot. */
 export interface BadManifest {
@@ -210,7 +210,7 @@ function readEntry(entry: unknown, beside: ReadonlyMap<string, ArtifactFile>): E
   if (journeyBroken !== null) return `journey-${journeyBroken}`;
   if (path !== undefined && !isRoute(path)) return "path-not-a-route";
   if (!isObject(images)) return "no-images";
-  const listed = SHOT_SIZES.filter((size) => images[size] !== undefined);
+  const listed = VIEWPORT_NAMES.filter((size) => images[size] !== undefined);
   if (listed.length === 0) return "no-images";
   for (const size of listed) {
     const file = images[size];
@@ -235,8 +235,10 @@ function readEntry(entry: unknown, beside: ReadonlyMap<string, ArtifactFile>): E
   };
 }
 
-/** Why a name a pull request gave has no shot in a reading. */
-export type ShotNotProduced = "not-produced" | "ambiguous-name" | "refused";
+/** Why a name a pull request gave has no shot in a reading: each an Evidence miss that sends back, as `size-missing` never is. */
+export const SHOT_NOT_PRODUCED = ["not-produced", "ambiguous-name", "refused"] as const;
+
+export type ShotNotProduced = (typeof SHOT_NOT_PRODUCED)[number];
 
 /** What a reading says of one name a pull request gave. */
 export type NamedShotAnswer =
@@ -265,16 +267,29 @@ export function namedShots(reading: ShotsManifest, names: readonly string[]): Na
   const answers = names.map((name): NamedShotAnswer => {
     if (reading.ambiguous.includes(name)) return { name, produced: false, why: "ambiguous-name" };
     const shot = reading.shots.find((candidate) => candidate.name === name);
-    if (shot !== undefined) return { name, produced: true, shot, sizes: SHOT_SIZES.filter((size) => shot.images[size] !== undefined) };
+    if (shot !== undefined) return { name, produced: true, shot, sizes: VIEWPORT_NAMES.filter((size) => shot.images[size] !== undefined) };
     if (reading.dropped.some((entry) => entry.name === name)) return { name, produced: false, why: "refused" };
     return { name, produced: false, why: "not-produced" };
   });
   const missed = answers.flatMap((answer): ShotMiss[] =>
     answer.produced
-      ? SHOT_SIZES.filter((size) => !answer.sizes.includes(size)).map((viewport) => ({ name: answer.name, viewport, why: "size-missing" }))
+      ? VIEWPORT_NAMES.filter((size) => !answer.sizes.includes(size)).map((viewport) => ({ name: answer.name, viewport, why: "size-missing" }))
       : [{ name: answer.name, why: answer.why }],
   );
   return { answers, missed };
+}
+
+/**
+ * A missed shot as a shots marker or a review job's step output holds it,
+ * when it reads, as a list of none or one: its name held to the name rule,
+ * its reason one of the Kit's, and a missing size one of the two.
+ */
+export function shotMissOf(value: unknown): ShotMiss[] {
+  if (!isObject(value) || !isShotName(value.name)) return [];
+  const { name, why, viewport } = value;
+  if (why === "size-missing") return VIEWPORT_NAMES.some((size) => size === viewport) ? [{ name, viewport: viewport as ShotSize, why }] : [];
+  const notProduced = SHOT_NOT_PRODUCED.find((reason) => reason === why);
+  return notProduced === undefined ? [] : [{ name, why: notProduced }];
 }
 
 function startsAsPng(start: Uint8Array): boolean {

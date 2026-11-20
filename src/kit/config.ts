@@ -233,6 +233,9 @@ export const UI_VIEWPORTS: readonly Viewport[] = [
   { name: "desktop", width: 1440, height: 900 },
 ];
 
+/** The viewports' names, mobile before desktop: the two sizes an Evidence shot is taken at, too. */
+export const VIEWPORT_NAMES: readonly Viewport["name"][] = UI_VIEWPORTS.map(({ name }) => name);
+
 /**
  * The most routes UI evidence captures, so capture stays fast: a Kit constant,
  * not Kit config. A route the Ticket names is captured even past it.
@@ -856,7 +859,7 @@ function readUi(ui: Reader | null | undefined, requiredChecks: readonly string[]
 }
 
 /** The `ui` fields only route capture reads, which Evidence shots take the place of. */
-const ROUTE_CAPTURE_FIELDS = ["before_url", "default_routes", "resolve_route"] as const;
+export const ROUTE_CAPTURE_FIELDS = ["before_url", "default_routes", "resolve_route"] as const;
 
 /** Names each of route capture's fields a ui with shots sets, in a message of its own, without reading its value. */
 function refuseBesideShots(ui: Reader): void {

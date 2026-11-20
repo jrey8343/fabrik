@@ -5,7 +5,7 @@
 // Execution flaw for a named shot the check didn't produce. The rules that
 // land them are in src/loop/review.ts.
 import type { ReviewShots, ShotsCollected } from "../evidence/shotsCollect.ts";
-import { code, readShotsMarker, type ShotMissOutcome, shotMissSentence, shotsSection, type ShotsRead, waitingAgainShotsMarker } from "../evidence/uiEvidence.ts";
+import { code, missOutcomeOf, readShotsMarker, shotMissSentence, shotsSection, type ShotsRead, waitingAgainShotsMarker } from "../evidence/uiEvidence.ts";
 import { spelled } from "./readable.ts";
 import { MAX_RETRIES, retryNumber } from "./retry.ts";
 import type { Action, KitConfig, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
@@ -20,7 +20,17 @@ import type { Action, KitConfig, Plan, PullRequestSnapshot, Snapshot } from "./t
 export function missSendsBackAt(pullRequest: PullRequestSnapshot): string | null {
   const { shotsMarker, headSha } = pullRequest;
   if (shotsMarker === null || shotsMarker.pushed !== headSha) return null;
-  return retryNumber(pullRequest.verdicts, pullRequest.ticketLandedNothing) <= MAX_RETRIES ? headSha : null;
+  return retryLeftForMiss(pullRequest) ? headSha : null;
+}
+
+/**
+ * Whether the Ticket has a Retry left for an Evidence miss on the pull
+ * request, counted as retryAfterFlaw counts it: from its Verdicts and the
+ * Ticket's empty diffs and Broken runs, so a pull request a first run opens,
+ * with no Verdict yet, counts from those alone.
+ */
+export function retryLeftForMiss({ verdicts, ticketLandedNothing }: Pick<PullRequestSnapshot, "verdicts" | "ticketLandedNothing">): boolean {
+  return retryNumber(verdicts, ticketLandedNothing) <= MAX_RETRIES;
 }
 
 /**
@@ -70,7 +80,8 @@ export function readShotsSectionActions(pullRequest: PullRequestSnapshot, read: 
     check: shots.check,
     artifact: shots.artifact,
     marker,
-    missOutcome: missOutcomeOf(marker.miss === "nothing-named", marker.pushed, read.collected, sentBack),
+    // A red check never decides a pull request that names nothing, which is judged as its Implement run's push lands.
+    missOutcome: missOutcomeOf({ pushed: marker.pushed === read.collected.head, sentBack, red: marker.miss !== "nothing-named" && read.collected.red }),
     evidencePage: read.artifact === null ? null : `${repoUrl}/actions/runs/${read.run}/artifacts/${read.artifact}`,
   });
   return [{ kind: "replace-evidence-section", issue: pullRequest.number, section }];
@@ -98,18 +109,6 @@ export function withShotsWaitingAfterRebase(plan: Plan, snapshot: Pick<Snapshot,
     return { ...action, pushed: [{ kind: "replace-evidence-section", issue: action.pullRequest, section }, ...action.pushed] };
   });
   return { ...plan, actions };
-}
-
-/**
- * What came of the pull request's Evidence miss at the head the shots were
- * read at: sent back, or not, because the named check is red (which never
- * decides one that names nothing, judged as its Implement run's push landed),
- * because no Implementer run pushed the head, or because no Retry is left.
- */
-function missOutcomeOf(namesNothing: boolean, pushed: string | undefined, collected: ShotsCollected, sentBack: boolean): ShotMissOutcome {
-  if (sentBack) return "sent-back";
-  if (!namesNothing && collected.red) return "check-red";
-  return pushed === collected.head ? "no-retry-left" : "not-pushed";
 }
 
 /**

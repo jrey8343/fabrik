@@ -1,6 +1,6 @@
 // Implementation rules: when an Implementer starts on a Ticket, and how the
 // branch it built lands as one draft PR, or doesn't.
-import { evidenceSection, isUi, type MissOutcome, namesNothing, shotsNamesOf, shotsSection, waitingShotsMarker, withoutEvidence } from "../evidence/uiEvidence.ts";
+import { evidenceSection, isUi, missOutcomeOf, namesNothing, shotsNamesOf, shotsSection, waitingShotsMarker, withoutEvidence } from "../evidence/uiEvidence.ts";
 import { changedTestsSection, together, withoutChangedTests } from "./changedTests.ts";
 import { checkTrustRoot } from "../guard/trust-root.ts";
 import { keptBranchOff } from "./backToDesign.ts";
@@ -46,6 +46,7 @@ import {
 } from "./retry.ts";
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { type AnswerLines, verdictActions } from "./review.ts";
+import { retryLeftForMiss } from "./shotsReview.ts";
 import type {
   Action,
   BranchChanges,
@@ -202,7 +203,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
   const whole = changes.wholeBranch;
   // The PR it opens has no Verdicts yet, so the Retry its Evidence miss would call for comes after the Ticket's empty diffs and Broken runs.
   const pushed = changes.pushedHead;
-  const evidence = evidenceFor(event, config, parsed.output, null, pushed === undefined ? null : 1 + issue.landedNothing <= MAX_RETRIES, whole?.net);
+  const evidence = evidenceFor(event, config, parsed.output, null, pushed === undefined ? null : retryLeftForMiss({ verdicts: [], ticketLandedNothing: issue.landedNothing }), whole?.net);
   const section = evidence?.section ?? null;
   return withStaleDispatchOff({
     kind: "act",
@@ -515,7 +516,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
  * job names no head the push lands (#819).
  */
 function retryLeftAt(pullRequest: PullRequestSnapshot, pushed: string | undefined): boolean | null {
-  return pushed === undefined ? null : retryNumber(pullRequest.verdicts, pullRequest.ticketLandedNothing) <= MAX_RETRIES;
+  return pushed === undefined ? null : retryLeftForMiss(pullRequest);
 }
 
 /** The PR as the run's push leaves it, at `headSha`, pushed by a Request-changes run, a conflict-only run, or neither: what a Verdict on that head reads. */
@@ -767,7 +768,7 @@ function evidenceFor(
   if (shots !== undefined) {
     if (!ui(pullRequest !== null && (pullRequest.shotsMarker !== null || pullRequest.uiEvidenceMarker !== null))) return null;
     const names = shotsNamesOf(output, pullRequest?.shotsMarker ?? null);
-    const missOutcome: MissOutcome = retryLeft === null ? "not-pushed" : retryLeft ? "sent-back" : "no-retry-left";
+    const missOutcome = missOutcomeOf({ pushed: retryLeft !== null, sentBack: retryLeft === true });
     // The push job's run, which its preview step links the preview from, and the head its push lands, at which alone
     // a miss the Review's jobs find is sent back (#820): none for a run that pushes no head.
     const marker = waitingShotsMarker(names, evidence?.run ?? null, preview, retryLeft === null ? null : (event.changes.pushedHead ?? null));

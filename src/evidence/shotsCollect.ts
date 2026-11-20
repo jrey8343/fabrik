@@ -4,8 +4,9 @@
 // before the Reviewer starts. The review job writes it as a step output, which
 // the Reviewer's runner and the push job read back by the same rules. Pure,
 // no I/O: the review job's own step reads the artifact (src/review/shots-main.ts).
-import { isRoute } from "../kit/config.ts";
-import { isShotName, namedShots, type ShotMiss, type ShotSize, type ShotsManifestRead } from "./shotsManifest.ts";
+import { isRoute, VIEWPORT_NAMES } from "../kit/config.ts";
+import { FULL_SHA } from "../skills/lock.ts";
+import { FLAT_FILE_NAME, isShotName, namedShots, SHOT_NOT_PRODUCED, type ShotMiss, shotMissOf, type ShotSize, type ShotsManifestRead } from "./shotsManifest.ts";
 import { SHOTS_FAILURES, type ShotsFailure } from "./uiEvidence.ts";
 
 /**
@@ -62,9 +63,6 @@ export interface ShotsCollected {
   readonly sendsBack: boolean;
 }
 
-/** Why a named shot that wasn't produced sends the pull request back; `size-missing` never does. */
-const SENDS_BACK: readonly ShotMiss["why"][] = ["not-produced", "ambiguous-name", "refused"];
-
 /**
  * What the Review's jobs collect: the reading of the artifact the named
  * check's newest attempt at `head` uploaded, or null when it uploaded none,
@@ -92,7 +90,7 @@ export function collectShots({ reading, given, head, red }: { readonly reading: 
     missed,
     produced: reading.shots.map(({ name }) => name),
     pastLimit: reading.pastLimit,
-    sendsBack: !red && given.sendsBackAt === head && missed.some(({ why }) => SENDS_BACK.includes(why)),
+    sendsBack: !red && given.sendsBackAt === head && missed.some(({ why }) => (SHOT_NOT_PRODUCED as readonly ShotMiss["why"][]).includes(why)),
   };
 }
 
@@ -149,21 +147,18 @@ export function reviewShotsFrom(text: string): ReviewShots {
   return { check, artifact, names, ...(typeof nothingVisible === "string" ? { nothingVisible } : {}), sendsBackAt };
 }
 
-/** A full commit sha. */
-const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-
-/** An image's file name as the artifact's rules allow it: flat, ending .png. */
-const IMAGE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.png$/;
-
-const SIZES: readonly ShotSize[] = ["mobile", "desktop"];
+/** Whether an image's file name is as the artifact's rules allow it: flat, ending .png. */
+function isImageFile(file: unknown): file is string {
+  return typeof file === "string" && FLAT_FILE_NAME.test(file) && !file.includes("..") && file.endsWith(".png");
+}
 
 function collectedShotOf(value: unknown): CollectedShot[] {
   if (!isObject(value) || !isShotName(value.name)) return [];
   const images = isObject(value.images) ? value.images : {};
   const kept = Object.fromEntries(
-    SIZES.flatMap((size) => {
+    VIEWPORT_NAMES.flatMap((size) => {
       const file = images[size];
-      return typeof file === "string" && IMAGE_FILE.test(file) && !file.includes("..") ? [[size, file]] : [];
+      return isImageFile(file) ? [[size, file]] : [];
     }),
   ) as Partial<Record<ShotSize, string>>;
   if (Object.keys(kept).length === 0) return [];
@@ -175,13 +170,6 @@ function collectedShotOf(value: unknown): CollectedShot[] {
       images: kept,
     },
   ];
-}
-
-function shotMissOf(value: unknown): ShotMiss[] {
-  if (!isObject(value) || !isShotName(value.name)) return [];
-  const { name, why, viewport } = value;
-  if (why === "size-missing") return viewport === "mobile" || viewport === "desktop" ? [{ name, viewport, why }] : [];
-  return why === "not-produced" || why === "ambiguous-name" || why === "refused" ? [{ name, why }] : [];
 }
 
 /** A check's or artifact's name, as Kit config holds it: text on one line. */

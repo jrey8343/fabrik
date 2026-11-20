@@ -13,7 +13,7 @@
 // first, and answers it would refuse are written nowhere. A block that means
 // the same, whatever its formatting or the order of its fields, is left as it
 // is, so running it again with the same answers writes nothing.
-import { KIT_CONFIG_PATH, resolveKitConfig } from "../kit/config.ts";
+import { KIT_CONFIG_PATH, resolveKitConfig, ROUTE_CAPTURE_FIELDS } from "../kit/config.ts";
 import { withMember, withoutMember } from "./json.ts";
 
 /** The blocks this writer owns, in the order it adds them. */
@@ -79,7 +79,7 @@ export function writeVisualEvidence(config: string | null, answersText: string):
  * back to captured routes. Taking out any other field is turning off what
  * the Operator turned on, which the answers' blocks say with `null`.
  */
-const REMOVABLE = ["ui.before_url", "ui.default_routes", "ui.resolve_route", "ui.shots"] as const;
+const REMOVABLE: readonly string[] = [...ROUTE_CAPTURE_FIELDS.map((field) => `ui.${field}`), "ui.shots"];
 
 /**
  * The `ui` fields the answers' `remove` confirms taking out, none when it's
@@ -95,7 +95,7 @@ function removals(answers: Record<string, unknown>): string[] | { readonly probl
   }
   const ui = answers.ui;
   const problems = remove.flatMap((name) => {
-    if (!(REMOVABLE as readonly string[]).includes(name)) return [`The answers' remove names ${JSON.stringify(name)}, which the writer never takes out: ${removable}`];
+    if (!REMOVABLE.includes(name)) return [`The answers' remove names ${JSON.stringify(name)}, which the writer never takes out: ${removable}`];
     if (!isObject(ui)) return [`The answers' remove names ${name}, but they hold no ui block to take it out of`];
     return Object.hasOwn(ui, fieldOf(name)) ? [`The answers both give ${name} and take it out: give it, or take it out`] : [];
   });
@@ -144,7 +144,7 @@ function requiredChecksFor(ui: unknown, sandbox: unknown): { readonly sandbox?: 
   return { sandbox: { checks: sandbox.checks } };
 }
 
-/** Whether two JSON values mean the same:an object's members in any order, a list's items in theirs. */
+/** Whether two JSON values mean the same: an object's members in any order, a list's items in theirs. */
 function sameJson(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) || Array.isArray(b)) {
     return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, i) => sameJson(item, b[i]));

@@ -19,9 +19,10 @@ import {
   UI_VIEWPORTS,
   type UiConfig,
   type Viewport,
+  VIEWPORT_NAMES,
 } from "../kit/config.ts";
 import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
-import { isShotName, SHOT_LIMIT, SHOT_NAME_RULE, type ShotMiss, type ShotSize, SHOTS_MANIFEST_FILE } from "./shotsManifest.ts";
+import { isShotName, SHOT_LIMIT, SHOT_NAME_RULE, type ShotMiss, shotMissOf, type ShotSize, SHOTS_MANIFEST_FILE } from "./shotsManifest.ts";
 import type { ShotsCollected } from "./shotsCollect.ts";
 import { linesOutsideCode, markerJson } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
@@ -304,8 +305,6 @@ export function readCaptureResult(value: unknown): CaptureResultRead {
       : { outcome: "failed", reason: reason as CaptureFailure, headSha: headSha as string, captures: checked, ...named };
   return { ok: true, result };
 }
-
-const VIEWPORT_NAMES = UI_VIEWPORTS.map(({ name }) => name);
 
 /** A plain file name in the capture's folder: never a path, `..`, or a hidden file. */
 const IMAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -1263,6 +1262,18 @@ export type MissOutcome = "sent-back" | "no-retry-left" | "not-pushed";
 /** What came of a named shot the check's run didn't produce (#820): as for any miss, or nothing sent back because the named check is still red. */
 export type ShotMissOutcome = MissOutcome | "check-red";
 
+/**
+ * What came of an Evidence miss at a head: sent back when the plan `sentBack`
+ * it; else nothing sent back because the named check is `red`; else gone on to
+ * Review because no Retry is left, at a head an Implementer run `pushed`, or
+ * because no Implementer run pushed it.
+ */
+export function missOutcomeOf({ pushed, sentBack, red = false }: { readonly pushed: boolean; readonly sentBack: boolean; readonly red?: boolean }): ShotMissOutcome {
+  if (sentBack) return "sent-back";
+  if (red) return "check-red";
+  return pushed ? "no-retry-left" : "not-pushed";
+}
+
 /** What the shots section needs: the named check and artifact, the marker it ends with, what came of its miss, and the Evidence page. */
 export interface ShotsSectionOf {
   readonly check: string;
@@ -1494,14 +1505,6 @@ function shotsMarkerOf(json: string | undefined): ShotsMarker | null {
 /** A named shot as its marker reads, with its Journey and path when each keeps the rule the artifact's entry was held to. */
 function namedShotOf(name: string, journey: unknown, path: unknown): NamedShot {
   return { name, ...(isShotName(journey) ? { journey } : {}), ...(isRoute(path) ? { path } : {}) };
-}
-
-/** A shots marker's missed shot, when it reads, as a list of none or one. */
-function shotMissOf(value: unknown): ShotMiss[] {
-  if (!isObject(value) || !isShotName(value.name)) return [];
-  const { name, why, viewport } = value;
-  if (why === "size-missing") return isOneOf(VIEWPORT_NAMES, viewport) ? [{ name, viewport, why }] : [];
-  return why === "not-produced" || why === "ambiguous-name" || why === "refused" ? [{ name, why }] : [];
 }
 
 /** A count: a whole number, zero or more. */

@@ -16,12 +16,13 @@
 //     reviewer ("skip" when a miss that sends back stops the Reviewer, or the found artifact's download left nothing to
 //     read, when shots is empty; else "run"), page ("true" when it wrote the
 //     Evidence page, EVIDENCE_PAGE_FILE in FABRIK_OUT_DIR).
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { EVIDENCE_PAGE_FILE } from "../evidence/capture.ts";
 import { reviewShotsFrom } from "../evidence/shotsCollect.ts";
 import { GitHub } from "../github/client.ts";
 import { type Needs, reviewChecksOf } from "../kit/pushJob.ts";
+import { writeOutputs } from "../kit/stepFiles.ts";
 import { readDownloadedShots } from "./shotsRead.ts";
 import { findShotsArtifact } from "./shotsRun.ts";
 
@@ -31,16 +32,12 @@ function required(name: string): string {
   return value;
 }
 
-async function output(values: Readonly<Record<string, string>>): Promise<void> {
-  await appendFile(required("GITHUB_OUTPUT"), Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join(""));
-}
-
 async function find(): Promise<void> {
   const [owner = "", name = ""] = required("GITHUB_REPOSITORY").split("/");
   const shots = reviewShotsFrom(required("FABRIK_UI_SHOTS"));
   const github = new GitHub(required("GH_TOKEN"), process.env["GITHUB_API_URL"]);
   const found = await findShotsArtifact(github, { owner, name }, { headSha: required("FABRIK_HEAD_SHA"), check: shots.check, artifact: shots.artifact });
-  await output({ run: String(found?.run ?? ""), artifact: String(found?.artifact ?? "") });
+  await writeOutputs({ run: String(found?.run ?? ""), artifact: String(found?.artifact ?? "") });
 }
 
 async function read(): Promise<void> {
@@ -61,7 +58,7 @@ async function read(): Promise<void> {
     await writeFile(join(outDir, EVIDENCE_PAGE_FILE), page);
   }
   // Nothing read of an artifact the check uploaded stops the Reviewer with no shots, which the push job lands as nothing.
-  await output({ shots: collected === null ? "" : JSON.stringify(collected), reviewer: collected === null || collected.sendsBack ? "skip" : "run", page: String(page !== null) });
+  await writeOutputs({ shots: collected === null ? "" : JSON.stringify(collected), reviewer: collected === null || collected.sendsBack ? "skip" : "run", page: String(page !== null) });
 }
 
 const step = process.argv[2];
