@@ -126,6 +126,8 @@ describe("A failed Auditor run on the pending Audit", () => {
     ["a provider error", auditFailed(report("provider-error")), "the model provider returned an error"],
     ["a dead token", auditFailed(report("dead-token")), "the Claude token was refused (`authentication_failed`), so it may need rotating"],
     ["the weekly limit", auditFailed(report("weekly-limit")), "it hit the weekly usage limit"],
+    // Never re-run, as no Audit is: the next one falls back on its start (ADR-0034).
+    ["a Fable cap", auditFailed(report("fable-cap")), "it hit the Fable cap on the `Claude token` Subscription"],
     [
       "metered billing",
       auditFailed(report("metered-billing")),

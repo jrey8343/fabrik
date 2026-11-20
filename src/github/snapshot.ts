@@ -2,6 +2,7 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { fableCapsIn, inForce } from "../loop/fableCap.ts";
 import { shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { changedTestsIn } from "../loop/changedTests.ts";
 import {
@@ -659,9 +660,11 @@ export async function gatherSnapshot(
         event.kind === "label-added" && event.label === REPLAY_TRIGGER_LABEL
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
+  // The Fable caps a refused run's re-run reads back, marked where its trigger label went: on the event's issue, or its PR (ADR-0034).
+  const fableCaps = inForce([...fableCapsIn(part?.issue?.body ?? ""), ...(part?.fableCaps ?? [])], new Date().toISOString());
   return part === null
     ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues };
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -2120,6 +2123,8 @@ async function gatherPullRequest(
     dispatch: null,
     designQueue: null,
     operator: operator ?? data.repository.owner.login,
+    // Every Fable cap marked on it, in force or not, which gatherSnapshot weighs. Only a body the App wrote counts, as for its other markers.
+    fableCaps: byAppOf(pullRequest.author, appLogin) ? fableCapsIn(pullRequest.body) : [],
   };
 }
 

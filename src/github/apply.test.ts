@@ -4,6 +4,7 @@ import { anIssue, aPullRequest, kitConfig, snapshotOf, snapshotOfPullRequest } f
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { landingFailureReport, pushLanding } from "../kit/landingFailure.ts";
 import { replayMarksIn } from "../kit/replay.ts";
+import { fableCapMarker, fableCapsIn } from "../loop/fableCap.ts";
 import { gateRerunMarker, gateRerunMarksIn } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Action, LoopEvent, Plan } from "../loop/types.ts";
@@ -816,6 +817,60 @@ describe("Applying a prototype turn's plan (#155)", () => {
 
       await expect(applyPlan(fakeGitHub(), repo, plan, heldBranch())).rejects.toThrow("The plan refers to a comment it hasn't posted: prototype-round");
     });
+  });
+});
+
+describe("Marking a Subscription's Fable cap where a refused run's trigger label goes (ADR-0034)", () => {
+  const AT = "2026-11-20T10:00:00.000Z";
+  const RESETS = "2026-11-27T04:00:00.000Z";
+  /** A GitHub holding #7's body, which a GET reads and a PATCH replaces. */
+  function holding(body: string) {
+    const issue = { body };
+    return {
+      issue,
+      async rest(method: string, path: string, sent?: unknown): Promise<unknown> {
+        expect(path).toBe(`${issues}/7`);
+        if (method === "GET") return { number: 7, body: issue.body };
+        if (method === "PATCH") issue.body = (sent as { body: string }).body;
+        return null;
+      },
+      async graphql(): Promise<never> {
+        throw new Error("no GraphQL expected");
+      },
+    };
+  }
+  const mark = (subscription: string, resetsAt: string | null): Plan => ({ kind: "act", actions: [{ kind: "mark-fable-cap", issue: 7, subscription, resetsAt }] });
+
+  it("adds a hidden line under the body as it stands, which the re-run's snapshot reads back, until the cap resets", async () => {
+    const github = holding("Add the booking page.");
+
+    await applyPlan(github, repo, mark("Claude token", RESETS), null, { id: 42, at: AT });
+
+    expect(github.issue.body).toBe(`Add the booking page.\n\n${fableCapMarker({ subscription: "Claude token", until: RESETS })}`);
+    expect(fableCapsIn(github.issue.body)).toEqual([{ subscription: "Claude token", until: RESETS }]);
+  });
+
+  it("marks a cap with no reset for a week from when it's marked", async () => {
+    const github = holding("");
+
+    await applyPlan(github, repo, mark("Claude token", null), null, { id: 42, at: AT });
+
+    expect(fableCapsIn(github.issue.body)).toEqual([{ subscription: "Claude token", until: "2026-11-27T10:00:00.000Z" }]);
+  });
+
+  it("keeps one line a Subscription, in place of its earlier one, and drops a line whose time has passed", async () => {
+    const earlier = fableCapMarker({ subscription: "Claude token", until: "2026-11-21T00:00:00.000Z" });
+    const other = fableCapMarker({ subscription: "Claude token 2", until: RESETS });
+    const passed = fableCapMarker({ subscription: "Claude token 3", until: "2026-11-19T00:00:00.000Z" });
+    const github = holding(["Add the booking page.", "", earlier, other, passed].join("\n"));
+
+    await applyPlan(github, repo, mark("Claude token", RESETS), null, { id: 42, at: AT });
+
+    expect(fableCapsIn(github.issue.body)).toEqual([
+      { subscription: "Claude token 2", until: RESETS },
+      { subscription: "Claude token", until: RESETS },
+    ]);
+    expect(github.issue.body.startsWith("Add the booking page.\n\n")).toBe(true);
   });
 });
 

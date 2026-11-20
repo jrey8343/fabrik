@@ -277,6 +277,8 @@ export function failureNotice(
     return landed.kind !== "act" || repoWide === null ? landed : { ...landed, actions: [...landed.actions, ...repoWide.actions] };
   }
   if (run.role === "review" && failure === "merge-conflict") return conflictedReviewPlan(run, context, config, pullRequest, mergeable);
+  // The scheduled tick starts the next Audit or Retro, so a Fable cap fails one as any failure does.
+  if (failure === "fable-cap" && !isWeeklyRole(run.role)) return fableCapRerun(run, context, ranOn);
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
@@ -396,6 +398,32 @@ export function failureNotice(
       ...(label === null ? [] : [{ kind: "remove-label" as const, issue: labelled, label }]),
       { kind: "comment", issue: target, body },
       ...(repoWide?.actions ?? []),
+    ],
+  };
+}
+
+/**
+ * A Fable run refused on its Subscription's Fable cap (ADR-0034): an
+ * Infrastructure failure that uses none of the Ticket's retries. It is re-run
+ * once, quietly, through its trigger label, as a weekly-limit refusal is while
+ * another Subscription is free, with one Subscription listed too, since the
+ * re-run can fall back to Opus. The cap is marked where the label goes, before
+ * it, so the re-run starts where Fable is left (src/loop/fableCap.ts). No
+ * comment, no Kit-owned issue, no held run: nothing asks anything of the Operator.
+ */
+function fableCapRerun(run: FailedRun, { issue }: IssueContext, { subscription }: RanOn): Plan {
+  // The review trigger lives on the PR; every other role's on the issue.
+  const labelled = run.role === "review" ? (issue.openPullRequests[0] ?? run.issue) : run.issue;
+  const rerun = RESUME_LABELS[run.role];
+  if (rerun === null) return { kind: "nothing", reason: `The ${runNamed(run.role)} on #${run.issue} has no trigger label to re-run it through` };
+  return {
+    kind: "act",
+    actions: [
+      { kind: "remove-label", issue: labelled, label: rerun },
+      // Before the label, whose Loop run reads both.
+      ...waitingAgain(run, issue),
+      { kind: "mark-fable-cap", issue: labelled, subscription, resetsAt: run.report?.resetsAt ?? null },
+      { kind: "add-labels", issue: labelled, labels: [rerun] },
     ],
   };
 }

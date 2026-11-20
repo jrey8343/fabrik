@@ -12,6 +12,7 @@ import type { DigestHead } from "../loop/digestPlaces.ts";
 import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
+import { withFableCap } from "../loop/fableCap.ts";
 import { isEmptyDiffComment, withGateRerunStarted, withPrototypeStarted } from "../loop/markers.ts";
 import { sameRepo } from "../loop/blockers.ts";
 import { closingCommentText } from "../loop/design.ts";
@@ -462,6 +463,14 @@ async function apply(
       const { body } = (await github.rest("GET", path)) as { body: string };
       const marked = withPrototypeStarted(body, action.started);
       if (marked !== body) await github.rest("PATCH", path, { body: marked });
+      return;
+    }
+    case "mark-fable-cap": {
+      // Read fresh, so what anyone edited after the plan was made stays.
+      const path = `${issues}/${action.issue}`;
+      const { body } = (await github.rest("GET", path)) as { body: string | null };
+      const marked = withFableCap(body ?? "", action.subscription, action.resetsAt, made.run?.at ?? new Date().toISOString());
+      await github.rest("PATCH", path, { body: marked });
       return;
     }
     case "mark-gate-rerun-started": {

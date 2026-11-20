@@ -10,6 +10,7 @@ import type { RateLimitReading } from "../kit/runRecord.ts";
 import type { CheckExcerpt, FailureExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { IssueRef } from "./blockers.ts";
+import type { FableCapReading, ModelFallback } from "./fableCap.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven, PictureOf } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
@@ -1564,6 +1565,15 @@ export interface Snapshot {
    */
   readonly closedCheckIssues: readonly ClosedCheckIssue[] | null;
   /**
+   * The Fable cap readings still in force as the adapter read them (ADR-0034):
+   * those marked on the body of the event's issue or PR, where a run refused
+   * on its Subscription's Fable cap had its trigger label re-added. A run it
+   * starts on a role naming Fable starts on a Subscription with Fable left, or
+   * on Opus (src/loop/fableCap.ts). Absent or empty, every Subscription has
+   * Fable left.
+   */
+  readonly fableCaps?: readonly FableCapReading[];
+  /**
    * For a Design-session turn the Operator's reply started: that comment, and
    * whether it is still on the issue. Null when the event names no such comment.
    */
@@ -2151,6 +2161,13 @@ export type Action =
       readonly effort: string | null;
       readonly timeoutMinutes: number;
       /**
+       * For a Fable fallback (ADR-0034): the model Kit config named, which
+       * `model` falls back from, and why. Absent on any other run, whose
+       * `model` is Kit config's.
+       */
+      readonly configuredModel?: string;
+      readonly fallback?: ModelFallback;
+      /**
        * The Subscription it runs on: the `Fabrik` vault item name its job loads
        * the Claude token from. `planFor` gives it to every run it starts, in one
        * place for every role, so the builders of a run leave it out.
@@ -2316,6 +2333,21 @@ export type Action =
       /** The request's comment. */
       readonly comment: number;
       readonly started: boolean;
+    }
+  | {
+      /**
+       * Marks a Subscription's Fable cap (ADR-0034) on the body of the issue or
+       * PR a refused run's trigger label is re-added on, before the label, so
+       * the re-run's Kit job reads it back: until `resetsAt`, or for a week
+       * from when it is marked with none (src/loop/fableCap.ts). The adapter
+       * reads the body fresh, so an edit since the plan was made stays. An
+       * edit, so it notifies nobody.
+       */
+      readonly kind: "mark-fable-cap";
+      readonly issue: number;
+      readonly subscription: string;
+      /** When the cap resets, ISO 8601, or null when the stream didn't say. */
+      readonly resetsAt: string | null;
     }
   | {
       /** Opens a PR as the Fabrik App, which starts CI on it. */

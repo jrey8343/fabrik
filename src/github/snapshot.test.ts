@@ -28,6 +28,7 @@ import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
 import { changedTestsSection } from "../loop/changedTests.ts";
 import { holdsSlot } from "../loop/designQueue.ts";
+import { fableCapMarker } from "../loop/fableCap.ts";
 import {
   checkFixMarker,
   DESIGN_TURN_FAILED_MARKER,
@@ -1496,6 +1497,30 @@ function pullRequestGitHub({
     },
   } as unknown as GitHub;
 }
+
+describe("Gathering the Fable cap readings marked where a refused run's trigger label went (ADR-0034)", () => {
+  const ahead = fableCapMarker({ subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" });
+  const passed = fableCapMarker({ subscription: "Claude token 2", until: "2020-01-01T00:00:00.000Z" });
+
+  it("reads those still in force off the event's issue", async () => {
+    const github = issueGitHub({ body: ["Sort this out.", "", ahead, passed].join("\n"), labels: ["needs-triage"] });
+
+    const snapshot = await gatherSnapshot(github, repo, { kind: "label-added", issue: 98, label: "needs-triage" }, null, null);
+
+    expect(snapshot.fableCaps).toEqual([{ subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" }]);
+  });
+
+  it("reads those still in force off a PR the Fabrik App opened, and none off anyone else's", async () => {
+    const labeled = { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" } as const;
+    const body = ["Adds a waitlist.", "", "Closes #7", "", ahead, passed].join("\n");
+
+    const byApp = await gatherSnapshot(pullRequestGitHub({ body }), repo, labeled, null, APP_LOGIN);
+    const byOther = await gatherSnapshot(pullRequestGitHub({ body, author: { login: "someone", __typename: "User" } }), repo, labeled, null, APP_LOGIN);
+
+    expect(byApp.fableCaps).toEqual([{ subscription: "Claude token", until: "2099-01-01T00:00:00.000Z" }]);
+    expect(byOther.fableCaps).toEqual([]);
+  });
+});
 
 describe("Gathering the labels of the Ticket a pull request was cut for", () => {
   const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
