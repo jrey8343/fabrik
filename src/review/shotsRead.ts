@@ -14,7 +14,7 @@ import { type ArtifactFile, readShotsManifest, SHOTS_MANIFEST_FILE, type ShotSiz
  * could read nothing of an artifact the check did upload, and the Evidence
  * page's HTML, or null when it has no shot to show.
  */
-export interface DownloadedShots {
+export interface ShotsReadStep {
   readonly collected: ShotsCollected | null;
   readonly page: string | null;
 }
@@ -44,7 +44,7 @@ export async function readDownloadedShots({
   readonly head: string;
   readonly red: boolean;
   readonly ticket: number;
-}): Promise<DownloadedShots> {
+}): Promise<ShotsReadStep> {
   if (!found) return { collected: collectShots({ reading: null, given, head, red }), page: null };
   const files = await filesIn(dir);
   if (files === null) return { collected: null, page: null };

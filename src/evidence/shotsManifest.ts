@@ -5,10 +5,6 @@
 // beside it.
 import { isRoute, VIEWPORT_NAMES, type Viewport } from "../kit/config.ts";
 
-// The artifact's default name, which Kit config's ui.shots.artifact can change.
-// Kit config defines it, since this module reads config.ts and not the other way.
-export { DEFAULT_SHOTS_ARTIFACT } from "../kit/config.ts";
-
 /** The manifest's file name at the artifact's root: the one file the Kit reads besides the images it lists. */
 export const SHOTS_MANIFEST_FILE = "manifest.json";
 
