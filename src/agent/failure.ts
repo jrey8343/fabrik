@@ -83,7 +83,7 @@ const WEEKLY_LIMIT_TYPE = "seven_day";
 function providerError(
   { result: last, rateLimits, apiRetries: retries }: AgentStream,
   fable: boolean,
-): { error: string; detail: string; resetsAt?: string; refusal?: RateLimitRefusal } | null {
+): { error: string; detail: string; resetsAt?: string; refusal?: RateLimitRefusal; weeklyResetsAt?: string } | null {
   // A run that ended in a clean result recovered from any retries along the way.
   if (last !== null && last["is_error"] !== true) return null;
 
@@ -99,11 +99,14 @@ function providerError(
     const capped = fable && refusal.rateLimitType !== WEEKLY_LIMIT_TYPE;
     const at = refusal.resetsAt === null ? null : new Date(refusal.resetsAt * 1000).toISOString();
     const resets = at === null ? "" : `resets at ${at}`;
+    // A Fable cap with no reset of its own counts until the weekly limit's (src/loop/fableCap.ts), when the stream read one.
+    const weeklyResetsAt = capped ? lastWeeklyReset(rateLimits) : null;
     return {
       error: capped ? "fable_cap" : "weekly_limit",
       detail: capped ? [refusal.rateLimitType ?? "", resets].filter((part) => part !== "").join(", ") : resets,
       ...(at === null ? {} : { resetsAt: at }),
       refusal,
+      ...(weeklyResetsAt === null ? {} : { weeklyResetsAt }),
     };
   }
 
@@ -124,6 +127,12 @@ function providerError(
     return { error: "result", detail: typeof last["result"] === "string" ? last["result"] : "the CLI returned an error" };
   }
   return null;
+}
+
+/** When the stream's last weekly-limit reading said the weekly limit resets, ISO 8601, or null when none gave a reset. */
+function lastWeeklyReset(rateLimits: AgentStream["rateLimits"]): string | null {
+  const resetsAt = rateLimits.findLast((info) => info["rateLimitType"] === WEEKLY_LIMIT_TYPE && refusalIn(info).resetsAt !== null)?.["resetsAt"];
+  return typeof resetsAt === "number" ? new Date(resetsAt * 1000).toISOString() : null;
 }
 
 /** A refused rate limit, raw, as the stream or a report gave it, each part that doesn't read as null. */
@@ -165,6 +174,7 @@ export function failureReportFor({ error, lines, initRefused, overage = null, mo
       detail: provider.detail,
       ...(provider.resetsAt === undefined ? {} : { resetsAt: provider.resetsAt }),
       ...(provider.refusal === undefined ? {} : { refusal: provider.refusal }),
+      ...(provider.weeklyResetsAt === undefined ? {} : { weeklyResetsAt: provider.weeklyResetsAt }),
     };
   }
 
@@ -217,12 +227,14 @@ export function readFailureReport(text: string): FailureReport {
   }
   const detail = value?.["detail"];
   const resetsAt = value?.["resetsAt"];
+  const weeklyResetsAt = value?.["weeklyResetsAt"];
   return {
     failure: failure as ReportedFailure,
     detail: typeof detail === "string" ? detail : "",
     ...(typeof resetsAt === "string" && !Number.isNaN(Date.parse(resetsAt)) ? { resetsAt } : {}),
     ...(value?.["refused"] === true ? { refused: true as const } : {}),
     ...withRefusal(value?.["refusal"]),
+    ...(typeof weeklyResetsAt === "string" && !Number.isNaN(Date.parse(weeklyResetsAt)) ? { weeklyResetsAt } : {}),
     ...withChecks(value?.["checks"]),
     ...withWait(value),
     ...withCommits(value?.["commits"]),

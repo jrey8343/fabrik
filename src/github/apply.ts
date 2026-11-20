@@ -469,7 +469,8 @@ async function apply(
       // Read fresh, so what anyone edited after the plan was made stays.
       const path = `${issues}/${action.issue}`;
       const { body } = (await github.rest("GET", path)) as { body: string | null };
-      const marked = withFableCap(body ?? "", action.subscription, action.resetsAt, made.run?.at ?? new Date().toISOString());
+      const resets = { resetsAt: action.resetsAt, weeklyResetsAt: action.weeklyResetsAt ?? null };
+      const marked = withFableCap(body ?? "", action.subscription, resets, made.run?.at ?? new Date().toISOString());
       await github.rest("PATCH", path, { body: marked });
       return;
     }

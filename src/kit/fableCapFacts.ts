@@ -6,7 +6,7 @@
 // Fable left, or on Opus, with no refusal first (src/loop/fableCap.ts); the
 // Weekly summary shows each Subscription's Fable reset from them
 // (src/kit/weeklySummary.ts). Pure, no I/O.
-import { type FableCapReading, UNTIMED_CAP_MS } from "../loop/fableCap.ts";
+import { type FableCapReading, fableCapUntil } from "../loop/fableCap.ts";
 import { lastMonthStart } from "./replayFacts.ts";
 import { type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
 
@@ -21,25 +21,27 @@ import { type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
 export function fableCapReadingsOf(records: readonly RunRecord[], counted: (record: RunRecord) => boolean = () => true): FableCapReading[] {
   return records
     .filter((record) => record.infrastructureFailure === "fable-cap" && counted(record))
-    .map((record) => ({ subscription: record.subscription, until: fableCapUntil(record, records) }));
+    .map((record) => ({ subscription: record.subscription, until: capUntil(record, records) }));
 }
 
 /**
- * Until when a run refused on its Fable cap holds that cap, ISO 8601: its
- * refusal's reset; else the reset of its Subscription's newest weekly-limit
- * reading by then, among `records`, when that is still ahead of the refusal;
- * else UNTIMED_CAP_MS from when it ended.
+ * Until when a run refused on its Fable cap holds that cap, ISO 8601, from
+ * when it ended, as a hidden line's is from when it's marked (fableCapUntil):
+ * its refusal's reset; else the reset of its Subscription's newest
+ * weekly-limit reading by then, among `records`.
  */
-function fableCapUntil(refused: RunRecord, records: readonly RunRecord[]): string {
+function capUntil(refused: RunRecord, records: readonly RunRecord[]): string {
   const at = Date.parse(refused.endedAt);
-  const resetsAt = refused.refusal?.resetsAt ?? null;
-  if (resetsAt !== null) return new Date(resetsAt * 1000).toISOString();
   const weekly = records
     .filter((record) => record.subscription === refused.subscription && Date.parse(record.endedAt) <= at && record.rateLimit?.rateLimitType === WEEKLY_LIMIT)
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
     .at(-1)?.rateLimit?.resetsAt;
-  if (weekly !== undefined && weekly !== null && weekly * 1000 > at) return new Date(weekly * 1000).toISOString();
-  return new Date(at + UNTIMED_CAP_MS).toISOString();
+  return fableCapUntil({ resetsAt: timeOf(refused.refusal?.resetsAt), weeklyResetsAt: timeOf(weekly) }, refused.endedAt);
+}
+
+/** A reset in epoch seconds, as the stream gives it, as an ISO 8601 time; null for none. */
+function timeOf(resetsAt: number | null | undefined): string | null {
+  return resetsAt === null || resetsAt === undefined ? null : new Date(resetsAt * 1000).toISOString();
 }
 
 /**

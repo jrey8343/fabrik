@@ -117,6 +117,12 @@ export interface FailureReport {
    */
   readonly refusal?: RateLimitRefusal;
   /**
+   * For a Fable cap, when its Subscription's weekly limit resets (an ISO 8601
+   * time), from the stream's last weekly-limit reading, if one gave a reset:
+   * what a cap with no reset of its own counts until (src/loop/fableCap.ts).
+   */
+  readonly weeklyResetsAt?: string;
+  /**
    * For unread inputs: true when GitHub refused the request (a 4xx that isn't
    * a rate limit), which it does again each time the run goes again, until the Kit is fixed.
    * Absent for a 5xx, a rate limit or a call GitHub never answered.
@@ -2349,8 +2355,9 @@ export type Action =
       /**
        * Marks a Subscription's Fable cap (ADR-0034) on the body of the issue or
        * PR a refused run's trigger label is re-added on, before the label, so
-       * the re-run's Kit job reads it back: until `resetsAt`, or for a week
-       * from when it is marked with none (src/loop/fableCap.ts). The adapter
+       * the re-run's Kit job reads it back: until `resetsAt`, else until
+       * `weeklyResetsAt` while that is ahead, else for a week from when it is
+       * marked (fableCapUntil, src/loop/fableCap.ts). The adapter
        * reads the body fresh, so an edit since the plan was made stays. An
        * edit, so it notifies nobody.
        */
@@ -2359,6 +2366,8 @@ export type Action =
       readonly subscription: string;
       /** When the cap resets, ISO 8601, or null when the stream didn't say. */
       readonly resetsAt: string | null;
+      /** When the Subscription's weekly limit resets, ISO 8601, which a cap with no reset counts until while it is ahead; absent when the stream didn't say. */
+      readonly weeklyResetsAt?: string;
     }
   | {
       /** Opens a PR as the Fabrik App, which starts CI on it. */

@@ -118,6 +118,20 @@ describe("How an agent job reports its own failure", () => {
         refusal: { rateLimitType: "seven_day_fable", resetsAt: null },
       });
     });
+
+    it("a Fable cap the stream gives no reset for carries its Subscription's weekly-limit reset, from the stream's last weekly-limit reading", () => {
+      const allowed = (rateLimitType: string, resetsAt: number) => line({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType, resetsAt } });
+
+      const report = reportOn(fable, allowed("seven_day", 1_797_000_000), allowed("seven_day", 1_798_000_000), allowed("five_hour", 1_796_000_000), rejected("seven_day_fable"));
+
+      expect(report).toEqual({
+        failure: "fable-cap",
+        detail: "seven_day_fable",
+        refusal: { rateLimitType: "seven_day_fable", resetsAt: null },
+        weeklyResetsAt: "2026-12-23T04:26:40.000Z",
+      });
+      expect(readFailureReport(JSON.stringify(report))).toEqual(report);
+    });
   });
 
   it("a rejected seven_day_opus on a run that isn't Fable is the weekly limit, as before", () => {

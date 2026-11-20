@@ -99,6 +99,21 @@ describe("A Fable run refused on its Subscription's Fable cap (ADR-0034)", () =>
     expect(actionsOf(plan)).toContainEqual({ kind: "mark-fable-cap", issue: 7, subscription: "Claude token", resetsAt: null });
   });
 
+  it("marks a cap the stream gave no reset for with its Subscription's weekly-limit reset, when the stream gave that", () => {
+    const event = capped("triage", { resetsAt: null });
+    const withWeekly = { ...event, report: { ...(event as { report: object }).report, weeklyResetsAt: "2026-11-24T04:00:00.000Z" } } as LoopEvent;
+
+    const plan = planFor(withWeekly, snapshotOf(anIssue({ number: 7 })), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "mark-fable-cap",
+      issue: 7,
+      subscription: "Claude token",
+      resetsAt: null,
+      weeklyResetsAt: "2026-11-24T04:00:00.000Z",
+    });
+  });
+
   it("opens no Kit-owned issue, holds no run and posts no comment, while every other Subscription is used up too", () => {
     const limit = { number: 41, labels: ["fabrik:weekly-limit"], body: "<!-- fabrik:subscription Claude token 2 -->", comments: [] };
 

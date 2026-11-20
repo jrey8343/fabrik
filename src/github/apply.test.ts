@@ -858,6 +858,20 @@ describe("Marking a Subscription's Fable cap where a refused run's trigger label
     expect(fableCapsIn(github.issue.body)).toEqual([{ subscription: "Claude token", until: "2026-11-27T10:00:00.000Z" }]);
   });
 
+  it("marks a cap with no reset until its Subscription's weekly-limit reset, while that is still ahead", async () => {
+    const github = holding("");
+    const weekly = (weeklyResetsAt: string): Plan => ({
+      kind: "act",
+      actions: [{ kind: "mark-fable-cap", issue: 7, subscription: "Claude token", resetsAt: null, weeklyResetsAt }],
+    });
+
+    await applyPlan(github, repo, weekly("2026-11-24T04:00:00.000Z"), null, { id: 42, at: AT });
+    expect(fableCapsIn(github.issue.body)).toEqual([{ subscription: "Claude token", until: "2026-11-24T04:00:00.000Z" }]);
+
+    await applyPlan(github, repo, weekly("2026-11-19T04:00:00.000Z"), null, { id: 42, at: AT });
+    expect(fableCapsIn(github.issue.body)).toEqual([{ subscription: "Claude token", until: "2026-11-27T10:00:00.000Z" }]);
+  });
+
   it("keeps one line a Subscription, in place of its earlier one, and drops a line whose time has passed", async () => {
     const earlier = fableCapMarker({ subscription: "Claude token", until: "2026-11-21T00:00:00.000Z" });
     const other = fableCapMarker({ subscription: "Claude token 2", until: RESETS });

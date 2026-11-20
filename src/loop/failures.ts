@@ -449,7 +449,13 @@ function fableCapRerun(run: FailedRun, { issue }: IssueContext, { subscription }
       { kind: "remove-label", issue: labelled, label: rerun },
       // Before the label, whose Loop run reads both.
       ...waitingAgain(run, issue),
-      { kind: "mark-fable-cap", issue: labelled, subscription, resetsAt: run.report?.resetsAt ?? null },
+      {
+        kind: "mark-fable-cap",
+        issue: labelled,
+        subscription,
+        resetsAt: run.report?.resetsAt ?? null,
+        ...(run.report?.weeklyResetsAt === undefined ? {} : { weeklyResetsAt: run.report.weeklyResetsAt }),
+      },
       { kind: "add-labels", issue: labelled, labels: [rerun] },
     ],
   };

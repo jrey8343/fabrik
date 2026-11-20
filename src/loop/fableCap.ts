@@ -28,10 +28,31 @@ export interface FableCapReading {
 }
 
 /**
- * How long a reading with no reset counts, from when it was marked: its
- * Subscription's week, the longest a weekly cap can last.
+ * How long a reading with no reset counts, from when it was marked, while its
+ * Subscription's weekly-limit reset isn't known either: its week, the longest
+ * a weekly cap can last.
  */
 export const UNTIMED_CAP_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** What a refusal on a Fable cap says of when it resets, each ISO 8601 or null when not known. */
+export interface FableCapResets {
+  /** The cap's own reset, from its refusal. */
+  readonly resetsAt: string | null;
+  /** Its Subscription's weekly-limit reset, from the newest weekly-limit reading by then. */
+  readonly weeklyResetsAt: string | null;
+}
+
+/**
+ * Until when a Fable cap refused at `at` counts, ISO 8601, wherever its
+ * reading comes from, a hidden line or a Run record: its own reset; else its
+ * Subscription's weekly-limit reset, while that is still ahead of `at`; else
+ * UNTIMED_CAP_MS from `at`.
+ */
+export function fableCapUntil({ resetsAt, weeklyResetsAt }: FableCapResets, at: string): string {
+  if (resetsAt !== null) return new Date(resetsAt).toISOString();
+  if (weeklyResetsAt !== null && Date.parse(weeklyResetsAt) > Date.parse(at)) return new Date(weeklyResetsAt).toISOString();
+  return new Date(Date.parse(at) + UNTIMED_CAP_MS).toISOString();
+}
 
 const MARKER_START = "<!-- fabrik:fable-cap ";
 const MARKER_LINE = /^<!-- fabrik:fable-cap (.+) until (\S+) -->$/;
@@ -62,13 +83,13 @@ export function fableCapsInForce(caps: FableCapSnapshot | undefined): FableCapRe
 }
 
 /**
- * The body with the Fable cap reading for `subscription` marked at `now`, until
- * its reset, or for UNTIMED_CAP_MS with none: in place of any earlier
- * reading for it, and with every reading no longer in force left out, so a
- * body holds one line for each Subscription whose cap is in force.
+ * The body with the Fable cap reading for `subscription` marked at `now`,
+ * until what `resets` says (fableCapUntil): in place of any earlier reading
+ * for it, and with every reading no longer in force left out, so a body holds
+ * one line for each Subscription whose cap is in force.
  */
-export function withFableCap(body: string, subscription: Subscription, resetsAt: string | null, now: string): string {
-  const until = resetsAt ?? new Date(Date.parse(now) + UNTIMED_CAP_MS).toISOString();
+export function withFableCap(body: string, subscription: Subscription, resets: FableCapResets, now: string): string {
+  const until = fableCapUntil(resets, now);
   const live = new Set(inForce(fableCapsIn(body), now).filter((reading) => reading.subscription !== subscription).map(fableCapMarker));
   const kept = body.split("\n").filter((line) => !line.trim().startsWith(MARKER_START) || live.has(line.trim()));
   while (kept.length > 0 && kept.at(-1)?.trim() === "") kept.pop();
