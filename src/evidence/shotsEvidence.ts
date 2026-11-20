@@ -9,7 +9,7 @@ import { isRoute, NAMED_SHOT_CAP, REVIEWER_IMAGE_CAP, UI_VIEWPORTS } from "../ki
 import { withoutMentions } from "../loop/mentions.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import type { ShotsCollected } from "./shotsCollect.ts";
-import { isShotName, SHOT_LIMIT, SHOT_NAME_RULE, type ShotMiss, shotMissOf, type ShotSize, SHOTS_MANIFEST_FILE } from "./shotsManifest.ts";
+import { type EvidenceShot, isShotName, SHOT_LIMIT, SHOT_NAME_RULE, type ShotMiss, shotMissOf, type ShotSize, SHOTS_MANIFEST_FILE } from "./shotsManifest.ts";
 import {
   code,
   EVIDENCE_MARKER,
@@ -115,11 +115,7 @@ function reviewerShotLine({ name, size, file }: ReviewerShotImage, named: ShotsC
  * A name a pull request's shots marker holds: the Implementer's, with the
  * Journey and path the artifact's entry gave once it has been read (#820).
  */
-export interface NamedShot {
-  readonly name: string;
-  readonly journey?: string;
-  readonly path?: string;
-}
+export type NamedShot = Omit<EvidenceShot, "images">;
 
 /** How many names the run that gave a pull request its names dropped: past the first four, and for breaking the name rule. */
 export interface DroppedNames {

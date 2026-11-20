@@ -6,7 +6,7 @@
 // no I/O: the review job's own step reads the artifact (src/review/shots-main.ts).
 import { isRoute, VIEWPORT_NAMES } from "../kit/config.ts";
 import { FULL_SHA } from "../skills/lock.ts";
-import { FLAT_FILE_NAME, isShotName, namedShots, SHOT_NOT_PRODUCED, type ShotMiss, shotMissOf, type ShotSize, type ShotsManifestRead } from "./shotsManifest.ts";
+import { type EvidenceShot, FLAT_FILE_NAME, isShotName, namedShots, SHOT_NOT_PRODUCED, type ShotMiss, shotMissOf, type ShotSize, type ShotsManifestRead } from "./shotsManifest.ts";
 import { SHOTS_FAILURES, type ShotsFailure } from "./shotsEvidence.ts";
 
 /**
@@ -31,12 +31,7 @@ export interface ReviewShots {
 }
 
 /** A named shot the run produced, as the Review's jobs collected it: its images are files of the downloaded artifact. */
-export interface CollectedShot {
-  readonly name: string;
-  readonly journey?: string;
-  readonly path?: string;
-  readonly images: Readonly<Partial<Record<ShotSize, string>>>;
-}
+export type CollectedShot = EvidenceShot;
 
 /** What the Review's jobs collected of a head's Evidence shots, for the Reviewer and the push job. */
 export interface ShotsCollected {

@@ -20,13 +20,16 @@ export interface ArtifactFile {
   readonly start: Uint8Array;
 }
 
-/** An Evidence shot that passed the artifact's rules. */
-export interface EvidenceShot {
+/**
+ * An Evidence shot that passed the artifact's rules: its name, the Journey and
+ * path its entry gave, and its images by size, at least one, each a file
+ * beside the manifest, or, for a reader that has read them, an `Image` of its own.
+ */
+export interface EvidenceShot<Image = string> {
   readonly name: string;
   readonly journey?: string;
   readonly path?: string;
-  /** Its images by size, each a file beside the manifest: at least one. */
-  readonly images: Readonly<Partial<Record<ShotSize, string>>>;
+  readonly images: Readonly<Partial<Record<ShotSize, Image>>>;
 }
 
 /** Why an entry of the manifest was dropped: each of the artifact's rules has its own. */

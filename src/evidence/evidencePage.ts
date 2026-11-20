@@ -6,7 +6,7 @@
 import { Buffer } from "node:buffer";
 import { UI_VIEWPORTS } from "../kit/config.ts";
 import type { PrototypeVariant } from "../loop/designOutput.ts";
-import type { ShotSize } from "./shotsManifest.ts";
+import type { EvidenceShot } from "./shotsManifest.ts";
 import {
   type Capture,
   CAPTURE_SIDES,
@@ -215,12 +215,7 @@ function variantFigure({ variant, viewport, status, png, webm, identity }: Varia
 }
 
 /** An Evidence shot with its images' bytes, PNGs by size, as the Review's jobs read them from the named check's artifact (#820). */
-export interface PageShot {
-  readonly name: string;
-  readonly journey?: string;
-  readonly path?: string;
-  readonly images: Readonly<Partial<Record<ShotSize, Uint8Array>>>;
-}
+export type PageShot = EvidenceShot<Uint8Array>;
 
 /** What a pull request's Evidence page of Evidence shots is of: its Ticket, the head the named check ran at, the check, and the pull request's names in order. */
 export interface ShotsEvidencePageMeta {
