@@ -151,6 +151,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     leftDraftSinceVerdict: false,
     url: "https://github.com/acme/shop/pull/50",
     uiEvidenceMarker: null,
+    shotsMarker: null,
     changedTests: [],
     digests: [],
     ...overrides,

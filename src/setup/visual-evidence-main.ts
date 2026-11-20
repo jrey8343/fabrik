@@ -2,8 +2,9 @@
 // from a Fabrik checkout at the release the Product repo pins, in the Product
 // repo's checkout, with the Operator's confirmed answers on stdin:
 //   node <fabrik>/src/setup/visual-evidence-main.ts < answers.json
-// The answers are the Kit config's ui and preview blocks, in JSON. It writes
-// them into .fabrik/config.json, or names each problem and writes nothing.
+// The answers are the Kit config's ui and preview blocks, in JSON, with any ui
+// fields the Operator confirmed taking out in `remove`. It writes them into
+// .fabrik/config.json, or names each problem and writes nothing.
 // It needs no gh and no op. Thin by design: every decision is in
 // visualEvidence.ts.
 import { readFile, writeFile } from "node:fs/promises";

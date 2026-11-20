@@ -483,6 +483,69 @@ describe("Applying a plan that links a UI PR's preview deployment", () => {
   });
 });
 
+describe("Applying a plan that comments on the PR it opens (#819)", () => {
+  it("posts the comment on that PR once it is open", async () => {
+    const github = fakeGitHub();
+    const plan: Plan = {
+      kind: "act",
+      actions: [
+        { kind: "open-pull-request", issue: 7, head: "fabrik/ticket-7", base: "main", title: "Inbox", body: "Adds it.", draft: true },
+        { kind: "comment-on-opened", body: "## Verdict: Execution flaw" },
+      ],
+    };
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.calls.at(-1)).toStrictEqual({ method: "POST", path: "/repos/acme/shop/issues/51/comments", body: { body: "## Verdict: Execution flaw" } });
+  });
+
+  it("refuses one in a plan that opens no PR", async () => {
+    const plan: Plan = { kind: "act", actions: [{ kind: "comment-on-opened", body: "## Verdict: Execution flaw" }] };
+
+    await expect(applyPlan(fakeGitHub(), repo, plan)).rejects.toThrow("The plan comments on a PR it hasn't opened");
+  });
+});
+
+describe("Applying a plan that replaces a PR's evidence section (#820)", () => {
+  const SECTION = "<!-- fabrik:ui-evidence-start -->\n## UI evidence\n\nRead.\n<!-- fabrik:ui-evidence {\"source\":\"shots\",\"head\":null} -->";
+  const READ = "<!-- fabrik:ui-evidence-start -->\n## UI evidence\n\nRead at the head.\n<!-- fabrik:ui-evidence {\"source\":\"shots\"} -->";
+
+  function gitHubWithBody(body: string) {
+    const pullRequest = { body };
+    const patches: string[] = [];
+    return {
+      pullRequest,
+      patches,
+      async rest(method: string, path: string, sent?: unknown): Promise<unknown> {
+        if (method === "GET" && path === "/repos/acme/shop/issues/50") return { number: 50, body: pullRequest.body };
+        if (method === "PATCH" && path === "/repos/acme/shop/issues/50") patches.push((pullRequest.body = (sent as { body: string }).body));
+        return null;
+      },
+      async graphql(): Promise<never> {
+        throw new Error("no GraphQL expected");
+      },
+    };
+  }
+
+  const plan: Plan = { kind: "act", actions: [{ kind: "replace-evidence-section", issue: 50, section: READ }] };
+
+  it("replaces the section in the body as it is when applied, keeping what the Operator edited around it", async () => {
+    const github = gitHubWithBody(`Adds drafts, as the Operator reworded it.\n\n${SECTION}\n\nCloses #7`);
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.pullRequest.body).toBe(`Adds drafts, as the Operator reworded it.\n\n${READ}\n\nCloses #7`);
+  });
+
+  it("leaves a body with no section as it is", async () => {
+    const github = gitHubWithBody("Adds drafts.\n\nCloses #7");
+
+    await applyPlan(github, repo, plan);
+
+    expect(github.patches).toEqual([]);
+  });
+});
+
 // #735: what the push job's Run record names as an Implement run's push, which Yield pairs with its first Verdict.
 describe("The pull request and head an Implement run's landing pushed", () => {
   const HEAD = "4f2b9c0e1d3a5b7c9e0f2a4b6c8d0e1f3a5b7c9d";

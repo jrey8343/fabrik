@@ -182,7 +182,8 @@ export interface Capturer {
 }
 
 /**
- * What capture came to: off without a ui block, skipped when there's nothing
+ * What capture came to: off without a ui block, or when a pull request's UI
+ * evidence comes from Evidence shots, skipped when there's nothing
  * to capture, or the capture result it recorded, of a pull request's sides
  * or of a Prototype's variants.
  */
@@ -212,7 +213,8 @@ const VARIANT_TAKE_MS = 90_000;
 /** Captures the branch's UI evidence, catching every failure into the capture result it records. */
 export async function captureEvidence(input: CaptureInput, capturer: Capturer): Promise<CaptureOutcome> {
   const { ui, headSha } = input;
-  if (ui === null) return { kind: "off" };
+  // With Evidence shots, a Required check's run takes the pull request's pictures, and the Kit job's summary says so.
+  if (ui === null || ui.shots !== undefined) return { kind: "off" };
   if (headSha === null) return { kind: "skipped", why: "the Implementer made no commit" };
   let changed: readonly string[];
   try {
@@ -628,7 +630,7 @@ export function prototypeCaptureSummary(outcome: CaptureOutcome<VariantCapture>)
   }
 }
 
-/** The capture step's summary, or null when Visual evidence is off, which the Kit job's summary says. */
+/** The capture step's summary, or null when it's off, which the Kit job's summary says, as it says where Evidence shots come from. */
 export function captureStepSummary(outcome: CaptureOutcome): string | null {
   switch (outcome.kind) {
     case "off":

@@ -379,6 +379,8 @@ function endedRun(end: Pick<RunEnd, "needs" | "eventIssue" | "failureReport">): 
     case "agent-result":
       return { role: input.role, issue: input.issue, pullRequest: input.pullRequest, job: routedJob(end.needs, input.role), failure: null, broken: null };
     case "review":
+      // An Evidence miss that stopped the Reviewer ran no agent (#820), so there's no run to record.
+      if (input.reviewerSkipped === true) return null;
       return { role: "review", issue: input.ticket, pullRequest: input.pullRequest, job: end.needs["review"], failure: null, broken: null };
     // A Digest run is recorded as any run is, on its Ticket and pull request.
     case "digest":

@@ -7,7 +7,8 @@
 // facts it hands the writer (src/agent/inputs.ts), and the Digest's rounds
 // table is rendered from the push job's own call, never from what the agent
 // job passed out.
-import { capturedRoutesOf } from "../evidence/uiEvidence.ts";
+import { capturedRoutesOf, type EvidenceMarker } from "../evidence/uiEvidence.ts";
+import { producedNamedShots, type ShotsMarker } from "../evidence/shotsEvidence.ts";
 import { ticketOfAgentBranch } from "../loop/agentPullRequest.ts";
 import { type DigestGiven, parseDigestReply } from "../loop/digestContract.ts";
 import { type DigestThread, digestFactsOf } from "../loop/digestFacts.ts";
@@ -37,13 +38,14 @@ export interface DigestWritten {
  * at `written.headSha`: what the push job knows already, Kit code's facts,
  * worked out from the pull request's thread as `github` reads it now, what
  * that head holds of the files the reply's places name (readDigestHead),
- * and the routes its UI evidence captured (capturedRoutesOf). Among the
+ * and what an item may name as its picture (digestPicturesOf): the routes
+ * its UI evidence captured, or the named shots that were produced. Among the
  * facts are the asks the writer's reply is checked against, so the
  * Operator's Request changes deferred during a Retry are read here as the
  * agent job's inputs step read them, from the Loop's snapshot of the pull
- * request. The captured routes come from that same read of it: its evidence
- * marker, as the snapshot reads it, only from a body a bot wrote. Each
- * item's picture is checked against them, never against the reply.
+ * request. The pictures come from that same read of it: its evidence marker
+ * or shots marker, as the snapshot reads them, only from a body a bot wrote.
+ * Each item's picture is checked against them, never against the reply.
  *
  * The reply says only which files to read: each place is checked against
  * what the read found, never against the reply. One that breaks its shape
@@ -54,14 +56,27 @@ export async function readDigestGiven(github: ReadClient, repo: Repo, written: D
   const operator = written.operator ?? repo.owner;
   const reply = parseDigestReply(written.output);
   const named = reply.ok ? reply.output.items.flatMap(({ places }) => places.map(({ path }) => path)) : [];
-  const [{ facts, capturedRoutes }, head] = await Promise.all([
-    digestSnapshotOn(github, repo, pullRequest, operator).then(async ({ deferredChangesRequests, uiEvidenceMarker }) => ({
+  const [{ facts, pictures }, head] = await Promise.all([
+    digestSnapshotOn(github, repo, pullRequest, operator).then(async ({ deferredChangesRequests, uiEvidenceMarker, shotsMarker }) => ({
       facts: digestFactsOf(await readDigestThread(github, repo, pullRequest, operator, deferredChangesRequests)),
-      capturedRoutes: capturedRoutesOf(uiEvidenceMarker),
+      pictures: digestPicturesOf(uiEvidenceMarker, shotsMarker),
     })),
     readDigestHead(github, repo, pullRequest, headSha, named),
   ]);
-  return { repoUrl, pullRequest, headSha, runUrl, facts, head, capturedRoutes };
+  return { repoUrl, pullRequest, headSha, runUrl, facts, head, ...pictures };
+}
+
+/**
+ * What a Digest item of a pull request may name as its picture, from the
+ * markers in a body the Fabrik App wrote, the caller having read them only
+ * from one: with a shots marker, the named shots that were produced, as
+ * Evidence shots (producedNamedShots); otherwise the routes its evidence
+ * marker names, as captured routes (capturedRoutesOf). The agent job's
+ * inputs step tells the writer these, and the push job checks each picture
+ * against them.
+ */
+export function digestPicturesOf(uiEvidenceMarker: EvidenceMarker | null, shotsMarker: ShotsMarker | null): Pick<DigestGiven, "pictureOf" | "pictures"> {
+  return shotsMarker === null ? { pictureOf: "route", pictures: capturedRoutesOf(uiEvidenceMarker) } : { pictureOf: "shot", pictures: producedNamedShots(shotsMarker) };
 }
 
 /** When the pull request opened, its branch, and the comments on each issue it closes, as the Loop's snapshot reads a Ticket's (src/github/snapshot.ts). */

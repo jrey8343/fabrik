@@ -103,6 +103,13 @@ describe("Reading a PR's Verdicts", () => {
   });
 });
 
+// #819: the Kit's own Execution flaw for an Evidence miss reads back with its source, so it counts.
+it("reads back the Verdict the Kit gives for an Evidence miss", () => {
+  const marker = `<!-- fabrik:verdict ${JSON.stringify({ verdict: "execution-flaw", source: "evidence-miss", requestChanges: false, headSha: HEAD_SHA })} -->`;
+
+  expect(verdictsIn([marker])).toEqual([{ verdict: "execution-flaw", source: "evidence-miss", requestChanges: false, headSha: HEAD_SHA }]);
+});
+
 // #434: a Retry that was a Broken run posts an Execution flaw Verdict, which counts like any other.
 it("reads back the Verdict a Broken Retry posts", () => {
   const flaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: HEAD_SHA } as const;

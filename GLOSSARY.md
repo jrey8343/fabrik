@@ -247,7 +247,7 @@ The part of a red Required check's log, with its annotations, that the Kit puts 
 _Avoid_: log, CI output, failure log
 
 **Retry**:
-An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff or a Broken run before its pull request opened uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. Nor does one from a Flaky check. Nor does an Unrelated failure. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff or a Broken run has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start. An Execution flaw whose findings are all Small findings or marked missed earlier calls for a Touch-up instead, and counts toward the two only once the Ticket's two Touch-ups are used.
+An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff or a Broken run before its pull request opened uses one, an Evidence miss sent back uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. Nor does one from a Flaky check. Nor does an Unrelated failure. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff or a Broken run has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start. An Execution flaw whose findings are all Small findings or marked missed earlier calls for a Touch-up instead, and counts toward the two only once the Ticket's two Touch-ups are used.
 _Avoid_: rerun, attempt
 
 **Touch-up**:
@@ -379,8 +379,20 @@ A comment the Operator leaves on an agent pull request, which every later agent 
 _Avoid_: PR feedback, reply
 
 **UI evidence**:
-The screenshots, and preview link if the Product repo has one, that the Kit captures for a pull request changing a Product repo's UI, so the Operator and the Reviewer can see what was built.
+The screenshots, and preview link if the Product repo has one, that the Kit gathers for a pull request changing a Product repo's UI, by capturing its routes or collecting its Evidence shots, so the Operator and the Reviewer can see what was built.
 _Avoid_: visual proof, screenshots, artifacts
+
+**Journey**:
+A named path a person takes through a Product repo's product, which that repo's end-to-end tests drive.
+_Avoid_: e2e test, scenario, spec, flow
+
+**Evidence shot**:
+A screenshot a Journey takes at a moment it names, which UI evidence collects. Its name alone says which shot it is.
+_Avoid_: snapshot, journey screenshot, checkpoint
+
+**Evidence miss**:
+A UI pull request whose Implementer showed nothing of its change: it named no Evidence shot without saying that nothing visible changes, or named one the check didn't produce.
+_Avoid_: capture failure, missing screenshot
 
 **Digest**:
 The Kit's plain-English account of an agent pull request as it stands at one head, written each time it arrives at the Merge gate and kept on the pull request for the Operator: what was decided and why, what was left out of scope, what needs follow-up, and which parts deserve the Operator's own eyes.

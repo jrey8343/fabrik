@@ -80,7 +80,8 @@ export function aDigestGiven(overrides: Partial<DigestGiven> = {}): DigestGiven 
     runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1",
     facts: aDigestFacts(),
     head: { files: [], changed: [] },
-    capturedRoutes: [],
+    pictureOf: "route",
+    pictures: [],
     ...overrides,
   };
 }

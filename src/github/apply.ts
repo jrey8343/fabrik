@@ -2,6 +2,7 @@
 // at a time, as the token the job holds. It holds no Loop rules, only how
 // GitHub carries them out: a trigger label left on is cycled so adding it
 // fires its event (#417), since GitHub fires none for a label already on.
+import { withEvidenceSection } from "../evidence/uiEvidence.ts";
 import { prototypePreviewUrl, previewUrl } from "../kit/config.ts";
 import { replayResultsIn, withTicketFinished, withTicketStarted } from "../kit/replay.ts";
 import type { Pushed } from "../kit/runRecord.ts";
@@ -180,10 +181,10 @@ export async function applyPlan(
     for (const action of actions) {
       if (action.kind === "carry-digest") {
         if (heads === null) throw new Error(`This job can't read #${action.pullRequest}'s head to carry its Digest forward`);
-        const { pullRequest, headSha, repoUrl } = action;
+        const { pullRequest, headSha, repoUrl, pictureOf } = action;
         // With the files unread at the new head no place could be re-pointed, so nothing is carried.
         const body = await heads.read(pullRequest, headSha, placedFilesIn(action.digest)).then(
-          (head) => carriedDigest(action.digest, { repoUrl, pullRequest, headSha }, head),
+          (head) => carriedDigest(action.digest, { repoUrl, pullRequest, headSha, pictureOf }, head),
           (error: unknown) => {
             console.log(`::warning title=Digest not carried::#${pullRequest} at ${headSha.slice(0, 7)}: ${error instanceof Error ? error.message : String(error)}`);
             return null;
@@ -415,6 +416,10 @@ async function apply(
       return addBlockedBy(github, repo, action, made);
     case "comment-on-created":
       await github.rest("POST", `${issues}/${createdIn(made.created, action.on).number}/comments`, { body: action.body });
+      return;
+    case "comment-on-opened":
+      if (made.opened === null) throw new Error("The plan comments on a PR it hasn't opened");
+      await github.rest("POST", `${issues}/${made.opened}/comments`, { body: action.body });
       return;
     case "close-as-superseded": {
       const body = closingCommentText(
@@ -659,6 +664,7 @@ async function applyToIssue(
         | "create-issue"
         | "add-blocked-by"
         | "comment-on-created"
+        | "comment-on-opened"
         | "close-as-superseded"
         | "open-issue"
         | "push-branch"
@@ -732,6 +738,13 @@ async function applyToIssue(
     case "edit-issue-body":
       await github.rest("PATCH", issue, { body: action.body });
       return;
+    case "replace-evidence-section": {
+      // Read right before the write, so what the Operator edited after the plan was made stays (#820).
+      const pullRequest = (await github.rest("GET", issue)) as { body: string | null };
+      const body = withEvidenceSection(pullRequest.body ?? "", action.section);
+      if (body !== null) await github.rest("PATCH", issue, { body });
+      return;
+    }
     case "append-to-decisions-so-far": {
       // Read right before the write, so what the Operator edited after the plan was made stays.
       const line = action.line.map((part) => (typeof part === "string" ? part : postedIn(posted, part).url)).join("");

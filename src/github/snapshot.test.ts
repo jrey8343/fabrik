@@ -22,6 +22,7 @@ import { aReading, acceptedBody } from "../__fixtures__/replay.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { aRunRecord } from "../read/builders.ts";
 import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
+import { shotsSection, waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import type { RunRecord } from "../kit/runRecord.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { JUDGE_JOB } from "../kit/judge.ts";
@@ -1725,6 +1726,38 @@ describe("Gathering a pull request's UI evidence marker", () => {
     ["shares its line", `See <!-- fabrik:ui-evidence {"run":9100,"artifact":9202} -->`],
   ])("finds no UI evidence where the marker %s", async (_, marker) => {
     expect(await gathered(`Adds a waitlist.\n\n${marker}\n\nCloses #7`)).toMatchObject({ uiEvidenceMarker: null });
+  });
+});
+
+describe("Gathering a pull request's Evidence shots names (#819)", () => {
+  const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
+  /** A UI PR's body on a Product repo that uses Evidence shots, as the push job writes it. */
+  const body = [
+    "Adds drafts to the composer.",
+    shotsSection({ check: "e2e", artifact: "fabrik-evidence-shots", marker: waitingShotsMarker({ named: [{ name: "composer: draft ready" }] }, 9100, { kind: "none" }), missOutcome: "sent-back" }),
+    "Closes #7",
+  ].join("\n\n");
+
+  async function gathered(text: string, author: { login: string; __typename: string } | null = APP_BOT) {
+    return (await gatherSnapshot(pullRequestGitHub({ author, body: text }), repo, pushed, null, APP_LOGIN)).pullRequest;
+  }
+
+  it("reads back the names the shots marker holds, in a body the Fabrik App wrote, and no route marker", async () => {
+    expect(await gathered(body)).toMatchObject({ shotsMarker: { source: "shots", named: [{ name: "composer: draft ready" }] }, uiEvidenceMarker: null });
+  });
+
+  it.each([
+    ["a person", { login: "fabrik-app", __typename: "User" }],
+    ["another bot", { login: "other-app", __typename: "Bot" }],
+    ["a deleted account", null],
+  ])("ignores the names in the body of a PR %s opened, so nobody can give a PR names", async (_, author) => {
+    expect(await gathered(body, author)).toMatchObject({ shotsMarker: null });
+  });
+
+  it("finds none on a PR whose body has a route marker", async () => {
+    const routes = evidenceSection({ result: { outcome: "captured", headSha: HEAD_SHA, captures: [] }, run: 9100, artifact: 9202, evidencePage: null, preview: { kind: "none" } });
+
+    expect(await gathered(`Adds a waitlist.\n\n${routes}\n\nCloses #7`)).toMatchObject({ shotsMarker: null, uiEvidenceMarker: { run: 9100 } });
   });
 });
 

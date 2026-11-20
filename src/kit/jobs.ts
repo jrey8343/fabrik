@@ -70,7 +70,11 @@
 //   ui-evidence-failure      for that Review, why the run's capture failed, as the marker records it, which
 //                            the Reviewer hears when it has no capture result to read; empty when it captured,
 //                            when the marker records no outcome, or for any other run
-//   full-review              for a Review, "true" on a Full Review (#747), else "false"; empty for any other run
+//   ui-shots                 for a Review of a UI PR on a Product repo that uses Evidence shots (#820), what the
+//                            Review job collects the head's shots by, as one line of JSON: the check and artifact
+//                            Kit config names, the PR's names and sentence that nothing visible changes, and the
+//                            head a miss is sent back at. Agent text, so a job reads it through `env:`; else empty
+//   full-review             for a Review, "true" on a Full Review (#747), else "false"; empty for any other run
 //   last-judged-head         for a later Review (#748), the head the Reviewer last judged; else empty
 //   last-judged-change       for that Review, the change fingerprint its Verdict recorded, as one line of JSON,
 //                            whose paths are the PR's file names, so a job reads it through `env:`; else empty
@@ -290,6 +294,10 @@ export function kitJobOutputs(
     "ui-evidence-artifact": String(run?.evidence?.artifact ?? ""),
     // Only ever one of the CAPTURE_FAILURES the marker reads as.
     "ui-evidence-failure": run?.evidence?.failure ?? "",
+    // On a Product repo that uses Evidence shots (#820): the check and artifact Kit config names, the PR's names and its
+    // sentence that nothing visible changes, and the head a miss is sent back at, as one line of JSON. The names and the
+    // sentence are agent text, so a job reads it through `env:` only.
+    "ui-shots": run?.shots === undefined ? "" : JSON.stringify(run.shots),
     // For a Review (#747): "true" for a Full Review, whose Reviewer is given the Full Review section, else "false".
     "full-review": run?.role === "review" && run.reviewKind !== undefined ? String(run.reviewKind.kind === "full") : "",
     // For a later Review (#748): the head the Reviewer last judged, and the fingerprint its Verdict recorded, as one line

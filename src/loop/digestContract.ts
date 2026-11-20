@@ -196,9 +196,11 @@ export interface DigestItem {
   readonly places: readonly NamedPlace[];
   /**
    * The one picture the item points at: a route the pull request's UI
-   * evidence captured, named exactly as captured, or null. The item never
-   * embeds or links an image. Kit code drops one that is no captured route
-   * before the Digest lands.
+   * evidence captured, named exactly as captured, or, on a pull request
+   * whose UI evidence is Evidence shots, the name of a named shot that was
+   * produced; or null. The item never embeds or links an image. Kit code
+   * drops one that is none of the pull request's pictures before the Digest
+   * lands.
    */
   readonly picture: string | null;
   /**
@@ -311,8 +313,8 @@ function readItem(value: unknown, where: string, errors: string[]): DigestItem |
   if (!isText(sentence)) errors.push(`${where}.sentence must be non-empty text`);
   if (!Array.isArray(asks) || !asks.every(isText)) errors.push(`${where}.asks must be a list of ask ids`);
   const places = readPlaces(value["places"], `${where}.places`, errors);
-  // One route at most: a list of them is no picture.
-  if (picture !== null && typeof picture !== "string") errors.push(`${where}.picture must be a route as text, or null`);
+  // One route or one named shot at most: a list of them is no picture.
+  if (picture !== null && typeof picture !== "string") errors.push(`${where}.picture must be one route or one named shot, as text, or null`);
   if (suggestedRequest !== null && typeof suggestedRequest !== "string") errors.push(`${where}.suggestedRequest must be text or null`);
   if (errors.length > errorsBefore || kind === undefined) return null;
   return {
@@ -392,14 +394,26 @@ export interface DigestGiven {
   /** What the head holds of the files the reply's places name, and the pull request's files, from the push job's own read (src/github/digestHead.ts). */
   readonly head: DigestHead;
   /**
-   * The routes the pull request's UI evidence captured, as its evidence
-   * marker names them, from the push job's own read of its body
-   * (src/github/digestGiven.ts): the only routes an item may name as its
-   * picture. None on a pull request with no UI evidence, and on one whose
-   * marker names no routes, as a marker written before markers recorded them.
+   * What an item's picture names: a route the pull request's UI evidence
+   * captured, or, on a pull request whose UI evidence is Evidence shots, one
+   * of the shots it named, by name. A pull request with a route marker, or
+   * with no UI evidence at all, has routes.
    */
-  readonly capturedRoutes: readonly string[];
+  readonly pictureOf: PictureOf;
+  /**
+   * The only pictures an item may name, from the push job's own read of the
+   * pull request's body (src/github/digestGiven.ts), only from a body the
+   * Fabrik App wrote. For routes, the routes its evidence marker names: none
+   * on a pull request with no UI evidence, and on one whose marker names no
+   * routes, as a marker written before markers recorded them. For shots, the
+   * named shots the check's run produced, one lacking a size among them: none
+   * before the artifact is read, and none when nothing of it could be.
+   */
+  readonly pictures: readonly string[];
 }
+
+/** What a Digest item's picture names: a captured route, or a named Evidence shot. */
+export type PictureOf = "route" | "shot";
 
 /** A Digest's comment, or why Kit code refuses the reply: each reason a clause with no full stop, with "; " between two. */
 export type DigestComment = { readonly ok: true; readonly body: string } | { readonly ok: false; readonly refused: string };
@@ -421,6 +435,7 @@ const WHO: Readonly<Record<Round["who"], string>> = {
 /** What the Kit gave a Verdict of its own for. */
 const KIT_VERDICT_FOR: Readonly<Record<NonNullable<Round["why"]>, string>> = {
   "retry-changed-nothing": "a Retry that changed nothing",
+  "evidence-miss": "an Evidence miss",
   "broken-run": "a Broken run",
 };
 
@@ -546,16 +561,16 @@ export interface DigestData {
 
 /**
  * A reply's top as the Digest carries it, from the writer's fields, Kit
- * code's facts, what the head holds and the captured routes. The items are
- * in kind order with no suggested request where none may stand
+ * code's facts, what the head holds and the pull request's pictures. The
+ * items are in kind order with no suggested request where none may stand
  * (digestItemsOf); each place is as it resolves in the head, one that does
  * not being dropped and its item kept (placeAt); a picture is kept only when
- * its route is one of the captured routes, compared exactly, and is dropped
- * otherwise, its item kept; the Follow-ups are the ones the reply names,
+ * it is one of the pictures, a captured route or a produced named shot's
+ * name, compared exactly, and is dropped otherwise, its item kept; the Follow-ups are the ones the reply names,
  * once, in the order Kit code listed them; and every text has lost its
  * mentions.
  */
-function digestDataOf(reply: DigestReply, { facts, head, capturedRoutes }: Pick<DigestGiven, "facts" | "head" | "capturedRoutes">): DigestData {
+function digestDataOf(reply: DigestReply, { facts, head, pictures }: Pick<DigestGiven, "facts" | "head" | "pictures">): DigestData {
   return {
     v: DIGEST_DATA_VERSION,
     items: digestItemsOf(reply).map(({ kind, claim, sentence, places, picture, suggestedRequest }) => ({
@@ -563,7 +578,7 @@ function digestDataOf(reply: DigestReply, { facts, head, capturedRoutes }: Pick<
       claim: oneLine(claim),
       sentence: oneLine(sentence),
       places: places.map((place) => placeAt(place, head)).filter((place) => place !== null),
-      picture: picture !== null && capturedRoutes.includes(picture) ? picture : null,
+      picture: picture !== null && pictures.includes(picture) ? picture : null,
       suggestedRequest: suggestedRequest === null ? null : shown(suggestedRequest),
     })),
     whatItDoes: shown(reply.whatItDoes),
@@ -666,8 +681,11 @@ export function readDigestComment(body: string): DigestCommentRead {
   return { ok: true, ...mark, data: value as unknown as DigestData, folds: foldsLine === -1 ? "" : lines.slice(foldsLine + 1).join("\n") };
 }
 
-/** Where a Digest is: the Product repo's web address, its pull request, and the head it is written as of, a full sha. */
-export type DigestWhere = Pick<DigestGiven, "repoUrl" | "pullRequest" | "headSha">;
+/** Where a Digest is: the Product repo's web address, its pull request, the head it is written as of, a full sha, and what its pictures name. */
+export type DigestWhere = Pick<DigestGiven, "repoUrl" | "pullRequest" | "headSha" | "pictureOf">;
+
+/** The words a Digest names an item's picture with, before the picture itself. */
+const PICTURE_IS: Record<PictureOf, string> = { route: "the captured route", shot: "the Evidence shot" };
 
 /**
  * A place as a Digest shows it: a plain link to the file and its lines at
@@ -691,10 +709,11 @@ function asCode(name: string): string {
 }
 
 /**
- * The top of a Digest, rendered from its data alone: the line naming the
- * pull request and the head it is written as of; Needs your eyes, each item
- * as its bold claim and its sentence, then its places as plain links, then
- * its picture's route, named in words, or "Nothing." when there is none;
+ * The top of a Digest, rendered from its data and where it is: the line
+ * naming the pull request and the head it is written as of; Needs your eyes,
+ * each item as its bold claim and its sentence, then its places as plain
+ * links, then its picture, named in words as a captured route or an Evidence
+ * shot as `where` says, or "Nothing." when there is none;
  * What it does; How it got here; and the Follow-ups, each as its title and
  * its Open as issue link, or that none is named. No code appears in it, no
  * image is embedded or linked, and an item's suggested request is not
@@ -713,7 +732,7 @@ export function digestTop(data: DigestData, where: DigestWhere): string {
           `- **${oneLine(claim)}** ${oneLine(sentence)}`,
           ...(places.length === 0 ? [] : [`  ${places.map((place) => placeLink(place, where)).join(" · ")}`]),
           // In words alone: the Digest embeds and links no image, and a reader draws the picture from the UI evidence.
-          ...(picture === null ? [] : [`  Picture: the captured route ${asCode(picture)}`]),
+          ...(picture === null ? [] : [`  Picture: ${PICTURE_IS[where.pictureOf]} ${asCode(picture)}`]),
         ])),
     "",
     "### What it does",
@@ -884,7 +903,7 @@ function followUpsRefused(shown: readonly string[], listed: DigestFacts["followU
  * Put right, and the Digest lands: items out of kind order, a suggested
  * request where none may stand (digestItemsOf), a place that does not
  * resolve in the head, which is dropped, one over 40 lines, which is cut
- * (placeAt), and a picture whose route is not one of the captured routes,
+ * (placeAt), and a picture that is none of the pull request's pictures,
  * which is dropped, its item kept.
  */
 export function digestCommentOf(reply: DigestReply, given: DigestGiven): DigestComment {

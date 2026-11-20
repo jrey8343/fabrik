@@ -65,6 +65,36 @@ export function withMember(text: string, path: readonly string[], value: unknown
 }
 
 /**
+ * A JSON object's text with the member at this path taken out, every time its
+ * key is there, and every other byte kept as it was: a one-line object stays
+ * on one line, and one that holds nothing else becomes `{}`. The text is as it
+ * was when the member isn't there. `["ui", "shots"]` is the member `shots` of
+ * the `ui` object, which must be there.
+ */
+export function withoutMember(text: string, path: readonly string[]): string {
+  const key = path.at(-1);
+  if (key === undefined) throw new Error("withoutMember needs the path of a member");
+  let open = text.indexOf("{");
+  for (const parent of path.slice(0, -1)) {
+    const member = membersOf(text, open).members.findLast((m) => m.key === parent);
+    if (member === undefined || text[member.valueStart] !== "{") throw new Error(`${path.join(".")} isn't in an object`);
+    open = member.valueStart;
+  }
+  for (;;) {
+    const { members, close } = membersOf(text, open);
+    const at = members.findIndex((member) => member.key === key);
+    const member = members[at];
+    if (member === undefined) return text;
+    const next = members[at + 1];
+    const previous = members[at - 1];
+    // With a member after it, up to where that one starts; otherwise from the end of the one before it, comma and all.
+    if (next !== undefined) text = `${text.slice(0, member.start)}${text.slice(next.start)}`;
+    else if (previous !== undefined) text = `${text.slice(0, previous.end)}${text.slice(member.end)}`;
+    else text = `${text.slice(0, open)}{}${text.slice(close + 1)}`;
+  }
+}
+
+/**
  * The text with the object whose brace is at `open`, its members `level` deep,
  * one member per line when it was on one line, each member's own text kept.
  */

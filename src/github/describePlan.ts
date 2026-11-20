@@ -43,6 +43,8 @@ export function actionPhrase(action: Action): string {
       return `open the issue "${action.title}"${action.assignees.length > 0 ? `, assigned to ${action.assignees.join(", ")}` : ""}`;
     case "edit-issue-body":
       return `rewrite the body of #${action.issue}`;
+    case "replace-evidence-section":
+      return `rewrite the UI evidence section of #${action.issue}`;
     case "append-to-decisions-so-far":
       return `append a line to the Decisions so far of Map #${action.issue}`;
     case "create-issue":
@@ -60,6 +62,8 @@ export function actionPhrase(action: Action): string {
       return `make ${action.issue.repo}#${action.issue.number} blocked by ${action.blocker.created}`;
     case "comment-on-created":
       return `comment on ${action.on.created}`;
+    case "comment-on-opened":
+      return "comment on the PR it opens";
     case "close-as-superseded":
       return `close #${action.issue} as superseded`;
     case "start-agent-run":

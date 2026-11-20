@@ -680,6 +680,8 @@ describe("The head a push leaves the agent branch at, which fills in a preview U
 
     expect(branch.head).toBe(tip);
     expect(await git(remote, "rev-parse", `refs/heads/${BRANCH}`)).toBe(tip);
+    // A first run's Evidence miss is given at the head it pushes (#819).
+    expect(branch.changes.pushedHead).toBe(tip);
   });
 
   it("is a retry's own tip when it only adds commits", async () => {

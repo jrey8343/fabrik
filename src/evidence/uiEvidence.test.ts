@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import type { UiConfig } from "../kit/config.ts";
 import {
-  CAPTURE_FAILURES,
   type Capture,
+  CAPTURE_FAILURES,
   type CaptureFailure,
-  type CaptureResult,
   captureFailureSentence,
+  type CaptureResult,
   evidenceMarkerIn,
   evidenceSection,
   hasDynamicSegment,
@@ -18,9 +18,11 @@ import {
   routesFor,
   type UiEvidence,
   type VariantCapture,
+  withEvidenceSection,
   withoutEvidence,
   withPreviewLink,
 } from "./uiEvidence.ts";
+import { shotsSection, waitingShotsMarker } from "./shotsEvidence.ts";
 
 /** The Pilot's ui block: an Astro site served from its build. */
 const ui: UiConfig = {
@@ -1253,3 +1255,20 @@ describe("UI evidence of a dynamic route, and of an After that answered an error
   });
 });
 
+describe("Replacing a pull request body's evidence section (#820)", () => {
+  const waiting = shotsSection({
+    check: "e2e",
+    artifact: "fabrik-evidence-shots",
+    marker: waitingShotsMarker({ named: [{ name: "a" }] }, 9100, { kind: "none" }, null),
+    missOutcome: "not-pushed",
+  });
+  const after = '<!-- fabrik:ui-evidence-start -->\n## UI evidence\n\nRead.\n<!-- fabrik:ui-evidence {"source":"shots"} -->';
+
+  it("replaces the last section whole, from its start line through its marker, and keeps the rest of the body", () => {
+    expect(withEvidenceSection(`Adds drafts.\n\n${waiting}\n\nCloses #12`, after)).toBe(`Adds drafts.\n\n${after}\n\nCloses #12`);
+  });
+
+  it("is null for a body with no section, which it never adds one to", () => {
+    expect(withEvidenceSection("Adds drafts.\n\nCloses #12", after)).toBeNull();
+  });
+});

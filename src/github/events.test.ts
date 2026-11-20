@@ -14,7 +14,9 @@ import {
   researchEventFrom,
   retroEventFrom,
   reviewEventFrom,
+  evidenceMissEventFrom,
 } from "./events.ts";
+import { aShotsCollected } from "../__fixtures__/uiEvidence.ts";
 import { excerptsPassedOut, type FailureExcerpt } from "../review/failureExcerpt.ts";
 
 describe("A scheduled tick", () => {
@@ -609,6 +611,23 @@ describe("A finished Review of a head whose Required checks are still red (#779)
 
   it("carries no red checks on a green head", () => {
     expect(reviewEventFrom({ ...review, failedChecks: [], rerun: null, excerpts: [] })).not.toHaveProperty("redChecks");
+  });
+});
+
+describe("A finished Review of a pull request whose UI evidence is Evidence shots (#820)", () => {
+  const head = "c".repeat(40);
+  const result = readAgentRunResult(JSON.stringify({ role: "review", issue: 50, output: "verdict: pass" }));
+  const review = { pullRequest: 50, headSha: head, runUrl: "https://github.com/acme/shop/actions/runs/42/attempts/1", repoUrl: "https://github.com/acme/shop", failedChecks: [], ranNothing: [], result, rerun: null };
+  const shots = { collected: aShotsCollected({ head }), run: 42, artifact: 9301 };
+
+  it("carries what the Review's jobs read of the shots at the head the Reviewer judged, and none read at another", () => {
+    expect(reviewEventFrom({ ...review, shots })).toMatchObject({ kind: "review-run-finished", shots });
+    expect(reviewEventFrom({ ...review, shots: { ...shots, collected: aShotsCollected({ head: "d".repeat(40) }) } })).not.toHaveProperty("shots");
+  });
+
+  it("is the Kit's Evidence miss in place of a Verdict when the Reviewer didn't run, only at the head the shots were read at", () => {
+    expect(evidenceMissEventFrom({ ...review, shots })).toEqual({ kind: "evidence-miss-found", pullRequest: 50, headSha: head, runUrl: review.runUrl, repoUrl: review.repoUrl, shots });
+    expect(() => evidenceMissEventFrom({ ...review, headSha: "d".repeat(40), shots })).toThrow("The Evidence shots were read at ccccccc, not the Review's head ddddddd");
   });
 });
 

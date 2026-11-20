@@ -340,7 +340,7 @@ export function aDigestComment(
   { data = NOTHING_FOR_YOUR_EYES, carriedFrom = null, folds = "[The run](https://github.com/owner/product/actions/runs/42/attempts/1)" }: { readonly data?: DigestData; readonly carriedFrom?: string | null; readonly folds?: string } = {},
   overrides: Partial<CommentFacts> = {},
 ): CommentFacts {
-  const top = digestTop(data, { repoUrl: "https://github.com/owner/product", pullRequest: 50, headSha });
+  const top = digestTop(data, { repoUrl: "https://github.com/owner/product", pullRequest: 50, headSha, pictureOf: "route" });
   return aComment([digestMarker({ head: headSha, asks: [], carriedFrom }), digestDataMarker(data), top, "", DIGEST_FOLDS_MARKER, folds].join("\n"), at, overrides);
 }
 
@@ -484,7 +484,7 @@ export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> 
  * Kit config the default at `main`, nothing for Dispatch to weigh, the
  * Operator `operator`, the Fabrik App `fabrik-app[bot]`, and no GitHub facts,
  * issue bodies, merges, cross-references, closed issues' comments, Tickets'
- * states or evidence markers unless a test says so.
+ * states, evidence markers or shots markers unless a test says so.
  */
 export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts {
   return {
@@ -499,6 +499,7 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
     closedIssueComments: [],
     ticketStates: [],
     evidenceMarkers: [],
+    shotsMarkers: [],
     ...overrides,
   };
 }

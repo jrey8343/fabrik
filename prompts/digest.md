@@ -30,7 +30,7 @@ At the end of this prompt, each under its own heading:
 - "Every Verdict on the pull request", oldest first: each with the head it judged, who gave it and its whole comment.
 - "The Kit's notes on the pull request", oldest first: what the Kit itself wrote on the thread between the Verdicts, such as a Retry's push, a Touch-up's push, a body-only Touch-up's note that it rewrote the body alone, or a rebase onto the default branch.
 - "Kit code's facts": what Kit code worked out from the thread, which no agent wrote. Its `rounds`, oldest first, each with who and what, and on a Verdict its `effect` on the code against the Verdict before it; its `counts` of them; `retriesLeft`, how many of the Ticket's Retries are left; `touchUpsLeft`, how many of the pull request's Touch-ups are left, which use none of the Retries; `followUps`, every Follow-up a pass on this pull request named, each with Kit code's id for it; `asks`, every Request changes of the Operator's and every line comment in one, each under the id it is headed by where the Request changes are set out; `productCode`, whether the product code changed since the first Verdict; and `requiredChecksRanNothing`, the Required checks that passed on this head only by being skipped or reporting neutral, so ran nothing on it. These are facts. Word them, and never contradict them or count anything again yourself.
-- "UI evidence": whether the pull request has screenshots of its pages, and its captured routes, the routes those screenshots are of, or that it has none.
+- "UI evidence": whether the pull request has screenshots of its pages, and its captured routes, the routes those screenshots are of, or that it has none. On a pull request whose UI evidence is Evidence shots, it says so, and gives the named shots that were produced in place of captured routes, or that none was.
 
 You are given no transcript and no Run record, and you need none: write from the pull request, its thread and the code.
 
@@ -78,13 +78,13 @@ What an item holds:
 - Take each line number from the file as it stands at this head, as `grep -n` or `git blame` gives it, never from a diff, a Verdict or the pull request's body. The Kit drops a place whose file or lines the head does not have, and keeps the item.
 - Point; never quote. The Kit links each place after the item's sentence, and the Operator is shown the real lines from the head. Don't retype them in `claim` or `sentence`, or anywhere in the top.
 
-`picture`, on an item about a screen: one captured route, or `null`.
+`picture`, on an item about a screen: one captured route, or one named shot that was produced, or `null`.
 
-- An item about a screen may name one captured route as its picture: the route of the screen it is about, exactly as "UI evidence" lists it, with nothing added or left off. At most one on an item.
-- A changed screen with no captured route is a `not-proven` item: nothing shows it as it now is. Its `picture` is `null`.
-- `null` on an item that is about no screen, and on every item when the pull request has no captured routes.
-- Never embed or link an image, here or anywhere in your output. The Kit names the route after the item's places, and the Operator is shown the picture from the pull request's UI evidence.
-- The Kit drops a picture whose route is not a captured route, and keeps the item.
+- An item about a screen may name one captured route as its picture: the route of the screen it is about, exactly as "UI evidence" lists it, with nothing added or left off. On a pull request whose UI evidence is Evidence shots, it may name one of the named shots that were produced instead: the shot of the screen it is about, by its name exactly as "UI evidence" lists it, in the same case and with the same spaces. At most one on an item.
+- A changed screen with no captured route, and no named shot that was produced, is a `not-proven` item: nothing shows it as it now is. Its `picture` is `null`.
+- `null` on an item that is about no screen, and on every item when the pull request has no captured routes, or none of its named shots was produced.
+- Never embed or link an image, here or anywhere in your output. The Kit names the route or the shot after the item's places, and the Operator is shown the picture from the pull request's UI evidence.
+- The Kit drops a picture whose route is not a captured route, or whose name is not one of the named shots that were produced, and keeps the item.
 
 `suggestedRequest`, on an item that is `asked-not-here` or `not-proven`: the request the Operator could send as it stands, in at most 40 words, or `null` when you have none. The Kit does not show it in the Digest.
 
@@ -202,10 +202,10 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
 </digest>
 
 - `asks` holds your answer to every ask of Kit code's, under Kit code's id for it, and to every criterion, under an id of your own. Each has `id`, `answer`, `where` and `checkedBy`, and a criterion has `criterion` too. No id twice.
-- `items` is a list of at most four items, and an empty list when nothing needs the Operator's eyes. Each has `kind`, `claim`, `sentence`, `asks`, `places`, `picture` and `suggestedRequest`: `asks` is a list, empty on any kind but `asked-not-here`; `places` is a list of at most three places, each with `path`, `start`, `end` and `as`, and an empty list when the item is about no lines; `picture` is one captured route as text, or `null`; and `suggestedRequest` is text or `null`. `claim` and `sentence` are plain text.
+- `items` is a list of at most four items, and an empty list when nothing needs the Operator's eyes. Each has `kind`, `claim`, `sentence`, `asks`, `places`, `picture` and `suggestedRequest`: `asks` is a list, empty on any kind but `asked-not-here`; `places` is a list of at most three places, each with `path`, `start`, `end` and `as`, and an empty list when the item is about no lines; `picture` is one captured route, or one produced named shot's name, as text, or `null`; and `suggestedRequest` is text or `null`. `claim` and `sentence` are plain text.
 - `whatItDoes` and `howItGotHere` are plain text: no Markdown, no code, and each within its 40 words.
 - `followUps` is a list of Kit code's ids, such as `f1`, and an empty list when there is none to show.
 - `walkthrough` and `decided` are Markdown, with only what GitHub renders in a pull request: lists, tables, code blocks and Mermaid. No headings and no HTML: the Kit gives each fold its title.
 - `roundsLine` is plain text on one line.
 - Every field is required, and no text may be empty. The Kit checks the reply's shape, and a reply that breaks it posts no Digest.
-- Write no layout of your own around the JSON: the Kit adds the opening line, the headings, the link to each place, each picture's route, the Follow-ups' titles and links, the folds, the table of the rounds, the table of the asks and the link to the run.
+- Write no layout of your own around the JSON: the Kit adds the opening line, the headings, the link to each place, each picture's route or shot, the Follow-ups' titles and links, the folds, the table of the rounds, the table of the asks and the link to the run.

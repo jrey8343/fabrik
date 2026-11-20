@@ -106,7 +106,7 @@ export interface Round {
   /** On a Touch-up's push (#750), or a body-only Touch-up's note (#751): which of the pull request's Touch-ups it was, as its note names it. */
   readonly touchUp?: number;
   /** On a Verdict the Kit gave itself: what for. */
-  readonly why?: "retry-changed-nothing" | "broken-run";
+  readonly why?: "retry-changed-nothing" | "broken-run" | "evidence-miss";
   /**
    * On a Verdict: what the pull request's own change had changed of the code
    * since the Verdict before it, by their fingerprints. Null on the first
@@ -182,12 +182,13 @@ export interface DigestFacts {
 /** One thing on the thread, at its time. */
 type Entry = { readonly at: string } & ({ readonly body: string } | { readonly review: number });
 
-/** Who gives a Verdict, by its source: the Kit gives its own for a Retry that changed nothing and for a Broken run. */
+/** Who gives a Verdict, by its source: the Kit gives its own for a Retry that changed nothing, for a Broken run and for an Evidence miss (#819). */
 const VERDICT_BY: Readonly<Record<VerdictRecord["source"], Pick<Round, "who" | "why">>> = {
   reviewer: { who: "reviewer" },
   ci: { who: "required-checks" },
   "empty-diff": { who: "kit", why: "retry-changed-nothing" },
   "broken-run": { who: "kit", why: "broken-run" },
+  "evidence-miss": { who: "kit", why: "evidence-miss" },
 };
 
 /** Kit code's facts about a pull request, from its thread. */

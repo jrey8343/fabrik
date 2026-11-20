@@ -7,9 +7,21 @@
 // which keeps both out of agent text. A prototype turn's capture of its
 // variants (#155) shares the capture result, and neither the Reviewer nor the
 // evidence section ever shows it. The Evidence pages, the PR's and the
-// prototype's, are beside it (src/evidence/evidencePage.ts). Pure, no I/O.
+// prototype's, are beside it (src/evidence/evidencePage.ts). Evidence shots'
+// marker, section and miss wording are in src/evidence/shotsEvidence.ts.
+// Pure, no I/O.
 import { posix } from "node:path";
-import { type CaptureIdentity, isCaptureIdentity, isRoute, REVIEWER_IMAGE_CAP, UI_ROUTE_CAP, UI_VIEWPORTS, type UiConfig, type Viewport } from "../kit/config.ts";
+import {
+  type CaptureIdentity,
+  isCaptureIdentity,
+  isRoute,
+  REVIEWER_IMAGE_CAP,
+  UI_ROUTE_CAP,
+  UI_VIEWPORTS,
+  type UiConfig,
+  type Viewport,
+  VIEWPORT_NAMES,
+} from "../kit/config.ts";
 import { PROTOTYPE_VARIANT_CAP, variantLetter } from "../loop/designOutput.ts";
 import { linesOutsideCode, markerJson } from "../loop/markers.ts";
 import { withoutMentions } from "../loop/mentions.ts";
@@ -293,8 +305,6 @@ export function readCaptureResult(value: unknown): CaptureResultRead {
   return { ok: true, result };
 }
 
-const VIEWPORT_NAMES = UI_VIEWPORTS.map(({ name }) => name);
-
 /** A plain file name in the capture's folder: never a path, `..`, or a hidden file. */
 const IMAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -440,11 +450,11 @@ export function captureFailureOf(value: unknown): CaptureFailure | null {
   return isOneOf(CAPTURE_FAILURES, value) ? value : null;
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isOneOf<T extends string>(options: readonly T[], value: unknown): value is T {
+export function isOneOf<T extends string>(options: readonly T[], value: unknown): value is T {
   return (options as readonly unknown[]).includes(value);
 }
 
@@ -476,7 +486,7 @@ export function reviewerImages(captures: readonly (Capture | VariantCapture)[]):
 /** Where in its working directory a UI PR's Reviewer finds the screenshots it's given. */
 export const REVIEWER_IMAGES_DIR = "fabrik-ui-evidence";
 
-const UI_PR = "This pull request changes the Product repo's UI";
+export const UI_PR = "This pull request changes the Product repo's UI";
 
 /** What a UI PR's Reviewer is given of its UI evidence, for its prompt's block. */
 export interface ReviewerEvidence {
@@ -737,7 +747,7 @@ export interface UiEvidence extends Pick<EvidenceMarker, "run" | "artifact"> {
 }
 
 /** The hidden line the evidence section opens with, so it can be found and replaced whole. */
-const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
+export const SECTION_START = "<!-- fabrik:ui-evidence-start -->";
 
 /**
  * The evidence section of a UI pull request's body, between a hidden start
@@ -891,7 +901,7 @@ function evidencePageLine(url: string | null, headSha: string, captures: readonl
   return `${link("Open the Evidence page", url)} of ${screenshots(captures.length)}: this branch at \`${headSha.slice(0, 7)}\`${besideProduction}, at ${spelled(viewports, "and")} ${viewports.length === 1 ? "width" : "widths"}.`;
 }
 
-function previewLine(preview: PreviewLink): string {
+export function previewLine(preview: PreviewLink): string {
   switch (preview.kind) {
     case "linked":
       return `${link("Open the preview deployment", preview.url)}.`;
@@ -924,17 +934,17 @@ function evidenceMarker({ run, artifact, result, preview }: UiEvidence, routes: 
 }
 
 /** An evidence marker line holding this value, on one line. */
-function markerLine(value: unknown): string {
+export function markerLine(value: unknown): string {
   return `<!-- fabrik:ui-evidence ${markerJson(value)} -->`;
 }
 
 /** What the marker records of a preview link. */
-function markerPreview(preview: PreviewLink): MarkerPreview {
+export function markerPreview(preview: PreviewLink): MarkerPreview {
   return preview.kind === "linked" || preview.kind === "never-answered" ? { is: preview.kind, url: preview.url } : { is: preview.kind };
 }
 
 /** The marker line, matched against a whole line with its outer whitespace trimmed. */
-const EVIDENCE_MARKER = /^<!-- fabrik:ui-evidence (\{.*\}) -->$/;
+export const EVIDENCE_MARKER = /^<!-- fabrik:ui-evidence (\{.*\}) -->$/;
 
 /**
  * Where the marker in this body says its UI evidence is kept, or null when it
@@ -963,6 +973,23 @@ export function capturedRoutesOf(marker: EvidenceMarker | null): readonly string
 }
 
 /**
+ * The body with its evidence section replaced by `section` (#820): the last
+ * section, from its start line through the marker after it, so a section the
+ * push job wrote at waiting is replaced whole once the Review's jobs have
+ * read the shots. The rest of the body stays as it was, whatever the
+ * Operator changed. Null when the body has no section, which it never gets
+ * one added to.
+ */
+export function withEvidenceSection(body: string, section: string): string | null {
+  const lines = body.split("\n");
+  const startAt = lines.findLastIndex((line) => SECTION_START_LINE.test(line.trim()));
+  if (startAt === -1) return null;
+  const endAt = lines.findIndex((line, at) => at > startAt && EVIDENCE_MARKER.test(line.trim()));
+  if (endAt === -1) return null;
+  return [...lines.slice(0, startAt), section, ...lines.slice(endAt + 1)].join("\n");
+}
+
+/**
  * The body with what came of its preview deployment, once the push job has
  * polled it (src/kit/previewLink.ts): the evidence section run `run` wrote
  * links the preview, or says it never answered, where it said the preview is
@@ -974,9 +1001,13 @@ export function capturedRoutesOf(marker: EvidenceMarker | null): readonly string
  */
 export function withPreviewLink(body: string, run: number, preview: PreviewLink): string | null {
   const lines = body.split("\n");
-  const markers = lines.map((line) => markerOf(EVIDENCE_MARKER.exec(line.trim())?.[1]));
+  // A shots section's marker names the Implement run that wrote it apart from the Review run whose Evidence page it links.
+  const markers = lines.map((line) => {
+    const json = EVIDENCE_MARKER.exec(line.trim())?.[1];
+    return markerOf(json)?.run ?? shotsImplementRunOf(json);
+  });
   const markerAt = markers.findLastIndex((marker) => marker !== null);
-  if (markerAt === -1 || markers[markerAt]?.run !== run) return null;
+  if (markerAt === -1 || markers[markerAt] !== run) return null;
   const startAt = lines.findLastIndex((line, at) => at < markerAt && SECTION_START_LINE.test(line.trim()));
   const waiting = previewLine({ kind: "pending" });
   const at = lines.findIndex((line, i) => startAt !== -1 && i > startAt && i < markerAt && line.trim() === waiting);
@@ -991,6 +1022,17 @@ export function withPreviewLink(body: string, run: number, preview: PreviewLink)
   return lines.join("\n");
 }
 
+/** The Implement run a shots marker names (src/evidence/shotsEvidence.ts), or null when the JSON is no shots marker or names none. */
+function shotsImplementRunOf(json: string | undefined): number | null {
+  if (json === undefined) return null;
+  try {
+    const value: unknown = JSON.parse(json);
+    return isObject(value) && value.source === "shots" && isId(value.implementRun) ? value.implementRun : null;
+  } catch {
+    return null;
+  }
+}
+
 function markerOf(json: string | undefined): EvidenceMarker | null {
   if (json === undefined) return null;
   let value: unknown;
@@ -999,7 +1041,8 @@ function markerOf(json: string | undefined): EvidenceMarker | null {
   } catch {
     return null;
   }
-  if (!isObject(value)) return null;
+  // A marker with a source is another shape of it (a shots marker), never a route marker.
+  if (!isObject(value) || value.source !== undefined) return null;
   const { run, artifact, failure, routes, preview, missed, resolved } = value;
   if (!isId(run) || !(artifact === null || isId(artifact))) return null;
   // A field it doesn't record, or that doesn't read, leaves where the evidence is kept, and the other fields, as they were.
@@ -1025,7 +1068,7 @@ function isMarkerMissedShot(value: unknown): value is MarkerMissedShot {
 }
 
 /** A marker's preview, when it reads: one of its four outcomes, with the address it polled exactly when it was polled. */
-function markerPreviewOf(value: unknown): { preview: MarkerPreview } | null {
+export function markerPreviewOf(value: unknown): { preview: MarkerPreview } | null {
   if (!isObject(value)) return null;
   const { is, url } = value;
   if ((is === "none" || is === "pending") && url === undefined) return { preview: { is } };
@@ -1034,7 +1077,7 @@ function markerPreviewOf(value: unknown): { preview: MarkerPreview } | null {
 }
 
 /** A GitHub id: a whole number above zero. */
-function isId(value: unknown): value is number {
+export function isId(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
@@ -1079,7 +1122,7 @@ function isBlank(line: string | undefined): boolean {
 }
 
 /** A Markdown link. */
-function link(text: string, url: string): string {
+export function link(text: string, url: string): string {
   return `[${text}](<${url}>)`;
 }
 

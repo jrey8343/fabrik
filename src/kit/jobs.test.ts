@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { aPullRequest, anIssue, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { aPullRequest, anIssue, HEAD_SHA, kitConfig, RETRO_WINDOW_END, retroBody, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { acceptedBody, aReplayIssue, baseOf } from "../__fixtures__/replay.ts";
-import { UI } from "../__fixtures__/uiEvidence.ts";
-import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
+import { SHOTS_UI, UI } from "../__fixtures__/uiEvidence.ts";
+import { type EvidenceMarker } from "../evidence/uiEvidence.ts";
+import { waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Label } from "../loop/labels.ts";
 import type { Action, AgentRole, Plan } from "../loop/types.ts";
@@ -177,6 +178,20 @@ describe("The Kit job's routing", () => {
     const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(aPullRequest({ uiEvidenceMarker })), kitConfig());
 
     expect(kitJobOutputs(plan, 7, kitConfig())).toMatchObject({ route: "review", ...evidence });
+  });
+
+  // The Review job finds the named check's run at the head and reads its Evidence shots against the PR's names (#820).
+  it("passes out for the Review of a UI PR on a Product repo that uses Evidence shots what its shots are collected by, as one line of JSON", () => {
+    const config = kitConfig({ ui: SHOTS_UI });
+    const marker = waitingShotsMarker({ named: [{ name: "composer: draft ready" }] }, 9100, { kind: "none" }, HEAD_SHA);
+    const plan = planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(aPullRequest({ shotsMarker: marker })), config);
+
+    expect(kitJobOutputs(plan, 7, config)).toMatchObject({
+      route: "review",
+      "ui-shots": JSON.stringify({ check: "e2e", artifact: "fabrik-evidence-shots", names: ["composer: draft ready"], sendsBackAt: HEAD_SHA }),
+      "ui-evidence-run": "",
+    });
+    expect(kitJobOutputs(planFor({ kind: "pull-request-pushed", pullRequest: 50 }, snapshotOfPullRequest(aPullRequest()), kitConfig()), 7, kitConfig())).toMatchObject({ "ui-shots": "" });
   });
 
   // The Review job gives a Full Review's Reviewer the Full Review section, and the push job records the kind (#747).

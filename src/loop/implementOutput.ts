@@ -28,6 +28,20 @@ export interface ImplementOutput {
    */
   readonly routes?: readonly string[];
   /**
+   * On a Product repo that uses Evidence shots (#819): the names of the
+   * shots that show the change, as it gave them, in its order. The push job
+   * holds them to the manifest's name rule and counts the first four
+   * (src/evidence/uiEvidence.ts). Left out when the run gave anything but a
+   * list of names: a bad list never fails the run.
+   */
+  readonly shots?: readonly string[];
+  /**
+   * On a Product repo that uses Evidence shots: its one sentence that nothing
+   * a person sees changes, and why. Left out when the run gave anything but
+   * text. Named shots win over it.
+   */
+  readonly nothingVisible?: string;
+  /**
    * For a Request-changes run alone: its two answers about the review it was
    * started for, which the Kit records on the PR (#369). Every other run
    * leaves them out.
@@ -69,6 +83,11 @@ function isRouteList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isRoute);
 }
 
+/** Whether a run's shots are a list of names, as text; anything else, an empty list too, reads as none named. */
+function isShotList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every((name) => typeof name === "string");
+}
+
 function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
@@ -78,7 +97,7 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["Implementer output must be a JSON object"] };
   }
-  const { title, summary, fix, operatorCommentsConsidered: considered, routes } = value as Record<string, unknown>;
+  const { title, summary, fix, operatorCommentsConsidered: considered, routes, shots, nothingVisible } = value as Record<string, unknown>;
   const errors: string[] = [];
   if (!isText(title) || title.includes("\n") || title.length > MAX_TITLE) {
     errors.push(`title must be one non-empty line of at most ${MAX_TITLE} characters`);
@@ -96,6 +115,9 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
       ...(isCommentIdList(considered) ? { operatorCommentsConsidered: considered } : {}),
       // Nor does a malformed list of routes: it reads as none named.
       ...(isRouteList(routes) ? { routes } : {}),
+      // Nor do malformed shots, or a sentence that isn't text: each reads as not given.
+      ...(isShotList(shots) ? { shots } : {}),
+      ...(isText(nothingVisible) ? { nothingVisible: nothingVisible.trim() } : {}),
     },
   };
 }

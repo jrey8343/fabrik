@@ -1,6 +1,8 @@
 // The Loop rules core's interface: a Loop event, a snapshot of GitHub state and
 // the resolved Kit config go in; a plan comes out.
+import type { ReviewShots } from "../evidence/shotsCollect.ts";
 import type { CaptureResult, EvidenceMarker } from "../evidence/uiEvidence.ts";
+import type { ShotsMarker, ShotsRead } from "../evidence/shotsEvidence.ts";
 import type { ChangedPath } from "../guard/trust-root.ts";
 import type { PlannedTicket, ReplayAcceptance, ReplayIssue, ReplayOutcomes, ReplayTicketEnd } from "../kit/replay.ts";
 import type { EvidenceRef, StreakRow } from "../kit/retroEvidence.ts";
@@ -9,7 +11,7 @@ import type { CheckExcerpt, FailureExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { IssueRef } from "./blockers.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
-import type { DigestGiven } from "./digestContract.ts";
+import type { DigestGiven, PictureOf } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
 import type { CheckFixMark, FlakyCheckMark, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
@@ -170,8 +172,10 @@ export interface BranchChanges {
    */
   readonly mainMerge?: { readonly main: string; readonly resolved: boolean };
   /**
-   * For a run on its agent PR's own branch with something to push: the commit
-   * its push lands as the branch's head, which its push note names (pushedHeadMarker).
+   * For a run with something to push: the commit its push lands as the
+   * branch's head, which a run on its agent PR's own branch names in its push
+   * note (pushedHeadMarker), and at which the Kit gives an Evidence miss's
+   * Execution flaw (#819).
    */
   readonly pushedHead?: string;
   /**
@@ -399,6 +403,27 @@ export type LoopEvent =
       readonly operatorComments?: readonly GivenOperatorComment[];
       /** On a head whose Required checks were still red after everything the Kit could do (#779), those checks; absent on green. */
       readonly redChecks?: RedRequiredChecks;
+      /**
+       * On a UI PR in a Product repo that uses Evidence shots (#820): what the
+       * Review's jobs read of the named check's artifact at the head, which the
+       * push job writes the evidence section from. Absent when they read none.
+       */
+      readonly shots?: ShotsRead;
+    }
+  | {
+      /**
+       * The Review's jobs found an Evidence miss that sends back at the head
+       * (#820): a named shot the green named check didn't produce, at a head
+       * an Implementer run pushed, with a Retry left. The Reviewer didn't run;
+       * its push job gives the Kit's own Execution flaw in its place.
+       */
+      readonly kind: "evidence-miss-found";
+      readonly pullRequest: number;
+      /** The head the named check ran at, which the Review's waits read. */
+      readonly headSha: string;
+      readonly runUrl: string;
+      readonly repoUrl: string;
+      readonly shots: ShotsRead;
     }
   | {
       /** The Digest writer finished on an agent PR; its push job holds the reply, not yet posted (ADR-0022). */
@@ -1011,6 +1036,12 @@ export interface PullRequestSnapshot {
    */
   readonly uiEvidenceMarker: EvidenceMarker | null;
   /**
+   * On a Product repo that uses Evidence shots (#819): the shots marker in the
+   * body the Fabrik App wrote (src/evidence/uiEvidence.ts), which holds the
+   * PR's names between runs and marks it UI, or null when it has none.
+   */
+  readonly shotsMarker: ShotsMarker | null;
+  /**
    * The existing tests its Implement runs changed (#463), read from the
    * marker in the body the Fabrik App wrote (src/loop/changedTests.ts), or
    * none, so a later run's push lists them beside its own.
@@ -1251,10 +1282,10 @@ export interface VerdictRecord {
   readonly verdict: Verdict;
   /**
    * The Reviewer judged it; or red required checks, a retry whose branch
-   * changed nothing, or a retry that was a Broken run (#434), made it an
-   * Execution flaw.
+   * changed nothing, a retry that was a Broken run (#434), or an Evidence
+   * miss at a head an Implementer run pushed (#819), made it an Execution flaw.
    */
-  readonly source: "reviewer" | "ci" | "empty-diff" | "broken-run";
+  readonly source: "reviewer" | "ci" | "empty-diff" | "broken-run" | "evidence-miss";
   /**
    * Whether it came from a Request-changes run, which uses no retry itself. An
    * Execution flaw on its push still calls for one, and counts (#393).
@@ -1987,6 +2018,11 @@ export type Action =
       readonly body: string;
     }
   | {
+      /** Comments on the pull request `open-pull-request` opened earlier in the plan, as the Kit's Execution flaw for a first run's Evidence miss does (#819). */
+      readonly kind: "comment-on-opened";
+      readonly body: string;
+    }
+  | {
       /** Comments on an issue, linking comments posted or issues created earlier in the plan. */
       readonly kind: "comment-linking";
       readonly issue: number;
@@ -1996,6 +2032,16 @@ export type Action =
       readonly key?: string;
     }
   | { readonly kind: "edit-issue-body"; readonly issue: number; readonly body: string }
+  | {
+      /**
+       * Replaces the evidence section of a PR's body with `section`, keeping
+       * the rest of the body as it is when applied (#820): a body with no
+       * section is left as it is.
+       */
+      readonly kind: "replace-evidence-section";
+      readonly issue: number;
+      readonly section: string;
+    }
   | {
       /**
        * Appends one line to a Map's Decisions so far. The core never sends the
@@ -2068,6 +2114,12 @@ export type Action =
        * which the Review job downloads for the Reviewer. A PR with no marker gets none.
        */
       readonly evidence?: EvidenceMarker;
+      /**
+       * For a Review of a UI PR in a Product repo that uses Evidence shots
+       * (#820): the check and artifact its shots come from, its names, and
+       * the head a miss is sent back at, for the Review's jobs.
+       */
+      readonly shots?: ReviewShots;
       /**
        * For a Design session's prototype turn (#155): the pending prototype
        * request it builds, and the Operator's reply that started the turn
@@ -2344,6 +2396,8 @@ export type Action =
       readonly headSha: string;
       /** The Product repo's web address, which the carried Digest's links start from. */
       readonly repoUrl: string;
+      /** What the Digest's pictures name, as the pull request's UI evidence has them: the carried comment names each picture so again. */
+      readonly pictureOf: PictureOf;
       /** The last Digest's comment, as it was posted. */
       readonly digest: string;
       readonly carried: readonly Action[];

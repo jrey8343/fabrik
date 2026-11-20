@@ -122,6 +122,18 @@ describe("The Kit job's step summary", () => {
 
       expect(kitJobSummary(plan, config, [])).toBe("### Fabrik Kit job\n\nThe Implement run on #7 was given the Subscription **Claude token**.\n");
     });
+
+    it("notes quietly that UI evidence comes from the check ui.shots names, when it comes from Evidence shots", () => {
+      const shots = { check: "e2e", artifact: "fabrik-evidence-shots" };
+      const config = kitConfig({ subscriptions: ["Claude token", "Claude token 2"], ui: { ...ui, defaultRoutes: [], shots } });
+      const plan = planFor(dispatched, snapshotOf(readyTicket), config);
+
+      expect(kitJobSummary(plan, config, [])).toBe(
+        "### Fabrik Kit job\n\n" +
+          "The Implement run on #7 was given the Subscription **Claude token**.\n\n" +
+          "UI evidence comes from the Evidence shots the Required check `e2e` uploads, so the Implement job captures no routes.\n",
+      );
+    });
   });
 
   it("says nothing of Visual evidence on a run that isn't an Implement run", () => {

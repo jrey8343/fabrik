@@ -77,9 +77,18 @@ export async function digestContext(
  * any, and its captured routes, which Kit code read from the evidence marker
  * in its body (capturedRoutesOf, src/evidence/uiEvidence.ts) and checks each
  * item's picture against before the Digest lands. With no UI evidence, or a
- * marker that names no routes, it is told there are none.
+ * marker that names no routes, it is told there are none. On a pull request
+ * whose UI evidence is Evidence shots, it is told the named shots that were
+ * produced in their place (digestPicturesOf, src/github/digestGiven.ts), or
+ * that none was.
  */
-function uiEvidenceParts({ uiEvidence, capturedRoutes }: Partial<DigestPullRequest>): string[] {
+function uiEvidenceParts({ uiEvidence, capturedRoutes, producedShots }: Partial<DigestPullRequest>): string[] {
+  if (producedShots !== undefined) {
+    const are = "This pull request's UI evidence is Evidence shots: screenshots its Journeys took in a Required check, each known by its name alone, its body listing the ones its Implementer named.";
+    const names = Array.isArray(producedShots) ? producedShots.filter((name) => typeof name === "string") : [];
+    if (names.length === 0) return [`${are} None of its named shots was produced, so no item may name a picture.`];
+    return [`${are} The named shots that were produced, the only names an item may name as its picture:`, ...jsonBlock(names)];
+  }
   if (uiEvidence !== true) return ["This pull request has no UI evidence, and so no captured routes: no item may name a picture."];
   const has = "This pull request has UI evidence: screenshots of its pages, which its body links.";
   const routes = Array.isArray(capturedRoutes) ? capturedRoutes.filter((route) => typeof route === "string") : [];

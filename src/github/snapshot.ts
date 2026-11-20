@@ -2,6 +2,7 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { changedTestsIn } from "../loop/changedTests.ts";
 import {
   INSTRUCTED_ROLES,
@@ -1364,6 +1365,7 @@ async function gatherEventPart(
     case "pull-request-pushed":
     case "pull-request-labeled":
     case "review-run-finished":
+    case "evidence-miss-found":
     case "digest-run-finished":
     case "pull-request-left-draft":
     case "pull-request-closed":
@@ -2078,17 +2080,22 @@ export async function deferredChangesRequestsOn(github: ReadClient, repo: Repo, 
  * What the push job takes from the Loop's snapshot of a PR to land its
  * Digest (src/github/digestGiven.ts), in the one read: the Operator's Request
  * changes deferred while a Retry was in flight, as deferredChangesRequestsOn
- * gives them, and its evidence marker, read only from a body a bot wrote
- * (byAppOf), so nobody else can name a route as captured.
+ * gives them, and its evidence marker and shots marker, each read only from
+ * a body a bot wrote (byAppOf), so nobody else can name a route as captured
+ * or a shot as produced.
  */
 export async function digestSnapshotOn(
   github: ReadClient,
   repo: Repo,
   number: number,
   operator: string,
-): Promise<Pick<PullRequestSnapshot, "deferredChangesRequests" | "uiEvidenceMarker">> {
+): Promise<Pick<PullRequestSnapshot, "deferredChangesRequests" | "uiEvidenceMarker" | "shotsMarker">> {
   const { pullRequest } = await gatherPullRequest(github, repo, number, operator, null);
-  return { deferredChangesRequests: pullRequest?.deferredChangesRequests ?? [], uiEvidenceMarker: pullRequest?.uiEvidenceMarker ?? null };
+  return {
+    deferredChangesRequests: pullRequest?.deferredChangesRequests ?? [],
+    uiEvidenceMarker: pullRequest?.uiEvidenceMarker ?? null,
+    shotsMarker: pullRequest?.shotsMarker ?? null,
+  };
 }
 
 async function gatherPullRequest(
@@ -2167,6 +2174,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     url: pullRequest.url,
     // Only a body the App wrote counts, as for an issue's markers, so nobody else can mark a PR as UI.
     uiEvidenceMarker: byAppOf(pullRequest.author, appLogin) ? evidenceMarkerIn(pullRequest.body) : null,
+    shotsMarker: byAppOf(pullRequest.author, appLogin) ? shotsMarkerIn(pullRequest.body) : null,
     // Likewise, so nobody else can plant or hide the existing tests its runs changed (#463).
     changedTests: byAppOf(pullRequest.author, appLogin) ? changedTestsIn(pullRequest.body) : [],
     // Only a bot's comment whose first line is the Digest's marker, as for a Verdict: never a no-Digest line, and

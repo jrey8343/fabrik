@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
-import { CAPTURED, EVIDENCE_PAGE } from "../__fixtures__/uiEvidence.ts";
+import { aShotsCollected, CAPTURED, EVIDENCE_PAGE } from "../__fixtures__/uiEvidence.ts";
+import type { ShotsCollected } from "../evidence/shotsCollect.ts";
 import { type CaptureResult, evidenceSection } from "../evidence/uiEvidence.ts";
+import { readShotsMarker, type ShotsMarker, shotsSection, waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import { type DigestReply, digestCommentOf, readDigestComment } from "../loop/digestContract.ts";
 import { handBackMarker, RETRY_PUSH_MARKER, verdictMarker } from "../loop/markers.ts";
 import type { ReadClient } from "./client.ts";
@@ -259,7 +261,7 @@ describe("What the push job hands the Digest's contract", () => {
     const given = await readDigestGiven(gitHub(thread).client, repo, written);
 
     expect(given).toMatchObject({ repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, runUrl: RUN });
-    expect(Object.keys(given).toSorted()).toEqual(["capturedRoutes", "facts", "head", "headSha", "pullRequest", "repoUrl", "runUrl"]);
+    expect(Object.keys(given).toSorted()).toEqual(["facts", "head", "headSha", "pictureOf", "pictures", "pullRequest", "repoUrl", "runUrl"]);
     expect(given.facts.rounds.map(({ who, what }) => `${who}: ${what}`)).toEqual([
       "implementer: first-run",
       "operator: request-changes",
@@ -403,7 +405,7 @@ describe("What the push job hands the Digest's contract", () => {
     };
 
     it("is the routes the evidence marker in the pull request's body names, in the marker's order", async () => {
-      expect((await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES }).client, repo, written)).capturedRoutes).toEqual(["/basket", "/basket/saved"]);
+      expect((await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES }).client, repo, written)).pictures).toEqual(["/basket", "/basket/saved"]);
     });
 
     it("is the routes of the evidence section the push job writes on a UI pull request, one whose every shot was missed among them", async () => {
@@ -416,7 +418,7 @@ describe("What the push job hands the Digest's contract", () => {
       };
       const section = evidenceSection({ run: 9100, artifact: 9202, result, evidencePage: EVIDENCE_PAGE, preview: { kind: "none" } });
 
-      expect((await readDigestGiven(gitHub({ ...quiet, body: `Adds the waitlist.\n\n${section}\n\nCloses #7` }).client, repo, written)).capturedRoutes).toEqual(["/pricing", "/waitlist"]);
+      expect((await readDigestGiven(gitHub({ ...quiet, body: `Adds the waitlist.\n\n${section}\n\nCloses #7` }).client, repo, written)).pictures).toEqual(["/pricing", "/waitlist"]);
     });
 
     it.each([
@@ -428,18 +430,22 @@ describe("What the push job hands the Digest's contract", () => {
     ])("is none on a pull request that %s, so every picture is dropped", async (_what, body) => {
       const given = await readDigestGiven(gitHub({ ...quiet, body }).client, repo, written);
 
-      expect(given.capturedRoutes).toEqual([]);
+      expect(given.pictures).toEqual([]);
       expect(pictures(aDigestReply({ items: [item("/basket"), item("/basket/saved")] }), given)).toEqual([null, null]);
     });
 
     it("is none when somebody other than a bot wrote the body, so nobody else can name a captured route", async () => {
-      expect((await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES, openedBy: STRANGER }).client, repo, written)).capturedRoutes).toEqual([]);
+      expect((await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES, openedBy: STRANGER }).client, repo, written)).pictures).toEqual([]);
     });
 
     it("is what the contract checks each picture against: a captured route lands, and a route that was not captured is dropped", async () => {
       const given = await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES }).client, repo, written);
 
       expect(pictures(aDigestReply({ items: [item("/basket/saved"), item("/checkout")] }), given)).toEqual(["/basket/saved", null]);
+    });
+
+    it("names them as routes", async () => {
+      expect((await readDigestGiven(gitHub({ ...quiet, body: TWO_ROUTES }).client, repo, written)).pictureOf).toBe("route");
     });
 
     it("costs no call of its own: the body comes with the pull request as the read already asks for it, once for the Loop's snapshot and once for the thread", async () => {
@@ -453,6 +459,73 @@ describe("What the push job hands the Digest's contract", () => {
         "GET /repos/acme/shop/pulls/50/comments",
         "GET /repos/acme/shop/pulls/50/reviews",
       ]);
+    });
+  });
+
+  describe("of the named shots that were produced, for the picture an item names on a pull request whose UI evidence is Evidence shots", () => {
+    const quiet: Thread = { ...thread, reviews: [] };
+    /** The pull request's names, waiting for the `e2e` check. */
+    const NAMED = waitingShotsMarker({ named: [{ name: "Basket page" }, { name: "Saved basket" }, { name: "Checkout" }] }, 8000, { kind: "none" });
+    /** The marker once the Review's jobs read the `e2e` check's artifact, which produced every name, `sign in: form` that nobody named beside them, but for what `missed` says. */
+    const readWith = (collected: Partial<ShotsCollected>): ShotsMarker =>
+      readShotsMarker(NAMED, {
+        collected: aShotsCollected({
+          named: ["Basket page", "Saved basket", "Checkout"].map((name) => ({ name, images: { mobile: "m.png", desktop: "d.png" } })),
+          produced: ["Basket page", "Saved basket", "Checkout", "sign in: form"],
+          ...collected,
+        }),
+        run: 9100,
+        artifact: 9300,
+      });
+    const bodyWith = (marker: ShotsMarker) => `Saves the basket.\n\n${shotsSection({ check: "e2e", artifact: "fabrik-evidence-shots", marker, missOutcome: "no-retry-left" })}\n\nCloses #7`;
+    const given = (marker: ShotsMarker, openedBy?: User) => readDigestGiven(gitHub({ ...quiet, body: bodyWith(marker), ...(openedBy === undefined ? {} : { openedBy }) }).client, repo, written);
+    const item = (picture: string): DigestReply["items"][number] => ({
+      kind: "yours-to-judge",
+      claim: "The saved basket's page is new.",
+      sentence: "How it reads is yours to judge.",
+      asks: [],
+      places: [],
+      picture,
+      suggestedRequest: null,
+    });
+    const pictures = (reply: DigestReply, from: Awaited<ReturnType<typeof readDigestGiven>>) => {
+      const comment = digestCommentOf(reply, from);
+      const read = readDigestComment(comment.ok ? comment.body : "");
+      return read.ok ? read.data.items.map(({ picture }) => picture) : read.why;
+    };
+
+    it("is every named shot the check's run produced, in the names' order, named as Evidence shots", async () => {
+      expect(await given(readWith({}))).toMatchObject({ pictureOf: "shot", pictures: ["Basket page", "Saved basket", "Checkout"] });
+    });
+
+    it.each(["not-produced", "ambiguous-name", "refused"] as const)("leaves out a named shot missed as %s", async (why) => {
+      expect((await given(readWith({ missed: [{ name: "Checkout", why }] }))).pictures).toEqual(["Basket page", "Saved basket"]);
+    });
+
+    it("keeps a named shot that lacks one size: it was produced", async () => {
+      expect((await given(readWith({ missed: [{ name: "Saved basket", viewport: "desktop", why: "size-missing" }] }))).pictures).toEqual(["Basket page", "Saved basket", "Checkout"]);
+    });
+
+    it.each<[string, ShotsMarker]>([
+      ["while it waits for the named check, its artifact unread", NAMED],
+      ["when the named check's run uploaded no artifact", readWith({ failure: "no-artifact", named: [], missed: [], produced: [] })],
+      ["when the artifact's manifest could not be read", readWith({ failure: "bad-manifest", named: [], missed: [], produced: [] })],
+      ["when every named shot was missed", readWith({ missed: ["Basket page", "Saved basket", "Checkout"].map((name) => ({ name, why: "not-produced" as const })) })],
+    ])("is none %s, so every picture is dropped", async (_when, marker) => {
+      const from = await given(marker);
+
+      expect(from).toMatchObject({ pictureOf: "shot", pictures: [] });
+      expect(pictures(aDigestReply({ items: [item("Basket page"), item("Saved basket")] }), from)).toEqual([null, null]);
+    });
+
+    it("is none when somebody other than a bot wrote the body, so nobody else can name a shot", async () => {
+      expect((await given(readWith({}), STRANGER)).pictures).toEqual([]);
+    });
+
+    it("is what the contract checks each picture against: a produced name lands, and a missed shot, a shot of the run nobody named and a name in another case are dropped", async () => {
+      const from = await given(readWith({ missed: [{ name: "Checkout", why: "not-produced" }] }));
+
+      expect(pictures(aDigestReply({ items: [item("Saved basket"), item("Checkout"), item("sign in: form"), item("basket page")] }), from)).toEqual(["Saved basket", null, null, null]);
     });
   });
 });

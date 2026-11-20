@@ -129,7 +129,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Digest's release notes, while dr
   it("say the rest of what changed in the Kit's own words: a carried Digest's line, the comparison that could not be established, and the waiting draft's Standing", async () => {
     const notes = await read(NOTES);
     const prompt = await read("prompts/digest.md");
-    const carried = carriedDigest(digestBodyOf(), { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: "b".repeat(40) }, { files: [], changed: [] });
+    const carried = carriedDigest(digestBodyOf(), { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: "b".repeat(40), pictureOf: "route" }, { files: [], changed: [] });
     const waiting = { name: "running", pullRequest: 12, since: "2026-11-13T00:00:00Z", detail: { run: "digest", retry: null, actionsRun: 1, passed: true } } as unknown as Standing;
 
     expect(carried).toContain("Carried over from `aaaaaaa` because only `main` moved.");

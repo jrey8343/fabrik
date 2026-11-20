@@ -2,6 +2,7 @@
 // passed out to its push job, into the Loop event it stands for.
 // It holds no Loop rules; those all live in src/loop/rules.ts.
 import type { AgentRunResult, BuiltBranch } from "../agent/result.ts";
+import type { ShotsRead } from "../evidence/shotsEvidence.ts";
 import { splitWorkflowRef } from "../kit/caller.ts";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { FULL_SHA } from "../skills/lock.ts";
@@ -357,6 +358,20 @@ export interface FinishedReview {
    * turned green has its first attempt's alone, which its Flaky check's issue carries (#778).
    */
   readonly excerpts?: readonly CheckExcerpt[];
+  /** What the Review's jobs read of the head's Evidence shots (#820), in this run; absent when they read none. */
+  readonly shots?: ShotsRead;
+}
+
+/**
+ * Turns a Review whose jobs found an Evidence miss that sends back (#820),
+ * so its Reviewer never ran, into the Loop event its push job applies: the
+ * Kit's own Execution flaw at the head the Review's waits read, from what
+ * the Review's jobs read of the shots, in this run.
+ */
+export function evidenceMissEventFrom(review: Pick<FinishedReview, "pullRequest" | "headSha" | "runUrl" | "repoUrl"> & { readonly shots: ShotsRead }): LoopEvent {
+  const { pullRequest, headSha, runUrl, repoUrl, shots } = review;
+  if (shots.collected.head !== headSha) throw new Error(`The Evidence shots were read at ${shots.collected.head.slice(0, 7)}, not the Review's head ${headSha.slice(0, 7)}`);
+  return { kind: "evidence-miss-found", pullRequest, headSha, runUrl, repoUrl, shots };
 }
 
 /** Turns a finished Review into the Loop event its push job applies. */
@@ -383,6 +398,8 @@ export function reviewEventFrom(review: FinishedReview): LoopEvent {
     ...(review.failedChecks.length === 0
       ? {}
       : { redChecks: { failed: review.failedChecks, ...(review.rerun === null ? {} : { rerun: review.rerun }), excerpts: review.excerpts ?? [] } }),
+    // Only shots read at the head the Reviewer judged (#820).
+    ...(review.shots === undefined || review.shots.collected.head !== headSha ? {} : { shots: review.shots }),
   };
 }
 

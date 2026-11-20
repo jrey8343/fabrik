@@ -12,8 +12,8 @@
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  CAPTURE_RESULT_FILE,
   type Capture,
+  CAPTURE_RESULT_FILE,
   type CaptureFailure,
   type CaptureResult,
   parseCaptureResult,
@@ -22,6 +22,8 @@ import {
   reviewerEvidenceBlock,
   reviewerImages,
 } from "../evidence/uiEvidence.ts";
+import { type ReviewerShotImage, reviewerShotImages, reviewerShotsBlock } from "../evidence/shotsEvidence.ts";
+import { type ShotsCollected, shotsCollectedOf } from "../evidence/shotsCollect.ts";
 import { type Needs, reviewChecksOf } from "../kit/pushJob.ts";
 import { changedTestsIn, reviewerChangedTestsBlock } from "../loop/changedTests.ts";
 import { checkCode } from "../review/failureExcerpt.ts";
@@ -49,6 +51,7 @@ export async function reviewContext(
   ranNothing: readonly string[] = [],
   later: LaterReviewGiven | null = null,
   red: RedRequiredChecks | null = null,
+  shots: DownloadedShots | null = null,
 ): Promise<PullRequestRunContext> {
   const { operatorComments, requestedChanges, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
@@ -80,6 +83,8 @@ export async function reviewContext(
       ...(evidenceDir === null
         ? []
         : await uiEvidenceContext(productDir, evidenceDir, { head: headOf(pullRequest.headRefOid), recorded: recordedFailure })),
+      // On a Product repo that uses Evidence shots, the named shots the Review's jobs collected at the head (#820).
+      ...(shots === null ? [] : await shotsContext(productDir, shots)),
     ],
     operatorComments: fromOperator.given,
   };
@@ -217,6 +222,46 @@ async function uiEvidenceContext(
   if (result === null) return reviewerEvidenceBlock({ result: null, given: [], ...pullRequest });
   const given = await copied(reviewerImages(result.captures), evidenceDir, join(productDir, REVIEWER_IMAGES_DIR));
   return reviewerEvidenceBlock({ result, given, ...pullRequest });
+}
+
+/** What the Review's jobs collected of the head's Evidence shots (#820), and the folder they downloaded the artifact into. */
+export interface DownloadedShots {
+  readonly collected: ShotsCollected;
+  readonly dir: string;
+}
+
+/**
+ * A Reviewer's Evidence shots (#820): the images reviewerShotImages picks of
+ * the named shots the run produced, copied from the downloaded artifact into
+ * REVIEWER_IMAGES_DIR, and the prompt's block naming them
+ * (reviewerShotsBlock). An image the download lacks is left out, never a failed Review.
+ */
+async function shotsContext(productDir: string, { collected, dir }: DownloadedShots): Promise<string[]> {
+  const to = join(productDir, REVIEWER_IMAGES_DIR);
+  const given: ReviewerShotImage[] = [];
+  try {
+    await mkdir(to, { recursive: true });
+    for (const image of reviewerShotImages(collected)) {
+      // What was collected allows only flat .png names, so none reaches outside either folder.
+      await copyFile(join(dir, image.file), join(to, image.file)).then(
+        () => given.push(image),
+        () => undefined,
+      );
+    }
+  } catch {
+    // A folder it can't make gives the Reviewer no pictures, never a failed Review.
+  }
+  return reviewerShotsBlock({ collected, given });
+}
+
+/**
+ * What the Review's jobs collected of the head's Evidence shots, as the
+ * review job passes it in FABRIK_SHOTS with the folder FABRIK_SHOTS_DIR, or
+ * null when it passes none, as on a Product repo without them, or none that reads.
+ */
+export function downloadedShotsOf(text: string | undefined, dir: string | undefined): DownloadedShots | null {
+  const collected = shotsCollectedOf(text);
+  return collected === null ? null : { collected, dir: dir ?? "" };
 }
 
 /** The PR's head, as the Review job's PR input names it (src/agent/inputs.ts), or null when it names none. */

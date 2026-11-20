@@ -141,7 +141,24 @@ export interface UiConfig {
    * Sandbox's own server (ADR-0024). Absent, a dynamic route is never captured.
    */
   readonly resolveRoute?: string;
+  /**
+   * Where a pull request's UI evidence comes from when it's Evidence shots: a
+   * Required check and the artifact its run uploads them in. Absent, UI
+   * evidence is captured from routes.
+   */
+  readonly shots?: ShotsConfig;
 }
+
+/** The `ui.shots` block: the Required check whose run uploads a pull request's Evidence shots, and the artifact they're in. */
+export interface ShotsConfig {
+  /** One of `sandbox.checks`. */
+  readonly check: string;
+  /** The artifact's name; DEFAULT_SHOTS_ARTIFACT when the block leaves it out. */
+  readonly artifact: string;
+}
+
+/** The Evidence shots artifact's default name, which `ui.shots.artifact` can change. */
+export const DEFAULT_SHOTS_ARTIFACT = "fabrik-evidence-shots";
 
 /** A named kind of user that UI evidence views a route as: one of `ui.sign_in`'s keys. */
 export type CaptureIdentity = string;
@@ -216,11 +233,20 @@ export const UI_VIEWPORTS: readonly Viewport[] = [
   { name: "desktop", width: 1440, height: 900 },
 ];
 
+/** The viewports' names, mobile before desktop: the two sizes an Evidence shot is taken at, too. */
+export const VIEWPORT_NAMES: readonly Viewport["name"][] = UI_VIEWPORTS.map(({ name }) => name);
+
 /**
  * The most routes UI evidence captures, so capture stays fast: a Kit constant,
  * not Kit config. A route the Ticket names is captured even past it.
  */
 export const UI_ROUTE_CAP = 4;
+
+/**
+ * The most Evidence shots a pull request names (#819): the first this many
+ * names the Implementer gives count, and the rest are dropped. A Kit constant.
+ */
+export const NAMED_SHOT_CAP = 4;
 
 /**
  * The most UI evidence images a Reviewer gets, so the ones that matter most fit
@@ -687,7 +713,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     digest: { enabled: file.object("digest").boolean("enabled") ?? defaults.digest.enabled },
     operator: orDefault(file.nullableString("operator", checkLogin), defaults.operator),
     subscriptions: file.subscriptions("subscriptions") ?? defaults.subscriptions,
-    ui: readUi(file.nullableObject("ui")),
+    ui: readUi(file.nullableObject("ui"), requiredChecks),
     preview: readPreview(file.nullableObject("preview")),
     production: readProduction(file.nullableObject("production")),
     // A time_zone the runtime doesn't know falls back to UTC, and never fails the Kit config (ADR-0023).
@@ -805,22 +831,63 @@ function checkHttpsUrl(url: string): string | null {
   return URL.parse(url)?.protocol === "https:" ? null : "the Sentry token is sent there, so it must be an https:// URL";
 }
 
-/** The `ui` block; left out or null, Visual evidence never captures. */
-function readUi(ui: Reader | null | undefined): UiConfig | null {
+/**
+ * The `ui` block; left out or null, Visual evidence never captures.
+ * `requiredChecks` are `sandbox.checks`, one of which `ui.shots.check` names.
+ */
+function readUi(ui: Reader | null | undefined, requiredChecks: readonly string[]): UiConfig | null {
   if (ui === undefined || ui === null) return null;
   const paths = ui.requiredList("paths", "list at least one glob of the files that make a pull request UI", checkGlob);
   const serve = ui.requiredString("serve", checkServe);
   const url = ui.requiredString("url", checkHttpOrHttpsUrl);
-  const beforeUrl = ui.nullableString("before_url", checkHttpOrHttpsUrl);
-  const defaultRoutes = ui.stringList("default_routes", checkRoute);
+  // Evidence shots take the place of route capture, so a ui with shots can't set the fields only it reads.
+  const fromShots = ui.isObject("shots");
+  if (fromShots) refuseBesideShots(ui);
+  const beforeUrl = fromShots ? null : ui.nullableString("before_url", checkHttpOrHttpsUrl);
+  const defaultRoutes = fromShots ? [] : ui.stringList("default_routes", checkRoute);
   const signsIn = ui.isObject("sign_in");
   const signedIn = readSignIn(ui);
-  const resolveRoute = ui.nullableString("resolve_route", checkResolveRouteCommand);
+  const resolveRoute = fromShots ? null : ui.nullableString("resolve_route", checkResolveRouteCommand);
+  const shots = readShots(ui.nullableObject("shots"), requiredChecks);
   const loopback = refuseUnlessLoopback(ui, url, [...(signsIn ? ["sign_in"] : []), ...(typeof resolveRoute === "string" ? ["resolve_route"] : [])]);
   if (paths === undefined || serve === undefined || url === undefined || signedIn === undefined || !loopback) return null;
   if (resolveRoute === undefined && ui.has("resolve_route")) return null;
+  if (shots === undefined && ui.has("shots")) return null;
   const resolving = typeof resolveRoute === "string" ? { resolveRoute } : {};
-  return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [], ...signedIn, ...resolving };
+  const shooting = shots ? { shots } : {};
+  return { paths, serve, url, beforeUrl: beforeUrl ?? null, defaultRoutes: defaultRoutes ?? [], ...signedIn, ...resolving, ...shooting };
+}
+
+/** The `ui` fields only route capture reads, which Evidence shots take the place of. */
+export const ROUTE_CAPTURE_FIELDS = ["before_url", "default_routes", "resolve_route"] as const;
+
+/** Names each of route capture's fields a ui with shots sets, in a message of its own, without reading its value. */
+function refuseBesideShots(ui: Reader): void {
+  for (const key of ROUTE_CAPTURE_FIELDS.filter((field) => ui.has(field))) {
+    ui.skip(key);
+    ui.refuse(
+      `${ui.fieldName(key)} is set, but so is ${ui.fieldName("shots")}: route capture's fields can't be set when UI evidence comes from Evidence shots`,
+    );
+  }
+}
+
+/** The `ui.shots` block; null when it's null, undefined when it's left out or once it has named every problem. */
+function readShots(shots: Reader | null | undefined, requiredChecks: readonly string[]): ShotsConfig | null | undefined {
+  if (shots === undefined || shots === null) return shots;
+  const listed = requiredChecks.length === 0 ? "which lists none" : spelled(requiredChecks, "and");
+  const required = (name: string): string | null =>
+    oneLineName(name, "a check's") ??
+    (requiredChecks.includes(name) ? null : `it must be one of sandbox.checks, ${listed}, since that check's run uploads the Evidence shots`);
+  const check = shots.requiredString("check", required);
+  const artifact = shots.string("artifact", (name) => oneLineName(name, "an artifact's"));
+  if (check === undefined || (artifact === undefined && shots.has("artifact"))) return undefined;
+  return { check, artifact: artifact ?? DEFAULT_SHOTS_ARTIFACT };
+}
+
+/** Why `name`, which `whose` names the owner of, isn't non-blank text on one line, or null when it is. */
+function oneLineName(name: string, whose: string): string | null {
+  if (name.trim() === "") return `${whose} name can't be blank`;
+  return /[\r\n]/.test(name) ? `${whose} name is one line` : null;
 }
 
 /**

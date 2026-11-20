@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type ChangeFingerprint, changeLine } from "../loop/changeFingerprint.ts";
 import { aDigestFacts, aDigestGiven } from "../__fixtures__/digests.ts";
+import { aShotsCollected } from "../__fixtures__/uiEvidence.ts";
+import type { ShotsCollected } from "../evidence/shotsCollect.ts";
+import { readShotsMarker, type ShotsMarker, shotsSection, waitingShotsMarker } from "../evidence/shotsEvidence.ts";
 import {
   ASK_ANSWERS,
   CHECKED_BY,
@@ -66,6 +69,8 @@ describe("What the Digest writer is given of the pull request", () => {
     verdicts: { readonly flaw: string; readonly pass: string } = { flaw: FLAW, pass: PASS },
     /** Every REST route the read asked for, in order. */
     asked: string[] = [],
+    /** Who opened it, and so wrote its body: the Fabrik App, unless told otherwise. */
+    openedBy: { readonly login: string; readonly type: string } = BOT,
   ): Reader {
     const comments = [
       conversation(1, BOT, verdicts.flaw, 1),
@@ -94,7 +99,7 @@ describe("What the Digest writer is given of the pull request", () => {
       rest: async (_method: string, path: string) => {
         const [route = "", query] = path.split("?");
         asked.push(route);
-        if (route === "/repos/acme/shop/pulls/50") return { base: { ref: "main" } };
+        if (route === "/repos/acme/shop/pulls/50") return { base: { ref: "main" }, user: openedBy };
         if (!/(^|&)page=1(&|$)/.test(query ?? "")) return [];
         switch (route) {
           case "/repos/acme/shop/issues/50/comments":
@@ -230,6 +235,59 @@ describe("What the Digest writer is given of the pull request", () => {
     ])("is none on a pull request that %s", async (_what, body, uiEvidence) => {
       expect(await readDigestPullRequest(thread(body), repo, 50, { operator: "operator" })).toMatchObject({ uiEvidence, capturedRoutes: [] });
     });
+
+    it("holds no produced shots on a pull request with a route marker, so its input is as it was before Evidence shots", async () => {
+      const body = bodyWith('{"run":9100,"artifact":9202,"failure":null,"routes":["/basket"],"preview":{"is":"none"},"missed":[]}');
+
+      expect(await readDigestPullRequest(thread(body), repo, 50, { operator: "operator" })).not.toHaveProperty("producedShots");
+    });
+
+    it("is read from no body somebody other than the Fabrik App wrote, as the push job reads it", async () => {
+      const body = bodyWith('{"run":9100,"artifact":9202,"failure":null,"routes":["/basket"],"preview":{"is":"none"},"missed":[]}');
+
+      expect(await readDigestPullRequest(thread(body, undefined, [], { login: "stranger", type: "User" }), repo, 50, { operator: "operator" })).toMatchObject({ uiEvidence: false, capturedRoutes: [] });
+    });
+  });
+
+  describe("of the named shots that were produced, on a pull request whose UI evidence is Evidence shots", () => {
+    const NAMED = waitingShotsMarker({ named: [{ name: "Basket page" }, { name: "Saved basket" }] }, 8000, { kind: "none" });
+    const bodyWith = (marker: ShotsMarker) => `Saves the cart.\n\n${shotsSection({ check: "e2e", artifact: "fabrik-evidence-shots", marker, missOutcome: "no-retry-left" })}\n\nCloses #7`;
+    const read = (missed: ShotsCollected["missed"]) =>
+      readShotsMarker(NAMED, {
+        collected: aShotsCollected({ named: [{ name: "Basket page", images: { mobile: "m.png" } }, { name: "Saved basket", images: { mobile: "m.png" } }], missed }),
+        run: 9100,
+        artifact: 9300,
+      });
+
+    it("is the named shots the check's run produced, read from the shots marker in a body the Fabrik App wrote", async () => {
+      const body = bodyWith(read([{ name: "Saved basket", viewport: "desktop", why: "size-missing" }]));
+
+      expect(await readDigestPullRequest(thread(body), repo, 50, { operator: "operator" })).toMatchObject({ capturedRoutes: [], producedShots: ["Basket page", "Saved basket"] });
+    });
+
+    it("leaves out a named shot the run didn't produce", async () => {
+      const body = bodyWith(read([{ name: "Saved basket", why: "not-produced" }]));
+
+      expect(await readDigestPullRequest(thread(body), repo, 50, { operator: "operator" })).toMatchObject({ producedShots: ["Basket page"] });
+    });
+
+    it("is none on a pull request whose only miss was shown with no Retry left, every named shot missed, so its writer is told none was produced", async () => {
+      const body = bodyWith(read([{ name: "Basket page", why: "not-produced" }, { name: "Saved basket", why: "refused" }]));
+
+      expect(body).toContain("No Retry is left, so it goes on to Review with the miss shown.");
+      expect(await readDigestPullRequest(thread(body), repo, 50, { operator: "operator" })).toMatchObject({ producedShots: [] });
+    });
+
+    it("is none while the marker waits for the named check", async () => {
+      expect(await readDigestPullRequest(thread(bodyWith(NAMED)), repo, 50, { operator: "operator" })).toMatchObject({ producedShots: [] });
+    });
+
+    it("is read from no body somebody other than the Fabrik App wrote", async () => {
+      const given = await readDigestPullRequest(thread(bodyWith(read([])), undefined, [], { login: "stranger", type: "User" }), repo, 50, { operator: "operator" });
+
+      expect(given).not.toHaveProperty("producedShots");
+      expect(given).toMatchObject({ uiEvidence: false, capturedRoutes: [] });
+    });
   });
 });
 
@@ -306,6 +364,32 @@ describe("A Digest run's context", () => {
     expect(parts.slice(parts.indexOf(`## ${DIGEST_SECTIONS.uiEvidence}`))).toEqual([
       `## ${DIGEST_SECTIONS.uiEvidence}`,
       "This pull request has UI evidence: screenshots of its pages, which its body links. It has no captured routes, so no item may name a picture.",
+    ]);
+  });
+
+  it("lists the named shots that were produced in place of captured routes, on a pull request whose UI evidence is Evidence shots", async () => {
+    const { dir, pullRequestFile, specFile } = await filesOf({ ...given, uiEvidence: false, capturedRoutes: [], producedShots: ["Basket page", "Saved basket"] });
+
+    const { parts } = await digestContext(dir, pullRequestFile, specFile, HEAD);
+
+    expect(parts.slice(parts.indexOf(`## ${DIGEST_SECTIONS.uiEvidence}`))).toEqual([
+      `## ${DIGEST_SECTIONS.uiEvidence}`,
+      "This pull request's UI evidence is Evidence shots: screenshots its Journeys took in a Required check, each known by its name alone, its body listing the ones its Implementer named. The named shots that were produced, the only names an item may name as its picture:",
+      ...json(["Basket page", "Saved basket"]),
+    ]);
+  });
+
+  it.each([
+    ["none of its named shots was produced", []],
+    ["what its input holds is no list of names", "Basket page"],
+  ])("says no named shot was produced on a pull request whose UI evidence is Evidence shots when %s", async (_what, producedShots) => {
+    const { dir, pullRequestFile, specFile } = await filesOf({ ...given, uiEvidence: false, capturedRoutes: [], producedShots });
+
+    const { parts } = await digestContext(dir, pullRequestFile, specFile, HEAD);
+
+    expect(parts.slice(parts.indexOf(`## ${DIGEST_SECTIONS.uiEvidence}`))).toEqual([
+      `## ${DIGEST_SECTIONS.uiEvidence}`,
+      "This pull request's UI evidence is Evidence shots: screenshots its Journeys took in a Required check, each known by its name alone, its body listing the ones its Implementer named. None of its named shots was produced, so no item may name a picture.",
     ]);
   });
 

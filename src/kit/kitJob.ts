@@ -4,7 +4,9 @@
 // used up, that it was held, until when and why; with one Subscription
 // listed, a quiet note that rotation is off until a second is listed; and on
 // an Implement run without a ui block, a quiet note that Visual evidence is
-// off (#153). Pure, no I/O.
+// off (#153), or, with ui.shots, that UI evidence comes from the check it
+// names (#818). Pure, no I/O.
+import { code } from "../evidence/uiEvidence.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { runNamed } from "../loop/heldRun.ts";
 import { readable } from "../loop/readable.ts";
@@ -37,6 +39,10 @@ export function kitJobSummary(
   // Said here, from the Kit config this job checked, so it's said whether or not the Implement job captures.
   if (run?.role === "implement" && config.ui === null) {
     lines.push("Visual evidence is off until Kit config has a `ui` block: `/fabrik-visual-evidence` turns it on.");
+  }
+  const shots = config.ui?.shots;
+  if (run?.role === "implement" && shots !== undefined) {
+    lines.push(`UI evidence comes from the Evidence shots the Required check ${code(shots.check)} uploads, so the Implement job captures no routes.`);
   }
   return `### Fabrik Kit job\n\n${lines.join("\n\n")}\n`;
 }

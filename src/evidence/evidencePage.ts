@@ -6,6 +6,7 @@
 import { Buffer } from "node:buffer";
 import { UI_VIEWPORTS } from "../kit/config.ts";
 import type { PrototypeVariant } from "../loop/designOutput.ts";
+import type { EvidenceShot } from "./shotsManifest.ts";
 import {
   type Capture,
   CAPTURE_SIDES,
@@ -211,6 +212,59 @@ function variantFigure({ variant, viewport, status, png, webm, identity }: Varia
       ? ""
       : `<video controls muted playsinline aria-label="Variant ${variant} at ${viewport}, loading and scrolling" src="data:video/webm;base64,${Buffer.from(webm).toString("base64")}"></video>`;
   return `<figure class="${viewport}${isServerError(status) ? " error" : ""}"><figcaption>${caption}</figcaption>${image}${video}</figure>`;
+}
+
+/** An Evidence shot with its images' bytes, PNGs by size, as the Review's jobs read them from the named check's artifact (#820). */
+export type PageShot = EvidenceShot<Uint8Array>;
+
+/** What a pull request's Evidence page of Evidence shots is of: its Ticket, the head the named check ran at, the check, and the pull request's names in order. */
+export interface ShotsEvidencePageMeta {
+  readonly ticket: number;
+  readonly headSha: string;
+  readonly check: string;
+  readonly named: readonly string[];
+}
+
+/**
+ * A pull request's Evidence page of Evidence shots (#820): every shot of the
+ * named check's run, the named ones first in the Implementer's order, then
+ * the rest in the manifest's, each under its name with its Journey and path,
+ * mobile beside desktop. Uncapped, unlike the Reviewer's images, and all
+ * inlined so it refers to nothing outside itself. The artifact's text is the
+ * pull request's own code's, so all of it is escaped.
+ */
+export function shotsEvidencePage(shots: readonly PageShot[], meta: ShotsEvidencePageMeta): string {
+  const { ticket, headSha, check, named } = meta;
+  const first = named.flatMap((name) => shots.filter((shot) => shot.name === name));
+  const rest = shots.filter((shot) => !named.includes(shot.name));
+  return evidencePageHtml({
+    policy: POLICY,
+    title: `Evidence page: Evidence shots for #${ticket} at ${headSha.slice(0, 7)}`,
+    style: PROTOTYPE_STYLE,
+    heading: `Evidence shots for #${ticket}`,
+    note: `Taken by the Journeys of the ${htmlCode(check)} check at <code>${headSha}</code>, each one screen high. The shots the Implementer named come first.`,
+    sections: [...first.map((shot) => shotSection(shot, true)), ...rest.map((shot) => shotSection(shot, false))].flat(),
+  });
+}
+
+/** A shot's heading, its Journey and path, then its images, mobile beside desktop, and the size it lacks. */
+function shotSection({ name, journey, path, images }: PageShot, isNamed: boolean): string[] {
+  const where = [...(journey === undefined ? [] : [`From the Journey ${htmlCode(journey)}`]), ...(path === undefined ? [] : [`at ${htmlCode(path)}`])];
+  const lacks = UI_VIEWPORTS.filter((viewport) => images[viewport.name] === undefined);
+  const figures = UI_VIEWPORTS.flatMap((viewport) => {
+    const png = images[viewport.name];
+    if (png === undefined) return [];
+    const image = `<img alt="${escaped(`${name} at ${viewport.name}`)}" src="data:image/png;base64,${Buffer.from(png).toString("base64")}">`;
+    return [`<figure class="${viewport.name}"><figcaption>${capitalised(viewport.name)}, ${viewport.width} × ${viewport.height}</figcaption>${image}</figure>`];
+  });
+  return [
+    "<section>",
+    `<h2>${htmlCode(name)}${isNamed ? ", named" : ""}</h2>`,
+    ...(where.length === 0 ? [] : [`<p>${capitalised(where.join(", "))}.</p>`]),
+    `<div class="viewports">${figures.join("")}</div>`,
+    ...lacks.map((viewport) => `<p>It has no ${viewport.name} image.</p>`),
+    "</section>",
+  ];
 }
 
 function capitalised(text: string): string {

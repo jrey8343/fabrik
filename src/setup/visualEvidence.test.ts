@@ -467,10 +467,52 @@ describe("The Visual evidence writer", () => {
 
 describe("The Visual evidence skill's offers", () => {
   const skill = readFileSync(resolve(KIT, "skills", "fabrik-visual-evidence", "SKILL.md"), "utf8");
-  const suggest = skill.slice(skill.indexOf("## 3. Suggest the answers"), skill.indexOf("## 4."));
+  /** The step under this heading, or nothing when the skill has no such step. */
+  const step = (heading: string): string => {
+    const from = skill.indexOf(`\n## ${heading}`);
+    if (from === -1) return "";
+    const to = skill.indexOf("\n## ", from + 1);
+    return skill.slice(from, to === -1 ? undefined : to);
+  };
+  const suggest = step("4. Suggest the answers");
+  const offer = (field: string): string => suggest.split("\n").find((line) => line.startsWith(`- \`${field}\``)) ?? "";
+
+  it("asks where pull requests' UI evidence comes from, suggesting Evidence shots when one of sandbox.checks runs the Journeys", () => {
+    const source = step("2. Ask where UI evidence comes from");
+
+    expect(source).toContain("**Captured routes:**");
+    expect(source).toContain("**Evidence shots:**");
+    expect(source).toMatch(/Journeys[^.]*run by one of `sandbox\.checks`[^.]*suggest Evidence shots/);
+    expect(source).toContain("confirm or correct");
+  });
+
+  it("tells the Operator what the Product repo's side needs first, linking the README's contract, and that a workflow change is theirs", () => {
+    const source = step("2. Ask where UI evidence comes from");
+
+    expect(source).toContain("helper");
+    expect(source).toContain("whether the Journeys passed or failed");
+    expect(source).toContain("https://github.com/jrey8343/fabrik#evidence-shots");
+    expect(source).toMatch(/workflow change is the Operator's own to make/);
+  });
+
+  it("offers ui.shots for Evidence shots, the check one of sandbox.checks and the artifact's default name", () => {
+    const shots = offer("ui.shots");
+
+    expect(shots).toContain("one of `sandbox.checks`");
+    expect(shots).toContain("`fabrik-evidence-shots`");
+  });
+
+  it("names each route capture field it will take out, and takes it out only once the Operator confirms, through remove", () => {
+    const write = step("5. Write the answers");
+
+    for (const field of ["`ui.default_routes`", "`ui.before_url`", "`ui.resolve_route`"]) expect(suggest).toContain(field);
+    expect(suggest).toMatch(/name each[^.]*take out[^.]*confirm/i);
+    expect(write).toContain('"remove": ["ui.before_url", "ui.default_routes", "ui.resolve_route"]');
+    expect(write).toContain('"remove": ["ui.shots"]');
+  });
 
   it("offers ui.resolve_route when the Product's routes have dynamic segments, with its contract and an example", () => {
-    const resolve = suggest.split("\n").find((line) => line.startsWith("- `ui.resolve_route`")) ?? "";
+    const resolve = offer("ui.resolve_route");
 
     expect(resolve).toContain("dynamic segment");
     expect(resolve).toContain("`FABRIK_ROUTE`");
@@ -480,10 +522,174 @@ describe("The Visual evidence skill's offers", () => {
   });
 
   it("offers production.url for ui.before_url when Kit config declares one, saying where the offer came from", () => {
-    const before = suggest.split("\n").find((line) => line.startsWith("- `ui.before_url`")) ?? "";
+    const before = offer("ui.before_url");
 
     expect(before).toContain("offer `production.url`");
     expect(before).toContain("say it came from the `production` block");
+  });
+});
+
+describe("UI evidence from Evidence shots", () => {
+  /** A Kit config whose Required checks run the Journeys, with Visual evidence capturing routes. */
+  const capturing = lines(
+    "{",
+    '  "sandbox": { "build": "npm run build", "checks": ["e2e", "lint"] },',
+    '  "operator": "jrey8343",',
+    '  "ui": {',
+    '    "paths": ["src/**"],',
+    '    "serve": "npm run preview",',
+    '    "url": "http://localhost:4321",',
+    '    "before_url": "https://clinic.example.com",',
+    '    "default_routes": ["/"],',
+    '    "resolve_route": "npm run resolve-route"',
+    "  }",
+    "}",
+    "",
+  );
+  const shots = { check: "e2e", artifact: "fabrik-evidence-shots" };
+  /** The Evidence shots answers, the Operator having confirmed taking out each of route capture's fields. */
+  const fromShots = { ui: { shots }, remove: ["ui.before_url", "ui.default_routes", "ui.resolve_route"] };
+
+  it("writes a shots block that names one of the file's own sandbox.checks, keeping every other byte", () => {
+    const routeless = lines("{", '  "sandbox": { "checks": ["e2e"] },', '  "ui": { "paths": ["src/**"], "serve": "npm start", "url": "http://localhost:3000" }', "}", "");
+
+    expect(write(routeless, { ui: { shots } })).toEqual({
+      ok: true,
+      written: ["ui"],
+      config: lines(
+        "{",
+        '  "sandbox": { "checks": ["e2e"] },',
+        '  "ui": {',
+        '    "paths": ["src/**"],',
+        '    "serve": "npm start",',
+        '    "url": "http://localhost:3000",',
+        '    "shots": {',
+        '      "check": "e2e",',
+        '      "artifact": "fabrik-evidence-shots"',
+        "    }",
+        "  }",
+        "}",
+        "",
+      ),
+    });
+  });
+
+  it("writes nothing for a check that isn't one of sandbox.checks, naming them", () => {
+    expect(write(capturing, { ...fromShots, ui: { shots: { check: "unit" } } })).toEqual({
+      ok: false,
+      problems: [`ui.shots.check is "unit": it must be one of sandbox.checks, e2e and lint, since that check's run uploads the Evidence shots`],
+    });
+  });
+
+  it("takes out route capture's fields once the answers confirm each, keeping every other byte", () => {
+    expect(write(capturing, fromShots)).toEqual({
+      ok: true,
+      written: ["ui"],
+      config: lines(
+        "{",
+        '  "sandbox": { "build": "npm run build", "checks": ["e2e", "lint"] },',
+        '  "operator": "jrey8343",',
+        '  "ui": {',
+        '    "paths": ["src/**"],',
+        '    "serve": "npm run preview",',
+        '    "url": "http://localhost:4321",',
+        '    "shots": {',
+        '      "check": "e2e",',
+        '      "artifact": "fabrik-evidence-shots"',
+        "    }",
+        "  }",
+        "}",
+        "",
+      ),
+    });
+  });
+
+  it("writes nothing while the answers don't confirm taking out a route capture field the block holds, naming each", () => {
+    expect(write(capturing, { ...fromShots, remove: ["ui.resolve_route"] })).toEqual({
+      ok: false,
+      problems: [
+        "ui.before_url is set, but so is ui.shots: route capture's fields can't be set when UI evidence comes from Evidence shots",
+        "ui.default_routes is set, but so is ui.shots: route capture's fields can't be set when UI evidence comes from Evidence shots",
+      ],
+    });
+  });
+
+  it("takes them out of a one-line ui block, keeping it on one line", () => {
+    const oneLine = lines(
+      "{",
+      '  "sandbox": { "checks": ["e2e"] },',
+      '  "ui": { "default_routes": ["/"], "paths": ["src/**"], "before_url": null, "serve": "npm start", "url": "http://localhost:3000" }',
+      "}",
+      "",
+    );
+
+    const result = write(oneLine, { ui: { paths: ["src/**"] }, remove: ["ui.default_routes", "ui.before_url"] });
+
+    expect(result).toEqual({
+      ok: true,
+      written: ["ui"],
+      config: lines("{", '  "sandbox": { "checks": ["e2e"] },', '  "ui": { "paths": ["src/**"], "serve": "npm start", "url": "http://localhost:3000" }', "}", ""),
+    });
+  });
+
+  it("writes nothing when run again with the same answers", () => {
+    const once = write(capturing, fromShots);
+    const config = once.ok ? once.config : "";
+
+    expect(write(config, fromShots)).toEqual({ ok: true, written: [], config });
+  });
+
+  it("goes back to captured routes, taking shots out once the answers confirm it, and writing the route answers", () => {
+    const once = write(capturing, fromShots);
+    const config = once.ok ? once.config : "";
+    const routes = { ui: { before_url: null, default_routes: ["/"] }, remove: ["ui.shots"] };
+
+    const back = write(config, routes);
+
+    expect(back.ok && back.config).toBe(
+      lines(
+        "{",
+        '  "sandbox": { "build": "npm run build", "checks": ["e2e", "lint"] },',
+        '  "operator": "jrey8343",',
+        '  "ui": {',
+        '    "paths": ["src/**"],',
+        '    "serve": "npm run preview",',
+        '    "url": "http://localhost:4321",',
+        '    "before_url": null,',
+        '    "default_routes": ["/"]',
+        "  }",
+        "}",
+        "",
+      ),
+    );
+    expect(write(config, { ui: routes.ui })).toEqual({
+      ok: false,
+      problems: [
+        "ui.before_url is set, but so is ui.shots: route capture's fields can't be set when UI evidence comes from Evidence shots",
+        "ui.default_routes is set, but so is ui.shots: route capture's fields can't be set when UI evidence comes from Evidence shots",
+      ],
+    });
+  });
+
+  it("takes out only route capture's fields and shots, and never a field the answers also give", () => {
+    expect(write(capturing, { ui: { shots }, remove: "ui.default_routes" })).toEqual({
+      ok: false,
+      problems: [
+        'The answers\' remove must be a list of the fields to take out, such as ["ui.default_routes"]: it takes out only ui.before_url, ui.default_routes, ui.resolve_route and ui.shots',
+      ],
+    });
+    expect(write(capturing, { ui: { shots, before_url: null }, remove: ["ui.paths", "default_routes", "ui.before_url"] })).toEqual({
+      ok: false,
+      problems: [
+        'The answers\' remove names "ui.paths", which the writer never takes out: it takes out only ui.before_url, ui.default_routes, ui.resolve_route and ui.shots',
+        'The answers\' remove names "default_routes", which the writer never takes out: it takes out only ui.before_url, ui.default_routes, ui.resolve_route and ui.shots',
+        "The answers both give ui.before_url and take it out: give it, or take it out",
+      ],
+    });
+    expect(write(capturing, { preview: { url: null }, remove: ["ui.default_routes"] })).toEqual({
+      ok: false,
+      problems: ["The answers' remove names ui.default_routes, but they hold no ui block to take it out of"],
+    });
   });
 });
 

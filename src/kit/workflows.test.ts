@@ -1390,6 +1390,74 @@ describe("loop.yml's Review job on a UI PR", () => {
   });
 });
 
+// Evidence shots (#820): the review job finds the named check's newest attempt
+// at the head, downloads its artifact, reads it, keeps the Evidence page, and
+// runs no Reviewer when a miss sends the pull request back.
+describe("loop.yml's Review job on a UI PR whose evidence is Evidence shots (#820)", () => {
+  const steps = (): readonly string[] => stepsOf(job("review"));
+  const stepAt = (pattern: string): number => steps().findIndex((step) => step.includes(pattern));
+  const step = (pattern: string): string => steps()[stepAt(pattern)] ?? "";
+  const find = () => step("shots-main.ts find");
+  const download = () => step("path: ${{ runner.temp }}/fabrik-evidence-shots\n");
+  const read = () => step("shots-main.ts read");
+  const page = () => step("id: shots-page\n");
+
+  it("gets what the shots are collected by from the Kit job, read only through env", () => {
+    expect(job("kit")).toContain("ui-shots: ${{ steps.route.outputs.ui-shots }}");
+    expect(find()).toContain("FABRIK_UI_SHOTS: ${{ needs.kit.outputs.ui-shots }}\n");
+    expect(read()).toContain("FABRIK_UI_SHOTS: ${{ needs.kit.outputs.ui-shots }}\n");
+    expect(job("review").split("\n").filter((line) => line.includes("ui-shots") && line.includes("run:"))).toEqual([]);
+  });
+
+  it("finds the named check's run at the head the waits read, with the job's own read-only token, only on such a PR", () => {
+    expect(find()).toContain("if: needs.kit.outputs.ui-shots != ''\n");
+    expect(find()).toContain("GH_TOKEN: ${{ github.token }}\n");
+    expect(find()).toContain("FABRIK_HEAD_SHA: ${{ needs.review-checks.outputs.head-sha }}\n");
+    expect(find()).toContain("run: node kit/src/review/shots-main.ts find");
+  });
+
+  it("downloads the artifact it found, from that run, outside the working directory, never failing the Review on it", () => {
+    expect(download()).toContain("uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2");
+    expect(download()).toContain("if: steps.shots-find.outputs.artifact != ''\n");
+    expect(download()).toContain("run-id: ${{ steps.shots-find.outputs.run }}\n");
+    expect(download()).toContain("artifact-ids: ${{ steps.shots-find.outputs.artifact }}\n");
+    expect(download()).toContain("github-token: ${{ github.token }}\n");
+    expect(download()).toContain("continue-on-error: true\n");
+  });
+
+  it("reads it against the names, knowing how the Review's checks ended, before any secret loads", () => {
+    expect(read()).toContain("id: shots\n");
+    expect(read()).toContain("FABRIK_SHOTS_DIR: ${{ runner.temp }}/fabrik-evidence-shots\n");
+    expect(read()).toContain("FABRIK_SHOTS_ARTIFACT: ${{ steps.shots-find.outputs.artifact }}\n");
+    expect(read()).toContain("FABRIK_REVIEW_NEEDS: ${{ toJSON(needs) }}\n");
+    expect(stepAt("shots-main.ts find")).toBeLessThan(stepAt("path: ${{ runner.temp }}/fabrik-evidence-shots\n"));
+    expect(stepAt("path: ${{ runner.temp }}/fabrik-evidence-shots\n")).toBeLessThan(stepAt("shots-main.ts read"));
+    expect(stepAt("shots-main.ts read")).toBeLessThan(stepAt("id: op\n"));
+  });
+
+  it("keeps the Evidence page in the Review's own run, unzipped, for 30 days, and passes its id out", () => {
+    expect(page()).toContain("if: steps.shots.outputs.page == 'true'\n");
+    expect(page()).toContain("path: ${{ runner.temp }}/fabrik-shots-page/fabrik-ui-evidence-page.html\n");
+    expect(page()).toContain("archive: false\n");
+    expect(page()).toContain("retention-days: 30\n");
+    expect(page()).toContain("continue-on-error: true\n");
+    expect(job("review")).toContain("shots-page-artifact: ${{ steps.shots-page.outputs.artifact-id }}");
+    expect(job("review")).toContain("shots: ${{ steps.shots.outputs.shots }}");
+    expect(job("review")).toContain("shots-reviewer: ${{ steps.shots.outputs.reviewer }}");
+  });
+
+  it("runs no Reviewer, loads no secret and passes out no Verdict when a miss sends the pull request back", () => {
+    for (const pattern of ["id: op\n", "id: agent\n", "name: fabrik-agent-result\n"]) {
+      expect(step(pattern)).toContain("if: steps.shots.outputs.reviewer != 'skip'\n");
+    }
+  });
+
+  it("tells the Reviewer what was collected, and where, only on such a PR", () => {
+    expect(step("id: agent\n")).toContain("FABRIK_SHOTS: ${{ steps.shots.outputs.shots }}\n");
+    expect(step("id: agent\n")).toContain("FABRIK_SHOTS_DIR: ${{ needs.kit.outputs.ui-shots != '' && format('{0}/fabrik-evidence-shots', runner.temp) || '' }}\n");
+  });
+});
+
 // A Full Review (#747): the Kit job works out the kind, the Review job's
 // Reviewer is told it, and the push job's Run record reads it from the Kit job.
 describe("loop.yml's Review job on a Full Review", () => {

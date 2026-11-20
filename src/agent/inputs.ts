@@ -28,9 +28,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
 import { leavingOutDigests } from "../github/digestComments.ts";
-import { readDigestThread } from "../github/digestGiven.ts";
+import { digestPicturesOf, readDigestThread } from "../github/digestGiven.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { capturedRoutesOf, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
 import {
   byTime,
@@ -498,6 +499,15 @@ export interface DigestPullRequest {
    * names no routes, as one written before markers recorded them.
    */
   readonly capturedRoutes: readonly string[];
+  /**
+   * On a pull request whose UI evidence is Evidence shots, the named shots
+   * the check's run produced, in the names' order (digestPicturesOf): the
+   * only names an item may name as its picture, in place of captured routes.
+   * Read from the shots marker only in a body the Fabrik App wrote, and
+   * absent on any other pull request, so a route pull request's input is as
+   * it was.
+   */
+  readonly producedShots?: readonly string[];
   /** Kit code's facts, worked out from its thread (src/loop/digestFacts.ts), which the writer words and never contradicts. */
   readonly facts: DigestFacts;
 }
@@ -508,9 +518,11 @@ export interface DigestPullRequest {
  * comments, as readPullRequest gives a Reviewer them, `deferred` ones left
  * out; every Verdict with the head it judged; the Kit's own notes on the
  * thread, oldest first, among its latest hundred comments; whether UI
- * evidence exists; and the routes it captured, as the evidence marker in the
- * body names them, which the push job reads again to check each item's
- * picture against. Nobody else's words are in it, and nothing from the run
+ * evidence exists; and the routes it captured, as the evidence marker names
+ * them, or, on a pull request whose UI evidence is Evidence shots, the named
+ * shots that were produced, as the shots marker says, each read only from a
+ * body a bot wrote, as the push job reads them again to check each
+ * item's picture against. Nobody else's words are in it, and nothing from the run
  * store: no transcript and no Run record. The Verdicts and the notes come
  * only from what readPullRequest and verdictsOn hand back, so whatever those
  * keep from an agent is kept from this one. Beside them go Kit code's facts,
@@ -536,6 +548,12 @@ export async function readDigestPullRequest(
     readDigestThread(github, repo, number, operator, deferred, written),
   ]);
   const verdicts = verdictsAmong(written.conversation);
+  // Only a body a bot wrote counts, as the push job's read of the Loop's snapshot takes it (digestSnapshotOn), so nobody
+  // else can name a route as captured or a shot as produced. This job holds no App token, so it knows no App login.
+  const openedBy = (rest as { user?: { type?: string } | null }).user;
+  const byApp = openedBy?.type === "Bot";
+  const shots = byApp ? shotsMarkerIn((read as { body: string }).body) : null;
+  const routes = byApp ? evidenceMarkerIn((read as { body: string }).body) : null;
   const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges"> & {
     comments: { body: string; author: { __typename: string } | null }[];
   };
@@ -545,8 +563,9 @@ export async function readDigestPullRequest(
     verdicts,
     // Only a bot's comments are the Kit's, as only a bot's markers are read; its Verdicts are given apart, whole.
     kitNotes: comments.filter(({ body, author }) => author?.__typename === "Bot" && verdictsIn([body]).length === 0).map(({ body }) => body),
-    uiEvidence: (evidenceMarkerIn(pullRequest.body)?.artifact ?? null) !== null,
-    capturedRoutes: capturedRoutesOf(evidenceMarkerIn(pullRequest.body)),
+    uiEvidence: (routes?.artifact ?? null) !== null,
+    capturedRoutes: capturedRoutesOf(routes),
+    ...(shots === null ? {} : { producedShots: digestPicturesOf(null, shots).pictures }),
     facts: digestFactsOf(thread),
   };
 }
