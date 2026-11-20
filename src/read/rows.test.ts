@@ -478,6 +478,15 @@ describe("a Product repo's rows", () => {
       ]);
     });
 
+    it("are null on every row of facts cached by an earlier release, which hold no shots markers", () => {
+      const { shotsMarkers: _, ...cached } = homeFactsOf({ github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7 })] }) });
+
+      const rows = rowsOf(JSON.parse(JSON.stringify(cached)) as Facts, null, null, null, NOW);
+
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.map(({ shots }) => shots)).toEqual(rows.map(() => null));
+    });
+
     describe("as the README's section on reading the Kit says it", () => {
       const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
       const section = readme.split("\n## Reading the Kit from another program\n")[1]?.split("\n## ")[0] ?? "";

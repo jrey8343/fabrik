@@ -358,10 +358,11 @@ function evidenceOf({ evidenceMarkers }: Facts, pullRequest: number): RowEvidenc
 /**
  * Agent pull request `pullRequest`'s named shots, from its shots marker, each
  * page built as a captured route's is, its live page only on a merged pull
- * request's row (`merged`); null when the facts hold none for it.
+ * request's row (`merged`); null when the facts hold none for it, as facts
+ * cached by an earlier release, with no `shotsMarkers` at all, never do.
  */
 function shotsOf({ kit, shotsMarkers }: Facts, pullRequest: number, merged: boolean): RowShots | null {
-  const marker = shotsMarkers.find((held) => held.pullRequest === pullRequest)?.marker;
+  const marker = (shotsMarkers as Facts["shotsMarkers"] | undefined)?.find((held) => held.pullRequest === pullRequest)?.marker;
   if (marker === undefined) return null;
   const { head, run, artifact, failure, preview, nothingVisible, miss, named, missed } = marker;
   const linked = preview?.is === "linked" ? preview.url : null;
