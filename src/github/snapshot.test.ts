@@ -53,6 +53,7 @@ import {
   designTurnsInProgress,
   gatherSnapshot as gatherFrom,
   IMPLEMENT_JOB_NAME,
+  jobsOfUnfinishedRuns,
   KIT_JOB_NAME,
   MERGEABLE_READS,
   MERGEABLE_WAIT_MS,
@@ -190,6 +191,226 @@ describe("Reading the runs not yet finished without GitHub's status filters (#72
 
     expect((await countDispatchedRuns(actions, repo)).implementTickets).toEqual([310]);
     expect(decodeURIComponent(listings[0] ?? "")).toContain(`created=>=${hoursAgo(24)}`);
+  });
+});
+
+describe("Asking for the runs read's pages and jobs side by side (#836)", () => {
+  type ListedRun = { id: number; status: string; jobs?: string[] };
+
+  /**
+   * An Actions API that answers none of its calls until the test releases them, so a test sees which it was
+   * asked for before any answered. Its listing pages through `runs`, newest first, as they stand when a page
+   * is answered, with a `total_count` of them unless `totalCount` says otherwise (null leaves it out). Each
+   * run's jobs are named by its `jobs`, or one job named after it.
+   */
+  function unansweredActions(runs: ListedRun[], { totalCount }: { totalCount?: number | null } = {}) {
+    const asked: string[] = [];
+    const waitingCalls: { path: string; answer: () => void; refuse: (error: unknown) => void }[] = [];
+    const answerOf = (path: string): unknown => {
+      const listed = /^\/repos\/acme\/shop\/actions\/runs\?created=[^&]+&exclude_pull_requests=true&per_page=100&page=(\d+)$/.exec(path);
+      if (listed !== null) {
+        const page = Number(listed[1]);
+        return {
+          ...(totalCount === null ? {} : { total_count: totalCount ?? runs.length }),
+          workflow_runs: runs.slice((page - 1) * 100, page * 100).map(({ id, status }) => ({ id, status, created_at: "2026-11-08T19:00:00Z" })),
+        };
+      }
+      const jobs = /^\/repos\/acme\/shop\/actions\/runs\/(\d+)\/jobs\?filter=latest&per_page=100$/.exec(path);
+      if (jobs !== null) {
+        const run = runs.find(({ id }) => id === Number(jobs[1]));
+        return { jobs: (run?.jobs ?? [`job of ${jobs[1]}`]).map((name) => ({ name, status: "queued" })) };
+      }
+      throw new Error(`Unexpected call: ${path}`);
+    };
+    const actions = {
+      rest(method: string, path: string): Promise<unknown> {
+        expect(method).toBe("GET");
+        asked.push(path);
+        return new Promise((resolve, reject) => waitingCalls.push({ path, answer: () => resolve(answerOf(path)), refuse: reject }));
+      },
+    };
+    /** Lets every call the read can make without another answer be made. */
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+    return {
+      actions,
+      /** The pages of the listing asked for so far, in the order asked. */
+      pagesAsked: () => asked.flatMap((path) => /&page=(\d+)$/.exec(path)?.[1] ?? []).map(Number),
+      /** The runs whose jobs were asked for so far, in the order asked. */
+      jobsAsked: () => asked.flatMap((path) => /\/runs\/(\d+)\/jobs/.exec(path)?.[1] ?? []).map(Number),
+      /** How many calls are waiting on an answer. */
+      waiting: () => waitingCalls.length,
+      /** Answers every waiting call, the last asked first, then lets the read go on. */
+      async release() {
+        for (const call of waitingCalls.splice(0).reverse()) call.answer();
+        await settle();
+      },
+      /** Answers every waiting call but the one `refused` picks, which fails with `error`. */
+      async refuse(refused: (path: string) => boolean, error: unknown) {
+        for (const call of waitingCalls.splice(0)) {
+          if (refused(call.path)) call.refuse(error);
+          else call.answer();
+        }
+        await settle();
+      },
+      settle,
+    };
+  }
+
+  const unfinishedRuns = (from: number, count: number): ListedRun[] => Array.from({ length: count }, (_, i) => ({ id: from + i, status: "queued" }));
+  const finishedRuns = (from: number, count: number): ListedRun[] => Array.from({ length: count }, (_, i) => ({ id: from + i, status: "completed" }));
+
+  it("asks for the first page alone, then every other page before any of them has answered", async () => {
+    const listing = unansweredActions(finishedRuns(1000, 350));
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    await listing.settle();
+    expect(listing.pagesAsked()).toEqual([1]);
+
+    await listing.release();
+    expect(listing.pagesAsked()).toEqual([1, 2, 3, 4]);
+    expect(listing.waiting()).toBe(3);
+
+    await listing.release();
+    expect(await read).toEqual([]);
+  });
+
+  it("asks for every unfinished run's jobs before any of them has answered, and gives them by run in the listing's order", async () => {
+    const listing = unansweredActions([
+      { id: 31, status: "queued", jobs: ["fabrik / Implement #310", "fabrik / Push"] },
+      ...finishedRuns(1000, 120),
+      { id: 7, status: "in_progress", jobs: ["fabrik / Triage"] },
+      { id: 52, status: "waiting", jobs: ["fabrik / Review #52", "fabrik / Review checks"] },
+    ]);
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    await listing.release();
+    await listing.release();
+    expect(listing.jobsAsked()).toEqual([31, 7, 52]);
+    expect(listing.waiting()).toBe(3);
+
+    // The last-asked jobs answer first.
+    await listing.release();
+    expect((await read).map(({ run, name }) => [run, name])).toEqual([
+      [31, "fabrik / Implement #310"],
+      [31, "fabrik / Push"],
+      [7, "fabrik / Triage"],
+      [52, "fabrik / Review #52"],
+      [52, "fabrik / Review checks"],
+    ]);
+  });
+
+  it("lists the jobs of a run that appears on two pages once", async () => {
+    const runs = [...finishedRuns(1000, 99), { id: 7, status: "queued" }, ...finishedRuns(2000, 50)];
+    const listing = unansweredActions(runs);
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    await listing.release();
+    // A run created after the first page answered pushes run 7 onto the second page too.
+    runs.unshift({ id: 9000, status: "completed" });
+    await listing.release();
+    await listing.release();
+
+    expect(listing.jobsAsked()).toEqual([7]);
+    expect((await read).map(({ run }) => run)).toEqual([7]);
+  });
+
+  it("follows a listing whose last page comes back full, page by page until one comes back short, and reads the unfinished run found there", async () => {
+    const runs = [...finishedRuns(1000, 199), { id: 7, status: "queued" }];
+    const listing = unansweredActions(runs);
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    await listing.release();
+    // A newer run pushes run 7 off the second page, the last the first page's count says there is.
+    runs.unshift({ id: 9000, status: "completed" });
+    await listing.release();
+    expect(listing.pagesAsked()).toEqual([1, 2, 3]);
+    await listing.release();
+    await listing.release();
+
+    expect(listing.pagesAsked()).toEqual([1, 2, 3]);
+    expect((await read).map(({ run }) => run)).toEqual([7]);
+  });
+
+  it("asks for no more than ten pages up front, as GitHub lists no more than 1,000 runs, whatever its count", async () => {
+    const listing = unansweredActions(finishedRuns(1000, 1000), { totalCount: 4_200 });
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    await listing.release();
+    expect(listing.pagesAsked()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+    // The tenth comes back full, so the eleventh is asked for, and comes back empty.
+    await listing.release();
+    expect(listing.pagesAsked()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    await listing.release();
+    expect(await read).toEqual([]);
+  });
+
+  it("reads a listing whose first page gives no count page by page, and gives the same jobs", async () => {
+    const runs = [{ id: 7, status: "queued" }, ...finishedRuns(1000, 150), { id: 8, status: "in_progress" }, ...finishedRuns(2000, 100)];
+    const listing = unansweredActions(runs, { totalCount: null });
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    for (const page of [1, 2, 3]) {
+      await listing.settle();
+      expect(listing.pagesAsked()).toEqual(Array.from({ length: page }, (_, i) => i + 1));
+      expect(listing.waiting()).toBe(1);
+      await listing.release();
+    }
+    await listing.release();
+
+    expect((await read).map(({ run, name }) => [run, name])).toEqual([
+      [7, "job of 7"],
+      [8, "job of 8"],
+    ]);
+  });
+
+  // A count that matches the listing names the pages a page-by-page read asks for, the empty one after an exact multiple of 100 too.
+  it.each([
+    [0, [1]],
+    [99, [1]],
+    [100, [1, 2]],
+    [250, [1, 2, 3]],
+    [300, [1, 2, 3, 4]],
+    [1000, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]],
+  ])("asks for the same pages as a page-by-page read of a listing of %i runs that doesn't change while read", async (count, pages) => {
+    const listing = unansweredActions(unfinishedRuns(1000, count));
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    for (await listing.settle(); listing.waiting() > 0; ) await listing.release();
+
+    expect(listing.pagesAsked()).toEqual(pages);
+    expect(listing.jobsAsked()).toEqual(unfinishedRuns(1000, count).map(({ id }) => id));
+    expect(await read).toHaveLength(count);
+  });
+
+  it.each([
+    ["refuses", 502],
+    ["never answers", 0],
+  ])("fails with GitHub's error when it %s a page after the first", async (_, status) => {
+    const listing = unansweredActions([...finishedRuns(1000, 300), { id: 7, status: "queued" }]);
+    const error = new GitHubError(`GitHub GET …&page=3 failed: ${status}`, status);
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    const failed = expect(read).rejects.toBe(error);
+    await listing.release();
+    await listing.refuse((path) => path.endsWith("&page=3"), error);
+
+    await failed;
+  });
+
+  it.each([
+    ["refuses", 403],
+    ["never answers", 0],
+  ])("fails with GitHub's error when it %s a run's jobs listing", async (_, status) => {
+    const listing = unansweredActions(unfinishedRuns(1, 3));
+    const error = new GitHubError(`GitHub GET …/runs/2/jobs failed: ${status}`, status);
+
+    const read = jobsOfUnfinishedRuns(listing.actions, repo);
+    const failed = expect(read).rejects.toBe(error);
+    await listing.release();
+    await listing.refuse((path) => path.includes("/runs/2/jobs"), error);
+
+    await failed;
   });
 });
 

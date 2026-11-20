@@ -617,6 +617,28 @@ describe("The runs read", () => {
       expect(read.runs).toMatchObject([{ run: 7, issue: 12 }]);
     });
 
+    // The runs read asks for the pages after the first, and the unfinished runs' jobs, side by side (#836).
+    it.each([
+      ["refuses", "a page after the first", 403, (path: string) => path.endsWith("&page=2")],
+      ["never answers", "a page after the first", 0, (path: string) => path.endsWith("&page=2")],
+      ["refuses", "an unfinished run's jobs", 403, (path: string) => path.includes("/runs/7/jobs")],
+      ["never answers", "an unfinished run's jobs", 0, (path: string) => path.includes("/runs/7/jobs")],
+    ])("gives the runs unread when GitHub %s %s", async (_, __, status, refused) => {
+      const listed = (page: number) =>
+        Array.from({ length: page === 1 ? 100 : 30 }, (__, i) => ({ id: page === 1 && i === 0 ? 7 : page * 1000 + i, status: page === 1 && i === 0 ? "queued" : "completed", created_at: "2026-11-12T09:00:00Z" }));
+      const actions = {
+        async rest(_method: string, path: string): Promise<unknown> {
+          if (refused(path)) throw new GitHubError(`GitHub GET ${path} failed: ${status}`, status, { request: `GET ${path}` });
+          if (path.includes("/workflows/fabrik.yml/runs")) return { workflow_runs: [] };
+          const page = /&page=(\d+)$/.exec(path);
+          if (page !== null) return { total_count: 130, workflow_runs: listed(Number(page[1])) };
+          return { jobs: [kitJob(IMPLEMENT_ON_12)] };
+        },
+      };
+
+      expect((await readRuns(actions, "owner/product", NOW)).runs).toBe("unread");
+    });
+
     it("never throws, though GitHub fails some other way than refusing", async () => {
       const failing = { rest: () => Promise.reject(new TypeError("fetch failed")) };
 
