@@ -241,6 +241,12 @@ describe("What the Digest writer is given of the pull request", () => {
 
       expect(await readDigestPullRequest(thread(body), repo, 50, { operator: "operator" })).not.toHaveProperty("producedShots");
     });
+
+    it("is read from no body somebody other than the Fabrik App wrote, as the push job reads it", async () => {
+      const body = bodyWith('{"run":9100,"artifact":9202,"failure":null,"routes":["/basket"],"preview":{"is":"none"},"missed":[]}');
+
+      expect(await readDigestPullRequest(thread(body, undefined, [], { login: "stranger", type: "User" }), repo, 50, { operator: "operator" })).toMatchObject({ uiEvidence: false, capturedRoutes: [] });
+    });
   });
 
   describe("of the named shots that were produced, on a pull request whose UI evidence is Evidence shots", () => {
