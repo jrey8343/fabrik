@@ -53,18 +53,21 @@ describe("Reading the Evidence shots the review job downloaded (#820)", () => {
 
     const { collected, page } = await readDownloadedShots({ dir, found: true, given, head: HEAD, red: false, ticket: 7 });
 
-    expect(collected.missed).toEqual([{ name: "composer: draft ready", why: "refused" }]);
+    expect(collected?.missed).toEqual([{ name: "composer: draft ready", why: "refused" }]);
     expect(page!.match(/data:image\/png;base64,/g)).toHaveLength(1);
   });
 
-  it.each([
-    ["the check's run uploaded no artifact of that name", false, async () => downloaded({})],
-    ["the download left no folder", true, async () => join(await downloaded({}), "never-downloaded")],
-  ])("is no-artifact when %s, with no Evidence page", async (_, found, dirOf) => {
-    expect(await readDownloadedShots({ dir: await dirOf(), found, given, head: HEAD, red: false, ticket: 7 })).toEqual({
+  it("is no-artifact when the check's run uploaded no artifact of that name, with no Evidence page", async () => {
+    expect(await readDownloadedShots({ dir: await downloaded({}), found: false, given, head: HEAD, red: false, ticket: 7 })).toEqual({
       collected: expect.objectContaining({ failure: "no-artifact", sendsBack: false }),
       page: null,
     });
+  });
+
+  it("reads nothing, never no-artifact, when the check uploaded the artifact and its download left no folder", async () => {
+    const dir = join(await downloaded({}), "never-downloaded");
+
+    expect(await readDownloadedShots({ dir, found: true, given, head: HEAD, red: false, ticket: 7 })).toEqual({ collected: null, page: null });
   });
 
   it("is bad-manifest when the artifact has no manifest that reads, with no Evidence page", async () => {

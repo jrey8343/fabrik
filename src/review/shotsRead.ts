@@ -9,18 +9,26 @@ import { type PageShot, shotsEvidencePage } from "../evidence/evidencePage.ts";
 import { collectShots, type ReviewShots, type ShotsCollected } from "../evidence/shotsCollect.ts";
 import { type ArtifactFile, readShotsManifest, SHOTS_MANIFEST_FILE, type ShotSize } from "../evidence/shotsManifest.ts";
 
-/** What the review job's read step leaves: what it collected, and the Evidence page's HTML, or null when it has no shot to show. */
+/**
+ * What the review job's read step leaves: what it collected, or null when it
+ * could read nothing of an artifact the check did upload, and the Evidence
+ * page's HTML, or null when it has no shot to show.
+ */
 export interface DownloadedShots {
-  readonly collected: ShotsCollected;
+  readonly collected: ShotsCollected | null;
   readonly page: string | null;
 }
 
 /**
  * Reads the folder `dir` the review job downloaded the named check's
  * artifact into, when the find step `found` one, against the names the
- * Review was `given`, at `head`, the named check `red` or not. A folder that
- * isn't there, as when the download failed, is no artifact. The Evidence page
- * holds every shot the reading kept, the named ones first, for `ticket`.
+ * Review was `given`, at `head`, the named check `red` or not. No artifact
+ * found is `no-artifact`. A folder that isn't there although one was found,
+ * as when its download failed, is read as nothing at all, never as
+ * `no-artifact`, which means only that the check uploaded none: the Review
+ * then runs no Reviewer, as a wait that gives up runs none, and the section
+ * keeps waiting. The Evidence page holds every shot the reading kept, the
+ * named ones first, for `ticket`.
  */
 export async function readDownloadedShots({
   dir,
@@ -37,8 +45,9 @@ export async function readDownloadedShots({
   readonly red: boolean;
   readonly ticket: number;
 }): Promise<DownloadedShots> {
-  const files = found ? await filesIn(dir) : null;
-  if (files === null) return { collected: collectShots({ reading: null, given, head, red }), page: null };
+  if (!found) return { collected: collectShots({ reading: null, given, head, red }), page: null };
+  const files = await filesIn(dir);
+  if (files === null) return { collected: null, page: null };
   const manifest = await readFile(join(dir, SHOTS_MANIFEST_FILE), "utf8").catch(() => null);
   const reading = readShotsManifest(manifest, files);
   const collected = collectShots({ reading, given, head, red });

@@ -235,7 +235,8 @@ export function pushJobInput(needs: Needs, eventIssue: number | null, eventComme
         const shots = reviewShotsOutputs(reviewer.outputs);
         // A miss that sends back stopped the Reviewer, so the push job gives the Kit's Execution flaw on what was read.
         const skipped = reviewer.outputs["shots-reviewer"] === "skip";
-        if (skipped && shots === null) return { kind: "nothing", reason: `#${pullRequest}'s Reviewer didn't run, and the Evidence shots its Review read don't read` };
+        // A skip with no shots read is a found artifact whose download failed: no Review, and the section keeps waiting.
+        if (skipped && shots === null) return { kind: "nothing", reason: `#${pullRequest}'s Reviewer didn't run, and its Review read nothing of the Evidence shots, so their section keeps waiting` };
         return { kind: "review", pullRequest, ticket, headSha, failedChecks, ranNothing, ...rerun, ...(shots === null ? {} : { shots }), ...(skipped ? { reviewerSkipped: true as const } : {}) };
       }
       return { kind: "nothing", reason: `#${pullRequest}'s checks ended ${outcome ?? "unknown"}, so there's no Verdict to post` };

@@ -583,6 +583,10 @@ describe("What the push job applies of a Review's Evidence shots (#820)", () => 
     expect(review({ shots: "{", "shots-reviewer": "skip" })).toMatchObject({ kind: "nothing" });
   });
 
+  it("lands nothing, so the section keeps waiting, when the Reviewer didn't run because the found artifact's download left nothing to read", () => {
+    expect(review({ shots: "", "shots-reviewer": "skip" })).toMatchObject({ kind: "nothing", reason: expect.stringContaining("keeps waiting") });
+  });
+
   it("carries no shots on a Review whose jobs read none, as on a Product repo without them", () => {
     expect(review({})).not.toHaveProperty("shots");
     expect(review({ shots: "{" })).not.toHaveProperty("shots");

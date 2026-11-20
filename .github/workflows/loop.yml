@@ -1386,7 +1386,8 @@ jobs:
         run: node kit/src/review/shots-main.ts find
 
       # The artifact, read as data and never run, outside the working directory. continue-on-error: a download
-      # that fails is read as no artifact, never a failed Review.
+      # that fails is never a failed Review, and never no-artifact: the read step reads nothing, the Reviewer doesn't
+      # run, and the section keeps waiting, as after a wait that gives up.
       - name: Download the Evidence shots
         if: steps.shots-find.outputs.artifact != ''
         continue-on-error: true

@@ -13,7 +13,8 @@
 //     step's artifact, empty for none), FABRIK_REVIEW_NEEDS (the Review's jobs, as JSON, for whether the named check is
 //     still red), FABRIK_TICKET, FABRIK_OUT_DIR.
 //     Writes step outputs: shots (what it collected, one line of JSON holding agent text, so read through `env:`),
-//     reviewer ("skip" when a miss that sends back stops the Reviewer, else "run"), page ("true" when it wrote the
+//     reviewer ("skip" when a miss that sends back stops the Reviewer, or the found artifact's download left nothing to
+//     read, when shots is empty; else "run"), page ("true" when it wrote the
 //     Evidence page, EVIDENCE_PAGE_FILE in FABRIK_OUT_DIR).
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -59,7 +60,8 @@ async function read(): Promise<void> {
     await mkdir(outDir, { recursive: true });
     await writeFile(join(outDir, EVIDENCE_PAGE_FILE), page);
   }
-  await output({ shots: JSON.stringify(collected), reviewer: collected.sendsBack ? "skip" : "run", page: String(page !== null) });
+  // Nothing read of an artifact the check uploaded stops the Reviewer with no shots, which the push job lands as nothing.
+  await output({ shots: collected === null ? "" : JSON.stringify(collected), reviewer: collected === null || collected.sendsBack ? "skip" : "run", page: String(page !== null) });
 }
 
 const step = process.argv[2];
