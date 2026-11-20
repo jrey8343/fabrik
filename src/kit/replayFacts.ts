@@ -4,7 +4,8 @@
 // spare-capacity gate weighs, and a waiting request's candidate Tickets,
 // which the Replay module picks from (src/kit/replay.ts). Pure, no I/O.
 import type { MergedFile, ReplayCandidate } from "./replay.ts";
-import { isLive, type RateLimitReading, type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
+import { WEEKLY_LIMIT } from "../agent/failure.ts";
+import { isLive, type RateLimitReading, type RunRecord } from "./runRecord.ts";
 
 /** A Subscription's last weekly-limit reading, as a Run record kept it, with when it was read and when its week resets. */
 export interface SubscriptionReading {

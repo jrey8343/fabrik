@@ -4,7 +4,7 @@
 // works that out itself (src/loop/failures.ts). The Review checks job leaves
 // one too (src/review/wait.ts). Pure, no I/O.
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
-import { namesFable } from "../kit/config.ts";
+import { isFableRun } from "../kit/config.ts";
 import type { FailedRunCommits, FailureReport, RateLimitRefusal, ReportedFailure } from "../loop/types.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import type { BuiltBranch } from "./result.ts";
@@ -76,8 +76,12 @@ function nameOf(error: unknown): string {
 const PREFLIGHT_REFUSAL = /Metered-billing preflight (refused the run|could not run)/;
 const ROUTE_LINE = /::error title=Metered-billing route::(.*)/g;
 
-/** The `rateLimitType` of the Subscription's weekly limit across every model. */
-const WEEKLY_LIMIT_TYPE = "seven_day";
+/**
+ * The `rateLimitType` of the Subscription's weekly limit across every model;
+ * the stream reports its five-hour one too, and on a Fable run a
+ * `seven_day_*` is its Fable cap (ADR-0034).
+ */
+export const WEEKLY_LIMIT = "seven_day";
 
 /** A provider error the stream reported, if the run never recovered from it. */
 function providerError(
@@ -90,13 +94,13 @@ function providerError(
   const rejected = rateLimits.filter((info) => info["status"] === "rejected");
   // The weekly limit across every model wins over any seven_day_* beside it, whatever their order: it holds every run.
   const weekly =
-    rejected.find((info) => info["rateLimitType"] === WEEKLY_LIMIT_TYPE) ??
-    rejected.find((info) => String(info["rateLimitType"] ?? "").startsWith(WEEKLY_LIMIT_TYPE));
+    rejected.find((info) => info["rateLimitType"] === WEEKLY_LIMIT) ??
+    rejected.find((info) => String(info["rateLimitType"] ?? "").startsWith(WEEKLY_LIMIT));
   if (weekly !== undefined) {
     const refusal = refusalIn(weekly);
     // Only a Fable run's seven_day_* is its Fable cap. Plain seven_day, and any on a run that isn't Fable, is the weekly
     // limit, so a cap that reads as plain seven_day holds its Subscription: it costs time, never money (ADR-0034).
-    const capped = fable && refusal.rateLimitType !== WEEKLY_LIMIT_TYPE;
+    const capped = fable && refusal.rateLimitType !== WEEKLY_LIMIT;
     const at = refusal.resetsAt === null ? null : new Date(refusal.resetsAt * 1000).toISOString();
     const resets = at === null ? "" : `resets at ${at}`;
     // A Fable cap with no reset of its own counts until the weekly limit's (src/loop/fableCap.ts), when the stream read one.
@@ -131,7 +135,7 @@ function providerError(
 
 /** When the stream's last weekly-limit reading said the weekly limit resets, ISO 8601, or null when none gave a reset. */
 function lastWeeklyReset(rateLimits: AgentStream["rateLimits"]): string | null {
-  const resetsAt = rateLimits.findLast((info) => info["rateLimitType"] === WEEKLY_LIMIT_TYPE && refusalIn(info).resetsAt !== null)?.["resetsAt"];
+  const resetsAt = rateLimits.findLast((info) => info["rateLimitType"] === WEEKLY_LIMIT && refusalIn(info).resetsAt !== null)?.["resetsAt"];
   return typeof resetsAt === "number" ? new Date(resetsAt * 1000).toISOString() : null;
 }
 
@@ -159,7 +163,7 @@ export function failureReportFor({ error, lines, initRefused, overage = null, mo
     return { failure: "metered-billing", detail: routes.join("; ") };
   }
 
-  const provider = providerError(readStream(lines), model !== undefined && namesFable(model));
+  const provider = providerError(readStream(lines), isFableRun(model));
   if (provider !== null) {
     const failure: ReportedFailure =
       provider.error === "authentication_failed"

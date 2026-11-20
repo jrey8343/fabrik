@@ -8,7 +8,8 @@
 // (src/kit/weeklySummary.ts). Pure, no I/O.
 import { type FableCapReading, fableCapUntil } from "../loop/fableCap.ts";
 import { lastMonthStart } from "./replayFacts.ts";
-import { type RunRecord, WEEKLY_LIMIT } from "./runRecord.ts";
+import { WEEKLY_LIMIT } from "../agent/failure.ts";
+import type { RunRecord } from "./runRecord.ts";
 
 /**
  * Every Fable cap reading these Run records give, in force or not, in their

@@ -8,7 +8,7 @@ import { isObject } from "../agent/stream.ts";
 import { type ChangedPath, checkTrustRoot } from "../guard/trust-root.ts";
 import { isTestPath } from "../loop/changedTests.ts";
 import { spelled } from "../loop/readable.ts";
-import { checkEffort, type KitConfig, refuseRoleModel } from "./config.ts";
+import { AS_IF_OPTED_IN_TO_FABLE, checkEffort, type KitConfig, refuseRoleModel } from "./config.ts";
 import { checkCandidateKit, type ReplayRequest, type ReplayVariable, settingOf } from "./replayRequest.ts";
 import { firstRunOf, isLive, type ReplayArm, type ReplayRole, type RunRecord } from "./runRecord.ts";
 
@@ -282,7 +282,8 @@ export function readArmSettings(value: unknown): ReplayArmSettings | null {
 function readRoleSettings(value: unknown): ReplayRoleSettings | null {
   if (!isObject(value)) return null;
   const { model, effort } = value;
-  if (typeof model !== "string" || model.trim() === "" || refuseRoleModel(model, true) !== null) return null;
+  // An arm's settings come from Kit config at a baseSha, or a request accepted in a repo that opted in: each run weighs the opt-in itself.
+  if (typeof model !== "string" || model.trim() === "" || refuseRoleModel(model, AS_IF_OPTED_IN_TO_FABLE) !== null) return null;
   if (!(effort === null || (typeof effort === "string" && checkEffort(effort) === null))) return null;
   return { model, effort };
 }

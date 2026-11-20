@@ -1126,6 +1126,18 @@ export function namesFable(model: string): boolean {
   return model.trim().toLowerCase().includes("fable");
 }
 
+/** Whether a run started on `model` is a Fable run (ADR-0034); a run whose model isn't known isn't one. */
+export function isFableRun(model: string | undefined): boolean {
+  return model !== undefined && namesFable(model);
+}
+
+/**
+ * The `allowFable` a reader passes when it can't tell yet whether this repo
+ * opted in to Fable, so it reads a model as any repo could accept it: whether
+ * this one has is weighed where its Kit config is read (ADR-0034).
+ */
+export const AS_IF_OPTED_IN_TO_FABLE = true;
+
 /** The Claude Code CLI's --effort levels. */
 const EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 

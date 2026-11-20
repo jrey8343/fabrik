@@ -112,7 +112,7 @@ import { callerChangeErrors } from "./callerPermissions.ts";
 import { readIfPresent, readKitConfigFromCheckout } from "./checkout.ts";
 import type { KitConfig } from "./config.ts";
 import { fableCapReadingsOf } from "./fableCapFacts.ts";
-import type { FableCapReading } from "../loop/fableCap.ts";
+import { configuredModelOf, type FableCapReading } from "../loop/fableCap.ts";
 import { readStoreRunRecords } from "./storeCheckout.ts";
 import { kitJobSummary, subscriptionOf } from "./kitJob.ts";
 import { kitSaidOf, routeOf } from "./kitSaid.ts";
@@ -194,11 +194,11 @@ async function main(productDir: string): Promise<void> {
     // A caller that grants no actions: read fails the read, and the run starts as before.
     const actions = event.kind === "label-added" && event.label === DISPATCH_LABEL ? github : null;
     // In a repo that opted in to Fable, the store's Fable cap readings, from the fable-store action's checkout (ADR-0034).
-    const fable = config.allowFable ? await storeFableCapsAt(process.env["FABRIK_STORE_DIR"], config) : { caps: [], unread: false };
-    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null, actions, null, null, fable.caps);
+    const storeFableCaps = config.allowFable ? await storeFableCapsAt(process.env["FABRIK_STORE_DIR"], config) : { caps: [], unread: false };
+    const snapshot = await gatherSnapshot(github, repo, event, config.operator, null, actions, { storeFableCaps: storeFableCaps.caps });
     plan = planFor(event, snapshot, config);
     if (plan.kind === "nothing") console.log(`Nothing to do: ${plan.reason}`);
-    summary = kitJobSummary(plan, config, snapshot.kitIssues, { storeUnread: fable.unread });
+    summary = kitJobSummary(plan, config, snapshot.kitIssues, { storeUnread: storeFableCaps.unread });
     ticket = snapshot.pullRequest?.ticket ?? null;
     // A run on an agent PR's branch may bring main in: the push job takes main as this job read it, before the
     // run started, for one of the heads it may have brought in (#341), as the agent job can't write this job's outputs.
@@ -300,7 +300,7 @@ export function kitJobOutputs(
     model: run?.model ?? "",
     effort: run?.effort ?? "",
     // For its Run record (ADR-0034): the model Kit config named, which a Fable fallback runs Opus in place of, and why.
-    "configured-model": run?.configuredModel ?? run?.model ?? "",
+    "configured-model": run === null ? "" : configuredModelOf(run),
     fallback: run?.fallback ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.
     retry: run?.role === "implement" ? String(run.retry ?? 0) : "",

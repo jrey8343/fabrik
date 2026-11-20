@@ -11,6 +11,7 @@
 import { code } from "../evidence/uiEvidence.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { namesFable } from "./config.ts";
+import { configuredModelOf } from "../loop/fableCap.ts";
 import { runNamed } from "../loop/heldRun.ts";
 import { readable } from "../loop/readable.ts";
 import { rotationIsOn, type Subscription, type Unusable, unusableSubscriptions } from "../loop/subscriptions.ts";
@@ -51,7 +52,7 @@ export function kitJobSummary(
     lines.push(`UI evidence comes from the Evidence shots the Required check ${code(shots.check)} uploads, so the Implement job captures no routes.`);
   }
   // The worst case is one more refusal, and the same fallback: said only on a run it could happen to.
-  if (storeUnread && run !== null && namesFable(run.configuredModel ?? run.model)) {
+  if (storeUnread && run !== null && namesFable(configuredModelOf(run))) {
     lines.push("The fabrik-runs store couldn't be read, so every Subscription counted as having Fable left.");
   }
   return `### Fabrik Kit job\n\n${lines.join("\n\n")}\n`;

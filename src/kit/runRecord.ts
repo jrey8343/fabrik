@@ -24,7 +24,7 @@
 // `touchUp` 0, and a schema 1 to 11 record, written before Fable fallbacks
 // (ADR-0034), as given the model it ran on, with no fallback and no refusal
 // recorded. Pure, no I/O.
-import { readFailureReport } from "../agent/failure.ts";
+import { readFailureReport, WEEKLY_LIMIT } from "../agent/failure.ts";
 import type { ModelFallback } from "../loop/fableCap.ts";
 import type { refusalOf } from "../github/client.ts";
 import { readAgentRunResult } from "../agent/result.ts";
@@ -100,9 +100,6 @@ export interface ModelCost {
   readonly costUsd: number | null;
   readonly costBasis: string | null;
 }
-
-/** The `rateLimitType` of the Subscription's weekly limit; the stream reports its five-hour one too. */
-export const WEEKLY_LIMIT = "seven_day";
 
 /** The last weekly-limit reading the stream reported, raw. */
 export interface RateLimitReading {

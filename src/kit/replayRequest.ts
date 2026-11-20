@@ -13,7 +13,7 @@ import { newIssueUrl } from "../loop/followUps.ts";
 import { REPLAY_LABEL } from "../loop/labels.ts";
 import { spelled } from "../loop/readable.ts";
 import { FULL_SHA } from "../skills/lock.ts";
-import { checkEffort, refuseRoleModel } from "./config.ts";
+import { AS_IF_OPTED_IN_TO_FABLE, checkEffort, refuseRoleModel } from "./config.ts";
 import { REPLAY_ROLES, type ReplayRole } from "./runRecord.ts";
 
 /**
@@ -234,6 +234,7 @@ export function readReplayVariable(value: unknown): ReplayVariable | null {
   // Read back through the request field that names it, so it's held to that field's own rules.
   const [key, given] = kind === "kit" ? [KIT_FIELD, sha] : kind === "model" || kind === "effort" ? [`${String(role)}.${kind}`, kind === "model" ? model : effort] : [null, null];
   if (key === null || typeof given !== "string") return null;
-  const field = variableField(key, true);
+  // A plan's variable was accepted where the repo's Kit config was read, so it reads as any repo could accept it.
+  const field = variableField(key, AS_IF_OPTED_IN_TO_FABLE);
   return typeof field === "string" || field.check(given) !== null ? null : field.variable(given);
 }

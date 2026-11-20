@@ -2,7 +2,8 @@
 // they are then held. One pure function, the Kit's one rule for it, so it can
 // change in one place. It takes no clock of its own: the time is passed in.
 import { lastMonthStart } from "../kit/replayFacts.ts";
-import { type RunRecord, WEEKLY_LIMIT } from "../kit/runRecord.ts";
+import { WEEKLY_LIMIT } from "../agent/failure.ts";
+import type { RunRecord } from "../kit/runRecord.ts";
 
 /** How long runs keep going at this pace, and how long they are then held. */
 export type Runway =

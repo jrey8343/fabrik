@@ -19,7 +19,7 @@ import { spelled } from "../loop/readable.ts";
 import type { Verdict } from "../loop/types.ts";
 import { FULL_SHA, shortSha } from "../skills/lock.ts";
 import { armsRunFable } from "../loop/fableCap.ts";
-import { type KitConfig, refuseRoleModel } from "./config.ts";
+import { AS_IF_OPTED_IN_TO_FABLE, type KitConfig, refuseRoleModel } from "./config.ts";
 import {
   eligibleOf,
   type LeftOutTicket,
@@ -206,7 +206,7 @@ export interface ReplayReads {
 export function replayReads(tick: Pick<ReplayTick, "operator" | "issues">, candidates: readonly ReplayCandidate[] | null): ReplayReads {
   const requests = operatorsOpenIssues(tick).flatMap((issue) => {
     // The adapter reads no Kit config of the repo's own, so it reads for a request any repo could accept: the tick weighs the opt-in.
-    const read = replayMarksIn(issue.body) === null ? readReplayRequest(issue.body, true) : null;
+    const read = replayMarksIn(issue.body) === null ? readReplayRequest(issue.body, AS_IF_OPTED_IN_TO_FABLE) : null;
     return read?.ok === true ? [read.request] : [];
   });
   const fabrikShas = requests.flatMap(({ variable }) => (variable.kind === "kit" ? [variable.sha] : []));
@@ -345,7 +345,7 @@ function planOf(
     if (base === undefined) return null;
     if (!base.ok) return `its Kit config at ${shortSha(baseSha)} doesn't resolve under this Kit release: ${base.errors.join("; ")}`;
     const { baseline } = replayArms(base.config, variable, ticket.steppedUp);
-    const refused = refusedFable(baseline, allowFable);
+    const refused = refusedBaselineModel(baseline, allowFable);
     if (refused !== null) return `its Kit config at ${shortSha(baseSha)} runs ${refused}, but this repo's Kit config doesn't opt in to Fable (allow_fable)`;
     const runs = alreadyRuns(baseline, variable);
     return runs === null ? null : `its Kit config at ${shortSha(baseSha)} already runs ${runs}, so its two arms would be the same`;
@@ -359,8 +359,12 @@ function planOf(
   return { plan: { variable, tickets, leftOut }, ruledOut };
 }
 
-/** The baseline's role run on a model this repo's Kit config refuses, as Fable once it no longer opts in, in words; null when there's none. */
-function refusedFable(baseline: ReplayArmSettings, allowFable: boolean): string | null {
+/**
+ * The baseline's role run on a model this repo's Kit config refuses, in
+ * words, such as Fable once it no longer opts in, or `best`; null when
+ * there's none.
+ */
+function refusedBaselineModel(baseline: ReplayArmSettings, allowFable: boolean): string | null {
   const role = REPLAY_ROLES.find((each) => refuseRoleModel(baseline[each].model, allowFable) !== null);
   return role === undefined ? null : `${RUN_NAMES[role]} on ${baseline[role].model}`;
 }

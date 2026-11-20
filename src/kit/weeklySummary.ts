@@ -59,8 +59,8 @@ import {
   type RunRecord,
   runKey,
   type UnreadableRunRecords,
-  WEEKLY_LIMIT,
 } from "./runRecord.ts";
+import { WEEKLY_LIMIT } from "../agent/failure.ts";
 import { NOT_APPLICABLE, type ScoreEntry, type ScoreFile, type ScoreSkip } from "./scorer.ts";
 import { YIELD_KINDS, type YieldKind, type Yields, type YieldShare, yieldsOf } from "./yield.ts";
 
@@ -888,10 +888,11 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
   const input: WeeklySummaryInput = { ...everything, records: records.filter(isLive), scoreFiles: scoreFiles.filter(isLive) };
   const replays = records.filter((record) => !isLive(record));
   // A Fable cap is the Subscription's, whatever run reached it, a Replay arm's included.
-  const fableResets = fableResetsOf(records, optedInToFable(input.kits), input.now);
+  const fable = optedInToFable(input.kits);
+  const fableResets = fableResetsOf(records, fable, input.now);
   const weeks = weeksEndingAt(Date.parse(input.now), input.timeZone);
-  const thisWeek = metricsOf(weeks.thisWeek, input, { latest: true });
-  const lastWeek = metricsOf(weeks.lastWeek, input, { latest: false });
+  const thisWeek = metricsOf(weeks.thisWeek, input, { latest: true, fable });
+  const lastWeek = metricsOf(weeks.lastWeek, input, { latest: false, fable });
   const replaySpend = { thisWeek: replaySpendOf(weeks.thisWeek, replays), lastWeek: replaySpendOf(weeks.lastWeek, replays) };
   const healthOf = (repo: string): LoopHealth | null => {
     const read = input.health.find((health) => health.repo === repo);
@@ -957,7 +958,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       stepUps: change("stepUps"),
       stepUpsByReason: change("stepUpsByReason"),
       steppedUpStarts: change("steppedUpStarts"),
-      fableFallbacks: optedInToFable(input.kits).size === 0 ? null : change("fableFallbacks"),
+      fableFallbacks: fable.size === 0 ? null : change("fableFallbacks"),
     },
     scores: change("scores"),
     scoringCost: change("scoringCost"),
@@ -1049,7 +1050,11 @@ interface WeekMetrics {
   readonly scoringCost: ScoringCost;
 }
 
-function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly latest: boolean }): WeekMetrics {
+function metricsOf(
+  week: Week,
+  input: WeeklySummaryInput,
+  { latest, fable }: { readonly latest: boolean; readonly fable: ReadonlySet<string> },
+): WeekMetrics {
   const records = input.records
     .filter((record) => within(week, record.endedAt))
     .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt));
@@ -1094,7 +1099,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
     steppedUpStarts: steppedUpStartsOf(merged, input.records),
-    fableFallbacks: fableFallbacksIn(records, optedInToFable(input.kits)),
+    fableFallbacks: fableFallbacksIn(records, fable),
     scores: scoresOf(week, input),
     scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };

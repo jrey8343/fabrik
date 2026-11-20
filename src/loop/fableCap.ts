@@ -6,11 +6,11 @@
 // it before the refused run's push job has written its Run record. In a repo
 // that opted in, the Kit job reads the readings in the store's Run records
 // too (src/kit/fableCapFacts.ts), so any run due, not only a re-run, weighs
-// every Subscription's cap. A run whose role
-// names Fable then starts on the first listed Subscription with Fable left,
-// or, with none left, on Opus 5.5 at the role's effort: a Fable fallback. The
-// fallback is per run: it never changes Kit config, and ends on its own once
-// the reading's time has passed. Pure, no I/O.
+// every Subscription's cap. A run whose role names Fable then starts on the
+// first listed Subscription with Fable left, or, with none left, on Opus 5.5
+// at the role's effort: a Fable fallback. The fallback is per run: it never
+// changes Kit config, and ends on its own once the reading's time has passed.
+// Pure, no I/O.
 import { namesFable } from "../kit/config.ts";
 import type { ReplayArms } from "../kit/replayPick.ts";
 import { freeSubscriptions, type Subscription } from "./subscriptions.ts";
@@ -19,6 +19,11 @@ import type { Action, FableCapSnapshot, KitConfig, KitIssueSnapshot, Plan } from
 /** Whether either arm of a Replay runs a role on Fable, so it starts only where Fable is left, and never falls back. */
 export function armsRunFable(arms: ReplayArms): boolean {
   return Object.values(arms).some(({ implement, review }) => namesFable(implement.model) || namesFable(review.model));
+}
+
+/** The model Kit config named for a run it starts: the one a Fable fallback runs Opus in place of, else the model it runs. */
+export function configuredModelOf(run: Pick<Extract<Action, { kind: "start-agent-run" }>, "configuredModel" | "model">): string {
+  return run.configuredModel ?? run.model;
 }
 
 /** The model a Fable fallback starts on, at the effort the role names. */

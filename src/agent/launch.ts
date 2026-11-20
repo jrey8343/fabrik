@@ -10,7 +10,7 @@ import { writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type { AgentStreamEvent } from "@ai-hero/sandcastle";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { type KitConfig, namesFable } from "../kit/config.ts";
+import { isFableRun, type KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
 import type { FailedRunCommits, FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
@@ -185,7 +185,7 @@ export function streamWatch(
   // null until the init message arrives, then the routes it refused (empty when it passed).
   let refused: readonly string[] | null = null;
   // Every Fable run stops on overage, so credits left on by mistake spend nothing (ADR-0034).
-  const stopsOnOverage = rotation || (model !== undefined && namesFable(model));
+  const stopsOnOverage = rotation || isFableRun(model);
   // null until a message shows overage, on a run that stops on it.
   let overage: string | null = null;
   return {

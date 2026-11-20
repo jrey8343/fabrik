@@ -553,6 +553,14 @@ export const KIT_JOB_NAME = "Kit";
 export const REPLAY_ARM_JOB_NAMES = ["Replay implement", "Replay gates", "Replay review", "Replay score"] as const;
 export const REPLAY_RECORD_JOB_NAME = "Replay record";
 
+/** What gatherSnapshot reads beside GitHub, each only where its caller has it (see gatherSnapshot). */
+export interface GatherOptions {
+  readonly store?: Pick<ReadClient, "rest"> | null;
+  readonly replayStore?: ReplayStore | null;
+  readonly storeFableCaps?: readonly FableCapReading[];
+  readonly wait?: (ms: number) => Promise<void>;
+}
+
 /**
  * Reads the current GitHub state the event needs, fresh rather than from the
  * event payload. The Operator is the Kit config's `operator`, or else the
@@ -574,6 +582,9 @@ export const REPLAY_RECORD_JOB_NAME = "Replay record";
  * claim weighs, and nothing of the store. The tick reads the Failure excerpt
  * of each Flaky check's red run it will report (#778): the job and its step's
  * log through `actions`, the annotations on the Fabrik App's Checks: read.
+ * The Kit job of a repo that opted in to Fable passes the Fable cap readings
+ * it read in the store (`storeFableCaps`, ADR-0034), and a test passes its
+ * own `wait` for GitHub's mergeable state.
  */
 export async function gatherSnapshot(
   client: ReadClient,
@@ -582,10 +593,7 @@ export async function gatherSnapshot(
   operator: string | null,
   appLogin: string | null,
   actions: (ReadClient & Pick<LogClient, "logText">) | null = null,
-  store: Pick<ReadClient, "rest"> | null = null,
-  replayStore: ReplayStore | null = null,
-  storeFableCaps: readonly FableCapReading[] = [],
-  wait: (ms: number) => Promise<void> = sleep,
+  { store = null, replayStore = null, storeFableCaps = [], wait = sleep }: GatherOptions = {},
 ): Promise<Snapshot> {
   // A held line is never read as activity or a reply (#471).
   const github = leavingOutHeldLines(client);
