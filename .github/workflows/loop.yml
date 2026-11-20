@@ -323,6 +323,9 @@ jobs:
           # The open issues and those closed in the last 30 days, which Triage compares the issue against for a duplicate (#363).
           FABRIK_RECENT_ISSUES_FILE: ${{ runner.temp }}/recent-issues.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          # The model the Kit job's plan chose, a Fable fallback's Opus included (ADR-0034).
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
         run: node ../kit/src/agent/run.ts triage
 
       - name: Pass the Triage output to the push job
@@ -459,6 +462,9 @@ jobs:
           FABRIK_SPEC_TICKETS_FILE: ${{ runner.temp }}/spec-tickets.json
           FABRIK_FILED_FROM_FILE: ${{ runner.temp }}/filed-from.json
           FABRIK_OUT_DIR: ${{ runner.temp }}/fabrik-out
+          # The model the Kit job's plan chose, a Fable fallback's Opus included (ADR-0034).
+          FABRIK_MODEL: ${{ needs.kit.outputs.model }}
+          FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}
         run: node ../kit/src/agent/run.ts design
 
       - name: Pass the turn's output to the push job

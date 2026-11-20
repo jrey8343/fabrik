@@ -33,6 +33,7 @@ import { noDigestAfter } from "./digest.ts";
 import { heldLineOn, heldRunName } from "./heldLine.ts";
 import { heldInOrder, heldLineIssue, type HoldableRun, holding, RESUME_LABELS, runNamed } from "./heldRun.ts";
 import { heldAfterKill, heldOn, heldUntilThen, startsWhen } from "./hold.ts";
+import { fableCapsInForce } from "./fableCap.ts";
 import { anotherSubscriptionFree, refusedToken, repoWideNotice } from "./kitIssues.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT } from "./labels.ts";
 import { BROKEN_RUN_MARKER, DESIGN_TURN_FAILED_MARKER, type HandBackMark, handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "./markers.ts";
@@ -45,6 +46,7 @@ import {
   type Action,
   type AgentRole,
   type BrokenRun,
+  type FableCapSnapshot,
   type FailedRunCommits,
   type InfrastructureFailure,
   isBrokenRun,
@@ -142,8 +144,11 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
     }
     case "weekly-limit":
       return "it hit the weekly usage limit";
-    case "fable-cap":
-      return `it hit the Fable cap on the \`${subscriptionOfRun(run, config)}\` Subscription`;
+    // Beside a weekly run's, only a refusal the Kit can't re-run, where it had marked the cap reached already, gets a notice (refusedAgain).
+    case "fable-cap": {
+      const capped = `it hit the Fable cap on the \`${subscriptionOfRun(run, config)}\` Subscription`;
+      return isWeeklyRole(run.role) ? capped : `${capped} again, though the Kit had marked it reached, so it isn't re-run on its own`;
+    }
     case "metered-billing":
       return "the preflight found a route that would bill metered API usage, so it refused to start the agent";
     case "usage-credits":
@@ -250,14 +255,18 @@ function heldOnRefusal(
  * Kit-owned issue does the notifying, once, and the comment points there. A
  * Review that stopped because its PR conflicts with main isn't handed back:
  * the Kit brings the PR up to date (afterConflictedReview), from `mergeable`,
- * its own read of the PR, gathered for that failure alone.
+ * its own read of the PR, gathered for that failure alone. A Fable cap is
+ * weighed against the Fable cap readings the snapshot holds (`fableCaps`).
  */
 export function failureNotice(
   run: FailedRun,
   context: IssueContext,
   config: KitConfig,
-  pullRequest: PullRequestSnapshot | null = null,
-  mergeable: MergeableSnapshot | null = null,
+  {
+    pullRequest = null,
+    mergeable = null,
+    fableCaps,
+  }: { readonly pullRequest?: PullRequestSnapshot | null; readonly mergeable?: MergeableSnapshot | null; readonly fableCaps?: FableCapSnapshot } = {},
 ): Plan {
   const { issue, operator } = context;
   const failure = infrastructureFailureOf(run);
@@ -278,7 +287,7 @@ export function failureNotice(
   }
   if (run.role === "review" && failure === "merge-conflict") return conflictedReviewPlan(run, context, config, pullRequest, mergeable);
   // The scheduled tick starts the next Audit or Retro, so a Fable cap fails one as any failure does.
-  if (failure === "fable-cap" && !isWeeklyRole(run.role)) return fableCapRerun(run, context, ranOn);
+  if (failure === "fable-cap" && !isWeeklyRole(run.role) && !refusedAgain(run, ranOn, fableCaps)) return fableCapRerun(run, context, ranOn);
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
     // Its place in the order: a run held before, resumed and refused again, keeps the one it had.
@@ -400,6 +409,24 @@ export function failureNotice(
       ...(repoWide?.actions ?? []),
     ],
   };
+}
+
+/**
+ * Whether a Fable run refused on its Subscription's Fable cap was refused on
+ * one the Fable cap readings already mark (ADR-0034): one still in force, or
+ * one with the same reset, though that has passed. A re-run would start where
+ * this one did, and be refused again, so it isn't re-run: as a weekly-limit
+ * refusal is re-run only while another Subscription is free, its re-run never
+ * repeats. Its notice says so, as for any Infrastructure failure.
+ */
+function refusedAgain(run: FailedRun, { subscription }: RanOn, caps: FableCapSnapshot | undefined): boolean {
+  if (caps === undefined) return false;
+  const resetsAt = run.report?.resetsAt;
+  const live = new Set(fableCapsInForce(caps));
+  return caps.readings.some(
+    (reading) =>
+      reading.subscription === subscription && (live.has(reading) || (resetsAt !== undefined && Date.parse(reading.until) === Date.parse(resetsAt))),
+  );
 }
 
 /**

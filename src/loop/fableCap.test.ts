@@ -119,6 +119,59 @@ describe("A Fable run refused on its Subscription's Fable cap (ADR-0034)", () =>
     ]);
   });
 
+  // As a weekly-limit refusal is re-run once, only while another Subscription is free, so its re-run never repeats.
+  it("isn't re-run again when refused on a Subscription its issue already marks as capped, which a re-run would only repeat", () => {
+    const issue = anIssue({ number: 7, labels: ["ready-for-agent"] });
+
+    const plan = planFor(capped("implement"), snapshotOf(issue, { fableCaps: readAt([{ subscription: "Claude token", until: RESETS_AT }]) }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan).filter((action) => action.kind === "add-labels" || action.kind === "mark-fable-cap")).toEqual([]);
+    expect(notificationsOf(plan)).toEqual(["mention on #7"]);
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "comment",
+      issue: 7,
+      body: expect.stringContaining("it hit the Fable cap on the `Claude token` Subscription again, though the Kit had marked it reached"),
+    });
+  });
+
+  it("is re-run on a cap marked on another Subscription, so a re-run refused on the next one moves on again", () => {
+    const issue = anIssue({ number: 7, labels: ["ready-for-agent"] });
+
+    const plan = planFor(
+      capped("implement", { subscription: "Claude token 2" }),
+      snapshotOf(issue, { fableCaps: readAt([{ subscription: "Claude token", until: RESETS_AT }]) }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+    expect(actionsOf(plan)).toEqual([
+      { kind: "remove-label", issue: 7, label: "agent:implement" },
+      { kind: "mark-fable-cap", issue: 7, subscription: "Claude token 2", resetsAt: RESETS_AT },
+      { kind: "add-labels", issue: 7, labels: ["agent:implement"] },
+    ]);
+  });
+
+  it("isn't re-run again when refused with the reset its issue already marks, though that reset has passed", () => {
+    const issue = anIssue({ number: 7, labels: ["ready-for-agent"] });
+    const passed = "2026-11-19T04:00:00.000Z";
+
+    const plan = planFor(
+      capped("implement", { resetsAt: passed }),
+      snapshotOf(issue, { fableCaps: readAt([{ subscription: "Claude token", until: passed }]) }),
+      TWO_SUBSCRIPTIONS,
+    );
+
+    expect(actionsOf(plan).filter((action) => action.kind === "add-labels" || action.kind === "mark-fable-cap")).toEqual([]);
+    expect(notificationsOf(plan)).toEqual(["mention on #7"]);
+  });
+
+  it("is re-run when its issue marks only an earlier cap on that Subscription, long reset", () => {
+    const issue = anIssue({ number: 7, labels: ["ready-for-agent"] });
+
+    const plan = planFor(capped("implement"), snapshotOf(issue, { fableCaps: readAt([{ subscription: "Claude token", until: "2026-11-13T04:00:00.000Z" }]) }), TWO_SUBSCRIPTIONS);
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["remove-label", "mark-fable-cap", "add-labels"]);
+  });
+
   it("a Digest run isn't re-run: its no-Digest line says so, mentioning nobody, as for any failed Digest run", () => {
     const event: LoopEvent = { ...capped("digest"), digest: { pullRequest: 50, headSha: "a".repeat(40) } } as LoopEvent;
 

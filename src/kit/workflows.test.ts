@@ -2636,6 +2636,26 @@ describe("The Subscription each agent job runs on", () => {
   });
 });
 
+// Any role may name Fable in a repo that opted in (ADR-0034), so every agent job runs the model the Kit job's
+// plan chose, a Fable fallback's Opus included, never its checkout's Kit config's own.
+describe("The model each agent job runs on", () => {
+  it.each(["triage", "design", "prototype", "implement", "review", "audit", "research", "digest"])(
+    "loop.yml's %s job runs its agent on the model and effort the Kit job's plan chose",
+    (name) => {
+      const agent = stepsOf(jobIn(loop, name)).find((step) => step.includes("run: node ../kit/src/agent/run.ts "));
+
+      expect(agent).toContain("FABRIK_MODEL: ${{ needs.kit.outputs.model }}");
+      expect(agent).toContain("FABRIK_EFFORT: ${{ needs.kit.outputs.effort }}");
+    },
+  );
+
+  it("loop.yml's Kit job passes out the model Kit config named and the fallback, which the push job's Run record reads", () => {
+    expect(jobIn(loop, "kit")).toContain("configured-model: ${{ steps.route.outputs.configured-model }}");
+    expect(jobIn(loop, "kit")).toContain("fallback: ${{ steps.route.outputs.fallback }}");
+    expect(jobIn(loop, "push")).toContain("FABRIK_NEEDS: ${{ toJSON(needs) }}");
+  });
+});
+
 // A Replay Ticket's run (#156): the claim, then each arm's Implement, gates, Review and judge jobs as a
 // matrix, then the replay-record job, the replay's own push job (ADR-0009's addendum). The composite actions
 // they run hold their own steps' wiring (src/kit/replayActions.test.ts); these hold the jobs' own.
