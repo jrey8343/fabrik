@@ -43,7 +43,7 @@ export type ReportedFailure =
   | "dead-token"
   | "weekly-limit"
   | "metered-billing"
-  /** With rotation on, the stream watch stopped a run whose stream showed overage. */
+  /** With rotation on, or on a Fable run (ADR-0034), the stream watch stopped a run whose stream showed overage. */
   | "usage-credits"
   /** The Kit's input step couldn't read the agent's inputs from GitHub, so the agent never started (#328). */
   | "unread-inputs"

@@ -95,9 +95,9 @@ export function repoWideNotice(
       return deadToken(snapshot, stalled);
     case "weekly-limit":
       return stalled.rotation ? subscriptionWeeklyLimit(snapshot, stalled) : weeklyLimit(snapshot, stalled);
-    // Only with rotation on does the stream watch kill a run for spending usage credits.
+    // The stream watch kills a run for spending usage credits with rotation on, or a Fable run with it off (ADR-0034).
     case "usage-credits":
-      return stalled.rotation ? usageCreditsNotice(snapshot, stalled) : null;
+      return usageCreditsNotice(snapshot, stalled);
     default:
       return null;
   }

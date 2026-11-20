@@ -109,6 +109,56 @@ describe("A run killed for spending usage credits, with rotation on", () => {
   });
 });
 
+describe("A Fable run killed for spending usage credits, with rotation off (ADR-0034)", () => {
+  const ONE_SUBSCRIPTION = kitConfig({ allowFable: true });
+
+  it("opens its Subscription's usage-credits issue, assigned to the Operator as the one notification, and the failure comment points there", () => {
+    const plan = planFor(killed("review"), snapshotOf(anIssue({ number: 7 })), ONE_SUBSCRIPTION);
+
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "open-issue",
+      title: "Turn off usage credits on the `Claude token` Subscription",
+      body: expect.stringContaining("- [ ] Turn usage credits off on the Claude account whose token is the `Claude token` item"),
+      labels: ["ready-for-human", "fabrik:usage-credits"],
+      assignees: ["operator"],
+    });
+    expect(notificationsOf(plan)).toEqual(['assign new "Turn off usage credits on the `Claude token` Subscription"']);
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "comment",
+      issue: 7,
+      body: expect.stringContaining("The Kit has opened a Turn off usage credits on the `Claude token` Subscription issue for the Operator."),
+    });
+  });
+
+  it("names the Subscription in the issue's marker, so the Kit keeps off it until the Operator closes the issue", () => {
+    const issue = kitIssueOpenedBy(planFor(killed("triage"), snapshotOf(anIssue({ number: 7 })), ONE_SUBSCRIPTION), 60);
+
+    expect(issue.body).toContain("<!-- fabrik:subscription Claude token -->");
+    expect(issue.body).toContain("- [ ] Close this issue");
+    expect(issue.body).not.toContain("other Subscription");
+  });
+
+  it("isn't re-run: with no other Subscription, its failure comment says how to run it again", () => {
+    const plan = planFor(killed("implement"), snapshotOf(anIssue({ number: 7 })), ONE_SUBSCRIPTION);
+
+    expect(actionsOf(plan).filter((action) => action.kind === "add-labels" || action.kind === "hold-agent-run")).toEqual([]);
+    expect(actionsOf(plan)).toContainEqual({ kind: "comment", issue: 7, body: expect.stringContaining("Re-add `agent:implement` on this Ticket to run it again.") });
+  });
+
+  it("a second kill comments quietly on the open usage-credits issue, and opens none", () => {
+    const open = kitIssueOpenedBy(planFor(killed("triage"), snapshotOf(anIssue({ number: 7 })), ONE_SUBSCRIPTION), 60);
+
+    const plan = planFor(killed("triage", { issue: 8 }), snapshotOf(anIssue({ number: 8 }), { kitIssues: [open] }), ONE_SUBSCRIPTION);
+
+    expect(notificationsOf(plan)).toEqual([]);
+    expect(actionsOf(plan)).toContainEqual({
+      kind: "comment",
+      issue: 60,
+      body: `The Triage run on #8 was killed for spending usage credits too. [The run](${RUN})`,
+    });
+  });
+});
+
 /** An open weekly-limit issue on `subscription`, the one that buzzed the Operator. */
 function weeklyLimitIssue(number: number, subscription: string): KitIssueSnapshot {
   return {
@@ -444,14 +494,5 @@ describe("Scenario: an Implement run killed for spending while no other Subscrip
     );
 
     expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
-  });
-});
-
-describe("A run killed for spending usage credits, with one Subscription listed", () => {
-  it("gets a V1 failure comment that @-mentions the Operator, and no Kit-owned issue", () => {
-    const plan = planFor(killed("triage"), snapshotOf(anIssue({ number: 7 })), kitConfig());
-
-    expect(notificationsOf(plan)).toEqual(["mention on #7"]);
-    expect(actionsOf(plan).filter((action) => action.kind === "open-issue")).toEqual([]);
   });
 });
