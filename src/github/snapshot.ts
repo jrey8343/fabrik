@@ -3128,33 +3128,56 @@ interface ListedJob {
 export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, repo: Repo): Promise<ActionsJob[]> {
   const base = `/repos/${repo.owner}/${repo.name}/actions`;
   const since = new Date(Date.now() - RUNS_IN_FLIGHT_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
-  const listed = await allPages<ListedWorkflowRun>(
-    github,
-    `${base}/runs?created=${encodeURIComponent(`>=${since}`)}&exclude_pull_requests=true`,
-    (page) => (page as { workflow_runs: ListedWorkflowRun[] }).workflow_runs,
-  );
+  const listed = await workflowRunsListed(github, `${base}/runs?created=${encodeURIComponent(`>=${since}`)}&exclude_pull_requests=true`);
   // A run listed on two pages, as one created while paging shifts the rest along, is read once.
   const runs = new Map(listed.filter(({ status }) => status !== "completed").map((run) => [run.id, run]));
-  const jobs: ActionsJob[] = [];
-  for (const [id, run] of runs) {
-    const page = (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] };
-    const runUrl = run.html_url ?? `https://github.com/${repo.owner}/${repo.name}/actions/runs/${id}`;
-    jobs.push(
-      ...page.jobs.map((job) => ({
-        run: id,
-        attempt: run.run_attempt ?? 1,
-        createdAt: run.created_at,
-        runUrl,
-        name: job.name,
-        status: job.status,
-        conclusion: job.conclusion ?? null,
-        startedAt: job.status === "in_progress" || job.status === "completed" ? (job.started_at ?? null) : null,
-        url: job.html_url ?? runUrl,
-        steps: (job.steps ?? []).map((step) => ({ name: step.name, status: step.status, conclusion: step.conclusion ?? null })),
-      })),
-    );
+  const pages = await Promise.all(
+    [...runs.keys()].map(async (id) => (await github.rest("GET", `${base}/runs/${id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] }),
+  );
+  return [...runs.values()].flatMap((run, i) => {
+    const runUrl = run.html_url ?? `https://github.com/${repo.owner}/${repo.name}/actions/runs/${run.id}`;
+    return (pages[i]?.jobs ?? []).map((job) => ({
+      run: run.id,
+      attempt: run.run_attempt ?? 1,
+      createdAt: run.created_at,
+      runUrl,
+      name: job.name,
+      status: job.status,
+      conclusion: job.conclusion ?? null,
+      startedAt: job.status === "in_progress" || job.status === "completed" ? (job.started_at ?? null) : null,
+      url: job.html_url ?? runUrl,
+      steps: (job.steps ?? []).map((step) => ({ name: step.name, status: step.status, conclusion: step.conclusion ?? null })),
+    }));
+  });
+}
+
+/** The most runs a page of the runs listing holds, which the runs read asks for. */
+const RUNS_PER_PAGE = 100;
+
+/** The most pages of runs GitHub lists for a `created` bound, 1,000 runs, whatever its `total_count` says. */
+const MOST_RUNS_PAGES = 10;
+
+/**
+ * Every run the listing at `path` gives, page after page, as `allPages` reads
+ * it, but with the pages after the first asked for side by side (#836): the
+ * first page's `total_count` says how many there are, up to GitHub's ten.
+ * While the last page read comes back full, the next is asked for, one at a
+ * time, until one comes back short, which finds a run that a newer one
+ * pushed onto a further page while the listing was read. A first page with
+ * no count is read page by page.
+ */
+async function workflowRunsListed(github: Pick<ReadClient, "rest">, path: string): Promise<ListedWorkflowRun[]> {
+  const pageAt = async (page: number) =>
+    (await github.rest("GET", `${path}&per_page=${RUNS_PER_PAGE}&page=${page}`)) as { total_count?: unknown; workflow_runs: ListedWorkflowRun[] };
+  const first = await pageAt(1);
+  const pages = [first.workflow_runs];
+  if (typeof first.total_count === "number" && first.workflow_runs.length === RUNS_PER_PAGE) {
+    const counted = Math.min(Math.ceil(first.total_count / RUNS_PER_PAGE), MOST_RUNS_PAGES);
+    const rest = Array.from({ length: counted - 1 }, (_, i) => i + 2);
+    pages.push(...(await Promise.all(rest.map(async (page) => (await pageAt(page)).workflow_runs))));
   }
-  return jobs;
+  while (pages.at(-1)?.length === RUNS_PER_PAGE) pages.push((await pageAt(pages.length + 1)).workflow_runs);
+  return pages.flat();
 }
 
 /** Reads the Kit config folder's files from the Product repo at `ref`, through the API. */
