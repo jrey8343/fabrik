@@ -598,7 +598,8 @@ function changedTestsOf(pullRequest: PullRequestSnapshot, changes: BranchChanges
 }
 
 /**
- * The evidence section for the run's PR, or null when the run isn't UI. The
+ * The evidence section for the run's PR, or null when the run isn't UI, or
+ * when its UI evidence comes from Evidence shots, which no capture here takes. The
  * push job decides that, never the agent job, whose runner the agent could
  * have changed: the run is UI when its changes match `ui.paths`, or when its
  * PR is `marked` UI already, a retry's changes holding only its own commits.
@@ -606,7 +607,8 @@ function changedTestsOf(pullRequest: PullRequestSnapshot, changes: BranchChanges
  */
 function evidenceFor(event: ImplementRunFinished, config: KitConfig, marked: boolean, paths: readonly { readonly path: string }[] = event.changes.net): string | null {
   const { evidence } = event;
-  if (evidence === undefined) return null;
+  // With Evidence shots, the Implement job captures nothing, so no capture of its own is missing (#818).
+  if (evidence === undefined || config.ui?.shots !== undefined) return null;
   if (!marked && !isUi(paths.map(({ path }) => path), config.ui)) return null;
   const { result, headSha, run, artifact, evidencePage } = evidence;
   return evidenceSection({

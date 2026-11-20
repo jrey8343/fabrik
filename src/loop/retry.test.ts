@@ -649,6 +649,14 @@ describe("The evidence section on a retry's PR", () => {
 
     expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state.\n\nCloses #7" });
   });
+
+  it("isn't on a PR marked UI in a repo whose UI evidence comes from Evidence shots, whose Implement job captures nothing", () => {
+    const fromShots = kitConfig({ ui: { ...UI, defaultRoutes: [], shots: { check: "e2e", artifact: "fabrik-evidence-shots" } } });
+
+    const actions = actionsOf(planFor(copyingForward({ evidence: anEvidence(undefined) }), retrySnapshot(markedUi()), fromShots));
+
+    expect(actions[0]).toEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state.\n\nCloses #7" });
+  });
 });
 
 describe("The preview deployment of a retry's PR", () => {

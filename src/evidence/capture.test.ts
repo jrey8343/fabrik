@@ -96,6 +96,14 @@ describe("Capturing UI evidence", () => {
     expect(calls).toEqual([]);
   });
 
+  it("captures no routes when UI evidence comes from Evidence shots, installing, building and serving nothing", async () => {
+    const { capturer, calls } = runner();
+    const fromShots = { ...ui, beforeUrl: null, defaultRoutes: [], shots: { check: "e2e", artifact: "fabrik-evidence-shots" } };
+
+    expect(await captureEvidence(input({ ui: fromShots }), capturer)).toEqual({ kind: "off" });
+    expect(calls).toEqual([]);
+  });
+
   it("captures nothing when the branch changes no ui.paths file against the default branch", async () => {
     const { capturer, calls } = runner({ changedPaths: async () => ["src/lib/booking.ts", "README.md"] });
 

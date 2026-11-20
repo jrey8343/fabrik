@@ -139,6 +139,24 @@ describe("Capturing a prototype turn's variants", () => {
     ]);
   });
 
+  it("captures the variants as it does without Evidence shots in a Product repo whose UI evidence comes from them", async () => {
+    const { capturer, calls } = runner();
+    const fromShots = { ...ui, beforeUrl: null, defaultRoutes: [], shots: { check: "e2e", artifact: "fabrik-evidence-shots" } };
+
+    const outcome = await capturePrototype(input({ ui: fromShots, variants: ["A"] }), capturer);
+
+    expect(outcome).toEqual({ kind: "recorded", result: { outcome: "captured", headSha: HEAD, captures: [variantA, variantAWide] } });
+    expect(calls).toEqual([
+      "install-browser",
+      "build npm run build",
+      "free-port http://127.0.0.1:4321/",
+      "serve node ./dist/server/entry.mjs at http://127.0.0.1:4321/",
+      "record http://127.0.0.1:4321/book?variant=A at mobile as variant-a-mobile.png and variant-a-mobile.webm",
+      "record http://127.0.0.1:4321/book?variant=A at desktop as variant-a-desktop.png and variant-a-desktop.webm",
+      "stop",
+    ]);
+  });
+
   it("keeps a variant's screenshot without a video when its video wasn't saved, and still counts the capture as captured", async () => {
     const { capturer } = runner({ recordVariant: async () => ({ status: 200, video: false }) });
 

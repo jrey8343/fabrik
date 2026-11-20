@@ -1658,6 +1658,135 @@ describe("The ui and preview blocks, which Visual evidence reads", () => {
   });
 });
 
+describe("The ui block's shots, which says UI evidence comes from Evidence shots", () => {
+  /** A Kit config whose sandbox requires e2e and lint, and whose ui block is valid with these fields changed; undefined leaves one out. */
+  function withShots(changes: Record<string, unknown>): string {
+    return JSON.stringify({
+      sandbox: { checks: ["e2e", "lint"] },
+      ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", ...changes },
+    });
+  }
+
+  it("resolves the check and the artifact's name", () => {
+    const result = resolveKitConfig({ config: withShots({ shots: { check: "e2e", artifact: "clinic-shots" } }) });
+
+    expect(result.ok && result.config.ui?.shots).toEqual({ check: "e2e", artifact: "clinic-shots" });
+  });
+
+  it("names the artifact fabrik-evidence-shots when the block leaves it out", () => {
+    const result = resolveKitConfig({ config: withShots({ shots: { check: "e2e" } }) });
+
+    expect(result.ok && result.config.ui?.shots).toEqual({ check: "e2e", artifact: "fabrik-evidence-shots" });
+  });
+
+  it("refuses a check that isn't one of sandbox.checks, naming the check and the list", () => {
+    const result = resolveKitConfig({ config: withShots({ shots: { check: "unit" } }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`ui.shots.check is "unit": it must be one of sandbox.checks, e2e and lint, since that check's run uploads the Evidence shots`],
+    });
+  });
+
+  it("refuses a check when sandbox.checks lists none", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ ui: { paths: ["src/**"], serve: "npm run preview", url: "http://localhost:4321", shots: { check: "e2e" } } }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`ui.shots.check is "e2e": it must be one of sandbox.checks, which lists none, since that check's run uploads the Evidence shots`],
+    });
+  });
+
+  it.each([
+    [{ check: undefined }, "ui.shots.check is missing"],
+    [{ check: 1 }, "ui.shots.check must be a string"],
+    [{ check: " " }, `ui.shots.check is " ": a check's name can't be blank`],
+    [{ check: "e2e\nlint" }, `ui.shots.check is "e2e\\nlint": a check's name is one line`],
+    [{ artifact: "" }, `ui.shots.artifact is "": an artifact's name can't be blank`],
+    [{ artifact: "shots\r\n" }, `ui.shots.artifact is "shots\\r\\n": an artifact's name is one line`],
+    [{ artifact: null }, "ui.shots.artifact must be a string"],
+    [{ video: true }, "ui.shots.video is not a Kit config field"],
+  ])("refuses a missing, blank or many-line check or artifact, or a field the block doesn't have, naming it: %j", (changes, error) => {
+    const result = resolveKitConfig({ config: withShots({ shots: { check: "e2e", ...changes } }) });
+
+    expect(result).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([["e2e"], [["e2e"]]])("refuses a shots that isn't an object: %j", (shots) => {
+    expect(resolveKitConfig({ config: withShots({ shots }) })).toEqual({ ok: false, errors: ["ui.shots must be an object or null"] });
+  });
+
+  it.each([
+    [{ default_routes: ["/", "/book"] }, "ui.default_routes"],
+    [{ default_routes: [] }, "ui.default_routes"],
+    [{ before_url: "https://penrithphysio.com.au" }, "ui.before_url"],
+    [{ before_url: null }, "ui.before_url"],
+    [{ resolve_route: "pnpm resolve-route" }, "ui.resolve_route"],
+  ])("refuses a field only route capture reads beside shots, naming it: %j", (changes, field) => {
+    const result = resolveKitConfig({ config: withShots({ shots: { check: "e2e" }, ...changes }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`${field} is set, but so is ui.shots: route capture's fields can't be set when UI evidence comes from Evidence shots`],
+    });
+  });
+
+  it("names each route capture field beside shots in its own message, without reading their values", () => {
+    const result = resolveKitConfig({
+      config: withShots({ shots: { check: "e2e" }, default_routes: ["book"], before_url: "ftp://x", resolve_route: " " }),
+    });
+
+    expect(!result.ok && result.errors).toEqual([
+      "ui.before_url is set, but so is ui.shots: route capture's fields can't be set when UI evidence comes from Evidence shots",
+      "ui.default_routes is set, but so is ui.shots: route capture's fields can't be set when UI evidence comes from Evidence shots",
+      "ui.resolve_route is set, but so is ui.shots: route capture's fields can't be set when UI evidence comes from Evidence shots",
+    ]);
+  });
+
+  it("reads paths, serve, url and the sign-in fields beside shots as it does without them, since a prototype turn still captures with them", () => {
+    const result = resolveKitConfig({
+      config: withShots({
+        shots: { check: "e2e" },
+        sign_in: { owner: "pnpm sign-in owner" },
+        sign_in_path: "/sign-in",
+        signed_in_routes: [{ route: "/**", as: "owner" }],
+      }),
+    });
+
+    expect(result.ok && result.config.ui).toEqual({
+      paths: ["src/**"],
+      serve: "npm run preview",
+      url: "http://localhost:4321",
+      beforeUrl: null,
+      defaultRoutes: [],
+      signIn: { owner: "pnpm sign-in owner" },
+      signInPath: "/sign-in",
+      signedInRoutes: [{ route: "/**", as: "owner" }],
+      shots: { check: "e2e", artifact: "fabrik-evidence-shots" },
+    });
+  });
+
+  it("resolves a ui block with no shots exactly as before", () => {
+    const result = resolveKitConfig({ config: withShots({ before_url: "https://penrithphysio.com.au", default_routes: ["/"] }) });
+
+    expect(result.ok && result.config.ui).toEqual({
+      paths: ["src/**"],
+      serve: "npm run preview",
+      url: "http://localhost:4321",
+      beforeUrl: "https://penrithphysio.com.au",
+      defaultRoutes: ["/"],
+    });
+  });
+
+  it("resolves a null shots as no shots", () => {
+    const result = resolveKitConfig({ config: withShots({ shots: null }) });
+
+    expect(result.ok && result.config.ui !== null && "shots" in result.config.ui).toBe(false);
+  });
+});
+
 describe("The production block, which says where a Product repo's production is", () => {
   it.each([`{}`, `{ "production": null }`])("declares no production for %s, and is valid", (text) => {
     expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });

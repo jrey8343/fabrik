@@ -439,6 +439,15 @@ describe("The evidence section on a first run's draft PR", () => {
     expect(openedBody(planFor(event, snapshotOf(readyTicket()), config))).toBe("Adds a waitlist to full days.\n\nCloses #7");
   });
 
+  it("isn't there on a UI run in a repo whose UI evidence comes from Evidence shots, whose Implement job captures nothing, so it never says capture left no result", () => {
+    const fromShots = kitConfig({ ui: { ...UI, defaultRoutes: [], shots: { check: "e2e", artifact: "fabrik-evidence-shots" } } });
+
+    const plan = planFor(uiRun(anEvidence(undefined, { artifact: null, evidencePage: null })), snapshotOf(readyTicket()), fromShots);
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["push-branch", "open-pull-request"]);
+    expect(openedBody(plan)).toBe("Adds a waitlist to full days.\n\nCloses #7");
+  });
+
   it("isn't there in a repo with no ui block, whose capture step passes out nothing, so the PR opens exactly as it did before UI evidence", () => {
     const capturedNothing = uiRun(anEvidence(undefined, { artifact: null, evidencePage: null }));
     const { evidence: _, ...beforeUiEvidence } = capturedNothing;
