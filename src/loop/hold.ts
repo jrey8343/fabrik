@@ -2,6 +2,9 @@
 // listed Subscription is used up, through any mix of weekly limits, usage
 // credits and dead tokens, each run due is held instead of started, and a run
 // refused, or killed, while none is free is held instead of re-run (#470).
+// With rotation off, an open usage-credits issue holds them the same way, as
+// for a Fable run killed for overage (ADR-0034): the Kit keeps off its
+// Subscription until the Operator closes it.
 // The held marker naming it goes, quietly, on a carrier: the weekly-limit
 // issue that buzzed the Operator, else the first to reset, and it is held
 // until the earliest reset across them. With no weekly-limit issue open it
@@ -14,7 +17,7 @@
 import { type HeldUntil, heldLineOn, heldRunName } from "./heldLine.ts";
 import { carriesHeldMarkers, heldInOrder, heldMarker, heldRunOf, type HoldableRun, holding, isCarrier, runNamed } from "./heldRun.ts";
 import { earliestOf, notified, resetsAtOf } from "./kitIssueMarks.ts";
-import { WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { readable } from "./readable.ts";
 import { freeSubscriptions, rotationIsOn } from "./subscriptions.ts";
 import type { Action, KitConfig, KitIssueSnapshot, Plan } from "./types.ts";
@@ -52,8 +55,8 @@ export function heldUntilFreeLine(held: HoldableRun): string {
 }
 
 /**
- * With rotation on and every listed Subscription used up, the Plan with each
- * run it would start held instead: its trigger label off, a quiet comment
+ * While runs due are held (runsDueAreHeld), the Plan with each run it would
+ * start held instead: its trigger label off, a quiet comment
  * naming it on its carrier (holdingOn), and the held line on its own issue or
  * PR (#471). No @-mention. Every other action, and every Plan that starts no run, is left
  * as it is.
@@ -93,14 +96,27 @@ export function heldWhileUsedUp(
 /**
  * Whether a run due now is held rather than started (heldWhileUsedUp): with
  * rotation on, while every listed Subscription is used up, through any mix of
- * weekly-limit, usage-credits and token-rotation issues (#470). An Auditor or
+ * weekly-limit, usage-credits and token-rotation issues (#470); with it off,
+ * while a usage-credits issue keeps the one Subscription off as well, since
+ * usage credits are on there and only the Operator can turn them off
+ * (ADR-0034). A weekly-limit or token-rotation issue alone, with rotation
+ * off, holds nothing, as in V1. An Auditor or
  * Retro run is never held: its pending issue fails instead
  * (src/loop/weeklyRuns.ts). Nor is a Digest run: where this says a run
  * would be held, the Merge gate opens with the no-Digest line instead
  * (src/loop/digest.ts).
  */
 export function runsDueAreHeld(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {
-  return rotationIsOn(config) && freeSubscriptions(kitIssues, config).length === 0 && holdingOn(kitIssues, null) !== null;
+  return holdsRuns(kitIssues, config) && freeSubscriptions(kitIssues, config).length === 0 && holdingOn(kitIssues, null) !== null;
+}
+
+/**
+ * Whether the Kit holds runs at all while no Subscription is free: always
+ * with rotation on, and with it off only while a usage-credits issue is
+ * open (ADR-0034).
+ */
+export function holdsRuns(kitIssues: readonly KitIssueSnapshot[], config: Pick<KitConfig, "subscriptions">): boolean {
+  return rotationIsOn(config) || kitIssues.some((issue) => issue.labels.includes(USAGE_CREDITS_LABEL));
 }
 
 /**
@@ -191,7 +207,8 @@ export function heldAgain(runs: readonly HoldableRun[], kitIssues: readonly KitI
 
 /**
  * With rotation on, a run killed for spending usage credits, or refused on a
- * dead token, while no other Subscription is free, held: its trigger label
+ * dead token, while no other Subscription is free, held, and with it off, a
+ * Fable run killed for spending usage credits (ADR-0034): its trigger label
  * off, and a quiet line naming it on its carrier, then `notice`, the actions
  * on its usage-credits or token-rotation issue, then the held line, naming it
  * as `name`, on its own issue or PR (#471). With no weekly-limit issue open

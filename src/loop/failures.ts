@@ -230,7 +230,9 @@ function resumeAfter(failure: InfrastructureFailure, run: FailedRun, resume: str
  * With rotation on, the run a weekly-limit refusal, a kill for spending usage
  * credits or a dead token holds rather than fails, or null: a run of any role
  * but the Auditor's or the Retro's, which are never held, while no other
- * Subscription is free.
+ * Subscription is free. With rotation off, only a kill for spending usage
+ * credits holds its run, on the usage-credits issue that keeps the Kit off its
+ * one Subscription until the Operator closes it (ADR-0034).
  */
 function heldOnRefusal(
   run: FailedRun,
@@ -238,7 +240,7 @@ function heldOnRefusal(
   { issue, kitIssues }: IssueContext,
   ranOn: RanOn,
 ): HoldableRun | null {
-  if (!ranOn.rotation || !RERUN_FAILURES.includes(failure)) return null;
+  if (!RERUN_FAILURES.includes(failure) || (!ranOn.rotation && failure !== "usage-credits")) return null;
   // The tick can't start an Auditor or Retro run at the reset, so its issue fails, and the tick opens the next one.
   if (isWeeklyRole(run.role)) return null;
   if (anotherSubscriptionFree(kitIssues, ranOn)) return null;

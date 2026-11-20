@@ -1,5 +1,6 @@
-// Resuming held runs: with rotation on, once a Subscription is free, the held
-// runs resume, in the order each was first held (#439). The scheduled tick
+// Resuming held runs: once a Subscription is free, the held runs, with
+// rotation on, or with it off those held on a usage-credits issue (ADR-0034),
+// resume, in the order each was first held (#439). The scheduled tick
 // resumes them when it closes a weekly-limit issue at its reset, and on any
 // tick that finds a Subscription free some other way, as when the Operator
 // closed a usage-credits issue the Loop missed, or listed another
@@ -46,7 +47,7 @@
 import type { HoldEnded } from "./heldLine.ts";
 import { auditMarksIn } from "./markers.ts";
 import { type HeldRun, type HoldableRun, isCarrier, resumedMarker, runNamed, type Waiting, waitingHeldRuns } from "./heldRun.ts";
-import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, RESEARCH_DECISION_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
+import { AUDIT_LABEL, isStateLabel, NEEDS_DESIGN, READY_FOR_AGENT, RESEARCH_DECISION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "./labels.ts";
 import { freeSubscriptions, rotationIsOn } from "./subscriptions.ts";
 import type { Action, HeldTargetSnapshot, KitConfig, KitIssueSnapshot, Plan, Snapshot } from "./types.ts";
 import { failedHeldAudit } from "./weeklyRuns.ts";
@@ -63,11 +64,12 @@ import { heldAgain } from "./hold.ts";
  * resume, even while another issue keeps that Subscription used up (#440).
  * The tick's closedCarriers, those closed in the last 7 days, are read too,
  * by the ordinary rule (#533). While every Subscription is used up, the runs
- * held only on a closed carrier are held again on an open one. With rotation
- * off, or with no run waiting, it is left as it is.
+ * held only on a closed carrier are held again on an open one. With no run
+ * waiting, as with rotation off and no usage-credits issue ever open, it is
+ * left as it is.
  */
 export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConfig, closed: number | null = null): Plan {
-  if (plan.kind === "fail" || !rotationIsOn(config)) return plan;
+  if (plan.kind === "fail") return plan;
   const planned = plan.kind === "act" ? plan.actions : [];
   // A carrier closed by hand has left kitIssues, so the snapshot holds it apart (#440, #470).
   const closedCarrier = snapshot.closedKitIssue?.number === closed ? snapshot.closedKitIssue : null;
@@ -78,7 +80,9 @@ export function resumingHeldRuns(plan: Plan, snapshot: Snapshot, config: KitConf
   for (const issue of [...open, ...(closedCarrier === null ? [] : [closedCarrier]), ...(snapshot.closedCarriers ?? [])]) {
     if (!byNumber.has(issue.number)) byNumber.set(issue.number, issue);
   }
-  const limits = [...byNumber.values()].filter(isCarrier).sort((a, b) => a.number - b.number);
+  // With rotation off, only a usage-credits issue holds runs (ADR-0034): a V1 weekly-limit issue's reset resumes nothing.
+  const holding = (issue: KitIssueSnapshot) => isCarrier(issue) && (rotationIsOn(config) || issue.labels.includes(USAGE_CREDITS_LABEL));
+  const limits = [...byNumber.values()].filter(holding).sort((a, b) => a.number - b.number);
   const closing = new Set(planned.flatMap((action) => (action.kind === "close" ? [action.issue] : [])));
   const stillOpen = snapshot.kitIssues.filter((issue) => issue.number !== closed && !closing.has(issue.number));
   // The Operator closing a weekly-limit issue says its Subscription works again, whatever else is open (#440).
