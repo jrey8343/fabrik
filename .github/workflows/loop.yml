@@ -124,6 +124,10 @@ jobs:
       # The model and effort the plan chose for its agent run, a Step-up included.
       model: ${{ steps.route.outputs.model }}
       effort: ${{ steps.route.outputs.effort }}
+      # For its Run record (ADR-0034): the model Kit config named, and "fable-cap" when the run falls back to Opus
+      # from it because no Subscription has Fable left (empty otherwise).
+      configured-model: ${{ steps.route.outputs.configured-model }}
+      fallback: ${{ steps.route.outputs.fallback }}
       # Which run the plan started, for its Run record: its Retry number (0 for none), "true"
       # or "false" for whether it Steps up and whether it's the Operator's Request-changes run,
       # and why it Steps up (retry, marked, request-changes or conflict-only; empty for none).

@@ -21,14 +21,26 @@
 // before Full Reviews were recorded, with a null `fullReview`, and a schema
 // 1 to 11 record written before findings were tagged, with null
 // `findingTags`, and one written before Touch-ups were recorded, with
-// `touchUp` 0. Pure, no I/O.
+// `touchUp` 0, and a schema 1 to 11 record, written before Fable fallbacks
+// (ADR-0034), as given the model it ran on, with no fallback and no refusal
+// recorded. Pure, no I/O.
 import { readFailureReport } from "../agent/failure.ts";
+import type { ModelFallback } from "../loop/fableCap.ts";
 import type { refusalOf } from "../github/client.ts";
 import { readAgentRunResult } from "../agent/result.ts";
 import { readStream, type StreamMessage } from "../agent/stream.ts";
 import { brokenRunOf, infrastructureFailureOf } from "../loop/failures.ts";
 import { firstSubscription } from "../loop/subscriptions.ts";
-import { type AgentRole, type BrokenRun, type FindingTagCounts, type InfrastructureFailure, type KitConfig, type StepUpReason, type Verdict } from "../loop/types.ts";
+import {
+  type AgentRole,
+  type BrokenRun,
+  type FindingTagCounts,
+  type InfrastructureFailure,
+  type KitConfig,
+  type RateLimitRefusal,
+  type StepUpReason,
+  type Verdict,
+} from "../loop/types.ts";
 import { parseVerdict, verdictTagsOf } from "../loop/verdict.ts";
 import { DIGEST_JOB, isPrototypeTurn, type NeededJob, type Needs, pushJobInput, RERUN_WAIT_JOB, RETRO_EVIDENCE_JOB, routedJob, stepUpReasonOf } from "./pushJob.ts";
 
@@ -147,9 +159,10 @@ export type RunRecordRole = AgentRole | "score";
  * The schema a Run record is written at: 2 added `subscription`, 3 added
  * `prototype`, 4 added `replay`, 5 added `stepUpReason`, 6 added `emptyDiff`,
  * 7 added `keptBranch`, 8 added `brokenRun`, 9 added `landing`, 10 added
- * `pushed`, 11 added `fullReview`, `findingTags` and `touchUp`.
+ * `pushed`, 11 added `fullReview`, `findingTags` and `touchUp`, 12 added
+ * `configuredModel`, `fallback` and `refusal`.
  */
-export const RUN_RECORD_SCHEMA = 11;
+export const RUN_RECORD_SCHEMA = 12;
 
 /** A Replay's two arms (#156): the baseline, run as the Ticket was built, and the variant, with the one variable changed. */
 export type ReplayArm = "baseline" | "variant";
@@ -237,8 +250,20 @@ export interface RunRecord {
   readonly issue: number;
   readonly pullRequest: number | null;
   readonly endedAt: string;
+  /** The model the run was started on. */
   readonly model: string;
   readonly effort: string | null;
+  /**
+   * The model Kit config named for the run (ADR-0034): `model` too, but on a
+   * Fable fallback, which ran Opus in its place. A schema 1 to 11 record,
+   * written before Fable fallbacks, reads as `model`.
+   */
+  readonly configuredModel: string;
+  /**
+   * Why `model` isn't `configuredModel`: `fable-cap` when no Subscription had
+   * Fable left, else null. A schema 1 to 11 record reads as null.
+   */
+  readonly fallback: ModelFallback | null;
   /**
    * The Subscription the run used: the `Fabrik` vault item name its Claude
    * token came from, never the secret. A judge run's is the scored run's.
@@ -292,6 +317,15 @@ export interface RunRecord {
   readonly terminalReason: string | null;
   /** null, or the Infrastructure failure, classified as the failure notice classifies it. */
   readonly infrastructureFailure: InfrastructureFailure | null;
+  /**
+   * For a run the provider refused on a rate limit, Fable cap or not, that
+   * limit raw, as its failure report kept it from the stream: its
+   * `rateLimitType` and `resetsAt`, beside `rateLimit`, the last weekly-limit
+   * reading. A `fable-cap` failure with this is a Fable cap reading for the
+   * record's Subscription (ADR-0034). null for any other run, and for a
+   * schema 1 to 11 record, written before refusals were recorded.
+   */
+  readonly refusal: RateLimitRefusal | null;
   /**
    * null, or how the Implement run was a Broken run (#434), which is never an
    * Infrastructure failure, classified as the failure notice classifies it. A
@@ -411,6 +445,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
   const { recordPath, transcriptPath } = pathsFor({ ...end, role, replay: null }, end.transcript !== null);
   const implement = role === "implement";
   const landing = landingOf(end.loopOutcome, end.landingFailed);
+  const model = whatRan(agent, kit, end.roles[role]);
   const facts: RunFacts = {
     kitSha: end.kitSha,
     repo: end.repo,
@@ -420,7 +455,8 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     issue,
     pullRequest,
     endedAt: end.endedAt,
-    ...whatRan(agent, kit, end.roles[role]),
+    ...model,
+    ...givenModelOf(kit, model.model),
     subscription: nonEmpty(kit["subscription"]) ?? firstSubscription({ subscriptions: end.subscriptions }),
     retry: implement ? (countOf(kit["retry"]) ?? 0) : 0,
     touchUp: implement ? (countOf(kit["touch-up"]) ?? 0) : 0,
@@ -433,6 +469,7 @@ export function runRecordFor(end: RunEnd): RunRecordFiles | null {
     baseSha: nonEmpty(agent["base-sha"]),
     jobResult: job?.result ?? "unknown",
     infrastructureFailure: ran.failure,
+    refusal: rateLimitRefusalOf(job?.result ?? "unknown", end.failureReport),
     brokenRun: ran.broken,
     landing,
     // Only work that landed was pushed: never an empty diff, a failed run or a failed landing.
@@ -487,6 +524,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
   const runAttempt = countOf(judge.outputs["attempt"]) ?? scored.runAttempt;
   // In the scored run's month, so the two sit side by side even when the judge ends in the next one.
   const { recordPath, transcriptPath } = pathsFor({ ...scored, runAttempt, role: "score" }, end.transcript !== null);
+  const judged = whatRan(judge.outputs, {}, { model: end.judgeModel, effort: end.judgeEffort });
   const facts: RunFacts = {
     kitSha: end.kitSha,
     repo: scored.repo,
@@ -496,7 +534,10 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     issue: scored.issue,
     pullRequest: scored.pullRequest,
     endedAt: end.endedAt,
-    ...whatRan(judge.outputs, {}, { model: end.judgeModel, effort: end.judgeEffort }),
+    ...judged,
+    // The judge runs the Kit's own model, never Fable, so never falls back.
+    configuredModel: judged.model,
+    fallback: null,
     // The Kit job gives the judge the Subscription it gave the run the judge scores.
     subscription: scored.subscription,
     retry: 0,
@@ -512,6 +553,7 @@ export function judgeRunRecordFor(end: JudgeRunEnd): RunRecordFiles {
     baseSha: null,
     jobResult: judge.result,
     infrastructureFailure: failureOf(judge.result, judge.outputs["secrets-step"], end.failureReport),
+    refusal: rateLimitRefusalOf(judge.result, end.failureReport),
     brokenRun: null,
     landing: null,
     pushed: null,
@@ -562,6 +604,7 @@ export interface ReplayRunEnd {
 export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
   const { replay, role, job } = end;
   const { recordPath, transcriptPath } = pathsFor({ ...end, role, replay }, end.transcript !== null);
+  const model = whatRan(job.outputs, {}, end.settings);
   const facts: RunFacts = {
     kitSha: end.kitSha,
     repo: end.repo,
@@ -571,7 +614,10 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     issue: replay.ticket,
     pullRequest: end.pullRequest,
     endedAt: end.endedAt,
-    ...whatRan(job.outputs, {}, end.settings),
+    ...model,
+    // An arm never falls back, since another model would spoil the comparison (ADR-0034).
+    configuredModel: model.model,
+    fallback: null,
     subscription: end.subscription,
     retry: 0,
     touchUp: 0,
@@ -585,6 +631,7 @@ export function replayRunRecordFor(end: ReplayRunEnd): RunRecordFiles {
     baseSha: end.baseSha,
     jobResult: job.result,
     infrastructureFailure: failureOf(job.result, job.outputs["secrets-step"], end.failureReport),
+    refusal: rateLimitRefusalOf(job.result, end.failureReport),
     // A Replay arm uses no Retries, and its Replay ends on any failure it can't land (src/kit/replayRecord.ts), so it's never a Broken run.
     brokenRun: null,
     landing: null,
@@ -737,15 +784,32 @@ type AddedIn11 = "fullReview" | "findingTags" | "touchUp";
 /** Schema 11's fields as a schema 1 to 10 record reads them: no word on a Full Review, no tags, and no Touch-up. */
 const NOT_IN_10: Pick<RunRecord, AddedIn11> = { fullReview: null, findingTags: null, touchUp: 0 };
 
+/** The fields schema 12 added: the model Kit config named, a Fable fallback and a refusal (ADR-0034). */
+type AddedIn12 = "configuredModel" | "fallback" | "refusal";
+
+/** Schema 12's fields as a schema 1 to 11 record reads them: given the model it ran on, with no fallback and no refusal recorded. */
+function notIn11({ model }: Pick<RunRecord, "model">): Pick<RunRecord, AddedIn12> {
+  return { configuredModel: model, fallback: null, refusal: null };
+}
+
+/** A record as schema 11 held it, before schema 12's fields were recorded. */
+type Schema11 = Omit<RunRecord, "schema" | AddedIn12>;
+
 /** An older stored record at the current schema (readRunRecord), or null for a schema the Kit doesn't know. */
 function upgraded(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): RunRecord | null {
+  const older = schema === 11 ? { ...(stored as Schema11), schema: RUN_RECORD_SCHEMA as typeof RUN_RECORD_SCHEMA } : upgradedToSchema11(stored, schema, subscriptions);
+  return older === null ? null : { ...older, ...notIn11(older) };
+}
+
+/** A stored record older than schema 11 at schema 11's fields, or null for a schema the Kit doesn't know. */
+function upgradedToSchema11(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): (Schema11 & Pick<RunRecord, "schema">) | null {
   if (schema === 10) return { ...(stored as Schema10), schema: RUN_RECORD_SCHEMA, ...NOT_IN_10 };
   const older = upgradedToSchema10(stored, schema, subscriptions);
   return older === null ? null : { ...older, ...NOT_IN_10 };
 }
 
 /** A record as schema 10 held it, before schema 11's fields were recorded. */
-type Schema10 = Omit<RunRecord, "schema" | AddedIn11>;
+type Schema10 = Omit<Schema11, AddedIn11>;
 
 /** A stored record older than schema 10 at schema 10's fields, or null for a schema the Kit doesn't know. */
 function upgradedToSchema10(stored: object, schema: unknown, subscriptions: KitConfig["subscriptions"]): (Schema10 & Pick<RunRecord, "schema">) | null {
@@ -822,6 +886,25 @@ function failureOf(jobResult: string, secretsStep: string | undefined, failureRe
     secretsStep: secretsStep === "failure" ? "failure" : null,
     report: failureReport === null ? null : readFailureReport(failureReport),
   });
+}
+
+/**
+ * A failed or cancelled job's refusal, raw, as its failure report kept it
+ * from the stream, or null for a job that didn't fail or a report with none.
+ */
+function rateLimitRefusalOf(jobResult: string, failureReport: string | null): RateLimitRefusal | null {
+  if (!FAILED.includes(jobResult) || failureReport === null) return null;
+  return readFailureReport(failureReport).refusal ?? null;
+}
+
+/**
+ * The model Kit config named for the run, from the Kit job's plan, and why
+ * the run started on another (ADR-0034): a Kit job that passed out none, as
+ * before Fable fallbacks, gave it the model it ran on.
+ */
+function givenModelOf(kit: Readonly<Record<string, string>>, model: string): Pick<RunRecord, "configuredModel" | "fallback"> {
+  const configuredModel = nonEmpty(kit["configured-model"]) ?? model;
+  return { configuredModel, fallback: kit["fallback"] === "fable-cap" && configuredModel !== model ? "fable-cap" : null };
 }
 
 /**

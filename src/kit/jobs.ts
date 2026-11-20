@@ -274,6 +274,9 @@ export function kitJobOutputs(
     "rerun-red": rerun === undefined ? "" : JSON.stringify({ rerun: rerun.checks.map(({ name, link, run: id }) => ({ name, link, run: id })), outside: [] }),
     model: run?.model ?? "",
     effort: run?.effort ?? "",
+    // For its Run record (ADR-0034): the model Kit config named, which a Fable fallback runs Opus in place of, and why.
+    "configured-model": run?.configuredModel ?? run?.model ?? "",
+    fallback: run?.fallback ?? "",
     // Which run it is, for its Run record: nothing reads these before the push job writes one.
     retry: run?.role === "implement" ? String(run.retry ?? 0) : "",
     // A Touch-up (#750) is no Retry: its own number, which its push note and its Run record carry.

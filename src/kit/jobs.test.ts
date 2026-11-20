@@ -223,6 +223,27 @@ describe("The Kit job's routing", () => {
   });
 });
 
+describe("The Kit job's outputs for a Fable fallback (ADR-0034)", () => {
+  const start = (run: Partial<Extract<Action, { kind: "start-agent-run" }>>): Plan => ({
+    kind: "act",
+    actions: [{ kind: "start-agent-run", role: "review", issue: 50, model: "claude-opus-5-5", effort: "high", timeoutMinutes: 30, subscription: "Claude token", ...run }],
+  });
+
+  it("passes out the model it runs on, the model Kit config named and why they differ", () => {
+    expect(kitJobOutputs(start({ configuredModel: "claude-fable-5-2", fallback: "fable-cap" }), 7, kitConfig())).toMatchObject({
+      model: "claude-opus-5-5",
+      effort: "high",
+      "configured-model": "claude-fable-5-2",
+      fallback: "fable-cap",
+    });
+  });
+
+  it("passes out the model it runs on as Kit config's, with no fallback, for any other run", () => {
+    expect(kitJobOutputs(start({}), 7, kitConfig())).toMatchObject({ model: "claude-opus-5-5", "configured-model": "claude-opus-5-5", fallback: "" });
+    expect(kitJobOutputs(null, null, kitConfig())).toMatchObject({ "configured-model": "", fallback: "" });
+  });
+});
+
 describe("The Kit job's routing of a conflict-only run (#304)", () => {
   const MAIN = "9".repeat(40);
   const ticket = anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] });
