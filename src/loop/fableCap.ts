@@ -2,7 +2,11 @@
 // Reaching it holds no run. The refused run is re-run once, quietly, through
 // its trigger label (src/loop/failures.ts), and the Fable cap reading goes on
 // the body of the issue or PR the label goes on, in a hidden marker, as the
-// re-run's Kit job reads it back (src/github/snapshot.ts). A run whose role
+// re-run's Kit job reads it back (src/github/snapshot.ts): the label starts
+// it before the refused run's push job has written its Run record. In a repo
+// that opted in, the Kit job reads the readings in the store's Run records
+// too (src/kit/fableCapFacts.ts), so any run due, not only a re-run, weighs
+// every Subscription's cap. A run whose role
 // names Fable then starts on the first listed Subscription with Fable left,
 // or, with none left, on Opus 5.5 at the role's effort: a Fable fallback. The
 // fallback is per run: it never changes Kit config, and ends on its own once
