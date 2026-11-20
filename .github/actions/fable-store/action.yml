@@ -1,0 +1,111 @@
+# Checks out the fabrik-runs store for the Kit job's Fable cap readings
+# (ADR-0034), read-only, and only in a Product repo whose Kit config opted in
+# to Fable, so a repo that didn't reads nothing new and runs exactly as
+# before. Its first look reads `allow_fable` from the Product's Kit config
+# checkout, as data, with no secret (src/kit/fable-store-main.ts). Only then
+# does it load the Fabrik App key through the push service account, ask as
+# the App itself whether it's on fabrik-runs, and mint a token for the store
+# alone with Contents read. Its checkout holds only the Run records the Kit
+# job reads (fableStorePaths in src/kit/fableCapFacts.ts): every Product
+# repo's from the store's last two months, since a Subscription's Fable cap
+# is reached by whichever repo runs on it. No score file, transcript or
+# Replay patch.
+#
+# Like the Kit job itself it runs no agent and no Product code, and holds no
+# write credential. A store setup hasn't made yet, or one that can't be read,
+# fails no step: the checkout comes out empty, and the Kit job then counts
+# every Subscription as having Fable left, saying so in its step summary.
+# The worst case is one more refusal, and the same fallback. The Kit job runs
+# it once Node is set up, after checking out the Kit into kit/ and the
+# Product's Kit config into product/:
+#   - id: fable-store
+#     continue-on-error: true
+#     uses: ./kit/.github/actions/fable-store
+#     with:
+#       op-push-token: ${{ secrets.OP_PUSH_TOKEN }}
+#       product-dir: ${{ github.workspace }}/product
+# and hands its routing step `FABRIK_STORE_DIR: ${{ steps.fable-store.outputs.store-dir }}`.
+name: Check out the store for the Fable cap readings
+description: In a repo that opted in to Fable, checks out the Run records the Kit job reads the Fable cap readings from, read-only.
+
+inputs:
+  op-push-token:
+    description: The push service account's token (secrets.OP_PUSH_TOKEN), which reads the Fabrik App vault.
+    required: true
+  product-dir:
+    description: The Product's Kit config checkout, an absolute path, read as data only.
+    required: true
+
+outputs:
+  store-dir:
+    description: The store's checkout, for the routing step's FABRIK_STORE_DIR; empty in a repo that didn't opt in to Fable, or when the store couldn't be read.
+    value: ${{ steps.checked-out.outputs.store-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Look for the opt-in to Fable
+      id: look
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_PRODUCT_DIR: ${{ inputs.product-dir }}
+      run: node src/kit/fable-store-main.ts "$FABRIK_PRODUCT_DIR"
+
+    - name: Load the Fabrik App key
+      id: op
+      if: steps.look.outputs.opted-in == 'true'
+      continue-on-error: true
+      uses: 1password/load-secrets-action@70062d7a876d3eb6334754fa26efd2fbd90c32f2 # v5.0.1
+      with:
+        export-env: false
+      env:
+        OP_SERVICE_ACCOUNT_TOKEN: ${{ inputs.op-push-token }}
+        FABRIK_APP_CLIENT_ID: op://Fabrik App/Fabrik App/client-id
+        FABRIK_APP_PRIVATE_KEY: op://Fabrik App/Fabrik App/private-key
+
+    # Asks as the App itself whether it's installed on fabrik-runs, so a store
+    # setup hasn't made yet fails no step. Its key never leaves this step.
+    - name: Find the fabrik-runs store
+      id: find-store
+      if: steps.look.outputs.opted-in == 'true' && steps.op.outcome == 'success'
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../..
+      env:
+        FABRIK_APP_CLIENT_ID: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        FABRIK_APP_PRIVATE_KEY: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+      run: node src/kit/find-store-main.ts
+
+    - name: Mint a read-only Fabrik App token for the fabrik-runs store
+      id: store
+      if: steps.find-store.outputs.installed == 'true'
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ steps.op.outputs.FABRIK_APP_CLIENT_ID }}
+        private-key: ${{ steps.op.outputs.FABRIK_APP_PRIVATE_KEY }}
+        owner: jrey8343
+        repositories: fabrik-runs
+        permission-contents: read
+
+    # Non-cone patterns: each Product repo's last two months.
+    - name: Check out the Run records the Kit job reads
+      id: checkout
+      if: steps.store.outputs.token != ''
+      continue-on-error: true
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: jrey8343/fabrik-runs
+        token: ${{ steps.store.outputs.token }}
+        path: store
+        sparse-checkout: ${{ steps.look.outputs.paths }}
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+
+    - name: Pass out the store's checkout
+      id: checked-out
+      if: steps.checkout.outcome == 'success'
+      shell: bash
+      run: echo "store-dir=$GITHUB_WORKSPACE/store" >>"$GITHUB_OUTPUT"

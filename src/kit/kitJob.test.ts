@@ -157,4 +157,30 @@ describe("The Kit job's step summary", () => {
 
     expect(kitJobSummary(plan, config, [])).toBeNull();
   });
+
+  // ADR-0034: the worst case is one more refusal, and the same fallback.
+  describe("in a repo that opted in to Fable, whose fabrik-runs store couldn't be read", () => {
+    const config = kitConfig({
+      allowFable: true,
+      subscriptions: ["Claude token", "Claude token 2"],
+      roles: { ...kitConfig().roles, triage: { ...kitConfig().roles.triage, model: "claude-fable-5-2" } },
+    });
+
+    it("notes quietly that every Subscription counted as having Fable left, on a run whose role names Fable", () => {
+      const plan = planFor(triage, snapshotOf(ticket), config);
+
+      expect(kitJobSummary(plan, config, [], { storeUnread: true })).toBe(
+        "### Fabrik Kit job\n\n" +
+          "The Triage run on #7 was given the Subscription **Claude token**.\n\n" +
+          "The fabrik-runs store couldn't be read, so every Subscription counted as having Fable left.\n",
+      );
+    });
+
+    it("says nothing of it on a run whose role doesn't name Fable", () => {
+      const plain = { ...config, roles: kitConfig().roles };
+      const plan = planFor(triage, snapshotOf(ticket), plain);
+
+      expect(kitJobSummary(plan, plain, [], { storeUnread: true })).not.toContain("fabrik-runs");
+    });
+  });
 });

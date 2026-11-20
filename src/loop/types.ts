@@ -1567,9 +1567,11 @@ export interface Snapshot {
   /**
    * The Fable cap readings still in force as the adapter read them (ADR-0034):
    * those marked on the body of the event's issue or PR, where a run refused
-   * on its Subscription's Fable cap had its trigger label re-added. A run it
-   * starts on a role naming Fable starts on a Subscription with Fable left, or
-   * on Opus (src/loop/fableCap.ts). Absent or empty, every Subscription has
+   * on its Subscription's Fable cap had its trigger label re-added, and, in
+   * the Kit job of a repo that opted in, those in the store's Run records
+   * (src/kit/fableCapFacts.ts). A run it starts on a role naming Fable starts
+   * on a Subscription with Fable left, or on Opus (src/loop/fableCap.ts).
+   * Absent or empty, as when the store can't be read, every Subscription has
    * Fable left.
    */
   readonly fableCaps?: readonly FableCapReading[];

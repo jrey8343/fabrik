@@ -21,7 +21,8 @@ import { architecturalEscapesOf, type ArchitecturalEscapes, escapesCell, escapeW
 import { flakyCheckMarksIn, unrelatedFailureMarksIn, weeklyRunName, weeklyRunWaitingNoted, type WeeklyRunKind } from "../loop/markers.ts";
 import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { freeSubscriptions } from "../loop/subscriptions.ts";
-import { type FableCapReading, inForce, UNTIMED_CAP_MS } from "../loop/fableCap.ts";
+import { inForce } from "../loop/fableCap.ts";
+import { fableCapReadingsOf } from "./fableCapFacts.ts";
 import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
@@ -1444,40 +1445,15 @@ function subscriptionUsageOf(
 /**
  * When each Subscription's Fable cap resets (ADR-0034), by name, for those
  * with a Fable cap reading still in force at `now`, read off the Run records
- * of the repos given: a record of a run refused on its Fable cap is a reading
- * for its Subscription, until its refusal's `resetsAt`, or, with none, its
- * Subscription's weekly-limit reset, or for UNTIMED_CAP_MS from when the run
- * ended when that isn't known either. The latest reading in force counts.
+ * of the repos given (fableCapReadingsOf). The latest reading in force counts.
  */
 function fableResetsOf(records: readonly RunRecord[], repos: ReadonlySet<string>, now: string): Map<string, string> {
-  const readings = records
-    .filter((record) => repos.has(record.repo) && record.infrastructureFailure === "fable-cap")
-    .map((record): FableCapReading => ({ subscription: record.subscription, until: fableCapUntil(record, records) }));
   const resets = new Map<string, string>();
-  for (const { subscription, until } of inForce(readings, now)) {
+  for (const { subscription, until } of inForce(fableCapReadingsOf(records, (record) => repos.has(record.repo)), now)) {
     const seen = resets.get(subscription);
     if (seen === undefined || Date.parse(until) > Date.parse(seen)) resets.set(subscription, until);
   }
   return resets;
-}
-
-/**
- * Until when a run refused on its Fable cap holds that cap, ISO 8601: its
- * refusal's reset; else the reset of its Subscription's newest weekly-limit
- * reading by then, among `records`, when that is still ahead of the
- * refusal; else UNTIMED_CAP_MS from when it ended.
- */
-function fableCapUntil(refused: RunRecord, records: readonly RunRecord[]): string {
-  const at = Date.parse(refused.endedAt);
-  const resetsAt = refused.refusal?.resetsAt ?? null;
-  if (resetsAt !== null) return new Date(resetsAt * 1000).toISOString();
-  const weekly = lastWeeklyLimitOf(
-    records
-      .filter((record) => record.subscription === refused.subscription && Date.parse(record.endedAt) <= at)
-      .toSorted((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt)),
-  )?.resetsAt;
-  if (weekly !== undefined && weekly !== null && weekly * 1000 > at) return new Date(weekly * 1000).toISOString();
-  return new Date(at + UNTIMED_CAP_MS).toISOString();
 }
 
 /** Each Subscription these records ran on, in name order, with their cost and latest weekly-limit reading. */

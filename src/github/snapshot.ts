@@ -2,7 +2,7 @@
 // needs, fresh rather than from the event payload, into the snapshot the core
 // decides on. It holds no Loop rules; those all live in src/loop/rules.ts.
 import { evidenceMarkerIn } from "../evidence/uiEvidence.ts";
-import { fableCapsIn, inForce } from "../loop/fableCap.ts";
+import { type FableCapReading, fableCapsIn, inForce } from "../loop/fableCap.ts";
 import { shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { changedTestsIn } from "../loop/changedTests.ts";
 import {
@@ -583,6 +583,7 @@ export async function gatherSnapshot(
   actions: (ReadClient & Pick<LogClient, "logText">) | null = null,
   store: Pick<ReadClient, "rest"> | null = null,
   replayStore: ReplayStore | null = null,
+  storeFableCaps: readonly FableCapReading[] = [],
   wait: (ms: number) => Promise<void> = sleep,
 ): Promise<Snapshot> {
   // A held line is never read as activity or a reply (#471).
@@ -660,10 +661,12 @@ export async function gatherSnapshot(
         event.kind === "label-added" && event.label === REPLAY_TRIGGER_LABEL
         ? { issues: await gatherReplayIssues(github, repo, appLogin), capacity: null, acceptance: null }
         : null;
-  // The Fable caps a refused run's re-run reads back, marked where its trigger label went: on the event's issue, or its PR (ADR-0034).
-  const fableCaps = inForce([...fableCapsIn(part?.issue?.body ?? ""), ...(part?.fableCaps ?? [])], new Date().toISOString());
+  // The Fable caps still in force (ADR-0034): those a refused run's re-run reads back, marked where its trigger label
+  // went, on the event's issue or its PR, and those the Kit job read in the store's newest Run records (storeFableCaps).
+  const marked = [...fableCapsIn(part?.issue?.body ?? ""), ...(part?.fableCaps ?? [])];
+  const fableCaps = inForce([...marked, ...storeFableCaps], new Date().toISOString());
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues }
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
     : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
 }
 
