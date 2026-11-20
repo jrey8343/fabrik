@@ -415,6 +415,12 @@ export type ReplayTicketEnd =
   | { readonly kind: "done" }
   /** It was refused on a Subscription's weekly limit, which costs the Replay time, never the Ticket. */
   | { readonly kind: "weekly-limit" }
+  /**
+   * It was refused on a Subscription's Fable cap, which, like a weekly limit,
+   * costs the Replay time, never the Ticket. Unlike a live run, a Replay arm
+   * never falls back, since another model would spoil the comparison (ADR-0034).
+   */
+  | { readonly kind: "fable-cap" }
   /** Any other Infrastructure failure, with why. */
   | { readonly kind: "infrastructure"; readonly reason: string }
   /**
@@ -438,7 +444,7 @@ export function withTicketStarted(body: string, ticket: number, run: number, sta
 
 /**
  * The body with run `run` of Ticket `ticket` ended so: done; back to pending
- * after a weekly-limit refusal; after any other Infrastructure failure,
+ * after a weekly-limit or Fable cap refusal; after any other Infrastructure failure,
  * waiting to run again the first time and failed the second. Null when the
  * Ticket isn't in progress in that run.
  */
@@ -450,6 +456,7 @@ export function withTicketFinished(body: string, ticket: number, run: number, en
       case "done":
         return { state: "done", run };
       case "weekly-limit":
+      case "fable-cap":
         return retrying === null ? { state: "pending" } : { state: "retried", reason: retrying };
       case "infrastructure":
         return retrying === null ? { state: "retried", reason: end.reason } : { state: "failed", run, reason: end.reason };

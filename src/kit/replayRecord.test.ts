@@ -292,6 +292,31 @@ describe("How a replay Ticket's run ended, for the Loop to land on the replay is
     expect(files.ended).toMatchObject({ end: { kind: "weekly-limit" }, resetsAt: "2026-11-09T04:00:00.000Z" });
   });
 
+  // A Replay arm never falls back (ADR-0034): another model would spoil the comparison.
+  it("is a Fable cap refusal when any arm's run was refused on its Subscription's Fable cap, with when it resets, and nothing fell back", () => {
+    const refused = failed({ failure: "fable-cap", detail: "You've hit your Fable limit", resetsAt: "2026-11-09T04:00:00.000Z", rateLimitType: "seven_day_fable" });
+    const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline"), variant: armRan("variant", { review: refused }) }, KIT, ENDED_AT);
+    const record = files.writes.flatMap((group) => group.files).find(({ path }) => path === "runs/acme/shop/2026-11/9001-1-review-replay-variant.json");
+
+    expect(files.ended).toMatchObject({ end: { kind: "fable-cap" }, resetsAt: "2026-11-09T04:00:00.000Z" });
+    expect(JSON.parse(Buffer.from(record?.content ?? []).toString("utf8"))).toMatchObject({ infrastructureFailure: "fable-cap", fallback: null });
+    expect(written(files).filter((path) => path.startsWith("replays/"))).toEqual([]);
+  });
+
+  it("is a weekly-limit refusal, a fact about the whole Subscription, when one arm's run met the weekly limit and another its Fable cap", () => {
+    const weekly = failed({ failure: "weekly-limit", detail: "You've hit your weekly limit", resetsAt: "2026-11-09T04:00:00.000Z" });
+    const fable = failed({ failure: "fable-cap", detail: "You've hit your Fable limit", resetsAt: "2026-11-10T04:00:00.000Z", rateLimitType: "seven_day_fable" });
+    const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline", { review: fable }), variant: armRan("variant", { review: weekly }) }, KIT, ENDED_AT);
+
+    expect(files.ended).toMatchObject({ end: { kind: "weekly-limit" }, resetsAt: "2026-11-09T04:00:00.000Z" });
+  });
+
+  it("reads back a Fable cap end as the replay-record job leaves it", () => {
+    const ended = { issue: 140, ticket: 12, run: 9001, end: { kind: "fable-cap" }, subscription: "Claude token", resetsAt: "2026-11-09T04:00:00.000Z" };
+
+    expect(readReplayRunEnded(JSON.stringify(ended))).toEqual(ended);
+  });
+
   it("is an Infrastructure failure, naming the arm and the run, when any arm's run ended in any other", () => {
     const files = replayRunFiles(CONTEXT, { baseline: armRan("baseline", { implement: failed({ failure: "provider-error", detail: "overloaded" }) }), variant: armRan("variant") }, KIT, ENDED_AT);
 

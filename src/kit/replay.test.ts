@@ -1041,6 +1041,19 @@ describe("A Replay's next step on the tick", () => {
       expect(replayMarksIn(refused.body)?.progress[0]).toEqual({ ticket: 12, state: "retried", reason: "the model provider failed" });
     });
 
+    // A Replay arm never falls back (ADR-0034), so a Fable cap costs the Replay time, as a weekly limit does, never the Ticket.
+    it("returning a Ticket whose run was refused on a Fable cap to pending, as a weekly-limit refusal does, its one retry kept", () => {
+      const refused = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "fable-cap" });
+      const once = finished(started(anAcceptedIssue(140), 12, 9001), 12, 9001, { kind: "infrastructure", reason: "the model provider failed" });
+
+      expect(replayMarksIn(refused.body)?.progress[0]).toEqual({ ticket: 12, state: "pending" });
+      expect(replayMarksIn(finished(started(once, 12, 9002), 12, 9002, { kind: "fable-cap" }).body)?.progress[0]).toEqual({
+        ticket: 12,
+        state: "retried",
+        reason: "the model provider failed",
+      });
+    });
+
     // #448: a run its replay-record job couldn't land is released by that job at once, not left to the tick's 210-minute release.
     describe("releasing a Ticket whose run's landing failed, from the replay-record job itself", () => {
       const running = started(anAcceptedIssue(140), 12, 9001);

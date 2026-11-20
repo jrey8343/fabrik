@@ -80,7 +80,7 @@ export function replayRunContextOf(
  * Loop to land on the replay issue (the `replay-run-finished` event, less what
  * src/main.ts adds): the replay issue, the Ticket, the Actions run its claim
  * marked it in progress in, its end, the Subscription both arms ran on, and,
- * for a weekly-limit refusal, when the limit resets, if the stream said.
+ * for a weekly-limit or Fable cap refusal, when the limit resets, if the stream said.
  */
 export interface ReplayRunEnded {
   readonly issue: number;
@@ -100,7 +100,7 @@ export function readReplayRunEnded(text: string): ReplayRunEnded {
   const ended = isObject(value) ? value : {};
   const { issue, ticket, run, end, subscription, resetsAt } = ended;
   const ids = [issue, ticket, run].every((id) => Number.isSafeInteger(id) && (id as number) > 0);
-  const known = isObject(end) && (end["kind"] === "done" || end["kind"] === "weekly-limit" || ((end["kind"] === "infrastructure" || end["kind"] === "kit-sha-unavailable") && typeof end["reason"] === "string"));
+  const known = isObject(end) && (end["kind"] === "done" || end["kind"] === "weekly-limit" || end["kind"] === "fable-cap" || ((end["kind"] === "infrastructure" || end["kind"] === "kit-sha-unavailable") && typeof end["reason"] === "string"));
   if (!ids || !known || typeof subscription !== "string" || !(resetsAt === null || typeof resetsAt === "string")) {
     throw new Error(`The replay-record job's ${REPLAY_RUN_ENDED_FILE} doesn't read as how a replay Ticket's run ended`);
   }
@@ -161,7 +161,9 @@ function armRunsOf(context: ReplayRunContext, arms: Readonly<Record<ReplayArm, A
 
 /** How the run of these arms' runs ended, for the Loop to land. */
 function endedOf(context: ReplayRunContext, runs: ArmRuns): ReplayRunEnded {
-  const refused = runs.flatMap(({ implement, review }) => [implement, review]).find(isWeeklyLimit);
+  const all = runs.flatMap(({ implement, review }) => [implement, review]);
+  // The weekly limit's reset first, as its end comes first.
+  const refused = all.find((run) => refusedOn(run) === "weekly-limit") ?? all.find((run) => refusedOn(run) === "fable-cap");
   return {
     issue: context.issue,
     ticket: context.ticket,
@@ -193,20 +195,25 @@ function armRunOf(context: ReplayRunContext, arm: ReplayArm, role: ReplayRole, a
   return { kind: "ran", files: armRunRecord(context, arm, role, job.job, artifacts, endedAt), failureReport: artifacts.failureReport };
 }
 
-function isWeeklyLimit(run: ArmRun): boolean {
-  return run.kind === "ran" && run.files.record.infrastructureFailure === "weekly-limit";
+/** The limit a run was refused on, the Subscription's weekly limit or its Fable cap, or null for any other run. */
+function refusedOn(run: ArmRun): "weekly-limit" | "fable-cap" | null {
+  const failure = run.kind === "ran" ? run.files.record.infrastructureFailure : null;
+  return failure === "weekly-limit" || failure === "fable-cap" ? failure : null;
 }
 
 /**
  * How the Ticket's run ended: a weekly-limit refusal of any arm's run first,
- * a fact about the Subscription that costs the Ticket nothing; then, in the
- * arms' order, the first run that ended in another Infrastructure failure or
- * left no account of how it went; else done. Each arm's Implement run must
- * have run, while its Review may never have started, as when its patch
- * wasn't laid.
+ * a fact about the whole Subscription, then a Fable cap refusal, a fact about
+ * its Fable alone, either costing the Ticket nothing, and neither re-run on
+ * another model (ADR-0034); then, in the arms' order, the first run that
+ * ended in another Infrastructure failure or left no account of how it went;
+ * else done. Each arm's Implement run must have run, while its Review may
+ * never have started, as when its patch wasn't laid.
  */
 function endOf(runs: ArmRuns): ReplayTicketEnd {
-  if (runs.some(({ implement, review }) => isWeeklyLimit(implement) || isWeeklyLimit(review))) return { kind: "weekly-limit" };
+  const refusals = runs.flatMap(({ implement, review }) => [refusedOn(implement), refusedOn(review)]);
+  if (refusals.includes("weekly-limit")) return { kind: "weekly-limit" };
+  if (refusals.includes("fable-cap")) return { kind: "fable-cap" };
   for (const { arm, implement, review } of runs) {
     for (const role of REPLAY_ROLES) {
       const run = role === "implement" ? implement : review;

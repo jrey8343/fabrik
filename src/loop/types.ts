@@ -584,7 +584,7 @@ export type LoopEvent =
       readonly runUrl: string;
       /** The Subscription both arms ran on, from the Kit job's `subscription` output. Absent, it is read as the first listed. */
       readonly subscription?: string;
-      /** For a weekly-limit refusal, when the limit resets (an ISO 8601 time), if the stream said. */
+      /** For a weekly-limit or Fable cap refusal, when the limit resets (an ISO 8601 time), if the stream said. */
       readonly resetsAt?: string;
       /**
        * What the store holds of the Replay once the job wrote this run's files,
