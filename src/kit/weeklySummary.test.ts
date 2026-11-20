@@ -440,6 +440,62 @@ describe("the Weekly summary", () => {
     expect(result.kind === "summary" ? result.body : "").toMatch(/\| Landings failed \| 0 \| 0 \|/);
   });
 
+  // #832, ADR-0034
+  describe("Fable fallbacks", () => {
+    const OPTED_IN = aRepoKit({ config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, allowFable: true } } });
+    const fellBack = { model: "claude-opus-5-5", configuredModel: "claude-fable-5-2", fallback: "fable-cap" } as const;
+    const refusedOnTheCap = {
+      model: "claude-fable-5-2",
+      jobResult: "failure",
+      infrastructureFailure: "fable-cap",
+      refusal: { rateLimitType: "seven_day_fable", resetsAt: 1_794_000_000 },
+    } as const;
+
+    it("counts the week's runs started on Opus in Fable's place, against last week's, apart from the Fable cap refusals and other Infrastructure failures", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ ...refusedOnTheCap, endedAt: "2026-11-03T00:00:00Z" }),
+            aRunRecord({ ...fellBack, endedAt: "2026-11-03T00:05:00Z" }),
+            aRunRecord({ ...fellBack, endedAt: "2026-11-05T00:00:00Z", role: "review" }),
+            // Refused on the weekly limit, and resumed: counted once, by the run that ran.
+            aRunRecord({ ...fellBack, endedAt: "2026-11-06T00:00:00Z", jobResult: "failure", infrastructureFailure: "weekly-limit" }),
+            aRunRecord({ endedAt: "2026-11-06T00:00:00Z" }),
+            aRunRecord({ ...fellBack, endedAt: "2026-10-29T00:00:00Z" }), // last week
+          ],
+          kits: [OPTED_IN],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: { thisWeek: 2, lastWeek: 1 } } } });
+      expect(result.kind === "summary" ? result.body : "").toContain("| Fable fallbacks | 2 | 1 | +1 |");
+    });
+
+    it("counts only the repos that opted in to Fable", () => {
+      const result = weeklySummary(
+        input({
+          records: [
+            aRunRecord({ ...fellBack, endedAt: "2026-11-03T00:00:00Z" }),
+            aRunRecord({ ...fellBack, endedAt: "2026-11-04T00:00:00Z", repo: "owner/other" }),
+          ],
+          facts: [factsOf(), factsOf({ repo: "owner/other" })],
+          kits: [OPTED_IN, aRepoKit({ repo: "owner/other" })],
+        }),
+      );
+      expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: { thisWeek: 1, lastWeek: 0 } } } });
+    });
+
+    it.each([
+      ["allow_fable unset", [aRepoKit()]],
+      ["an invalid Kit config", [aRepoKit({ config: { ok: false, errors: [".fabrik/config.json is not valid JSON"] }, dispatch: null })]],
+      ["no Kit config read", []],
+    ])("shows no Fable row with %s", (_, kits) => {
+      const result = weeklySummary(input({ records: [aRunRecord({ ...fellBack, endedAt: "2026-11-03T00:00:00Z" })], kits }));
+
+      expect(result).toMatchObject({ kind: "summary", summary: { counts: { fableFallbacks: null } } });
+      expect(result.kind === "summary" ? result.body : "").not.toContain("Fable");
+    });
+  });
+
   it("counts the week's Flaky checks, found by the Kit's re-run and counted back alike, on open and closed agent PRs (#462)", () => {
     const line = (checks: string[], countedBack = false) =>
       `<!-- fabrik:flaky-check ${JSON.stringify({ headSha: "a".repeat(40), checks, ...(countedBack ? { countedBack } : {}) })} -->\nflaky`;

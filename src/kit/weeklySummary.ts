@@ -464,6 +464,12 @@ export interface WeeklySummary {
     readonly stepUpsByReason: WeekOverWeek<StepUpCounts>;
     /** The Tickets merged in the week whose first Implement run was a Stepped-up start, and how many of them needed no Retry. */
     readonly steppedUpStarts: WeekOverWeek<SteppedUpStarts>;
+    /**
+     * The Fable fallbacks (ADR-0034) in the Product repos that opted in to
+     * Fable (fableFallbacksIn), or null when none did, so a Kit that never
+     * runs Fable shows no row.
+     */
+    readonly fableFallbacks: WeekOverWeek<number> | null;
   };
   /** What the score files of the week's runs say. */
   readonly scores: WeekOverWeek<WeekScores>;
@@ -945,6 +951,7 @@ export function weeklySummary(everything: WeeklySummaryInput): WeeklySummaryResu
       stepUps: change("stepUps"),
       stepUpsByReason: change("stepUpsByReason"),
       steppedUpStarts: change("steppedUpStarts"),
+      fableFallbacks: optedInToFable(input.kits).size === 0 ? null : change("fableFallbacks"),
     },
     scores: change("scores"),
     scoringCost: change("scoringCost"),
@@ -1031,6 +1038,7 @@ interface WeekMetrics {
   readonly stepUps: number;
   readonly stepUpsByReason: StepUpCounts;
   readonly steppedUpStarts: SteppedUpStarts;
+  readonly fableFallbacks: number;
   readonly scores: WeekScores;
   readonly scoringCost: ScoringCost;
 }
@@ -1080,6 +1088,7 @@ function metricsOf(week: Week, input: WeeklySummaryInput, { latest }: { readonly
     stepUps: records.filter((record) => record.stepUp).length,
     stepUpsByReason: stepUpsByReasonOf(records),
     steppedUpStarts: steppedUpStartsOf(merged, input.records),
+    fableFallbacks: fableFallbacksIn(records, optedInToFable(input.kits)),
     scores: scoresOf(week, input),
     scoringCost: { usd: scoring.usd, share: cost === 0 ? null : scoring.usd / cost, unknownCost: scoring.unknownCost },
   };
@@ -1155,6 +1164,23 @@ function retriesIn(records: readonly RunRecord[]): number {
 function touchUpsIn(records: readonly RunRecord[]): number {
   const touchUps = records.filter((record) => record.role === "implement" && record.touchUp > 0 && record.infrastructureFailure === null);
   return new Set(touchUps.map(({ repo, issue, pullRequest, touchUp }) => JSON.stringify([repo, issue, pullRequest, touchUp]))).size;
+}
+
+/**
+ * How many Fable fallbacks (ADR-0034) these records hold in the repos given:
+ * records with `fallback` `fable-cap`, each a run started on Opus 5.5 because
+ * no Subscription had Fable left, and no Infrastructure failure, so a
+ * fallback refused on the weekly limit and then resumed counts once. The Fable
+ * run's own refusal on its Fable cap is an Infrastructure failure, never a
+ * fallback: only the run that fell back counts.
+ */
+function fableFallbacksIn(records: readonly RunRecord[], repos: ReadonlySet<string>): number {
+  return records.filter((record) => repos.has(record.repo) && record.fallback === "fable-cap" && record.infrastructureFailure === null).length;
+}
+
+/** The Product repos whose Kit config, as read at their default branch's head, opts in to Fable with `allow_fable` (ADR-0034). */
+function optedInToFable(kits: readonly RepoKitFacts[]): ReadonlySet<string> {
+  return new Set(kits.flatMap(({ repo, config }) => (config.ok && config.config.allowFable ? [repo] : [])));
 }
 
 /**
@@ -1882,6 +1908,7 @@ function bodyOf(summary: WeeklySummary, { operator, timeZone, unreadableRecords,
     row("Step-ups", counts.stepUps, count),
     ...stepUpReasonRows(counts.stepUpsByReason),
     steppedUpStartsRow(counts.steppedUpStarts),
+    ...(counts.fableFallbacks === null ? [] : [row("Fable fallbacks", counts.fableFallbacks, count)]),
     row("Human touches per merged PR", humanTouches, (value) => value.toFixed(1)),
     ...requestChangesRows(summary.requestChanges),
     row("Cycle time (median)", cycleTimeMs, hours),
