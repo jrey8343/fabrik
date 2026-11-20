@@ -240,6 +240,17 @@ describe("The scheduled tick's replay step, beside its gates", () => {
         actions: [{ kind: "comment", issue: 140, body: expect.stringContaining('review.effort is "highest"') }, { kind: "check-dispatch" }, { kind: "check-design-queue" }],
       });
     });
+
+    it.each([
+      [true, "edit-issue-body"],
+      [false, "comment"],
+    ])("weighs one naming Fable against this repo's allow_fable (%j), accepting it only where the repo opted in", (allowFable, kind) => {
+      const fable = aReplayIssue({ body: requestBody("review.model: claude-fable-5-2", "12") });
+
+      const [step] = actionsOf(tick(replaySlice([fable], {}, acceptance), [], kitConfig({ allowFable })));
+
+      expect(step).toMatchObject({ kind, issue: 140 });
+    });
   });
 
   // Replay is on from the release that ships it, and a repo with no experiment pays nothing for it.

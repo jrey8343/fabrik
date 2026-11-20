@@ -97,6 +97,8 @@ export interface ReplayAcceptance {
 export interface ReplayTick {
   /** The Operator's GitHub login. */
   readonly operator: string;
+  /** Whether this Product repo's Kit config opts in to Fable (`allow_fable`, ADR-0034), which a request's variable is held to. */
+  readonly allowFable: boolean;
   /** The `fabrik:replay` issues, in any order. */
   readonly issues: readonly ReplayIssue[];
   readonly capacity: ReplayCapacity;
@@ -151,7 +153,7 @@ export function nextReplayStep(tick: ReplayTick): ReplayStep {
       accepted.push({ issue: issue.number, marks });
       continue;
     }
-    const step = requestStep(issue, tick.acceptance);
+    const step = requestStep(issue, tick.acceptance, tick.allowFable);
     if (step !== null) return step;
   }
   const running = replayInProgress(tick);
@@ -195,7 +197,8 @@ export interface ReplayReads {
  */
 export function replayReads(tick: Pick<ReplayTick, "operator" | "issues">, candidates: readonly ReplayCandidate[] | null): ReplayReads {
   const requests = operatorsOpenIssues(tick).flatMap((issue) => {
-    const read = replayMarksIn(issue.body) === null ? readReplayRequest(issue.body) : null;
+    // The adapter reads no Kit config of the repo's own, so it reads for a request any repo could accept: the tick weighs the opt-in.
+    const read = replayMarksIn(issue.body) === null ? readReplayRequest(issue.body, true) : null;
     return read?.ok === true ? [read.request] : [];
   });
   const fabrikShas = requests.flatMap(({ variable }) => (variable.kind === "kit" ? [variable.sha] : []));
@@ -258,8 +261,8 @@ export function oneAtATime({ issue, progress }: ReplayRunning): string {
  * was rejected already for the same problem. Nothing, when the acceptance
  * facts lack one that replayReads names.
  */
-function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null): ReplayStep | null {
-  const read = readReplayRequest(issue.body);
+function requestStep(issue: ReplayIssue, acceptance: ReplayAcceptance | null, allowFable: boolean): ReplayStep | null {
+  const read = readReplayRequest(issue.body, allowFable);
   if (!read.ok) return rejection(issue, rejectedRequest(read.errors));
   const { request } = read;
   const missing = (fact: string): ReplayStep => ({ kind: "nothing", reason: `Replay #${issue.number}'s request waits on ${fact}, which the tick didn't read` });

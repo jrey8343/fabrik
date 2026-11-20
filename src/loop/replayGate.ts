@@ -30,6 +30,7 @@ export function replayGate(now: string, snapshot: Snapshot, config: KitConfig): 
   const capacity = capacityOf(now, slice, snapshot, config);
   const step = nextReplayStep({
     operator: snapshot.operator,
+    allowFable: config.allowFable,
     issues: slice.issues,
     capacity,
     acceptance: slice.acceptance,
