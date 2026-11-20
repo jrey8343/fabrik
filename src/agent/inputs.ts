@@ -28,9 +28,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { allPages, GitHub, pagesOf, type Repo } from "../github/client.ts";
 import { leavingOutDigests } from "../github/digestComments.ts";
-import { readDigestThread } from "../github/digestGiven.ts";
+import { digestPicturesOf, readDigestThread } from "../github/digestGiven.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
-import { capturedRoutesOf, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
+import { capturedRoutesOf, evidenceMarkerIn, shotsMarkerIn } from "../evidence/uiEvidence.ts";
 import { byAppOf, deferredChangesRequestsOn, gatherAuditSliceFor, gatherOpenMaps, type OpenMap } from "../github/snapshot.ts";
 import {
   byTime,
@@ -498,6 +498,15 @@ export interface DigestPullRequest {
    * names no routes, as one written before markers recorded them.
    */
   readonly capturedRoutes: readonly string[];
+  /**
+   * On a pull request whose UI evidence is Evidence shots, the named shots
+   * the check's run produced, in the names' order (digestPicturesOf): the
+   * only names an item may name as its picture, in place of captured routes.
+   * Read from the shots marker only in a body the Fabrik App wrote, and
+   * absent on any other pull request, so a route pull request's input is as
+   * it was.
+   */
+  readonly producedShots?: readonly string[];
   /** Kit code's facts, worked out from its thread (src/loop/digestFacts.ts), which the writer words and never contradicts. */
   readonly facts: DigestFacts;
 }
@@ -509,8 +518,10 @@ export interface DigestPullRequest {
  * out; every Verdict with the head it judged; the Kit's own notes on the
  * thread, oldest first, among its latest hundred comments; whether UI
  * evidence exists; and the routes it captured, as the evidence marker in the
- * body names them, which the push job reads again to check each item's
- * picture against. Nobody else's words are in it, and nothing from the run
+ * body names them, or, on a pull request whose UI evidence is Evidence
+ * shots, the named shots that were produced, as the shots marker in a body
+ * the Fabrik App wrote says, which the push job reads again to check each
+ * item's picture against. Nobody else's words are in it, and nothing from the run
  * store: no transcript and no Run record. The Verdicts and the notes come
  * only from what readPullRequest and verdictsOn hand back, so whatever those
  * keep from an agent is kept from this one. Beside them go Kit code's facts,
@@ -536,6 +547,9 @@ export async function readDigestPullRequest(
     readDigestThread(github, repo, number, operator, deferred, written),
   ]);
   const verdicts = verdictsAmong(written.conversation);
+  // Only a body the Fabrik App wrote counts, as in the Loop's snapshot, so nobody else can name a shot as produced.
+  const openedBy = (rest as { user?: { type?: string } | null }).user;
+  const shots = openedBy?.type === "Bot" ? shotsMarkerIn((read as { body: string }).body) : null;
   const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges"> & {
     comments: { body: string; author: { __typename: string } | null }[];
   };
@@ -547,6 +561,7 @@ export async function readDigestPullRequest(
     kitNotes: comments.filter(({ body, author }) => author?.__typename === "Bot" && verdictsIn([body]).length === 0).map(({ body }) => body),
     uiEvidence: (evidenceMarkerIn(pullRequest.body)?.artifact ?? null) !== null,
     capturedRoutes: capturedRoutesOf(evidenceMarkerIn(pullRequest.body)),
+    ...(shots === null ? {} : { producedShots: digestPicturesOf(null, shots).pictures }),
     facts: digestFactsOf(thread),
   };
 }

@@ -11,7 +11,7 @@ const BLOB = `https://github.com/acme/shop/blob/${HEAD}`;
 
 /** What the push job hands the contract for #50, whose UI evidence captured `capturedRoutes`: the basket and the saved basket, unless told otherwise. */
 function given(capturedRoutes: readonly string[] = ["/basket", "/basket/saved"], rest: Partial<DigestGiven> = {}): DigestGiven {
-  return aDigestGiven({ repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, capturedRoutes, ...rest });
+  return aDigestGiven({ repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: HEAD, pictures: capturedRoutes, ...rest });
 }
 
 function bodyOf(reply: DigestReply, from: DigestGiven = given()): string {
@@ -150,12 +150,66 @@ describe("An item's picture, in the Digest", () => {
   });
 });
 
+describe("An item's picture, in the Digest of a pull request whose UI evidence is Evidence shots", () => {
+  /** What the push job hands the contract for #50, whose named shots `produced` were produced: the basket page and the saved basket, unless told otherwise. */
+  function shots(produced: readonly string[] = ["Basket page", "Saved basket"], rest: Partial<DigestGiven> = {}): DigestGiven {
+    return given([], { pictureOf: "shot", pictures: produced, ...rest });
+  }
+
+  it("lands as the shot's name in the item's data, and is named in words after its places, when it is one of the named shots that were produced", () => {
+    const head = { files: [{ path: "src/pages/saved.tsx", text: "one\ntwo\nthree\n" }], changed: [] };
+    const reply = aDigestReply({
+      items: [
+        anItem("yours-to-judge", { picture: "Saved basket", places: [{ path: "src/pages/saved.tsx", start: 2, end: 3, as: "words" }] }),
+        anItem("not-proven", { claim: "Nothing shows a basket expiring." }),
+      ],
+    });
+
+    const body = bodyOf(reply, shots(["Basket page", "Saved basket"], { head }));
+
+    expect(dataOf(body).items.map(({ picture }) => picture)).toEqual(["Saved basket", null]);
+    expect(needsYourEyesIn(body)).toEqual([
+      "- **The saved basket's page is new.** Nothing but its picture shows how it reads on a phone.",
+      `  [\`src/pages/saved.tsx\`, lines 2 to 3](${BLOB}/src/pages/saved.tsx?plain=1#L2-L3)`,
+      "  Picture: the Evidence shot `Saved basket`",
+      "- **Nothing shows a basket expiring.** Nothing but its picture shows how it reads on a phone.",
+    ]);
+  });
+
+  it.each([
+    ["in other letters' case", "saved basket"],
+    ["with a space after it", "Saved basket "],
+    ["with two spaces inside it", "Saved  basket"],
+    ["as the route its shot was taken at", "/basket/saved"],
+  ])("is compared with the produced names exactly: a produced name written %s is dropped, and its item kept", (_how, picture) => {
+    const body = bodyOf(aDigestReply({ items: [anItem("yours-to-judge", { picture })] }), shots());
+
+    expect(dataOf(body).items).toMatchObject([{ kind: "yours-to-judge", claim: "The saved basket's page is new.", picture: null }]);
+    expect(body).not.toContain("Picture:");
+  });
+
+  it("names a shot as code, so that one with a mention-like word in it mentions nobody", () => {
+    const body = bodyOf(aDigestReply({ items: [anItem("yours-to-judge", { picture: "Team page, olive" })] }), shots(["Team page, olive"]));
+
+    expect(needsYourEyesIn(body)[1]).toBe("  Picture: the Evidence shot `Team page, olive`");
+  });
+
+  it("is dropped, whatever it names, when none of the named shots was produced", () => {
+    const reply = aDigestReply({ items: [anItem("yours-to-judge", { picture: "Saved basket" }), anItem("not-proven", { picture: "Basket page" })] });
+
+    const body = bodyOf(reply, shots([]));
+
+    expect(dataOf(body).items.map(({ picture }) => picture)).toEqual([null, null]);
+    expect(body).not.toContain("Picture:");
+  });
+});
+
 describe("A Digest with a picture, as the push job lands it", () => {
   const pullRequest = aPullRequest({ labels: ["agent:digest"], verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }] });
   const GATE_OPENS = ["remove-label", "mark-ready-for-review", "request-review"];
 
   function landed(reply: unknown, capturedRoutes: readonly string[]): Action[] {
-    const from = aDigestGiven({ headSha: HEAD_SHA, capturedRoutes });
+    const from = aDigestGiven({ headSha: HEAD_SHA, pictures: capturedRoutes });
     const plan = planFor({ kind: "digest-run-finished", pullRequest: 50, headSha: HEAD_SHA, output: JSON.stringify(reply), given: from, runUrl: from.runUrl }, snapshotOfPullRequest(pullRequest), kitConfig());
     return plan.kind === "act" ? [...plan.actions] : [];
   }
@@ -202,16 +256,20 @@ describe("The Digest writer's prompt, on a picture", () => {
   const eyes = prompt.split("\n### Needs your eyes\n")[1]?.split(/\n###? /)[0] ?? "";
   const output = prompt.split("\n## Your output\n")[1] ?? "";
 
-  it("says the writer is given the captured routes, under UI evidence", () => {
+  it("says the writer is given the captured routes, or the named shots that were produced, under UI evidence", () => {
     expect(givenSection).toContain(
-      '- "UI evidence": whether the pull request has screenshots of its pages, and its captured routes, the routes those screenshots are of, or that it has none.',
+      '- "UI evidence": whether the pull request has screenshots of its pages, and its captured routes, the routes those screenshots are of, or that it has none. On a pull request whose UI evidence is Evidence shots, it says so, and gives the named shots that were produced in place of captured routes, or that none was.',
     );
   });
 
-  it("carries the addition: an item about a screen may name one captured route, and a changed screen with no captured route is a not-proven item", () => {
-    expect(eyes).toContain("`picture`, on an item about a screen: one captured route, or `null`.");
+  it("carries the addition: an item about a screen may name one captured route or one produced named shot, and a changed screen with neither is a not-proven item", () => {
+    expect(eyes).toContain("`picture`, on an item about a screen: one captured route, or one named shot that was produced, or `null`.");
     expect(eyes).toContain("An item about a screen may name one captured route as its picture");
-    expect(eyes).toContain("A changed screen with no captured route is a `not-proven` item");
+    expect(eyes).toContain(
+      'On a pull request whose UI evidence is Evidence shots, it may name one of the named shots that were produced instead: the shot of the screen it is about, by its name exactly as "UI evidence" lists it, in the same case and with the same spaces.',
+    );
+    expect(eyes).toContain("A changed screen with no captured route, and no named shot that was produced, is a `not-proven` item");
+    expect(eyes).toContain("on every item when the pull request has no captured routes, or none of its named shots was produced");
   });
 
   it("has the writer name the route exactly as the captured routes list it, and never embed or link an image", () => {
@@ -220,15 +278,15 @@ describe("The Digest writer's prompt, on a picture", () => {
     expect(eyes).toContain("Never embed or link an image");
   });
 
-  it("says what the Kit does with a picture: one that is no captured route is dropped, and its item kept", () => {
-    expect(eyes).toContain("The Kit drops a picture whose route is not a captured route, and keeps the item");
-    expect(eyes).toContain("The Kit names the route after the item's places");
+  it("says what the Kit does with a picture: one that is no captured route, or no named shot that was produced, is dropped, and its item kept", () => {
+    expect(eyes).toContain("The Kit drops a picture whose route is not a captured route, or whose name is not one of the named shots that were produced, and keeps the item");
+    expect(eyes).toContain("The Kit names the route or the shot after the item's places");
   });
 
   it("gives the picture its part of the reply's shape", () => {
     expect(output).toContain("Each has `kind`, `claim`, `sentence`, `asks`, `places`, `picture` and `suggestedRequest`");
-    expect(output).toContain("`picture` is one captured route as text, or `null`");
-    expect(output).toContain("the link to each place, each picture's route,");
+    expect(output).toContain("`picture` is one captured route, or one produced named shot's name, as text, or `null`");
+    expect(output).toContain("the link to each place, each picture's route or shot,");
   });
 
   it("keeps its own example to the rule: an item about a screen names one route as its picture, and the others name none", () => {
@@ -272,8 +330,25 @@ describe("The README's Digest section, on a picture", () => {
     }
   });
 
-  it("says the writer is told the captured routes, where the section says what the writer is given", () => {
-    expect(bullets.find((line) => line.startsWith("- **The Digest writer**")) ?? "").toContain("whether UI evidence exists, and the routes it captured");
+  it("says what a picture is on a pull request whose UI evidence is Evidence shots, and which named shots count as produced", () => {
+    for (const said of [
+      "On a pull request whose UI evidence is [Evidence shots](#evidence-shots)",
+      "one of the named shots that were produced, by its name",
+      "the shots marker in the pull request's body",
+      "`not-produced`, `ambiguous-name` or `refused`",
+      "one that lacks only a size is",
+      "before the Review's jobs have read the named check's artifact",
+      "a name in another case, or with a space more or less",
+      "`Picture: the Evidence shot`",
+    ]) {
+      expect(picture).toContain(said);
+    }
+  });
+
+  it("says the writer is told the captured routes, or the named shots that were produced, where the section says what the writer is given", () => {
+    expect(bullets.find((line) => line.startsWith("- **The Digest writer**")) ?? "").toContain(
+      "whether UI evidence exists, and the routes it captured, or, on a pull request whose UI evidence is Evidence shots, the named shots that were produced",
+    );
   });
 
   it("no longer says the data's picture is null for now", () => {

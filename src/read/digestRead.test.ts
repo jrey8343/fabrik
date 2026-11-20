@@ -68,7 +68,7 @@ describe("The Digest on an open agent pull request's row", () => {
 
   it("reads a Digest as Kit code carries one forward: its new head, the head it was written at, and its folds as the writer's run left them", () => {
     const writtenEarlier = aDigestComment(EARLIER_HEAD, "2026-11-08T17:00:00Z", { folds: FOLDS });
-    const body = carriedDigest(writtenEarlier.body, { repoUrl: "https://github.com/owner/product", pullRequest: 50, headSha: HEAD }, { files: [], changed: [] });
+    const body = carriedDigest(writtenEarlier.body, { repoUrl: "https://github.com/owner/product", pullRequest: 50, headSha: HEAD, pictureOf: "route" }, { files: [], changed: [] });
     const carried = { ...writtenEarlier, body: body ?? "", at: "2026-11-08T18:05:00Z" };
 
     expect(digestOn(atTheMergeGate(writtenEarlier, carried))).toMatchObject({ is: "readable", head: HEAD, carriedFrom: EARLIER_HEAD, at: "2026-11-08T18:05:00Z", folds: FOLDS });

@@ -10,7 +10,7 @@ import type { CheckExcerpt, FailureExcerpt } from "../review/failureExcerpt.ts";
 import type { SentBack } from "./backToDesign.ts";
 import type { IssueRef } from "./blockers.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
-import type { DigestGiven } from "./digestContract.ts";
+import type { DigestGiven, PictureOf } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
 import type { CheckFixMark, FlakyCheckMark, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
@@ -2395,6 +2395,8 @@ export type Action =
       readonly headSha: string;
       /** The Product repo's web address, which the carried Digest's links start from. */
       readonly repoUrl: string;
+      /** What the Digest's pictures name, as the pull request's UI evidence has them: the carried comment names each picture so again. */
+      readonly pictureOf: PictureOf;
       /** The last Digest's comment, as it was posted. */
       readonly digest: string;
       readonly carried: readonly Action[];

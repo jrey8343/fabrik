@@ -181,10 +181,10 @@ export async function applyPlan(
     for (const action of actions) {
       if (action.kind === "carry-digest") {
         if (heads === null) throw new Error(`This job can't read #${action.pullRequest}'s head to carry its Digest forward`);
-        const { pullRequest, headSha, repoUrl } = action;
+        const { pullRequest, headSha, repoUrl, pictureOf } = action;
         // With the files unread at the new head no place could be re-pointed, so nothing is carried.
         const body = await heads.read(pullRequest, headSha, placedFilesIn(action.digest)).then(
-          (head) => carriedDigest(action.digest, { repoUrl, pullRequest, headSha }, head),
+          (head) => carriedDigest(action.digest, { repoUrl, pullRequest, headSha, pictureOf }, head),
           (error: unknown) => {
             console.log(`::warning title=Digest not carried::#${pullRequest} at ${headSha.slice(0, 7)}: ${error instanceof Error ? error.message : String(error)}`);
             return null;

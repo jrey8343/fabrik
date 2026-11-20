@@ -127,6 +127,8 @@ export function digestOnPass(event: Passed, pullRequest: PullRequestSnapshot, sn
       pullRequest: pullRequest.number,
       headSha: event.headSha,
       repoUrl: event.repoUrl,
+      // A pull request whose body the Fabrik App wrote with a shots marker has Evidence shots for its pictures.
+      pictureOf: pullRequest.shotsMarker === null ? "route" : "shot",
       digest: pullRequest.digests.at(-1)!.body,
       // The Digest carried is itself an older one once its copy for this head is posted.
       carried: [...collapseOlder(pullRequest), ...gateOpening(pullRequest, snapshot.operator)],

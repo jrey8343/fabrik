@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { aDigestFacts, aDigestGiven, aDigestReply } from "../__fixtures__/digests.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
+import { waitingShotsMarker } from "../evidence/uiEvidence.ts";
 import { agentRunIn } from "../github/apply.ts";
 import { carriedDigest, placedFilesIn } from "./digestCarry.ts";
 import { type DigestCommentRead, type DigestItem, digestCommentOf, digestMarkIn, digestTop, noDigestLine, readDigestComment } from "./digestContract.ts";
@@ -83,6 +84,7 @@ describe("The Digest carried forward: a pass on a head where only main moved", (
         pullRequest: 50,
         headSha: HEAD_SHA,
         repoUrl: REPO,
+        pictureOf: "route",
         digest: pullRequest.digests[0]!.body,
         carried: [
           { kind: "minimize-comment", pullRequest: 50, node: "IC_last", classifier: "OUTDATED" },
@@ -159,6 +161,20 @@ describe("The Digest carried forward: a pass on a head where only main moved", (
     expect(agentRunIn(passOn(rebased()))).toBeNull();
   });
 
+  it("on a pull request whose UI evidence is Evidence shots, says so, so the carried comment names its pictures as Evidence shots", () => {
+    const reply = aDigestReply({ items: [{ kind: "yours-to-judge", claim: "The saved basket is new.", sentence: "Only its shot shows it.", asks: [], places: [], picture: "Saved basket", suggestedRequest: null }] });
+    const written = digestCommentOf(reply, aDigestGiven({ repoUrl: REPO, headSha: WRITTEN_AT, runUrl: RUN, pictureOf: "shot", pictures: ["Saved basket"] }));
+    if (!written.ok) throw new Error(written.refused);
+    const shotsMarker = waitingShotsMarker({ named: [{ name: "Saved basket" }] }, 8000, { kind: "none" });
+
+    const [carry] = afterTheVerdict(passOn(rebased({ digests: [onThread(written.body)], shotsMarker })));
+    if (carry?.kind !== "carry-digest") throw new Error("expected the pass to carry the Digest");
+    const body = carriedDigest(carry.digest, carry, { files: [], changed: [] });
+
+    expect(carry.pictureOf).toBe("shot");
+    expect(body).toContain("\n  Picture: the Evidence shot `Saved basket`\n");
+  });
+
   it("with the Digest off in Kit config, nothing is carried and the gate opens as it always has", () => {
     expect(afterTheVerdict(passOn(rebased(), kitConfig({ digest: { enabled: false } })))).toEqual([
       { kind: "mark-ready-for-review", pullRequest: 50 },
@@ -175,7 +191,7 @@ const TWELVE_FROM_MAIN = Array.from({ length: 12 }, (_, index) => `import { help
 const SAVE_MOVED_DOWN_12 = `${[...TWELVE_FROM_MAIN, ...SAVE_LINES].join("\n")}\n`;
 
 const NEW_HEAD = HEAD_SHA;
-const WHERE = { repoUrl: REPO, pullRequest: 50, headSha: NEW_HEAD };
+const WHERE = { repoUrl: REPO, pullRequest: 50, headSha: NEW_HEAD, pictureOf: "route" } as const;
 const BLOB = `${REPO}/blob/${NEW_HEAD}`;
 
 function anItem(claim: string, places: readonly NamedPlace[], picture: string | null = null): DigestItem {
@@ -271,7 +287,7 @@ describe("The Digest carried forward: the comment posted for the new head", () =
   it("keeps an item's picture as it was, whatever the new head holds", () => {
     const rendered = digestCommentOf(
       aDigestReply({ items: [anItem("The saved basket page is new.", [inSave(10, 12)], "/basket/saved")] }),
-      aDigestGiven({ repoUrl: REPO, headSha: WRITTEN_AT, runUrl: RUN, head: aHead(), capturedRoutes: ["/basket/saved"] }),
+      aDigestGiven({ repoUrl: REPO, headSha: WRITTEN_AT, runUrl: RUN, head: aHead(), pictures: ["/basket/saved"] }),
     );
     if (!rendered.ok) throw new Error(rendered.refused);
     // Its place is gone at the new head, and its picture stays.
