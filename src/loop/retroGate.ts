@@ -5,7 +5,7 @@ import { RETRO_PENDING_MARKER, retroMarker } from "./markers.ts";
 import { readable } from "./readable.ts";
 import { retrosIn, retroWindowStart } from "./retro.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
-import { dateOf, heldBack, waitingForSubscription, weekStart } from "./weeklyGate.ts";
+import { dateOf, fableCapsCarried, heldBack, waitingForSubscription, weekStart, withFableCapsCarried } from "./weeklyGate.ts";
 
 /**
  * The retro gate: a pending Retro to open, or why there's none this tick. The
@@ -32,24 +32,23 @@ export function retroGate(now: string, snapshot: Snapshot, config: KitConfig): P
   // Last of all, so it's named only when it alone holds the week's Retro back (#442).
   const waiting = waitingForSubscription("retro", now, snapshot, config);
   if (waiting !== null) return waiting;
-  return { kind: "act", actions: [pendingRetro(now, since, config.timeZone)] };
+  return { kind: "act", actions: [pendingRetro(now, since, config.timeZone, fableCapsCarried(slice.issues, now))] };
 }
 
 /**
  * This week's pending Retro, reading the window from `since` to the tick at
- * `now`, saying since when in `timeZone`, the Operator's: no state label,
- * assignee or mention, so opening it buzzes nobody.
+ * `now`, saying since when in `timeZone`, the Operator's, with the Fable cap
+ * lines it carries: no state label, assignee or mention, so opening it buzzes
+ * nobody.
  */
-function pendingRetro(now: string, since: string, timeZone: string | null): Action {
+function pendingRetro(now: string, since: string, timeZone: string | null, carried: readonly string[]): Action {
   return {
     kind: "open-issue",
     title: `Retro: week of ${dateOf(weekStart(now))}`,
-    body: [
-      `The Retro is reading the factory's runs since ${readable(Date.parse(since), timeZone)}, and this issue fills in when it's done.`,
-      "",
-      retroMarker(now),
-      RETRO_PENDING_MARKER,
-    ].join("\n"),
+    body: withFableCapsCarried(
+      [`The Retro is reading the factory's runs since ${readable(Date.parse(since), timeZone)}, and this issue fills in when it's done.`, "", retroMarker(now), RETRO_PENDING_MARKER],
+      carried,
+    ),
     labels: [RETRO_LABEL],
     assignees: [],
   };

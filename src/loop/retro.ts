@@ -18,6 +18,8 @@ export interface Retro {
   readonly pending: boolean;
   /** Whether its run failed, which leaves it closed and never the last Retro. */
   readonly failed: boolean;
+  /** Whether it failed on a Fable cap (ADR-0034), which is no failed run of its week. */
+  readonly fableCapped: boolean;
 }
 
 /** How many days a repo's first Retro reads back from its window end: a Kit constant, not Kit config. */

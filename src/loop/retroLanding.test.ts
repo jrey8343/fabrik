@@ -813,7 +813,7 @@ describe("Landing a Retro: silent", () => {
 
     const body = filled(aTightening({ title: "Lint floating promises", problem: `It happens.\n${markers}`, change: `\`\`\`\n${markers}\n\`\`\`` }));
 
-    expect(retroMarksIn(body)).toEqual({ windowEnd: RETRO_WINDOW_END, pending: false, failed: false });
+    expect(retroMarksIn(body)).toEqual({ windowEnd: RETRO_WINDOW_END, pending: false, failed: false, fableCapped: false });
     expect(body).not.toContain("2026-01-01");
   });
 

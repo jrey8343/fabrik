@@ -148,6 +148,26 @@ describe("Each way a Retro run fails", () => {
   });
 });
 
+// A Fable cap is no failure of the Retro's week: the gate opens the next one, which falls back at its start (ADR-0034).
+describe("A Retro run refused on its Subscription's Fable cap", () => {
+  it("closes the Retro with the cap marked on it, posting nothing and mentioning nobody", () => {
+    const capped = retroFailed({ report: { failure: "fable-cap", detail: "seven_day_fable" }, subscription: "Claude token" });
+
+    const plan = planFor(capped, snapshotOf(aRetro()), kitConfig());
+
+    expect(actionsOf(plan)).toEqual([
+      {
+        kind: "edit-issue-body",
+        issue: 120,
+        body: expect.stringMatching(/^The Retro's run hit the Fable cap on the `Claude token` Subscription, so the next Retro starts where Fable is left, or on Opus 5\.5\./),
+      },
+      { kind: "mark-fable-cap", issue: 120, subscription: "Claude token", resetsAt: null },
+      { kind: "close", issue: 120, reason: "not_planned" },
+    ]);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+});
+
 describe("A second failed Retro run in a week", () => {
   it("@-mentions the Operator on the Retro it closes, with both runs and how each failed", () => {
     const earlier = aRetroIssue({ number: 119, stateReason: "not_planned", createdAt: "2026-11-07T00:05:00Z", body: retroBody(RETRO_WINDOW_END, "failed") });

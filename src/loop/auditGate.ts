@@ -5,7 +5,7 @@ import { auditsIn, lastAudit } from "./audit.ts";
 import { AUDIT_LABEL } from "./labels.ts";
 import { AUDIT_PENDING_MARKER, auditMarker } from "./markers.ts";
 import type { Action, KitConfig, Plan, Snapshot } from "./types.ts";
-import { dateOf, heldBack, waitingForSubscription, weekStart } from "./weeklyGate.ts";
+import { dateOf, fableCapsCarried, heldBack, waitingForSubscription, weekStart, withFableCapsCarried } from "./weeklyGate.ts";
 
 /**
  * The audit gate: a pending Audit to open, or why there's none this tick. The
@@ -33,20 +33,21 @@ export function auditGate(now: string, snapshot: Snapshot, config: KitConfig): P
   // the tick can't start an Auditor run at a reset, so none is ever held.
   const waiting = waitingForSubscription("audit", now, snapshot, config);
   if (waiting !== null) return waiting;
-  return { kind: "act", actions: [pendingAudit(weekStart(now), head)] };
+  return { kind: "act", actions: [pendingAudit(weekStart(now), head, fableCapsCarried(slice.issues, now))] };
 }
 
-/** This week's pending Audit of `head`: no state label, assignee or mention, so opening it buzzes nobody. */
-function pendingAudit(week: number, head: string): Action {
+/**
+ * This week's pending Audit of `head`, with the Fable cap lines it carries:
+ * no state label, assignee or mention, so opening it buzzes nobody.
+ */
+function pendingAudit(week: number, head: string, carried: readonly string[]): Action {
   return {
     kind: "open-issue",
     title: `Audit: week of ${dateOf(week)}`,
-    body: [
-      `The Auditor is reading the default branch up to \`${shortSha(head)}\`, and this issue fills in when it's done.`,
-      "",
-      auditMarker(head),
-      AUDIT_PENDING_MARKER,
-    ].join("\n"),
+    body: withFableCapsCarried(
+      [`The Auditor is reading the default branch up to \`${shortSha(head)}\`, and this issue fills in when it's done.`, "", auditMarker(head), AUDIT_PENDING_MARKER],
+      carried,
+    ),
     labels: [AUDIT_LABEL],
     assignees: [],
   };

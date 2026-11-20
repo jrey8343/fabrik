@@ -18,6 +18,8 @@ export interface Audit {
   readonly pending: boolean;
   /** Whether its run failed, which leaves it closed and never the last Audit. */
   readonly failed: boolean;
+  /** Whether it failed on a Fable cap (ADR-0034), which is no failed run of its week. */
+  readonly fableCapped: boolean;
   /** Whether its run filled it with candidates; a clean Audit, which closed itself, has none. */
   readonly filled: boolean;
 }

@@ -4,6 +4,7 @@
 // of the ISO week, which runs from Monday 00:00 to Monday 00:00 in UTC; only
 // the times their notes show the Operator are in the Operator's time zone.
 import { WEEK_DAYS, type WeekDay } from "../kit/config.ts";
+import { type FableCapReading, fableCapMarker, fableCapsIn, inForce } from "./fableCap.ts";
 import { carrierOf } from "./hold.ts";
 import { weeklyRunName, weeklyRunWaitingMarker, weeklyRunWaitingNoted, type WeeklyRunKind } from "./markers.ts";
 import { readable } from "./readable.ts";
@@ -33,6 +34,12 @@ export interface WeeklyIssue {
   readonly createdAt: string;
   /** Whether its run failed, which leaves it closed. */
   readonly failed: boolean;
+  /**
+   * Whether that failure was a Fable cap (ADR-0034), which counts as no
+   * failed run of its week: the gate opens the next one, which falls back
+   * at its start.
+   */
+  readonly fableCapped: boolean;
 }
 
 /**
@@ -94,16 +101,38 @@ export function waitingForSubscription(
 /**
  * Those of a gate's issues, an Audit's or a Retro's, opened in the week from
  * `week`, Monday 00:00 UTC in milliseconds, whose runs failed, oldest first:
- * FAILED_RUNS_A_WEEK of them hold the gate back until the next week.
+ * FAILED_RUNS_A_WEEK of them hold the gate back until the next week. One that
+ * failed on a Fable cap is no failed run (ADR-0034).
  */
-export function failedInWeek<Issue extends Pick<WeeklyIssue, "createdAt" | "failed" | "number">>(issues: readonly Issue[], week: number): Issue[] {
+export function failedInWeek<Issue extends Pick<WeeklyIssue, "createdAt" | "failed" | "fableCapped" | "number">>(issues: readonly Issue[], week: number): Issue[] {
   return openedInWeek(issues, week)
-    .filter((issue) => issue.failed)
+    .filter((issue) => issue.failed && !issue.fableCapped)
     .toSorted((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.number - b.number);
 }
 
 function openedInWeek<Issue extends Pick<WeeklyIssue, "createdAt">>(issues: readonly Issue[], week: number): Issue[] {
   return issues.filter(({ createdAt }) => Date.parse(createdAt) >= week && Date.parse(createdAt) < week + 7 * DAY);
+}
+
+/**
+ * The Fable cap lines a gate's next pending issue carries (ADR-0034): the
+ * newest reading for each Subscription, still in force at `now`, among the
+ * hidden lines on the Fabrik App's issues of the gate, `bodies`, so the run
+ * its opening starts falls back as a re-run's does, whether or not the Kit
+ * job reads the store.
+ */
+export function fableCapsCarried(issues: readonly Pick<WeeklyIssueSnapshot, "body" | "byApp">[], now: string): string[] {
+  const newest = new Map<string, FableCapReading>();
+  for (const reading of inForce(issues.flatMap(({ body, byApp }) => (byApp ? fableCapsIn(body) : [])), now)) {
+    const seen = newest.get(reading.subscription);
+    if (seen === undefined || Date.parse(reading.until) > Date.parse(seen.until)) newest.set(reading.subscription, reading);
+  }
+  return [...newest.values()].map(fableCapMarker);
+}
+
+/** A pending issue's body, with the Fable cap lines it carries (fableCapsCarried) under its own lines. */
+export function withFableCapsCarried(lines: readonly string[], carried: readonly string[]): string {
+  return [...lines, ...(carried.length === 0 ? [] : ["", ...carried])].join("\n");
 }
 
 /** Monday 00:00 UTC of the ISO week `now` falls in, in milliseconds. */

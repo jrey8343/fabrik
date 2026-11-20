@@ -172,19 +172,50 @@ function runLink(runUrl: string | null): string {
 /** A failed weekly run's pending issue rewritten to its one line, keeping its own marker, and closed as not planned. */
 function failedIssue(
   role: WeeklyRole,
-  { number, body }: Pick<IssueSnapshot, "number" | "body">,
+  issue: Pick<IssueSnapshot, "number" | "body">,
   how: string,
   runUrl: string | null,
 ): [Action, Action] {
-  const run = WEEKLY_RUNS[role];
+  return closedWith(role, issue, `${WEEKLY_RUNS[role].runName} failed: ${how}.${runLink(runUrl)}`);
+}
+
+/** A weekly run's pending issue rewritten to `line`, keeping its own marker, with the failed one, and closed as not planned. */
+function closedWith(role: WeeklyRole, { number, body }: Pick<IssueSnapshot, "number" | "body">, line: string): [Action, Action] {
   return [
-    {
-      kind: "edit-issue-body",
-      issue: number,
-      body: [`${run.runName} failed: ${how}.${runLink(runUrl)}`, "", ...run.failedMarkers(body)].join("\n"),
-    },
+    { kind: "edit-issue-body", issue: number, body: [line, "", ...WEEKLY_RUNS[role].failedMarkers(body)].join("\n") },
     { kind: "close", issue: number, reason: "not_planned" },
   ];
+}
+
+/** What a weekly run refused on its Subscription's Fable cap said of it. */
+export interface WeeklyFableCap {
+  readonly subscription: string;
+  /** The cap's reset, and its Subscription's weekly-limit reset, each ISO 8601, as the run's failure report gave them. */
+  readonly resetsAt: string | null;
+  readonly weeklyResetsAt: string | null;
+  readonly runUrl: string;
+}
+
+/**
+ * The plan for a weekly run refused on its Subscription's Fable cap on its
+ * pending issue (ADR-0034). It isn't re-run, as no weekly run is, and it is
+ * no failure of the week: its issue closes as a failed one does, so it is
+ * never the last Audit or Retro, with one line saying so and the cap's hidden
+ * line marked on it, but it counts toward no week's failed runs
+ * (failedInWeek), posts nothing and mentions nobody. The gate opens the next
+ * one, carrying the hidden line (fableCapsCarried), so its run starts where
+ * Fable is left, or on Opus 5.5, through the normal choice.
+ */
+export function fableCappedWeekly(role: WeeklyRole, { issue }: IssueContext, { subscription, resetsAt, weeklyResetsAt, runUrl }: WeeklyFableCap): Plan {
+  const run = WEEKLY_RUNS[role];
+  if (!run.isPending(issue)) {
+    return { kind: "nothing", reason: `#${issue.number} is no longer a pending ${run.issueName}, so its run's Fable cap changes nothing` };
+  }
+  const line = `${run.runName} hit the Fable cap on the \`${subscription}\` Subscription, so the next ${run.issueName} starts where Fable is left, or on Opus 5.5.${runLink(runUrl)}`;
+  const [edit, close] = closedWith(role, issue, line);
+  // After the edit, whose body it reads fresh, and before the close.
+  const mark: Action = { kind: "mark-fable-cap", issue: issue.number, subscription, resetsAt, ...(weeklyResetsAt === null ? {} : { weeklyResetsAt }) };
+  return { kind: "act", actions: [edit, mark, close] };
 }
 
 /**

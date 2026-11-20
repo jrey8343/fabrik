@@ -57,7 +57,7 @@ import {
   type Plan,
   type PullRequestSnapshot,
 } from "./types.ts";
-import { failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
+import { fableCappedWeekly, failWeekly, isWeeklyRole } from "./weeklyRuns.ts";
 
 type FailedRun = Extract<LoopEvent, { kind: "agent-run-failed" }>;
 
@@ -144,11 +144,9 @@ function howItFailed(failure: InfrastructureFailure, run: FailedRun, config: Kit
     }
     case "weekly-limit":
       return "it hit the weekly usage limit";
-    // Beside a weekly run's, only a refusal the Kit can't re-run, where it had marked the cap reached already, gets a notice (refusedAgain).
-    case "fable-cap": {
-      const capped = `it hit the Fable cap on the \`${subscriptionOfRun(run, config)}\` Subscription`;
-      return isWeeklyRole(run.role) ? capped : `${capped} again, though the Kit had marked it reached, so it isn't re-run on its own`;
-    }
+    // Only a refusal the Kit had marked reached already fails as one, on any role (refusedAgain).
+    case "fable-cap":
+      return `it hit the Fable cap on the \`${subscriptionOfRun(run, config)}\` Subscription again, though the Kit had marked it reached, so it isn't re-run on its own`;
     case "metered-billing":
       return "the preflight found a route that would bill metered API usage, so it refused to start the agent";
     case "usage-credits":
@@ -288,7 +286,7 @@ export function failureNotice(
     return landed.kind !== "act" || repoWide === null ? landed : { ...landed, actions: [...landed.actions, ...repoWide.actions] };
   }
   if (run.role === "review" && failure === "merge-conflict") return conflictedReviewPlan(run, context, config, pullRequest, mergeable);
-  // The scheduled tick starts the next Audit or Retro, so a Fable cap fails one as any failure does.
+  // An Audit or a Retro isn't re-run: its Fable cap closes it quietly, below.
   if (failure === "fable-cap" && !isWeeklyRole(run.role) && !refusedAgain(run, ranOn, fableCaps)) return fableCapRerun(run, context, ranOn);
   const refused = heldOnRefusal(run, failure, context, ranOn);
   if (refused !== null) {
@@ -313,6 +311,15 @@ export function failureNotice(
     // After the weekly-limit issue's own actions, since it may link the one they open.
     const line = repoWide?.heldOn === undefined ? [] : [heldLineOn(held, name, repoWide.heldOn, { until: firstReset, reset: true, timeZone: config.timeZone })];
     return { kind: "act", actions: [...holding(held, firstReset), ...notice, ...line] };
+  }
+  // A Fable cap is no failure of an Audit's or a Retro's week: the next one falls back at its start (ADR-0034).
+  if (failure === "fable-cap" && isWeeklyRole(run.role) && !refusedAgain(run, ranOn, fableCaps)) {
+    return fableCappedWeekly(run.role, context, {
+      subscription: ranOn.subscription,
+      resetsAt: run.report?.resetsAt ?? null,
+      weeklyResetsAt: run.report?.weeklyResetsAt ?? null,
+      runUrl: run.runUrl,
+    });
   }
   // The scheduled tick tries a failed Audit or Retro again, so there's no trigger label to re-add.
   if (isWeeklyRole(run.role)) {

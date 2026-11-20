@@ -126,8 +126,6 @@ describe("A failed Auditor run on the pending Audit", () => {
     ["a provider error", auditFailed(report("provider-error")), "the model provider returned an error"],
     ["a dead token", auditFailed(report("dead-token")), "the Claude token was refused (`authentication_failed`), so it may need rotating"],
     ["the weekly limit", auditFailed(report("weekly-limit")), "it hit the weekly usage limit"],
-    // Never re-run, as no Audit is: the next one falls back on its start (ADR-0034).
-    ["a Fable cap", auditFailed(report("fable-cap")), "it hit the Fable cap on the `Claude token` Subscription"],
     [
       "metered billing",
       auditFailed(report("metered-billing")),
@@ -145,6 +143,60 @@ describe("A failed Auditor run on the pending Audit", () => {
       },
       { kind: "close", issue: 98, reason: "not_planned" },
     ]);
+  });
+});
+
+// An Audit isn't re-run on any failure, and a Fable cap is no failure of the week: the gate opens the next one,
+// which falls back at its start, as any run due does (ADR-0034).
+describe("An Auditor run refused on its Subscription's Fable cap", () => {
+  const capped = auditFailed({
+    report: { failure: "fable-cap", detail: "seven_day_fable", resetsAt: "2026-11-09T04:00:00.000Z" },
+    subscription: "Claude token",
+  });
+  const EARLIER_RUN = "https://github.com/acme/shop/actions/runs/41/attempts/1";
+  const earlier = anAuditIssue({
+    number: 97,
+    title: "Audit: week of 2026-11-02",
+    stateReason: "not_planned",
+    createdAt: "2026-11-08T00:05:00Z",
+    body: `The Auditor's run failed: it crashed. [The run](${EARLIER_RUN})\n\n<!-- fabrik:audit ${AUDITED_SHA} -->\n<!-- fabrik:audit-failed -->`,
+  });
+  const pending = anAuditIssue({ number: 98, open: true, stateReason: null, createdAt: "2026-11-08T02:05:00Z", body: auditBody(AUDITED_SHA, "pending") });
+
+  it("closes the Audit with the cap marked on it, posting nothing and mentioning nobody, so the next one starts where Fable is left", () => {
+    const plan = planFor(capped, snapshotOf(anAudit()), kitConfig());
+
+    expect(actionsOf(plan)).toEqual([
+      {
+        kind: "edit-issue-body",
+        issue: 98,
+        body: [
+          `The Auditor's run hit the Fable cap on the \`Claude token\` Subscription, so the next Audit starts where Fable is left, or on Opus 5.5. [The run](${RUN})`,
+          "",
+          `<!-- fabrik:audit ${AUDITED_SHA} -->`,
+          "<!-- fabrik:audit-failed -->",
+        ].join("\n"),
+      },
+      { kind: "mark-fable-cap", issue: 98, subscription: "Claude token", resetsAt: "2026-11-09T04:00:00.000Z" },
+      { kind: "close", issue: 98, reason: "not_planned" },
+    ]);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("isn't the week's second failure after an earlier one failed: no comment, no mention", () => {
+    const plan = planFor(capped, snapshotOf(anAudit(), { weeklyIssues: [pending, earlier, anAuditIssue()] }), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["edit-issue-body", "mark-fable-cap", "close"]);
+    expect(notificationsOf(plan)).toEqual([]);
+  });
+
+  it("counts as no failure for a later one either: a crash after it is the week's first", () => {
+    const cappedEarlier = { ...earlier, body: `The Auditor's run hit the Fable cap.\n\n<!-- fabrik:audit ${AUDITED_SHA} -->\n<!-- fabrik:audit-failed -->\n\n<!-- fabrik:fable-cap Claude token until 2026-11-09T04:00:00.000Z -->` };
+
+    const plan = planFor(auditFailed(), snapshotOf(anAudit(), { weeklyIssues: [pending, cappedEarlier, anAuditIssue()] }), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["edit-issue-body", "close"]);
+    expect(notificationsOf(plan)).toEqual([]);
   });
 });
 
