@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { aReadyOperator, fakeCommands } from "../__fixtures__/setupCommands.ts";
 import { aWorld, store, type World, worldScript } from "../__fixtures__/setupWorld.ts";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
+import { resolveKitConfig } from "../kit/config.ts";
 import { type Env, type Run, spawnRun } from "./exec.ts";
 import { runSetup } from "./program.ts";
 import type { Prompt } from "./prompt.ts";
@@ -17,7 +18,7 @@ import { WIZARD_SECOND_SUBSCRIPTION_ENV } from "./wizard.ts";
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 const BRANCH = "fabrik/setup-v1.4.2";
 /** Every question but the yes answered by a flag. */
-const FLAGS = ["--no-production", "--no-time-zone", "--no-second-subscription", "--no-paused"];
+const FLAGS = ["--no-production", "--no-staging", "--no-time-zone", "--no-second-subscription", "--no-paused"];
 
 let origin: string;
 let checkout: string;
@@ -457,7 +458,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const world = aWorld();
     const starter = await readFile(join(KIT_DIR, "templates", "fabrik-config.json"), "utf8");
 
-    const { code, said, wizardRuns } = await setupOnce(world, { wizard: addsASecondSubscription, args: ["--no-production", "--no-time-zone", "--second-subscription", "--no-paused"] });
+    const { code, said, wizardRuns } = await setupOnce(world, { wizard: addsASecondSubscription, args: ["--no-production", "--no-staging", "--no-time-zone", "--second-subscription", "--no-paused"] });
 
     expect(code).toBe(0);
     // So the wizard's stage says setup lists it, rather than asking for a hand edit.
@@ -477,7 +478,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("with a second Subscription whose stage the Operator skipped, lists nothing and says to walk it and run setup again", async () => {
     const world = aWorld();
 
-    const { code } = await setupOnce(world, { args: ["--no-production", "--no-time-zone", "--second-subscription", "--no-paused"] });
+    const { code } = await setupOnce(world, { args: ["--no-production", "--no-staging", "--no-time-zone", "--second-subscription", "--no-paused"] });
 
     expect(code).toBe(0);
     expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).subscriptions).toEqual(["Claude token"]);
@@ -489,7 +490,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("with --paused on a fresh repo, the setup PR says the starter pauses Dispatch, not that --paused had no effect", async () => {
     const world = aWorld();
 
-    const { code, said } = await setupOnce(world, { args: ["--no-production", "--no-time-zone", "--no-second-subscription", "--paused"] });
+    const { code, said } = await setupOnce(world, { args: ["--no-production", "--no-staging", "--no-time-zone", "--no-second-subscription", "--paused"] });
 
     expect(code).toBe(0);
     expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).max_in_flight).toBe(0);
@@ -514,7 +515,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   it("with --paused, a run after one that wrote the starter and stopped partway says nothing about --paused having had no effect", async () => {
     const world = aWorld();
     world.failingLabels.add("needs-info");
-    const args = ["--no-production", "--no-time-zone", "--no-second-subscription", "--paused"];
+    const args = ["--no-production", "--no-staging", "--no-time-zone", "--no-second-subscription", "--paused"];
     await setupOnce(world, { args });
     world.failingLabels.clear();
 
@@ -547,7 +548,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const PAUSED = "Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.";
     const WARNING = "2 open issues are labelled ready-for-agent: Dispatch starts releasing them to Implementers as soon as the setup PR merges.";
     const PAUSES = "- write .fabrik/config.json (the starter Kit config, with Dispatch paused now (max_in_flight 0))";
-    const withPaused = (paused: boolean) => ["--no-production", "--no-time-zone", "--no-second-subscription", paused ? "--paused" : "--no-paused"];
+    const withPaused = (paused: boolean) => ["--no-production", "--no-staging", "--no-time-zone", "--no-second-subscription", paused ? "--paused" : "--no-paused"];
     const closingOf = (said: string[]) => said.slice(said.indexOf("The setup PR: https://github.com/acme/clinic/pull/1"));
     const maxInFlight = () => JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`)).max_in_flight;
 
@@ -601,7 +602,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       await setupOnce(world, { args: withPaused(true) });
       world.failingLabels.clear();
 
-      const { code, said, questions } = await setupOnce(world, { args: ["--no-production", "--no-time-zone", "--no-second-subscription"], answers: ["", "y"] });
+      const { code, said, questions } = await setupOnce(world, { args: ["--no-production", "--no-staging", "--no-time-zone", "--no-second-subscription"], answers: ["", "y"] });
 
       expect(code).toBe(0);
       expect(questions[0]).toBe("Install with Dispatch paused, so no Implementer starts until you raise max_in_flight? [Y/n] ");
@@ -883,7 +884,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   });
 
   describe("production's question", () => {
-    const OTHERS = ["--no-time-zone", "--no-second-subscription", "--no-paused"];
+    const OTHERS = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-staging"];
     const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
     const NAMED = 'the production block: url "https://clinic.example.com", environment "production"';
 
@@ -936,6 +937,54 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(again.code).toBe(0);
       expect(again.said).toContain(COMPLETE);
       expect(world.prs).toHaveLength(1);
+    });
+  });
+
+  describe("staging's question", () => {
+    const OTHERS = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production"];
+    const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
+    const trial = { url: "https://staging.clinic.example.com", environment: "staging" };
+
+    it("on a fresh repo, offers what the Deployments carry and writes a block Kit config accepts into the setup PR; once merged, a later run asks nothing and leaves it byte for byte", async () => {
+      const world = aWorld();
+      world.deployments.push({ environment: "staging", url: "https://staging.clinic.example.com" }, { environment: "production", url: "https://clinic.example.com" });
+
+      const first = await setupOnce(world, { args: OTHERS, answers: ["", "", "y"] });
+
+      expect(first.code).toBe(0);
+      expect(first.questions.slice(0, 2)).toEqual([
+        "The environment staging's deploys carry in GitHub's Deployments, or none to leave staging out [staging]: ",
+        "Staging's address, or no to leave staging out [https://staging.clinic.example.com]: ",
+      ]);
+      const config = originGit("show", `${BRANCH}:.fabrik/config.json`);
+      const resolved = resolveKitConfig({ config });
+      expect(resolved.ok && resolved.config.staging).toEqual(trial);
+      expect(world.prs[0]?.body).toContain('the staging block: url "https://staging.clinic.example.com", environment "staging"');
+      mergeTheSetupPr(world);
+
+      const again = await setupOnce(world, { args: OTHERS, answers: [] });
+
+      expect(again.code).toBe(0);
+      expect(again.questions).toEqual([]);
+      expect(again.said).toContain(COMPLETE);
+      expect(await readFile(join(checkout, ".fabrik/config.json"), "utf8")).toBe(config);
+      expect(again.calls.some((call) => call.line.includes("deployments"))).toBe(false);
+    });
+
+    it("leaves the starter's staging null when the Operator declines, and asks again on the next run", async () => {
+      const world = aWorld();
+      world.deployments.push({ environment: "staging", url: "https://staging.clinic.example.com" });
+
+      const first = await setupOnce(world, { args: OTHERS, answers: ["none", "y"] });
+
+      expect(first.code).toBe(0);
+      expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`))).toMatchObject({ staging: null });
+      mergeTheSetupPr(world);
+
+      const again = await setupOnce(world, { args: OTHERS, answers: ["none"] });
+
+      expect(again.questions).toEqual(["The environment staging's deploys carry in GitHub's Deployments, or none to leave staging out [staging]: "]);
+      expect(again.said).toContain(COMPLETE);
     });
   });
 
@@ -1028,7 +1077,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     it("with a yes to a second Subscription whose token isn't stored, walks the wizard, and lists it in the subscriptions line in a setup PR", async () => {
       const world = aWorld();
       await aMergedInstallLacking(world, () => {});
-      const args = ["--no-production", "--no-time-zone", "--second-subscription", "--no-paused"];
+      const args = ["--no-production", "--no-staging", "--no-time-zone", "--second-subscription", "--no-paused"];
 
       const { code, said, complaints, questions, wizardRuns } = await setupOnce(world, { args, wizard: addsASecondSubscription });
 
@@ -1111,7 +1160,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
     describe("listing two Subscriptions, a rotation setup never adds to", () => {
       const LEFT_AS_IT_IS = ".fabrik/config.json already lists 2 Subscriptions, and Setup leaves a list of two or more as it is";
-      const withTheFlag = ["--no-production", "--no-time-zone", "--second-subscription", "--no-paused"];
+      const withTheFlag = ["--no-production", "--no-staging", "--no-time-zone", "--second-subscription", "--no-paused"];
 
       async function aRotationOnMain(world: World): Promise<void> {
         await aMergedInstallLacking(world, async (lacking) => {
@@ -1124,7 +1173,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         const world = aWorld();
         await aRotationOnMain(world);
 
-        const { code, said, questions } = await setupOnce(world, { answers: [], args: ["--no-production", "--no-time-zone", "--no-paused"] });
+        const { code, said, questions } = await setupOnce(world, { answers: [], args: ["--no-production", "--no-staging", "--no-time-zone", "--no-paused"] });
 
         expect(code).toBe(0);
         expect(questions).toEqual([]);
@@ -1161,7 +1210,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       const world = aWorld();
       await aMergedInstallLacking(world, () => listOnMain(["Claude token 2"]));
 
-      const { code, wizardRuns } = await setupOnce(world, { args: ["--no-production", "--no-time-zone", "--second-subscription", "--no-paused"], wizard: addsASecondSubscription });
+      const { code, wizardRuns } = await setupOnce(world, { args: ["--no-production", "--no-staging", "--no-time-zone", "--second-subscription", "--no-paused"], wizard: addsASecondSubscription });
 
       expect(code).toBe(0);
       expect(wizardRuns[0]?.env[WIZARD_SECOND_SUBSCRIPTION_ENV]).toBe("no");
@@ -1174,7 +1223,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         await listOnMain(["Claude token 2"]);
       });
 
-      const { code, said, questions } = await setupOnce(world, { answers: [], args: ["--no-production", "--no-time-zone", "--no-paused"] });
+      const { code, said, questions } = await setupOnce(world, { answers: [], args: ["--no-production", "--no-staging", "--no-time-zone", "--no-paused"] });
 
       expect(code).toBe(0);
       expect(questions).toEqual([]);

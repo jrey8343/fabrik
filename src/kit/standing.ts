@@ -15,10 +15,13 @@ import { handBackStandingsOf } from "./standingHandBacks.ts";
 import { inFlightStandingsOf } from "./standingInFlight.ts";
 import { operatorStandingsOf } from "./standingOperator.ts";
 import type { DeploymentsRead } from "../read/deployments.ts";
-import { type MergedLastDayFacts, type ProductionDetail, productionAt, productionStandingsOf } from "./standingProduction.ts";
+import type { MainChecksRead } from "../read/mainChecks.ts";
+import { type MergedLastDayFacts, type ProductionDetail, productionAt } from "./standingProduction.ts";
+import { mergedStandingsOf, type PromotedFacts, type StagingDetail } from "./standingStaging.ts";
 import { joinPairing, pairingsOf, plainStandingsOf } from "./standingPlain.ts";
 import { silenceStandingsOf, type WaitingOnKitSilence } from "./standingSilence.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
+import type { TrialFacts, TrialResultGiven } from "./trialResult.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 /**
@@ -63,7 +66,7 @@ export type StandingWork =
   | "plain";
 
 /** Its place on the Loop; a Standing with none has `place: null`. */
-export type StandingPlace = "triage" | "design" | "implement" | "review" | "merge-gate" | "production";
+export type StandingPlace = "triage" | "design" | "implement" | "review" | "merge-gate" | "staging" | "production";
 
 /** Whose move is next: the Operator's, the Kit's, or nobody's, when nothing is owed and nothing moves. */
 export type StandingMove = "operator" | "kit" | "nobody";
@@ -103,6 +106,9 @@ export const STANDING_NAMES = [
   "deploy-failed",
   "no-deploy-seen",
   "merged",
+  "on-staging",
+  "trial-accepted",
+  "trial-problem",
 ] as const;
 
 export type StandingName = (typeof STANDING_NAMES)[number];
@@ -249,12 +255,33 @@ export interface StandingDetails {
   readonly blocked: { readonly blockers: readonly { readonly repo: string; readonly number: number }[]; readonly hiddenBlockers: number };
   /** `author` is a login, with no `@`. */
   readonly "waiting-on-author": { readonly author: string };
-  /** A merged agent pull request at Production (src/kit/standingProduction.ts): each of its five names carries the same keys. */
+  /**
+   * A merged agent pull request at Production (src/kit/standingProduction.ts):
+   * each of its five names carries the same keys. In a repo that declares
+   * `staging` every one but `live` is said at Staging too, of the staging
+   * environment, and each carries `staging` beside (./standingStaging.ts).
+   */
   readonly deploying: ProductionDetail;
   readonly live: ProductionDetail;
   readonly "deploy-failed": ProductionDetail;
   readonly "no-deploy-seen": ProductionDetail;
   readonly merged: ProductionDetail;
+  /**
+   * A merged agent pull request on staging (./standingStaging.ts), in a repo
+   * that declares `staging`: what each of the five names above carries there,
+   * `staging.trial` saying whether it needs a Staging trial and why.
+   */
+  readonly "on-staging": ProductionDetail & { readonly staging: StagingDetail };
+  /**
+   * A merged agent pull request whose Staging trial has a result (#856,
+   * ./trialResult.ts), at Staging whether or not it is on staging: what
+   * `on-staging` carries, its `staging.result` holding the result, with its
+   * Trial problems and, where it was accepted through its fix, the fix. No
+   * deploy decides its name, so it names no Deployment. Each name has the
+   * result that gives it, never none.
+   */
+  readonly "trial-accepted": ProductionDetail & { readonly staging: StagingDetail & { readonly result: Extract<TrialResultGiven, { readonly is: "accepted" }> } };
+  readonly "trial-problem": ProductionDetail & { readonly staging: StagingDetail & { readonly result: Extract<TrialResultGiven, { readonly is: "problem" }> } };
 }
 
 /** The fields every Standing has, whatever its name. */
@@ -264,7 +291,7 @@ interface StandingFields {
   readonly repo: string;
   /** The issue this work is, or null for a Plain pull request with no issue. */
   readonly issue: number | null;
-  /** Its open pull request, or null; at Production, the merged one. */
+  /** Its open pull request, or null; at Staging and at Production, the merged one. */
   readonly pullRequest: number | null;
   readonly work: StandingWork;
   /** Null: no place on the Loop. */
@@ -272,7 +299,7 @@ interface StandingFields {
   readonly move: StandingMove;
   /** The move is the Operator's, or the name is `stuck`. */
   readonly yours: boolean;
-  /** Work is stopped until the Operator moves: only ever true when `yours`. */
+  /** Work is stopped until the Operator moves: only ever true when `yours`, and never for a merged change on staging, which holds nothing up. */
   readonly stopsWork: boolean;
   /** When it came to stand so, ISO 8601. */
   readonly since: string;
@@ -325,6 +352,46 @@ export interface StandingFacts {
   readonly mergedLastDay?: readonly MergedLastDayFacts[];
   /** The Deployments read of those merges; left out or null, their deploys are unread. */
   readonly deployments?: DeploymentsRead | null;
+  /**
+   * In a repo that declares `staging` (ADR-0038), the Deployments read of
+   * those merges in `staging.environment`; left out or null, their staging
+   * deploys are unread.
+   */
+  readonly stagingDeployments?: DeploymentsRead | null;
+  /** The Main checks read of the commits on staging (src/read/mainChecks.ts); left out or null, their Main checks are unread. */
+  readonly mainChecks?: MainChecksRead | null;
+  /**
+   * The numbers of those merges that need a Staging trial for the UI
+   * evidence they carry: the ones whose Implementer did not say nothing
+   * visible changes (asksAStagingTrial). Left out, none does. One that
+   * closes a Trial problem needs a trial too, which `trials` says.
+   */
+  readonly needTrial?: readonly number[];
+  /**
+   * In a repo that declares `staging` (#856), the agent pull requests merged
+   * that production has not taken, as only the read library's gather keeps
+   * them: merged since the newest successful production Deployment, however
+   * long ago. One of them that needs a Staging trial and has no result keeps
+   * its Standing until it has one or a production Deployment contains it;
+   * one in `mergedLastDay` alone stands for its 24 hours. Left out, there is
+   * none.
+   */
+  readonly unpromoted?: readonly MergedLastDayFacts[];
+  /**
+   * In a repo that declares `staging` (#857), the agent pull requests a
+   * production Deployment took in the last 24 hours, each with that
+   * Deployment, as only the read library's gather keeps them: one is Live
+   * for 24 hours from it, however long before it merged, on the gather's
+   * word where no Deployments read answers for its merge. Left out, there
+   * is none.
+   */
+  readonly promoted?: readonly PromotedFacts[];
+  /**
+   * What the Staging trial's result is read from (./trialResult.ts): the
+   * label events of the merged pull requests and the Trial problems. Left
+   * out, every merge is untried and none closes a Trial problem.
+   */
+  readonly trials?: TrialFacts;
 }
 
 /** A run that ended, on an issue or a pull request, and when: a sign from the Kit on that work. */
@@ -374,6 +441,10 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
   "deploy-failed": "silence",
   "no-deploy-seen": "silence",
   merged: "silence",
+  // The Operator's when it needs a Staging trial, as reading matter is theirs.
+  "on-staging": "operator",
+  "trial-accepted": "silence",
+  "trial-problem": "silence",
 };
 
 /**
@@ -413,7 +484,7 @@ function unjoinedStandingsOf(facts: StandingFacts, now: string): Standing[] {
     ...silenceStandingsOf(facts, now),
     ...handBackStandingsOf(facts, now),
     ...plainStandingsOf(facts, now),
-    ...productionStandingsOf(facts, now),
+    ...mergedStandingsOf(facts, now),
   ];
   return oneForEachWork(candidates.map((standing) => withItsPullRequest(standing, facts.github)));
 }

@@ -13,38 +13,73 @@
 // an edit to each of an open pull request's comments (#655), and, with each
 // cross-reference, how its issue was closed, with the comments of those
 // closed as not planned, where an owed Roll-in's closing comment is (#664).
-// The rows are worked out from its facts by ./rows.ts.
-import { gatherWeeklyRunIssues, isAgent, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
+// In a repo whose Kit config declares `staging` it reads past the last day
+// (#856, ADR-0038): the agent pull requests merged since the newest
+// successful production Deployment, the 100 most recent at most, with the
+// label events a Staging trial's result is read from and the Trial problems
+// that name them; and, for the Promote list and for Live counted from the
+// production Deployment (#857), the Plain pull requests merged to the default
+// branch since that start, how many merged since it in all, and the agent
+// pull requests a production Deployment took in the last 24 hours. A repo
+// that declares none is asked what it ever was.
+// The rows are worked out from its facts by ./rows.ts, and the Promote list
+// by ./promoteList.ts.
+import { gatherWeeklyRunIssues, isAgent, labelEventsOf, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
 import { byAppOf, gatherClosedCheckIssues, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
 import { type EvidenceMarker, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { type ShotsMarker, shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
-import { KIT_CONFIG_PATH, type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
+import { KIT_CONFIG_PATH, type KitConfig, type KitConfigResult, resolveKitConfig } from "../kit/config.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import { MERGED_STANDS_HOURS, type MergedLastDayFacts } from "../kit/standingProduction.ts";
+import type { PromotedFacts } from "../kit/standingStaging.ts";
+import type { TrialFacts, TrialProblemFacts } from "../kit/trialResult.ts";
 import type { CommentFacts, GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
-import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL } from "../loop/labels.ts";
+import { sameRepo } from "../loop/blockers.ts";
+import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL, TRIAL_LABELS } from "../loop/labels.ts";
+import { trialProblemIn } from "../loop/markers.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import {
   type ClosedIssueCommentsQueryResult,
   closedIssueCommentsQuery,
+  deploymentsQuery,
   MERGED_PULL_REQUESTS_QUERY,
+  MERGED_SINCE_COUNT_QUERY,
   type MergedPullRequestsQueryResult,
   OPEN_ISSUES_QUERY,
   type RawHomeComment,
   OPEN_PULL_REQUESTS_QUERY,
+  type RawCountedPullRequest,
   type RawCrossReference,
+  type RawGatheredDeployment,
   type RawHomeIssue,
   type RawHomePullRequest,
+  type RawMergedPullRequest,
+  type RawTrialIssue,
+  type RawUnpromotedPullRequest,
   REPO_QUERY,
   type RepoQueryResult,
+  UNPROMOTED_PULL_REQUESTS_QUERY,
 } from "./homeQueries.ts";
 import { gatherStore, type StoreFacts } from "./store.ts";
 
 /** How far back the merged agent pull requests reach: as long as a merged one stands. */
 const MERGED_REACH_MS = MERGED_STANDS_HOURS * 60 * 60 * 1000;
+
+/** How long GitHub keeps a Deployment's statuses, all but its current one: 90 days. */
+const STATUSES_KEPT_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
+ * How many merged pull requests a gather keeps past the last day, in a repo
+ * that declares `staging`: the most recent merges since the Promote list's
+ * start, agent and Plain together, and, in the room those leave, of what a
+ * production Deployment took in the last 24 hours. The one cap: the
+ * Standings of those production has not taken and the Promote list's
+ * entries, with its counts (./promoteList.ts), are all of this one set.
+ */
+export const MERGES_KEPT = 100;
 
 /** A repo with no caller workflow that pins the Kit at its default branch's head: nothing more is read of it. */
 export interface RepoReadNotProduct {
@@ -145,6 +180,116 @@ export interface ShotsMarkerFacts {
 }
 
 /**
+ * A Deployment a gather cuts the merged pull requests at, in a repo that
+ * declares `staging`: those merged after its commit came after it, and
+ * those merged up to it are what it took. As Facts' `staging.since` it is
+ * where the reach past the last day starts (#856): the newest successful
+ * Deployment in production's environment, or, where none has ever succeeded
+ * or Kit config names no such environment, the first successful Deployment
+ * in `staging.environment`, which is where the Promote list starts
+ * (./promoteList.ts, #857). The gather also cuts at each production
+ * Deployment of the last day, and at the one before them (StagingReach).
+ */
+export interface DeploymentCut {
+  /** Which environment's Deployment it is. */
+  readonly from: "production" | "staging";
+  /** GitHub's id of that Deployment, or null where it gives none. */
+  readonly deployment: number | null;
+  /** The commit it deployed. */
+  readonly commit: string;
+  /**
+   * The time the merges are cut at, ISO 8601, which is not when it deployed
+   * (`deployedAt`): when that commit was committed, as a commit on the
+   * default branch holds every merge before it; the Deployment's creation
+   * where GitHub gives no commit, or dates it later than that. A cut by
+   * time, not by what the commit contains: a Deployments read of production
+   * says that of each merge.
+   */
+  readonly cutAt: string;
+  /**
+   * When that Deployment succeeded, ISO 8601 (#857); its creation where
+   * GitHub no longer says when, having deleted the status that did, as it
+   * does after 90 days to all but a Deployment's current one.
+   */
+  readonly deployedAt: string;
+}
+
+/**
+ * A Plain pull request merged to the default branch, as the gather keeps one
+ * merged since the Promote list's start (#857): what the list names it by,
+ * and what its kind is told from (plainKindOf). It has no Standing past its
+ * merge, at Staging or anywhere.
+ */
+export interface MergedPlainFacts {
+  readonly number: number;
+  readonly title: string;
+  /** ISO 8601. */
+  readonly mergedAt: string;
+  /** Who opened it, a bot's login ending `[bot]`. */
+  readonly author: string;
+  /** The branch it was merged from. */
+  readonly headRef: string;
+  /** The issues of its repo GitHub records it as closing. */
+  readonly closes: readonly number[];
+}
+
+/**
+ * What a gather reads past the last day in a repo whose Kit config declares
+ * `staging` (#856, ADR-0038): the merged pull requests production has not
+ * taken, what a Staging trial's result is read from, and those a production
+ * Deployment took in the last 24 hours (#857).
+ */
+export interface StagingFacts {
+  /** Where the reach starts; null when no Deployment it could start at has succeeded, and nothing past the last day is kept. */
+  readonly since: DeploymentCut | null;
+  /**
+   * The agent pull requests merged since then, which that Deployment's
+   * commit does not hold, newest first: those among the 100 most recent
+   * merges of either kind since the start, so with `plain` 100 at most, and
+   * together exactly what the Promote list holds. One merged in the last 24
+   * hours is in `mergedLastDay` too.
+   */
+  readonly unpromoted: readonly MergedLastDayFacts[];
+  /**
+   * The agent pull requests a production Deployment took in the last 24
+   * hours, newest first, each with the first such Deployment whose commit
+   * holds it (#857): those merged up to that Deployment's commit and after
+   * the commit of the newest production Deployment that succeeded before the
+   * last 24 hours, or, where there is none, of the first successful staging
+   * Deployment. As many, the most recent, as `unpromoted` and `plain` leave
+   * of the 100 a gather keeps. None where production's newest success is
+   * older than 24 hours, or nothing says how far back what it took reaches. One merged in the last 24 hours is in
+   * `mergedLastDay` too.
+   */
+  readonly promoted: readonly PromotedFacts[];
+  /**
+   * The Plain pull requests merged to the default branch since the start,
+   * newest first (#857): those among the 100 most recent merges of either
+   * kind, as `unpromoted` holds the agent ones among them. Only the Promote
+   * list reads them.
+   */
+  readonly plain: readonly MergedPlainFacts[];
+  /**
+   * How many pull requests merged since the start, by the same cut (#857):
+   * every agent one, and every Plain one merged to the default branch,
+   * however many of them the facts keep. 0 with no start.
+   */
+  readonly mergedSince: number;
+  /**
+   * What the trial result rule reads (src/kit/trialResult.ts): the label
+   * events of every merged pull request the gather read, agent or Plain, and
+   * the issues each closes; and each issue of the repo whose body carries
+   * the Trial problem's line, that GitHub cross-references to one of them or
+   * that one of them closes.
+   */
+  readonly trials: TrialFacts;
+  /** The evidence marker of each of `unpromoted` and `promoted` that has one, as `evidenceMarkers` holds an open or newly merged pull request's. */
+  readonly evidenceMarkers: readonly EvidenceMarkerFacts[];
+  /** The shots marker of each of `unpromoted` and `promoted` that has one, as `shotsMarkers` holds an open or newly merged pull request's. */
+  readonly shotsMarkers: readonly ShotsMarkerFacts[];
+}
+
+/**
  * What a gather reads of one Product repo: the facts the Standing rule reads,
  * and what a reader shows beside a Standing. Plain data: written as JSON and
  * read back they are equal.
@@ -184,6 +329,12 @@ export interface Facts {
    * marker of the other shape.
    */
   readonly shotsMarkers: readonly ShotsMarkerFacts[];
+  /**
+   * In a repo whose Kit config declares `staging` (#856): what the gather
+   * reads past the last day. No such key in any other repo, whose facts are
+   * as they were, nor in facts kept from an earlier release.
+   */
+  readonly staging?: StagingFacts;
 }
 
 /**
@@ -242,7 +393,7 @@ async function gatherFacts(
   const [pullRequests, issues, merged, { designQueue }, { kitIssues }, audits, retros, candidates, closedCheckIssues] = await Promise.all([
     pagesOf<RawHomePullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawHomeIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
-    github.graphql<MergedPullRequestsQueryResult>(MERGED_PULL_REQUESTS_QUERY, { owner: repo.owner, name: repo.name }),
+    gatherMerged(github, repo, kit.config.ok ? kit.config.config : null, kit.branch, now),
     // The Design queue check's own slice: open `needs-design` issues only, so one closed in its session is in none.
     gatherDesignQueueSlice(github, null, repo, appLogin),
     gatherKitIssues(github, repo, appLogin),
@@ -257,7 +408,7 @@ async function gatherFacts(
   const open = issues.filter(({ state }) => state === "OPEN");
   const labelled = (label: string) => open.filter(({ labels }) => labels.nodes.some(({ name }) => name === label));
   const since = Date.parse(now) - MERGED_REACH_MS;
-  const mergedLastDay = merged.repository.pullRequests.nodes.flatMap(({ mergedAt, ...pullRequest }) =>
+  const mergedLastDay = merged.pullRequests.flatMap(({ mergedAt, ...pullRequest }) =>
     mergedAt === null || Date.parse(mergedAt) < since || !isAgent(pullRequest) ? [] : [{ ...pullRequest, mergedAt }],
   );
   const crossReferences = agent.flatMap(({ number, crossReferences: references }) => references.nodes.flatMap((reference) => crossReferenceOf(number, reference)));
@@ -303,13 +454,7 @@ async function gatherFacts(
     operator,
     appLogin,
     issueBodies: open.filter(({ author }) => loginOf(author) === operator).map(({ number, body }) => ({ issue: number, body })),
-    mergedLastDay: mergedLastDay.map(({ number, title, closingIssuesReferences, mergeCommit, mergedAt }) => ({
-      number,
-      title,
-      ticket: closingIssuesReferences.nodes[0]?.number ?? null,
-      mergeCommit: mergeCommit?.oid ?? null,
-      mergedAt,
-    })),
+    mergedLastDay: mergedLastDay.map(mergedFactsOf),
     crossReferences,
     closedIssueComments: await gatherClosedIssueComments(github, repo, crossReferences),
     ticketStates: agent.flatMap(({ closingIssuesReferences }) => {
@@ -317,16 +462,303 @@ async function gatherFacts(
       const ticket = closingIssuesReferences.nodes[0];
       return ticket?.state === undefined ? [] : [{ ticket: ticket.number, closed: ticket.state === "CLOSED" }];
     }),
-    // A marker counts only in a body the Fabrik App wrote, as the Kit's other readers of it take it.
-    evidenceMarkers: [...agent, ...mergedLastDay].flatMap(({ number, body, author }) => {
-      const marker = byAppOf(author, appLogin) ? evidenceMarkerIn(body) : null;
-      return marker === null ? [] : [{ pullRequest: number, marker }];
-    }),
-    shotsMarkers: [...agent, ...mergedLastDay].flatMap(({ number, body, author }) => {
-      const marker = byAppOf(author, appLogin) ? shotsMarkerIn(body) : null;
-      return marker === null ? [] : [{ pullRequest: number, marker }];
-    }),
+    evidenceMarkers: markersIn([...agent, ...mergedLastDay], appLogin, evidenceMarkerIn),
+    shotsMarkers: markersIn([...agent, ...mergedLastDay], appLogin, shotsMarkerIn),
+    // No such key in a repo that declares no `staging`: its facts are what they were.
+    ...(merged.staging === null ? {} : { staging: stagingFactsOf(merged.staging, repo, kit.branch, appLogin) }),
   };
+}
+
+/**
+ * The marker `read` finds in the body of each of these pull requests that
+ * has one, with its pull request: an open one's, a newly merged one's or one
+ * kept past the last day alike. A marker counts only in a body the Fabrik
+ * App wrote, as the Kit's other readers of it take it.
+ */
+function markersIn<Marker>(
+  pullRequests: readonly Pick<RawMergedPullRequest, "number" | "body" | "author">[],
+  appLogin: string | null,
+  read: (body: string) => Marker | null,
+): { readonly pullRequest: number; readonly marker: Marker }[] {
+  return pullRequests.flatMap(({ number, body, author }) => {
+    const marker = byAppOf(author, appLogin) ? read(body) : null;
+    return marker === null ? [] : [{ pullRequest: number, marker }];
+  });
+}
+
+/** A merged agent pull request as the facts keep it: its Ticket the first issue it closes. */
+function mergedFactsOf({ number, title, closingIssuesReferences, mergeCommit, mergedAt }: Pick<RawMergedPullRequest, "number" | "title" | "mergeCommit"> & { readonly mergedAt: string; readonly closingIssuesReferences: { readonly nodes: readonly { readonly number?: number }[] } }): MergedLastDayFacts {
+  return { number, title, ticket: closingIssuesReferences.nodes[0]?.number ?? null, mergeCommit: mergeCommit?.oid ?? null, mergedAt };
+}
+
+/**
+ * How far a gather reaches past the last day, in a repo that declares
+ * `staging`: where the Promote list starts, and, where production was
+ * deployed in the last 24 hours, the Deployments that took what merged
+ * before that start (#857).
+ */
+interface StagingReach {
+  /** Where the reach starts (DeploymentCut): the Promote list's start. Null when no Deployment it could start at has succeeded. */
+  readonly since: DeploymentCut | null;
+  /**
+   * The production Deployments that succeeded in the last 24 hours, oldest
+   * first, `since` the newest of them: each took what had merged up to its
+   * commit. None where production's newest success is older than that, or
+   * the reach starts at a staging Deployment.
+   */
+  readonly recent: readonly DeploymentCut[];
+  /**
+   * Where what those took starts: the newest production Deployment that
+   * succeeded before the last 24 hours, or, where there is none, the first
+   * successful staging one. Null with none of `recent`, or where nothing
+   * says how far back what they took reaches.
+   */
+  readonly before: DeploymentCut | null;
+}
+
+/** The merged pull requests a gather read: every one, for the last day's; and, in a repo that declares `staging`, how far its reach past the last day goes, those read to it, and how many merged since its start. */
+interface GatheredMerged {
+  readonly pullRequests: readonly (RawMergedPullRequest | RawUnpromotedPullRequest)[];
+  readonly staging: { readonly reach: StagingReach; readonly pullRequests: readonly RawUnpromotedPullRequest[]; readonly mergedSince: number } | null;
+}
+
+/**
+ * The merged pull requests of `repo`, whose default branch is `branch`. With
+ * no valid Kit config that declares `staging`, the one page of the
+ * newest-updated the gather has ever read, and nothing more. In a repo that
+ * declares it (#856), first how far the reach goes (gatherStagingReach),
+ * then the merged pull requests newest-updated first, a page at a time,
+ * until a page reaches back past that and the last 24 hours: a pull request
+ * is updated no earlier than it merged, so none merged since is on a later
+ * page. Once it holds the 100 merges it keeps (MERGES_KEPT), agent and
+ * Plain together, it stops at the first page whose oldest update is before
+ * the hundredth's merge, as no later page can hold one of the 100 most
+ * recent.
+ *
+ * It also counts the pull requests merged since the start (#857): from the
+ * pages it read where they reach the start, and, where they stopped at the
+ * 100 short of it, from a second read that asks only what the count needs
+ * (MERGED_SINCE_COUNT_QUERY), a hundred at a time back to the start.
+ */
+async function gatherMerged(github: Pick<ReadClient, "graphql">, repo: Repo, config: KitConfig | null, branch: string, now: string): Promise<GatheredMerged> {
+  if (config === null || config.staging === null) {
+    const { repository } = await github.graphql<MergedPullRequestsQueryResult>(MERGED_PULL_REQUESTS_QUERY, { owner: repo.owner, name: repo.name });
+    return { pullRequests: repository.pullRequests.nodes, staging: null };
+  }
+  const reach = await gatherStagingReach(github, repo, config.production?.environment ?? null, config.staging.environment, now);
+  const { since } = reach;
+  const dayAgo = Date.parse(now) - MERGED_REACH_MS;
+  const back = Math.min(dayAgo, ...[since, reach.before].flatMap((start) => (start === null ? [] : [Date.parse(start.cutAt)])));
+  const kept: number[] = [];
+  // Where the pages stopped at the 100 they keep: the hundredth's merge.
+  const stopped: { at: number | null } = { at: null };
+  const pullRequests = await pagesOf<RawUnpromotedPullRequest>(github, UNPROMOTED_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests, (page) => {
+    const oldest = Math.min(...page.map(({ updatedAt }) => Date.parse(updatedAt)));
+    if (oldest < back) return true;
+    kept.push(...page.filter((pullRequest) => isMergedSince(pullRequest, since, branch) || takenBy(pullRequest, reach) !== null).map(({ mergedAt }) => Date.parse(mergedAt ?? "")));
+    const hundredth = kept.toSorted((a, b) => b - a)[MERGES_KEPT - 1];
+    if (hundredth === undefined || oldest >= Math.min(hundredth, dayAgo)) return false;
+    stopped.at = hundredth;
+    return true;
+  });
+  // A pull request not read was last updated, so merged, before the hundredth merged: the pages fall short of the start only where that is after it.
+  const mergedSince =
+    since !== null && stopped.at !== null && stopped.at > Date.parse(since.cutAt)
+      ? await countMergedSince(github, repo, since, branch)
+      : pullRequests.filter((pullRequest) => isMergedSince(pullRequest, since, branch)).length;
+  return { pullRequests, staging: { reach, pullRequests, mergedSince } };
+}
+
+/** What the gather reads of a merged pull request to say whether it merged since a start. */
+type MergedSinceRead = Pick<RawUnpromotedPullRequest, "mergedAt" | "headRefName" | "baseRefName" | "author" | "mergeCommit">;
+
+/** Whether a pull request merged after the commit `start` deployed, and not as that commit: by time, as a commit on the default branch holds every merge before it. */
+function mergedAfter({ mergedAt, mergeCommit }: Pick<MergedSinceRead, "mergedAt" | "mergeCommit">, start: DeploymentCut): boolean {
+  return mergedAt !== null && Date.parse(mergedAt) > Date.parse(start.cutAt) && mergeCommit?.oid !== start.commit;
+}
+
+/** Whether a merged pull request is an agent one production has not taken: merged after the commit the reach starts at, and not as that commit. */
+function isUnpromoted(pullRequest: MergedSinceRead, since: DeploymentCut | null): boolean {
+  return since !== null && isAgent(pullRequest) && mergedAfter(pullRequest, since);
+}
+
+/**
+ * Whether a pull request merged since the Promote list's start, to count
+ * (#857): an agent one production has not taken, or a Plain one merged to
+ * the default branch after the start's commit. A Plain one merged into
+ * another branch reaches production only through that branch's own merge.
+ */
+function isMergedSince(pullRequest: MergedSinceRead, since: DeploymentCut | null, branch: string): boolean {
+  return since !== null && mergedAfter(pullRequest, since) && (isAgent(pullRequest) || pullRequest.baseRefName === branch);
+}
+
+/**
+ * The production Deployment that took an agent pull request in the last 24
+ * hours (#857): the first of those that succeeded then whose commit holds
+ * its merge, by the same cut by time. Null for one production has not
+ * taken, one that merged before those Deployments' reach starts, and
+ * wherever no production Deployment succeeded in the last 24 hours.
+ */
+function takenBy(pullRequest: MergedSinceRead, { since, recent, before }: StagingReach): DeploymentCut | null {
+  if (before === null || !isAgent(pullRequest) || isUnpromoted(pullRequest, since) || !mergedAfter(pullRequest, before)) return null;
+  return recent.find((deployment) => !mergedAfter(pullRequest, deployment)) ?? null;
+}
+
+/**
+ * How many pull requests merged since `since` (isMergedSince), read
+ * newest-updated first, a hundred at a time, until a page reaches back past
+ * the start: none merged since is on a later page.
+ */
+async function countMergedSince(github: Pick<ReadClient, "graphql">, repo: Repo, since: DeploymentCut, branch: string): Promise<number> {
+  const start = Date.parse(since.cutAt);
+  const read = await pagesOf<RawCountedPullRequest>(github, MERGED_SINCE_COUNT_QUERY, repo, {}, (data) => data.repository.pullRequests, (page) =>
+    page.some(({ updatedAt }) => Date.parse(updatedAt) < start),
+  );
+  return read.filter((pullRequest) => isMergedSince(pullRequest, since, branch)).length;
+}
+
+/**
+ * How far the reach past the last day goes (StagingReach). It starts at the
+ * newest Deployment in `production` that succeeded, read newest first; or,
+ * where Kit config names no such environment or none there has succeeded, at
+ * the first in `staging` that did, read oldest first; null with neither.
+ *
+ * Where production's newest success is of the last 24 hours before `now`
+ * (#857), its Deployments are read on to the newest that succeeded before
+ * then, which is where what the last day's took starts; with none, that is
+ * the first successful staging Deployment. Each is read a page at a time, no
+ * further than it needs: where production's newest success is older than 24
+ * hours, no further than that one.
+ *
+ * GitHub deletes a Deployment's statuses after 90 days, all but its current
+ * one, and makes a success `inactive` when a later deploy succeeds. So the
+ * newest success keeps its `success` whatever its age, and one that old and
+ * superseded reads as `inactive` alone. A Deployment that shows `inactive`
+ * and no `success` is therefore read by its age (succeededLongAgo): created
+ * more than 90 days ago, it is taken for a success whose status GitHub
+ * deleted; younger, it would still show a success it had, so it never
+ * succeeded and is passed over, as the Deployments read passes it over
+ * (stateOf, ./deployments.ts). The first staging Deployment that succeeded
+ * is the first that shows `success` or is taken for one, where the start at
+ * production must still say `success`. A production Deployment taken for
+ * one, older than the start, succeeded before the last 24 hours, so nothing
+ * it took is given to a later Deployment.
+ */
+async function gatherStagingReach(github: Pick<ReadClient, "graphql">, repo: Repo, production: string | null, staging: string, now: string): Promise<StagingReach> {
+  const has = ({ statuses }: RawGatheredDeployment, state: string) => (statuses?.nodes ?? []).some((status) => status.state === state);
+  /** When it succeeded: its earliest `success`, or null where it shows none. */
+  const succeededAt = ({ statuses }: RawGatheredDeployment): string | null => {
+    const times = (statuses?.nodes ?? []).flatMap(({ state, createdAt }) => (state === "SUCCESS" ? [createdAt] : []));
+    return times.toSorted((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null;
+  };
+  /** Whether it shows `inactive` and no `success`, and is old enough for GitHub to have deleted its `success`. */
+  const succeededLongAgo = (deployment: RawGatheredDeployment) =>
+    has(deployment, "INACTIVE") && !has(deployment, "SUCCESS") && Date.parse(deployment.createdAt) < Date.parse(now) - STATUSES_KEPT_MS;
+  const startOf = (from: DeploymentCut["from"], deployment: RawGatheredDeployment): DeploymentCut => {
+    // A commit dated after its own Deployment has a wrong date: the creation is then the later bound.
+    const committed = deployment.commit?.committedDate ?? deployment.createdAt;
+    const cutAt = Date.parse(committed) <= Date.parse(deployment.createdAt) ? committed : deployment.createdAt;
+    return { from, deployment: deployment.databaseId, commit: deployment.commitOid, cutAt, deployedAt: succeededAt(deployment) ?? deployment.createdAt };
+  };
+  const firstOnStaging = async (): Promise<DeploymentCut | null> => {
+    const succeeded = (deployment: RawGatheredDeployment) => has(deployment, "SUCCESS") || succeededLongAgo(deployment);
+    const read = await pagesOf<RawGatheredDeployment>(github, deploymentsQuery("ASC"), repo, { environment: staging }, (data) => data.repository.deployments, (page) => page.some(succeeded));
+    const first = read.find(succeeded);
+    return first === undefined ? null : startOf("staging", first);
+  };
+  if (production !== null) {
+    const dayAgo = Date.parse(now) - MERGED_REACH_MS;
+    const settled = (deployment: RawGatheredDeployment) => {
+      const at = succeededAt(deployment);
+      return at === null ? succeededLongAgo(deployment) : Date.parse(at) < dayAgo;
+    };
+    // Read on from the newest success to the first that succeeded before the last 24 hours, which may be the same one.
+    let found = false;
+    const read = await pagesOf<RawGatheredDeployment>(github, deploymentsQuery("DESC"), repo, { environment: production }, (data) => data.repository.deployments, (page) =>
+      page.some((deployment) => {
+        found ||= has(deployment, "SUCCESS");
+        return found && settled(deployment);
+      }),
+    );
+    const newest = read.find((deployment) => has(deployment, "SUCCESS"));
+    if (newest !== undefined) {
+      const since = startOf("production", newest);
+      const recent: DeploymentCut[] = [];
+      for (const deployment of read.slice(read.indexOf(newest))) {
+        if (settled(deployment)) return { since, recent, before: recent.length === 0 ? null : startOf("production", deployment) };
+        if (has(deployment, "SUCCESS")) recent.unshift(startOf("production", deployment));
+      }
+      return { since, recent, before: recent.length === 0 ? null : await firstOnStaging() };
+    }
+  }
+  return { since: await firstOnStaging(), recent: [], before: null };
+}
+
+/**
+ * What the gather keeps past the last day (StagingFacts), from the merged
+ * pull requests it read: the 100 most recent merges of either kind since the
+ * start (MERGES_KEPT), newest first, the agent ones, which production has
+ * not taken, apart from the Plain ones; in the room those leave of the 100,
+ * the agent ones a production Deployment took in the last 24 hours, newest
+ * first; the markers of each agent one kept; of every one read, agent or
+ * Plain, its label events on the two trial labels and the issues of the repo
+ * it closes, where it has either; and each Trial problem among the issues
+ * cross-referenced to one whose line names it, or closed by one, lowest
+ * first.
+ */
+function stagingFactsOf({ reach, pullRequests, mergedSince }: NonNullable<GatheredMerged["staging"]>, repo: Repo, branch: string, appLogin: string | null): StagingFacts {
+  const { since } = reach;
+  const here = `${repo.owner}/${repo.name}`;
+  const ofThisRepo = ({ repository }: RawTrialIssue) => repository === undefined || sameRepo(repository.nameWithOwner, here);
+  const closedBy = ({ closingIssuesReferences }: RawUnpromotedPullRequest) => closingIssuesReferences.nodes.flatMap((issue) => (issue.number !== undefined && ofThisRepo(issue) ? [issue.number] : []));
+  const merged = pullRequests
+    .flatMap((pullRequest) => (pullRequest.mergedAt === null ? [] : [{ ...pullRequest, mergedAt: pullRequest.mergedAt }]))
+    .toSorted((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt) || b.number - a.number);
+  const sinceStart = merged.filter((pullRequest) => isMergedSince(pullRequest, since, branch)).slice(0, MERGES_KEPT);
+  const unpromoted = sinceStart.filter((pullRequest) => isAgent(pullRequest));
+  const plain = sinceStart.filter((pullRequest) => !isAgent(pullRequest));
+  const promoted = merged.flatMap((pullRequest) => {
+    const by = takenBy(pullRequest, reach);
+    return by === null ? [] : [{ pullRequest, by: { deployment: by.deployment, commit: by.commit, at: by.deployedAt } }];
+  }).slice(0, MERGES_KEPT - sinceStart.length);
+  const kept = [...unpromoted, ...promoted.map(({ pullRequest }) => pullRequest)];
+  const problems = new Map<number, TrialProblemFacts>();
+  for (const { number, crossReferences, closingIssuesReferences } of pullRequests) {
+    const named = crossReferences.nodes.flatMap(({ source }) => (source?.__typename === "Issue" && ofThisRepo(source) ? trialProblemOf(source, number) : []));
+    const closed = closingIssuesReferences.nodes.flatMap((issue) => (ofThisRepo(issue) ? trialProblemOf(issue, null) : []));
+    for (const problem of [...named, ...closed]) if (!problems.has(problem.issue)) problems.set(problem.issue, problem);
+  }
+  return {
+    since,
+    unpromoted: unpromoted.map(mergedFactsOf),
+    promoted: promoted.map(({ pullRequest, by }) => ({ ...mergedFactsOf(pullRequest), by })),
+    plain: plain.map((pullRequest) => ({ number: pullRequest.number, title: pullRequest.title, mergedAt: pullRequest.mergedAt, author: loginOf(pullRequest.author), headRef: pullRequest.headRefName, closes: closedBy(pullRequest) })),
+    mergedSince,
+    trials: {
+      pullRequests: pullRequests.flatMap((pullRequest) => {
+        const labelEvents = labelEventsOf(pullRequest.timelineItems.nodes).filter(({ label }) => (TRIAL_LABELS as readonly string[]).includes(label));
+        const closes = closedBy(pullRequest);
+        return labelEvents.length === 0 && closes.length === 0 ? [] : [{ pullRequest: pullRequest.number, labelEvents, closes }];
+      }),
+      problems: [...problems.values()].toSorted((a, b) => a.issue - b.issue),
+    },
+    evidenceMarkers: markersIn(kept, appLogin, evidenceMarkerIn),
+    shotsMarkers: markersIn(kept, appLogin, shotsMarkerIn),
+  };
+}
+
+/**
+ * An issue as a Trial problem, when its body carries the line: the one
+ * `pullRequest` names, where one is given, as an issue cross-referenced to a
+ * pull request is its Trial problem only when its line names that pull
+ * request; whichever its line names with null, as for an issue a pull
+ * request closes. None for an issue with no line, or one of another's.
+ */
+function trialProblemOf({ number, title, state, stateReason, body }: RawTrialIssue, pullRequest: number | null): TrialProblemFacts[] {
+  const named = body === undefined ? null : trialProblemIn(body);
+  if (number === undefined || named === null || (pullRequest !== null && named !== pullRequest)) return [];
+  const closedAs = state !== "CLOSED" || stateReason === undefined || stateReason === null || stateReason === "REOPENED" ? null : CLOSED_AS[stateReason];
+  return [{ issue: number, pullRequest: named, title: title ?? "", open: state === "OPEN", closedAs }];
 }
 
 /** How the Kit names each reason GitHub closes an issue with. */

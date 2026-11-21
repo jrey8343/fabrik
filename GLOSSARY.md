@@ -434,6 +434,18 @@ _Avoid_: gallery, screenshot page
 The Console's view of one Product repo's Prototypes and the UI evidence of its pull requests. It shows only what still has screenshots and keeps none itself.
 _Avoid_: evidence page (the Kit's own page), album, roll
 
+**Staging trial**:
+The Operator trying a merged change by hand on a Product repo's staging environment before they deploy it to production. Only the Operator does one, and nothing in the Loop waits on it.
+_Avoid_: QA, UAT, acceptance test, smoke test
+
+**Trial problem**:
+The issue the Operator files when a Staging trial finds a problem. The pull request it was found on is not accepted until the Trial problem's fix is on staging and accepted.
+_Avoid_: Follow-up (the Reviewer's), bug report, defect
+
+**Promote list**:
+Every pull request a production deployment of a Product repo would take, agent or Plain, each with its Staging trial's result, and a count of those not yet accepted. A pull request is on it from its merge until production takes it, which is when a production deployment that contains it has succeeded: it is promoted then, and unpromoted until. The list only tells the Operator what that deploy holds, and nothing deploys or refuses a deploy for it.
+_Avoid_: release list, changelog, deploy queue, release candidates
+
 ## Measuring the factory
 
 **Run record**:

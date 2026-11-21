@@ -16,6 +16,7 @@ import {
   aFollowUpIssue,
   AGROUP_STATS,
   aLabelAdded,
+  aMainChecksRead,
   aMapCapRefusal,
   aMergedLastDay,
   aMergedPullRequest,
@@ -40,6 +41,8 @@ import {
   aRunInFlight,
   aRunRecord,
   aSpec,
+  aStagingFacts,
+  aStagingRead,
   aSummaryIssue,
   aTicketTimeline,
   aVerdictComment,
@@ -49,6 +52,7 @@ import {
   storeFactsOf,
   CAPTURE_RESULT_FILE,
   checkCallerWorkflow,
+  commitsToCheck,
   costOf,
   costPerMergedPullRequestOf,
   DEFAULT_KIT_CONFIG,
@@ -68,6 +72,7 @@ import {
   joinChecks,
   joinDeployments,
   joinRuns,
+  joinStaging,
   KIT_SAID_VERSION,
   kitSaidIn,
   MERGED_STANDS_HOURS,
@@ -80,12 +85,14 @@ import {
   parseCaptureResult,
   producedNamedShots,
   productionPageUrl,
+  promoteListOf,
   readCaller,
   readDeployments,
   readDigestPlaces,
   readOutcomes,
   readIssuesToRollIn,
   readKitConfigSources,
+  readMainChecks,
   readRunRecord,
   readRequiredChecks,
   readRound,
@@ -115,12 +122,17 @@ import {
   shotsMarkerIn,
   STANDING_NAMES,
   STANDING_SCHEMA,
+  stagingMergesToRead,
   standingAt,
   standingsOf,
   stuckBarMinutes,
   subscriptionReadingsOf,
   TICK_DEAD_MINUTES,
   TICK_MINUTES,
+  TRIAL_ACCEPTED_LABEL,
+  TRIAL_PROBLEM_LABEL,
+  trialProblemIn,
+  trialProblemLine,
   weeksEndingAt,
   wordStanding,
 } from "./index.ts";
@@ -132,6 +144,7 @@ import type {
   CallerRead,
   CaptureResult,
   CaptureResultRead,
+  CommitToCheck,
   CostFigure,
   DeploymentsRead,
   DeployOf,
@@ -151,6 +164,8 @@ import type {
   KitConfigResult,
   KitConfigSources,
   KitSaid,
+  MainCheckOf,
+  MainChecksRead,
   MergedInWeek,
   MergedLastDayFacts,
   MergeToRead,
@@ -160,6 +175,8 @@ import type {
   OutcomesRead,
   OwedRollIn,
   PlaceShown,
+  PromoteEntry,
+  PromoteList,
   ReadClient,
   RepoRead,
   Repo,
@@ -181,6 +198,7 @@ import type {
   ShotsManifestRead,
   ShotsMarker,
   SpendRead,
+  StagingRead,
   Standing,
   StandingFacts,
   StandingName,
@@ -333,6 +351,187 @@ const A_MERGE_AT_PRODUCTION = homeFactsOf({
 
 /** `owner/product`'s Deployments in `production` read at NOW: merge `m…` deploying since 11:40. */
 const A_DEPLOYMENTS_READ = aDeploymentsRead({ ["m".repeat(40)]: aDeployOf({ is: "running", deployment: 901, commit: "m".repeat(40), at: "2026-11-09T11:40:00Z" }) }, NOW) satisfies DeploymentsRead;
+
+/**
+ * Agent pull request 50 for Ticket 7, merged at 11:30 with merge commit `m…`
+ * and carrying UI evidence of two routes, in a repo declaring production in
+ * environment `production` and staging in `staging`, and naming the Main
+ * check `e2e`.
+ */
+const A_MERGE_AT_STAGING = homeFactsOf({
+  kit: {
+    repo: "owner/product",
+    branch: "main",
+    config: {
+      ok: true,
+      config: {
+        ...DEFAULT_KIT_CONFIG,
+        production: { url: "https://shop.example", environment: "production" },
+        staging: { url: "https://staging.shop.example", environment: "staging" },
+        monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e"] },
+      },
+    },
+    dispatch: null,
+  },
+  mergedLastDay: [aMergedLastDay("2026-11-09T11:30:00Z")],
+  evidenceMarkers: [{ pullRequest: 50, marker: { run: 4410, artifact: 901, failure: null, routes: ["/book", "/patients/[patientId]/notes"] } }],
+});
+
+/** `owner/product`'s Main checks read at NOW: `e2e` green on commit `d…`. */
+const A_MAIN_CHECKS_READ = aMainChecksRead(
+  { ["d".repeat(40)]: [{ name: "e2e", is: "green", url: "https://github.com/owner/product/actions/runs/7/job/901", at: "2026-11-09T11:55:00Z" }] },
+  NOW,
+) satisfies MainChecksRead;
+
+/**
+ * What a reader read of `owner/product`'s staging at NOW: its Deployments in
+ * `staging`, asked for the newest success, with merge `m…` deployed at 11:36
+ * and the newest deploy that contains it, of commit `d…`, at 11:50; and that
+ * Main checks read.
+ */
+const A_STAGING_READ = aStagingRead(
+  {
+    ["m".repeat(40)]: aDeployOf({
+      is: "succeeded",
+      deployment: 900,
+      commit: "m".repeat(40),
+      at: "2026-11-09T11:36:00Z",
+      newest: { deployment: 905, commit: "d".repeat(40), at: "2026-11-09T11:50:00Z" },
+    }),
+  },
+  A_MAIN_CHECKS_READ,
+  NOW,
+) satisfies StagingRead;
+
+/** That read's Deployments read of `staging`. */
+const A_STAGING_DEPLOYMENTS_READ = A_STAGING_READ.deployments satisfies DeploymentsRead;
+
+/**
+ * A_MERGE_AT_STAGING's repo as a gather reads it past the last day (#857),
+ * its production block naming the workflow `deploy-production.yml`:
+ * production last deployed by Deployment 880 of commit `p…`, which succeeded
+ * on 2026-11-08 at 09:15, and since then agent pull request 50 and
+ * Dependabot's Kit bump 51 merged.
+ */
+const A_REPO_TO_PROMOTE = {
+  ...A_MERGE_AT_STAGING,
+  kit: {
+    repo: "owner/product",
+    branch: "main",
+    config: {
+      ok: true,
+      config: {
+        ...DEFAULT_KIT_CONFIG,
+        production: { url: "https://shop.example", environment: "production", workflow: "deploy-production.yml" },
+        staging: { url: "https://staging.shop.example", environment: "staging" },
+        monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e"] },
+      },
+    },
+    dispatch: null,
+  },
+  staging: aStagingFacts({
+    since: { from: "production", deployment: 880, commit: "p".repeat(40), cutAt: "2026-11-08T09:00:00Z", deployedAt: "2026-11-08T09:15:00Z" },
+    unpromoted: [aMergedLastDay("2026-11-09T11:30:00Z")],
+    plain: [{ number: 51, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T10:00:00Z", author: "dependabot[bot]", headRef: "dependabot/github_actions/fabrik-3.2.0", closes: [] }],
+    mergedSince: 2,
+  }),
+} satisfies Facts;
+
+/**
+ * Agent pull request 50's Standing at Staging in that repo at NOW, with
+ * A_STAGING_READ: on staging since its first deploy at 11:36, the Operator's
+ * move and stopping no work, with no result, so with no time it stands until.
+ */
+const AN_UNTRIED_STANDING = {
+  schema: STANDING_SCHEMA,
+  repo: "owner/product",
+  issue: 7,
+  pullRequest: 50,
+  work: "ticket",
+  place: "staging",
+  name: "on-staging",
+  move: "operator",
+  yours: true,
+  stopsWork: false,
+  since: "2026-11-09T11:36:00Z",
+  stuckAt: null,
+  awaits: null,
+  subscription: null,
+  detail: {
+    mergeCommit: "m".repeat(40),
+    mergedAt: "2026-11-09T11:30:00Z",
+    environment: "staging",
+    noDeployAt: null,
+    deployment: 905,
+    log: null,
+    deploysUnread: false,
+    staging: {
+      environment: "staging",
+      productionEnvironment: "production",
+      trial: { needed: true, why: "ui-evidence" },
+      result: null,
+      standsUntil: null,
+      mainChecks: ["e2e"],
+      check: null,
+      checksUnread: false,
+    },
+  },
+} satisfies Standing;
+
+/** Agent pull request 50's entry in that repo's Promote list: on staging, carrying UI evidence of two routes, and untried. */
+const AN_UNTRIED_ENTRY = {
+  is: "agent",
+  pullRequest: 50,
+  title: "Build the thing",
+  ticket: 7,
+  mergedAt: "2026-11-09T11:30:00Z",
+  evidence: {
+    run: 4410,
+    artifact: 901,
+    failure: null,
+    preview: "unknown",
+    pages: [
+      { route: "/book", preview: null },
+      { route: "/patients/[patientId]/notes", preview: null },
+    ],
+    failureSentence: null,
+    missed: null,
+  },
+  shots: null,
+  staging: {
+    site: "https://staging.shop.example",
+    pages: [
+      { route: "/book", url: "https://staging.shop.example/book" },
+      { route: "/patients/[patientId]/notes", url: "https://staging.shop.example" },
+    ],
+    shots: [],
+    toTry: ["/book", "/patients/[patientId]/notes"],
+  },
+  trial: { needed: true, why: "ui-evidence" },
+  result: { is: "untried" },
+  standing: AN_UNTRIED_STANDING,
+} as const satisfies PromoteEntry;
+
+/** AN_UNTRIED_STANDING as another pull request's, for another Ticket: nobody's move, since `since`, before its own name and what it carries are given. */
+function nobodysAtStaging(pullRequest: number, issue: number, since: string) {
+  return { ...AN_UNTRIED_STANDING, pullRequest, issue, move: "nobody", yours: false, since } as const;
+}
+
+/** What AN_UNTRIED_STANDING carries at Staging. */
+const ITS_STAGING_DETAIL = AN_UNTRIED_STANDING.detail.staging;
+
+/** The Kit bump's entry: a Plain pull request's, with its kind and nothing more. */
+const A_PLAIN_ENTRY = { is: "plain", pullRequest: 51, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T10:00:00Z", kind: "kit-bump" } as const satisfies PromoteEntry;
+
+/** That repo's Promote list at NOW, with A_STAGING_READ. */
+const A_PROMOTE_LIST = {
+  repo: "owner/product",
+  start: { from: "production", deployment: 880, commit: "p".repeat(40), deployedAt: "2026-11-08T09:15:00Z" },
+  entries: [AN_UNTRIED_ENTRY, A_PLAIN_ENTRY],
+  notAccepted: 1,
+  leftOut: 0,
+  dispatchPage: "https://github.com/owner/product/actions/workflows/deploy-production.yml",
+} as const satisfies PromoteList;
 
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
@@ -1091,6 +1290,68 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   MERGED_STANDS_HOURS: () => MERGED_STANDS_HOURS,
   NO_DEPLOY_SEEN_MINUTES: () => NO_DEPLOY_SEEN_MINUTES,
 
+  // The Standing at Staging
+
+  aMainChecksRead: () =>
+    aMainChecksRead(
+      A_MAIN_CHECKS_READ.commits,
+      NOW,
+    ),
+  aStagingFacts: () =>
+    aStagingFacts(
+      { unpromoted: [aMergedLastDay("2026-11-09T11:30:00Z")], mergedSince: 1 },
+    ),
+  aStagingRead: () =>
+    aStagingRead(
+      A_STAGING_DEPLOYMENTS_READ.merges,
+      A_MAIN_CHECKS_READ,
+      NOW,
+    ),
+  commitsToCheck: () =>
+    commitsToCheck(
+      rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
+      A_STAGING_DEPLOYMENTS_READ,
+    ),
+  joinStaging: () =>
+    joinStaging(
+      rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
+      A_STAGING_READ,
+      NOW,
+    ),
+  readMainChecks: () =>
+    readMainChecks(
+      REFUSING_CLIENT,
+      "owner/product",
+      [{ commit: "d".repeat(40), checks: ["e2e"] }],
+      NOW,
+    ),
+  stagingMergesToRead: () =>
+    stagingMergesToRead(
+      rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
+    ),
+
+  // The Staging trial
+
+  TRIAL_ACCEPTED_LABEL: () => TRIAL_ACCEPTED_LABEL,
+  TRIAL_PROBLEM_LABEL: () => TRIAL_PROBLEM_LABEL,
+  trialProblemIn: () =>
+    trialProblemIn(
+      "The cart total reads 0 on staging.\n\nFrom Staging trial of PR #50",
+    ),
+  trialProblemLine: () =>
+    trialProblemLine(
+      50,
+    ),
+
+  // The Promote list
+
+  promoteListOf: () =>
+    promoteListOf(
+      A_REPO_TO_PROMOTE,
+      A_STAGING_READ,
+      NOW,
+    ),
+
   // The Round read
 
   readRound: () =>
@@ -1472,6 +1733,81 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The Standing at Production
 
   MergedLastDayFacts: { number: 50, title: "Build the thing", ticket: 7, mergeCommit: "m".repeat(40), mergedAt: "2026-11-09T11:30:00Z" } satisfies MergedLastDayFacts,
+
+  // The Standing at Staging
+
+  CommitToCheck: { commit: "d".repeat(40), checks: ["e2e", "smoke"] } satisfies CommitToCheck,
+  MainCheckOf: { name: "smoke", is: "red", url: "https://github.com/owner/product/actions/runs/7/job/903", at: "2026-11-09T11:58:00Z" } satisfies MainCheckOf,
+  MainChecksRead: {
+    repo: "owner/product",
+    readAt: NOW,
+    commits: {
+      ["d".repeat(40)]: [
+        { name: "e2e", is: "green", url: "https://github.com/owner/product/actions/runs/7/job/901", at: "2026-11-09T11:55:00Z" },
+        { name: "smoke", is: "undecided", url: null, at: null },
+      ],
+      ["e".repeat(40)]: "unread",
+    },
+  } satisfies MainChecksRead,
+  StagingRead: A_STAGING_READ satisfies StagingRead,
+
+  // The Promote list
+
+  PromoteList: A_PROMOTE_LIST satisfies PromoteList,
+  PromoteEntry: [
+    AN_UNTRIED_ENTRY,
+    {
+      ...AN_UNTRIED_ENTRY,
+      pullRequest: 44,
+      ticket: 3,
+      result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, title: "The cart total reads 0", open: false }] },
+      standing: {
+        ...nobodysAtStaging(44, 3, "2026-11-09T11:00:00Z"),
+        name: "trial-accepted",
+        detail: {
+          ...AN_UNTRIED_STANDING.detail,
+          deployment: null,
+          staging: { ...ITS_STAGING_DETAIL, result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, open: false }] }, standsUntil: "2026-11-10T11:00:00.000Z" },
+        },
+      },
+    },
+    {
+      ...AN_UNTRIED_ENTRY,
+      pullRequest: 45,
+      ticket: 4,
+      result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, title: "The basket loses its last line", open: true }] },
+      standing: {
+        ...nobodysAtStaging(45, 4, "2026-11-09T08:00:00Z"),
+        name: "trial-problem",
+        detail: {
+          ...AN_UNTRIED_STANDING.detail,
+          deployment: null,
+          staging: { ...ITS_STAGING_DETAIL, result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, open: true }] }, standsUntil: "2026-11-10T08:00:00.000Z" },
+        },
+      },
+    },
+    {
+      ...AN_UNTRIED_ENTRY,
+      pullRequest: 46,
+      ticket: 5,
+      result: { is: "not-on-staging", name: "deploy-failed", unread: false },
+      standing: { ...nobodysAtStaging(46, 5, "2026-11-09T11:38:00Z"), name: "deploy-failed", detail: { ...AN_UNTRIED_STANDING.detail, deployment: 899 } },
+    },
+    {
+      ...AN_UNTRIED_ENTRY,
+      pullRequest: 47,
+      ticket: 6,
+      evidence: null,
+      staging: { site: "https://staging.shop.example", pages: [], shots: [], toTry: [] },
+      trial: { needed: false, why: "no-screen" },
+      result: { is: "no-screen" },
+      standing: {
+        ...nobodysAtStaging(47, 6, "2026-11-09T11:36:00Z"),
+        detail: { ...AN_UNTRIED_STANDING.detail, staging: { ...ITS_STAGING_DETAIL, trial: { needed: false, why: "no-screen" }, standsUntil: "2026-11-10T11:30:00.000Z" } },
+      },
+    },
+    A_PLAIN_ENTRY,
+  ] satisfies readonly PromoteEntry[],
 
   // The Round read
 

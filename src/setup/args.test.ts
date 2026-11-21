@@ -89,6 +89,30 @@ describe("The setup program's flags", () => {
     });
   });
 
+  describe("staging's flags", () => {
+    it("takes the address and the environment from their flags", () => {
+      expect(parsed("--staging-url=https://staging.clinic.example.com", "--staging-environment=staging").answers).toEqual({
+        stagingUrl: "https://staging.clinic.example.com",
+        stagingEnvironment: "staging",
+      });
+    });
+
+    it("answers no with --no-staging or an empty --staging-url=", () => {
+      expect(parsed("--no-staging").answers).toEqual({ stagingUrl: null });
+      expect(parsed("--staging-url=").answers).toEqual({ stagingUrl: null });
+    });
+
+    it("takes an empty --staging-environment= as no environment", () => {
+      expect(parsed("--staging-environment=").answers).toEqual({ stagingEnvironment: null });
+    });
+
+    it("refuses either flag without its =, and a value on --no-staging", () => {
+      expect(refused(".", "v1.4.2", "--staging-url")).toBe("--staging-url takes its value after an =, such as --staging-url=https://staging.example.com.");
+      expect(refused(".", "v1.4.2", "--staging-environment")).toBe("--staging-environment takes its value after an =, such as --staging-environment=staging.");
+      expect(refused(".", "v1.4.2", "--no-staging=yes")).toBe("Unknown flag --no-staging=yes.");
+    });
+  });
+
   it("takes the 1Password account from --account=", () => {
     expect(parsed("--account=acme.1password.com").account).toBe("acme.1password.com");
   });
@@ -140,6 +164,9 @@ describe("The setup program's flags", () => {
       "--production-url=",
       "--production-environment=",
       "--no-production",
+      "--staging-url=",
+      "--staging-environment=",
+      "--no-staging",
       "--plan",
     ];
 
@@ -156,6 +183,7 @@ describe("The setup program's flags", () => {
       expect(account, flag).toContain(`\`${flag}`);
     }
     expect(account).toContain("`--no-production`");
+    expect(account).toContain("`--no-staging`");
   });
 
   it("takes every flag its usage line lists, but the one the bootstrap takes itself", () => {
@@ -164,6 +192,8 @@ describe("The setup program's flags", () => {
       "--time-zone=": "Europe/London",
       "--production-url=": "https://clinic.example.com",
       "--production-environment=": "production",
+      "--staging-url=": "https://staging.clinic.example.com",
+      "--staging-environment=": "staging",
     };
 
     for (const [flag] of SETUP_USAGE.matchAll(/--[a-z-]+=?/g)) {

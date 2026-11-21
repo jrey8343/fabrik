@@ -2,7 +2,19 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { claudeArgs } from "../agent/launch.ts";
 import { prototypeRole } from "../loop/design.ts";
-import { captureIdentityOf, previewUrl, productionPageUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, timeZoneNote, type UiConfig, UI_VIEWPORTS, withRouteOn } from "./config.ts";
+import {
+  captureIdentityOf,
+  previewUrl,
+  productionDispatchPage,
+  productionPageUrl,
+  REVIEWER_IMAGE_CAP,
+  resolveKitConfig,
+  stagingPageUrl,
+  timeZoneNote,
+  type UiConfig,
+  UI_VIEWPORTS,
+  withRouteOn,
+} from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
@@ -37,6 +49,7 @@ const DEFAULTS = {
   ui: null,
   preview: null,
   production: null,
+  staging: null,
   timeZone: null,
 };
 
@@ -347,6 +360,7 @@ describe("Kit config", () => {
       digest: { enabled: true },
       operator: null,
       production: null,
+      staging: null,
     };
 
     expect(resolveKitConfig({ config: JSON.stringify(starter) })).toEqual({ ok: true, config: DEFAULTS });
@@ -1066,11 +1080,11 @@ describe("The Kit config template", () => {
     expect(JSON.parse(template)).toMatchObject({ ui: null, preview: { url: null } });
   });
 
-  it("spells out production at its Kit default, declaring nothing, then time_zone unset, as the last members", () => {
+  it("spells out production and staging at their Kit defaults, declaring nothing, then time_zone unset, as the last members", () => {
     const starter: unknown = JSON.parse(template);
 
-    expect(starter).toMatchObject({ production: null, time_zone: null });
-    expect(Object.keys(starter as object).slice(-2)).toEqual(["production", "time_zone"]);
+    expect(starter).toMatchObject({ production: null, staging: null, time_zone: null });
+    expect(Object.keys(starter as object).slice(-3)).toEqual(["production", "staging", "time_zone"]);
   });
 
   it("resolves to every Kit default", () => {
@@ -1083,7 +1097,9 @@ describe("The Kit config template", () => {
 
     expect(nulls).toContain("`production`");
     expect(nulls).toContain("`production.environment`");
+    expect(nulls).toContain("`production.workflow`");
     expect(section).toMatch(/^- `production` \(default `null`\)/m);
+    expect(section).toMatch(/^ {2}- `workflow` \(default `null`\): the file name of the workflow the Operator dispatches to deploy production/m);
     expect(section).toMatch(/^ {4}\| No `production` \|/m);
     expect(section).toMatch(/^ {4}\| `production\.url`, no `environment` \|/m);
     expect(section).toMatch(/^ {4}\| `production\.url` and `environment` \|/m);
@@ -1870,7 +1886,7 @@ describe("The production block, which says where a Product repo's production is"
   it("resolves an address with no environment to no environment, for a host that reports no Deployments", () => {
     const result = resolveKitConfig({ config: `{ "production": { "url": "https://shop.example" } }` });
 
-    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, production: { url: "https://shop.example", environment: null } } });
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, production: { url: "https://shop.example", environment: null, workflow: null } } });
   });
 
   it("lets null say the host reports no Deployments", () => {
@@ -1878,19 +1894,45 @@ describe("The production block, which says where a Product repo's production is"
 
     expect(result).toEqual({
       ok: true,
-      config: { ...DEFAULTS, production: { url: "http://shop.example:8080/", environment: null } },
+      config: { ...DEFAULTS, production: { url: "http://shop.example:8080/", environment: null, workflow: null } },
     });
   });
 
-  it("resolves an address and an environment to both", () => {
+  it("resolves an address and an environment to both, and to no workflow when none is named", () => {
     const result = resolveKitConfig({
       config: `{ "production": { "url": "https://shop.example", "environment": "production" } }`,
     });
 
     expect(result).toEqual({
       ok: true,
-      config: { ...DEFAULTS, production: { url: "https://shop.example", environment: "production" } },
+      config: { ...DEFAULTS, production: { url: "https://shop.example", environment: "production", workflow: null } },
     });
+  });
+
+  it.each(["deploy-production.yml", "Deploy Production.yaml", "release.YML"])("resolves workflow %j to that file name, the workflow the Operator dispatches to deploy production (#857)", (workflow) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ production: { url: "https://shop.example", environment: "production", workflow } }) });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, production: { url: "https://shop.example", environment: "production", workflow } } });
+  });
+
+  it("lets null say no workflow is dispatched to deploy production, as leaving it out does", () => {
+    const result = resolveKitConfig({ config: `{ "production": { "url": "https://shop.example", "workflow": null } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, production: { url: "https://shop.example", environment: null, workflow: null } } });
+  });
+
+  it.each([
+    [".github/workflows/deploy.yml", `production.workflow is ".github/workflows/deploy.yml": a workflow is named by its file's name alone, such as deploy.yml, not by a path`],
+    ["workflows\\deploy.yml", `production.workflow is "workflows\\\\deploy.yml": a workflow is named by its file's name alone, such as deploy.yml, not by a path`],
+    ["deploy.yml\nrelease.yml", `production.workflow is "deploy.yml\\nrelease.yml": a workflow's file name is one line`],
+    ["deploy", `production.workflow is "deploy": a workflow's file name ends in .yml or .yaml`],
+    ["deploy.json", `production.workflow is "deploy.json": a workflow's file name ends in .yml or .yaml`],
+    [".yml", `production.workflow is ".yml": a workflow's file name ends in .yml or .yaml`],
+    ["", `production.workflow is "": a workflow's file name can't be blank`],
+    ["  ", `production.workflow is "  ": a workflow's file name can't be blank`],
+    [42, "production.workflow must be a string"],
+  ])("refuses workflow %j, naming the field (#857)", (workflow, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ production: { url: "https://shop.example", workflow } }) })).toEqual({ ok: false, errors: [error] });
   });
 
   it.each([
@@ -1925,7 +1967,7 @@ describe("The production block, which says where a Product repo's production is"
 
     expect(result).toEqual({
       ok: true,
-      config: { ...DEFAULTS, ui: null, preview: null, production: { url: "https://shop.example", environment: "production" } },
+      config: { ...DEFAULTS, ui: null, preview: null, production: { url: "https://shop.example", environment: "production", workflow: null } },
     });
   });
 
@@ -1938,7 +1980,7 @@ describe("The production block, which says where a Product repo's production is"
     });
 
     expect(result.ok && result.config.ui?.beforeUrl).toBeNull();
-    expect(result.ok && result.config.production).toEqual({ url: "https://shop.example", environment: null });
+    expect(result.ok && result.config.production).toEqual({ url: "https://shop.example", environment: null, workflow: null });
   });
 
   it("names every problem in the production block at once", () => {
@@ -1952,6 +1994,115 @@ describe("The production block, which says where a Product repo's production is"
         "production.region is not a Kit config field",
       ],
     });
+  });
+});
+
+describe("The staging block, which says where a Product repo's staging environment is", () => {
+  it.each([`{}`, `{ "staging": null }`])("declares no staging for %s, and is valid", (text) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("resolves an address and an environment to both", () => {
+    const result = resolveKitConfig({ config: `{ "staging": { "url": "https://staging.shop.example", "environment": "staging" } }` });
+
+    expect(result).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, staging: { url: "https://staging.shop.example", environment: "staging" } },
+    });
+  });
+
+  it.each([
+    [{ environment: "staging" }, "staging.url is missing"],
+    [{ url: "https://staging.shop.example" }, "staging.environment is missing"],
+  ])("refuses a staging block with only one of the two, naming the one it lacks: %j", (block, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ staging: block }) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ url: null, environment: "staging" }, "url must be a string"],
+    [{ url: "shop.example", environment: "staging" }, `url is "shop.example": a URL must start with http:// or https://`],
+    [{ url: "ftp://shop.example", environment: "staging" }, `url is "ftp://shop.example": a URL must start with http:// or https://`],
+    [{ url: "https://shop.example", environment: "" }, `environment is "": an environment can't be blank`],
+    [{ url: "https://shop.example", environment: "  " }, `environment is "  ": an environment can't be blank`],
+    [{ url: "https://shop.example", environment: "one\ntwo" }, `environment is "one\\ntwo": an environment is the one line GitHub's Deployments name it`],
+    [{ url: "https://shop.example", environment: 42 }, "environment must be a string"],
+    [{ url: "https://shop.example", environment: "staging", region: "syd1" }, "region is not a Kit config field"],
+  ])("refuses in a staging block what a production block is refused for, naming its own field: %j", (block, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ production: block }) })).toEqual({ ok: false, errors: [`production.${error}`] });
+    expect(resolveKitConfig({ config: JSON.stringify({ staging: block }) })).toEqual({ ok: false, errors: [`staging.${error}`] });
+  });
+
+  it("refuses a null environment, which only production may leave out", () => {
+    const result = resolveKitConfig({ config: `{ "staging": { "url": "https://staging.shop.example", "environment": null } }` });
+
+    expect(result).toEqual({ ok: false, errors: ["staging.environment must be a string"] });
+  });
+
+  it.each([
+    [`{ "staging": "https://staging.shop.example" }`, "staging must be an object or null"],
+    [`{ "staging": ["https://staging.shop.example"] }`, "staging must be an object or null"],
+  ])("refuses a staging block that isn't an object, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("refuses the environment production's deploys carry, since a deploy can't be told from a promotion then", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        production: { url: "https://shop.example", environment: "live" },
+        staging: { url: "https://staging.shop.example", environment: "live" },
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`staging.environment is "live": production.environment names it, and staging's environment is never production's`],
+    });
+  });
+
+  it("takes an environment of its own beside production's, and one beside a production that names none", () => {
+    const staging = { url: "https://staging.shop.example", environment: "staging" };
+    const tracked = { url: "https://shop.example", environment: "production" };
+    const untracked = { url: "https://shop.example", environment: null };
+
+    expect(resolveKitConfig({ config: JSON.stringify({ production: tracked, staging }) })).toEqual({ ok: true, config: { ...DEFAULTS, production: { ...tracked, workflow: null }, staging } });
+    expect(resolveKitConfig({ config: JSON.stringify({ production: untracked, staging }) })).toEqual({ ok: true, config: { ...DEFAULTS, production: { ...untracked, workflow: null }, staging } });
+  });
+
+  it("names every problem in the staging block at once, after production's", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ staging: { url: "shop.example", environment: "", region: "syd1" }, production: { environment: "production" } }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        "production.url is missing",
+        `staging.url is "shop.example": a URL must start with http:// or https://`,
+        `staging.environment is "": an environment can't be blank`,
+        "staging.region is not a Kit config field",
+      ],
+    });
+  });
+
+  it("is documented in the README's Kit config section, after production: null accepted, both fields required, and production's environment refused", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
+    const nulls = /`null` is accepted only where the default is `null` \(([^)]*)\)/.exec(section)?.[1] ?? "";
+    const block = /^- `staging` \(default `null`\).*\n(?: {2,}.*\n)*/m.exec(section)?.[0] ?? "";
+
+    expect(nulls).toContain("`staging`");
+    expect(nulls).not.toContain("`staging.environment`");
+    expect(section.indexOf("- `staging` (default `null`)")).toBeGreaterThan(section.indexOf("- `production` (default `null`)"));
+    expect(block).toMatch(/^ {2}- `url` \(required\)/m);
+    expect(block).toMatch(/^ {2}- `environment` \(required\)/m);
+    expect(block).toContain("`production.environment`");
+    expect(block).toContain("ADR-0038");
+  });
+
+  it("declares staging in a repo that declares no production", () => {
+    const result = resolveKitConfig({ config: `{ "production": null, "staging": { "url": "https://staging.shop.example", "environment": "staging" } }` });
+
+    expect(result.ok && result.config.production).toBeNull();
+    expect(result.ok && result.config.staging).toEqual({ url: "https://staging.shop.example", environment: "staging" });
   });
 });
 
@@ -2025,6 +2176,30 @@ describe("A captured route's page on a site, as a reader links it (#639)", () =>
   it("builds a production page from the production block's address, whether or not it names an environment", () => {
     expect(productionPageUrl({ url: "https://shop.example/", environment: "production" }, "/book?when=today")).toBe("https://shop.example/book?when=today");
     expect(productionPageUrl({ url: "https://example.dev/shop", environment: null }, "/")).toBe("https://example.dev/shop/");
+  });
+
+  it.each([
+    ["https://staging.shop.example/", "/book?when=today", "https://staging.shop.example/book?when=today"],
+    ["https://example.dev/staging", "/", "https://example.dev/staging/"],
+    ["https://example.dev/staging/?branch=main", "/book?when=today", "https://example.dev/staging/book?branch=main&when=today"],
+  ])("builds a staging page from the staging block's address, %s, as a production page is built from production's", (base, route, page) => {
+    expect(stagingPageUrl({ url: base, environment: "staging" }, route)).toBe(page);
+    expect(productionPageUrl({ url: base, environment: "production" }, route)).toBe(page);
+  });
+
+  it("gives GitHub's Actions page of the workflow production.workflow names, in that repo, as the page it is dispatched from (#857)", () => {
+    const production = { url: "https://shop.example", environment: "production" };
+
+    expect(productionDispatchPage("jrey8343/shop", { ...production, workflow: "deploy-production.yml" })).toBe("https://github.com/jrey8343/shop/actions/workflows/deploy-production.yml");
+    expect(productionDispatchPage("acme/clinic", { ...production, workflow: "Deploy Production.yaml" })).toBe("https://github.com/acme/clinic/actions/workflows/Deploy%20Production.yaml");
+  });
+
+  it.each([
+    ["the block names no workflow", { url: "https://shop.example", environment: "production", workflow: null }],
+    ["the block was built with no workflow member, as Setup's answers are", { url: "https://shop.example", environment: "production" }],
+    ["Kit config declares no production", null],
+  ])("gives no dispatch page where %s", (_where, production) => {
+    expect(productionDispatchPage("jrey8343/shop", production)).toBeNull();
   });
 });
 
