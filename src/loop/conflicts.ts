@@ -640,9 +640,9 @@ export function conflictRunEnded(
  * run's time in flight, adds ready-for-human to the PR, and brings it back out
  * of draft to the Merge gate. It never closes the PR, and the note counts as
  * main's conflict attempt, so once the label is off (#841) the conflict check
- * doesn't try again until main moves. The run settles nothing: once main moves and the PR is brought up to
- * date, an Execution flaw on it still gives way to the Operator's Request
- * changes, which no run has built yet.
+ * doesn't try again until main moves. The run settles nothing: once main
+ * moves and the PR is brought up to date, an Execution flaw on it still gives
+ * way to the Operator's Request changes, which no run has built yet.
  */
 export function requestChangesRunEnded(pullRequest: number, main: string, operator: string, why: string, runUrl: string): Action[] {
   const head = main.slice(0, 7);
