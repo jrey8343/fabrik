@@ -31,13 +31,14 @@ import { aTicket, issueRef } from "../__fixtures__/snapshots.ts";
 /** Issue `number` of `owner/product`, the repo these Standings are of. */
 const here = (number: number) => issueRef(number, "owner/product");
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
-import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";
+import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN, TOKEN_ROTATION_LABEL, TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL, USAGE_CREDITS_LABEL, WEEKLY_LIMIT_LABEL } from "../loop/labels.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { roundLineOf } from "../loop/roundLine.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "./config.ts";
 import { type Standing, standingAt, STANDING_NAMES, STANDING_SCHEMA, standingsOf, type StandingFacts } from "./standing.ts";
 import { isSpec } from "./standingInFlight.ts";
+import type { TrialProblemFacts } from "./trialResult.ts";
 import type { CommentFacts, GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
@@ -1287,6 +1288,588 @@ describe("a merged agent pull request at Production (#634)", () => {
   });
 });
 
+describe("a merged agent pull request at Staging (#855)", () => {
+  const MERGED = "2026-11-08T19:30:00Z";
+  const MERGE = "m".repeat(40);
+  const kit = (overrides: Partial<KitConfig> = {}) =>
+    ({
+      repo: "owner/product",
+      branch: "main",
+      config: {
+        ok: true,
+        config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" }, staging: { url: "https://staging.shop.example", environment: "staging" }, ...overrides },
+      },
+      dispatch: null,
+      runsInFlight: [],
+      headChecks: {},
+    }) as const;
+  /** A Deployments read of the `staging` environment, saying this of agent pull request 50's merge. */
+  const staged = (deploy: Parameters<typeof aDeployOf>[0] | "unread") => ({ ...aDeploymentsRead({ [MERGE]: deploy === "unread" ? "unread" : aDeployOf(deploy) }), environment: "staging" });
+  /** The Standings of agent pull request 50, merged at MERGED, in a repo declaring production and staging, with these facts. */
+  const atStaging = (facts: Partial<Omit<StandingFacts, "kind" | "github">>, now = NOW) => standingsIn({}, { kit: kit(), mergedLastDay: [aMergedLastDay(MERGED)], ...facts }, now);
+
+  it("is merged at Staging in the first hour with no staging deploy started, nobody's move, since the merge; and no deploy seen a minute after the hour, since its end", () => {
+    const merged = atStaging({ stagingDeployments: staged({ is: "none" }) }, "2026-11-08T20:29:00Z");
+    expect(merged).toEqual([
+      {
+        schema: 2,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "staging",
+        name: "merged",
+        move: "nobody",
+        yours: false,
+        stopsWork: false,
+        since: MERGED,
+        stuckAt: null,
+        awaits: null,
+        subscription: null,
+        detail: {
+          mergeCommit: MERGE,
+          mergedAt: MERGED,
+          environment: "staging",
+          noDeployAt: "2026-11-08T20:30:00.000Z",
+          deployment: null,
+          log: null,
+          deploysUnread: false,
+          staging: { environment: "staging", productionEnvironment: "production", trial: { needed: false, why: "no-screen" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
+        },
+      },
+    ]);
+    const unseen = atStaging({ stagingDeployments: staged({ is: "none" }) }, "2026-11-08T20:31:00Z");
+    expect(unseen).toMatchObject([{ place: "staging", name: "no-deploy-seen", move: "nobody", since: "2026-11-08T20:30:00.000Z", detail: { environment: "staging", noDeployAt: null, deploysUnread: false } }]);
+    expect(merged.map((standing) => standingAt(standing, "2026-11-08T20:31:00Z"))).toStrictEqual(unseen);
+  });
+
+  it("is merged with its deploys unread, and never no deploy seen, when the staging Deployments read is missing, unread for this merge, or of another environment", () => {
+    const unread = { place: "staging", name: "merged", since: MERGED, detail: { environment: "staging", noDeployAt: null, deploysUnread: true } };
+    const later = "2026-11-08T23:00:00Z";
+    expect(atStaging({}, later)).toMatchObject([unread]);
+    expect(atStaging({ stagingDeployments: null }, later)).toMatchObject([unread]);
+    expect(atStaging({ stagingDeployments: staged("unread") }, later)).toMatchObject([unread]);
+    expect(atStaging({ stagingDeployments: { ...staged({ is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }), environment: "preview" } }, later)).toMatchObject([unread]);
+  });
+
+  it("is deploying while a staging deploy that contains it is running, nobody's move, since the Deployment's creation; not merged", () => {
+    expect(atStaging({ stagingDeployments: staged({ is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }) })).toMatchObject([
+      { issue: 7, pullRequest: 50, place: "staging", name: "deploying", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T19:35:00Z", detail: { environment: "staging", deployment: 901, noDeployAt: null, deploysUnread: false, staging: { check: null } } },
+    ]);
+  });
+
+  it("is deploy failed when the staging deploy failed, nobody's move, since the failed report, with its log; not deploying", () => {
+    const log = "https://github.com/owner/product/actions/runs/40/job/41";
+    expect(atStaging({ stagingDeployments: staged({ is: "failed", deployment: 902, commit: MERGE, at: "2026-11-08T19:45:00Z", log }) })).toMatchObject([
+      { place: "staging", name: "deploy-failed", move: "nobody", yours: false, since: "2026-11-08T19:45:00Z", detail: { environment: "staging", deployment: 902, log, staging: { check: null } } },
+    ]);
+  });
+
+  it("is on staging once a staging deploy that contains it succeeded, in a repo that names no Main checks: nobody's move when it changes no screen, since the deploy; not deploying", () => {
+    expect(atStaging({ stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) })).toEqual([
+      {
+        schema: 2,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "staging",
+        name: "on-staging",
+        move: "nobody",
+        yours: false,
+        stopsWork: false,
+        since: "2026-11-08T19:40:00Z",
+        stuckAt: null,
+        awaits: null,
+        subscription: null,
+        detail: {
+          mergeCommit: MERGE,
+          mergedAt: MERGED,
+          environment: "staging",
+          noDeployAt: null,
+          deployment: 900,
+          log: null,
+          deploysUnread: false,
+          staging: { environment: "staging", productionEnvironment: "production", trial: { needed: false, why: "no-screen" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
+        },
+      },
+    ]);
+  });
+
+  it("is the Operator's move on staging when it needs a Staging trial, yours and never stopping work, saying why; and nobody's on its way there", () => {
+    const trial = { needTrial: [50] };
+    const needed = { staging: { trial: { needed: true, why: "ui-evidence" } } };
+    expect(atStaging({ ...trial, stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) })).toMatchObject([
+      { place: "staging", name: "on-staging", move: "operator", yours: true, stopsWork: false, stuckAt: null, awaits: null, detail: needed },
+    ]);
+    expect(atStaging({ needTrial: [51], stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) })).toMatchObject([
+      { name: "on-staging", move: "nobody", yours: false, stopsWork: false, detail: { staging: { trial: { needed: false, why: "no-screen" } } } },
+    ]);
+    for (const deploy of [{ is: "none" }, { is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }, { is: "failed", deployment: 902, commit: MERGE, at: "2026-11-08T19:45:00Z" }] as const) {
+      expect(atStaging({ ...trial, stagingDeployments: staged(deploy) })).toMatchObject([{ place: "staging", move: "nobody", yours: false, stopsWork: false, detail: needed }]);
+    }
+  });
+
+  describe("and Production, which share the one pull request", () => {
+    const ON_STAGING = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
+    /** A Deployments read of the `production` environment, saying this of the merge. */
+    const promoted = (deploy: Parameters<typeof aDeployOf>[0] | "unread") => aDeploymentsRead({ [MERGE]: deploy === "unread" ? "unread" : aDeployOf(deploy) });
+
+    it("moves to Production, as deploying, once a production Deployment that contains it has started, the Kit's move as it is there, keeping what it carried at Staging", () => {
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, deployments: promoted({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" }) })).toEqual([
+        {
+          schema: 2,
+          repo: "owner/product",
+          issue: 7,
+          pullRequest: 50,
+          work: "ticket",
+          place: "production",
+          name: "deploying",
+          move: "kit",
+          yours: false,
+          stopsWork: false,
+          since: "2026-11-08T19:55:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: {
+            mergeCommit: MERGE,
+            mergedAt: MERGED,
+            environment: "production",
+            noDeployAt: null,
+            deployment: 950,
+            log: null,
+            deploysUnread: false,
+            staging: { environment: "staging", productionEnvironment: "production", trial: { needed: true, why: "ui-evidence" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
+          },
+        },
+      ]);
+    });
+
+    it("has production's names from then on, whatever staging says: live once that deploy succeeded, deploy failed with its log when it failed", () => {
+      const log = "https://github.com/owner/product/actions/runs/60/job/61";
+      for (const stagingDeployments of [ON_STAGING, staged({ is: "none" }), undefined]) {
+        expect(atStaging({ stagingDeployments, deployments: promoted({ is: "succeeded", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z" }) })).toMatchObject([
+          { place: "production", name: "live", move: "nobody", since: "2026-11-08T19:58:00Z", detail: { environment: "production", deployment: 950 } },
+        ]);
+        expect(atStaging({ stagingDeployments, deployments: promoted({ is: "failed", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z", log }) })).toMatchObject([
+          { place: "production", name: "deploy-failed", move: "nobody", detail: { environment: "production", log } },
+        ]);
+      }
+    });
+
+    it("stays at Staging while no production Deployment has started, or production's could not be read: merged and no deploy seen are never said at Production", () => {
+      const later = "2026-11-08T23:00:00Z";
+      for (const deployments of [promoted({ is: "none" }), promoted("unread"), null, undefined, staged({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" })]) {
+        expect(atStaging({ stagingDeployments: ON_STAGING, deployments }, later)).toMatchObject([{ place: "staging", name: "on-staging" }]);
+        expect(atStaging({ stagingDeployments: staged({ is: "none" }), deployments }, later)).toMatchObject([{ place: "staging", name: "no-deploy-seen", detail: { environment: "staging" } }]);
+        expect(atStaging({ deployments }, later)).toMatchObject([{ place: "staging", name: "merged", detail: { environment: "staging", deploysUnread: true } }]);
+      }
+    });
+
+    it("never moves to Production in a repo that tracks no production deploys: one with no production block, or one that declares an address and no environment", () => {
+      const started = promoted({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" });
+      for (const production of [null, { url: "https://shop.example", environment: null }]) {
+        expect(atStaging({ kit: kit({ production }), stagingDeployments: ON_STAGING, deployments: started })).toMatchObject([
+          { place: "staging", name: "on-staging", detail: { environment: "staging", staging: { environment: "staging", productionEnvironment: null } } },
+        ]);
+      }
+    });
+  });
+
+  it("stands at 24 hours from the merge and is gone a minute after at Staging, and at Production at 24 hours from the production Deployment that took it (#857)", () => {
+    const onStaging = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
+    const live = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z" }) });
+    // Read straight from the rule: a minute later the rule drops it, which a kept Standing read later cannot.
+    const ruleAt = (now: string, facts: Partial<StandingFacts>) => standingsOf(standingFactsOf({ kit: kit(), mergedLastDay: [aMergedLastDay(MERGED)], needTrial: [50], ...facts }), now);
+    expect(ruleAt("2026-11-09T19:30:00Z", { stagingDeployments: onStaging })).toMatchObject([{ place: "staging", name: "on-staging", move: "operator" }]);
+    expect(ruleAt("2026-11-09T19:31:00Z", { stagingDeployments: onStaging })).toEqual([]);
+    expect(ruleAt("2026-11-09T19:58:00Z", { stagingDeployments: onStaging, deployments: live })).toMatchObject([{ place: "production", name: "live", since: "2026-11-08T19:58:00Z" }]);
+    expect(ruleAt("2026-11-09T19:59:00Z", { stagingDeployments: onStaging, deployments: live })).toEqual([]);
+  });
+
+  it("gives none with an invalid Kit config or with the merges unread, and none from the Weekly summary's facts", () => {
+    const reads = { stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) };
+    expect(standingsIn({}, { ...reads, mergedLastDay: [aMergedLastDay(MERGED)], kit: { ...kit(), config: { ok: false, errors: ["max_in_flight must be a whole number"] } } })).toEqual([]);
+    expect(standingsIn({}, { ...reads, kit: kit() })).toEqual([]);
+    expect(standingsIn({ pullRequests: [aMergedPullRequest("2026-11-08T19:00:00Z")] }, { kit: kit() })).toEqual([]);
+  });
+
+  describe("in a repo that names Main checks", () => {
+    const DEPLOYED = "d".repeat(40);
+    const NAMING = { kit: kit({ monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e", "smoke"] } }) };
+    /** A staging deploy of the merge commit that succeeded at 19:40, and a later one of DEPLOYED, which contains it, at 19:50. */
+    const SUCCEEDED = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z", newest: { deployment: 905, commit: DEPLOYED, at: "2026-11-08T19:50:00Z" } });
+    const green = (name: string) => ({ name, is: "green", url: `https://github.com/owner/product/actions/runs/7/job/${name}`, at: "2026-11-08T19:55:00Z" }) as const;
+    const checked = (commit: string, checks: NonNullable<StandingFacts["mainChecks"]>["commits"][string]) => ({ repo: "owner/product", readAt: NOW, commits: { [commit]: checks } });
+
+    it("is on staging once every Main check is green on the commit of the newest successful staging Deployment, since the first deploy that contained it", () => {
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, [green("e2e"), green("smoke")]) })).toMatchObject([
+        { place: "staging", name: "on-staging", move: "nobody", since: "2026-11-08T19:40:00Z", detail: { deployment: 905, log: null, staging: { mainChecks: ["e2e", "smoke"], check: null, checksUnread: false } } },
+      ]);
+    });
+
+    it("is deploying while a Main check on that commit is not green yet, naming the first such, nobody's move, since that deploy succeeded; not on staging", () => {
+      const running = { name: "smoke", is: "undecided", url: null, at: null } as const;
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, [green("e2e"), running]) })).toMatchObject([
+        { place: "staging", name: "deploying", move: "nobody", yours: false, since: "2026-11-08T19:50:00Z", detail: { deployment: 905, log: null, staging: { check: "smoke", checksUnread: false } } },
+      ]);
+    });
+
+    it("is deploy failed when a Main check on that commit is red, whatever the others say, since the run ended, with the check's link where a failed deploy has its log", () => {
+      const running = { name: "e2e", is: "undecided", url: null, at: null } as const;
+      const red = { name: "smoke", is: "red", url: "https://github.com/owner/product/actions/runs/7/job/903", at: "2026-11-08T19:58:00Z" } as const;
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, [running, red]) })).toMatchObject([
+        { place: "staging", name: "deploy-failed", move: "nobody", yours: false, since: "2026-11-08T19:58:00Z", detail: { deployment: 905, log: red.url, staging: { check: "smoke", checksUnread: false } } },
+      ]);
+    });
+
+    it("reads them on the deploy's own commit when the read gives no newer one", () => {
+      const first = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
+      expect(atStaging({ ...NAMING, stagingDeployments: first, mainChecks: checked(MERGE, [green("e2e"), green("smoke")]) })).toMatchObject([{ name: "on-staging", detail: { deployment: 900 } }]);
+      expect(atStaging({ ...NAMING, stagingDeployments: first, mainChecks: checked(DEPLOYED, [green("e2e"), green("smoke")]) })).toMatchObject([{ name: "deploying" }]);
+    });
+
+    it("is deploying with its Main checks unread, never on staging, when the read is missing, of another repo, unread for that commit or lacks a named check", () => {
+      const unread = { place: "staging", name: "deploying", move: "nobody", since: "2026-11-08T19:50:00Z", detail: { deployment: 905, staging: { check: null, checksUnread: true } } };
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED })).toMatchObject([unread]);
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: null })).toMatchObject([unread]);
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: { ...checked(DEPLOYED, [green("e2e"), green("smoke")]), repo: "owner/other" } })).toMatchObject([unread]);
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, "unread") })).toMatchObject([unread]);
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, [green("e2e")]) })).toMatchObject([unread]);
+    });
+
+    it("is on staging on the Deployment alone with Main checks off, whatever a read says", () => {
+      const off = { kit: kit({ monitor: { ...DEFAULT_KIT_CONFIG.monitor, redMain: false, mainChecks: ["e2e", "smoke"] } }) };
+      expect(atStaging({ ...off, stagingDeployments: SUCCEEDED })).toMatchObject([{ name: "on-staging", detail: { staging: { mainChecks: [], check: null, checksUnread: false } } }]);
+    });
+
+    it("waits on no Main check while its staging deploy is running or failed", () => {
+      expect(atStaging({ ...NAMING, stagingDeployments: staged({ is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }) })).toMatchObject([
+        { name: "deploying", since: "2026-11-08T19:35:00Z", detail: { staging: { check: null, checksUnread: false } } },
+      ]);
+    });
+  });
+
+  describe("and its Staging trial's result (#856)", () => {
+    const ON_STAGING = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
+    const LABELLED = "2026-11-08T19:50:00Z";
+    /** `actor` adding `label` at `at`: the Operator at LABELLED, unless a test says otherwise. */
+    const added = (label: string, at = LABELLED, actor = "operator") => aLabelAdded(label, at, { actor });
+    /** What the trial result rule reads: pull request 50 with these label events, the other merged pull requests, and the Trial problems. */
+    const trials = (labelEvents: readonly ReturnType<typeof aLabelAdded>[], others: NonNullable<StandingFacts["trials"]>["pullRequests"] = [], problems: NonNullable<StandingFacts["trials"]>["problems"] = []) => ({
+      trials: { pullRequests: [{ pullRequest: 50, labelEvents, closes: [] }, ...others], problems },
+    });
+    /** Trial problem `issue`, found on pull request 50, closed as completed unless a test says otherwise. */
+    const aTrialProblem = (issue: number, overrides: Partial<TrialProblemFacts> = {}): TrialProblemFacts => ({ issue, pullRequest: 50, title: "The cart total reads 0", open: false, closedAs: "completed", ...overrides });
+
+    it("is trial accepted for the Operator's fabrik:trial-accepted, at Staging, nobody's move, since they put it on, for 24 hours from then", () => {
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...trials([added(TRIAL_ACCEPTED_LABEL)]) })).toEqual([
+        {
+          schema: 2,
+          repo: "owner/product",
+          issue: 7,
+          pullRequest: 50,
+          work: "ticket",
+          place: "staging",
+          name: "trial-accepted",
+          move: "nobody",
+          yours: false,
+          stopsWork: false,
+          since: LABELLED,
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: {
+            mergeCommit: MERGE,
+            mergedAt: MERGED,
+            environment: "staging",
+            noDeployAt: null,
+            deployment: null,
+            log: null,
+            deploysUnread: false,
+            staging: {
+              environment: "staging",
+              productionEnvironment: "production",
+              trial: { needed: true, why: "ui-evidence" },
+              result: { is: "accepted", at: LABELLED, problems: [], fix: null },
+              standsUntil: "2026-11-09T19:50:00.000Z",
+              mainChecks: [],
+              check: null,
+              checksUnread: false,
+            },
+          },
+        },
+      ]);
+    });
+
+    it("is trial problem for the Operator's fabrik:trial-problem, nobody's move, since they put it on, naming no issue when no Trial problem names it", () => {
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...trials([added(TRIAL_PROBLEM_LABEL)]) })).toMatchObject([
+        {
+          place: "staging",
+          name: "trial-problem",
+          move: "nobody",
+          yours: false,
+          stopsWork: false,
+          since: LABELLED,
+          stuckAt: null,
+          detail: { environment: "staging", deployment: null, staging: { result: { is: "problem", at: LABELLED, problems: [] }, standsUntil: "2026-11-09T19:50:00.000Z" } },
+        },
+      ]);
+    });
+
+    it.each([
+      ["another person", "kate"],
+      ["the Fabrik App", "fabrik-app[bot]"],
+    ])("stays on staging, untried and the Operator's, when %s applied the labels", (_who, actor) => {
+      for (const label of [TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL]) {
+        expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...trials([added(label, LABELLED, actor)]) })).toMatchObject([
+          { name: "on-staging", move: "operator", yours: true, detail: { staging: { result: null, standsUntil: "2026-11-09T19:30:00.000Z" } } },
+        ]);
+      }
+    });
+
+    it("takes the later of the Operator's two labels, and is on staging and untried again once they removed the deciding one, whatever the other says", () => {
+      const both = [added(TRIAL_PROBLEM_LABEL, "2026-11-08T19:45:00Z"), added(TRIAL_ACCEPTED_LABEL, "2026-11-08T19:50:00Z")];
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...trials(both) })).toMatchObject([{ name: "trial-accepted", since: "2026-11-08T19:50:00Z" }]);
+      const otherOrder = [added(TRIAL_ACCEPTED_LABEL, "2026-11-08T19:45:00Z"), added(TRIAL_PROBLEM_LABEL, "2026-11-08T19:50:00Z")];
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...trials(otherOrder) })).toMatchObject([{ name: "trial-problem", since: "2026-11-08T19:50:00Z" }]);
+      const removed = aLabelAdded(TRIAL_ACCEPTED_LABEL, "2026-11-08T19:55:00Z", { actor: "operator", action: "unlabeled" });
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...trials([...both, removed]) })).toMatchObject([{ name: "on-staging", move: "operator", since: "2026-11-08T19:40:00Z", detail: { staging: { result: null } } }]);
+      const otherRemoved = aLabelAdded(TRIAL_PROBLEM_LABEL, "2026-11-08T19:55:00Z", { actor: "operator", action: "unlabeled" });
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...trials([...both, otherRemoved]) })).toMatchObject([{ name: "trial-accepted", since: "2026-11-08T19:50:00Z" }]);
+    });
+
+    it("takes its result's name whether or not it is on staging, and whether or not it needs a trial, whatever its staging deploys and their Main checks say", () => {
+      const naming = kit({ monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e"] } });
+      const red = { repo: "owner/product", readAt: NOW, commits: { [MERGE]: [{ name: "e2e", is: "red", url: "https://github.com/owner/product/actions/runs/7/job/903", at: "2026-11-08T19:58:00Z" }] } } as const;
+      const reads: Partial<StandingFacts>[] = [
+        {},
+        { stagingDeployments: staged("unread") },
+        { stagingDeployments: staged({ is: "none" }) },
+        { stagingDeployments: staged({ is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }) },
+        { stagingDeployments: staged({ is: "failed", deployment: 902, commit: MERGE, at: "2026-11-08T19:45:00Z" }) },
+        { stagingDeployments: ON_STAGING, kit: naming, mainChecks: red },
+        { stagingDeployments: ON_STAGING, needTrial: [50] },
+      ];
+      const given = reads.map((read) => atStaging({ ...read, ...trials([added(TRIAL_PROBLEM_LABEL)]) }, "2026-11-08T23:00:00Z"));
+      for (const standings of given) expect(standings).toMatchObject([{ place: "staging", name: "trial-problem", move: "nobody", since: LABELLED, detail: { deployment: null, log: null, noDeployAt: null, deploysUnread: false, staging: { check: null, checksUnread: false } } }]);
+      // A later deploy never moves it: but for the Main checks its repo names and whether it needs a trial, every read gives the one Standing.
+      expect(given.slice(0, 5).every(([standing]) => JSON.stringify(standing) === JSON.stringify(given[0]?.[0]))).toBe(true);
+    });
+
+    it("names each Trial problem whose line names it on trial problem, with whether it is open, and none of another pull request's", () => {
+      const problems = [aTrialProblem(71, { open: true, closedAs: null }), aTrialProblem(70, { closedAs: "not_planned" }), aTrialProblem(72, { pullRequest: 51 })];
+      expect(atStaging({ stagingDeployments: ON_STAGING, ...trials([added(TRIAL_PROBLEM_LABEL)], [], problems) })).toMatchObject([
+        { name: "trial-problem", detail: { staging: { result: { is: "problem", problems: [{ issue: 70, open: false }, { issue: 71, open: true }] } } } },
+      ]);
+    });
+
+    it("is trial accepted through its fix once the merged pull request that closed its Trial problem is accepted, since that acceptance, naming the fix; and trial problem while the fix is untried", () => {
+      const fixed = (labelEvents: readonly ReturnType<typeof aLabelAdded>[]) =>
+        atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...trials([added(TRIAL_PROBLEM_LABEL, "2026-11-08T19:42:00Z")], [{ pullRequest: 61, labelEvents, closes: [70] }], [aTrialProblem(70)]) });
+      expect(fixed([])).toMatchObject([{ name: "trial-problem", since: "2026-11-08T19:42:00Z", detail: { staging: { result: { is: "problem", problems: [{ issue: 70, open: false }] } } } }]);
+      expect(fixed([added(TRIAL_ACCEPTED_LABEL, "2026-11-08T19:55:00Z")])).toMatchObject([
+        {
+          name: "trial-accepted",
+          move: "nobody",
+          since: "2026-11-08T19:55:00Z",
+          detail: { staging: { result: { is: "accepted", at: "2026-11-08T19:55:00Z", problems: [{ issue: 70, open: false }], fix: [61] }, standsUntil: "2026-11-09T19:55:00.000Z" } },
+        },
+      ]);
+    });
+
+    it("leaves it trial problem when its Trial problem is closed as not planned, closed with no pull request or still open, until the Operator's later fabrik:trial-accepted", () => {
+      const found = added(TRIAL_PROBLEM_LABEL, "2026-11-08T19:42:00Z");
+      const accepted = { pullRequest: 61, labelEvents: [added(TRIAL_ACCEPTED_LABEL, "2026-11-08T19:55:00Z")], closes: [70] };
+      const endings = [
+        trials([found], [accepted], [aTrialProblem(70, { closedAs: "not_planned" })]),
+        trials([found], [], [aTrialProblem(70)]),
+        trials([found], [accepted], [aTrialProblem(70, { open: true, closedAs: null })]),
+      ];
+      for (const ending of endings) {
+        expect(atStaging({ stagingDeployments: ON_STAGING, ...ending })).toMatchObject([{ name: "trial-problem", since: "2026-11-08T19:42:00Z" }]);
+        const theirs = { trials: { ...ending.trials, pullRequests: [{ pullRequest: 50, labelEvents: [found, added(TRIAL_ACCEPTED_LABEL, "2026-11-08T19:58:00Z")], closes: [] }, ...ending.trials.pullRequests.slice(1)] } };
+        expect(atStaging({ stagingDeployments: ON_STAGING, ...theirs })).toMatchObject([{ name: "trial-accepted", since: "2026-11-08T19:58:00Z", detail: { staging: { result: { is: "accepted", fix: null } } } }]);
+      }
+    });
+
+    it("is the Operator's move on staging when it closes a Trial problem and carries no UI evidence, saying so; and still says UI evidence when it carries that too", () => {
+      const closing = { trials: { pullRequests: [{ pullRequest: 50, labelEvents: [], closes: [70] }], problems: [aTrialProblem(70, { pullRequest: 12 })] } };
+      expect(atStaging({ stagingDeployments: ON_STAGING, ...closing })).toMatchObject([
+        { place: "staging", name: "on-staging", move: "operator", yours: true, stopsWork: false, detail: { staging: { trial: { needed: true, why: "closes-trial-problem" }, result: null } } },
+      ]);
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, ...closing })).toMatchObject([{ name: "on-staging", move: "operator", detail: { staging: { trial: { needed: true, why: "ui-evidence" } } } }]);
+      const closingATicket = { trials: { pullRequests: [{ pullRequest: 50, labelEvents: [], closes: [7] }], problems: [aTrialProblem(70, { pullRequest: 12 })] } };
+      expect(atStaging({ stagingDeployments: ON_STAGING, ...closingATicket })).toMatchObject([{ name: "on-staging", move: "nobody", detail: { staging: { trial: { needed: false, why: "no-screen" } } } }]);
+    });
+
+    describe("how long it stands", () => {
+      const WEEK_OLD = "2026-11-01T19:30:00Z";
+      /** The rule's own Standings, read straight from it: a Standing that has ended cannot be read from a kept one. */
+      const ruleAt = (now: string, facts: Partial<StandingFacts>) => standingsOf(standingFactsOf({ kit: kit(), ...facts }), now);
+      /** Pull request 50, merged a week before NOW, among those production has not taken. */
+      const unpromoted = { unpromoted: [aMergedLastDay(WEEK_OLD)] };
+
+      it("still stands a week after its merge, on staging or not, while it needs a trial and has no result: until it has one or production takes it", () => {
+        expect(standingsIn({}, { kit: kit(), ...unpromoted, needTrial: [50], stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-01T19:40:00Z" }) })).toMatchObject([
+          { place: "staging", name: "on-staging", move: "operator", yours: true, stopsWork: false, since: "2026-11-01T19:40:00Z", detail: { mergedAt: WEEK_OLD, staging: { result: null, standsUntil: null } } },
+        ]);
+        expect(standingsIn({}, { kit: kit(), ...unpromoted, needTrial: [50], stagingDeployments: staged({ is: "failed", deployment: 902, commit: MERGE, at: "2026-11-01T19:45:00Z" }) })).toMatchObject([
+          { place: "staging", name: "deploy-failed", move: "nobody", detail: { staging: { standsUntil: null } } },
+        ]);
+        expect(standingsIn({}, { kit: kit(), ...unpromoted, needTrial: [50], stagingDeployments: staged({ is: "none" }) })).toMatchObject([{ place: "staging", name: "no-deploy-seen", detail: { staging: { standsUntil: null } } }]);
+        expect(standingsIn({}, { kit: kit(), ...unpromoted, needTrial: [50] })).toMatchObject([{ place: "staging", name: "merged", detail: { deploysUnread: true, staging: { standsUntil: null } } }]);
+        const closing = { trials: { pullRequests: [{ pullRequest: 50, labelEvents: [], closes: [70] }], problems: [aTrialProblem(70, { pullRequest: 12 })] } };
+        expect(standingsIn({}, { kit: kit(), ...unpromoted, ...closing })).toMatchObject([{ place: "staging", name: "merged", detail: { staging: { trial: { why: "closes-trial-problem" }, standsUntil: null } } }]);
+      });
+
+      it("has none 24 hours after its merge when it changes no screen, however long production leaves it, as before", () => {
+        const noScreen = { unpromoted: [aMergedLastDay(MERGED)], stagingDeployments: ON_STAGING };
+        expect(ruleAt("2026-11-09T19:30:00Z", noScreen)).toMatchObject([{ name: "on-staging", move: "nobody", detail: { staging: { standsUntil: "2026-11-09T19:30:00.000Z" } } }]);
+        expect(ruleAt("2026-11-09T19:31:00Z", noScreen)).toEqual([]);
+        expect(ruleAt(NOW, { ...unpromoted, stagingDeployments: ON_STAGING })).toEqual([]);
+      });
+
+      it("has none 24 hours after its merge when the gather kept it for its last day alone, whether or not it needs a trial: production has taken it, or nothing says how far back to keep", () => {
+        const lastDay = { mergedLastDay: [aMergedLastDay(MERGED)], needTrial: [50], stagingDeployments: ON_STAGING };
+        expect(ruleAt("2026-11-09T19:30:00Z", lastDay)).toMatchObject([{ name: "on-staging", move: "operator", detail: { staging: { standsUntil: "2026-11-09T19:30:00.000Z" } } }]);
+        expect(ruleAt("2026-11-09T19:31:00Z", lastDay)).toEqual([]);
+        expect(ruleAt("2026-11-09T19:31:00Z", { ...lastDay, unpromoted: [aMergedLastDay(MERGED)] })).toMatchObject([{ name: "on-staging", move: "operator", detail: { staging: { standsUntil: null } } }]);
+      });
+
+      it("stands for 24 hours from the label event that gave its result, and has none a minute after, however long ago it merged", () => {
+        for (const label of [TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL]) {
+          const tried = { ...unpromoted, needTrial: [50], ...trials([added(label, "2026-11-07T12:00:00Z")]) };
+          expect(ruleAt("2026-11-08T12:00:00Z", tried)).toMatchObject([{ place: "staging", since: "2026-11-07T12:00:00Z", detail: { staging: { standsUntil: "2026-11-08T12:00:00.000Z" } } }]);
+          expect(ruleAt("2026-11-08T12:01:00Z", tried)).toEqual([]);
+        }
+        // One that changes no screen, given a result all the same, stands by its result too.
+        const noScreen = { ...unpromoted, ...trials([added(TRIAL_ACCEPTED_LABEL, "2026-11-07T12:00:00Z")]) };
+        expect(ruleAt("2026-11-08T12:00:00Z", noScreen)).toMatchObject([{ name: "trial-accepted" }]);
+        expect(ruleAt("2026-11-08T12:01:00Z", noScreen)).toEqual([]);
+      });
+
+      it("stands again for 24 hours from the acceptance of its fix, long after its problem's own day ended", () => {
+        const found = added(TRIAL_PROBLEM_LABEL, "2026-11-02T12:00:00Z");
+        const fixed = (now: string, fix: readonly ReturnType<typeof aLabelAdded>[]) => ruleAt(now, { ...unpromoted, needTrial: [50], ...trials([found], [{ pullRequest: 61, labelEvents: fix, closes: [70] }], [aTrialProblem(70)]) });
+        expect(fixed("2026-11-03T12:00:00Z", [])).toMatchObject([{ name: "trial-problem" }]);
+        expect(fixed("2026-11-03T12:01:00Z", [])).toEqual([]);
+        const accepted = [added(TRIAL_ACCEPTED_LABEL, "2026-11-07T15:00:00Z")];
+        expect(fixed("2026-11-08T15:00:00Z", accepted)).toMatchObject([{ name: "trial-accepted", since: "2026-11-07T15:00:00Z", detail: { staging: { result: { fix: [61] } } } }]);
+        expect(fixed("2026-11-08T15:01:00Z", accepted)).toEqual([]);
+      });
+
+      it("moves to Production once a production Deployment that contains it has started, with production's names, result or none; and one that waits on nobody stands there 24 hours from that Deployment, however long ago it merged (#857)", () => {
+        const started = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" }) });
+        const accepted = trials([added(TRIAL_ACCEPTED_LABEL)]);
+        expect(atStaging({ needTrial: [50], unpromoted: [aMergedLastDay(MERGED)], stagingDeployments: ON_STAGING, deployments: started, ...accepted })).toMatchObject([
+          { place: "production", name: "deploying", move: "kit", detail: { environment: "production", staging: { result: { is: "accepted", at: LABELLED } } } },
+        ]);
+        // One merged a week ago that waits on nobody, long since accepted or changing no screen, stands by the Deployment that gave it its name, not by its merge.
+        const promoting = [
+          { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING, deployments: started, ...trials([added(TRIAL_ACCEPTED_LABEL, "2026-11-02T19:00:00Z")]) },
+          { ...unpromoted, stagingDeployments: ON_STAGING, deployments: started },
+        ];
+        for (const facts of promoting) {
+          expect(ruleAt(NOW, facts)).toMatchObject([{ place: "production", name: "deploying", move: "kit", since: "2026-11-08T19:55:00Z", detail: { mergedAt: WEEK_OLD } }]);
+          expect(ruleAt("2026-11-09T19:55:00Z", facts)).toMatchObject([{ place: "production", name: "deploying" }]);
+          expect(ruleAt("2026-11-09T19:56:00Z", facts)).toEqual([]);
+        }
+        const failed = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "failed", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z", log: "https://github.com/owner/product/actions/runs/60/job/61" }) });
+        expect(ruleAt("2026-11-09T19:58:00Z", { ...unpromoted, deployments: failed })).toMatchObject([{ place: "production", name: "deploy-failed", since: "2026-11-08T19:58:00Z" }]);
+        expect(ruleAt("2026-11-09T19:59:00Z", { ...unpromoted, deployments: failed })).toEqual([]);
+      });
+
+      it("keeps its Standing at Production, untried and needing a trial, while the production Deployment that contains it has failed or is still running, however long: production has not taken it until one succeeds", () => {
+        const untried = { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING };
+        const failed = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "failed", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z", log: "https://github.com/owner/product/actions/runs/60/job/61" }) });
+        const running = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 951, commit: MERGE, at: "2026-11-08T19:55:00Z" }) });
+        // 25 hours after the Deployment, and eleven days after it.
+        for (const now of ["2026-11-09T20:58:00Z", "2026-11-19T20:00:00Z"]) {
+          expect(ruleAt(now, { ...untried, deployments: failed })).toMatchObject([
+            { place: "production", name: "deploy-failed", move: "nobody", since: "2026-11-08T19:58:00Z", detail: { mergedAt: WEEK_OLD, staging: { trial: { needed: true }, result: null, standsUntil: null } } },
+          ]);
+          expect(ruleAt(now, { ...untried, deployments: running })).toMatchObject([{ place: "production", name: "deploying", move: "kit", since: "2026-11-08T19:55:00Z", detail: { staging: { result: null, standsUntil: null } } }]);
+        }
+        // Once one that contains it has succeeded, production has taken it: Live for 24 hours from that Deployment, tried or not.
+        const taken = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 960, commit: MERGE, at: "2026-11-10T09:00:00Z" }) });
+        expect(ruleAt("2026-11-11T09:00:00Z", { ...untried, deployments: taken })).toMatchObject([{ place: "production", name: "live", since: "2026-11-10T09:00:00Z" }]);
+        expect(ruleAt("2026-11-11T09:01:00Z", { ...untried, deployments: taken })).toEqual([]);
+        // And once it has a result it waits on nobody: 24 hours from the failed Deployment, as every other at Production.
+        const tried = { ...untried, deployments: failed, ...trials([added(TRIAL_PROBLEM_LABEL, "2026-11-08T12:00:00Z")]) };
+        expect(ruleAt("2026-11-09T19:58:00Z", tried)).toMatchObject([{ place: "production", name: "deploy-failed" }]);
+        expect(ruleAt("2026-11-09T19:59:00Z", tried)).toEqual([]);
+      });
+
+      it("is live for 24 hours from the production Deployment that took it, not from its merge: live an hour after that Deployment, five days after its merge, and with no Standing 25 hours after it (#857)", () => {
+        const taken = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 960, commit: "9".repeat(40), at: "2026-11-08T19:00:00Z" }) });
+        const fiveDaysBefore = { unpromoted: [aMergedLastDay("2026-11-03T19:00:00Z")], deployments: taken };
+        expect(ruleAt("2026-11-08T20:00:00Z", fiveDaysBefore)).toMatchObject([
+          { place: "production", name: "live", move: "nobody", yours: false, since: "2026-11-08T19:00:00Z", detail: { mergedAt: "2026-11-03T19:00:00Z", environment: "production", deployment: 960 } },
+        ]);
+        expect(ruleAt("2026-11-09T19:00:00Z", fiveDaysBefore)).toMatchObject([{ name: "live" }]);
+        expect(ruleAt("2026-11-09T19:01:00Z", fiveDaysBefore)).toEqual([]);
+        expect(ruleAt("2026-11-09T20:00:00Z", fiveDaysBefore)).toEqual([]);
+        // Whether or not it needed a trial, and whatever came of it.
+        for (const more of [{ needTrial: [50] }, trials([added(TRIAL_PROBLEM_LABEL, "2026-11-04T10:00:00Z")])]) {
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...fiveDaysBefore, ...more })).toMatchObject([{ place: "production", name: "live", since: "2026-11-08T19:00:00Z" }]);
+          expect(ruleAt("2026-11-09T20:00:00Z", { ...fiveDaysBefore, ...more })).toEqual([]);
+        }
+      });
+
+      describe("one a production Deployment took in the last 24 hours, as the gather keeps it (#857)", () => {
+        /** Pull request 50, merged five days before the production Deployment 960 that took it, which succeeded at 19:00. */
+        const promoted = { promoted: [{ ...aMergedLastDay("2026-11-03T19:00:00Z"), by: { deployment: 960, commit: "9".repeat(40), at: "2026-11-08T19:00:00Z" } }] };
+
+        it("is live since that Deployment on the gather's word alone, with no Deployments read, though its Standing at Staging ended days ago; and has none 25 hours after it", () => {
+          expect(ruleAt("2026-11-08T20:00:00Z", promoted)).toMatchObject([
+            { place: "production", name: "live", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T19:00:00Z", detail: { mergedAt: "2026-11-03T19:00:00Z", environment: "production", deployment: 960, deploysUnread: false, staging: { environment: "staging", productionEnvironment: "production" } } },
+          ]);
+          expect(ruleAt("2026-11-09T19:00:00Z", promoted)).toMatchObject([{ name: "live" }]);
+          expect(ruleAt("2026-11-09T20:00:00Z", promoted)).toEqual([]);
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, deployments: aDeploymentsRead({ [MERGE]: "unread" }) })).toMatchObject([{ name: "live", detail: { deployment: 960 } }]);
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, deployments: aDeploymentsRead({}) })).toMatchObject([{ name: "live", detail: { deployment: 960 } }]);
+        });
+
+        it("is as a Deployments read of production says, where one answers for its merge: the read is the nearer look", () => {
+          const earlier = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 955, commit: MERGE, at: "2026-11-08T18:00:00Z" }) });
+          const rerun = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 970, commit: MERGE, at: "2026-11-08T19:30:00Z" }) });
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, deployments: earlier })).toMatchObject([{ name: "live", since: "2026-11-08T18:00:00Z", detail: { deployment: 955 } }]);
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, deployments: rerun })).toMatchObject([{ place: "production", name: "deploying", since: "2026-11-08T19:30:00Z", detail: { deployment: 970 } }]);
+        });
+
+        it("has one Standing where the gather kept it for its last day too, and none in a repo that tracks no production deploys", () => {
+          const lastDay = { mergedLastDay: [aMergedLastDay(MERGED)], promoted: [{ ...aMergedLastDay(MERGED), by: { deployment: 960, commit: "9".repeat(40), at: "2026-11-08T19:45:00Z" } }], needTrial: [50] };
+          expect(standingsIn({}, { kit: kit(), ...lastDay })).toMatchObject([{ pullRequest: 50, place: "production", name: "live", since: "2026-11-08T19:45:00Z", detail: { staging: { trial: { needed: true } } } }]);
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, kit: kit({ production: { url: "https://shop.example", environment: null } }) })).toEqual([]);
+        });
+      });
+
+      it("gives one Standing to a pull request the gather kept both ways, and none where neither was read", () => {
+        const both = { mergedLastDay: [aMergedLastDay(MERGED)], unpromoted: [aMergedLastDay(MERGED), aMergedLastDay(WEEK_OLD, { number: 44, ticket: 3, mergeCommit: "4".repeat(40) })], needTrial: [44, 50] };
+        expect(standingsIn({}, { kit: kit(), ...both }).map(({ pullRequest, name }) => [pullRequest, name])).toEqual([
+          [44, "merged"],
+          [50, "merged"],
+        ]);
+        expect(standingsIn({}, { kit: kit(), ...trials([added(TRIAL_ACCEPTED_LABEL)]) })).toEqual([]);
+      });
+    });
+  });
+
+  it("is never merged or no deploy seen at Production, never at no place, never stops work, and yours only on staging needing a trial, in every read above of a repo that declares staging", () => {
+    const declaring = produced.filter(({ facts }) => facts.kit?.config.ok === true && facts.kit.config.config.staging !== null).flatMap(({ standings }) => standings);
+    expect(new Set(declaring.map(({ place }) => place))).toEqual(new Set(["staging", "production"]));
+    expect(new Set(declaring.filter(({ place }) => place === "production").map(({ name }) => name))).toEqual(new Set(["deploying", "live", "deploy-failed"]));
+    expect(new Set(declaring.filter(({ place }) => place === "staging").map(({ name }) => name))).toEqual(new Set(["merged", "no-deploy-seen", "deploying", "deploy-failed", "on-staging", "trial-accepted", "trial-problem"]));
+    for (const standing of declaring) {
+      expect(standing).toMatchObject({ stopsWork: false, stuckAt: null, awaits: null });
+      expect(standing.yours).toBe(standing.name === "on-staging" && standing.detail.staging.trial.needed);
+      expect(standing.move).toBe(standing.yours ? "operator" : standing.place === "production" && standing.name === "deploying" ? "kit" : "nobody");
+    }
+  });
+});
+
 describe("a passed draft waiting on its Digest (#654)", () => {
   const PASSED = "2026-11-08T19:20:00Z";
   const ASKED = "2026-11-08T19:21:00Z";
@@ -1468,12 +2051,13 @@ describe("a Standing, as plain data", () => {
     for (const standing of all()) expect(JSON.parse(JSON.stringify(standing))).toStrictEqual(standing);
   });
 
-  it("stops work only when the Operator's, never for reading matter or a parked draft, and always for any other move of theirs but a Plain pull request's or a failed Weekly summary run's", () => {
+  it("stops work only when the Operator's, never for reading matter, a parked draft or a merged change on staging, and always for any other move of theirs but a Plain pull request's or a failed Weekly summary run's", () => {
     for (const standing of all()) {
-      if (!standing.yours || standing.name === "yours-to-read" || standing.name === "parked") expect(standing).toMatchObject({ stopsWork: false });
+      if (!standing.yours || standing.name === "yours-to-read" || standing.name === "parked" || standing.name === "on-staging") expect(standing).toMatchObject({ stopsWork: false });
       else if (standing.work !== "plain" && standing.work !== "weekly-summary") expect(standing).toMatchObject({ stopsWork: true });
     }
     expect(all().some(({ name }) => name === "yours-to-read")).toBe(true);
+    expect(all().some(({ name, yours }) => name === "on-staging" && yours)).toBe(true);
   });
 
   it("is the same for the same facts read a minute later, but for a Standing that crossed its bar then", () => {

@@ -28,7 +28,8 @@ const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 const BOOTSTRAP_USAGE =
   "Usage: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- [release | --release=<release>] [--account=<1Password account>]" +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
-  " [--production-url=<address> | --no-production] [--production-environment=<Deployments environment>] [--plan]";
+  " [--production-url=<address> | --no-production] [--production-environment=<Deployments environment>]" +
+  " [--staging-url=<address> | --no-staging] [--staging-environment=<Deployments environment>] [--plan]";
 
 let productDir: string;
 
@@ -168,8 +169,8 @@ describe("The setup program", () => {
   });
 
   it("with several 1Password accounts, asks which, and every later op call uses it", async () => {
-    // The Operator answers the account, the four questions, then no to the plan.
-    const prompt = scripted("2", "no", "", "", "", "n");
+    // The Operator answers the account, the five questions, then no to the plan.
+    const prompt = scripted("2", "no", "", "", "", "", "n");
     const script = { ...severalAccounts, ...withFabrikVault, ...NO_EARLIER_RUN, ...deploymentsOf("acme/clinic", []) };
     const { code, said, calls } = await setup([".", "v1.4.2"], { script, prompt });
 
@@ -182,7 +183,7 @@ describe("The setup program", () => {
   });
 
   it("with --account=, asks nothing about the account and sets OP_ACCOUNT from it", async () => {
-    const { calls } = await setup([".", "v1.4.2", "--plan", "--account=acme.1password.com", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production"], {
+    const { calls } = await setup([".", "v1.4.2", "--plan", "--account=acme.1password.com", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production", "--no-staging"], {
       script: severalAccounts,
       prompt: neverAsked,
     });
@@ -203,6 +204,8 @@ describe("The setup program", () => {
         "--paused",
         "--production-url=https://clinic.example.com",
         "--production-environment=production",
+        "--staging-url=https://staging.clinic.example.com",
+        "--staging-environment=staging",
       ],
       { script: severalAccounts, prompt: neverAsked },
     );
@@ -215,7 +218,7 @@ describe("The setup program", () => {
   describe("production's question", () => {
     const PLANNED =
       '- write .fabrik/config.json (a starter Kit config with every v1 default, and the production block: url "https://clinic.example.com", environment "production")';
-    const OTHERS = ["--no-time-zone", "--no-second-subscription", "--no-paused"];
+    const OTHERS = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-staging"];
 
     it("with --plan in a terminal, offers the environment and address the repo's Deployments carry, names the block in the plan, and changes nothing", async () => {
       const script = deploymentsOf("acme/clinic", [{ environment: "production", url: "https://clinic.example.com" }]);
@@ -254,6 +257,65 @@ describe("The setup program", () => {
 
       expect(code).toBe(1);
       expect(complaints[0]).toMatch(/^Kit config would refuse --production-url=clinic\.example\.com: production\.url is "clinic\.example\.com": /);
+      expect(calls.filter((call) => !isReadOnly(call)).map((call) => call.line)).toEqual([]);
+    });
+  });
+
+  describe("staging's question", () => {
+    const BLOCK = 'the staging block: url "https://staging.clinic.example.com", environment "staging"';
+    const OTHERS = ["--no-time-zone", "--no-second-subscription", "--no-paused"];
+    const deployed = deploymentsOf("acme/clinic", [
+      { environment: "staging", url: "https://staging.clinic.example.com" },
+      { environment: "production", url: "https://clinic.example.com" },
+    ]);
+
+    it("with --plan in a terminal, asks it after production's, offering the environments the one Deployments read saw, and names both blocks in the plan", async () => {
+      const prompt = scripted("", "", "", "");
+
+      const { code, said, calls } = await setup([".", "v1.4.2", "--plan", ...OTHERS], { script: deployed, prompt });
+
+      expect(code).toBe(0);
+      expect(prompt.questions).toEqual([
+        "The environment production's deploys carry in GitHub's Deployments, or none [production]: ",
+        "Production's address, or no to leave production out [https://clinic.example.com]: ",
+        "The environment staging's deploys carry in GitHub's Deployments, or none to leave staging out [staging]: ",
+        "Staging's address, or no to leave staging out [https://staging.clinic.example.com]: ",
+      ]);
+      expect(said).toContain(
+        `- write .fabrik/config.json (a starter Kit config with every v1 default, and the production block: url "https://clinic.example.com", environment "production", and ${BLOCK})`,
+      );
+      expect(calls.filter((call) => call.line.includes("/deployments?"))).toHaveLength(1);
+      expect(calls.filter((call) => !isReadOnly(call)).map((call) => call.line)).toEqual([]);
+    });
+
+    it("plans no staging block when the Operator declines it", async () => {
+      const prompt = scripted("none");
+
+      const { code, said } = await setup([".", "v1.4.2", "--plan", ...OTHERS, "--no-production"], { script: deployed, prompt });
+
+      expect(code).toBe(0);
+      expect(said).toContain("- write .fabrik/config.json (a starter Kit config with every v1 default)");
+      expect(said.join("\n")).not.toContain("staging block");
+    });
+
+    it("without a terminal, plans the block from its two flags, reading no Deployments, and none without them", async () => {
+      const flags = ["--staging-url=https://staging.clinic.example.com", "--staging-environment=staging"];
+
+      const flagged = await setup([".", "v1.4.2", ...OTHERS, "--no-production", ...flags], { prompt: null });
+      const unflagged = await setup([".", "v1.4.2", ...OTHERS, "--no-production"], { prompt: null });
+
+      expect(flagged.said).toContain(`- write .fabrik/config.json (a starter Kit config with every v1 default, and ${BLOCK})`);
+      expect(flagged.calls.some((call) => call.line.includes("deployments"))).toBe(false);
+      expect(unflagged.said.join("\n")).not.toContain("staging block");
+    });
+
+    it("stops the run with Kit config's reason when the flags give production's environment to staging", async () => {
+      const flags = ["--production-url=https://clinic.example.com", "--production-environment=live", "--staging-url=https://staging.clinic.example.com", "--staging-environment=live"];
+
+      const { code, complaints, calls } = await setup([".", "v1.4.2", ...OTHERS, ...flags], { prompt: null });
+
+      expect(code).toBe(1);
+      expect(complaints[0]).toBe(`Kit config would refuse staging's flags: staging.environment is "live": production.environment names it, and staging's environment is never production's`);
       expect(calls.filter((call) => !isReadOnly(call)).map((call) => call.line)).toEqual([]);
     });
   });
@@ -297,7 +359,7 @@ describe("The setup program", () => {
   });
 
   it("with --plan in a terminal, stops at the plan and says how to carry it out", async () => {
-    const { code, said } = await setup([".", "v1.4.2", "--plan", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production"], { prompt: neverAsked });
+    const { code, said } = await setup([".", "v1.4.2", "--plan", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production", "--no-staging"], { prompt: neverAsked });
 
     expect(code).toBe(0);
     expect(said).toContain("Run setup again without --plan to do it.");
@@ -346,7 +408,7 @@ describe("An old personal copy of the fabrik-setup skill", () => {
   const FOUND = () => `${copy} is an out-of-date copy of the fabrik-setup skill, which Setup no longer uses.`;
   const STALE = () => `It's stale: delete it with rm -rf '${copy}'.`;
   /** A run in a terminal with every question answered by a flag, that the Operator says no to at the plan. */
-  const ANSWERED = [".", "v1.4.2", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production"];
+  const ANSWERED = [".", "v1.4.2", "--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production", "--no-staging"];
 
   it("is offered for deletion once the checks pass, and deleted on a yes, leaving the other personal skills", async () => {
     const prompt = scripted("y", "n");

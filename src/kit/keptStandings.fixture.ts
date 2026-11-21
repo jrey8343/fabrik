@@ -118,8 +118,49 @@ const A_CHECK_HEALING = aStanding(
   { pullRequest: 50, place: "merge-gate" },
 );
 
+/** What every Standing of a merged agent pull request at Staging carries (#855), in a repo that declares `staging` beside production and names no Main check. */
+const AT_STAGING = { pullRequest: 50, place: "staging", move: "nobody" } as const;
+const A_MERGE_ON_STAGING = { ...A_MERGE, environment: "staging", deployment: 77 } as const;
+const ITS_STAGING = { environment: "staging", productionEnvironment: "production", mainChecks: [], check: null, checksUnread: false } as const;
+const ITS_TRIAL = { needed: true, why: "ui-evidence" } as const;
+
+/**
+ * A merged UI pull request on staging, waiting on its Staging trial (#855),
+ * and one of each name a trial's result gives (#856), a problem found and
+ * one accepted through its fix: the place `staging` and three names schema 2
+ * gained after v3.4.1, with no move of the schema.
+ */
+export const ON_STAGING_AT_SCHEMA_2 = aStanding(
+  "on-staging",
+  { ...A_MERGE_ON_STAGING, staging: { ...ITS_STAGING, trial: ITS_TRIAL, result: null, standsUntil: null } },
+  { ...AT_STAGING, move: "operator", yours: true },
+);
+const A_TRIAL_PROBLEM = aStanding(
+  "trial-problem",
+  {
+    ...A_MERGE_ON_STAGING,
+    deployment: null,
+    staging: { ...ITS_STAGING, trial: ITS_TRIAL, result: { is: "problem", at: "2026-11-08T14:00:00Z", problems: [{ issue: 70, open: true }] }, standsUntil: "2026-11-09T14:00:00.000Z" },
+  },
+  { ...AT_STAGING, since: "2026-11-08T14:00:00Z" },
+);
+const A_TRIAL_ACCEPTED = aStanding(
+  "trial-accepted",
+  {
+    ...A_MERGE_ON_STAGING,
+    deployment: null,
+    staging: {
+      ...ITS_STAGING,
+      trial: ITS_TRIAL,
+      result: { is: "accepted", at: "2026-11-08T16:00:00Z", problems: [{ issue: 70, open: false }], fix: [61] },
+      standsUntil: "2026-11-09T16:00:00.000Z",
+    },
+  },
+  { ...AT_STAGING, since: "2026-11-08T16:00:00Z" },
+);
+
 /** For each schema a Standing has had, Standings as a reader kept them at it. */
 export const KEPT_STANDINGS: Readonly<Record<number, readonly unknown[]>> = {
   1: [A_SCHEMA_1_BLOCKED, ...THE_SAME_AT_SCHEMAS_1_AND_2.map((standing) => ({ ...standing, schema: 1 }))],
-  2: [THAT_BLOCKED_AT_SCHEMA_2, ...THE_SAME_AT_SCHEMAS_1_AND_2, A_CHECK_HEALING],
+  2: [THAT_BLOCKED_AT_SCHEMA_2, ...THE_SAME_AT_SCHEMAS_1_AND_2, A_CHECK_HEALING, ON_STAGING_AT_SCHEMA_2, A_TRIAL_PROBLEM, A_TRIAL_ACCEPTED],
 };

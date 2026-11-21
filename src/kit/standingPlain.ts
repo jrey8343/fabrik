@@ -249,7 +249,7 @@ function lastPassedAt(checks: readonly RequiredCheckFact[]): string | null {
  * bump, the Operator's from a Pairing session, whose body closes the issue
  * its branch names, whatever else it closes; or any other.
  */
-export function plainKindOf({ author, headRef, closes }: PlainPullRequestFacts, operator: string, appLogin: string): PlainKind {
+export function plainKindOf({ author, headRef, closes }: Pick<PlainPullRequestFacts, "author" | "headRef" | "closes">, operator: string, appLogin: string): PlainKind {
   if (author === DEPENDABOT && headRef.startsWith(KIT_BUMP_BRANCH_PREFIX)) return "kit-bump";
   if (author === operator && SETUP_BRANCH_PREFIXES.some((prefix) => headRef.startsWith(prefix))) return "setup";
   if (author === appLogin && headRef.startsWith(`${SKILLS_BUMP_BRANCH}/`)) return "skills-bump";

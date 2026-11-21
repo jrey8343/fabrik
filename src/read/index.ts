@@ -142,6 +142,24 @@ export { MERGED_STANDS_HOURS, NO_DEPLOY_SEEN_MINUTES } from "../kit/standingProd
 export { joinDeployments, mergesToRead } from "./joinDeployments.ts";
 export type { MergedLastDayFacts } from "../kit/standingProduction.ts";
 
+// The Standing at Staging
+
+export { aMainChecksRead, aStagingFacts, aStagingRead } from "./builders.ts";
+export { commitsToCheck, joinStaging, stagingMergesToRead } from "./joinStaging.ts";
+export { readMainChecks } from "./mainChecks.ts";
+export type { CommitToCheck, MainCheckOf, MainChecksRead } from "./mainChecks.ts";
+export type { StagingRead } from "./rows.ts";
+
+// The Staging trial
+
+export { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
+export { trialProblemIn, trialProblemLine } from "../loop/markers.ts";
+
+// The Promote list
+
+export { promoteListOf } from "./promoteList.ts";
+export type { PromoteEntry, PromoteList } from "./promoteList.ts";
+
 // The Round read
 
 export { readRound } from "./roundRead.ts";

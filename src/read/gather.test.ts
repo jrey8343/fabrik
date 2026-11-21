@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient, type Repo } from "../github/client.ts";
 import { wordStanding } from "../kit/standingWording.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
+import { trialProblemLine } from "../loop/markers.ts";
 import { aDigestComment, aRollInComment } from "./builders.ts";
 import { type Facts, gatherRepo } from "./gather.ts";
-import { closedIssueCommentsQuery } from "./homeQueries.ts";
+import { closedIssueCommentsQuery, MERGED_PULL_REQUESTS_QUERY } from "./homeQueries.ts";
 import { threeDeepConnectionsIn } from "./queryShape.ts";
+import { promoteListOf } from "./promoteList.ts";
 import { rowsOf } from "./rows.ts";
 
 const NOW = "2026-11-09T12:00:00Z";
@@ -27,6 +29,8 @@ interface RawRepo {
   openPullRequests?: Record<string, unknown>[];
   /** The merged pull requests, newest-updated first. */
   mergedPullRequests?: Record<string, unknown>[];
+  /** Its Deployments by environment, in any order: a query gets them by creation, in the direction it asks for. */
+  deployments?: Record<string, Record<string, unknown>[]>;
   /** The closed issues labelled as a Check's issue, updated in the last week. */
   closedCheckIssues?: Record<string, unknown>[];
   /** Fail every query whose text holds this. */
@@ -41,7 +45,12 @@ interface Calls {
   readonly files: string[];
 }
 
-/** A read-only client over `jrey8343/shop`, answering each query the gather makes with one page, and recording what it was asked. */
+/**
+ * A read-only client over `jrey8343/shop`, answering each query the gather
+ * makes with one page, and recording what it was asked. A query that reads a
+ * connection of Deployments or merged pull requests from a cursor gets as
+ * many as it asks for at a time.
+ */
 function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
   const calls: Calls = { queries: [], files: [] };
   const page = (nodes: unknown[] = []) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
@@ -66,6 +75,18 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       if (query.includes("defaultBranchRef { name target { oid } }") && !query.includes("issues(")) {
         return answer({ repository: { owner: { login: "jrey8343" }, defaultBranchRef: branch === null ? null : { name: branch.name, target: { oid: branch.head } } } });
       }
+      // A page of as many as the query asks for first, from its cursor, which here is how many came before.
+      const paged = (nodes: Record<string, unknown>[]) => {
+        const from = Number(variables["after"] ?? 0);
+        const to = from + Number(/first: (\d+), after: \$after/.exec(query)?.[1]);
+        return { pageInfo: { hasNextPage: to < nodes.length, endCursor: to < nodes.length ? String(to) : null }, nodes: nodes.slice(from, to) };
+      };
+      const newestFirst = (nodes: Record<string, unknown>[], by: string) => nodes.toSorted((a, b) => Date.parse(String(b[by])) - Date.parse(String(a[by])));
+      if (query.includes("deployments(environments: [$environment]")) {
+        const created = newestFirst(raw.deployments?.[String(variables["environment"])] ?? [], "createdAt");
+        return answer({ repository: { deployments: paged(query.includes("direction: DESC") ? created : created.toReversed()) } });
+      }
+      if (query.includes("pullRequests(states: MERGED") && query.includes("$after")) return answer({ repository: { pullRequests: paged(newestFirst(raw.mergedPullRequests ?? [], "updatedAt")) } });
       if (query.includes("pullRequests(states: MERGED")) return answer({ repository: { pullRequests: page(raw.mergedPullRequests) } });
       if (query.includes("pullRequests(states: OPEN, first: 25")) return answer({ repository: { pullRequests: page(raw.openPullRequests) } });
       if (query.includes("labels: [$needsDesign]")) return answer({ repository: { owner: { login: "jrey8343" }, issues: page(labelled(variables["needsDesign"])) } });
@@ -790,6 +811,757 @@ describe("a gather shaped for Home", () => {
       expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
     });
   });
+
+  describe("a repo that declares staging (#856)", () => {
+    const PRODUCTION = { url: "https://shop.example", environment: "production" };
+    const STAGING = { url: "https://staging.shop.example", environment: "staging" };
+    const declaring = (config: Record<string, unknown> = {}) => ({ [CALLER_PATH]: CALLER, [CONFIG_PATH]: JSON.stringify({ production: PRODUCTION, staging: STAGING, ...config }) });
+    /** The commit production runs: the newest successful production Deployment's, committed on 2026-11-02 at 09:00. */
+    const PROMOTED = "e".repeat(40);
+    const PROMOTION = aRawDeployment({ databaseId: 800, createdAt: "2026-11-02T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-11-02T09:00:00Z" } });
+    const statuses = (...states: string[]) => ({ nodes: states.map((state) => ({ state, createdAt: "2026-11-08T09:20:00Z" })) });
+    const labelled = (label: string, at: string, actor: Record<string, unknown> | null = OPERATOR, kind = "LabeledEvent") => ({ __typename: kind, createdAt: at, actor, label: { name: label } });
+    const marker = (value: Record<string, unknown>) => ["It builds the cart.", "", "<!-- fabrik:ui-evidence-start -->", "## UI evidence", `<!-- fabrik:ui-evidence ${JSON.stringify(value)} -->`].join("\n");
+    const UI = { run: 4400, artifact: 900, failure: null, routes: ["/cart"] };
+
+    async function gathered(raw: RawRepo, appLogin: string | null = null): Promise<{ facts: Facts; calls: Calls }> {
+      const { client, calls } = repoWith({ files: declaring(), ...raw });
+      const read = await gatherRepo(client, "jrey8343/shop", NOW, appLogin);
+      if (!read.product || read.facts === null) throw new Error(`no facts: ${JSON.stringify(read)}`);
+      return { facts: read.facts, calls };
+    }
+    const factsOf = async (raw: RawRepo, appLogin: string | null = null) => (await gathered(raw, appLogin)).facts;
+
+    it("asks a repo that declares none what it asked before, and gives it no staging facts: the one page of merged pull requests, with no label event of one, and no Deployment", async () => {
+      const asked: string[][] = [];
+      for (const files of [{ [CALLER_PATH]: CALLER }, { [CALLER_PATH]: CALLER, [CONFIG_PATH]: JSON.stringify({ production: PRODUCTION }) }, declaring({ staging: null })]) {
+        const { client, calls } = repoWith({ files, mergedPullRequests: [aRawMergedPullRequest()], deployments: { production: [PROMOTION], staging: [aRawDeployment()] } });
+
+        const read = await gatherRepo(client, "jrey8343/shop", NOW);
+
+        expect(read).toMatchObject({ product: true, unread: null });
+        expect(read.product && read.facts).not.toHaveProperty("staging");
+        expect(calls.queries.filter((query) => query.includes("pullRequests(states: MERGED"))).toEqual([MERGED_PULL_REQUESTS_QUERY]);
+        expect(calls.queries.filter((query) => query.includes("deployments("))).toEqual([]);
+        asked.push(calls.queries);
+      }
+      expect(MERGED_PULL_REQUESTS_QUERY).toContain("pullRequests(states: MERGED, first: 25, orderBy: { field: UPDATED_AT, direction: DESC })");
+      expect(MERGED_PULL_REQUESTS_QUERY).not.toMatch(/timelineItems|\$after|updatedAt|pageInfo/);
+      // But for its merged pull requests and its Deployments, a repo that declares staging is asked the same, in the same order.
+      const { calls } = await gathered({ mergedPullRequests: [aRawMergedPullRequest()], deployments: { production: [PROMOTION] } });
+      const others = (queries: readonly string[]) => queries.filter((query) => !query.includes("pullRequests(states: MERGED") && !query.includes("deployments("));
+      expect(others(calls.queries)).toEqual(others(asked[0] ?? []));
+      expect(asked[1]).toEqual(asked[0]);
+      expect(asked[2]).toEqual(asked[0]);
+    });
+
+    it("keeps the agent pull requests merged since the newest successful production Deployment, newest first, however long ago, and none that Deployment's commit holds", async () => {
+      const { facts, calls } = await gathered({
+        deployments: {
+          production: [
+            aRawDeployment({ databaseId: 700, createdAt: "2026-10-20T09:10:00Z", commitOid: "a".repeat(40), commit: { committedDate: "2026-10-20T09:00:00Z" } }),
+            PROMOTION,
+            aRawDeployment({ databaseId: 810, createdAt: "2026-11-08T09:10:00Z", commitOid: "f".repeat(40), commit: { committedDate: "2026-11-08T09:00:00Z" }, statuses: statuses("FAILURE", "IN_PROGRESS") }),
+            aRawDeployment({ databaseId: 820, createdAt: "2026-11-09T11:50:00Z", commitOid: "9".repeat(40), commit: { committedDate: "2026-11-09T11:40:00Z" }, statuses: statuses("IN_PROGRESS", "QUEUED") }),
+          ],
+        },
+        mergedPullRequests: [
+          aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-09T10:00:00Z", headRefName: "fabrik/ticket-12", closingIssuesReferences: { nodes: [{ number: 12 }] }, mergeCommit: { oid: "5".repeat(40) } }),
+          aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-05T10:00:00Z", headRefName: "fabrik/ticket-11", closingIssuesReferences: { nodes: [{ number: 11 }] }, mergeCommit: { oid: "4".repeat(40) }, title: "Show the cart total" }),
+          aRawMergedPullRequest({ number: 53, mergedAt: "2026-11-03T10:00:00Z", headRefName: "fix-typo", author: OPERATOR }),
+          // The pull request whose merge the promotion deployed, which GitHub dates a second after its commit.
+          aRawMergedPullRequest({ number: 52, mergedAt: "2026-11-02T09:00:01Z", mergeCommit: { oid: PROMOTED } }),
+          aRawMergedPullRequest({ number: 51, mergedAt: "2026-11-01T10:00:00Z", mergeCommit: { oid: "1".repeat(40) } }),
+        ],
+      });
+
+      expect(facts.staging?.since).toEqual({ from: "production", deployment: 800, commit: PROMOTED, cutAt: "2026-11-02T09:00:00Z", deployedAt: "2026-11-08T09:15:00Z" });
+      expect(facts.staging?.unpromoted).toEqual([
+        { number: 55, title: "Build the thing", ticket: 12, mergeCommit: "5".repeat(40), mergedAt: "2026-11-09T10:00:00Z" },
+        { number: 54, title: "Show the cart total", ticket: 11, mergeCommit: "4".repeat(40), mergedAt: "2026-11-05T10:00:00Z" },
+      ]);
+      // The last day's are what they were, one production holds among them.
+      expect(facts.mergedLastDay.map(({ number }) => number)).toEqual([55]);
+      expect(calls.queries.filter((query) => query.includes("deployments("))).toEqual([expect.stringMatching(/deployments\(environments: \[\$environment\], first: \d+, after: \$after, orderBy: \{ field: CREATED_AT, direction: DESC \}\)/)]);
+    });
+
+    it("never gathers a pull request the newest successful production Deployment holds as waiting at Staging: it is Live for a day from that Deployment, then has no row (#857)", async () => {
+      const promotedToday = aRawDeployment({ databaseId: 830, createdAt: "2026-11-09T11:00:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-11-09T10:30:00Z" }, statuses: { nodes: [{ state: "SUCCESS", createdAt: "2026-11-09T11:05:00Z" }] } });
+      const merged = [
+        aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-09T10:00:00Z", body: marker(UI) }),
+        aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-05T10:00:00Z", headRefName: "fabrik/ticket-11", closingIssuesReferences: { nodes: [{ number: 11 }] }, mergeCommit: { oid: "4".repeat(40) }, body: marker(UI) }),
+      ];
+
+      const taken = await factsOf({ deployments: { production: [PROMOTION, promotedToday] }, mergedPullRequests: merged });
+      const waiting = await factsOf({ deployments: { production: [PROMOTION] }, mergedPullRequests: merged });
+
+      expect(taken.staging).toMatchObject({ since: { deployment: 830 }, unpromoted: [] });
+      expect(taken.mergedLastDay.map(({ number }) => number)).toEqual([55]);
+      expect(rowsOf(taken, null, null, null, NOW).map(({ standing }) => [standing.pullRequest, standing.place, standing.name, standing.since]).toSorted(([a], [b]) => Number(a) - Number(b))).toEqual([
+        [54, "production", "live", "2026-11-09T11:05:00Z"],
+        [55, "production", "live", "2026-11-09T11:05:00Z"],
+      ]);
+      expect(rowsOf(taken, null, null, null, "2026-11-10T11:05:00Z")).toHaveLength(2);
+      expect(rowsOf(taken, null, null, null, "2026-11-10T11:06:00Z")).toEqual([]);
+      // Until production takes them, both wait on the Operator, the one merged four days ago too.
+      expect(rowsOf(waiting, null, null, null, "2026-11-10T10:01:00Z").map(({ standing }) => [standing.pullRequest, standing.place, standing.detail])).toMatchObject([
+        [54, "staging", { staging: { trial: { needed: true }, standsUntil: null } }],
+        [55, "staging", { staging: { trial: { needed: true }, standsUntil: null } }],
+      ]);
+    });
+
+    it.each([
+      ["no production Deployment has ever succeeded", { production: PRODUCTION }, [aRawDeployment({ databaseId: 810, statuses: statuses("FAILURE") }), aRawDeployment({ databaseId: 811, createdAt: "2026-11-08T10:00:00Z", statuses: statuses("INACTIVE") })]],
+      ["production declares no environment", { production: { url: "https://shop.example", environment: null } }, [PROMOTION]],
+      ["Kit config declares no production", { production: null }, [PROMOTION]],
+    ] as const)("starts at the first successful staging Deployment where %s, and gathers nothing merged before it", async (_where, config, production) => {
+      const { facts, calls } = await gathered({
+        files: declaring(config),
+        deployments: {
+          production: [...production],
+          staging: [
+            aRawDeployment({ databaseId: 601, createdAt: "2026-11-04T08:00:00Z", commitOid: "6".repeat(40), commit: { committedDate: "2026-11-04T07:50:00Z" }, statuses: statuses("FAILURE") }),
+            // A success GitHub has since made inactive, when the next one succeeded.
+            aRawDeployment({ databaseId: 602, createdAt: "2026-11-04T09:10:00Z", commitOid: "7".repeat(40), commit: { committedDate: "2026-11-04T09:00:00Z" }, statuses: { nodes: [{ state: "INACTIVE", createdAt: "2026-11-06T09:15:00Z" }, { state: "SUCCESS", createdAt: "2026-11-04T09:14:00Z" }] } }),
+            aRawDeployment({ databaseId: 603, createdAt: "2026-11-06T09:10:00Z", commitOid: "8".repeat(40), commit: { committedDate: "2026-11-06T09:00:00Z" } }),
+          ],
+        },
+        mergedPullRequests: [
+          aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-05T10:00:00Z", mergeCommit: { oid: "5".repeat(40) } }),
+          aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-04T09:00:00Z", mergeCommit: { oid: "7".repeat(40) } }),
+          aRawMergedPullRequest({ number: 53, mergedAt: "2026-11-04T08:30:00Z", mergeCommit: { oid: "3".repeat(40) } }),
+          aRawMergedPullRequest({ number: 52, mergedAt: "2026-11-03T10:00:00Z", mergeCommit: { oid: "2".repeat(40) } }),
+        ],
+      });
+
+      expect(facts.staging?.since).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), cutAt: "2026-11-04T09:00:00Z", deployedAt: "2026-11-04T09:14:00Z" });
+      expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55]);
+      const environments = calls.queries.filter((query) => query.includes("deployments(")).map((query) => /direction: (ASC|DESC)/.exec(query)?.[1]);
+      expect(environments).toEqual(config.production?.environment ? ["DESC", "ASC"] : ["ASC"]);
+    });
+
+    it.each([
+      // GitHub deletes a Deployment's statuses after 90 days, all but its current one: NOW is 2026-11-09 at 12:00.
+      ["created 91 days ago is taken for a success whose status GitHub deleted, and the start", "2026-08-10T09:10:00Z", 601],
+      ["created 89 days ago would still show its success, so it is passed over for the first that does", "2026-08-12T09:10:00Z", 603],
+      ["created five days ago is passed over too", "2026-11-04T09:10:00Z", 603],
+    ])("reads a staging Deployment that shows inactive alone by its age: one %s", async (_what, createdAt, start) => {
+      const facts = await factsOf({
+        files: declaring({ production: null }),
+        deployments: {
+          staging: [
+            aRawDeployment({ databaseId: 601, createdAt, commitOid: "6".repeat(40), commit: { committedDate: createdAt }, statuses: statuses("INACTIVE") }),
+            aRawDeployment({ databaseId: 603, createdAt: "2026-11-06T09:10:00Z", commitOid: "8".repeat(40), commit: { committedDate: "2026-11-06T09:00:00Z" } }),
+          ],
+        },
+      });
+
+      expect(facts.staging?.since).toMatchObject({ from: "staging", deployment: start });
+    });
+
+    it("keeps nothing past the last day where no staging Deployment has succeeded either, and still reads the last day's label events", async () => {
+      const facts = await factsOf({
+        deployments: { production: [aRawDeployment({ statuses: statuses("FAILURE") })], staging: [aRawDeployment({ statuses: statuses("IN_PROGRESS") }), aRawDeployment({ statuses: statuses() })] },
+        mergedPullRequests: [
+          aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-09T10:00:00Z", timelineItems: { nodes: [labelled("fabrik:trial-accepted", "2026-11-09T11:00:00Z")] } }),
+          aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-05T10:00:00Z" }),
+        ],
+      });
+
+      expect(facts.staging).toMatchObject({ since: null, unpromoted: [] });
+      expect(facts.mergedLastDay.map(({ number }) => number)).toEqual([55]);
+      expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => [standing.pullRequest, standing.name])).toEqual([[55, "trial-accepted"]]);
+    });
+
+    it("reads a Deployment with no commit GitHub still has as of its creation, and pages on to the first that succeeded", async () => {
+      const failed = Array.from({ length: 45 }, (_, at) => aRawDeployment({ databaseId: 900 + at, createdAt: `2026-11-08T10:${String(at).padStart(2, "0")}:00Z`, statuses: statuses("FAILURE") }));
+      const { facts, calls } = await gathered({ deployments: { production: [aRawDeployment({ databaseId: 800, createdAt: "2026-11-02T09:10:00Z", commit: null }), ...failed] } });
+
+      expect(facts.staging?.since).toEqual({ from: "production", deployment: 800, commit: "d".repeat(40), cutAt: "2026-11-02T09:10:00Z", deployedAt: "2026-11-08T09:15:00Z" });
+      expect(calls.queries.filter((query) => query.includes("deployments(")).length).toBeGreaterThan(1);
+    });
+
+    it("starts no later than the Deployment's creation, whatever date its commit carries: a commit can't be deployed before it exists", async () => {
+      const postdated = aRawDeployment({ databaseId: 800, createdAt: "2026-11-02T09:10:00Z", commit: { committedDate: "2026-11-06T09:00:00Z" } });
+      const facts = await factsOf({ deployments: { production: [postdated] }, mergedPullRequests: [aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-05T10:00:00Z" })] });
+
+      expect(facts.staging?.since).toMatchObject({ deployment: 800, cutAt: "2026-11-02T09:10:00Z" });
+      expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55]);
+    });
+
+    it("keeps the 100 most recent past 100 merges, agent and Plain together, and reads no page older than they need", async () => {
+      // 130 agent pull requests since the promotion, an hour apart, newest first, with a Plain one after every tenth.
+      const hours = (back: number) => new Date(Date.parse("2026-11-09T11:00:00Z") - back * 60 * 60 * 1000).toISOString().replace(".000Z", "Z");
+      const merged = Array.from({ length: 130 }, (_, at) => [
+        aRawMergedPullRequest({ number: 1000 - at, mergedAt: hours(at), mergeCommit: { oid: String(1000 - at).padStart(40, "0") } }),
+        ...(at % 10 === 9 ? [aRawMergedPullRequest({ number: 2000 - at, mergedAt: hours(at + 0.5), headRefName: "fix-typo", author: OPERATOR })] : []),
+      ]).flat();
+      const early = aRawDeployment({ databaseId: 790, createdAt: "2026-10-01T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-10-01T09:00:00Z" } });
+
+      const { facts, calls } = await gathered({ deployments: { production: [early] }, mergedPullRequests: merged });
+
+      // The 100 most recent merges of either kind: 91 agent pull requests and the 9 Plain ones among them.
+      expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual(Array.from({ length: 91 }, (_, at) => 1000 - at));
+      expect(facts.staging?.plain.map(({ number }) => number)).toEqual(Array.from({ length: 9 }, (_, at) => 1991 - at * 10));
+      // They are the first four pages of 25, and the fifth shows nothing newer is left.
+      expect(calls.queries.filter((query) => query.includes("pullRequests(states: MERGED") && query.includes("timelineItems"))).toHaveLength(5);
+      expect(facts.mergedLastDay).toHaveLength(24);
+    });
+
+    it("keeps a pull request merged long ago and touched since out of the 100, however near the top GitHub lists it", async () => {
+      const hours = (back: number) => new Date(Date.parse("2026-11-09T11:00:00Z") - back * 60 * 60 * 1000).toISOString().replace(".000Z", "Z");
+      const merged = [
+        aRawMergedPullRequest({ number: 7, mergedAt: "2026-10-05T10:00:00Z", updatedAt: "2026-11-09T11:59:00Z", mergeCommit: { oid: "7".repeat(40) } }),
+        ...Array.from({ length: 100 }, (_, at) => aRawMergedPullRequest({ number: 1000 - at, mergedAt: hours(at), mergeCommit: { oid: String(1000 - at).padStart(40, "0") } })),
+      ];
+      const early = aRawDeployment({ databaseId: 790, createdAt: "2026-10-01T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-10-01T09:00:00Z" } });
+
+      const facts = await factsOf({ deployments: { production: [early] }, mergedPullRequests: merged });
+
+      expect(facts.staging?.unpromoted).toHaveLength(100);
+      expect(facts.staging?.unpromoted.map(({ number }) => number)).not.toContain(7);
+    });
+
+    it("holds, with each, its label events on the two trial labels in GitHub's order, the issues it closes, and its evidence or shots marker", async () => {
+      const shots = ["It reworks the composer.", "", `<!-- fabrik:ui-evidence ${JSON.stringify({ source: "shots", head: "c".repeat(40), run: 9300, artifact: 9301, failure: null, routes: [], named: [{ name: "composer: draft ready" }], missed: [] })} -->`].join("\n");
+      const facts = await factsOf(
+        {
+          deployments: { production: [PROMOTION] },
+          mergedPullRequests: [
+            aRawMergedPullRequest({
+              number: 55,
+              mergedAt: "2026-11-05T10:00:00Z",
+              mergeCommit: { oid: "5".repeat(40) },
+              body: marker(UI),
+              timelineItems: {
+                nodes: [
+                  labelled("agent:review", "2026-11-05T09:00:00Z", APP),
+                  labelled("fabrik:trial-problem", "2026-11-06T09:00:00Z"),
+                  labelled("fabrik:trial-accepted", "2026-11-06T09:00:00Z", APP),
+                  labelled("fabrik:trial-problem", "2026-11-07T09:00:00Z", OPERATOR, "UnlabeledEvent"),
+                  labelled("fabrik:trial-accepted", "2026-11-07T10:00:00Z", null),
+                ],
+              },
+            }),
+            aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-04T10:00:00Z", headRefName: "fabrik/ticket-11", mergeCommit: { oid: "4".repeat(40) }, closingIssuesReferences: { nodes: [{ number: 11 }, { number: 3, repository: { nameWithOwner: "jrey8343/other" } }] }, body: shots }),
+            aRawMergedPullRequest({ number: 53, mergedAt: "2026-11-03T10:00:00Z", headRefName: "fix-typo", author: OPERATOR, closingIssuesReferences: { nodes: [] }, body: marker(UI), timelineItems: { nodes: [labelled("fabrik:trial-accepted", "2026-11-03T11:00:00Z")] } }),
+            aRawMergedPullRequest({ number: 56, mergedAt: "2026-11-03T09:00:00Z", headRefName: "fix-copy", author: OPERATOR, closingIssuesReferences: { nodes: [] } }),
+          ],
+        },
+        "fabrik-app[bot]",
+      );
+
+      expect(facts.staging?.trials.pullRequests).toEqual([
+        {
+          pullRequest: 55,
+          labelEvents: [
+            { label: "fabrik:trial-problem", action: "labeled", actor: "jrey8343", at: "2026-11-06T09:00:00Z" },
+            { label: "fabrik:trial-accepted", action: "labeled", actor: "fabrik-app[bot]", at: "2026-11-06T09:00:00Z" },
+            { label: "fabrik:trial-problem", action: "unlabeled", actor: "jrey8343", at: "2026-11-07T09:00:00Z" },
+            { label: "fabrik:trial-accepted", action: "labeled", actor: "ghost", at: "2026-11-07T10:00:00Z" },
+          ],
+          closes: [7],
+        },
+        { pullRequest: 54, labelEvents: [], closes: [11] },
+        // A Plain pull request's too: the Operator can label any, and one can be a Trial problem's fix. One with no such label that closes nothing says nothing.
+        { pullRequest: 53, labelEvents: [{ label: "fabrik:trial-accepted", action: "labeled", actor: "jrey8343", at: "2026-11-03T11:00:00Z" }], closes: [] },
+      ]);
+      expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55, 54]);
+      expect(facts.staging?.evidenceMarkers).toEqual([{ pullRequest: 55, marker: UI }]);
+      expect(facts.staging?.shotsMarkers).toMatchObject([{ pullRequest: 54, marker: { run: 9300, named: [{ name: "composer: draft ready" }] } }]);
+      // What the last day's facts held is what they hold: neither merged in it.
+      expect(facts.evidenceMarkers).toEqual([]);
+      expect(facts.shotsMarkers).toEqual([]);
+    });
+
+    it("holds the Trial problems that name each, from the issues GitHub cross-references to it: one whose body's line names it, and none that only mentions it, names another, or is in another repo", async () => {
+      const facts = await factsOf({
+        deployments: { production: [PROMOTION] },
+        mergedPullRequests: [
+          aRawMergedPullRequest({
+            number: 55,
+            mergedAt: "2026-11-05T10:00:00Z",
+            crossReferences: {
+              nodes: [
+                { __typename: "CrossReferencedEvent", source: aRawTrialProblem(71, 55, { state: "OPEN", stateReason: null, title: "The total reads 0" }) },
+                { __typename: "CrossReferencedEvent", source: aRawTrialProblem(70, 55, { stateReason: "NOT_PLANNED" }) },
+                { __typename: "CrossReferencedEvent", source: aRawTrialProblem(72, 55, { body: "It broke after #55." }) },
+                { __typename: "CrossReferencedEvent", source: aRawTrialProblem(73, 54) },
+                { __typename: "CrossReferencedEvent", source: aRawTrialProblem(74, 55, { repository: { nameWithOwner: "jrey8343/other" } }) },
+                { __typename: "CrossReferencedEvent", source: { __typename: "PullRequest" } },
+                { __typename: "CrossReferencedEvent", source: aRawTrialProblem(75, 55, { state: "OPEN", stateReason: "REOPENED" }) },
+              ],
+            },
+          }),
+        ],
+      });
+
+      expect(facts.staging?.trials.problems).toEqual([
+        { issue: 70, pullRequest: 55, title: "A Trial problem", open: false, closedAs: "not_planned" },
+        { issue: 71, pullRequest: 55, title: "The total reads 0", open: true, closedAs: null },
+        { issue: 75, pullRequest: 55, title: "A Trial problem", open: true, closedAs: null },
+      ]);
+    });
+
+    it("holds the Trial problem a merged pull request closes, whichever pull request it was found on, so its fix always needs a Staging trial", async () => {
+      const facts = await factsOf({
+        deployments: { production: [PROMOTION] },
+        mergedPullRequests: [
+          aRawMergedPullRequest({ number: 61, mergedAt: "2026-11-08T10:00:00Z", headRefName: "fabrik/ticket-70", mergeCommit: { oid: "6".repeat(40) }, closingIssuesReferences: { nodes: [aRawTrialProblem(70, 40), { number: 9, body: "No line here.", state: "CLOSED", stateReason: "COMPLETED" }] } }),
+        ],
+      });
+
+      expect(facts.staging?.trials).toEqual({
+        pullRequests: [{ pullRequest: 61, labelEvents: [], closes: [70, 9] }],
+        problems: [{ issue: 70, pullRequest: 40, title: "A Trial problem", open: false, closedAs: "completed" }],
+      });
+      expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => standing)).toMatchObject([{ pullRequest: 61, place: "staging", move: "nobody", detail: { staging: { trial: { needed: true, why: "closes-trial-problem" }, standsUntil: null } } }]);
+    });
+
+    it("gives the pull request a problem was found on trial problem, naming its Trial problem, then trial accepted through its fix once the Operator accepts the merged pull request that closed it", async () => {
+      const found = (fixLabels: Record<string, unknown>[]) =>
+        factsOf({
+          deployments: { production: [PROMOTION] },
+          mergedPullRequests: [
+            aRawMergedPullRequest({ number: 61, mergedAt: "2026-11-09T09:00:00Z", headRefName: "fabrik/ticket-70", mergeCommit: { oid: "6".repeat(40) }, closingIssuesReferences: { nodes: [aRawTrialProblem(70, 55)] }, timelineItems: { nodes: fixLabels } }),
+            aRawMergedPullRequest({
+              number: 55,
+              mergedAt: "2026-11-05T10:00:00Z",
+              body: marker(UI),
+              timelineItems: { nodes: [labelled("fabrik:trial-problem", "2026-11-09T08:00:00Z")] },
+              crossReferences: { nodes: [{ __typename: "CrossReferencedEvent", source: aRawTrialProblem(70, 55) }] },
+            }),
+          ],
+        });
+      const named = (facts: Facts) => rowsOf(facts, null, null, null, NOW).map(({ standing }) => [standing.pullRequest, standing.name, standing.move, "staging" in standing.detail ? (standing.detail.staging?.result ?? null) : null]);
+
+      expect(named(await found([]))).toEqual([
+        [55, "trial-problem", "nobody", { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 70, open: false }] }],
+        [61, "merged", "nobody", null],
+      ]);
+      expect(named(await found([labelled("fabrik:trial-accepted", "2026-11-09T11:30:00Z")]))).toEqual([
+        [55, "trial-accepted", "nobody", { is: "accepted", at: "2026-11-09T11:30:00Z", problems: [{ issue: 70, open: false }], fix: [61] }],
+        [61, "trial-accepted", "nobody", { is: "accepted", at: "2026-11-09T11:30:00Z", problems: [], fix: null }],
+      ]);
+    });
+
+    it("counts the labels of the repo's owner where Kit config names no Operator, and only the named Operator's where it names one", async () => {
+      const merged = [aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-05T10:00:00Z", body: marker(UI), timelineItems: { nodes: [labelled("fabrik:trial-accepted", "2026-11-09T11:00:00Z")] } })];
+      const names = async (config: Record<string, unknown>) => rowsOf(await factsOf({ files: declaring(config), deployments: { production: [PROMOTION] }, mergedPullRequests: merged }), null, null, null, NOW).map(({ standing }) => standing.name);
+
+      expect(await names({})).toEqual(["trial-accepted"]);
+      expect(await names({ operator: "jrey8343" })).toEqual(["trial-accepted"]);
+      expect(await names({ operator: "kate" })).toEqual(["merged"]);
+    });
+
+    it("asks for no connection inside a connection inside a connection, reads no REST, and gives facts that survive a JSON round trip", async () => {
+      const { facts, calls } = await gathered({
+        deployments: { production: [aRawDeployment({ statuses: statuses("FAILURE") })], staging: [PROMOTION] },
+        mergedPullRequests: [
+          aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-05T10:00:00Z", body: marker(UI), timelineItems: { nodes: [labelled("fabrik:trial-problem", "2026-11-09T08:00:00Z")] }, crossReferences: { nodes: [{ __typename: "CrossReferencedEvent", source: aRawTrialProblem(70, 55) }] } }),
+        ],
+      });
+
+      expect(calls.queries.filter((query) => query.includes("deployments(") || query.includes("pullRequests(states: MERGED"))).toHaveLength(3);
+      for (const query of calls.queries) expect(threeDeepConnectionsIn(query)).toEqual([]);
+      expect(facts.staging?.trials.problems).toHaveLength(1);
+      expect(JSON.parse(JSON.stringify(facts))).toStrictEqual(facts);
+    });
+
+    it("gives no facts, saying why, when the read of its Deployments fails, as when any query of the facts does", async () => {
+      const { client } = repoWith({ files: declaring(), failing: "deployments(" });
+
+      expect(await gatherRepo(client, "jrey8343/shop", NOW)).toMatchObject({ product: true, operator: "jrey8343", facts: null, unread: expect.stringContaining("502") });
+    });
+
+    describe("what a production Deployment took in the last 24 hours, and every merge since the start (#857)", () => {
+      /** A Deployment's statuses, newest first as GitHub gives them: it succeeded at `at`, and `later` are what it has been since. */
+      const succeededAt = (at: string, ...later: string[]) => ({ nodes: [...later.map((state) => ({ state, createdAt: "2026-11-09T11:00:00Z" })), { state: "SUCCESS", createdAt: at }, { state: "IN_PROGRESS", createdAt: at }] });
+      /** The promotion before today's: Deployment 800 of commit `e…`, which succeeded a week before NOW and has been superseded since. */
+      const BEFORE = aRawDeployment({ databaseId: 800, createdAt: "2026-11-02T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-11-02T09:00:00Z" }, statuses: succeededAt("2026-11-02T09:15:00Z", "INACTIVE") });
+      /** Today's promotion: Deployment 830 of commit `f…`, committed at 10:30, which succeeded at 11:00, an hour before NOW. */
+      const TODAYS = "f".repeat(40);
+      const TODAY = aRawDeployment({ databaseId: 830, createdAt: "2026-11-09T10:40:00Z", commitOid: TODAYS, commit: { committedDate: "2026-11-09T10:30:00Z" }, statuses: succeededAt("2026-11-09T11:00:00Z") });
+      const agent = (number: number, mergedAt: string, more: Record<string, unknown> = {}) =>
+        aRawMergedPullRequest({ number, mergedAt, headRefName: `fabrik/ticket-${number - 40}`, closingIssuesReferences: { nodes: [{ number: number - 40 }] }, mergeCommit: { oid: String(number).padStart(40, "0") }, ...more });
+      const plain = (number: number, mergedAt: string, more: Record<string, unknown> = {}) =>
+        aRawMergedPullRequest({ number, mergedAt, title: "Fix a typo", headRefName: "fix-typo", author: OPERATOR, closingIssuesReferences: { nodes: [] }, mergeCommit: { oid: String(number).padStart(40, "0") }, ...more });
+      const standing = (facts: Facts, now: string) =>
+        rowsOf(facts, null, null, null, now)
+          .map(({ standing: { pullRequest, place, name, since } }) => [pullRequest, place, name, since])
+          .toSorted(([a], [b]) => Number(a) - Number(b));
+
+      it("says when the Deployment it starts at succeeded: production's newest success by its success, and a staging one GitHub has since made inactive by its creation", async () => {
+        const production = await factsOf({ deployments: { production: [BEFORE] } });
+        const staging = await factsOf({
+          files: declaring({ production: null }),
+          deployments: { staging: [aRawDeployment({ databaseId: 602, createdAt: "2026-07-04T09:10:00Z", commitOid: "7".repeat(40), commit: { committedDate: "2026-07-04T09:00:00Z" }, statuses: statuses("INACTIVE") })] },
+        });
+
+        expect(production.staging?.since).toEqual({ from: "production", deployment: 800, commit: PROMOTED, cutAt: "2026-11-02T09:00:00Z", deployedAt: "2026-11-02T09:15:00Z" });
+        expect(staging.staging?.since).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), cutAt: "2026-07-04T09:00:00Z", deployedAt: "2026-07-04T09:10:00Z" });
+      });
+
+      it("keeps the agent pull requests a production Deployment took in the last 24 hours, each with that Deployment, back to the newest that succeeded before them; so one merged five days before it is Live for a day from it", async () => {
+        const { facts, calls } = await gathered({
+          deployments: { production: [BEFORE, TODAY] },
+          mergedPullRequests: [
+            agent(56, "2026-11-09T11:30:00Z"),
+            agent(55, "2026-11-09T10:00:00Z"),
+            agent(54, "2026-11-04T11:00:00Z", { title: "Show the cart total", body: marker(UI) }),
+            plain(53, "2026-11-03T10:00:00Z"),
+            // The pull request whose merge the promotion before deployed, and one that promotion already held.
+            agent(52, "2026-11-02T09:00:01Z", { mergeCommit: { oid: PROMOTED } }),
+            agent(51, "2026-11-01T10:00:00Z"),
+          ],
+        });
+        const by = { deployment: 830, commit: TODAYS, at: "2026-11-09T11:00:00Z" };
+
+        expect(facts.staging?.since).toEqual({ from: "production", deployment: 830, commit: TODAYS, cutAt: "2026-11-09T10:30:00Z", deployedAt: "2026-11-09T11:00:00Z" });
+        expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([56]);
+        expect(facts.staging?.promoted).toEqual([
+          { number: 55, title: "Build the thing", ticket: 15, mergeCommit: "55".padStart(40, "0"), mergedAt: "2026-11-09T10:00:00Z", by },
+          { number: 54, title: "Show the cart total", ticket: 14, mergeCommit: "54".padStart(40, "0"), mergedAt: "2026-11-04T11:00:00Z", by },
+        ]);
+        expect(facts.staging?.evidenceMarkers).toEqual([{ pullRequest: 54, marker: UI }]);
+        // An hour after the Deployment both are Live, since it succeeded, with no Deployments read; 25 hours after it, neither has a row.
+        expect(standing(facts, NOW)).toEqual([
+          [54, "production", "live", "2026-11-09T11:00:00Z"],
+          [55, "production", "live", "2026-11-09T11:00:00Z"],
+          [56, "staging", "merged", "2026-11-09T11:30:00Z"],
+        ]);
+        expect(rowsOf(facts, null, null, null, NOW).find(({ standing: { pullRequest } }) => pullRequest === 54)).toMatchObject({ title: "Show the cart total", evidence: { run: 4400 }, production: { site: "https://shop.example" } });
+        expect(standing(facts, "2026-11-10T12:00:00Z")).toEqual([]);
+        // Production's Deployments are read newest first, no further than the one that succeeded before the last 24 hours.
+        expect(calls.queries.filter((query) => query.includes("deployments(")).map((query) => /direction: (ASC|DESC)/.exec(query)?.[1])).toEqual(["DESC"]);
+      });
+
+      it("gives each the first of the last day's production Deployments to hold it, where more than one succeeded", async () => {
+        const morning = aRawDeployment({ databaseId: 820, createdAt: "2026-11-09T08:10:00Z", commitOid: "a".repeat(40), commit: { committedDate: "2026-11-09T08:00:00Z" }, statuses: succeededAt("2026-11-09T08:30:00Z", "INACTIVE") });
+        const failed = aRawDeployment({ databaseId: 825, createdAt: "2026-11-09T09:00:00Z", commitOid: "b".repeat(40), commit: { committedDate: "2026-11-09T08:50:00Z" }, statuses: statuses("FAILURE", "IN_PROGRESS") });
+
+        const facts = await factsOf({ deployments: { production: [BEFORE, morning, failed, TODAY] }, mergedPullRequests: [agent(55, "2026-11-09T10:00:00Z"), agent(54, "2026-11-04T11:00:00Z")] });
+
+        expect(facts.staging?.since).toMatchObject({ deployment: 830 });
+        expect(facts.staging?.promoted.map(({ number, by }) => [number, by])).toEqual([
+          [55, { deployment: 830, commit: TODAYS, at: "2026-11-09T11:00:00Z" }],
+          [54, { deployment: 820, commit: "a".repeat(40), at: "2026-11-09T08:30:00Z" }],
+        ]);
+      });
+
+      it("takes a production Deployment GitHub shows as inactive alone for one that succeeded long before, so nothing it took is given to today's", async () => {
+        const longAgo = aRawDeployment({ databaseId: 700, createdAt: "2026-07-02T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-07-02T09:00:00Z" }, statuses: statuses("INACTIVE") });
+
+        const facts = await factsOf({ deployments: { production: [longAgo, TODAY] }, mergedPullRequests: [agent(55, "2026-11-09T10:00:00Z"), agent(51, "2026-07-01T10:00:00Z")] });
+
+        expect(facts.staging?.promoted.map(({ number }) => number)).toEqual([55]);
+      });
+
+      it("passes over a production Deployment that went inactive without succeeding, too young for GitHub to have deleted a success of it: what merged before it is still today's to have taken, and Live", async () => {
+        // Production succeeded five days ago; a Deployment two days ago was made inactive with no success; and today's succeeded an hour ago.
+        const fiveDaysAgo = aRawDeployment({ databaseId: 810, createdAt: "2026-11-04T09:10:00Z", commitOid: "a".repeat(40), commit: { committedDate: "2026-11-04T09:00:00Z" }, statuses: succeededAt("2026-11-04T09:15:00Z", "INACTIVE") });
+        const passedOver = aRawDeployment({ databaseId: 820, createdAt: "2026-11-07T09:10:00Z", commitOid: "b".repeat(40), commit: { committedDate: "2026-11-07T09:00:00Z" }, statuses: statuses("INACTIVE") });
+
+        const facts = await factsOf({ deployments: { production: [fiveDaysAgo, passedOver, TODAY] }, mergedPullRequests: [agent(56, "2026-11-08T10:00:00Z"), agent(54, "2026-11-05T10:00:00Z"), agent(51, "2026-11-03T10:00:00Z")] });
+
+        const by = { deployment: 830, commit: TODAYS, at: "2026-11-09T11:00:00Z" };
+        expect(facts.staging?.promoted.map(({ number, by }) => [number, by])).toEqual([[56, by], [54, by]]);
+        expect(standing(facts, NOW)).toEqual([
+          [54, "production", "live", "2026-11-09T11:00:00Z"],
+          [56, "production", "live", "2026-11-09T11:00:00Z"],
+        ]);
+      });
+
+      it("reaches back to the first successful staging Deployment where production first succeeded in the last 24 hours, and keeps none as taken where nothing says how far back that is", async () => {
+        const merged = [agent(55, "2026-11-09T10:00:00Z"), agent(54, "2026-11-05T10:00:00Z"), agent(53, "2026-11-03T10:00:00Z")];
+        const firstOnStaging = aRawDeployment({ databaseId: 603, createdAt: "2026-11-04T09:10:00Z", commitOid: "8".repeat(40), commit: { committedDate: "2026-11-04T09:00:00Z" }, statuses: succeededAt("2026-11-04T09:15:00Z", "INACTIVE") });
+
+        const { facts, calls } = await gathered({ deployments: { production: [TODAY], staging: [firstOnStaging] }, mergedPullRequests: merged });
+        const unknown = await factsOf({ deployments: { production: [TODAY] }, mergedPullRequests: merged });
+
+        expect(facts.staging?.since).toMatchObject({ from: "production", deployment: 830 });
+        expect(facts.staging?.promoted.map(({ number }) => number)).toEqual([55, 54]);
+        expect(calls.queries.filter((query) => query.includes("deployments(")).map((query) => /direction: (ASC|DESC)/.exec(query)?.[1])).toEqual(["DESC", "ASC"]);
+        expect(unknown.staging).toMatchObject({ since: { deployment: 830 }, promoted: [], unpromoted: [] });
+        expect(unknown.mergedLastDay.map(({ number }) => number)).toEqual([55]);
+      });
+
+      it("keeps as taken only as many, the most recent, as the merges since the start leave of the 100", async () => {
+        // 95 merges since the commit today's promotion deployed, a second apart, every fifth a Plain one; and six that promotion took, a day apart before it.
+        const seconds = (after: number) => new Date(Date.parse("2026-11-09T10:31:00Z") + after * 1000).toISOString().replace(".000Z", "Z");
+        const since = Array.from({ length: 95 }, (_, at) => (at % 5 === 4 ? plain(2000 + at, seconds(at)) : agent(2000 + at, seconds(at))));
+        const taken = Array.from({ length: 6 }, (_, at) => agent(1000 - at, `2026-11-0${8 - at}T10:00:00Z`));
+
+        const facts = await factsOf({ deployments: { production: [BEFORE, TODAY] }, mergedPullRequests: [...since, ...taken] });
+
+        expect((facts.staging?.unpromoted.length ?? 0) + (facts.staging?.plain.length ?? 0)).toBe(95);
+        expect(facts.staging?.promoted.map(({ number }) => number)).toEqual([1000, 999, 998, 997, 996]);
+      });
+
+      it("keeps none as taken where production's newest success is more than 24 hours old, and makes no more requests than before", async () => {
+        const { facts, calls } = await gathered({ deployments: { production: [BEFORE] }, mergedPullRequests: [agent(55, "2026-11-05T10:00:00Z"), agent(51, "2026-11-01T10:00:00Z")] });
+
+        expect(facts.staging).toMatchObject({ since: { deployment: 800 }, promoted: [] });
+        expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55]);
+        expect(calls.queries.filter((query) => query.includes("deployments(") || query.includes("pullRequests(states: MERGED"))).toHaveLength(2);
+      });
+
+      it("keeps the Plain pull requests merged to the default branch since the start, newest first, each with who opened it, its branch and the issues it closes; and counts every merge since the start", async () => {
+        const facts = await factsOf({
+          deployments: { production: [BEFORE] },
+          mergedPullRequests: [
+            plain(60, "2026-11-08T10:00:00Z", { title: "Bump the Kit to v3.2.0", headRefName: "dependabot/github_actions/fabrik-3.2.0", author: { __typename: "Bot", login: "dependabot" } }),
+            agent(55, "2026-11-07T10:00:00Z"),
+            plain(59, "2026-11-06T10:00:00Z", { title: "Pair on the cart", headRefName: "fabrik/pair-12", closingIssuesReferences: { nodes: [{ number: 12 }, { number: 4, repository: { nameWithOwner: "jrey8343/other" } }] } }),
+            plain(58, "2026-11-05T10:00:00Z"),
+            // Merged into another pull request's branch, which production takes only through that pull request.
+            plain(57, "2026-11-04T10:00:00Z", { baseRefName: "fabrik/ticket-9" }),
+            // Merged before the start, and the pull request whose merge the start deployed.
+            plain(52, "2026-11-02T09:00:01Z", { mergeCommit: { oid: PROMOTED } }),
+            plain(51, "2026-11-01T10:00:00Z"),
+          ],
+        });
+
+        expect(facts.staging?.plain).toEqual([
+          { number: 60, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-08T10:00:00Z", author: "dependabot[bot]", headRef: "dependabot/github_actions/fabrik-3.2.0", closes: [] },
+          { number: 59, title: "Pair on the cart", mergedAt: "2026-11-06T10:00:00Z", author: "jrey8343", headRef: "fabrik/pair-12", closes: [12] },
+          { number: 58, title: "Fix a typo", mergedAt: "2026-11-05T10:00:00Z", author: "jrey8343", headRef: "fix-typo", closes: [] },
+        ]);
+        expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55]);
+        expect(facts.staging?.mergedSince).toBe(4);
+      });
+
+      it("gives no Plain pull request a Standing at Staging, whatever label the Operator put on it: only agent pull requests have a row", async () => {
+        const facts = await factsOf({
+          deployments: { production: [BEFORE], staging: [aRawDeployment({ databaseId: 603, createdAt: "2026-11-03T09:10:00Z" })] },
+          mergedPullRequests: [
+            plain(60, "2026-11-09T11:00:00Z", { title: "Bump the Kit to v3.2.0", headRefName: "dependabot/github_actions/fabrik-3.2.0", author: { __typename: "Bot", login: "dependabot" } }),
+            plain(59, "2026-11-09T10:30:00Z", { headRefName: "fabrik/pair-12", closingIssuesReferences: { nodes: [{ number: 12 }] }, body: marker(UI) }),
+            plain(58, "2026-11-05T10:00:00Z", { timelineItems: { nodes: [labelled("fabrik:trial-problem", "2026-11-06T09:00:00Z")] } }),
+            agent(55, "2026-11-04T10:00:00Z", { body: marker(UI) }),
+          ],
+        });
+
+        expect(facts.staging?.plain.map(({ number }) => number)).toEqual([60, 59, 58]);
+        for (const now of [NOW, "2026-11-09T11:30:00Z", "2026-11-12T12:00:00Z"]) {
+          const standings = rowsOf(facts, null, null, null, now).map(({ standing }) => standing);
+          expect(standings.filter(({ pullRequest }) => pullRequest !== 55)).toEqual([]);
+        }
+        expect(rowsOf(facts, null, null, null, NOW).map(({ standing }) => [standing.pullRequest, standing.place])).toEqual([[55, "staging"]]);
+      });
+
+      it("counts every merge since the start past the 100 it keeps, with a query that asks only what the count needs, and makes it only then", async () => {
+        // 150 merges since the promotion, an hour apart, newest first: every sixth a Plain one, so 125 agent and 25 Plain, and two older than it.
+        const hours = (back: number) => new Date(Date.parse("2026-11-09T11:00:00Z") - back * 60 * 60 * 1000).toISOString().replace(".000Z", "Z");
+        const since = Array.from({ length: 150 }, (_, at) => (at % 6 === 5 ? plain(1000 - at, hours(at)) : agent(1000 - at, hours(at))));
+        const early = aRawDeployment({ databaseId: 790, createdAt: "2026-10-01T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-10-01T09:00:00Z" } });
+        const heavy = (queries: readonly string[]) => queries.filter((query) => query.includes("pullRequests(states: MERGED") && query.includes("timelineItems"));
+        const counting = (queries: readonly string[]) => queries.filter((query) => query.includes("pullRequests(states: MERGED") && !query.includes("timelineItems"));
+
+        const { facts, calls } = await gathered({ deployments: { production: [early] }, mergedPullRequests: [...since, agent(7, "2026-09-20T10:00:00Z"), plain(6, "2026-09-19T10:00:00Z")] });
+        const few = await gathered({ deployments: { production: [early] }, mergedPullRequests: since.slice(0, 30) });
+
+        expect(facts.staging?.mergedSince).toBe(150);
+        // The 100 most recent merges of either kind hold 84 agent pull requests and these 16 Plain ones.
+        expect(facts.staging?.unpromoted).toHaveLength(84);
+        expect(facts.staging?.unpromoted.at(-1)).toMatchObject({ number: 901 });
+        expect(facts.staging?.plain.map(({ number }) => number)).toEqual(Array.from({ length: 16 }, (_, at) => 1000 - (at * 6 + 5)));
+        expect(counting(calls.queries)).toHaveLength(2);
+        for (const query of counting(calls.queries)) {
+          expect(query).toMatch(/pullRequests\(states: MERGED, first: 100, after: \$after, orderBy: \{ field: UPDATED_AT, direction: DESC \}\)/);
+          expect(query).not.toMatch(/body|title|closingIssuesReferences|crossReferences/);
+          expect(threeDeepConnectionsIn(query)).toEqual([]);
+        }
+        expect(few.facts.staging?.mergedSince).toBe(30);
+        expect(heavy(few.calls.queries)).toHaveLength(2);
+        expect(counting(few.calls.queries)).toEqual([]);
+      });
+
+      describe("and the Promote list of what it read", () => {
+        /** Production as it runs: Deployment 800 of commit `e…`, committed on 2026-11-02 at 09:00, which succeeded at 09:15 and nothing has superseded. */
+        const LIVE = aRawDeployment({ databaseId: 800, createdAt: "2026-11-02T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-11-02T09:00:00Z" }, statuses: succeededAt("2026-11-02T09:15:00Z") });
+        const numbers = (list: ReturnType<typeof promoteListOf>) => list?.entries.map(({ pullRequest }) => pullRequest);
+
+        it("is null for a repo with no staging block, whatever it has merged and deployed", async () => {
+          for (const files of [{ [CALLER_PATH]: CALLER }, { [CALLER_PATH]: CALLER, [CONFIG_PATH]: JSON.stringify({ production: { ...PRODUCTION, workflow: "deploy-production.yml" } }) }, declaring({ staging: null })]) {
+            const { client } = repoWith({ files, mergedPullRequests: [agent(55, "2026-11-09T10:00:00Z"), plain(54, "2026-11-08T10:00:00Z")], deployments: { production: [LIVE] } });
+            const read = await gatherRepo(client, "jrey8343/shop", NOW);
+            if (!read.product || read.facts === null) throw new Error(`no facts: ${JSON.stringify(read)}`);
+
+            expect(promoteListOf(read.facts, null, NOW)).toBeNull();
+          }
+        });
+
+        it("holds, with one successful production Deployment, exactly the pull requests merged that it does not contain, agent or Plain, newest first, and names that Deployment as its start", async () => {
+          const facts = await factsOf({
+            deployments: {
+              production: [
+                aRawDeployment({ databaseId: 700, createdAt: "2026-10-20T09:10:00Z", commitOid: "a".repeat(40), commit: { committedDate: "2026-10-20T09:00:00Z" }, statuses: succeededAt("2026-10-20T09:15:00Z", "INACTIVE") }),
+                LIVE,
+                aRawDeployment({ databaseId: 810, createdAt: "2026-11-08T09:10:00Z", commitOid: "f".repeat(40), commit: { committedDate: "2026-11-08T09:00:00Z" }, statuses: statuses("FAILURE", "IN_PROGRESS") }),
+              ],
+            },
+            mergedPullRequests: [
+              agent(56, "2026-11-09T11:30:00Z"),
+              plain(59, "2026-11-08T10:00:00Z"),
+              agent(55, "2026-11-05T10:00:00Z", { title: "Show the cart total" }),
+              // The pull request whose merge that Deployment deployed, which GitHub dates a second after its commit, and what merged before it.
+              agent(52, "2026-11-02T09:00:01Z", { mergeCommit: { oid: PROMOTED } }),
+              plain(49, "2026-11-02T08:00:00Z"),
+              agent(51, "2026-11-01T10:00:00Z"),
+            ],
+          });
+
+          const list = promoteListOf(facts, null, NOW);
+
+          expect(list?.start).toEqual({ from: "production", deployment: 800, commit: PROMOTED, deployedAt: "2026-11-02T09:15:00Z" });
+          expect(numbers(list)).toEqual([56, 59, 55]);
+          expect(list?.entries[2]).toMatchObject({ is: "agent", pullRequest: 55, title: "Show the cart total", ticket: 15, mergedAt: "2026-11-05T10:00:00Z" });
+          expect(list).toMatchObject({ repo: "jrey8343/shop", leftOut: 0 });
+        });
+
+        it.each([
+          ["no production Deployment has ever succeeded", { production: PRODUCTION }, [aRawDeployment({ databaseId: 810, statuses: statuses("FAILURE") })]],
+          ["production declares no environment", { production: { url: "https://shop.example", environment: null } }, [LIVE]],
+          ["Kit config declares no production", { production: null }, [LIVE]],
+        ] as const)("starts at the first successful staging Deployment where %s, and says so; and is empty where no staging Deployment has succeeded either", async (_where, config, production) => {
+          const merged = [plain(58, "2026-11-06T10:00:00Z"), agent(55, "2026-11-05T10:00:00Z"), agent(54, "2026-11-04T09:00:00Z", { mergeCommit: { oid: "7".repeat(40) } }), agent(53, "2026-11-04T08:30:00Z")];
+          const staging = [
+            aRawDeployment({ databaseId: 601, createdAt: "2026-11-04T08:00:00Z", commitOid: "6".repeat(40), commit: { committedDate: "2026-11-04T07:50:00Z" }, statuses: statuses("FAILURE") }),
+            aRawDeployment({ databaseId: 602, createdAt: "2026-11-04T09:10:00Z", commitOid: "7".repeat(40), commit: { committedDate: "2026-11-04T09:00:00Z" }, statuses: succeededAt("2026-11-04T09:14:00Z", "INACTIVE") }),
+            aRawDeployment({ databaseId: 603, createdAt: "2026-11-06T09:10:00Z", commitOid: "8".repeat(40), commit: { committedDate: "2026-11-06T09:00:00Z" } }),
+          ];
+
+          const started = promoteListOf(await factsOf({ files: declaring(config), deployments: { production: [...production], staging }, mergedPullRequests: merged }), null, NOW);
+          const never = promoteListOf(await factsOf({ files: declaring(config), deployments: { production: [...production], staging: [staging[0]!] }, mergedPullRequests: merged }), null, NOW);
+
+          expect(started?.start).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), deployedAt: "2026-11-04T09:14:00Z" });
+          expect(numbers(started)).toEqual([58, 55]);
+          expect(never).toMatchObject({ start: null, entries: [], notAccepted: 0, leftOut: 0 });
+        });
+
+        it("gives each agent pull request the result its row's Standing at Staging has, and each Plain one, a Kit bump, a Pairing session's and the Operator's own, its kind and nothing more, counting only the agent ones not yet accepted", async () => {
+          const oid = (number: number) => String(number).padStart(40, "0");
+          const facts = await factsOf(
+            {
+              deployments: { production: [LIVE] },
+              mergedPullRequests: [
+                plain(64, "2026-11-09T11:00:00Z", { title: "Bump the Kit to v3.2.0", headRefName: "dependabot/github_actions/fabrik-3.2.0", author: { __typename: "Bot", login: "dependabot" } }),
+                agent(60, "2026-11-08T16:00:00Z", { body: marker(UI) }),
+                plain(63, "2026-11-08T15:30:00Z", { title: "Pair on the cart", headRefName: "fabrik/pair-12", closingIssuesReferences: { nodes: [{ number: 12 }] }, body: marker(UI) }),
+                agent(59, "2026-11-08T15:00:00Z", { body: marker(UI), timelineItems: { nodes: [labelled("fabrik:trial-accepted", "2026-11-09T09:00:00Z")] } }),
+                agent(57, "2026-11-08T14:00:00Z", { closingIssuesReferences: { nodes: [aRawTrialProblem(70, 58, { title: "The cart total reads 0" })] }, timelineItems: { nodes: [labelled("fabrik:trial-accepted", "2026-11-09T10:00:00Z")] } }),
+                agent(58, "2026-11-06T10:00:00Z", {
+                  body: marker(UI),
+                  timelineItems: { nodes: [labelled("fabrik:trial-problem", "2026-11-07T09:00:00Z")] },
+                  crossReferences: { nodes: [{ __typename: "CrossReferencedEvent", source: aRawTrialProblem(70, 58, { title: "The cart total reads 0" }) }] },
+                }),
+                plain(62, "2026-11-05T12:00:00Z", { timelineItems: { nodes: [labelled("fabrik:trial-problem", "2026-11-06T09:00:00Z")] } }),
+                agent(55, "2026-11-05T10:00:00Z", { body: marker(UI) }),
+                agent(54, "2026-11-04T10:00:00Z"),
+              ],
+            },
+            "fabrik-app[bot]",
+          );
+          const succeeded = (number: number, at: string) => ({ is: "succeeded", deployment: 600 + number, commit: oid(number), at, log: null }) as const;
+          const read = {
+            deployments: {
+              repo: "jrey8343/shop",
+              environment: "staging",
+              readAt: NOW,
+              merges: {
+                [oid(60)]: succeeded(60, "2026-11-08T16:06:00Z"),
+                [oid(59)]: succeeded(59, "2026-11-08T15:06:00Z"),
+                [oid(58)]: succeeded(58, "2026-11-06T10:06:00Z"),
+                [oid(57)]: succeeded(57, "2026-11-08T14:06:00Z"),
+                [oid(55)]: { is: "failed", deployment: 655, commit: oid(55), at: "2026-11-05T10:08:00Z", log: null },
+                [oid(54)]: succeeded(54, "2026-11-04T10:06:00Z"),
+              },
+            },
+            mainChecks: null,
+          } as const;
+
+          const list = promoteListOf(facts, read, NOW);
+          const rows = rowsOf(facts, null, null, null, NOW, read);
+
+          expect(list?.entries.map((entry) => [entry.is, entry.pullRequest, entry.is === "plain" ? entry.kind : entry.result.is])).toEqual([
+            ["plain", 64, "kit-bump"],
+            ["agent", 60, "untried"],
+            ["plain", 63, "pairing"],
+            ["agent", 59, "accepted"],
+            ["agent", 57, "accepted"],
+            ["agent", 58, "accepted"],
+            ["plain", 62, "other"],
+            ["agent", 55, "not-on-staging"],
+            ["agent", 54, "no-screen"],
+          ]);
+          // What its row's Standing at Staging says, for each that still has a row: the one that changes no screen stood for its merge's day alone.
+          expect(rows.map(({ standing }) => [standing.pullRequest, standing.place, standing.name]).toSorted(([a], [b]) => Number(b) - Number(a))).toEqual([
+            [60, "staging", "on-staging"],
+            [59, "staging", "trial-accepted"],
+            [58, "staging", "trial-accepted"],
+            [57, "staging", "trial-accepted"],
+            [55, "staging", "deploy-failed"],
+          ]);
+          expect(list?.entries.find(({ pullRequest }) => pullRequest === 58)).toMatchObject({ result: { is: "accepted", at: "2026-11-09T10:00:00Z", fix: [57], problems: [{ issue: 70, title: "The cart total reads 0", open: false }] } });
+          expect(list?.entries.find(({ pullRequest }) => pullRequest === 55)).toMatchObject({ result: { is: "not-on-staging", name: "deploy-failed", unread: false }, evidence: { run: 4400 }, staging: { site: "https://staging.shop.example", toTry: ["/cart"] } });
+          // A Plain entry has its kind, and no evidence, no staging pages and no result, whatever its body or its labels say.
+          expect(list?.entries.filter((entry) => entry.is === "plain")).toEqual([
+            { is: "plain", pullRequest: 64, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T11:00:00Z", kind: "kit-bump" },
+            { is: "plain", pullRequest: 63, title: "Pair on the cart", mergedAt: "2026-11-08T15:30:00Z", kind: "pairing" },
+            { is: "plain", pullRequest: 62, title: "Fix a typo", mergedAt: "2026-11-05T12:00:00Z", kind: "other" },
+          ]);
+          // Untried 60 and 55, which never reached staging: the count is the entries that need a Staging trial and are not accepted.
+          expect(list?.notAccepted).toBe(2);
+        });
+
+        it("carries GitHub's Actions page for production.workflow in that repo as its dispatch page, and none where Kit config names no workflow", async () => {
+          const dispatched = await factsOf({ files: declaring({ production: { ...PRODUCTION, workflow: "deploy-production.yml" } }), deployments: { production: [LIVE] } });
+          const undeclared = await factsOf({ deployments: { production: [LIVE] } });
+
+          expect(promoteListOf(dispatched, null, NOW)?.dispatchPage).toBe("https://github.com/jrey8343/shop/actions/workflows/deploy-production.yml");
+          expect(promoteListOf(undeclared, null, NOW)?.dispatchPage).toBeNull();
+        });
+
+        it.each([
+          [120, 20],
+          [150, 50],
+          [100, 0],
+        ])("holds the newest 100 of %i merges since the start, and says %i were left out", async (merges, leftOut) => {
+          // An hour apart, newest first, every sixth a Plain one; and two that merged before the start.
+          const hours = (back: number) => new Date(Date.parse("2026-11-09T11:00:00Z") - back * 60 * 60 * 1000).toISOString().replace(".000Z", "Z");
+          const since = Array.from({ length: merges }, (_, at) => (at % 6 === 5 ? plain(1000 - at, hours(at)) : agent(1000 - at, hours(at))));
+          const early = aRawDeployment({ databaseId: 790, createdAt: "2026-10-01T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-10-01T09:00:00Z" } });
+
+          const list = promoteListOf(await factsOf({ deployments: { production: [early] }, mergedPullRequests: [...since, agent(7, "2026-09-20T10:00:00Z"), plain(6, "2026-09-19T10:00:00Z")] }), null, NOW);
+
+          expect(numbers(list)).toEqual(Array.from({ length: 100 }, (_, at) => 1000 - at));
+          expect(list?.leftOut).toBe(leftOut);
+        });
+
+        it("keeps one set past the cap, the 100 most recent merges of either kind: its agent pull requests are the ones with a Standing, the list's entries are that set, and its counts are of it", async () => {
+          // 100 untried UI agent pull requests, an hour apart, then 20 newer Plain ones, a minute apart.
+          const back = (minutes: number) => new Date(Date.parse("2026-11-09T11:00:00Z") - minutes * 60 * 1000).toISOString().replace(".000Z", "Z");
+          const plains = Array.from({ length: 20 }, (_, at) => plain(2000 - at, back(at)));
+          const agents = Array.from({ length: 100 }, (_, at) => agent(1000 - at, back((at + 1) * 60), { body: marker(UI) }));
+          const early = aRawDeployment({ databaseId: 790, createdAt: "2026-10-01T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-10-01T09:00:00Z" } });
+
+          const facts = await factsOf({ deployments: { production: [early] }, mergedPullRequests: [...plains, ...agents] });
+          const list = promoteListOf(facts, null, NOW);
+          const waiting = rowsOf(facts, null, null, null, NOW).filter(({ standing }) => standing.place === "staging");
+
+          // The 20 Plain ones and the 80 agent ones that merged most recently.
+          const kept = Array.from({ length: 80 }, (_, at) => 1000 - at);
+          expect(facts.staging?.plain.map(({ number }) => number)).toEqual(Array.from({ length: 20 }, (_, at) => 2000 - at));
+          expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual(kept);
+          expect(facts.staging?.evidenceMarkers.map(({ pullRequest }) => pullRequest)).toEqual(kept);
+          expect(waiting.map(({ standing }) => standing.pullRequest).toSorted((a, b) => Number(b) - Number(a))).toEqual(kept);
+          expect(numbers(list)).toEqual([...Array.from({ length: 20 }, (_, at) => 2000 - at), ...kept]);
+          expect(list).toMatchObject({ notAccepted: 80, leftOut: 20 });
+        });
+      });
+    });
+  });
 });
 
 /** Open issue 31, the Operator's, opened on 2026-11-01, with no labels, comments or label events unless a test says so. */
@@ -843,17 +1615,53 @@ function aRawCrossReference(number: number, state: "OPEN" | "CLOSED", stateReaso
   };
 }
 
-/** Agent pull request 50, the Fabrik App's from Ticket 7's branch, closing #7, merged on 2026-11-09 at 10:00 as `c…c`, its body empty. */
+/**
+ * Agent pull request 50, the Fabrik App's from Ticket 7's branch, closing #7,
+ * merged on 2026-11-09 at 10:00 as `c…c`, its body empty; and, as a repo that
+ * declares staging is asked for them, merged into `main`, last updated when
+ * it merged, with no label event and no cross-reference.
+ */
 function aRawMergedPullRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const mergedAt = overrides["mergedAt"] ?? "2026-11-09T10:00:00Z";
   return {
     number: 50,
     title: "Build the thing",
     body: "",
-    mergedAt: "2026-11-09T10:00:00Z",
+    mergedAt,
+    updatedAt: mergedAt,
+    baseRefName: "main",
     headRefName: "fabrik/ticket-7",
     author: APP,
     mergeCommit: { oid: "c".repeat(40) },
     closingIssuesReferences: { nodes: [{ number: 7 }] },
+    timelineItems: { nodes: [] },
+    crossReferences: { nodes: [] },
+    ...overrides,
+  };
+}
+
+/** Deployment 900 of commit `d…d`, committed on 2026-11-08 at 09:00 and deployed ten minutes later, which succeeded, its statuses newest first as GitHub gives them. */
+function aRawDeployment(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    databaseId: 900,
+    createdAt: "2026-11-08T09:10:00Z",
+    commitOid: "d".repeat(40),
+    commit: { committedDate: "2026-11-08T09:00:00Z" },
+    statuses: { nodes: [{ state: "SUCCESS", createdAt: "2026-11-08T09:15:00Z" }, { state: "IN_PROGRESS", createdAt: "2026-11-08T09:11:00Z" }] },
+    ...overrides,
+  };
+}
+
+/** Issue `number` of `jrey8343/shop`, a Trial problem found on pull request `pullRequest`, closed as completed, as a cross-reference's source or an issue a pull request closes reads. */
+function aRawTrialProblem(number: number, pullRequest: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    __typename: "Issue",
+    number,
+    title: "A Trial problem",
+    state: "CLOSED",
+    stateReason: "COMPLETED",
+    body: ["The total reads 0 on the cart page.", "", trialProblemLine(pullRequest)].join("\n"),
+    repository: { nameWithOwner: "jrey8343/shop" },
     ...overrides,
   };
 }

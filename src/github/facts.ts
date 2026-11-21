@@ -574,7 +574,7 @@ export interface RawActor {
   __typename: string;
 }
 
-interface RawLabelEvent {
+export interface RawLabelEvent {
   __typename: string;
   createdAt: string;
   actor: RawActor | null;
@@ -885,7 +885,8 @@ function commentOf(comment: RawComment): CommentFacts {
   return { url: comment.url, author: loginOf(comment.author), byBot: comment.author?.__typename === "Bot", body: comment.body, at: comment.createdAt };
 }
 
-function labelEventsOf(nodes: readonly RawLabelEvent[]): LabelEvent[] {
+/** GitHub's label events as facts, in the order its timeline has them. */
+export function labelEventsOf(nodes: readonly RawLabelEvent[]): LabelEvent[] {
   return nodes.map((event) => ({
     label: event.label.name,
     action: event.__typename === "UnlabeledEvent" ? "unlabeled" : "labeled",

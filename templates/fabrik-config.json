@@ -63,5 +63,6 @@
   "ui": null,
   "preview": { "url": null },
   "production": null,
+  "staging": null,
   "time_zone": null
 }

@@ -465,6 +465,67 @@ describe("The Deployments read", () => {
     });
   });
 
+  describe("asked for the newest success, as a read of staging is (#855)", () => {
+    /** The read of the one merge in the `staging` environment, asked for the newest success. */
+    const readNewest = (client: Pick<ReadClient, "rest">) => readDeployments(client, "owner/product", "staging", [{ mergeCommit: sha("a"), mergedAt: MERGED_AT }], NOW, { newest: true });
+    const first = { id: 30, sha: sha("a"), environment: "staging", createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "success", at: "2026-11-12T08:06:00Z" }, { state: "inactive", at: "2026-11-12T08:40:00Z" }] };
+    const later = { id: 31, sha: sha("b"), environment: "staging", createdAt: "2026-11-12T08:30:00Z", reports: [{ state: "success", at: "2026-11-12T08:40:00Z" }] };
+
+    it("gives a success the newest successful Deployment whose commit contains the merge, by creation, beside the earliest, which still decides it", async () => {
+      const client = repoWith({
+        deployments: [
+          first,
+          later,
+          { id: 32, sha: sha("c"), environment: "staging", createdAt: "2026-11-12T09:00:00Z", reports: [{ state: "in_progress", at: "2026-11-12T09:01:00Z" }] },
+          { id: 33, sha: sha("d"), environment: "staging", createdAt: "2026-11-12T09:10:00Z", reports: [{ state: "success", at: "2026-11-12T09:15:00Z" }] },
+          { id: 34, sha: sha("e"), environment: "staging", createdAt: "2026-11-12T09:20:00Z", reports: [{ state: "failure", at: "2026-11-12T09:25:00Z" }] },
+        ],
+        compare: { [`${sha("a")}...${sha("b")}`]: "ahead", [`${sha("a")}...${sha("c")}`]: "ahead", [`${sha("a")}...${sha("d")}`]: "diverged", [`${sha("a")}...${sha("e")}`]: "ahead" },
+      });
+      expect(await readNewest(client)).toEqual({
+        repo: "owner/product",
+        environment: "staging",
+        readAt: NOW,
+        merges: {
+          [sha("a")]: { is: "succeeded", deployment: 30, commit: sha("a"), at: "2026-11-12T08:06:00Z", log: null, newest: { deployment: 31, commit: sha("b"), at: "2026-11-12T08:40:00Z" } },
+        },
+      });
+    });
+
+    it("gives the deciding Deployment itself where no later one succeeded, asking no comparison for it", async () => {
+      const client = repoWith({ deployments: [first] });
+      expect(deployOf(await readNewest(client), sha("a"))).toEqual({
+        is: "succeeded",
+        deployment: 30,
+        commit: sha("a"),
+        at: "2026-11-12T08:06:00Z",
+        log: null,
+        newest: { deployment: 30, commit: sha("a"), at: "2026-11-12T08:06:00Z" },
+      });
+      expect(client.calls.some((path) => path.includes("/compare/"))).toBe(false);
+    });
+
+    it("gives none on a merge with no success, and none on any merge when it was not asked for", async () => {
+      const running = { id: 32, sha: sha("a"), environment: "staging", createdAt: "2026-11-12T09:00:00Z", reports: [{ state: "in_progress", at: "2026-11-12T09:01:00Z" }] };
+      expect(deployOf(await readNewest(repoWith({ deployments: [running] })), sha("a"))).not.toHaveProperty("newest");
+      expect(deployOf(await readNewest(repoWith({ deployments: [] })), sha("a"))).not.toHaveProperty("newest");
+      const client = repoWith({ deployments: [first, later], compare: { [`${sha("a")}...${sha("b")}`]: "ahead" } });
+      const unasked = await readDeployments(client, "owner/product", "staging", [{ mergeCommit: sha("a"), mergedAt: MERGED_AT }], NOW);
+      expect(deployOf(unasked, sha("a"))).not.toHaveProperty("newest");
+      expect(client.calls.some((path) => path.includes("/compare/"))).toBe(false);
+    });
+
+    it("leaves the merge unread when a later success's comparison fails, or a later Deployment's reports could not be read and it contains the merge", async () => {
+      const refused = repoWith({ deployments: [first, later], compare: { [`${sha("a")}...${sha("b")}`]: refusal(`/repos/owner/product/compare/${sha("a")}...${sha("b")}`) } });
+      expect((await readNewest(refused)).merges).toEqual({ [sha("a")]: "unread" });
+      const unreadable = { id: 35, sha: sha("c"), environment: "staging", createdAt: "2026-11-12T09:30:00Z", reports: refusal("/repos/owner/product/deployments/35/statuses") };
+      const within = repoWith({ deployments: [first, later, unreadable], compare: { [`${sha("a")}...${sha("b")}`]: "ahead", [`${sha("a")}...${sha("c")}`]: "ahead" } });
+      expect((await readNewest(within)).merges).toEqual({ [sha("a")]: "unread" });
+      const without = repoWith({ deployments: [first, later, unreadable], compare: { [`${sha("a")}...${sha("b")}`]: "ahead", [`${sha("a")}...${sha("c")}`]: "diverged" } });
+      expect(deployOf(await readNewest(without), sha("a"))).toMatchObject({ is: "succeeded", newest: { deployment: 31 } });
+    });
+  });
+
   it("is plain data: it survives being written as JSON and read back", async () => {
     const client = repoWith({
       deployments: [{ id: 20, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "failure", at: "2026-11-12T08:09:00Z", log: "https://ci.example.com/20" }] }],

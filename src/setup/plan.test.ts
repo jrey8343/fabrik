@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { aCleanProduct, afterApplying, aProtectedBranch } from "../__fixtures__/productState.ts";
+import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { describeAction } from "./apply.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type ProductState, type SetupAction, planSetup, setupPaths } from "./plan.ts";
@@ -361,6 +362,8 @@ describe("Labels", () => {
     "fabrik:flaky-check",
     "fabrik:step-up",
     "fabrik:kept-branch",
+    "fabrik:trial-accepted",
+    "fabrik:trial-problem",
     "wayfinder:map",
     "wayfinder:research",
     "wayfinder:prototype",
@@ -419,6 +422,17 @@ describe("Labels", () => {
     expect(planSetup(before, kit).actions).toEqual([
       expect.objectContaining({ kind: "create-label", name: "fabrik:kept-branch", description: expect.stringMatching(/carries on its Kept branch/) }),
     ]);
+  });
+
+  it("creates the two trial labels, each saying it marks a merged pull request, on a re-run of an install from before them (#814)", () => {
+    const working = afterApplying(aCleanProduct(), planSetup(aCleanProduct(), kit));
+    const before = { ...working, labels: working.labels.filter((l) => !l.startsWith("fabrik:trial-")) };
+
+    expect(planSetup(before, kit).actions).toEqual([
+      expect.objectContaining({ kind: "create-label", name: TRIAL_ACCEPTED_LABEL, description: expect.stringMatching(/merged PR.* accepted/) }),
+      expect.objectContaining({ kind: "create-label", name: TRIAL_PROBLEM_LABEL, description: expect.stringMatching(/merged PR.* problem/) }),
+    ]);
+    expect([TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL]).toEqual(["fabrik:trial-accepted", "fabrik:trial-problem"]);
   });
 
   it("are each named in the README's list of the labels setup creates", () => {
@@ -763,6 +777,7 @@ describe("The starters the Product repo then owns", () => {
       ui: null,
       preview: { url: null },
       production: null,
+      staging: null,
       time_zone: null,
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
@@ -1160,7 +1175,7 @@ describe("The production block, which Setup proposes", () => {
         '  "production": {\n    "url": "https://clinic.example.com",\n    "environment": "production"\n  },\n',
       ),
     );
-    expect(declared(config)).toEqual(live);
+    expect(declared(config)).toEqual({ ...live, workflow: null });
     expect(why(actions)).toBe(
       'write .fabrik/config.json (a starter Kit config with every v1 default, and the production block: url "https://clinic.example.com", environment "production")',
     );
@@ -1169,7 +1184,7 @@ describe("The production block, which Setup proposes", () => {
   it("writes an address with no environment as environment null, and names that", () => {
     const { actions } = planSetup(aCleanProduct(), kit, { production: { url: "https://clinic.example.com", environment: null } });
 
-    expect(declared(written(actions, ".fabrik/config.json"))).toEqual({ url: "https://clinic.example.com", environment: null });
+    expect(declared(written(actions, ".fabrik/config.json"))).toEqual({ url: "https://clinic.example.com", environment: null, workflow: null });
     expect(why(actions)).toContain('the production block: url "https://clinic.example.com", environment null');
   });
 
@@ -1231,7 +1246,7 @@ describe("The production block, which Setup proposes", () => {
     const { actions } = planSetup(starter, kit, { production: live, paused: true, secondSubscription: true }, { wroteStarter: true });
 
     const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
-    expect(config.ok && [config.config.production, config.config.maxInFlight, config.config.subscriptions]).toEqual([live, 0, ["Claude token", "Claude token 2"]]);
+    expect(config.ok && [config.config.production, config.config.maxInFlight, config.config.subscriptions]).toEqual([{ ...live, workflow: null }, 0, ["Claude token", "Claude token 2"]]);
     expect(why(actions)).toContain('the production block: url "https://clinic.example.com", environment "production"');
     expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
   });
@@ -1239,8 +1254,116 @@ describe("The production block, which Setup proposes", () => {
   it("adds it to the starter on setup's branch with nothing else to change", () => {
     const { actions } = planSetup(withConfig(kit.templates.kitConfig), kit, { production: live }, { wroteStarter: true });
 
-    expect(declared(written(actions, ".fabrik/config.json"))).toEqual(live);
+    expect(declared(written(actions, ".fabrik/config.json"))).toEqual({ ...live, workflow: null });
     expect(why(actions)).toBe('write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production")');
+  });
+});
+
+describe("The staging block, which Setup proposes beside production's", () => {
+  const trial = { url: "https://staging.clinic.example.com", environment: "staging" };
+  const live = { url: "https://clinic.example.com", environment: "production" };
+  const NAMED = 'the staging block: url "https://staging.clinic.example.com", environment "staging"';
+  const why = (actions: readonly SetupAction[]) => {
+    const action = actions.find((a) => a.kind === "write-file" && a.path === ".fabrik/config.json");
+    return action === undefined ? undefined : describeAction(action);
+  };
+  const withConfig = (config: string) => aCleanProduct({ files: { ".fabrik/config.json": config } });
+  const declared = (config: string | undefined) => {
+    const resolved = resolveKitConfig({ config: config ?? null });
+    return resolved.ok ? resolved.config.staging : resolved.errors;
+  };
+
+  it("writes the starter with its staging member set where it stands, a block Kit config accepts, and names the block and both values in the plan", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, { staging: trial });
+
+    const config = written(actions, ".fabrik/config.json");
+    expect(declared(config)).toEqual(trial);
+    expect(config).toBe(
+      kit.templates.kitConfig.replace(
+        '  "staging": null,\n',
+        '  "staging": {\n    "url": "https://staging.clinic.example.com",\n    "environment": "staging"\n  },\n',
+      ),
+    );
+    expect(why(actions)).toBe(`write .fabrik/config.json (a starter Kit config with every v1 default, and ${NAMED})`);
+  });
+
+  it("declares no staging when the Operator declined: the starter as it is, its staging null as every default is spelled out, and no write to an existing Kit config", () => {
+    const own = '{\n  "max_in_flight": 1\n}\n';
+
+    expect(written(planSetup(aCleanProduct(), kit, {}).actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
+    expect(JSON.parse(kit.templates.kitConfig)).toMatchObject({ production: null, staging: null });
+    expect(written(planSetup(withConfig(own), kit, {}).actions, ".fabrik/config.json")).toBeUndefined();
+  });
+
+  it("adds the block as one member of an existing Kit config, every other byte kept", () => {
+    const own = '{\n  "operator": "jrey8343",\n  "production": { "url": "https://clinic.example.com", "environment": "production" }\n}\n';
+
+    const { actions } = planSetup(withConfig(own), kit, { staging: trial });
+
+    expect(written(actions, ".fabrik/config.json")).toBe(
+      '{\n  "operator": "jrey8343",\n  "production": { "url": "https://clinic.example.com", "environment": "production" },\n  "staging": {\n    "url": "https://staging.clinic.example.com",\n    "environment": "staging"\n  }\n}\n',
+    );
+    expect(why(actions)).toBe(`write .fabrik/config.json (add ${NAMED})`);
+  });
+
+  it("sets a staging member that is null where it stands", () => {
+    const config = '{\n  "staging": null,\n  "max_in_flight": 1\n}\n';
+
+    expect(written(planSetup(withConfig(config), kit, { staging: trial }).actions, ".fabrik/config.json")).toBe(
+      '{\n  "staging": {\n    "url": "https://staging.clinic.example.com",\n    "environment": "staging"\n  },\n  "max_in_flight": 1\n}\n',
+    );
+  });
+
+  it("writes it in the same one write as the production block and the time zone, production's first", () => {
+    const { actions } = planSetup(withConfig('{\n  "max_in_flight": 1\n}\n'), kit, { production: live, staging: trial, timeZone: "Australia/Sydney" });
+
+    const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
+    expect(config.ok && [config.config.production, config.config.staging, config.config.timeZone]).toEqual([{ ...live, workflow: null }, trial, "Australia/Sydney"]);
+    expect(why(actions)).toBe(
+      `write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production", and add ${NAMED}, and set time_zone "Australia/Sydney")`,
+    );
+    expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
+  });
+
+  it("writes nothing when setup runs again with the same answers", () => {
+    for (const state of [aCleanProduct(), withConfig('{\n  "max_in_flight": 1\n}\n')]) {
+      const setUp = afterApplying(state, planSetup(state, kit, { staging: trial }));
+
+      expect(written(planSetup(setUp, kit, { staging: trial }).actions, ".fabrik/config.json")).toBeUndefined();
+    }
+  });
+
+  it("leaves a Kit config that already declares staging byte for byte, whatever the answer, and says nothing of it", () => {
+    const config = '{\n  "staging": { "url": "https://next.clinic.example.com", "environment": "next" }\n}\n';
+
+    const { actions, notes } = planSetup(withConfig(config), kit, { staging: trial });
+
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+    expect(notes.join("\n")).not.toContain("staging");
+  });
+
+  it("leaves a Kit config that is not a JSON object byte for byte, with one line saying why", () => {
+    for (const config of ["[]\n", "{ not json\n"]) {
+      const { actions, notes } = planSetup(withConfig(config), kit, { staging: trial });
+
+      expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+      expect(notes).toContainEqual(".fabrik/config.json isn't a JSON object, so setup didn't add the staging block to it: fix it, then run setup again.");
+    }
+  });
+
+  it("never writes a block Kit config would refuse, its own or beside the production the same plan writes, and says why", () => {
+    const badAddress = planSetup(aCleanProduct(), kit, { staging: { ...trial, url: "ftp://staging.clinic.example.com" } });
+    const sameEnvironment = planSetup(aCleanProduct(), kit, { production: live, staging: { ...trial, environment: "production" } });
+    const besideDeclared = planSetup(withConfig('{\n  "production": { "url": "https://clinic.example.com", "environment": "staging" }\n}\n'), kit, { staging: trial });
+
+    expect(written(badAddress.actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
+    expect(badAddress.notes.find((note) => note.includes("staging"))).toMatch(/^Setup didn't write the staging block: staging\.url is .*http:\/\/ or https:\/\/\.$/);
+    expect(declared(written(sameEnvironment.actions, ".fabrik/config.json"))).toBeNull();
+    expect(sameEnvironment.notes).toContainEqual(
+      `Setup didn't write the staging block: staging.environment is "production": production.environment names it, and staging's environment is never production's.`,
+    );
+    expect(written(besideDeclared.actions, ".fabrik/config.json")).toBeUndefined();
+    expect(besideDeclared.notes.find((note) => note.includes("staging block"))).toMatch(/^Setup didn't write the staging block: staging\.environment is "staging"/);
   });
 });
 
@@ -1298,7 +1421,7 @@ describe("The Operator's time zone in the Kit config, which Setup keeps in step 
     const { actions } = planSetup(withConfig('{\n  "max_in_flight": 1\n}\n'), kit, { ...sydney, production: live });
 
     const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
-    expect(config.ok && [config.config.production, config.config.timeZone]).toEqual([live, "Australia/Sydney"]);
+    expect(config.ok && [config.config.production, config.config.timeZone]).toEqual([{ ...live, workflow: null }, "Australia/Sydney"]);
     expect(why(actions)).toBe('write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production", and set time_zone "Australia/Sydney")');
     expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
   });

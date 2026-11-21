@@ -57,7 +57,9 @@ import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
 import type { ClosedCheckIssue, GateRerunDone, KitIssueSnapshot, Verdict } from "../loop/types.ts";
 import type { DeploymentsRead, DeployOf } from "./deployments.ts";
-import type { Facts } from "./gather.ts";
+import type { Facts, StagingFacts } from "./gather.ts";
+import type { MainChecksRead } from "./mainChecks.ts";
+import type { StagingRead } from "./rows.ts";
 import type { RunInFlight, RunsRead } from "./runs.ts";
 
 /** A passing first Implement run on Ticket 7 in `owner/product`, costing $1, ended at `endedAt`. */
@@ -565,6 +567,35 @@ export function aDeployOf(overrides: Partial<DeployOf> = {}): DeployOf {
 /** A Deployments read of `owner/product`'s `production` environment at the filing's time, holding these merges by merge commit. */
 export function aDeploymentsRead(merges: DeploymentsRead["merges"], readAt = "2026-11-08T20:00:00Z"): DeploymentsRead {
   return { repo: "owner/product", environment: "production", readAt, merges };
+}
+
+/**
+ * What a gather reads past the last day of a repo that declares `staging`
+ * (Facts' `staging`, ./gather.ts): no Deployment to start at, no pull request
+ * kept or counted, no label event and no Trial problem, unless a test says
+ * so.
+ */
+export function aStagingFacts(overrides: Partial<StagingFacts> = {}): StagingFacts {
+  return { since: null, unpromoted: [], promoted: [], plain: [], mergedSince: 0, trials: { pullRequests: [], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...overrides };
+}
+
+/** A Main checks read of `owner/product` at the filing's time, holding how these commits' Main checks stand, by commit. */
+export function aMainChecksRead(commits: MainChecksRead["commits"], readAt = "2026-11-08T20:00:00Z"): MainChecksRead {
+  return { repo: "owner/product", readAt, commits };
+}
+
+/**
+ * What a reader read of `owner/product`'s staging at the filing's time: a
+ * Deployments read of its `staging` environment holding these merges by
+ * merge commit, which it always has, and no Main checks read unless a test
+ * gives one.
+ */
+export function aStagingRead(
+  merges: DeploymentsRead["merges"],
+  mainChecks: MainChecksRead | null = null,
+  readAt = "2026-11-08T20:00:00Z",
+): StagingRead & { readonly deployments: DeploymentsRead } {
+  return { deployments: { ...aDeploymentsRead(merges, readAt), environment: "staging" }, mainChecks };
 }
 
 /** An Implement run in flight on no Ticket the job names, told by its job's name, running, its workflow run (1, first attempt) created an hour before the filing, with no start read, unless a test says otherwise. */

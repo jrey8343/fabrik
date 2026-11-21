@@ -12,6 +12,7 @@ export const SETUP_USAGE =
   `Usage: ${setupCommand("[release | --release=<release>]")} [--account=<1Password account>]` +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
   " [--production-url=<address> | --no-production] [--production-environment=<Deployments environment>]" +
+  " [--staging-url=<address> | --no-staging] [--staging-environment=<Deployments environment>]" +
   " [--plan]";
 
 /** The questions' answers the flags gave. A missing one is unanswered; null or false answers no. */
@@ -23,6 +24,10 @@ export interface FlagAnswers {
   readonly productionUrl?: string | null;
   /** --production-environment=: the environment its deploys carry in GitHub's Deployments; null, from an empty value, names none. */
   readonly productionEnvironment?: string | null;
+  /** --staging-url=: the staging site's address; null, from --no-staging or an empty value, declares none. */
+  readonly stagingUrl?: string | null;
+  /** --staging-environment=: the environment its deploys carry in GitHub's Deployments; null, from an empty value, names none, and staging needs one. */
+  readonly stagingEnvironment?: string | null;
 }
 
 export interface SetupArgs {
@@ -43,6 +48,14 @@ const YES_OR_NO = new Map<string, "secondSubscription" | "paused">([
   ["--paused", "paused"],
 ]);
 
+/** Production's and staging's flags that take a value, each with the answer it gives and a value to show in its refusal. */
+const ADDRESS_OR_ENVIRONMENT = new Map<string, readonly [answer: "productionUrl" | "productionEnvironment" | "stagingUrl" | "stagingEnvironment", suchAs: string]>([
+  ["--production-url", ["productionUrl", "https://example.com"]],
+  ["--production-environment", ["productionEnvironment", "production"]],
+  ["--staging-url", ["stagingUrl", "https://staging.example.com"]],
+  ["--staging-environment", ["stagingEnvironment", "staging"]],
+]);
+
 export function parseSetupArgs(args: readonly string[]): ParsedArgs {
   const positionals: string[] = [];
   const answers: { -readonly [K in keyof FlagAnswers]: FlagAnswers[K] } = {};
@@ -58,6 +71,7 @@ export function parseSetupArgs(args: readonly string[]): ParsedArgs {
     const [flag, value] = splitFlag(arg);
     const yes = YES_OR_NO.get(flag);
     const no = flag.startsWith("--no-") ? YES_OR_NO.get(`--${flag.slice("--no-".length)}`) : undefined;
+    const valued = ADDRESS_OR_ENVIRONMENT.get(flag);
     if (flag === "--plan" && value === undefined) plan = true;
     else if (flag === "--account") {
       if (value === undefined || value === "") return refuse("--account= needs a 1Password account, such as my.1password.com.");
@@ -66,10 +80,12 @@ export function parseSetupArgs(args: readonly string[]): ParsedArgs {
       if (value === undefined) return refuse("--time-zone takes its value after an =, such as --time-zone=Europe/London.");
       answers.timeZone = value === "" ? null : value;
     } else if (flag === "--no-time-zone" && value === undefined) answers.timeZone = null;
-    else if (flag === "--production-url" || flag === "--production-environment") {
-      if (value === undefined) return refuse(`${flag} takes its value after an =, such as ${flag}=${flag === "--production-url" ? "https://example.com" : "production"}.`);
-      answers[flag === "--production-url" ? "productionUrl" : "productionEnvironment"] = value.trim() === "" ? null : value.trim();
+    else if (valued !== undefined) {
+      const [answer, suchAs] = valued;
+      if (value === undefined) return refuse(`${flag} takes its value after an =, such as ${flag}=${suchAs}.`);
+      answers[answer] = value.trim() === "" ? null : value.trim();
     } else if (flag === "--no-production" && value === undefined) answers.productionUrl = null;
+    else if (flag === "--no-staging" && value === undefined) answers.stagingUrl = null;
     else if (yes !== undefined) {
       if (value !== undefined && value !== "") return refuse(`${flag} takes no value: give ${flag} for yes, or --no-${flag.slice(2)} for no.`);
       answers[yes] = value === undefined;
