@@ -121,7 +121,7 @@ const A_CHECK_HEALING = aStanding(
 /** What every Standing of a merged agent pull request at Staging carries (#855), in a repo that declares `staging` beside production and names no Main check. */
 const AT_STAGING = { pullRequest: 50, place: "staging", move: "nobody" } as const;
 const A_MERGE_ON_STAGING = { ...A_MERGE, environment: "staging", deployment: 77 } as const;
-const ITS_STAGING = { environment: "staging", production: "production", mainChecks: [], check: null, checksUnread: false } as const;
+const ITS_STAGING = { environment: "staging", productionEnvironment: "production", mainChecks: [], check: null, checksUnread: false } as const;
 const ITS_TRIAL = { needed: true, why: "ui-evidence" } as const;
 
 /**

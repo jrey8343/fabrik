@@ -875,7 +875,7 @@ describe("a gather shaped for Home", () => {
         ],
       });
 
-      expect(facts.staging?.since).toEqual({ from: "production", deployment: 800, commit: PROMOTED, at: "2026-11-02T09:00:00Z", deployedAt: "2026-11-08T09:15:00Z" });
+      expect(facts.staging?.since).toEqual({ from: "production", deployment: 800, commit: PROMOTED, cutAt: "2026-11-02T09:00:00Z", deployedAt: "2026-11-08T09:15:00Z" });
       expect(facts.staging?.unpromoted).toEqual([
         { number: 55, title: "Build the thing", ticket: 12, mergeCommit: "5".repeat(40), mergedAt: "2026-11-09T10:00:00Z" },
         { number: 54, title: "Show the cart total", ticket: 11, mergeCommit: "4".repeat(40), mergedAt: "2026-11-05T10:00:00Z" },
@@ -934,7 +934,7 @@ describe("a gather shaped for Home", () => {
         ],
       });
 
-      expect(facts.staging?.since).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), at: "2026-11-04T09:00:00Z", deployedAt: "2026-11-04T09:14:00Z" });
+      expect(facts.staging?.since).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), cutAt: "2026-11-04T09:00:00Z", deployedAt: "2026-11-04T09:14:00Z" });
       expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55]);
       const environments = calls.queries.filter((query) => query.includes("deployments(")).map((query) => /direction: (ASC|DESC)/.exec(query)?.[1]);
       expect(environments).toEqual(config.production?.environment ? ["DESC", "ASC"] : ["ASC"]);
@@ -977,7 +977,7 @@ describe("a gather shaped for Home", () => {
       const failed = Array.from({ length: 45 }, (_, at) => aRawDeployment({ databaseId: 900 + at, createdAt: `2026-11-08T10:${String(at).padStart(2, "0")}:00Z`, statuses: statuses("FAILURE") }));
       const { facts, calls } = await gathered({ deployments: { production: [aRawDeployment({ databaseId: 800, createdAt: "2026-11-02T09:10:00Z", commit: null }), ...failed] } });
 
-      expect(facts.staging?.since).toEqual({ from: "production", deployment: 800, commit: "d".repeat(40), at: "2026-11-02T09:10:00Z", deployedAt: "2026-11-08T09:15:00Z" });
+      expect(facts.staging?.since).toEqual({ from: "production", deployment: 800, commit: "d".repeat(40), cutAt: "2026-11-02T09:10:00Z", deployedAt: "2026-11-08T09:15:00Z" });
       expect(calls.queries.filter((query) => query.includes("deployments(")).length).toBeGreaterThan(1);
     });
 
@@ -985,7 +985,7 @@ describe("a gather shaped for Home", () => {
       const postdated = aRawDeployment({ databaseId: 800, createdAt: "2026-11-02T09:10:00Z", commit: { committedDate: "2026-11-06T09:00:00Z" } });
       const facts = await factsOf({ deployments: { production: [postdated] }, mergedPullRequests: [aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-05T10:00:00Z" })] });
 
-      expect(facts.staging?.since).toMatchObject({ deployment: 800, at: "2026-11-02T09:10:00Z" });
+      expect(facts.staging?.since).toMatchObject({ deployment: 800, cutAt: "2026-11-02T09:10:00Z" });
       expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55]);
     });
 
@@ -1198,8 +1198,8 @@ describe("a gather shaped for Home", () => {
           deployments: { staging: [aRawDeployment({ databaseId: 602, createdAt: "2026-07-04T09:10:00Z", commitOid: "7".repeat(40), commit: { committedDate: "2026-07-04T09:00:00Z" }, statuses: statuses("INACTIVE") })] },
         });
 
-        expect(production.staging?.since).toEqual({ from: "production", deployment: 800, commit: PROMOTED, at: "2026-11-02T09:00:00Z", deployedAt: "2026-11-02T09:15:00Z" });
-        expect(staging.staging?.since).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), at: "2026-07-04T09:00:00Z", deployedAt: "2026-07-04T09:10:00Z" });
+        expect(production.staging?.since).toEqual({ from: "production", deployment: 800, commit: PROMOTED, cutAt: "2026-11-02T09:00:00Z", deployedAt: "2026-11-02T09:15:00Z" });
+        expect(staging.staging?.since).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), cutAt: "2026-07-04T09:00:00Z", deployedAt: "2026-07-04T09:10:00Z" });
       });
 
       it("keeps the agent pull requests a production Deployment took in the last 24 hours, each with that Deployment, back to the newest that succeeded before them; so one merged five days before it is Live for a day from it", async () => {
@@ -1217,7 +1217,7 @@ describe("a gather shaped for Home", () => {
         });
         const by = { deployment: 830, commit: TODAYS, at: "2026-11-09T11:00:00Z" };
 
-        expect(facts.staging?.since).toEqual({ from: "production", deployment: 830, commit: TODAYS, at: "2026-11-09T10:30:00Z", deployedAt: "2026-11-09T11:00:00Z" });
+        expect(facts.staging?.since).toEqual({ from: "production", deployment: 830, commit: TODAYS, cutAt: "2026-11-09T10:30:00Z", deployedAt: "2026-11-09T11:00:00Z" });
         expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([56]);
         expect(facts.staging?.promoted).toEqual([
           { number: 55, title: "Build the thing", ticket: 15, mergeCommit: "55".padStart(40, "0"), mergedAt: "2026-11-09T10:00:00Z", by },

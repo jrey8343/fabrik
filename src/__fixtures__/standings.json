@@ -532,7 +532,7 @@
       "deploysUnread": false,
       "staging": {
         "environment": "staging",
-        "production": "production",
+        "productionEnvironment": "production",
         "trial": { "needed": true, "why": "ui-evidence" },
         "result": null,
         "standsUntil": "2026-11-09T19:30:00.000Z",
@@ -567,7 +567,7 @@
       "deploysUnread": false,
       "staging": {
         "environment": "staging",
-        "production": "production",
+        "productionEnvironment": "production",
         "trial": { "needed": true, "why": "ui-evidence" },
         "result": { "is": "accepted", "at": "2026-11-08T19:55:00Z", "problems": [{ "issue": 70, "open": false }], "fix": [61] },
         "standsUntil": "2026-11-09T19:55:00.000Z",
@@ -602,7 +602,7 @@
       "deploysUnread": false,
       "staging": {
         "environment": "staging",
-        "production": "production",
+        "productionEnvironment": "production",
         "trial": { "needed": true, "why": "ui-evidence" },
         "result": { "is": "problem", "at": "2026-11-08T19:42:00Z", "problems": [{ "issue": 70, "open": false }] },
         "standsUntil": "2026-11-09T19:42:00.000Z",

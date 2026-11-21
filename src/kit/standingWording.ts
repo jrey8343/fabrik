@@ -12,7 +12,7 @@ import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import { refuseOtherSchema, type Standing, type StandingNamed } from "./standing.ts";
 import type { RunningRun } from "./standingInFlight.ts";
-import type { StagingDetail } from "./standingStaging.ts";
+import { isAtStaging, type StagingDetail } from "./standingStaging.ts";
 
 /** What a Standing says when shown. */
 export interface StandingWords {
@@ -261,12 +261,12 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     }
     case "trial-accepted": {
       // Accepted through its fix (#856): each merged pull request that closed one of its Trial problems, itself accepted.
-      const fix = standing.detail.staging.result?.is === "accepted" ? standing.detail.staging.result.fix : null;
+      const { fix } = standing.detail.staging.result;
       if (fix === null) return { pill: "Accepted", sentence: `Accepted in its Staging trial ${age} ago.`, remedy: null };
       return { pill: "Accepted", sentence: `Accepted through its ${fix.length === 1 ? "fix" : "fixes"}, ${listed(fix.map((pullRequest) => `#${pullRequest}`))}, ${age} ago.`, remedy: null };
     }
     case "trial-problem": {
-      const problems = standing.detail.staging.result?.problems ?? [];
+      const { problems } = standing.detail.staging.result;
       const named = problems.length === 0 ? ", with no issue named" : `: ${listed(problems.map(({ issue, open }) => `#${issue} (${open ? "open" : "closed"})`))}`;
       return { pill: "Problem found", sentence: `Its Staging trial found a problem ${age} ago${named}.`, remedy: null };
     }
@@ -287,7 +287,7 @@ function listed(names: readonly string[]): string {
 
 /** What a merged agent pull request's Standing at Staging carries of it (#855), or null at any other place. */
 function atStaging(standing: StandingNamed<"deploying" | "deploy-failed" | "merged">): StagingDetail | null {
-  return standing.place === "staging" ? (standing.detail.staging ?? null) : null;
+  return isAtStaging(standing) ? standing.detail.staging : null;
 }
 
 /** The run each trigger label asks for, as a not-started Standing's sentence names it: every one but `agent:digest`, whose wording is its own. */

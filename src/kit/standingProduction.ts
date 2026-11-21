@@ -16,7 +16,13 @@ export const NO_DEPLOY_SEEN_MINUTES = 60;
 /** How long after its merge, in hours, a merged agent pull request keeps its Standing. */
 export const MERGED_STANDS_HOURS = 24;
 
-/** An agent pull request merged in the last 24 hours, as the read library's gather keeps it. */
+/**
+ * An agent pull request merged in the last 24 hours, as the read library's
+ * gather keeps it. In a repo that declares `staging` the gather keeps one
+ * merged longer ago in the same shape (StandingFacts' `unpromoted` and
+ * `promoted`, ./standingStaging.ts): the name is from before it did, and
+ * the read library exports it, so it stays.
+ */
 export interface MergedLastDayFacts {
   readonly number: number;
   readonly title: string;

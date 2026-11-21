@@ -16,7 +16,7 @@ import { type PlainKind, type Standing, standingAt } from "../kit/standing.ts";
 import { plainKindOf } from "../kit/standingPlain.ts";
 import { type StagingStanding, stagingStandingsOf, type StagingTrial } from "../kit/standingStaging.ts";
 import type { TrialProblemFacts } from "../kit/trialResult.ts";
-import { type Facts, type MergedPlainFacts, MERGES_KEPT } from "./gather.ts";
+import { type DeploymentCut, type Facts, type MergedPlainFacts, MERGES_KEPT } from "./gather.ts";
 import { ANY_BOT, evidenceOf, type RowEvidence, type RowShots, type RowStaging, ruleFactsOf, shotsOf, type StagingRead, stagingOf } from "./rows.ts";
 import type { StoreFacts } from "./store.ts";
 
@@ -58,17 +58,15 @@ export interface PromoteList {
   readonly dispatchPage: string | null;
 }
 
-/** The Deployment a Promote list starts at. */
-export interface PromoteStart {
-  /** Which environment's Deployment it is: production's newest that succeeded, or staging's first. */
-  readonly from: "production" | "staging";
-  /** GitHub's id of that Deployment, or null where it gives none. */
-  readonly deployment: number | null;
-  /** The commit it deployed. */
-  readonly commit: string;
-  /** When it succeeded, ISO 8601; its creation where GitHub no longer says when, as for a staging Deployment older than 90 days. */
-  readonly deployedAt: string;
-}
+/**
+ * The Deployment a Promote list starts at, as the gather found it
+ * (DeploymentCut, ./gather.ts): which environment's it is, production's
+ * newest that succeeded or staging's first; GitHub's id of it; the commit it
+ * deployed; and when it succeeded, or its creation where GitHub no longer
+ * says when. All of it but the time the gather cuts the merges at, which
+ * the list has already been cut by.
+ */
+export type PromoteStart = Omit<DeploymentCut, "cutAt">;
 
 /** One pull request a production deployment would take. */
 export type PromoteEntry = PromoteAgentEntry | PromotePlainEntry;
@@ -208,12 +206,17 @@ export function promoteListOf(facts: Facts | StoreFacts, staging: StagingRead | 
   const entries = [...agent, ...plain].toSorted((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt) || b.pullRequest - a.pullRequest).slice(0, MERGES_KEPT);
   return {
     repo,
-    start: since === null ? null : { from: since.from, deployment: since.deployment, commit: since.commit, deployedAt: since.deployedAt },
+    start: since === null ? null : startOf(since),
     entries,
     notAccepted: entries.filter((entry) => entry.is === "agent" && entry.trial.needed && entry.result.is !== "accepted").length,
     leftOut: Math.max(0, (facts.staging?.mergedSince ?? 0) - entries.length),
     dispatchPage: productionDispatchPage(repo, facts.kit.config.config.production),
   };
+}
+
+/** The Deployment the gather cut at, as a list names its start. */
+function startOf({ cutAt: _cutAt, ...start }: DeploymentCut): PromoteStart {
+  return start;
 }
 
 /** A Plain pull request's entry: its kind told as the Standing tells an open one's, any bot's login taken for the Fabrik App's where the reader gave the gather none. */

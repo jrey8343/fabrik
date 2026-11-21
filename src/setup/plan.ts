@@ -337,14 +337,14 @@ interface AnsweredEdits {
 function answeredEdits(text: string, state: ProductState, answers: SetupAnswers, notes: string[]): AnsweredEdits {
   const listed = withSecondSubscription(text, state, answers);
   const live = withProduction(listed ?? text, answers, notes);
-  const trialled = withStaging(live ?? listed ?? text, answers, notes);
-  const zoned = withTimeZone(trialled ?? live ?? listed ?? text, answers, notes);
+  const staged = withStaging(live ?? listed ?? text, answers, notes);
+  const zoned = withTimeZone(staged ?? live ?? listed ?? text, answers, notes);
   const made: (readonly [change: string, also: string])[] = [];
   if (listed !== null) made.push([LIST_SECOND_SUBSCRIPTION, "the second Subscription listed"]);
   if (live !== null) made.push([`add ${productionWords(answers)}`, productionWords(answers)]);
-  if (trialled !== null) made.push([`add ${stagingWords(answers)}`, stagingWords(answers)]);
+  if (staged !== null) made.push([`add ${stagingWords(answers)}`, stagingWords(answers)]);
   if (zoned !== null) made.push([`set ${timeZoneWords(answers)}`, timeZoneWords(answers)]);
-  return { text: zoned ?? trialled ?? live ?? listed, changes: made.map(([change]) => change), also: made.map(([, also]) => also) };
+  return { text: zoned ?? staged ?? live ?? listed, changes: made.map(([change]) => change), also: made.map(([, also]) => also) };
 }
 
 /** The one write of a Kit config whose only changes are the Operator's answers, or none. */
@@ -391,25 +391,47 @@ function productionWords({ production }: SetupAnswers): string {
  * change, or one setup can't add a member to, which it says.
  */
 function withProduction(text: string, { production }: SetupAnswers, notes: string[]): string | null {
-  if (production === undefined) return null;
-  const config = jsonObject(text);
-  if (config === null) {
-    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so setup didn't add the production block to it: fix it, then run setup again.`);
+  return withBlock(text, "production", production, productionRefusal, notes);
+}
+
+/**
+ * The Kit config's text with the block `name` the Operator answered added,
+ * its address and its environment, every other byte kept, or null when
+ * there's nothing to write: no answer, a Kit config that declares the block
+ * already, which is the Product's to change, one setup can't add a member
+ * to, or a block Kit config would refuse (`refusalOf`), each of which it
+ * says. The production block and the staging block are both written so.
+ */
+function withBlock<Block extends { readonly url: string; readonly environment: string | null }>(
+  text: string,
+  name: "production" | "staging",
+  block: Block | undefined,
+  refusalOf: (block: Block) => string | null,
+  notes: string[],
+): string | null {
+  if (block === undefined) return null;
+  if (jsonObject(text) === null) {
+    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so setup didn't add the ${name} block to it: fix it, then run setup again.`);
     return null;
   }
-  if (declaresProduction(text)) return null;
-  const refused = productionRefusal(production);
+  if (declaresBlock(text, name)) return null;
+  const refused = refusalOf(block);
   if (refused !== null) {
-    notes.push(`Setup didn't write the production block: ${refused}.`);
+    notes.push(`Setup didn't write the ${name} block: ${refused}.`);
     return null;
   }
-  return withMember(text, ["production"], { url: production.url, environment: production.environment });
+  return withMember(text, [name], { url: block.url, environment: block.environment });
+}
+
+/** Whether the Kit config's text declares the block `name`: a member of that name that isn't null. */
+function declaresBlock(text: string, name: "production" | "staging"): boolean {
+  const block = jsonObject(text)?.[name];
+  return block !== undefined && block !== null;
 }
 
 /** Whether the Kit config's text declares production: a production member that isn't null. */
 export function declaresProduction(text: string): boolean {
-  const production = jsonObject(text)?.["production"];
-  return production !== undefined && production !== null;
+  return declaresBlock(text, "production");
 }
 
 /** Why Kit config would refuse this production block, in its own words, or null when it takes it. */
@@ -431,25 +453,12 @@ function stagingWords({ staging }: SetupAnswers): string {
  * the production this text declares, each of which it says.
  */
 function withStaging(text: string, { staging }: SetupAnswers, notes: string[]): string | null {
-  if (staging === undefined) return null;
-  const config = jsonObject(text);
-  if (config === null) {
-    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so setup didn't add the staging block to it: fix it, then run setup again.`);
-    return null;
-  }
-  if (declaresStaging(text)) return null;
-  const refused = stagingRefusal(staging, productionEnvironmentIn(text));
-  if (refused !== null) {
-    notes.push(`Setup didn't write the staging block: ${refused}.`);
-    return null;
-  }
-  return withMember(text, ["staging"], { url: staging.url, environment: staging.environment });
+  return withBlock(text, "staging", staging, (block) => stagingRefusal(block, productionEnvironmentIn(text)), notes);
 }
 
 /** Whether the Kit config's text declares staging: a staging member that isn't null. */
 export function declaresStaging(text: string): boolean {
-  const staging = jsonObject(text)?.["staging"];
-  return staging !== undefined && staging !== null;
+  return declaresBlock(text, "staging");
 }
 
 /**

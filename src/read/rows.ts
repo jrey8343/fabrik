@@ -25,7 +25,7 @@ import type { RunInFlightFact } from "../github/snapshot.ts";
 import { type ProductionConfig, productionPageUrl, stagingPageUrl, withRouteOn } from "../kit/config.ts";
 import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
 import { plainSinceOf } from "../kit/standingPlain.ts";
-import { asksAStagingTrial, isMergedStanding } from "../kit/standingStaging.ts";
+import { asksAStagingTrial, isMergedStanding, mergesHeld } from "../kit/standingStaging.ts";
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
 import { DESIGN_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
@@ -376,11 +376,9 @@ function evidenceMarkersOf({ evidenceMarkers, staging }: Facts): Facts["evidence
   return staging === undefined ? evidenceMarkers : [...evidenceMarkers, ...staging.evidenceMarkers];
 }
 
-/** The merged agent pull requests the facts hold, each once: those of the last 24 hours, then those production has not taken (#856), then those a production Deployment took in the last 24 hours (#857). */
+/** The merged agent pull requests the facts hold, each once, as the rule takes them (mergesHeld): those of the last 24 hours, then those production has not taken (#856), then those a production Deployment took in the last 24 hours (#857). */
 function mergedOf({ mergedLastDay, staging }: Facts): Facts["mergedLastDay"] {
-  if (staging === undefined) return mergedLastDay;
-  const past = [...staging.unpromoted, ...staging.promoted];
-  return [...mergedLastDay, ...past.filter(({ number }, at) => !mergedLastDay.some((held) => held.number === number) && past.findIndex((held) => held.number === number) === at)];
+  return staging === undefined ? mergedLastDay : mergesHeld<Facts["mergedLastDay"][number]>(mergedLastDay, staging.unpromoted, staging.promoted);
 }
 
 /**

@@ -20,7 +20,6 @@ import type { ShotsMarker } from "../evidence/shotsEvidence.ts";
 import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { DeploymentsRead, DeployOf } from "../read/deployments.ts";
 import type { MainCheckOf, MainChecksRead } from "../read/mainChecks.ts";
-import type { KitConfig } from "./config.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import {
   deployIn,
@@ -52,6 +51,11 @@ export type MergedStanding = ProductionStanding | StandingNamed<"on-staging" | T
 /** Whether a Standing is a merged agent pull request's, whatever its place and name. */
 export function isMergedStanding(standing: Standing): standing is MergedStanding {
   return standing.name === "on-staging" || isTried(standing) || isProductionStanding(standing);
+}
+
+/** Whether a Standing is a merged agent pull request's at Staging, which carries `detail.staging`: the one way to ask it, for the rule, the joins and the wording. */
+export function isAtStaging(standing: Standing): standing is StagingStanding {
+  return standing.place === "staging" && isMergedStanding(standing);
 }
 
 /** Whether a Standing is one a Staging trial's result names: settled, so no deploy and no check moves it. */
@@ -87,7 +91,7 @@ export interface StagingDetail {
   /** `staging.environment`. */
   readonly environment: string;
   /** `production.environment`, or null where Kit config tracks no production deploys: it then never moves to Production. */
-  readonly production: string | null;
+  readonly productionEnvironment: string | null;
   /** Whether it needs a Staging trial, and why. Only on staging is that the Operator's move. */
   readonly trial: StagingTrial;
   /**
@@ -121,6 +125,13 @@ export interface StagingDetail {
   readonly checksUnread: boolean;
 }
 
+/**
+ * What a merged agent pull request's Standing carries in such a repo before
+ * its deploys name it: all of StagingDetail but the Main check its name turns
+ * on, which only the Standing at Staging's own builder says.
+ */
+type StagingContext = Omit<StagingDetail, "check" | "checksUnread">;
+
 /** No merged pull request's label events and no Trial problem: every merge untried. */
 const NO_TRIALS: TrialFacts = { pullRequests: [], problems: [] };
 
@@ -148,13 +159,10 @@ export interface PromotedFacts extends MergedLastDayFacts {
  * in any other, as the Standing at Production gives it, unchanged.
  */
 export function mergedStandingsOf(facts: StandingFacts, now: string): Standing[] {
-  const config = facts.kit?.config;
-  if (config === undefined || !config.ok || config.config.staging === null) return productionStandingsOf(facts, now);
-  const { repo } = facts.github;
-  const { environment } = config.config.staging;
-  return mergesAtStagingOf(facts, config.config).flatMap(({ merge, context, by }) => {
-    const promoted = promotedStandingOf(repo, merge, context, facts.deployments ?? null, by);
-    const standing = promoted ?? stagingStandingOf(repo, merge, context, deployIn(facts.stagingDeployments ?? null, repo, environment, merge.mergeCommit), facts.mainChecks ?? null);
+  const merges = mergesAtStagingOf(facts);
+  if (merges === null) return productionStandingsOf(facts, now);
+  return merges.flatMap(({ merge, context, by, atStaging }) => {
+    const standing = promotedStandingOf(facts.github.repo, merge, context, facts.deployments ?? null, by) ?? atStaging;
     return mergedStillStands(standing, now) ? [standing] : [];
   });
 }
@@ -165,53 +173,60 @@ export function mergedStandingsOf(facts: StandingFacts, now: string): Standing[]
  * it at Staging for these facts, whether or not it still stands and whether
  * or not a production Deployment has started on it, before it is read at a
  * time (standingAt). None in any other repo. Anything else that says where
- * a merged pull request is at Staging says it through this, as the promote
+ * a merged pull request is at Staging says it through this, as the Promote
  * list does (src/read/promoteList.ts, #857), so it can't say otherwise.
  */
 export function stagingStandingsOf(facts: StandingFacts): StagingStanding[] {
-  const config = facts.kit?.config;
-  if (config === undefined || !config.ok || config.config.staging === null) return [];
-  const { repo } = facts.github;
-  const { environment } = config.config.staging;
-  return mergesAtStagingOf(facts, config.config).map(({ merge, context }) =>
-    stagingStandingOf(repo, merge, context, deployIn(facts.stagingDeployments ?? null, repo, environment, merge.mergeCommit), facts.mainChecks ?? null),
-  );
+  return (mergesAtStagingOf(facts) ?? []).map(({ atStaging }) => atStaging);
 }
 
 /**
- * Each merged agent pull request the facts hold in a repo that declares
- * `staging`, once: those merged in the last 24 hours, those production has
- * not taken, then those a production Deployment took in the last 24 hours;
- * with what its Standing carries there (StagingDetail), and, for one of the
- * last, the Deployment that took it.
+ * Each merged agent pull request a gather holds in a repo that declares
+ * `staging`, once: those merged in the last 24 hours, then those production
+ * has not taken, then those a production Deployment took in the last 24
+ * hours. The one union of the three, for the rule and for a row's title and
+ * markers (src/read/rows.ts).
+ */
+export function mergesHeld<Merge extends { readonly number: number }>(lastDay: readonly Merge[], unpromoted: readonly Merge[], promoted: readonly Merge[]): Merge[] {
+  const once = new Map<number, Merge>();
+  for (const merge of [...lastDay, ...unpromoted, ...promoted]) if (!once.has(merge.number)) once.set(merge.number, merge);
+  return [...once.values()];
+}
+
+/**
+ * Each merged agent pull request the facts hold (mergesHeld), in a repo
+ * whose valid Kit config declares `staging`, and null in any other: with
+ * what its Standing carries there (StagingContext), its Standing at Staging
+ * for the facts' staging read, whether or not production has begun to take
+ * it, and, for one a production Deployment took in the last 24 hours, that
+ * Deployment.
  */
 function mergesAtStagingOf(
   facts: StandingFacts,
-  { staging, production, monitor }: KitConfig,
-): { readonly merge: MergedLastDayFacts; readonly context: StagingDetail; readonly by: PromotedFacts["by"] | null }[] {
-  if (staging === null) return [];
+): { readonly merge: MergedLastDayFacts; readonly context: StagingContext; readonly by: PromotedFacts["by"] | null; readonly atStaging: StagingStanding }[] | null {
+  const config = facts.kit?.config;
+  if (config === undefined || !config.ok || config.config.staging === null) return null;
+  const { staging, production, monitor } = config.config;
+  const { repo } = facts.github;
   const unpromoted = facts.unpromoted ?? [];
   const promoted = facts.promoted ?? [];
   const waiting = new Set(unpromoted.map(({ number }) => number));
   const trials = facts.trials ?? NO_TRIALS;
-  const lastDay = (facts.mergedLastDay ?? []).filter(({ number }) => !waiting.has(number));
-  const held = new Set([...lastDay, ...unpromoted].map(({ number }) => number));
-  return [...lastDay, ...unpromoted, ...promoted.filter(({ number }) => !held.has(number))].map((merge) => {
+  return mergesHeld<MergedLastDayFacts>(facts.mergedLastDay ?? [], unpromoted, promoted).map((merge) => {
     const trial = stagingTrialOf(merge.number, facts.needTrial ?? [], trials);
     const given = trialResultOf(merge.number, trials, facts.operator);
     const result = given.is === "untried" ? null : given;
-    const context: StagingDetail = {
+    const context: StagingContext = {
       environment: staging.environment,
-      production: production?.environment ?? null,
+      productionEnvironment: production?.environment ?? null,
       trial,
       result,
       // Untried and needing a trial, it waits on the Operator for as long as production leaves it.
       standsUntil: result !== null ? dayAfter(result.at) : trial.needed && waiting.has(merge.number) ? null : dayAfter(merge.mergedAt),
       mainChecks: monitor.redMain ? monitor.mainChecks : [],
-      check: null,
-      checksUnread: false,
     };
-    return { merge, context, by: promoted.find(({ number }) => number === merge.number)?.by ?? null };
+    const atStaging = stagingStandingOf(repo, merge, context, deployIn(facts.stagingDeployments ?? null, repo, staging.environment, merge.mergeCommit), facts.mainChecks ?? null);
+    return { merge, context, by: promoted.find(({ number }) => number === merge.number)?.by ?? null, atStaging };
   });
 }
 
@@ -269,15 +284,16 @@ export function mergedStillStands({ place, name, since, detail }: MergedStanding
 export function promotedStandingOf(
   repo: string,
   merge: Pick<MergedLastDayFacts, "number" | "ticket" | "mergeCommit" | "mergedAt">,
-  context: StagingDetail,
+  context: StagingContext,
   production: DeploymentsRead | null,
   by: PromotedFacts["by"] | null = null,
 ): ProductionStanding | null {
-  if (context.production === null) return null;
-  const read = deployIn(production, repo, context.production, merge.mergeCommit);
-  const deploy = read !== "unread" || by === null ? read : ({ is: "succeeded", deployment: by.deployment, commit: by.commit, at: by.at, log: null } as const);
+  if (context.productionEnvironment === null) return null;
+  const read = deployIn(production, repo, context.productionEnvironment, merge.mergeCommit);
+  const deploy = read !== "unread" || by === null ? read : ({ is: "succeeded", ...by, log: null } as const);
   if (deploy === "unread" || deploy.is === "none") return null;
-  return productionStandingOf(repo, merge, context.production, deploy, { ...context, check: null, checksUnread: false });
+  // No Main check names a Standing at Production, whatever one a kept row's carried at Staging.
+  return productionStandingOf(repo, merge, context.productionEnvironment, deploy, { ...context, check: null, checksUnread: false });
 }
 
 /**
@@ -302,7 +318,7 @@ export function promotedStandingOf(
 export function stagingStandingOf(
   repo: string,
   merge: Pick<MergedLastDayFacts, "number" | "ticket" | "mergeCommit" | "mergedAt">,
-  context: StagingDetail,
+  context: StagingContext,
   deploy: DeployOf | "unread",
   mainChecks: MainChecksRead | null,
 ): StagingStanding {
@@ -330,7 +346,13 @@ export function stagingStandingOf(
     deploysUnread: false,
     staging: { ...context, check: null, checksUnread: false },
   };
-  if (context.result !== null) return { ...base, name: context.result.is === "accepted" ? "trial-accepted" : "trial-problem", since: context.result.at, detail };
+  const { result } = context;
+  if (result !== null) {
+    const tried = { ...base, since: result.at } as const;
+    return result.is === "accepted"
+      ? { ...tried, name: "trial-accepted", detail: { ...detail, staging: { ...detail.staging, result } } }
+      : { ...tried, name: "trial-problem", detail: { ...detail, staging: { ...detail.staging, result } } };
+  }
   if (deploy === "unread") return { ...base, name: "merged", since: merge.mergedAt, detail: { ...detail, deploysUnread: true } };
   const decided = { ...detail, deployment: deploy.deployment };
   switch (deploy.is) {

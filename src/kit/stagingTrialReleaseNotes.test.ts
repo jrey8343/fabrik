@@ -134,7 +134,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Staging trials release notes, wh
       homeFactsOf({
         kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, staging: { url: "https://staging.shop.example", environment: "staging" } } }, dispatch: null },
         staging: aStagingFacts({
-          since: { from: "staging", deployment: 1, commit: "s".repeat(40), at: "2026-11-01T09:00:00Z", deployedAt: "2026-11-01T09:05:00Z" },
+          since: { from: "staging", deployment: 1, commit: "s".repeat(40), cutAt: "2026-11-01T09:00:00Z", deployedAt: "2026-11-01T09:05:00Z" },
           plain: merges,
           mergedSince: merges.length,
         }),
@@ -302,7 +302,7 @@ const AT_STAGING = [...NEW_NAMES, ...valuesOf<Standing["name"]>()("merged", "dep
 const ALSO_YOURS = valuesOf<Standing["name"]>()("yours-to-read", "parked");
 const PLACES = valuesOf<NonNullable<Standing["place"]>>()("staging");
 const STANDING = keysOf<Standing>()("place", "yours", "stopsWork");
-const STAGING_DETAIL = keysOf<StagingDetail>()("environment", "production", "trial", "result", "standsUntil", "mainChecks", "check", "checksUnread");
+const STAGING_DETAIL = keysOf<StagingDetail>()("environment", "productionEnvironment", "trial", "result", "standsUntil", "mainChecks", "check", "checksUnread");
 const TRIAL = keysOf<StagingDetail["trial"]>()("needed", "why");
 const TRIAL_WHYS = valuesOf<StagingDetail["trial"]["why"]>()("ui-evidence", "closes-trial-problem", "no-screen");
 const ROW_STAGING = keysOf<NonNullable<Row["staging"]>>()("site", "pages", "shots", "toTry");

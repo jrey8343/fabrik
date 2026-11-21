@@ -9,13 +9,13 @@
 // no I/O. It agrees with the rule: for the same facts, the rows the rule
 // gives with a staging read (rowsOf) equal the rows it gave with none, or
 // with an earlier one, joined with that read.
-import { standingAt, standingOrder } from "../kit/standing.ts";
 import { deployIn } from "../kit/standingProduction.ts";
-import { isMergedStanding, isTried, type MergedStanding, mergedStillStands, stagingStandingOf } from "../kit/standingStaging.ts";
+import { isAtStaging, isTried, type MergedStanding, mergedStillStands, stagingStandingOf } from "../kit/standingStaging.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
+import { joinMergedRows } from "./joinDeployments.ts";
 import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import type { CommitToCheck } from "./mainChecks.ts";
-import { type Row, type StagingRead, withOwnSettled } from "./rows.ts";
+import type { Row, StagingRead } from "./rows.ts";
 
 /**
  * Which merges want a Deployments read of `staging.environment`, asked for
@@ -31,7 +31,7 @@ import { type Row, type StagingRead, withOwnSettled } from "./rows.ts";
 export function stagingMergesToRead(rows: readonly Row[]): MergeToRead[] {
   refuseRowsOfOtherSchema(rows);
   return rows.flatMap(({ standing }) => {
-    if (!isMergedStanding(standing) || standing.place !== "staging" || standing.detail.mergeCommit === null) return [];
+    if (!isAtStaging(standing) || standing.detail.mergeCommit === null) return [];
     if (isTried(standing) || (standing.name === "on-staging" && !standing.detail.staging.trial.needed)) return [];
     return [{ mergeCommit: standing.detail.mergeCommit, mergedAt: standing.detail.mergedAt }];
   });
@@ -53,9 +53,9 @@ export function commitsToCheck(rows: readonly Row[], read: DeploymentsRead): Com
   refuseRowsOfOtherSchema(rows);
   const asked = new Map<string, readonly string[]>();
   for (const { standing } of rows) {
-    if (!isMergedStanding(standing) || standing.place !== "staging" || isTried(standing)) continue;
-    const staging = standing.detail.staging;
-    if (staging === undefined || staging.mainChecks.length === 0) continue;
+    if (!isAtStaging(standing) || isTried(standing)) continue;
+    const { staging } = standing.detail;
+    if (staging.mainChecks.length === 0) continue;
     const deploy = deployIn(read, standing.repo, staging.environment, standing.detail.mergeCommit);
     if (deploy === "unread" || deploy.is !== "succeeded") continue;
     const commit = deploy.newest?.commit ?? deploy.commit;
@@ -85,22 +85,15 @@ export function commitsToCheck(rows: readonly Row[], read: DeploymentsRead): Com
  */
 export function joinStaging(rows: readonly Row[], read: StagingRead, now: string): Row[] {
   refuseRowsOfOtherSchema(rows);
-  const joined = rows.flatMap((row) => {
-    const settled = isMergedStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
-    if (settled === null) return [];
-    const standing = standingAt(settled, now);
-    const plainPullRequest = withOwnSettled(row.plainPullRequest, (own) => standingAt(own, now));
-    return standing === row.standing && plainPullRequest === row.plainPullRequest ? [row] : [{ ...row, standing, plainPullRequest }];
-  });
   // A row at Staging takes its deploy's or its check's time, so the rows are put back in the rule's order.
-  return joined.toSorted((a, b) => standingOrder(a.standing, b.standing));
+  return joinMergedRows(rows, now, (standing) => settledWith(standing, read, now));
 }
 
 /** A merged pull request's kept Standing with the fresh staging read, or as it was where it is not at Staging, its Staging trial has a result, or the read says nothing of it; null once it no longer stands. */
 function settledWith(standing: MergedStanding, { deployments, mainChecks }: StagingRead, now: string): MergedStanding | null {
-  const { repo, issue, pullRequest, place, detail } = standing;
   if (!mergedStillStands(standing, now)) return null;
-  if (place !== "staging" || detail.staging === undefined || pullRequest === null || isTried(standing)) return standing;
+  if (!isAtStaging(standing) || standing.pullRequest === null || isTried(standing)) return standing;
+  const { repo, issue, pullRequest, detail } = standing;
   const deploy = deployIn(deployments, repo, detail.staging.environment, detail.mergeCommit);
   if (deploy === "unread") return standing;
   return stagingStandingOf(repo, { number: pullRequest, ticket: issue, mergeCommit: detail.mergeCommit, mergedAt: detail.mergedAt }, detail.staging, deploy, mainChecks);

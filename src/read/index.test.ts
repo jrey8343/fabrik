@@ -111,7 +111,7 @@ describe("the read library's Standing at Staging (#855)", () => {
       deployment: 905,
       log: null,
       deploysUnread: false,
-      staging: { environment: "staging", production: "production", trial: { needed: true, why: "ui-evidence" }, result: null, standsUntil: "2026-11-10T11:30:00.000Z", mainChecks: ["e2e"], check: null, checksUnread: false },
+      staging: { environment: "staging", productionEnvironment: "production", trial: { needed: true, why: "ui-evidence" }, result: null, standsUntil: "2026-11-10T11:30:00.000Z", mainChecks: ["e2e"], check: null, checksUnread: false },
     });
     expect(rows[0]?.staging).toEqual({
       site: "https://staging.shop.example",
@@ -154,7 +154,7 @@ describe("the read library's Staging trial (#856)", () => {
       homeFactsOf({
         kit,
         staging: aStagingFacts({
-          since: { from: "staging", deployment: 600, commit: "s".repeat(40), at: "2026-11-01T09:00:00Z", deployedAt: "2026-11-01T09:10:00Z" },
+          since: { from: "staging", deployment: 600, commit: "s".repeat(40), cutAt: "2026-11-01T09:00:00Z", deployedAt: "2026-11-01T09:10:00Z" },
           unpromoted: [aMergedLastDay("2026-11-05T10:00:00Z")],
           mergedSince: 1,
           trials: {
@@ -221,7 +221,7 @@ describe("the read library's Promote list (#857)", () => {
     const by = { deployment: 880, commit: "p".repeat(40), at: "2026-11-09T11:00:00Z" };
     const staged = homeFactsOf({
       kit: STAGED,
-      staging: aStagingFacts({ since: { from: "production", ...by, at: "2026-11-09T10:30:00Z", deployedAt: by.at }, promoted: [{ ...merge, by }] }),
+      staging: aStagingFacts({ since: { from: "production", ...by, cutAt: "2026-11-09T10:30:00Z", deployedAt: by.at }, promoted: [{ ...merge, by }] }),
     });
     const names = (facts: ReturnType<typeof homeFactsOf>, deployments: Parameters<typeof rowsOf>[3], now: string) => rowsOf(facts, null, null, deployments, now).map(({ standing }) => [standing.place, standing.name, standing.since]);
 

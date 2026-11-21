@@ -10,7 +10,7 @@
 // (./joinStaging.ts).
 import { standingAt, standingOrder } from "../kit/standing.ts";
 import { deployIn, productionStandingOf } from "../kit/standingProduction.ts";
-import { isMergedStanding, type MergedStanding, mergedStillStands, promotedStandingOf, stagingStandingOf } from "../kit/standingStaging.ts";
+import { isAtStaging, isMergedStanding, type MergedStanding, mergedStillStands, promotedStandingOf, stagingStandingOf } from "../kit/standingStaging.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
 import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
@@ -35,9 +35,9 @@ export function mergesToRead(rows: readonly Row[]): MergeToRead[] {
 }
 
 /** Whether a merged pull request's row hangs on a read of production's Deployments: at Production and not Live, or at Staging in a repo that tracks production's deploys. */
-function wantsProductionRead({ place, name, detail }: MergedStanding): boolean {
-  if (place === "production") return name !== "live";
-  return place === "staging" && detail.staging !== undefined && detail.staging.production !== null;
+function wantsProductionRead(standing: MergedStanding): boolean {
+  if (standing.place === "production") return standing.name !== "live";
+  return isAtStaging(standing) && standing.detail.staging.productionEnvironment !== null;
 }
 
 /**
@@ -67,14 +67,26 @@ function wantsProductionRead({ place, name, detail }: MergedStanding): boolean {
  */
 export function joinDeployments(rows: readonly Row[], read: DeploymentsRead, now: string): Row[] {
   refuseRowsOfOtherSchema(rows);
+  // A row at Production takes its deploy's time, so the rows are put back in the rule's order.
+  return joinMergedRows(rows, now, (standing) => settledWith(standing, read, now));
+}
+
+/**
+ * The kept rows as they stand at `now`, in the rule's order, each merged
+ * pull request's Standing as `settle` leaves it, its row left out where that
+ * is null: what the join with Deployments and the join with staging
+ * (./joinStaging.ts) both do, each with its own read. Every row is read at
+ * `now` as the rule reads a kept Standing (standingAt), and one nothing
+ * changed is the row it was.
+ */
+export function joinMergedRows(rows: readonly Row[], now: string, settle: (standing: MergedStanding) => MergedStanding | null): Row[] {
   const joined = rows.flatMap((row) => {
-    const settled = isMergedStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
+    const settled = isMergedStanding(row.standing) ? settle(row.standing) : row.standing;
     if (settled === null) return [];
     const standing = standingAt(settled, now);
     const plainPullRequest = withOwnSettled(row.plainPullRequest, (own) => standingAt(own, now));
     return standing === row.standing && plainPullRequest === row.plainPullRequest ? [row] : [{ ...row, standing, plainPullRequest }];
   });
-  // A row at Production takes its deploy's time, so the rows are put back in the rule's order.
   return joined.toSorted((a, b) => standingOrder(a.standing, b.standing));
 }
 
@@ -98,7 +110,7 @@ function withRead(standing: MergedStanding, read: DeploymentsRead): MergedStandi
   if (pullRequest === null) return standing;
   const merge = { number: pullRequest, ticket: issue, mergeCommit: detail.mergeCommit, mergedAt: detail.mergedAt };
   if (detail.staging !== undefined) {
-    const deploy = deployIn(read, repo, detail.staging.production, detail.mergeCommit);
+    const deploy = deployIn(read, repo, detail.staging.productionEnvironment, detail.mergeCommit);
     if (deploy === "unread") return standing;
     const promoted = promotedStandingOf(repo, merge, detail.staging, read);
     if (promoted !== null || place === "staging") return promoted ?? standing;

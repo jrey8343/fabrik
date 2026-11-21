@@ -21,7 +21,7 @@ import { mergedStandingsOf, type PromotedFacts, type StagingDetail } from "./sta
 import { joinPairing, pairingsOf, plainStandingsOf } from "./standingPlain.ts";
 import { silenceStandingsOf, type WaitingOnKitSilence } from "./standingSilence.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
-import type { TrialFacts } from "./trialResult.ts";
+import type { TrialFacts, TrialResultGiven } from "./trialResult.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 /**
@@ -277,10 +277,11 @@ export interface StandingDetails {
    * ./trialResult.ts), at Staging whether or not it is on staging: what
    * `on-staging` carries, its `staging.result` holding the result, with its
    * Trial problems and, where it was accepted through its fix, the fix. No
-   * deploy decides its name, so it names no Deployment.
+   * deploy decides its name, so it names no Deployment. Each name has the
+   * result that gives it, never none.
    */
-  readonly "trial-accepted": ProductionDetail & { readonly staging: StagingDetail };
-  readonly "trial-problem": ProductionDetail & { readonly staging: StagingDetail };
+  readonly "trial-accepted": ProductionDetail & { readonly staging: StagingDetail & { readonly result: Extract<TrialResultGiven, { readonly is: "accepted" }> } };
+  readonly "trial-problem": ProductionDetail & { readonly staging: StagingDetail & { readonly result: Extract<TrialResultGiven, { readonly is: "problem" }> } };
 }
 
 /** The fields every Standing has, whatever its name. */

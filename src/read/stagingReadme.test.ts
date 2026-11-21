@@ -1,5 +1,5 @@
 // What the README tells a reader of the Kit about Staging (Spec #814, #858):
-// the reads, the joins and their order, the trial's labels and the promote
+// the reads, the joins and their order, the trial's labels and the Promote
 // list, each by the name the read library's entry gives it; what the kept
 // rows' functions refuse; and what each declaration in Kit config gets.
 import { readdirSync, readFileSync } from "node:fs";

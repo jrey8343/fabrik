@@ -1334,7 +1334,7 @@ describe("a merged agent pull request at Staging (#855)", () => {
           deployment: null,
           log: null,
           deploysUnread: false,
-          staging: { environment: "staging", production: "production", trial: { needed: false, why: "no-screen" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
+          staging: { environment: "staging", productionEnvironment: "production", trial: { needed: false, why: "no-screen" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
         },
       },
     ]);
@@ -1390,7 +1390,7 @@ describe("a merged agent pull request at Staging (#855)", () => {
           deployment: 900,
           log: null,
           deploysUnread: false,
-          staging: { environment: "staging", production: "production", trial: { needed: false, why: "no-screen" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
+          staging: { environment: "staging", productionEnvironment: "production", trial: { needed: false, why: "no-screen" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
         },
       },
     ]);
@@ -1440,7 +1440,7 @@ describe("a merged agent pull request at Staging (#855)", () => {
             deployment: 950,
             log: null,
             deploysUnread: false,
-            staging: { environment: "staging", production: "production", trial: { needed: true, why: "ui-evidence" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
+            staging: { environment: "staging", productionEnvironment: "production", trial: { needed: true, why: "ui-evidence" }, result: null, standsUntil: "2026-11-09T19:30:00.000Z", mainChecks: [], check: null, checksUnread: false },
           },
         },
       ]);
@@ -1471,7 +1471,7 @@ describe("a merged agent pull request at Staging (#855)", () => {
       const started = promoted({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" });
       for (const production of [null, { url: "https://shop.example", environment: null }]) {
         expect(atStaging({ kit: kit({ production }), stagingDeployments: ON_STAGING, deployments: started })).toMatchObject([
-          { place: "staging", name: "on-staging", detail: { environment: "staging", staging: { environment: "staging", production: null } } },
+          { place: "staging", name: "on-staging", detail: { environment: "staging", staging: { environment: "staging", productionEnvironment: null } } },
         ]);
       }
     });
@@ -1590,7 +1590,7 @@ describe("a merged agent pull request at Staging (#855)", () => {
             deploysUnread: false,
             staging: {
               environment: "staging",
-              production: "production",
+              productionEnvironment: "production",
               trial: { needed: true, why: "ui-evidence" },
               result: { is: "accepted", at: LABELLED, problems: [], fix: null },
               standsUntil: "2026-11-09T19:50:00.000Z",
@@ -1824,7 +1824,7 @@ describe("a merged agent pull request at Staging (#855)", () => {
 
         it("is live since that Deployment on the gather's word alone, with no Deployments read, though its Standing at Staging ended days ago; and has none 25 hours after it", () => {
           expect(ruleAt("2026-11-08T20:00:00Z", promoted)).toMatchObject([
-            { place: "production", name: "live", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T19:00:00Z", detail: { mergedAt: "2026-11-03T19:00:00Z", environment: "production", deployment: 960, deploysUnread: false, staging: { environment: "staging", production: "production" } } },
+            { place: "production", name: "live", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T19:00:00Z", detail: { mergedAt: "2026-11-03T19:00:00Z", environment: "production", deployment: 960, deploysUnread: false, staging: { environment: "staging", productionEnvironment: "production" } } },
           ]);
           expect(ruleAt("2026-11-09T19:00:00Z", promoted)).toMatchObject([{ name: "live" }]);
           expect(ruleAt("2026-11-09T20:00:00Z", promoted)).toEqual([]);

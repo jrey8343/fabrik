@@ -430,7 +430,7 @@ const A_REPO_TO_PROMOTE = {
     dispatch: null,
   },
   staging: aStagingFacts({
-    since: { from: "production", deployment: 880, commit: "p".repeat(40), at: "2026-11-08T09:00:00Z", deployedAt: "2026-11-08T09:15:00Z" },
+    since: { from: "production", deployment: 880, commit: "p".repeat(40), cutAt: "2026-11-08T09:00:00Z", deployedAt: "2026-11-08T09:15:00Z" },
     unpromoted: [aMergedLastDay("2026-11-09T11:30:00Z")],
     plain: [{ number: 51, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T10:00:00Z", author: "dependabot[bot]", headRef: "dependabot/github_actions/fabrik-3.2.0", closes: [] }],
     mergedSince: 2,
@@ -467,7 +467,7 @@ const AN_UNTRIED_STANDING = {
     deploysUnread: false,
     staging: {
       environment: "staging",
-      production: "production",
+      productionEnvironment: "production",
       trial: { needed: true, why: "ui-evidence" },
       result: null,
       standsUntil: null,
@@ -512,18 +512,13 @@ const AN_UNTRIED_ENTRY = {
   standing: AN_UNTRIED_STANDING,
 } as const satisfies PromoteEntry;
 
-/** AN_UNTRIED_STANDING as another pull request's, for another Ticket, under another name: nobody's move, since `since`, with this of what it carries at Staging. */
-function anEntryStanding(
-  pullRequest: number,
-  issue: number,
-  name: "trial-accepted" | "trial-problem" | "deploy-failed" | "on-staging",
-  since: string,
-  staging: Partial<Extract<Standing, { readonly name: "on-staging" }>["detail"]["staging"]>,
-  deployment: number | null = null,
-): Standing {
-  const detail = { ...AN_UNTRIED_STANDING.detail, deployment, staging: { ...AN_UNTRIED_STANDING.detail.staging, ...staging } };
-  return { ...AN_UNTRIED_STANDING, pullRequest, issue, name, move: "nobody", yours: false, since, detail };
+/** AN_UNTRIED_STANDING as another pull request's, for another Ticket: nobody's move, since `since`, before its own name and what it carries are given. */
+function nobodysAtStaging(pullRequest: number, issue: number, since: string) {
+  return { ...AN_UNTRIED_STANDING, pullRequest, issue, move: "nobody", yours: false, since } as const;
 }
+
+/** What AN_UNTRIED_STANDING carries at Staging. */
+const ITS_STAGING_DETAIL = AN_UNTRIED_STANDING.detail.staging;
 
 /** The Kit bump's entry: a Plain pull request's, with its kind and nothing more. */
 const A_PLAIN_ENTRY = { is: "plain", pullRequest: 51, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T10:00:00Z", kind: "kit-bump" } as const satisfies PromoteEntry;
@@ -1766,27 +1761,37 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
       pullRequest: 44,
       ticket: 3,
       result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, title: "The cart total reads 0", open: false }] },
-      standing: anEntryStanding(44, 3, "trial-accepted", "2026-11-09T11:00:00Z", {
-        result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, open: false }] },
-        standsUntil: "2026-11-10T11:00:00.000Z",
-      }),
+      standing: {
+        ...nobodysAtStaging(44, 3, "2026-11-09T11:00:00Z"),
+        name: "trial-accepted",
+        detail: {
+          ...AN_UNTRIED_STANDING.detail,
+          deployment: null,
+          staging: { ...ITS_STAGING_DETAIL, result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, open: false }] }, standsUntil: "2026-11-10T11:00:00.000Z" },
+        },
+      },
     },
     {
       ...AN_UNTRIED_ENTRY,
       pullRequest: 45,
       ticket: 4,
       result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, title: "The basket loses its last line", open: true }] },
-      standing: anEntryStanding(45, 4, "trial-problem", "2026-11-09T08:00:00Z", {
-        result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, open: true }] },
-        standsUntil: "2026-11-10T08:00:00.000Z",
-      }),
+      standing: {
+        ...nobodysAtStaging(45, 4, "2026-11-09T08:00:00Z"),
+        name: "trial-problem",
+        detail: {
+          ...AN_UNTRIED_STANDING.detail,
+          deployment: null,
+          staging: { ...ITS_STAGING_DETAIL, result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, open: true }] }, standsUntil: "2026-11-10T08:00:00.000Z" },
+        },
+      },
     },
     {
       ...AN_UNTRIED_ENTRY,
       pullRequest: 46,
       ticket: 5,
       result: { is: "not-on-staging", name: "deploy-failed", unread: false },
-      standing: anEntryStanding(46, 5, "deploy-failed", "2026-11-09T11:38:00Z", {}, 899),
+      standing: { ...nobodysAtStaging(46, 5, "2026-11-09T11:38:00Z"), name: "deploy-failed", detail: { ...AN_UNTRIED_STANDING.detail, deployment: 899 } },
     },
     {
       ...AN_UNTRIED_ENTRY,
@@ -1796,7 +1801,10 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
       staging: { site: "https://staging.shop.example", pages: [], shots: [], toTry: [] },
       trial: { needed: false, why: "no-screen" },
       result: { is: "no-screen" },
-      standing: anEntryStanding(47, 6, "on-staging", "2026-11-09T11:36:00Z", { trial: { needed: false, why: "no-screen" }, standsUntil: "2026-11-10T11:30:00.000Z" }, 905),
+      standing: {
+        ...nobodysAtStaging(47, 6, "2026-11-09T11:36:00Z"),
+        detail: { ...AN_UNTRIED_STANDING.detail, staging: { ...ITS_STAGING_DETAIL, trial: { needed: false, why: "no-screen" }, standsUntil: "2026-11-10T11:30:00.000Z" } },
+      },
     },
     A_PLAIN_ENTRY,
   ] satisfies readonly PromoteEntry[],

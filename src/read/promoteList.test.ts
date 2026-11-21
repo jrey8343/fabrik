@@ -29,7 +29,7 @@ const declaring = (overrides: Partial<KitConfig> = {}) =>
   }) as const;
 
 /** Production's newest successful Deployment, 800 of commit `e…`, which succeeded a week before NOW: where the list starts. */
-const SINCE = { from: "production", deployment: 800, commit: "e".repeat(40), at: "2026-11-02T09:00:00Z", deployedAt: "2026-11-02T09:15:00Z" } as const;
+const SINCE = { from: "production", deployment: 800, commit: "e".repeat(40), cutAt: "2026-11-02T09:00:00Z", deployedAt: "2026-11-02T09:15:00Z" } as const;
 
 /** Agent pull request `number`, closing Ticket `number - 40`, merged at `mergedAt` as commit `number`. */
 const merged = (number: number, mergedAt: string, title = "Build the thing") => aMergedLastDay(mergedAt, { number, ticket: number - 40, mergeCommit: commit(number), title });
@@ -295,7 +295,7 @@ describe("the Promote list", () => {
   });
 
   it("says which start it used: the first successful staging Deployment where the gather found no production one, and none, with nothing in it, where it found neither", () => {
-    const fromStaging = { from: "staging", deployment: 602, commit: "7".repeat(40), at: "2026-10-04T09:00:00Z", deployedAt: "2026-10-04T09:10:00Z" } as const;
+    const fromStaging = { from: "staging", deployment: 602, commit: "7".repeat(40), cutAt: "2026-10-04T09:00:00Z", deployedAt: "2026-10-04T09:10:00Z" } as const;
 
     expect(promoteListOf(facts({ since: fromStaging }), STAGING_READ, NOW)?.start).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), deployedAt: "2026-10-04T09:10:00Z" });
     expect(promoteListOf(facts({ since: null, unpromoted: [], mergedSince: 0 }), STAGING_READ, NOW)).toEqual({ repo: "owner/product", start: null, entries: [], notAccepted: 0, leftOut: 0, dispatchPage: "https://github.com/owner/product/actions/workflows/deploy-production.yml" });
