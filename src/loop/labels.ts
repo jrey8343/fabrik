@@ -103,6 +103,21 @@ export const STEP_UP_LABEL = "fabrik:step-up";
  */
 export const KEPT_BRANCH_LABEL = "fabrik:kept-branch";
 
+/**
+ * A Staging trial's result (ADR-0038): the Operator puts one of the two on a
+ * merged pull request they tried on staging, this one when they accept it.
+ * Setup creates both and only a reader of the Kit reads them: no Kit job adds,
+ * removes or reads either.
+ */
+export const TRIAL_ACCEPTED_LABEL = "fabrik:trial-accepted";
+
+/** The other result of a Staging trial: the Operator found a problem, and files a Trial problem for it. */
+export const TRIAL_PROBLEM_LABEL = "fabrik:trial-problem";
+
+/** The two labels a Staging trial ends in. The Operator's latest of them on a merged pull request is its result. */
+export const TRIAL_LABELS = [TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL] as const;
+export type TrialLabel = (typeof TRIAL_LABELS)[number];
+
 /** Every label that marks an issue as the Kit's own, so Intake leaves it alone and the adapter reads it into the snapshot. */
 export const KIT_ISSUE_LABELS = [
   TOKEN_ROTATION_LABEL,
@@ -165,7 +180,7 @@ export const RESEARCH_LABEL = "agent:research";
  */
 export const REPLAY_TRIGGER_LABEL = "agent:replay";
 
-/** A label the Kit itself adds or removes. Labels read from GitHub stay plain strings: anyone can add any label. */
+/** A label the Kit itself adds or removes, or, for a Staging trial's two, only creates. Labels read from GitHub stay plain strings: anyone can add any label. */
 export type Label =
   | StateLabel
   | CategoryLabel
@@ -182,7 +197,8 @@ export type Label =
   | typeof RESEARCH_LABEL
   | typeof REPLAY_TRIGGER_LABEL
   | typeof STEP_UP_LABEL
-  | typeof KEPT_BRANCH_LABEL;
+  | typeof KEPT_BRANCH_LABEL
+  | TrialLabel;
 
 /** Every label the Kit uses, so Setup can create each one. */
 export const ALL_LABELS: readonly Label[] = [
@@ -200,6 +216,7 @@ export const ALL_LABELS: readonly Label[] = [
   FLAKY_CHECK_LABEL,
   STEP_UP_LABEL,
   KEPT_BRANCH_LABEL,
+  ...TRIAL_LABELS,
   MAP_LABEL,
   ...DECISION_TYPES.map(decisionLabel),
 ];
@@ -237,6 +254,8 @@ export const LOOP_LABELS: Readonly<Record<Label, { readonly color: string; reado
   [FLAKY_CHECK_LABEL]: { color: "e99695", description: "Fabrik: a required check that failed and passed on the same head" },
   [STEP_UP_LABEL]: { color: "f9d0c4", description: "Fabrik: while it's on, the Ticket's Implement runs are Step-ups" },
   [KEPT_BRANCH_LABEL]: { color: "f9d0c4", description: "Fabrik: the Ticket's next Implement run carries on its Kept branch, not main" },
+  [TRIAL_ACCEPTED_LABEL]: { color: "bfe5bf", description: "Fabrik: on a merged PR, the Operator tried it on staging and accepted it" },
+  [TRIAL_PROBLEM_LABEL]: { color: "fef2c0", description: "Fabrik: on a merged PR, the Operator tried it on staging and found a problem" },
   [MAP_LABEL]: { color: "bfd4f2", description: "Fabrik: a Map charting a foggy destination through its Decisions" },
   [decisionLabel("research")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by research" },
   [decisionLabel("prototype")]: { color: "d4c5f9", description: "Fabrik: a Decision on a Map, resolved by a prototype" },

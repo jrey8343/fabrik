@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { aCleanProduct, afterApplying, aProtectedBranch } from "../__fixtures__/productState.ts";
+import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { describeAction } from "./apply.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type ProductState, type SetupAction, planSetup, setupPaths } from "./plan.ts";
@@ -361,6 +362,8 @@ describe("Labels", () => {
     "fabrik:flaky-check",
     "fabrik:step-up",
     "fabrik:kept-branch",
+    "fabrik:trial-accepted",
+    "fabrik:trial-problem",
     "wayfinder:map",
     "wayfinder:research",
     "wayfinder:prototype",
@@ -419,6 +422,17 @@ describe("Labels", () => {
     expect(planSetup(before, kit).actions).toEqual([
       expect.objectContaining({ kind: "create-label", name: "fabrik:kept-branch", description: expect.stringMatching(/carries on its Kept branch/) }),
     ]);
+  });
+
+  it("creates the two trial labels, each saying it marks a merged pull request, on a re-run of an install from before them (#814)", () => {
+    const working = afterApplying(aCleanProduct(), planSetup(aCleanProduct(), kit));
+    const before = { ...working, labels: working.labels.filter((l) => !l.startsWith("fabrik:trial-")) };
+
+    expect(planSetup(before, kit).actions).toEqual([
+      expect.objectContaining({ kind: "create-label", name: TRIAL_ACCEPTED_LABEL, description: expect.stringMatching(/merged PR.* accepted/) }),
+      expect.objectContaining({ kind: "create-label", name: TRIAL_PROBLEM_LABEL, description: expect.stringMatching(/merged PR.* problem/) }),
+    ]);
+    expect([TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL]).toEqual(["fabrik:trial-accepted", "fabrik:trial-problem"]);
   });
 
   it("are each named in the README's list of the labels setup creates", () => {
