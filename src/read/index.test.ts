@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isUi } from "../evidence/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
 import { aCheckIssue, aGateRerunDone, anOpenPullRequest, aPassNaming, factsOf, standingFactsOf } from "./builders.ts";
-import { A_BLOCKED_ISSUE, EXPORT_CALLS, EXPORT_SHAPES, NOT_DATA } from "./exports.fixture.ts";
+import { A_BLOCKED_ISSUE, A_ROW_KEPT_AT_V3_4_1, A_STANDING_KEPT_AT_SCHEMA_1, EXPORT_CALLS, EXPORT_SHAPES, NOT_DATA } from "./exports.fixture.ts";
+import type { Row, Standing } from "./index.ts";
 
 const ENTRY = new URL("./index.ts", import.meta.url);
 
@@ -89,6 +90,49 @@ describe("the read library's Standing", () => {
       remedy: null,
     });
     expect(standingAt(held!, "2026-11-08T22:31:00Z")).toMatchObject({ name: "stuck", move: "kit", yours: true, stopsWork: true, detail: { was: "check-healing", check: "test", healing } });
+  });
+});
+
+describe("the read library's kept Standings and rows (#793)", () => {
+  const NOW = "2026-11-09T00:00:00Z";
+
+  it("reads a Standing and a row kept at v3.4.1 at the current schema, which then word and join as any other", async () => {
+    const { joinRuns, readRow, readStanding, wordStanding } = await import("./index.ts");
+    const blockers = [
+      { repo: "acme/shop", number: 7 },
+      { repo: "acme/shop", number: 9 },
+    ];
+
+    const standing = readStanding(A_STANDING_KEPT_AT_SCHEMA_1);
+    const row = readRow(A_ROW_KEPT_AT_V3_4_1);
+
+    expect(standing).toEqual({ ...A_STANDING_KEPT_AT_SCHEMA_1, schema: 2, detail: { blockers, hiddenBlockers: 0 } });
+    expect(wordStanding(standing!, NOW, "UTC").sentence).toBe("Blocked by #7 and #9.");
+    expect(row).toEqual({ ...A_ROW_KEPT_AT_V3_4_1, standing, shots: null });
+    expect(joinRuns([row!], { repo: "acme/shop", readAt: NOW, runs: [], tick: { lastStartedAt: NOW } }, NOW)).toEqual([row]);
+  });
+
+  it("tells a newer Kit's Standing apart, which reads as null", async () => {
+    const { newerStandingSchemaOf, readRow, readStanding } = await import("./index.ts");
+    const newer = { ...A_STANDING_KEPT_AT_SCHEMA_1, schema: 3 };
+
+    expect(readStanding(newer)).toBeNull();
+    expect(readRow({ ...A_ROW_KEPT_AT_V3_4_1, standing: newer })).toBeNull();
+    expect(newerStandingSchemaOf(newer)).toBe(3);
+    expect(newerStandingSchemaOf(A_STANDING_KEPT_AT_SCHEMA_1)).toBeNull();
+  });
+
+  it("refuses a kept Standing, or a row holding one, that didn't come back through them, naming both schemas and readStanding", async () => {
+    const { joinChecks, joinDeployments, joinRuns, standingAt, wordStanding } = await import("./index.ts");
+    const kept = A_STANDING_KEPT_AT_SCHEMA_1 as unknown as Standing;
+    const rows = [A_ROW_KEPT_AT_V3_4_1 as unknown as Row];
+    const refusal = /schema 1 .*schema 2.*readStanding/;
+
+    expect(() => wordStanding(kept, NOW, "UTC")).toThrow(refusal);
+    expect(() => standingAt(kept, NOW)).toThrow(refusal);
+    expect(() => joinRuns(rows, { repo: "acme/shop", readAt: NOW, runs: [], tick: { lastStartedAt: NOW } }, NOW)).toThrow(refusal);
+    expect(() => joinChecks(rows, { repo: "acme/shop", branch: "main", readAt: NOW, required: [], holdsAdmins: "yes", heads: {} }, NOW)).toThrow(refusal);
+    expect(() => joinDeployments(rows, { repo: "acme/shop", environment: "production", readAt: NOW, merges: {} }, NOW)).toThrow(refusal);
   });
 });
 

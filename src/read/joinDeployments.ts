@@ -8,6 +8,7 @@
 import { standingAt, standingOrder } from "../kit/standing.ts";
 import { deployIn, isProductionStanding, type ProductionStanding, productionStandingOf, stillStands } from "../kit/standingProduction.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
+import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 
 /**
@@ -31,9 +32,12 @@ export function mergesToRead(rows: readonly Row[]): MergeToRead[] {
  * or gives as unread keeps its row, as does a read of another repo or
  * environment. A merged pull request's row whose 24 hours have passed at
  * `now` is left out, at Production or not. Every row is read at `now` as the
- * rule reads a kept Standing (standingAt).
+ * rule reads a kept Standing (standingAt). Rows holding a Standing of another
+ * schema are refused, one that would be left out among them: a kept row comes
+ * back through readRow (./keptRow.ts).
  */
 export function joinDeployments(rows: readonly Row[], read: DeploymentsRead, now: string): Row[] {
+  refuseRowsOfOtherSchema(rows);
   const joined = rows.flatMap((row) => {
     const settled = isProductionStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
     if (settled === null) return [];

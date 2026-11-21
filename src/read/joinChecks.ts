@@ -8,6 +8,7 @@
 import { type Standing, standingAt } from "../kit/standing.ts";
 import { joined, type MergeGatePass, mergeGateNameForChecks, nameForChecks } from "../kit/standingPlain.ts";
 import { requiredChecksFactOf, type RequiredChecksRead } from "./requiredChecks.ts";
+import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 
 /**
@@ -26,9 +27,11 @@ import { type Row, withOwnSettled } from "./rows.ts";
  * row kept that it would (#795); an agent draft, and one handed back
  * at the Merge gate, are left as they were. A head the read does not hold, or
  * holds as unread, leaves its row as it was. Every row is read at `now` as the
- * rule reads a kept Standing (standingAt).
+ * rule reads a kept Standing (standingAt). Rows holding a Standing of another
+ * schema are refused: a kept row comes back through readRow (./keptRow.ts).
  */
 export function joinChecks(rows: readonly Row[], read: RequiredChecksRead, now: string): Row[] {
+  refuseRowsOfOtherSchema(rows);
   return rows.map((row) => {
     const standing = standingAt(settledWith(row, read), now);
     const plainPullRequest = withOwnSettled(row.plainPullRequest, (own) => standingAt(own, now));
