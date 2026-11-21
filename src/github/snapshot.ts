@@ -22,6 +22,7 @@ import { agentPullRequestsByGate } from "../loop/dispatch.ts";
 import { inBlockerOrder, type IssueRef } from "../loop/blockers.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { parseDesignTurnOutput } from "../loop/designOutput.ts";
+import { parseImplementOutput } from "../loop/implementOutput.ts";
 import { digestMarkIn } from "../loop/digestContract.ts";
 import { heldRunsIn, isCarrier } from "../loop/heldRun.ts";
 import { makesUnusable } from "../loop/subscriptions.ts";
@@ -1085,6 +1086,8 @@ interface RestPullRequest {
   merged: boolean;
   head: { ref: string };
   user: { type: string } | null;
+  base?: { ref: string; repo: { default_branch: string } | null };
+  merge_commit_sha?: string | null;
 }
 
 /**
@@ -1094,9 +1097,17 @@ interface RestPullRequest {
  * its contract names none, since the core fails its Audit. For a
  * Design-session turn finishing in a Roll-in: the one pull request it is to
  * be settled onto; a turn that ends any other way, or whose reply breaks its
- * contract, reads none. A number GitHub has no PR for is left out.
+ * contract, reads none. For a conflict-only run finishing (#845): the merged
+ * PR its output names in `supersededBy`, with what the Kit checks of it; one
+ * that names none, or its own PR, reads none. A number GitHub has no PR for
+ * is left out.
  */
 async function gatherNamedPullRequests(github: ReadClient, repo: Repo, event: LoopEvent): Promise<NamedPullRequestSnapshot[] | null> {
+  if (event.kind === "implement-run-finished" && event.fixes?.conflict !== undefined) {
+    const parsed = parseImplementOutput(event.output, "pull-request");
+    const named = parsed.ok ? parsed.output.supersededBy : undefined;
+    return named === undefined || named === event.fixes.pullRequest ? null : readSupersedingPullRequest(github, repo, named, event.fixes.headSha);
+  }
   if (event.kind === "audit-run-finished") {
     const parsed = parseAuditOutput(event.output);
     return readPullRequests(github, repo, parsed.ok ? [...new Set(parsed.output.candidates.flatMap((candidate) => candidate.introducedBy))] : []);
@@ -1110,25 +1121,63 @@ async function gatherNamedPullRequests(github: ReadClient, repo: Repo, event: Lo
 
 /** Each of these pull requests that GitHub has, by number, in the order given. */
 async function readPullRequests(github: ReadClient, repo: Repo, named: readonly number[]): Promise<NamedPullRequestSnapshot[]> {
-  const pulls = await Promise.all(
-    named.map(
-      (number) =>
-        github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true }) as Promise<RestPullRequest | null>,
-    ),
-  );
-  return pulls.flatMap((pull) =>
-    pull === null
-      ? []
-      : [
-          {
-            number: pull.number,
-            open: pull.state === "open",
-            merged: pull.merged,
-            headRef: pull.head.ref,
-            isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
-          },
-        ],
-  );
+  const pulls = await Promise.all(named.map((number) => readPullRequest(github, repo, number)));
+  return pulls.flatMap((pull) => (pull === null ? [] : [namedPullRequestOf(pull)]));
+}
+
+/** A pull request as GitHub's REST API has it, or null when the number is no pull request. */
+function readPullRequest(github: ReadClient, repo: Repo, number: number): Promise<RestPullRequest | null> {
+  return github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true }) as Promise<RestPullRequest | null>;
+}
+
+/** What the Loop weighs of any pull request a run names. */
+function namedPullRequestOf(pull: RestPullRequest): NamedPullRequestSnapshot {
+  return {
+    number: pull.number,
+    open: pull.state === "open",
+    merged: pull.merged,
+    headRef: pull.head.ref,
+    isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
+  };
+}
+
+/** The Ticket a pull request closed, the first GitHub lists, read with a variable of its own so no other pull request query answers it. */
+const CLOSED_TICKET_QUERY = `
+  query ($owner: String!, $name: String!, $pull: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $pull) { closingIssuesReferences(first: 1) { nodes { number } } }
+    }
+  }
+`;
+
+/**
+ * The pull request a conflict-only run names in `supersededBy` (#845), if
+ * GitHub has it, with what the Kit checks of it: whether it merged into the
+ * default branch, and whether its merge commit is one `startedOn`, the head
+ * the run started on, doesn't hold, so it merged after that head's merge
+ * base with `main`, as GitHub's comparison of the two says. Its Ticket is
+ * read only of one that passes both.
+ */
+async function readSupersedingPullRequest(github: ReadClient, repo: Repo, number: number, startedOn: string): Promise<NamedPullRequestSnapshot[]> {
+  const pull = await readPullRequest(github, repo, number);
+  if (pull === null) return [];
+  const mergedAs = pull.merge_commit_sha ?? null;
+  const intoMain = pull.merged && mergedAs !== null && pull.base !== undefined && pull.base.ref === pull.base.repo?.default_branch;
+  const compared = !intoMain
+    ? null
+    : ((await github.rest("GET", `/repos/${repo.owner}/${repo.name}/compare/${startedOn}...${mergedAs}?per_page=1`, undefined, { allowNotFound: true })) as {
+        status?: string;
+      } | null);
+  // Ahead or diverged: the merge commit holds a commit the head doesn't, so the head doesn't hold it.
+  const sinceMergeBase = compared?.status === "ahead" || compared?.status === "diverged";
+  const ticket = !sinceMergeBase
+    ? null
+    : ((await github.graphql<{ repository: { pullRequest: { closingIssuesReferences: { nodes: { number: number }[] } } | null } }>(CLOSED_TICKET_QUERY, {
+        owner: repo.owner,
+        name: repo.name,
+        pull: number,
+      })).repository.pullRequest?.closingIssuesReferences.nodes[0]?.number ?? null);
+  return [{ ...namedPullRequestOf(pull), superseding: { intoMain, sinceMergeBase, ticket } }];
 }
 
 /**

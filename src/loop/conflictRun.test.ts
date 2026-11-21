@@ -17,7 +17,8 @@ import {
 } from "../github/threads.ts";
 import { verdictMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
-import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
+import { handBackMarkIn } from "./markers.ts";
+import type { Action, BranchChanges, LoopEvent, NamedPullRequestSnapshot, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/42/attempts/1";
 const MAIN = "9".repeat(40);
@@ -49,9 +50,10 @@ class Thread {
     });
   }
 
-  ticketSnapshot(): Snapshot {
+  ticketSnapshot(namedPullRequests: readonly NamedPullRequestSnapshot[] | null = null): Snapshot {
     return snapshotOf(anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }), {
       pullRequest: this.pullRequest(),
+      namedPullRequests,
     });
   }
 
@@ -304,6 +306,122 @@ describe("A conflict-only run", () => {
 
       expect(actionsOf(tick)).toContainEqual(expect.objectContaining({ kind: "rebase-onto-main", pullRequest: 50, onto: NEXT_MAIN }));
     });
+  });
+});
+
+describe("A conflict-only run that finds main already holds the PR's work (#845)", () => {
+  const COMPARED = "Compared #50's diff with #49's: #49 adds the same empty-cart guard to `src/cart.ts`, so nothing of #50's own is left.";
+  const UNCHANGED: BranchChanges = { net: [], commits: [], updatedFromMain: false };
+  const STANDS = "#50 is yours while it carries `ready-for-human`: the Kit leaves its branch alone until then, and taking the label off gives it back.";
+
+  /** The run finishes naming #49 in `supersededBy`, which the snapshot holds as `named`. */
+  function supersededRun(thread: Thread, named: readonly NamedPullRequestSnapshot[] | null, supersededBy: number = 49, changes: BranchChanges = UNCHANGED): Plan {
+    const event = conflictRunFinished(changes);
+    const output = { title: "Handle the empty cart", summary: "Handles the empty cart.", fix: COMPARED, supersededBy };
+    return thread.plan({ ...event, output: JSON.stringify(output) }, thread.ticketSnapshot(named));
+  }
+
+  /** #49, as GitHub has it: merged into main after #50's merge base, closing Ticket #6, unless a test says otherwise. */
+  function pr49(overrides: Partial<NamedPullRequestSnapshot> = {}, superseding: Partial<NonNullable<NamedPullRequestSnapshot["superseding"]>> = {}): NamedPullRequestSnapshot {
+    return { number: 49, open: false, merged: true, headRef: "fabrik/ticket-6", isAgent: true, superseding: { intoMain: true, sinceMergeBase: true, ticket: 6, ...superseding }, ...overrides };
+  }
+
+  it("hands the PR back as probably superseded by the merged PR it names, naming that PR's Ticket, and points to closing the PR and its Ticket", () => {
+    const thread = new Thread();
+    thread.mainMovesAndConflicts(MAIN);
+
+    const actions = actionsOf(supersededRun(thread, [pr49()]));
+
+    expect(thread.comments.at(-1)).toBe(
+      [
+        "<!-- fabrik:conflict-run-ended -->",
+        "@operator The conflict-only run on #50 didn't bring it up to date with `main` at 9999999: it found that `main` already holds the whole of its change, merged in #49.",
+        "",
+        `#50 is probably superseded by #49, which closed #6. Check #49 first; if it does hold this PR's work, close #50 and its Ticket #7 as duplicates. ${STANDS} No retry was used.`,
+        "",
+        "**What the Implementer said:**",
+        "",
+        COMPARED,
+        "",
+        `[The run](${RUN})`,
+        '<!-- fabrik:hand-back {"kind":"conflict-run-superseded","role":"implement"} -->',
+      ].join("\n"),
+    );
+    expect(thread.comments.at(-1)).not.toContain("yours to resolve");
+    // As every conflict-only run that can't push: ready-for-human, out of draft, ended, no retry used, nothing closed.
+    expect(actions).toContainEqual({ kind: "add-labels", issue: 50, labels: ["ready-for-human"] });
+    expect(thread.draft).toBe(false);
+    expect(actions.some((action) => action.kind === "push-branch" || action.kind === "close-pull-request" || action.kind === "close" || action.kind === "close-as-superseded")).toBe(false);
+    expect(thread.pullRequest().conflictRunInFlight).toBeNull();
+    expect(thread.pullRequest().verdicts).toHaveLength(1);
+  });
+
+  it("names no Ticket of the superseding PR when it closed none", () => {
+    const thread = new Thread();
+    thread.mainMovesAndConflicts(MAIN);
+
+    supersededRun(thread, [pr49({}, { ticket: null })]);
+
+    expect(thread.comments.at(-1)).toContain("#50 is probably superseded by #49. Check #49 first;");
+  });
+
+  it("still pushes nothing when the run rebased anyway, since it says nothing of the PR's own is left", () => {
+    const thread = new Thread();
+    thread.mainMovesAndConflicts(MAIN);
+
+    const actions = actionsOf(supersededRun(thread, [pr49()], 49, RESOLVED));
+
+    expect(actions.some((action) => action.kind === "push-branch")).toBe(false);
+    expect(handBackMarkIn(thread.comments.at(-1) ?? "")).toEqual({ kind: "conflict-run-superseded", role: "implement" });
+  });
+
+  it.each<[string, readonly NamedPullRequestSnapshot[] | null, number, RegExp]>([
+    ["an open PR", [pr49({ open: true, merged: false }, { intoMain: false })], 49, /#49 isn't merged/],
+    ["a PR closed unmerged", [pr49({ merged: false }, { intoMain: false })], 49, /#49 isn't merged/],
+    ["a PR merged into another branch", [pr49({}, { intoMain: false })], 49, /#49 didn't merge into `main`/],
+    ["a PR merged before the merge base", [pr49({}, { sinceMergeBase: false })], 49, /#49 merged into `main` before #50's merge base with it/],
+    ["the PR itself", [pr49({ number: 50 })], 50, /names #50 itself/],
+    ["a number that isn't a PR", [], 49, /#49 is no pull request/],
+  ])("ignores a run that names %s, handing the PR back as it always has, and says why in the run's log", (_, named, supersededBy, why) => {
+    const thread = new Thread();
+    thread.mainMovesAndConflicts(MAIN);
+
+    const plan = supersededRun(thread, named, supersededBy);
+
+    expect(thread.comments.at(-1)).toBe(
+      [
+        "<!-- fabrik:conflict-run-ended -->",
+        "@operator The conflict-only run on #50 didn't bring it up to date with `main` at 9999999: it committed no change to `fabrik/ticket-7`.",
+        "",
+        `The PR still conflicts with \`main\`, so it's yours to resolve. ${STANDS} No retry was used.`,
+        "",
+        `[The run](${RUN})`,
+        '<!-- fabrik:hand-back {"kind":"conflict-run-unlanded","role":"implement"} -->',
+      ].join("\n"),
+    );
+    expect(plan.kind === "act" ? plan.notes : undefined).toEqual([expect.stringMatching(why)]);
+  });
+});
+
+describe("supersededBy on a run that isn't conflict-only (#845)", () => {
+  it("is ignored: a retry that names a merged PR lands as any retry does", () => {
+    const thread = new Thread();
+    const retry: LoopEvent = {
+      kind: "implement-run-finished",
+      runUrl: RUN,
+      issue: 7,
+      output: JSON.stringify({ title: "Handle the empty cart", summary: "Handles the empty cart.", fix: "Fixed the guard.", supersededBy: 49 }),
+      branch: "fabrik/ticket-7",
+      base: "fabrik/ticket-7",
+      changes: RESOLVED,
+      fixes: { pullRequest: 50, headSha: A, runUrl: RUN },
+    };
+    const named: NamedPullRequestSnapshot[] = [{ number: 49, open: false, merged: true, headRef: "fabrik/ticket-6", isAgent: true, superseding: { intoMain: true, sinceMergeBase: true, ticket: 6 } }];
+
+    const withField = planFor(retry, thread.ticketSnapshot(named), kitConfig());
+    const without = planFor({ ...retry, output: JSON.stringify({ title: "Handle the empty cart", summary: "Handles the empty cart.", fix: "Fixed the guard." }) }, thread.ticketSnapshot(null), kitConfig());
+
+    expect(withField).toEqual(without);
   });
 });
 

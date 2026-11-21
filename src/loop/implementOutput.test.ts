@@ -153,3 +153,25 @@ describe("A Request-changes run's two answers about the review it was started fo
     });
   });
 });
+
+describe("The merged pull request a conflict-only run says supersedes its PR (#845)", () => {
+  const fix = "Compared #50's diff with #49's: #49 already makes every change #50 makes.";
+
+  it("is read from a run on a PR's output, by its number", () => {
+    expect(parseImplementOutput(output({ fix, supersededBy: 49 }), "pull-request")).toMatchObject({ ok: true, output: { fix, supersededBy: 49 } });
+  });
+
+  it.each([
+    ["a number as text", "49"],
+    ["a number with a hash", "#49"],
+    ["zero", 0],
+    ["a negative number", -49],
+    ["a fraction", 49.5],
+    ["a list", [49]],
+  ])("is left out when the output gives %s, and the output still reads", (_, supersededBy) => {
+    const parsed = parseImplementOutput(output({ fix, supersededBy }), "pull-request");
+
+    expect(parsed).toMatchObject({ ok: true, output: { fix } });
+    expect(parsed.ok && parsed.output.supersededBy).toBeUndefined();
+  });
+});

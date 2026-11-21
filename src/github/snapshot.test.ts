@@ -3405,6 +3405,125 @@ describe("Gathering the pull request a Design-session turn's Roll-in names", () 
   });
 });
 
+describe("Gathering the pull request a conflict-only run says supersedes its own (#845)", () => {
+  const STARTED_ON = "e".repeat(40);
+  const MERGED_AS = "c".repeat(40);
+
+  /**
+   * A GitHub holding Ticket #7 and its agent PR #50, these pull requests by number, each merged one's comparison
+   * against the head #50's run started on by its status, and the Ticket each PR closed; any other number is none.
+   */
+  function githubWith(pulls: Record<number, unknown>, compared: Record<string, string> = {}, closing: Record<number, number[]> = {}) {
+    const reads: string[] = [];
+    const issues = issueGitHub({ labels: ["ready-for-agent"] });
+    const pullRequests = pullRequestGitHub({ body: "Saves the cart.\n\nCloses #7", closing: [{ number: 7, labels: ["ready-for-agent"] }] });
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("pullRequest(number: $pull)")) {
+          reads.push(`closing #${String(variables["pull"])}`);
+          return { repository: { pullRequest: { closingIssuesReferences: { nodes: (closing[variables["pull"] as number] ?? []).map((number) => ({ number })) } } } };
+        }
+        return (query.includes("pullRequest(number: $number)") ? pullRequests : issues).graphql(query, variables);
+      },
+      async rest(method: string, path: string, _body?: unknown, options: { allowNotFound?: boolean } = {}): Promise<unknown> {
+        reads.push(`${method} ${path}`);
+        const pull = /^\/repos\/acme\/shop\/pulls\/(\d+)$/.exec(path);
+        const compare = /^\/repos\/acme\/shop\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)\?per_page=1$/.exec(path);
+        const found = pull !== null ? pulls[Number(pull[1])] : compare !== null && compare[1] === STARTED_ON ? compared[compare[2] ?? ""] : undefined;
+        if (method !== "GET" || (pull === null && compare === null)) throw new Error(`Unexpected call: ${method} ${path}`);
+        if (found !== undefined) return pull !== null ? found : { status: found };
+        if (options.allowNotFound === true) return null;
+        throw new Error(`GitHub GET ${path} failed: 404`);
+      },
+    } as unknown as GitHub;
+    return { github, reads };
+  }
+
+  const merged = (number: number, base = "main") => ({
+    number,
+    state: "closed",
+    merged: true,
+    head: { ref: `fabrik/ticket-${number - 43}` },
+    user: { type: "Bot" },
+    base: { ref: base, repo: { default_branch: "main" } },
+    merge_commit_sha: MERGED_AS,
+  });
+
+  function finished(output: Record<string, unknown>, conflict: string | null = "9".repeat(40)): LoopEvent {
+    return {
+      kind: "implement-run-finished",
+      runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1",
+      issue: 7,
+      output: JSON.stringify({ title: "Handle the empty cart", summary: "Handles the empty cart.", fix: "Compared the diffs.", ...output }),
+      branch: "fabrik/ticket-7",
+      base: "fabrik/ticket-7",
+      changes: { net: [], commits: [], updatedFromMain: false },
+      fixes: { pullRequest: 50, headSha: STARTED_ON, runUrl: "https://github.com/acme/shop/actions/runs/1/attempts/1", ...(conflict === null ? {} : { conflict }) },
+    };
+  }
+
+  it("holds it as merged into main since the merge base, with the Ticket it closed, when main gained it after the head the run started on", async () => {
+    const { github } = githubWith({ 49: merged(49) }, { [MERGED_AS]: "ahead" }, { 49: [6] });
+
+    const snapshot = await gatherSnapshot(github, repo, finished({ supersededBy: 49 }), null, APP_LOGIN);
+
+    expect(snapshot.namedPullRequests).toEqual([
+      { number: 49, open: false, merged: true, headRef: "fabrik/ticket-6", isAgent: true, superseding: { intoMain: true, sinceMergeBase: true, ticket: 6 } },
+    ]);
+    expect(snapshot.pullRequest).toMatchObject({ number: 50 });
+  });
+
+  it.each([
+    ["diverged", true],
+    ["behind", false],
+    ["identical", false],
+  ])("reads a merge commit %s of the head the run started on as merged since the merge base: %s", async (status, since) => {
+    const { github } = githubWith({ 49: merged(49) }, { [MERGED_AS]: status });
+
+    const snapshot = await gatherSnapshot(github, repo, finished({ supersededBy: 49 }), null, APP_LOGIN);
+
+    expect(snapshot.namedPullRequests?.[0]?.superseding?.sinceMergeBase).toBe(since);
+  });
+
+  it("holds one merged into another branch as not into main, and reads neither its comparison nor its Ticket", async () => {
+    const { github, reads } = githubWith({ 49: merged(49, "release") }, { [MERGED_AS]: "ahead" }, { 49: [6] });
+
+    const snapshot = await gatherSnapshot(github, repo, finished({ supersededBy: 49 }), null, APP_LOGIN);
+
+    expect(snapshot.namedPullRequests?.[0]?.superseding).toEqual({ intoMain: false, sinceMergeBase: false, ticket: null });
+    expect(reads).toEqual(["GET /repos/acme/shop/pulls/49"]);
+  });
+
+  it("holds an open one as neither", async () => {
+    const { github } = githubWith({ 49: { ...merged(49), state: "open", merged: false, merge_commit_sha: null } });
+
+    const snapshot = await gatherSnapshot(github, repo, finished({ supersededBy: 49 }), null, APP_LOGIN);
+
+    expect(snapshot.namedPullRequests).toMatchObject([{ number: 49, open: true, merged: false, superseding: { intoMain: false, sinceMergeBase: false, ticket: null } }]);
+  });
+
+  it("holds none when the number is no pull request", async () => {
+    const { github } = githubWith({});
+
+    const snapshot = await gatherSnapshot(github, repo, finished({ supersededBy: 49 }), null, APP_LOGIN);
+
+    expect(snapshot.namedPullRequests).toEqual([]);
+  });
+
+  it.each<[string, LoopEvent]>([
+    ["a conflict-only run that names none", finished({})],
+    ["a conflict-only run that names its own PR", finished({ supersededBy: 50 })],
+    ["a retry, which isn't conflict-only", finished({ supersededBy: 49 }, null)],
+  ])("reads no pull request for %s", async (_, event) => {
+    const { github, reads } = githubWith({ 49: merged(49) }, { [MERGED_AS]: "ahead" });
+
+    const snapshot = await gatherSnapshot(github, repo, event, null, APP_LOGIN);
+
+    expect(snapshot.namedPullRequests).toBeNull();
+    expect(reads).toEqual([]);
+  });
+});
+
 describe("Gathering a Design-session turn's starting reply", () => {
   const issueData = {
     repository: {

@@ -223,6 +223,28 @@ describe("The prompts of the runs that read an agent PR", () => {
     expect(text).toContain("- `operatorCommentsConsidered`");
   });
 
+  it("implement's conflict-only section has a run that finds main already holds the whole PR stop without pushing and name the merged PR in supersededBy (#845)", async () => {
+    const text = section(await prompt("implement"), "When main moved under the PR");
+    const bullet = lineStarting(text, "- If, while you rebase,");
+    expect(bullet).toContain("already merged into `main`");
+    expect(bullet).toMatch(/the whole of this PR's change/);
+    expect(bullet).toContain("`git rebase --abort`");
+    expect(bullet).toContain("stop without pushing");
+    expect(bullet).toContain("`supersededBy`");
+    expect(bullet).toMatch(/what you compared/);
+    // Whole-PR overlap only: a part of its own left means resolving as ever.
+    expect(bullet).toMatch(/If even part of the PR's own change is left, resolve the conflicts as above and leave `supersededBy` out/);
+  });
+
+  it("implement documents supersededBy in its output, for a conflict-only run alone, as the Kit reads it", async () => {
+    const text = section(await prompt("implement"), "Your output");
+    const bullet = lineStarting(text, "- `supersededBy`");
+    expect(bullet).toContain("only on a conflict-only run");
+    expect(bullet).toContain("the number of the pull request");
+    expect(bullet).toMatch(/merged into `main`/);
+    expect(readPullRequestRunOutput({ title: "t", summary: "s", fix: "Compared the diffs.", supersededBy: 49 })).toMatchObject({ ok: true, output: { supersededBy: 49 } });
+  });
+
   it("design describes the output field that names the Operator comments it weighed, which its round example carries", async () => {
     const text = await prompt("design");
     const example: unknown = JSON.parse(/<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");

@@ -81,8 +81,9 @@ If the end of this prompt has "A conflict-only run", this run is a conflict-only
 - Rebase onto it: `git rebase origin/main`. Resolve each conflict so that both the PR's change and what `main` brought in survive, then `git rebase --continue` until it finishes. On this run rebase, never merge: the Kit expects the rebase.
 - Change nothing else: no new features, fixes, refactors or tests beyond what resolving a conflict needs. There are no findings and no new requirements. The Ticket, as amended by any Request changes, is what the PR already meets.
 - A conflict inside a file you must not change (see below) can't be resolved by you: the Kit refuses it and hands the PR to the Operator. Don't try to work around that; say so in your `fix`.
+- If, while you rebase, you find that a pull request already merged into `main` makes the whole of this PR's change, so that nothing of the PR's own is left to keep, run `git rebase --abort`, commit nothing and stop without pushing. Name that pull request's number in your output's `supersededBy`, and say in your `fix` what you compared: which of the PR's changes you found in which merged commits. Judge it from the two diffs, never from titles or the Ticket. If even part of the PR's own change is left, resolve the conflicts as above and leave `supersededBy` out. The Kit checks that the pull request you name merged into `main`, and hands the PR to the Operator as probably superseded by it.
 - Run the build and the tests again before you finish.
-- Your output's `fix` must list every conflicted file and say how you resolved each conflict. Your `summary` describes the PR as a whole as it now stands, starting from "The pull request's current description": the Kit replaces the PR body with it. The Kit keeps the PR's title.
+- Your output's `fix` must list every conflicted file and say how you resolved each conflict, or, when you name a pull request in `supersededBy`, what you compared. Your `summary` describes the PR as a whole as it now stands, starting from "The pull request's current description": the Kit replaces the PR body with it. The Kit keeps the PR's title.
 
 ## The Operator's comments
 
@@ -148,6 +149,7 @@ When you have committed your work, end your reply with exactly one `<implement>`
 - If you need the Operator's input, put every question for them in `summary` under one heading, "Questions for the Operator", and nowhere else in it. Leave the heading out when you have none.
 - Name a criterion no run can meet in `summary` under "Criteria no run can meet", as "When a criterion is one no run can meet" says. Leave that heading out when there is none.
 - `fix` is non-empty Markdown on a retry or a Request-changes run, which the Kit posts as a comment on the PR. Leave it out on a first run. Don't @-mention anyone.
+- `supersededBy` is, only on a conflict-only run, the number of the pull request already merged into `main` that makes the whole of this PR's change, as "When main moved under the PR" says, such as `493`. Leave it out on every other run, and whenever any of the PR's own change is left.
 - `reviewMiss` is `true` or `false`, only on a Request-changes run: whether the review it was started for holds a Review miss, as "When the Operator requested changes" says. Leave it out on every other run.
 - `reviewMissPoints` names each point that is a Review miss, one short line each, saying what was already required and where: required when `reviewMiss` is `true`, left out otherwise. Don't @-mention anyone.
 - `amendsTicket` is `true` or `false`, only on a Request-changes run: whether the review amends the Ticket. Leave it out on every other run.

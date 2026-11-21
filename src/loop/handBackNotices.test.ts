@@ -91,6 +91,12 @@ describe("The hidden hand-back line", () => {
     });
   });
 
+  it("tells a conflict-only run that found its PR superseded from one that didn't land (#845)", () => {
+    const superseded = { by: 49, byTicket: 6, supersededTicket: 7, compared: "Compared the diffs." };
+    expect(handBackOf(commentsOf(conflictRunEnded(50, "d".repeat(40), "operator", "it found main holds it", RUN, true, null, superseded))[0])).toEqual({ kind: "conflict-run-superseded", role: "implement" });
+    expect(handBackOf(commentsOf(conflictRunEnded(50, "d".repeat(40), "operator", "it changed nothing", RUN))[0])).toEqual({ kind: "conflict-run-unlanded", role: "implement" });
+  });
+
   describe("on a notice that puts ready-for-human on a PR (#841)", () => {
     const STANDS = "#50 is yours while it carries `ready-for-human`: the Kit leaves its branch alone until then, and taking the label off gives it back.";
 

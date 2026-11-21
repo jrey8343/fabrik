@@ -13,6 +13,7 @@ export const HAND_BACKS = [
   "landing-failed",
   "request-changes-empty",
   "conflict-run-unlanded",
+  "conflict-run-superseded",
   "conflicted-review",
   "request-changes-unlanded",
   "closed-by-hand",

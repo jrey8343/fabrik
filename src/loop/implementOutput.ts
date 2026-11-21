@@ -47,6 +47,16 @@ export interface ImplementOutput {
    * leaves them out.
    */
   readonly answers?: ImplementerAnswers;
+  /**
+   * For a conflict-only run alone (#845): the pull request already merged into
+   * `main` that makes the whole of this PR's change, so that nothing of the
+   * PR's own is left to keep, by its number. The Kit weighs it only on a
+   * conflict-only run, and only once it has checked the PR it names merged
+   * into `main` since this PR's merge base (src/loop/implement.ts). Left out
+   * when the run gave anything but a positive whole number: a bad number never
+   * fails the run.
+   */
+  readonly supersededBy?: number;
 }
 
 /**
@@ -97,7 +107,7 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["Implementer output must be a JSON object"] };
   }
-  const { title, summary, fix, operatorCommentsConsidered: considered, routes, shots, nothingVisible } = value as Record<string, unknown>;
+  const { title, summary, fix, operatorCommentsConsidered: considered, routes, shots, nothingVisible, supersededBy } = value as Record<string, unknown>;
   const errors: string[] = [];
   if (!isText(title) || title.includes("\n") || title.length > MAX_TITLE) {
     errors.push(`title must be one non-empty line of at most ${MAX_TITLE} characters`);
@@ -118,6 +128,8 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
       // Nor do malformed shots, or a sentence that isn't text: each reads as not given.
       ...(isShotList(shots) ? { shots } : {}),
       ...(isText(nothingVisible) ? { nothingVisible: nothingVisible.trim() } : {}),
+      // Nor does a superseding PR that isn't a number: it reads as none named.
+      ...(Number.isInteger(supersededBy) && (supersededBy as number) > 0 ? { supersededBy: supersededBy as number } : {}),
     },
   };
 }
