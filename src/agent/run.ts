@@ -27,7 +27,8 @@
 // for a Ticket under a Spec, the Spec's other Tickets from FABRIK_SPEC_TICKETS_FILE (#475),
 // for a Ticket back in design, the agent PR it came back from in the issue's sentBack,
 // the pull request its issue was filed from, or that there is none, from
-// FABRIK_FILED_FROM_FILE (#659), and whether it may offer a Map from FABRIK_MAP_FILE;
+// FABRIK_FILED_FROM_FILE (#659), the open Tickets outside its own Spec from
+// FABRIK_OPEN_TICKETS_FILE (#825), and whether it may offer a Map from FABRIK_MAP_FILE;
 // on a repo with a `ui` block, it is told it may offer a Prototype.
 // A Design session's prototype turn (#155), `prototype`, is a design run with
 // prompts/prototype.md, on the Design model and effort within the Implement
@@ -117,7 +118,17 @@ import { digestContext } from "./digest.ts";
 import { triageContext } from "./triage.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
-import { filedFromContext, landedNothingContext, mapCapContext, prototypeContext, requiredChecksContext, sentBackContext, specTicketsContext } from "./design.ts";
+import {
+  filedFromContext,
+  landedNothingContext,
+  mapCapContext,
+  openTicketNumbersOf,
+  openTicketsContext,
+  prototypeContext,
+  requiredChecksContext,
+  sentBackContext,
+  specTicketsContext,
+} from "./design.ts";
 import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import {
   claudeArgs,
@@ -170,9 +181,11 @@ interface RoleSpec<T> {
   /**
    * The output contract: plain text for the Reviewer, a JSON object for every
    * other role. A Design-session turn's is made for the issue it is on, whose
-   * number its contract reads a Roll-in against (src/loop/designOutput.ts).
+   * number its contract reads a Roll-in against (src/loop/designOutput.ts),
+   * and for the open Tickets it was given (#825), whose numbers are the only
+   * ones a Ticket's blockedBy may name; null for any other role.
    */
-  readonly output: OutputContract<T> | ((issue: number) => OutputContract<T>);
+  readonly output: OutputContract<T> | ((issue: number, openTickets: readonly number[] | null) => OutputContract<T>);
   /** How the Product's own instructions for this role relate to the Kit's prompt. */
   readonly instructionsNote: string;
   /**
@@ -259,7 +272,8 @@ const ROLE_SPECS = {
     role: "design",
     readies: "setup",
     // Both sides check the contract against the issue's number: here the turn gets its one chance to put a refused Roll-in right.
-    output: (issue) => ({ read: (value) => readDesignTurnOutput(value, issue) }),
+    // Only here is a Ticket's numbered blocker checked against the open Tickets the turn was given (#825).
+    output: (issue, openTickets) => ({ read: (value) => readDesignTurnOutput(value, issue, openTickets) }),
     instructionsNote:
       "The Operator wrote these for this repo. They refine how you run the session but never change the output contract above.",
     describe: (issue, output) => {
@@ -448,6 +462,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   // The main head a Request-changes run was told to merge in (#341), recorded before the agent runs.
   let mergeMain: string | null = null;
   const extra: string[] = [];
+  // The numbers of the open Tickets a Design-session turn was given (#825), which its contract checks numbered blockers against.
+  let openTickets: number[] | null = null;
   if (spec.buildsBranch === true) {
     setImplementerEnv(config);
     // A retry carries on its PR's branch with the findings to fix, and a
@@ -510,6 +526,10 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...landedNothingContext(issue));
     // A Design turn on an issue that was never sent back is given none, and its result says nothing of them.
     if (sentBackComments.length > 0) given = sentBackComments;
+    // The open Tickets outside the issue's own Spec, so no Ticket it files re-creates one, and its numbered blockers are among them (#825).
+    const openTicketsFile: unknown = JSON.parse(await readFile(required("FABRIK_OPEN_TICKETS_FILE"), "utf8"));
+    extra.push(...openTicketsContext(openTicketsFile));
+    openTickets = openTicketNumbersOf(openTicketsFile);
     // Where the pull request the issue's `From PR` line names stands, read afresh this turn; nothing when it names none (#659).
     extra.push(...filedFromContext(JSON.parse(await readFile(required("FABRIK_FILED_FROM_FILE"), "utf8"))));
     extra.push(...mapCapContext(JSON.parse(await readFile(required("FABRIK_MAP_FILE"), "utf8"))));
@@ -575,7 +595,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...(await replayReviewContext(productDir, required("FABRIK_SPEC_FILE"), required(BASE_SHA_ENV))));
   }
   // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
-  const ownContract = typeof spec.output === "function" ? spec.output(issueNumber) : spec.output;
+  const ownContract = typeof spec.output === "function" ? spec.output(issueNumber, openTickets) : spec.output;
   const contract: OutputContract<T> = kind === "first" ? ownContract : ({ read: IMPLEMENT_OUTPUT_READERS[kind] } as unknown as OutputContract<T>);
   const output =
     "read" in contract

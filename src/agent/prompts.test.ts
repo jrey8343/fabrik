@@ -18,7 +18,15 @@ import { readTriageOutput } from "../loop/triageOutput.ts";
 import { STRENGTHS } from "../loop/types.ts";
 import { CONSIDERED_PREFIX, FINDING_TAG_TEXT, FOLLOW_UPS_PREFIX, parseVerdict, VERDICTS } from "../loop/verdict.ts";
 import { AUDIT_ISSUE_HEADING, AUDIT_SECTIONS } from "./audit.ts";
-import { FILED_FROM_HEADING, filedFromContext, LANDED_NOTHING_HEADING, MAP_CAP_HEADING, REQUIRED_CHECKS_HEADING, SPEC_TICKETS_HEADING } from "./design.ts";
+import {
+  FILED_FROM_HEADING,
+  filedFromContext,
+  LANDED_NOTHING_HEADING,
+  MAP_CAP_HEADING,
+  OPEN_TICKETS_HEADING,
+  REQUIRED_CHECKS_HEADING,
+  SPEC_TICKETS_HEADING,
+} from "./design.ts";
 import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
@@ -560,6 +568,60 @@ describe("The Map question in the Design prompt", () => {
     const examples = [...text.matchAll(/<design>\n([\s\S]*?)\n<\/design>/g)].map((match) => readDesignTurnOutput(JSON.parse(match[1] ?? "null"), EXAMPLE_ISSUE));
     expect(examples).toContainEqual(expect.objectContaining({ ok: true, output: expect.objectContaining({ kind: "map" }) }));
     expect(lineStarting(section(text, "Your output"), "- In `map`")).toContain("`research`, `prototype`, `grilling` or `task`");
+  });
+});
+
+// The open Tickets outside the issue's own Spec (#825): the prompt says how to use them, and ./design.ts sets them out.
+describe("The open Tickets in the Design prompt", () => {
+  const held = async () => section(await prompt("design"), "Work other Specs hold");
+
+  it("names the part the open Tickets arrive under, after the issue, and what it holds", async () => {
+    expect(await held()).toContain(`"${OPEN_TICKETS_HEADING}", which follows the issue at the end of this prompt, lists the open Tickets outside this issue's own Spec`);
+  });
+
+  it("checks the list before proposing a Ticket, and before asking the Operator whether an issue covers a piece of work", async () => {
+    const check = lineStarting(await held(), "- **Check the list first.**");
+    expect(check).toContain("Before you propose a Ticket, in a Spec, a split or an agent brief, read the list");
+    expect(check).toContain("and read it again before you ask the Operator whether some issue covers a piece of work.");
+  });
+
+  it("leaves out or waits on work an open Ticket holds, and says so in the closing comment", async () => {
+    const overlap = lineStarting(await held(), "- **Leave out or wait on what an open Ticket holds.**");
+    expect(overlap).toContain("the new Ticket either leaves that part out, or waits on that Ticket, by its number in the new Ticket's `blockedBy`");
+    expect(overlap).toContain("The closing `comment` names which open Ticket covers what was left out.");
+  });
+
+  it("never asks the Operator for a number the list answers, and asks whether a likely match covers the work instead", async () => {
+    const ask = lineStarting(await held(), "- **Never ask the Operator for an issue's number the list answers.**");
+    expect(ask).toContain("When the list holds a likely match, the round's question names that Ticket, by its number and title, and asks whether it covers the work.");
+  });
+
+  it("reads a Follows line as building on that Spec, whose Tickets are in the list and read before designing", async () => {
+    const follows = lineStarting(await held(), "- **A `Follows #<n>` line**");
+    expect(follows).toContain("means the issue builds on the Spec #n. Its open Tickets are in the list, and you read them before you design");
+  });
+
+  it("documents a numbered blockedBy and an Operator step's newIssue in the output rules", async () => {
+    const output = section(await prompt("design"), "Your output");
+    const blockedBy = lineStarting(output, "- Each Ticket's `key`");
+    expect(blockedBy).toContain(`A Ticket's \`blockedBy\` may also hold the number of an open Ticket in "${OPEN_TICKETS_HEADING}", such as \`482\``);
+    expect(blockedBy).toContain("A number not in that list is refused.");
+    expect(blockedBy).toContain("don't write issue numbers, `Parent` or `Blocked by` sections into any body");
+    const newIssue = lineStarting(output, "- An Operator step whose job is to open a new issue");
+    expect(newIssue).toContain("carries `newIssue`, the issue's `title` and `body`, never a free-text step that spells the issue out");
+    expect(newIssue).toContain("The new issue goes through Intake and Triage as normal.");
+    expect(newIssue).toContain("The step's `steps` still say what else the Operator does, such as which labels to add.");
+  });
+
+  it("shows a numbered blockedBy and a newIssue in a Spec example the Kit reads", async () => {
+    const text = await prompt("design");
+    const example: unknown = JSON.parse(/To finish with a Spec and its Tickets:\n\n<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
+
+    const read = readDesignTurnOutput(example, EXAMPLE_ISSUE, [482]);
+    expect(read).toMatchObject({ ok: true, output: { kind: "spec" } });
+    const tickets = read.ok && read.output.kind === "spec" ? read.output.tickets : [];
+    expect(tickets.some((ticket) => ticket.blockedBy.includes(482))).toBe(true);
+    expect(tickets.some((ticket) => ticket.operator === true && ticket.newIssue !== undefined)).toBe(true);
   });
 });
 

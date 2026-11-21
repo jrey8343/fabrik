@@ -13,10 +13,11 @@ import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
 import { withFableCap } from "../loop/fableCap.ts";
-import { isEmptyDiffComment, withGateRerunStarted, withPrototypeStarted } from "../loop/markers.ts";
+import { newIssueUrl } from "../loop/followUps.ts";
+import { followsSpecLine, isEmptyDiffComment, withGateRerunStarted, withPrototypeStarted } from "../loop/markers.ts";
 import { sameRepo } from "../loop/blockers.ts";
 import { closingCommentText } from "../loop/design.ts";
-import type { Action, CreatedIssue, ExistingIssue, LoopEvent, Plan, PostedComment } from "../loop/types.ts";
+import type { Action, CreatedIssue, ExistingIssue, LoopEvent, OpenAsIssueLink, OpenTicketRef, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
 import { allPages, type GitHub, GitHubError, gitHubMessageOf, type Repo } from "./client.ts";
 import type { WrittenReview } from "./writtenOn.ts";
@@ -309,6 +310,29 @@ function databaseId(issue: CreatedIssue | ExistingIssue, created: ReadonlyMap<st
   return "databaseId" in issue ? issue.databaseId : createdIn(created, issue).id;
 }
 
+/** A blocker's database id, as databaseId gives it, or, for an open Ticket in this repo named by its number (#825), as GitHub has it now. */
+async function blockerId(github: GitHubApi, repo: Repo, blocker: CreatedIssue | ExistingIssue | OpenTicketRef, created: ReadonlyMap<string, CreatedRecord>): Promise<number> {
+  if (!("ticket" in blocker)) return databaseId(blocker, created);
+  return ((await github.rest("GET", `/repos/${repo.owner}/${repo.name}/issues/${blocker.ticket}`)) as { id: number }).id;
+}
+
+/**
+ * An Operator step's body with its Open as issue link written in (#825): the
+ * link's prefilled body ends with a `Follows` line naming the Spec and its
+ * Tickets by the numbers the plan gave them, or the Spec's own number when it
+ * already existed.
+ */
+function linkedBody(body: readonly (string | OpenAsIssueLink)[], created: ReadonlyMap<string, CreatedRecord>): string {
+  const numberOf = (issue: CreatedIssue | number) => (typeof issue === "number" ? issue : createdIn(created, issue).number);
+  return body
+    .map((part) => {
+      if (typeof part === "string") return part;
+      const follows = followsSpecLine(numberOf(part.follows), part.tickets.map(numberOf));
+      return `[Open as issue](${newIssueUrl(part.repoUrl, part.title, part.body, follows)})`;
+    })
+    .join("");
+}
+
 /** Creates the issue, then links it under its parent and to each blocker, each made earlier in the plan or existing. */
 async function createIssue(
   github: GitHubApi,
@@ -330,7 +354,7 @@ async function createIssue(
     await github.rest("POST", `${issues}/${parent}/sub_issues`, { sub_issue_id: issue.id });
   }
   for (const blocker of action.blockedBy) {
-    await github.rest("POST", `${issues}/${issue.number}/dependencies/blocked_by`, { issue_id: databaseId(blocker, created) });
+    await github.rest("POST", `${issues}/${issue.number}/dependencies/blocked_by`, { issue_id: await blockerId(github, repo, blocker, created) });
   }
 }
 
@@ -417,6 +441,9 @@ async function apply(
       return addBlockedBy(github, repo, action, made);
     case "comment-on-created":
       await github.rest("POST", `${issues}/${createdIn(made.created, action.on).number}/comments`, { body: action.body });
+      return;
+    case "link-new-issue":
+      await github.rest("PATCH", `${issues}/${createdIn(made.created, action.on).number}`, { body: linkedBody(action.body, made.created) });
       return;
     case "comment-on-opened":
       if (made.opened === null) throw new Error("The plan comments on a PR it hasn't opened");
@@ -674,6 +701,7 @@ async function applyToIssue(
         | "create-issue"
         | "add-blocked-by"
         | "comment-on-created"
+        | "link-new-issue"
         | "comment-on-opened"
         | "close-as-superseded"
         | "open-issue"

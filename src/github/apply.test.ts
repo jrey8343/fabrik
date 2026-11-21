@@ -1419,3 +1419,63 @@ describe("Requesting a review GitHub refuses with a 422 (#551)", () => {
     expect(github.calls.filter(({ method }) => method === "GET")).toEqual([]);
   });
 });
+
+describe("Applying a Design session's Spec that leans on open Tickets outside it (#825)", () => {
+  const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { operator: "jrey" });
+  const turnFinished = (tickets: unknown[]): LoopEvent => ({
+    kind: "agent-run-finished",
+    role: "design",
+    issue: 7,
+    output: JSON.stringify({
+      kind: "spec",
+      comment: "Builds on the open booking model.",
+      spec: { title: "Spec: Waitlist", body: "## Problem Statement\n\nFully booked days lose patients." },
+      tickets,
+    }),
+  });
+  const ticket = (key: string, blockedBy: (string | number)[] = []) => ({ key, title: `Waitlist: ${key}`, body: `The ${key} slice.`, blockedBy });
+
+  it("files a Ticket whose blockedBy names an open Ticket's number with a native blocker on that issue", async () => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, planFor(turnFinished([ticket("model", [482]), ticket("ui", ["model", 482])]), inSession, kitConfig()));
+
+    const edges = github.calls.filter((call) => call.path.endsWith("/dependencies/blocked_by")).map((call) => [call.path, call.body]);
+    // The Spec is #100, then the model Ticket #101 and the UI Ticket #102; #482's database id is 1482.
+    expect(edges).toEqual([
+      [`${issues}/101/dependencies/blocked_by`, { issue_id: 1482 }],
+      [`${issues}/102/dependencies/blocked_by`, { issue_id: 1101 }],
+      [`${issues}/102/dependencies/blocked_by`, { issue_id: 1482 }],
+    ]);
+  });
+
+  it("files an Operator step with newIssue with an Open as issue link, prefilled with its body and a Follows line naming the Spec just filed and its Tickets", async () => {
+    const github = fakeGitHub();
+    const reminders = {
+      key: "reminders",
+      title: "Open the reminders issue",
+      body: "Reminders are their own piece of work.",
+      blockedBy: ["model"],
+      operator: true,
+      steps: ["Open the issue from the link", "Label it enhancement"],
+      newIssue: { title: "Remind waitlisted patients", body: "Text each waitlisted patient a day before." },
+    };
+
+    await applyPlan(github, repo, planFor(turnFinished([ticket("model"), reminders, ticket("ui", ["model"])]), inSession, kitConfig()));
+
+    // The Spec is #100, the model Ticket #101, the Operator step #102 and the UI Ticket #103.
+    const edit = github.calls.find((call) => call.method === "PATCH" && call.path === `${issues}/102`);
+    const body = (edit?.body as { body: string }).body;
+    expect(body.startsWith("Reminders are their own piece of work.\n\n")).toBe(true);
+    expect(body).toContain("## Steps\n\n- [ ] Open the issue from the link\n- [ ] Label it enhancement");
+    const link = /\[Open as issue\]\((https:\/\/github\.com\/[^)]*)\)/.exec(body)?.[1] ?? "";
+    const url = new URL(link);
+    expect(`${url.origin}${url.pathname}`).toBe("https://github.com/acme/shop/issues/new");
+    expect(url.searchParams.get("title")).toBe("Remind waitlisted patients");
+    expect(url.searchParams.get("body")).toBe("Text each waitlisted patient a day before.\n\nFollows #100 (its Tickets: #101, #103)");
+    // Edited once every Ticket under the Spec exists, so the line names them all.
+    const created = github.calls.filter((call) => call.method === "POST" && call.path === issues).length;
+    expect(created).toBe(4);
+    expect(github.calls.findIndex((call) => call === edit)).toBeGreaterThan(github.calls.findLastIndex((call) => call.method === "POST" && call.path === issues));
+  });
+});

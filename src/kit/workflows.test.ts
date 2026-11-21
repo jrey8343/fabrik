@@ -13,7 +13,7 @@ import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { DIGEST_JOB_NAME, IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
 import { CAPTURE_TIMEOUT_MINUTES, EVIDENCE_DIR, EVIDENCE_PAGE_FILE, PROTOTYPE_EVIDENCE_PAGE_FILE } from "../evidence/capture.ts";
-import { FILED_FROM_FILE, MAP_INPUTS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
+import { FILED_FROM_FILE, MAP_INPUTS_FILE, OPEN_TICKETS_FILE, RECENT_ISSUES_FILE, SPEC_TICKETS_FILE } from "../agent/inputs.ts";
 import { AGENT_BUNDLE_FILE, AGENT_RESULT_FILE } from "../agent/result.ts";
 import { AGENT_FAILURE_FILE } from "../agent/failure.ts";
 import { FAILURE_EXCERPTS_FILE, RERUN_FAILURE_EXCERPTS_FILE } from "../review/failureExcerpt.ts";
@@ -318,6 +318,13 @@ describe("The Kit's workflows", () => {
 
     expect(agent).toContain(`FABRIK_SPEC_TICKETS_FILE: \${{ runner.temp }}/${SPEC_TICKETS_FILE}`);
     expect(loop.split("FABRIK_SPEC_TICKETS_FILE:").length - 1).toBe(1);
+  });
+
+  it("the Design job gives its agent the open Tickets outside its issue's Spec the agent-inputs step read for its role, and no other agent job does, the prototype job's included (#825)", () => {
+    const agent = stepsOf(jobIn(loop, "design")).find((step) => step.includes("src/agent/run.ts design"));
+
+    expect(agent).toContain(`FABRIK_OPEN_TICKETS_FILE: \${{ runner.temp }}/${OPEN_TICKETS_FILE}`);
+    expect(loop.split("FABRIK_OPEN_TICKETS_FILE:").length - 1).toBe(1);
   });
 
   it("the Design job gives its agent the pull request its issue was filed from, which the agent-inputs step read for its role, and no other agent job does (#659)", () => {

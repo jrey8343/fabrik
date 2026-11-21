@@ -8,7 +8,8 @@
 //                                it may offer a Map (readMapOffer), spec-tickets.json, its Spec's other
 //                                Tickets (readIssue's otherTickets, #475), and filed-from.json, the pull
 //                                request its issue's `From PR` line names, or that there is none
-//                                (readFiledFrom, #659)
+//                                (readFiledFrom, #659), and open-tickets.json, the open Tickets outside
+//                                its own Spec (readOpenTickets, #825)
 //   FABRIK_ISSUE                 the issue or Ticket: writes issue.json and spec.json (its parent: a Ticket's Spec, a Decision's Map, or null);
 //                                a Ticket back in design from an agent PR carries that PR in issue.json's sentBack
 //   FABRIK_PULL_REQUEST          optional, a PR: writes pull-request.json, with the Operator's comments on it
@@ -47,13 +48,13 @@ import {
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
-import { isStateLabel, type StateLabel } from "../loop/labels.ts";
+import { isStateLabel, KIT_ISSUE_LABELS, READY_FOR_AGENT, type StateLabel } from "../loop/labels.ts";
 import { type Audit, auditsIn, lastAudit } from "../loop/audit.ts";
 import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { flakyCheckIssueOf, fromAuditIn, fromPullRequestIn } from "../loop/markers.ts";
+import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -142,16 +143,24 @@ export interface SpecTicket {
 type SubIssue = NonNullable<NonNullable<IssueQueryResult["repository"]["issue"]>["parent"]>["subIssues"]["nodes"][number];
 
 function specTicketOf(ticket: SubIssue): SpecTicket {
-  const pullRequests = ticket.closedByPullRequestsReferences.nodes;
-  const pullRequest =
-    pullRequests.find(({ state }) => state === "MERGED") ?? pullRequests.find(({ state }) => state === "OPEN") ?? pullRequests.at(-1) ?? null;
   return {
     number: ticket.number,
     title: ticket.title,
-    stateLabel: ticket.labels.nodes.map(({ name }) => name).find(isStateLabel) ?? null,
+    stateLabel: stateLabelOf(ticket.labels.nodes),
     open: ticket.state === "OPEN",
-    pullRequest: pullRequest === null ? null : { number: pullRequest.number, state: pullRequest.state === "MERGED" ? "merged" : pullRequest.state === "OPEN" ? "open" : "closed" },
+    pullRequest: pullRequestOf(ticket.closedByPullRequestsReferences.nodes),
   };
+}
+
+function stateLabelOf(labels: readonly { name: string }[]): StateLabel | null {
+  return labels.map(({ name }) => name).find(isStateLabel) ?? null;
+}
+
+/** The pull request a Ticket is told of by: the merged one that closes it, else the open one, else the latest closed one. */
+function pullRequestOf(pullRequests: readonly { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[]): SpecTicket["pullRequest"] {
+  const pullRequest =
+    pullRequests.find(({ state }) => state === "MERGED") ?? pullRequests.find(({ state }) => state === "OPEN") ?? pullRequests.at(-1) ?? null;
+  return pullRequest === null ? null : { number: pullRequest.number, state: pullRequest.state === "MERGED" ? "merged" : pullRequest.state === "OPEN" ? "open" : "closed" };
 }
 
 /**
@@ -612,6 +621,142 @@ export async function readMapOffer(
 /** Where the inputs step writes a Design-session turn's Spec's other Tickets (readIssue's otherTickets), beside issue.json. */
 export const SPEC_TICKETS_FILE = "spec-tickets.json";
 
+// --- A Design-session turn's open Tickets (#825) ----------------------------
+
+/** Where the inputs step writes a Design-session turn's open Tickets outside its own Spec, beside issue.json. */
+export const OPEN_TICKETS_FILE = "open-tickets.json";
+
+/**
+ * An open Ticket outside the issue's own Spec, as a Design session is given
+ * it (#825): its Spec, or null for a Fast-path Ticket, its state label, and
+ * its pull request, chosen as a SpecTicket's is.
+ */
+export interface OpenTicket {
+  readonly number: number;
+  readonly title: string;
+  readonly spec: number | null;
+  readonly stateLabel: StateLabel | null;
+  readonly pullRequest: SpecTicket["pullRequest"];
+}
+
+/** An open issue as the open-Tickets read takes it from GitHub, before it is known to be a Ticket. */
+export interface OpenTicketNode {
+  number: number;
+  title: string;
+  labels: { nodes: { name: string }[] };
+  parent: { number: number } | null;
+  subIssues: { totalCount: number };
+  closedByPullRequestsReferences: { nodes: { number: number; state: "OPEN" | "CLOSED" | "MERGED" }[] };
+}
+
+const OPEN_TICKET_FIELDS = `
+  number
+  title
+  labels(first: 100) { nodes { name } }
+  parent { number }
+  subIssues { totalCount }
+  closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number state } }
+`;
+
+/** The open issues, newest created first, with what tells a Ticket from any other issue. */
+const OPEN_TICKETS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, first: 100, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ${OPEN_TICKET_FIELDS} }
+      }
+    }
+  }
+`;
+
+/** A Spec's sub-issues, open and closed, newest created first. */
+const SPEC_SUB_ISSUES_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        subIssues(first: 100) { nodes { state ${OPEN_TICKET_FIELDS} } }
+      }
+    }
+  }
+`;
+
+/**
+ * Whether an open issue is a Ticket an Implementer can build: ready-for-agent,
+ * with no sub-issues of its own, as a Spec has, and none of the Kit's own
+ * labels. Operator steps, Decisions and Maps carry no ready-for-agent.
+ */
+function isOpenTicket(node: OpenTicketNode): boolean {
+  const labels = node.labels.nodes.map(({ name }) => name);
+  return labels.includes(READY_FOR_AGENT) && node.subIssues.totalCount === 0 && !labels.some((label) => (KIT_ISSUE_LABELS as readonly string[]).includes(label));
+}
+
+function openTicketOf(node: OpenTicketNode): OpenTicket {
+  return {
+    number: node.number,
+    title: node.title,
+    spec: node.parent?.number ?? null,
+    stateLabel: stateLabelOf(node.labels.nodes),
+    pullRequest: pullRequestOf(node.closedByPullRequestsReferences.nodes),
+  };
+}
+
+/**
+ * What a Design-session turn on `issue` is told of the open Tickets in the
+ * repo outside its own `spec` (#825): the RECENT_ISSUES_CAP most recently
+ * created, newest first, Fast-path ones and those blocked from starting
+ * among them, without the issue itself. Every open Ticket under the Spec
+ * `follows` names, the one its body's Follows line names, is kept past the
+ * cap, after the others. Everything here is data for the session, never
+ * instructions to it.
+ */
+export async function readOpenTickets(
+  github: Pick<Reader, "graphql">,
+  repo: Repo,
+  { issue, spec, follows }: { readonly issue: number; readonly spec: number | null; readonly follows: number | null },
+): Promise<OpenTicket[]> {
+  const elsewhere = (node: OpenTicketNode): boolean => isOpenTicket(node) && node.number !== issue && (spec === null || node.parent?.number !== spec);
+  let ticketsRead = 0;
+  const capReached = (page: readonly OpenTicketNode[]): boolean => {
+    ticketsRead += page.filter(elsewhere).length;
+    return ticketsRead >= RECENT_ISSUES_CAP;
+  };
+  const open = await pagesOf<OpenTicketNode>(github, OPEN_TICKETS_QUERY, repo, {}, (data) => data.repository.issues, capReached);
+  const recent = open.filter(elsewhere).slice(0, RECENT_ISSUES_CAP);
+  if (follows === null || follows === spec) return recent.map(openTicketOf);
+  const data = await github.graphql<{ repository: { issue: { subIssues: { nodes: (OpenTicketNode & { state: string })[] } } | null } }>(SPEC_SUB_ISSUES_QUERY, {
+    owner: repo.owner,
+    name: repo.name,
+    number: follows,
+  });
+  const listed = new Set(recent.map(({ number }) => number));
+  const followed = (data.repository.issue?.subIssues.nodes ?? [])
+    .filter((node) => node.state === "OPEN" && elsewhere(node) && !listed.has(node.number))
+    .sort((a, b) => b.number - a.number);
+  return [...recent, ...followed].map(openTicketOf);
+}
+
+/**
+ * Writes what only a Design-session turn is given of its issue's body, on a
+ * Design turn alone: the open Tickets outside its own Spec (#825), reading the
+ * Spec its Follows line names, and the pull request its `From PR` line names,
+ * or that there is none (#659), read afresh on every turn and always written.
+ * A prototype turn's job runs this step as the Design role too, and hands its
+ * agent nothing of either file.
+ */
+export async function writeDesignInputs(
+  github: Reader,
+  repo: Repo,
+  outDir: string,
+  role: string | undefined,
+  issue: { readonly number: number; readonly body: string; readonly spec: { readonly number: number } | null },
+): Promise<void> {
+  if (role !== "design") return;
+  const openTickets = await readOpenTickets(github, repo, { issue: issue.number, spec: issue.spec?.number ?? null, follows: followsSpecIn(issue.body) });
+  await writeFile(join(outDir, OPEN_TICKETS_FILE), JSON.stringify(openTickets));
+  await writeFile(join(outDir, FILED_FROM_FILE), JSON.stringify(await readFiledFrom(github, repo, issue.body)));
+}
+
 // --- The pull request a Design-session turn's issue was filed from (#659) -----
 
 /** Where the inputs step writes the pull request a Design-session turn's issue was filed from, beside issue.json. */
@@ -1061,9 +1206,7 @@ async function main(outDir: string): Promise<void> {
   await writeFile(join(outDir, "issue.json"), JSON.stringify(issue));
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
   if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, SPEC_TICKETS_FILE), JSON.stringify(otherTickets));
-  // Read afresh on every turn, and always written: a body with no `From PR` line writes that there is none (#659).
-  // A prototype turn's job runs this step as the Design role too, and hands its agent nothing of the file.
-  if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, FILED_FROM_FILE), JSON.stringify(await readFiledFrom(github, repo, body)));
+  await writeDesignInputs(github, repo, outDir, process.env["FABRIK_ROLE"], { number: issueNumber, body, spec });
   // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
   if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
     await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec, check)));

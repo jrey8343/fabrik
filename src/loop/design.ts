@@ -50,7 +50,7 @@ import {
   type RollInText,
   SESSION_FINISHED,
 } from "./markers.ts";
-import { blockersPhrase, hiddenBlockersPhrase, type IssueRef, issueRefName, refsNamedFrom } from "./blockers.ts";
+import { blockersPhrase, hiddenBlockersPhrase, type IssueRef, issueRefName, refsNamedFrom, sameRepo } from "./blockers.ts";
 import { spelled } from "./readable.ts";
 import type { MapCap } from "./mapCap.ts";
 import { withoutMentions } from "./mentions.ts";
@@ -67,6 +67,8 @@ import type {
   LoopEvent,
   MovedBlocking,
   NamedPullRequestSnapshot,
+  OpenAsIssueLink,
+  OpenTicketRef,
   Plan,
   StartingComment,
 } from "./types.ts";
@@ -696,9 +698,14 @@ function ticketActions(
   const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
   // The contract has already refused blockers that loop, so there is always an order.
   const tickets = dependencyOrder(outcome) ?? [];
-  const waitedOn = new Set(tickets.flatMap((ticket) => ticket.blockedBy));
+  // A number names an open Ticket outside the outcome (#825), which neither comes first nor last among its Tickets.
+  const siblingsOf = (ticket: SpecTicket): string[] => ticket.blockedBy.filter((blocker): blocker is string => typeof blocker === "string");
+  const waitedOn = new Set(tickets.flatMap(siblingsOf));
   const last = tickets.filter((ticket) => !waitedOn.has(ticket.key)).map((ticket) => ticketIssue(ticket.key));
-  const first = tickets.filter((ticket) => ticket.blockedBy.length === 0).map((ticket) => ticketIssue(ticket.key));
+  const first = tickets.filter((ticket) => siblingsOf(ticket).length === 0).map((ticket) => ticketIssue(ticket.key));
+  // The Tickets an Operator step's Follows line names: the ones an Implementer builds, never the Operator steps.
+  const followedTickets = tickets.filter((ticket) => !ticket.operator).map((ticket) => ticketIssue(ticket.key));
+  const repoUrl = `https://github.com/${superseded.repo}`;
   return {
     actions: [
       ...tickets.map(
@@ -709,7 +716,7 @@ function ticketActions(
           // An Operator step is the Operator's, so it waits for them, assigned, never for an Implementer.
           ...(ticket.operator
             ? {
-                body: [withoutMentions(ticket.body), "", "## Steps", "", ...taskList(ticket.steps)].join("\n"),
+                body: operatorStepBody(ticket, null).join(""),
                 labels: readyLabels(superseded, READY_FOR_HUMAN),
                 assignees: [operator],
               }
@@ -719,8 +726,26 @@ function ticketActions(
                 labels: ticket.stepUp === true ? [...readyLabels(superseded), STEP_UP_LABEL] : readyLabels(superseded),
               }),
           parent,
-          blockedBy: ticket.blockedBy.length === 0 ? superseded.blockers : ticket.blockedBy.map(ticketIssue),
+          blockedBy: [...(siblingsOf(ticket).length === 0 ? superseded.blockers : siblingsOf(ticket).map(ticketIssue)), ...openTicketsBlocking(ticket, superseded)],
         }),
+      ),
+      // Once every Ticket under the Spec exists, so the link's Follows line names them all.
+      ...tickets.flatMap((ticket): Action[] =>
+        ticket.operator && ticket.newIssue !== undefined
+          ? [
+              {
+                kind: "link-new-issue",
+                on: ticketIssue(ticket.key),
+                body: operatorStepBody(ticket, {
+                  repoUrl,
+                  title: withoutMentions(ticket.newIssue.title),
+                  body: withoutMentions(ticket.newIssue.body),
+                  follows: parent,
+                  tickets: followedTickets,
+                }),
+              },
+            ]
+          : [],
       ),
       ...superseded.openBlocking.flatMap((issue) =>
         last.map((blocker): Action => ({ kind: "add-blocked-by", issue, blocker })),
@@ -729,6 +754,32 @@ function ticketActions(
     created: tickets.map((ticket) => ticketIssue(ticket.key)),
     moved: movedEdges(first, superseded, last),
   };
+}
+
+/**
+ * The open Tickets outside the outcome a Ticket waits on, by their numbers
+ * (#825), each written once: one the superseded issue's blockers already hold,
+ * which a first Ticket takes on, is left to that edge.
+ */
+function openTicketsBlocking(ticket: SpecTicket, superseded: IssueSnapshot): OpenTicketRef[] {
+  const numbers = ticket.blockedBy.filter((blocker): blocker is number => typeof blocker === "number");
+  const takenOn = ticket.blockedBy.some((blocker) => typeof blocker === "string") ? [] : superseded.blockers;
+  const alreadyBlocking = (number: number) => takenOn.some((blocker) => blocker.number === number && sameRepo(blocker.repo, superseded.repo));
+  return [...new Set(numbers)].filter((number) => !alreadyBlocking(number)).map((number) => ({ ticket: number }));
+}
+
+/**
+ * An Operator step's body: its own, then, when it asks the Operator to open a
+ * new issue (#825), the Open as issue link `link` gives, then its steps as a
+ * task list. With no link, it is the body the step is created with.
+ */
+function operatorStepBody(ticket: Extract<SpecTicket, { operator: true }>, link: OpenAsIssueLink | null): (string | OpenAsIssueLink)[] {
+  return [
+    withoutMentions(ticket.body),
+    ...(link === null ? [] : ["\n\n", link]),
+    "\n\n## Steps\n\n",
+    taskList(ticket.steps).join("\n"),
+  ];
 }
 
 /**
