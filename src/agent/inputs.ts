@@ -639,6 +639,7 @@ export interface OpenTicket {
   readonly pullRequest: SpecTicket["pullRequest"];
 }
 
+/** An open issue as the open-Tickets read takes it from GitHub, before it is known to be a Ticket. */
 export interface OpenTicketNode {
   number: number;
   title: string;
@@ -714,14 +715,14 @@ export async function readOpenTickets(
   repo: Repo,
   { issue, spec, follows }: { readonly issue: number; readonly spec: number | null; readonly follows: number | null },
 ): Promise<OpenTicket[]> {
-  const kept = (node: OpenTicketNode): boolean => isOpenTicket(node) && node.number !== issue && (spec === null || node.parent?.number !== spec);
-  let found = 0;
-  const enough = (page: readonly OpenTicketNode[]): boolean => {
-    found += page.filter(kept).length;
-    return found >= RECENT_ISSUES_CAP;
+  const elsewhere = (node: OpenTicketNode): boolean => isOpenTicket(node) && node.number !== issue && (spec === null || node.parent?.number !== spec);
+  let ticketsRead = 0;
+  const capReached = (page: readonly OpenTicketNode[]): boolean => {
+    ticketsRead += page.filter(elsewhere).length;
+    return ticketsRead >= RECENT_ISSUES_CAP;
   };
-  const open = await pagesOf<OpenTicketNode>(github, OPEN_TICKETS_QUERY, repo, {}, (data) => data.repository.issues, enough);
-  const recent = open.filter(kept).slice(0, RECENT_ISSUES_CAP);
+  const open = await pagesOf<OpenTicketNode>(github, OPEN_TICKETS_QUERY, repo, {}, (data) => data.repository.issues, capReached);
+  const recent = open.filter(elsewhere).slice(0, RECENT_ISSUES_CAP);
   if (follows === null || follows === spec) return recent.map(openTicketOf);
   const data = await github.graphql<{ repository: { issue: { subIssues: { nodes: (OpenTicketNode & { state: string })[] } } | null } }>(SPEC_SUB_ISSUES_QUERY, {
     owner: repo.owner,
@@ -730,7 +731,7 @@ export async function readOpenTickets(
   });
   const listed = new Set(recent.map(({ number }) => number));
   const followed = (data.repository.issue?.subIssues.nodes ?? [])
-    .filter((node) => node.state === "OPEN" && kept(node) && !listed.has(node.number))
+    .filter((node) => node.state === "OPEN" && elsewhere(node) && !listed.has(node.number))
     .sort((a, b) => b.number - a.number);
   return [...recent, ...followed].map(openTicketOf);
 }

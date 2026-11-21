@@ -181,12 +181,9 @@ interface RoleSpec<T> {
   /**
    * The output contract: plain text for the Reviewer, a JSON object for every
    * other role. A Design-session turn's is made for the issue it is on, whose
-   * number its contract reads a Roll-in against (src/loop/designOutput.ts).
-   */
-  /**
-   * The contract, or, for a role whose contract reads the turn's issue, its
-   * builder: given the issue's number and, for a Design session, the numbers
-   * of the open Tickets it was given (#825), null for any other role.
+   * number its contract reads a Roll-in against (src/loop/designOutput.ts),
+   * and for the open Tickets it was given (#825), whose numbers are the only
+   * ones a Ticket's blockedBy may name; null for any other role.
    */
   readonly output: OutputContract<T> | ((issue: number, openTickets: readonly number[] | null) => OutputContract<T>);
   /** How the Product's own instructions for this role relate to the Kit's prompt. */

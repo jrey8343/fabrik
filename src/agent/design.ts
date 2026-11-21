@@ -121,10 +121,21 @@ export function specTicketsContext(value: unknown): string[] {
 }
 
 function specTicketLine(ticket: SpecTicket): string {
-  const said = [ticket.open ? "open" : "closed"];
+  return ticketLine(ticket, ticket.open ? "open" : "closed");
+}
+
+/** A Ticket's line, as the Spec's other Tickets and the open Tickets set it out: `where` it stands, then its state label and its PR. */
+function ticketLine(ticket: Pick<SpecTicket, "number" | "title" | "stateLabel" | "pullRequest">, where: string): string {
+  const said = [where];
   if (ticket.stateLabel !== null) said.push(`\`${ticket.stateLabel}\``);
   if (ticket.pullRequest !== null) said.push(`PR #${ticket.pullRequest.number} ${ticket.pullRequest.state}`);
   return `- #${ticket.number} ${ticket.title}: ${said.join(", ")}`;
+}
+
+/** A Ticket's pull request as an inputs file has it, or null. */
+function pullRequestIn(value: unknown): SpecTicket["pullRequest"] {
+  const pullRequest = value as { number?: unknown; state?: unknown } | null | undefined;
+  return typeof pullRequest?.number === "number" ? { number: pullRequest.number, state: text(pullRequest.state) as NonNullable<SpecTicket["pullRequest"]>["state"] } : null;
 }
 
 /** The inputs step's Spec Tickets, or a failed turn: a split is never proposed blind to its siblings. */
@@ -133,14 +144,12 @@ function readSpecTickets(value: unknown): SpecTicket[] {
   if (!Array.isArray(value)) throw fail();
   return value.map((ticket: Partial<Record<keyof SpecTicket, unknown>> | null) => {
     if (typeof ticket?.number !== "number") throw fail();
-    const pullRequest = ticket.pullRequest as { number?: unknown; state?: unknown } | null | undefined;
     return {
       number: ticket.number,
       title: text(ticket.title),
       stateLabel: typeof ticket.stateLabel === "string" ? (ticket.stateLabel as SpecTicket["stateLabel"]) : null,
       open: ticket.open === true,
-      pullRequest:
-        typeof pullRequest?.number === "number" ? { number: pullRequest.number, state: text(pullRequest.state) as NonNullable<SpecTicket["pullRequest"]>["state"] } : null,
+      pullRequest: pullRequestIn(ticket.pullRequest),
     };
   });
 }
@@ -175,10 +184,7 @@ export function openTicketNumbersOf(value: unknown): number[] {
 }
 
 function openTicketLine(ticket: OpenTicket): string {
-  const said = [ticket.spec === null ? "on the Fast path" : `under the Spec #${ticket.spec}`];
-  if (ticket.stateLabel !== null) said.push(`\`${ticket.stateLabel}\``);
-  if (ticket.pullRequest !== null) said.push(`PR #${ticket.pullRequest.number} ${ticket.pullRequest.state}`);
-  return `- #${ticket.number} ${ticket.title}: ${said.join(", ")}`;
+  return ticketLine(ticket, ticket.spec === null ? "on the Fast path" : `under the Spec #${ticket.spec}`);
 }
 
 /** The inputs step's open Tickets, or a failed turn: a Ticket is never filed blind to the work other Specs hold. */
@@ -187,14 +193,12 @@ function readOpenTicketsFile(value: unknown): OpenTicket[] {
   if (!Array.isArray(value)) throw fail();
   return value.map((ticket: Partial<Record<keyof OpenTicket, unknown>> | null) => {
     if (typeof ticket?.number !== "number" || typeof ticket.title !== "string" || (ticket.spec !== null && typeof ticket.spec !== "number")) throw fail();
-    const pullRequest = ticket.pullRequest as { number?: unknown; state?: unknown } | null | undefined;
     return {
       number: ticket.number,
       title: ticket.title,
       spec: ticket.spec,
       stateLabel: typeof ticket.stateLabel === "string" ? (ticket.stateLabel as OpenTicket["stateLabel"]) : null,
-      pullRequest:
-        typeof pullRequest?.number === "number" ? { number: pullRequest.number, state: text(pullRequest.state) as NonNullable<OpenTicket["pullRequest"]>["state"] } : null,
+      pullRequest: pullRequestIn(ticket.pullRequest),
     };
   });
 }

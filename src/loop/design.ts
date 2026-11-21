@@ -703,7 +703,8 @@ function ticketActions(
   const waitedOn = new Set(tickets.flatMap(siblingsOf));
   const last = tickets.filter((ticket) => !waitedOn.has(ticket.key)).map((ticket) => ticketIssue(ticket.key));
   const first = tickets.filter((ticket) => siblingsOf(ticket).length === 0).map((ticket) => ticketIssue(ticket.key));
-  const builds = tickets.filter((ticket) => !ticket.operator).map((ticket) => ticketIssue(ticket.key));
+  // The Tickets an Operator step's Follows line names: the ones an Implementer builds, never the Operator steps.
+  const followedTickets = tickets.filter((ticket) => !ticket.operator).map((ticket) => ticketIssue(ticket.key));
   const repoUrl = `https://github.com/${superseded.repo}`;
   return {
     actions: [
@@ -740,7 +741,7 @@ function ticketActions(
                   title: withoutMentions(ticket.newIssue.title),
                   body: withoutMentions(ticket.newIssue.body),
                   follows: parent,
-                  tickets: builds,
+                  tickets: followedTickets,
                 }),
               },
             ]
@@ -762,9 +763,9 @@ function ticketActions(
  */
 function openTicketsBlocking(ticket: SpecTicket, superseded: IssueSnapshot): OpenTicketRef[] {
   const numbers = ticket.blockedBy.filter((blocker): blocker is number => typeof blocker === "number");
-  const carried = ticket.blockedBy.some((blocker) => typeof blocker === "string") ? [] : superseded.blockers;
-  const held = (number: number) => carried.some((blocker) => blocker.number === number && sameRepo(blocker.repo, superseded.repo));
-  return [...new Set(numbers)].filter((number) => !held(number)).map((number) => ({ ticket: number }));
+  const takenOn = ticket.blockedBy.some((blocker) => typeof blocker === "string") ? [] : superseded.blockers;
+  const alreadyBlocking = (number: number) => takenOn.some((blocker) => blocker.number === number && sameRepo(blocker.repo, superseded.repo));
+  return [...new Set(numbers)].filter((number) => !alreadyBlocking(number)).map((number) => ({ ticket: number }));
 }
 
 /**
