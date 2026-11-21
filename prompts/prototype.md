@@ -41,6 +41,8 @@ If the variants can't be built without changing one of these, make no commits an
 
 ## Your output
 
+The reply that holds your `<prototype>` tag ends the run, and the Kit then stops anything you left running. Write it only once nothing is running and nothing is waited on: every command you started in the background has finished, and you have read its result. Never schedule a wakeup or a later turn: the run has none.
+
 When you have committed the variants, end your reply with exactly one `<prototype>` tag holding a JSON object, and nothing after it:
 
 <prototype>

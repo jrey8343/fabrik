@@ -14,6 +14,23 @@ export interface AgentStream {
   readonly result: StreamMessage | null;
   /** The last result's `modelUsage`, by model name: every model the run used, subagents included. Empty without one. */
   readonly modelUsage: Readonly<Record<string, StreamMessage>>;
+  /**
+   * The run's turns: `num_turns` summed over every result, since each counts
+   * its own turn alone (#860). A run whose turn ends with a background command
+   * running is woken into another turn, which ends in a result of its own.
+   * null when no result gave one.
+   */
+  readonly turns: number | null;
+  /** The run's API time: `duration_api_ms` summed over every result. null when no result gave one. */
+  readonly apiDurationMs: number | null;
+  /**
+   * The run's duration, from the agent's start to its last result, the waits
+   * between results included: the first result's `duration_ms`, then the time
+   * from it to the last result, read from the messages before each, since a
+   * result carries no time of its own. One result's `duration_ms` is the
+   * run's. null when no result gave one.
+   */
+  readonly durationMs: number | null;
   /** Every `rate_limit_event`'s `rate_limit_info`, in order. */
   readonly rateLimits: readonly StreamMessage[];
   /** The last rate-limit event's info, or null if the stream reported none. */
@@ -140,10 +157,41 @@ function stepsOf(messages: readonly StreamMessage[]): readonly StreamStep[] {
     });
 }
 
+const isResult = (message: StreamMessage): boolean => message["type"] === "result";
+
+/** A figure summed over every result that gave it, or null when none did. */
+function summed(results: readonly StreamMessage[], key: string): number | null {
+  const given = results.map((result) => result[key]).filter((value) => typeof value === "number");
+  return given.length === 0 ? null : given.reduce((a, b) => a + b, 0);
+}
+
+/** When the last message before `index` that carries a time was written, or null if none does. */
+function timeBefore(messages: readonly StreamMessage[], index: number): number | null {
+  for (const message of messages.slice(0, index).reverse()) {
+    const time = typeof message["timestamp"] === "string" ? Date.parse(message["timestamp"]) : NaN;
+    if (!Number.isNaN(time)) return time;
+  }
+  return null;
+}
+
+function durationOf(messages: readonly StreamMessage[]): number | null {
+  const results = messages.filter(isResult);
+  const first = results[0]?.["duration_ms"];
+  if (results.length > 1 && typeof first === "number") {
+    // Each result follows its turn's last message at once, so the two messages are as far apart as the two results.
+    const firstAt = timeBefore(messages, messages.findIndex(isResult));
+    const lastAt = timeBefore(messages, messages.findLastIndex(isResult));
+    if (firstAt !== null && lastAt !== null && lastAt >= firstAt) return first + (lastAt - firstAt);
+  }
+  // Without those times, the turns alone: the run's duration less its waits.
+  return summed(results, "duration_ms");
+}
+
 /** Reads every stdout line of the agent's stream, in order. */
 export function readStream(lines: readonly string[]): AgentStream {
   const messages = lines.map(streamMessageOf).filter((m): m is StreamMessage => m !== null);
-  const result = messages.findLast((m) => m["type"] === "result") ?? null;
+  const results = messages.filter(isResult);
+  const result = results.at(-1) ?? null;
   const rateLimits = messages
     .filter((m) => m["type"] === "rate_limit_event")
     .map((m) => m["rate_limit_info"])
@@ -153,6 +201,9 @@ export function readStream(lines: readonly string[]): AgentStream {
     init: messages.find(isInit) ?? null,
     result,
     modelUsage: modelUsageOf(result),
+    turns: summed(results, "num_turns"),
+    apiDurationMs: summed(results, "duration_api_ms"),
+    durationMs: durationOf(messages),
     rateLimits,
     lastRateLimit: rateLimits.at(-1) ?? null,
     apiRetries,

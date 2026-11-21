@@ -23,16 +23,15 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { run } from "@ai-hero/sandcastle";
-import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import { leaveFailureReport, readyHook, setAgentEnv, streamWatch } from "../agent/launch.ts";
+import { leaveFailureReport, readyHook, runAgent, streamWatch } from "../agent/launch.ts";
+import { endAgentProgram } from "../agent/stop.ts";
 import { runSummary } from "../agent/summary.ts";
 import { readTranscriptGzip, RUN_BRIEF_FILE, TRANSCRIPT_FILE } from "../agent/transcript.ts";
 import type { FailureReport } from "../loop/types.ts";
 import { readBytesIfPresent, readIfPresent } from "./checkout.ts";
 import { writeOutputs, writeSummary } from "./stepFiles.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
-import { judgeAgent, judgeClaudeArgs, judgeOutput } from "./judgeLaunch.ts";
+import { judgeLaunch, judgeOutput } from "./judgeLaunch.ts";
 import { loadRubrics } from "./kitFiles.ts";
 import { JUDGE_EFFORT, JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { readJudgedRun } from "./scorer.ts";
@@ -81,24 +80,20 @@ async function main(): Promise<void> {
     const { prompt, trimmed } = judgePrompt({ transcript: scored.lines, ticket, run: judged, brief, rubrics });
     transcriptTrimmed = trimmed;
 
-    // The agent inherits this process's env (noSandbox), so set what it needs here.
-    setAgentEnv(judgeClaudeArgs());
-    const result = await run({
+    const answer = await runAgent({
       name: JUDGE_JOB,
-      agent: judgeAgent(),
-      sandbox: noSandbox(),
+      launch: judgeLaunch(),
       cwd: await emptyWorkingDir(),
       prompt,
-      maxIterations: 1,
       output: judgeOutput(rubrics),
       // Neither setup nor build: the judge runs nothing, so only the preflight.
-      hooks: { sandbox: { onSandboxReady: [{ command: readyHook("none", { setup: null, build: null }), timeoutMs: JUDGE_TIMEOUT_MINUTES * 60_000 }] } },
-      signal: abort.signal,
-      logging: { type: "file", path: join(outDir, "agent.log"), onAgentStreamEvent: watch.onAgentStreamEvent },
+      ready: { command: readyHook("none", { setup: null, build: null }), timeoutMs: JUDGE_TIMEOUT_MINUTES * 60_000 },
+      abort,
+      watch,
+      logPath: join(outDir, "agent.log"),
     });
-    watch.checkInit();
 
-    await writeFile(join(outDir, JUDGE_RESULT_FILE), judgeResultText((result as { output?: unknown }).output, trimmed));
+    await writeFile(join(outDir, JUDGE_RESULT_FILE), judgeResultText(answer, trimmed));
     console.log(`The judge scored the run on ${rubrics.map((rubric) => rubric.name).join(", ")}${trimmed ? ", from a trimmed transcript" : ""}`);
   } catch (error) {
     // Left for the score-record job, which writes the judge's record and a judge-failed or judge-output-invalid score file.
@@ -110,7 +105,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  console.log(`::error title=The judge failed::${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+// Everything the judge writes is written by the time it settles, so its agent's process is stopped and the step ends (#860).
+const code = await main().then(
+  () => 0,
+  (error: unknown) => {
+    console.log(`::error title=The judge failed::${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  },
+);
+await endAgentProgram(code);

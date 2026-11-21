@@ -8,7 +8,19 @@ import {
   parseImplementOutput,
   readRequestChangesRunOutput,
 } from "../loop/implementOutput.ts";
-import { type Checked, leaveFailureReport, readyHook, replySchemaOf, settleReply, streamWatch, type StreamWatchOptions } from "./launch.ts";
+import { cleanLaunch } from "../__fixtures__/preflight.ts";
+import { checkMeteredBilling } from "../preflight/meteredBilling.ts";
+import {
+  agentLaunch,
+  type Checked,
+  claudeArgs,
+  leaveFailureReport,
+  readyHook,
+  replySchemaOf,
+  settleReply,
+  streamWatch,
+  type StreamWatchOptions,
+} from "./launch.ts";
 
 const line = (message: unknown) => JSON.stringify(message);
 const init = line({ type: "system", subtype: "init", apiKeySource: "none" });
@@ -47,6 +59,26 @@ describe("The stream watch", () => {
     const { abort } = watching([line({ type: "system", subtype: "init", apiKeySource: "ANTHROPIC_API_KEY" })]);
 
     expect(abort.signal.aborted).toBe(true);
+  });
+
+  it("warns once, naming them, when the init message still lists tools that schedule a later turn, and lets the run go on (#860)", () => {
+    const withTools = (tools: string[]) => line({ type: "system", subtype: "init", apiKeySource: "none", tools });
+    const { abort } = watching([
+      withTools(["Bash", "ScheduleWakeup", "Read", "CronCreate"]),
+      assistant,
+      // A session Sandcastle resumed, to ask for a malformed block again, starts with an init message of its own.
+      withTools(["Bash", "ScheduleWakeup", "Read", "CronCreate"]),
+    ]);
+
+    const warnings = vi.mocked(console.log).mock.calls.map(([text]) => String(text)).filter((text) => text.startsWith("::warning"));
+    expect(warnings).toEqual(["::warning title=Scheduling tools at init::ScheduleWakeup, CronCreate"]);
+    expect(abort.signal.aborted).toBe(false);
+  });
+
+  it("warns of nothing when the init message lists none of them", () => {
+    watching([line({ type: "system", subtype: "init", apiKeySource: "none", tools: ["Bash", "Read"] }), init, assistant]);
+
+    expect(vi.mocked(console.log).mock.calls.filter(([text]) => String(text).startsWith("::warning"))).toEqual([]);
   });
 
   it("lets a run whose stream shows no overage go on, with rotation on", () => {
@@ -278,5 +310,37 @@ describe("A run's onSandboxReady hook", () => {
 
     expect(readyHook("setup", both)).toBe(`(mise install) && ${hook}`);
     expect(readyHook("setup", { setup: null, build: "pnpm install" })).toBe(hook);
+  });
+});
+
+describe("Every agent's launch (#860)", () => {
+  /** A launch command's words, with Sandcastle's single quotes taken off. */
+  const words = (command: string) => command.split(" ").map((word) => word.replace(/^'(.*)'$/, "$1"));
+
+  it("turns off the tools that schedule a later turn, in arguments the metered-billing preflight lets through", () => {
+    const args = claudeArgs("claude-opus-5-5", "high");
+
+    expect(args.join(" ")).toContain("--disallowedTools ScheduleWakeup,CronCreate,CronDelete,CronList");
+    expect(args.slice(-2)).toEqual(["-p", "-"]);
+    expect(checkMeteredBilling(cleanLaunch({ args }))).toEqual({ kind: "pass" });
+  });
+
+  it.each([
+    ["with an effort", "high"],
+    ["at the CLI's default effort", null],
+  ])("starts the agent with exactly the arguments the preflight is given, %s", (_, effort) => {
+    const launch = agentLaunch("claude-opus-5-5", effort, "implement");
+    const { command, stdin } = launch.provider.buildPrintCommand({ prompt: "Build it.", dangerouslySkipPermissions: true });
+
+    expect(words(command)).toEqual(["claude", ...launch.args]);
+    expect(launch.args).toEqual(claudeArgs("claude-opus-5-5", effort));
+    expect(stdin).toBe("Build it.");
+  });
+
+  it("keeps them off when Sandcastle resumes the session to ask for a malformed block again", () => {
+    const { provider } = agentLaunch("claude-opus-5-5", "high", "implement");
+    const { command } = provider.buildPrintCommand({ prompt: "Emit the block again.", dangerouslySkipPermissions: true, resumeSession: "s1" });
+
+    expect(command).toMatch(/ --resume '?s1'? --disallowedTools ScheduleWakeup,CronCreate,CronDelete,CronList -p -$/);
   });
 });

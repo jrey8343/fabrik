@@ -172,6 +172,29 @@ describe("The Run record a run's end yields", () => {
     });
   });
 
+  it("a run whose stream holds several results records the whole run's duration, API time and turns, with the last result's cost (#860)", () => {
+    const at = (timestamp: string) => line({ type: "assistant", timestamp, message: {} });
+    const transcript = [
+      init,
+      at("2026-11-21T01:23:16.000Z"),
+      result({ num_turns: 99, duration_ms: 1_080_647, duration_api_ms: 700_000, total_cost_usd: 0.9 }),
+      at("2026-11-21T01:30:25.000Z"),
+      result({ num_turns: 4, duration_ms: 6_403, duration_api_ms: 5_000, total_cost_usd: 1.1 }),
+      at("2026-11-21T01:34:41.000Z"),
+      result({ num_turns: 3, duration_ms: 37_555, duration_api_ms: 30_000 }),
+    ];
+
+    expect(runRecordFor(runEnd({ transcript }))?.record).toMatchObject({
+      // 18m 0.647s to the first result, then 11m 25s to the last: never the last result's own 37.555s and 3 turns.
+      durationMs: 1_765_647,
+      apiDurationMs: 735_000,
+      turns: 106,
+      totalCostUsd: 1.25,
+      subtype: "success",
+      terminalReason: "completed",
+    });
+  });
+
   it("a Design-session turn's record is for the event's issue, and is no prototype turn's", () => {
     const files = runRecordFor(runEnd({ needs: needs("design", { design: job("success") }), agentResult: agentResult("design", 12) }));
 

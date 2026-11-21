@@ -64,6 +64,21 @@ const KINDS_NO_RUN_CAN_MEET = [
 /** What the prompts count beside the five kinds as a criterion no run can meet (#761). */
 const LITERAL_NO_OUTPUT_CAN_MEET = "a literal no output can meet, such as a line or a banner that nothing the Ticket builds could ever show";
 
+describe("The reply that ends a run, in every Kit prompt (#860)", () => {
+  // A turn that ends with a background command running, or a wakeup pending, isn't the run's last, so its block was once never read.
+  it.each(KIT_PROMPT_NAMES)("%s says the reply holding its output tag ends the run, with nothing running or waited on, and never a wakeup", async (name) => {
+    const output = section(await prompt(name), "Your output");
+
+    expect(output).toContain(
+      [
+        `The reply that holds your \`<${name}>\` tag ends the run, and the Kit then stops anything you left running.`,
+        "Write it only once nothing is running and nothing is waited on: every command you started in the background has finished, and you have read its result.",
+        "Never schedule a wakeup or a later turn: the run has none.",
+      ].join(" "),
+    );
+  });
+});
+
 describe("The prompts of the runs on a PR the Operator requested changes on (ADR-0010)", () => {
   it.each(["review", "implement"])("%s names the section the Request changes arrive under, as amendments to the Ticket", async (role) => {
     expect(await prompt(role)).toContain(`"${REQUESTED_CHANGES_HEADING}"`);

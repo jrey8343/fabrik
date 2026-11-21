@@ -71,6 +71,8 @@ Propose the change at that gate, and say in the proposal's `problem` which gate 
 
 ## Your output
 
+The reply that holds your `<retro>` tag ends the run, and the Kit then stops anything you left running. Write it only once nothing is running and nothing is waited on: every command you started in the background has finished, and you have read its result. Never schedule a wakeup or a later turn: the run has none.
+
 End your reply with exactly one `<retro>` tag holding a JSON object, and nothing after it:
 
 <retro>

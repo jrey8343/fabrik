@@ -366,6 +366,12 @@ export interface RunRecord {
    * reads as null.
    */
   readonly findingTags: FindingTagCounts | null;
+  /**
+   * The whole run's duration, API time and turns, as the stream reader gives
+   * them (src/agent/stream.ts): for a run whose stream holds several results,
+   * the time from the agent's start to its last result and the sums over all
+   * of them, never the last result's own (#860).
+   */
   readonly durationMs: number | null;
   readonly apiDurationMs: number | null;
   readonly turns: number | null;
@@ -735,9 +741,10 @@ function recordOf(facts: RunFacts, transcript: readonly string[] | null, transcr
     fullReview,
     verdict,
     findingTags,
-    durationMs: numberOr(last?.["duration_ms"]),
-    apiDurationMs: numberOr(last?.["duration_api_ms"]),
-    turns: numberOr(last?.["num_turns"]),
+    // The whole run's, over every result of its stream, never the last result's own (#860).
+    durationMs: stream?.durationMs ?? null,
+    apiDurationMs: stream?.apiDurationMs ?? null,
+    turns: stream?.turns ?? null,
     permissionDenials: Array.isArray(last?.["permission_denials"]) ? last["permission_denials"].length : null,
     apiRetries: stream?.apiRetryCount ?? null,
     // A run with any model of unknown cost basis has no total either: never a guessed figure.
