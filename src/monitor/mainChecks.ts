@@ -24,15 +24,14 @@ import {
   CHECK_NAME_MAX,
   type CheckRun,
   detailsRewriteOf,
-  FAILING,
   failedRunsOf,
   type MainCommit,
-  newestRunOfEach,
   type RedMainInput,
   seenGreenSince,
   shortSha,
 } from "./redMain.ts";
 import type { FailureExcerpt } from "../review/failureExcerpt.ts";
+import { mainCheckOn } from "./mainCheckState.ts";
 
 /**
  * Each Main check's part of the plan, in the order `monitor.main_checks`
@@ -112,16 +111,13 @@ type Decided = {
 };
 
 /**
- * How the commit decides this Main check, or null when it doesn't: no run of
- * it there, one still under way, or one that ended cancelled, skipped,
- * neutral, action_required or stale.
+ * How the commit decides this Main check, or null when it doesn't, by the
+ * rule the read library reads one by too (./mainCheckState.ts).
  */
 function decisionOf(check: string, commit: MainCommit, index: number): Decided | null {
-  const run = newestRunOfEach(commit.checkRuns).find((each) => each.name === check);
-  if (run === undefined || run.status !== "completed" || run.conclusion === null) return null;
-  const decidedAt = Date.parse(run.completedAt ?? "") || 0;
-  if (FAILING.includes(run.conclusion)) return { kind: "red", commit, index, run, decidedAt };
-  return run.conclusion === "success" ? { kind: "green", commit, index, run, decidedAt } : null;
+  const { is, run } = mainCheckOn(check, commit.checkRuns);
+  if (is === "undecided" || run === null) return null;
+  return { kind: is, commit, index, run, decidedAt: Date.parse(run.completedAt ?? "") || 0 };
 }
 
 /** Whether a red files a new issue past the check's newest issue, closed, and if so the issue it's still failing after. */
