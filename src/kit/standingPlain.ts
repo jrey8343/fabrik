@@ -56,10 +56,14 @@ export function plainStandingsOf({ github, kit, operator, appLogin }: StandingFa
  * name the pull request would have had, until that name is `yours-to-merge`:
  * then it takes it, with the mark off, since no Plain pull request stops work.
  * One that carries no pull request is joined first; else one carrying the
- * issue's open agent PR is, the Pairing session's number taking the agent
- * PR's, as the Operator pairing on the issue is its live work. Where the issue
- * has none, the pull request's Standing carries its number. With the issue
- * closed or missing the pull request stands by itself.
+ * issue's open agent PR while it is handed to the Operator, `yours-to-do`
+ * (#611), the Pairing session's number taking the agent PR's, as the Operator
+ * pairing on the issue is then its live work. One carrying an agent PR that
+ * is not handed to them, at implement, review, the Merge gate or a Retry, is
+ * never joined (#851): each pull request keeps its own row, named for its
+ * own head. Where the issue has no own Standing it may join, the pull
+ * request's Standing carries its number. With the issue closed or missing the
+ * pull request stands by itself.
  */
 export function joinPairing(standings: readonly Standing[], github: GitHubFacts): Standing[] {
   const replaced = new Map<Standing, Standing | null>();
@@ -76,7 +80,7 @@ export function joinPairing(standings: readonly Standing[], github: GitHubFacts)
   });
 }
 
-/** A Pairing session's pull request's Standing, the open issue its branch names, and the issue's own Standing it joins, or null where the issue has none. */
+/** A Pairing session's pull request's Standing, the open issue its branch names, and the issue's own Standing it joins, or null where the issue has none it may join. */
 export interface Pairing {
   readonly pairing: Standing;
   readonly issue: number;
@@ -85,9 +89,12 @@ export interface Pairing {
 
 /**
  * Each Pairing session's pull request whose issue is open, with the issue's
- * own Standing it joins, as joinPairing joins them: one that carries no pull
- * request first, else the first not yet joined. One whose issue's every own
- * Standing is joined already is left out, standing by itself.
+ * own Standing it joins, as joinPairing joins them, of those not yet joined:
+ * one that carries no pull request first, else one carrying the agent PR
+ * while it is handed to the Operator. With none of those, its own is null,
+ * and it stands by itself carrying the issue's number, as where the issue has
+ * no own Standing at all: beside an agent PR not handed to the Operator, or
+ * as a second Pairing session's pull request on the issue.
  */
 export function pairingsOf(standings: readonly Standing[], { plainPullRequests, openIssues }: GitHubFacts): Pairing[] {
   const taken = new Set<Standing>();
@@ -96,15 +103,17 @@ export function pairingsOf(standings: readonly Standing[], { plainPullRequests, 
     const headRef = plainPullRequests.find(({ number }) => number === pairing.pullRequest)?.headRef;
     const issue = headRef === undefined ? null : pairedIssueOf(headRef);
     if (issue === null || !openIssues.some(({ number }) => number === issue)) return [];
-    const own = standings.filter((standing) => standing.issue === issue && standing !== pairing);
-    const unjoined = own.filter((standing) => !taken.has(standing));
-    const joinable = unjoined.find((standing) => standing.pullRequest === null) ?? unjoined[0];
-    if (joinable !== undefined) {
-      taken.add(joinable);
-      return [{ pairing, issue, own: joinable }];
-    }
-    return own.length === 0 ? [{ pairing, issue, own: null }] : [];
+    const unjoined = standings.filter((standing) => standing.issue === issue && standing !== pairing && !taken.has(standing));
+    const joinable = unjoined.find((standing) => standing.pullRequest === null) ?? unjoined.find(isHandedToOperator);
+    if (joinable === undefined) return [{ pairing, issue, own: null }];
+    taken.add(joinable);
+    return [{ pairing, issue, own: joinable }];
   });
+}
+
+/** Whether an issue's own Standing is handed to the Operator, `yours-to-do`: the one carrying an agent PR a Pairing session's pull request may join (joinPairing). */
+function isHandedToOperator(own: Standing): boolean {
+  return own.name === "yours-to-do";
 }
 
 /** An issue's own Standing joined with its Pairing session's pull request's. */
