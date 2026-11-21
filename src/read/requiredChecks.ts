@@ -11,6 +11,7 @@
 // "unread", and the others are still given.
 import { allPages, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
+import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import type { Row } from "./rows.ts";
 
 /** What a read of a repo's Required checks says. */
@@ -130,9 +131,12 @@ export async function readDefaultBranchHeadChecks(
  * The heads a checks read is asked about, from rows, each once, from its
  * `detail.head`: each agent pull request's at the Merge gate, and each open
  * Plain pull request's that is not a draft, a Pairing session's joined to its
- * issue's row included. A draft agent pull request's is never one.
+ * issue's row included. A draft agent pull request's is never one. Rows
+ * holding a Standing of another schema are refused: a kept row comes back
+ * through readRow (./keptRow.ts).
  */
 export function headsToCheck(rows: readonly Row[]): string[] {
+  refuseRowsOfOtherSchema(rows);
   const heads = rows.flatMap(({ standing }) => {
     const { head } = standing.detail;
     if (head === undefined) return [];

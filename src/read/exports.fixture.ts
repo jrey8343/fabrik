@@ -76,6 +76,7 @@ import {
   mergesToRead,
   namedShots,
   newerSchemaOf,
+  newerStandingSchemaOf,
   owedRollInsOf,
   NO_DEPLOY_SEEN_MINUTES,
   parseCaptureResult,
@@ -91,9 +92,11 @@ import {
   readRunRecord,
   readRequiredChecks,
   readRound,
+  readRow,
   readRuns,
   readShotsManifest,
   readSpend,
+  readStanding,
   refusalOf,
   requiredChecksFactOf,
   resolveKitConfig,
@@ -699,6 +702,42 @@ const A_REPO_WITH_AN_OWED_ROLL_IN = homeFactsOf({
     },
   ],
 }) satisfies Facts;
+
+/** Ticket 12 of `acme/shop`, blocked by its own repo's #9 and #7, as a reader kept its Standing at v3.4.1: schema 1, its Blockers by number alone. */
+export const A_STANDING_KEPT_AT_SCHEMA_1 = {
+  schema: 1,
+  repo: "acme/shop",
+  issue: 12,
+  pullRequest: null,
+  work: "ticket",
+  place: "implement",
+  name: "blocked",
+  move: "nobody",
+  yours: false,
+  stopsWork: false,
+  since: "2026-11-08T12:00:00Z",
+  stuckAt: null,
+  awaits: { role: "implement", on: "issue" },
+  subscription: null,
+  detail: { blockers: [9, 7] },
+} as const;
+
+/** That Ticket's row as a reader kept it at v3.4.1: its Standing at schema 1, and no `shots`, which a row gained at v4.1.0. */
+export const A_ROW_KEPT_AT_V3_4_1 = {
+  standing: A_STANDING_KEPT_AT_SCHEMA_1,
+  title: "Sign the contract",
+  lastWord: null,
+  related: [],
+  mentions: [],
+  relatedTo: null,
+  followUps: [],
+  ticketClosed: null,
+  plainPullRequest: null,
+  evidence: null,
+  production: null,
+  prototype: null,
+  digest: null,
+} as const;
 
 /** One small call of every value the entry exports, keyed by its name: a constant is returned as it is. */
 export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
@@ -1312,6 +1351,21 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   owedRollInsOf: () =>
     owedRollInsOf(
       rowsOf(A_REPO_WITH_AN_OWED_ROLL_IN, A_RUNS_READ, A_CHECKS_READ, A_DEPLOYMENTS_READ, NOW),
+    ),
+
+  // Kept Standings and rows read back
+
+  readStanding: () =>
+    readStanding(
+      A_STANDING_KEPT_AT_SCHEMA_1,
+    ),
+  newerStandingSchemaOf: () =>
+    newerStandingSchemaOf(
+      { ...A_STANDING_KEPT_AT_SCHEMA_1, schema: STANDING_SCHEMA + 1 },
+    ),
+  readRow: () =>
+    readRow(
+      A_ROW_KEPT_AT_V3_4_1,
     ),
 };
 

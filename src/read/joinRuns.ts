@@ -12,6 +12,7 @@ import { type RunningRun, runningRunOf, runningSince } from "../kit/standingInFl
 import type { WaitingOnKitSilence } from "../kit/standingSilence.ts";
 import { DESIGN_LABEL, DIGEST_LABEL, REPLAY_TRIGGER_LABEL, type TriggerLabel } from "../loop/labels.ts";
 import { isOfPullRequest } from "../loop/types.ts";
+import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 
@@ -21,9 +22,11 @@ import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
  * Operator's, is `running` while a run of that role is in flight on its work.
  * Every row is then read at `now` as the rule reads a kept Standing
  * (standingAt), so one past its `stuckAt` is Stuck. With the runs unread, only
- * that.
+ * that. Rows holding a Standing of another schema are refused: a kept row
+ * comes back through readRow (./keptRow.ts).
  */
 export function joinRuns(rows: readonly Row[], runs: RunsRead, now: string): Row[] {
+  refuseRowsOfOtherSchema(rows);
   const inFlight = runsInFlightFactOf(runs);
   const settle = (standing: Standing) => standingAt(inFlight === "unread" ? standing : settled(standing, inFlight), now);
   // The issue's own Standing a Pairing session's row carries is settled with it, as the rule gives both from the same runs.

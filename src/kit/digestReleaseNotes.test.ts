@@ -130,7 +130,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Digest's release notes, while dr
     const notes = await read(NOTES);
     const prompt = await read("prompts/digest.md");
     const carried = carriedDigest(digestBodyOf(), { repoUrl: "https://github.com/acme/shop", pullRequest: 50, headSha: "b".repeat(40), pictureOf: "route" }, { files: [], changed: [] });
-    const waiting = { name: "running", pullRequest: 12, since: "2026-11-13T00:00:00Z", detail: { run: "digest", retry: null, actionsRun: 1, passed: true } } as unknown as Standing;
+    const waiting = { schema: 2, name: "running", pullRequest: 12, since: "2026-11-13T00:00:00Z", detail: { run: "digest", retry: null, actionsRun: 1, passed: true } } as unknown as Standing;
 
     expect(carried).toContain("Carried over from `aaaaaaa` because only `main` moved.");
     expect(notes).toContain('"Carried over from" the head it was written at, "because only `main` moved."');

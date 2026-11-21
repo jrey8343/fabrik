@@ -12,6 +12,7 @@ import { standingAt, standingOrder } from "../kit/standing.ts";
 import { deployIn, productionStandingOf } from "../kit/standingProduction.ts";
 import { isMergedStanding, type MergedStanding, mergedStillStands, promotedStandingOf, stagingStandingOf } from "../kit/standingStaging.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
+import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 
 /**
@@ -21,9 +22,11 @@ import { type Row, withOwnSettled } from "./rows.ts";
  * environment is at no place, and nothing is read for it. In a repo that
  * declares `staging`, every row at Staging wants production's read too,
  * where Kit config names production's environment: it is how a production
- * Deployment starting is seen.
+ * Deployment starting is seen. Rows holding a Standing of another schema are
+ * refused: a kept row comes back through readRow (./keptRow.ts).
  */
 export function mergesToRead(rows: readonly Row[]): MergeToRead[] {
+  refuseRowsOfOtherSchema(rows);
   return rows.flatMap(({ standing }) =>
     isMergedStanding(standing) && wantsProductionRead(standing) && standing.detail.mergeCommit !== null
       ? [{ mergeCommit: standing.detail.mergeCommit, mergedAt: standing.detail.mergedAt }]
@@ -46,7 +49,9 @@ function wantsProductionRead({ place, name, detail }: MergedStanding): boolean {
  * `now` is left out, at Production or not; in a repo that declares
  * `staging`, a row at Staging stands as its own `standsUntil` says (#856),
  * so one that waits on the Operator is kept however old. Every row is read
- * at `now` as the rule reads a kept Standing (standingAt).
+ * at `now` as the rule reads a kept Standing (standingAt). Rows holding a
+ * Standing of another schema are refused, one that would be left out among
+ * them: a kept row comes back through readRow (./keptRow.ts).
  *
  * In a repo that declares `staging`, a read of production's environment
  * moves a row at Staging to Production, with production's names, once it
@@ -56,6 +61,7 @@ function wantsProductionRead({ place, name, detail }: MergedStanding): boolean {
  * join with staging settles it.
  */
 export function joinDeployments(rows: readonly Row[], read: DeploymentsRead, now: string): Row[] {
+  refuseRowsOfOtherSchema(rows);
   const joined = rows.flatMap((row) => {
     const settled = isMergedStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
     if (settled === null) return [];
