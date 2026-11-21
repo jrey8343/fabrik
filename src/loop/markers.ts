@@ -1091,6 +1091,28 @@ export function fromPullRequestIn(body: string): number | null {
 }
 
 /**
+ * The line a Trial problem's body carries (#856, ADR-0038), naming the merged
+ * pull request whose Staging trial found it, matched against a whole line
+ * with its outer whitespace trimmed. It names the pull request where a person
+ * reads it, never inside a hidden comment: GitHub cross-references an issue
+ * to a pull request its rendered text names, and that is how a reader finds a
+ * pull request's Trial problems. It is not the Follow-up's `From PR #n`: a
+ * Trial problem holds acceptance back, and is no Roll-in candidate. A Design
+ * session's rewrite carries it forward.
+ */
+export const TRIAL_PROBLEM_LINE = /^From Staging trial of PR #([1-9][0-9]*)$/;
+
+/** The line for a Trial problem found on merged PR #`pullRequest`, which trialProblemIn reads back. */
+export function trialProblemLine(pullRequest: number): string {
+  return `From Staging trial of PR #${pullRequest}`;
+}
+
+/** The PR the first Trial problem's line in `body` names, or null if it has none: no Trial problem. A line quoted as code isn't one. */
+export function trialProblemIn(body: string): number | null {
+  return numberOnFirstLineIn(body, TRIAL_PROBLEM_LINE);
+}
+
+/**
  * The line an issue filed from a Retro's proposal ends with, naming the Retro
  * it came from (#151), matched against a whole line with its outer whitespace
  * trimmed: `From retro #n` on an issue in the Retro's own Product repo, and

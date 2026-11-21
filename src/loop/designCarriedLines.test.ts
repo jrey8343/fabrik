@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { KIT } from "../__fixtures__/repoScan.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
+import { trialProblemIn, trialProblemLine } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Plan } from "./types.ts";
 
@@ -357,6 +358,33 @@ describe("A Design session's rewrite keeps the issue's From PR line, so the issu
         planFor(turnFinished(output), inSession(""), kitConfig()),
       );
     }
+  });
+});
+
+// A Trial problem the Operator filed ends with the merged PR whose Staging trial found it (#856).
+const filedTrialProblem = ["The cart total reads 0 on staging.", "", trialProblemLine(88)].join("\n");
+
+describe("A Design session's rewrite keeps a Trial problem's line, so the pull request it was found on keeps its Trial problem", () => {
+  it("ends the Operator brief, the agent brief and the Map with it, since each rewrites the filed issue in place", () => {
+    for (const output of [operatorBrief, agentBrief, map]) {
+      const rewritten = rewrittenBody(planFor(turnFinished(output), inSession(filedTrialProblem), kitConfig()));
+
+      expect(rewritten?.split("\n").slice(-2)).toEqual(["", "From Staging trial of PR #88"]);
+      expect(trialProblemIn(rewritten ?? "")).toBe(88);
+    }
+  });
+
+  it("ends the Spec that supersedes the issue with it, and gives the Tickets under it none", () => {
+    const plan = planFor(turnFinished(spec), inSession(filedTrialProblem), kitConfig());
+
+    expect(trialProblemIn(createdBody(plan, "spec") ?? "")).toBe(88);
+    expect(trialProblemIn(createdBody(plan, "ticket:split") ?? "")).toBeNull();
+  });
+
+  it("carries no such line quoted in a fenced code block", () => {
+    const quoting = ["The Console wrote:", "", "```", trialProblemLine(88), "```", "", "The total is wrong."].join("\n");
+
+    expect(planFor(turnFinished(agentBrief), inSession(quoting), kitConfig())).toEqual(planFor(turnFinished(agentBrief), inSession("The total is wrong."), kitConfig()));
   });
 });
 
