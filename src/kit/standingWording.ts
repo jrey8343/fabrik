@@ -10,7 +10,7 @@ import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, NEEDS_INFO, NEEDS_TRIAGE, R
 import { fixRunName } from "../loop/retry.ts";
 import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
-import type { Standing, StandingNamed } from "./standing.ts";
+import { refuseOtherSchema, type Standing, type StandingNamed } from "./standing.ts";
 import type { RunningRun } from "./standingInFlight.ts";
 import type { StagingDetail } from "./standingStaging.ts";
 
@@ -83,8 +83,9 @@ function checkedHeadPhrase(standing: Standing, passedAt: string | undefined, now
   return headMoved(standing) ? `#${standing.pullRequest}'s head, pushed since the Reviewer passed it ${age} ago` : `the head the Reviewer passed ${age} ago`;
 }
 
-/** A Standing's pill, sentence and remedy at `now`, ISO 8601; times it names are told in `timeZone`. */
+/** A Standing's pill, sentence and remedy at `now`, ISO 8601; times it names are told in `timeZone`. A Standing of another schema is refused (refuseOtherSchema). */
 export function wordStanding(standing: Standing, now: string, timeZone: string): StandingWords {
+  refuseOtherSchema(standing);
   const age = ageSince(standing.since, now);
   switch (standing.name) {
     case "running": {

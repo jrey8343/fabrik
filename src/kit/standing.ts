@@ -24,8 +24,28 @@ import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
 import type { TrialFacts } from "./trialResult.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
-/** Goes up only when a field is removed or changes meaning: a new name or a new `detail` key leaves it. */
+/**
+ * Goes up only when a field is removed or changes meaning: a new name or a new
+ * `detail` key leaves it. A release that moves it writes the step from the
+ * schema before into readStanding (./keptStanding.ts).
+ */
 export const STANDING_SCHEMA = 2;
+
+/**
+ * Refuses a Standing of any schema but STANDING_SCHEMA, one with none
+ * included, naming its schema, the Kit's and readStanding, the one door a
+ * kept Standing comes back through (#793). Everything that takes a kept
+ * Standing calls it before reading anything else of what it was given, so
+ * nothing past readStanding meets an older Standing, or a newer Kit's.
+ */
+export function refuseOtherSchema(standing: Standing): void {
+  const schema: unknown = (standing as { readonly schema?: unknown } | null | undefined)?.schema;
+  if (schema === STANDING_SCHEMA) return;
+  const given = schema === undefined ? "no schema" : `schema ${JSON.stringify(schema)}`;
+  throw new Error(
+    `A Standing of ${given} was given where the Kit reads schema ${STANDING_SCHEMA}, its STANDING_SCHEMA. Read a kept Standing back through readStanding, and a kept row through readRow, before handing it on.`,
+  );
+}
 
 /** What kind of work a Standing is. */
 export type StandingWork =
@@ -481,9 +501,10 @@ export function standingOrder(a: Standing, b: Standing): number {
  * a `merged` Standing whose `noDeployAt` has passed is `no-deploy-seen`,
  * since then. Everything else is returned as it is. The rule reads each
  * Standing through this, so a reader that kept one gets the answer the rule
- * would give.
+ * would give. A Standing of another schema is refused (refuseOtherSchema).
  */
 export function standingAt(standing: Standing, now: string): Standing {
+  refuseOtherSchema(standing);
   if (standing.name === "merged") return productionAt(standing, now);
   if ((standing.name !== "not-started" && standing.name !== "waiting-on-kit" && standing.name !== "check-healing") || standing.stuckAt === null) return standing;
   if (Date.parse(now) < Date.parse(standing.stuckAt)) return standing;

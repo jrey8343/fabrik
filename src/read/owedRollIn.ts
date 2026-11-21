@@ -9,6 +9,7 @@ import type { CommentFacts } from "../kit/weeklySummary.ts";
 import type { RollInText } from "../loop/markers.ts";
 import { owedRollIns, type RollInIssue, type SettledRollIn } from "../loop/owedRollIn.ts";
 import type { Facts } from "./gather.ts";
+import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import type { Row } from "./rows.ts";
 
 /** A Roll-in the Operator settled and has not sent, with the closed issue it is for and the open agent pull request it is owed on. */
@@ -32,9 +33,11 @@ export interface OwedRollIn {
  * first, each with its issue and its pull request: the issue is closed, so
  * no row is its own and no row's `relatedTo` names it, and a reader holding
  * either number finds the other here. Nothing else under a row's `related`
- * is listed.
+ * is listed. Rows holding a Standing of another schema are refused: a kept
+ * row comes back through readRow (./keptRow.ts).
  */
 export function owedRollInsOf(rows: readonly Row[]): OwedRollIn[] {
+  refuseRowsOfOtherSchema(rows);
   return rows
     .flatMap(({ standing, related }) =>
       related.flatMap((entry): OwedRollIn[] => {
