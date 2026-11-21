@@ -808,6 +808,15 @@ describe("The Roll-in in the Design prompt", () => {
   });
 });
 
+describe("Test-first work in the Implement prompt", () => {
+  // #852: runs wrote a test and its code in one step, or were asked only for a test and never showed it failing.
+  it("has the run see each new test fail before its code, and show a test of behaviour already in the code can fail", async () => {
+    expect(lineStarting(section(await prompt("implement"), "How to work"), "- Work test-first.")).toBe(
+      "- Work test-first. Call the Skill tool with `tdd` and follow it: one failing test, then the least code that passes it, then the next. Run each new test and see it fail before you write the code it covers; never write a test and its code in the same step. When the Ticket, a finding or a requested change asks only for a test of behaviour already in the code, whether a new test or a stronger one, show the test can fail: break that behaviour briefly, run the test red, then restore it.",
+    );
+  });
+});
+
 describe("Product intent in the Implement prompt", () => {
   it("forbids changing anything under docs/product/ at the repo root, where the Vision and Roadmap live", async () => {
     expect(section(await prompt("implement"), "What you must not change")).toContain("- anything under `docs/product/` at the repo root");

@@ -109,9 +109,9 @@ describe("The Kit's Scorer rubrics", () => {
     expect(compliance?.text).not.toContain("make no commits and say why");
   });
 
-  it("give Test-first version 2 a pass line of 0.8, and the labels test-first, test-after, no test, fix before cause and not applicable", async () => {
+  it("give Test-first version 3 a pass line of 0.8, and the labels test-first, test-after, no test, fix before cause and not applicable", async () => {
     const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
-    expect(testFirst).toMatchObject({ version: 2, threshold: 0.8, labels: ["test-first", "test-after", "no-test", "fix-before-cause", "not-applicable"] });
+    expect(testFirst).toMatchObject({ version: 3, threshold: 0.8, labels: ["test-first", "test-after", "no-test", "fix-before-cause", "not-applicable"] });
   });
 
   // #741: under version 1 the judge gave 0.9 and 0.1, and took 0.1 off a run whose one finding had its failing test first for a case its tests didn't cover.
@@ -120,6 +120,14 @@ describe("The Kit's Scorer rubrics", () => {
     expect(testFirst?.text).toMatch(/exactly 1, 0\.5 or 0, never a score between them/);
     expect(testFirst?.text).toMatch(/One failing test for a behaviour change or a finding is enough/);
     expect(testFirst?.text).toMatch(/how many cases .* is the Reviewer's to judge/);
+  });
+
+  // #852: under version 2 the judge credited a mutation check in one run and refused it in another, since a run asked only for a test has no code to write after it.
+  it("count a mutation check as run red in Test-first, for a test added or strengthened for behaviour already in the code", async () => {
+    const testFirst = (await loadRubrics()).find((rubric) => rubric.name === "test-first");
+    expect(testFirst?.text).toContain(
+      "was written first but never seen to fail: count it as written after. A test added or strengthened for behaviour already in the code, where the run was asked only for the test, counts as run red when the transcript shows it failing with that behaviour briefly broken (a mutation check) before the behaviour is restored.",
+    );
   });
 
   // #739: it scores the practice, never the Skill call, and the rubric alone names the practices, the same in every Product repo.
@@ -196,6 +204,11 @@ describe("The rubric version guard", () => {
   // #766: so version 2's score files keep their meaning beside version 3's.
   it("keeps Ticket compliance version 2's hash recorded beside version 3's", () => {
     expect(Object.keys(RUBRIC_HASHES)).toEqual(expect.arrayContaining(["ticket-compliance@2", "ticket-compliance@3"]));
+  });
+
+  // #852: so version 2's score files keep their meaning beside version 3's.
+  it("keeps Test-first version 2's hash recorded beside version 3's", () => {
+    expect(Object.keys(RUBRIC_HASHES)).toEqual(expect.arrayContaining(["test-first@2", "test-first@3"]));
   });
 });
 

@@ -133,6 +133,8 @@ export const RUBRIC_HASHES: Readonly<Record<string, string>> = {
   "test-first@1": "9be3fd931b95136ef79bf1efa2d81428f609a17cd2646cf86c4f25a116bcc7ea",
   // #741: scores only 1, 0.5 or 0, and one failing test per change or finding is enough.
   "test-first@2": "2458597948fb47d183df34a1d133ec215937f0ea1924563625cfb4695f59118a",
+  // #852: a mutation check counts as run red, for a test the run was asked only to add or strengthen on behaviour already in the code.
+  "test-first@3": "e5b306d3a73776ed761da3068233a3813fd09eeecea5e672c24f40806e395091",
 };
 
 /** A rubric's content hash: everything the rubric says, but not its version. */
