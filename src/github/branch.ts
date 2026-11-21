@@ -442,7 +442,9 @@ async function fastForwardOnly(git: Git, url: string, branch: BuiltBranch, bundl
  * cleanly. The main it brought in is main as it is now, or else as the run
  * started, whichever the branch holds and the PR's head didn't: never a
  * commit only the run names, nor one main's history holds but main never
- * was at. A
+ * was at. Bringing either in is having brought main in (`updatedFromMain`,
+ * #861): the agent job can't fetch, so a run brings in main as its checkout
+ * held it, and main moving while it worked doesn't undo that. A
  * Request-changes run told to merge `mergeMain` in (#341) resolved its
  * conflict when the branch holds that head, or merges cleanly with it. Merges
  * follow the PR's .gitattributes as they were before the run.
@@ -524,7 +526,8 @@ async function onItsOwnBranch(
       commits,
       // A test is already there when the head the run's commits land on holds it, or main does, for a run that brought main in.
       changedTests: await existingTests(git, commits, [head, main]),
-      updatedFromMain: !(await isAncestor(git, main, head)) && (await isAncestor(git, main, tip)),
+      // Either head counts, so main moving while the run worked doesn't discard a run that brought it in as it started (#861).
+      updatedFromMain: broughtIn !== null,
       ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
       ...(told === null || resolved === null ? {} : { mainMerge: { main: told, resolved } }),
       // What the push lands, which the run's push note names (#420).

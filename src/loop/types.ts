@@ -178,7 +178,11 @@ export interface BranchChanges {
   readonly commits: readonly ChangedPath[];
   /**
    * For a run on its agent PR's own branch: whether it brought in main's newer
-   * commits, by a merge or a rebase. `net` and `commits` then hold only the
+   * commits, by a merge or a rebase. Its branch then holds, and the PR's head
+   * it landed on didn't, main as it is when the run ends or main as the Kit
+   * job read it before the run started (#861): the agent job can't fetch, so
+   * main moving while the run worked isn't held against it. A head only the
+   * agent job names never counts. `net` and `commits` then hold only the
    * run's own changes, never main's, and bringing the PR up to date is a
    * change even when the run made none of its own.
    */

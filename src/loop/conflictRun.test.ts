@@ -116,6 +116,9 @@ function conflictRunFinished(changes: BranchChanges, main = MAIN): Extract<LoopE
 }
 
 const RESOLVED: BranchChanges = { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }], updatedFromMain: true };
+/** A change of the run's own on a branch that holds main neither as the run started nor as it is now. */
+const UNREBASED: BranchChanges = { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }], updatedFromMain: false };
+const STANDS = "#50 is yours while it carries `ready-for-human`: the Kit leaves its branch alone until then, and taking the label off gives it back.";
 
 function actionsOf(plan: Plan): readonly Action[] {
   return plan.kind === "act" ? plan.actions : [];
@@ -174,6 +177,18 @@ describe("A conflict-only run", () => {
     expect(note).toContain("- `src/cart.ts`: kept both the empty-cart guard and main's new total.");
   });
 
+  it("lands when the push job found main brought in, as when main moved while it ran: its push, and a note naming the head it was started for, with no hand-back (#861)", () => {
+    const thread = new Thread();
+    thread.mainMovesAndConflicts(MAIN);
+
+    const actions = actionsOf(thread.conflictRunFinishes(RESOLVED, B));
+
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(thread.comments.at(-1)).toContain("The Implementer rebased `fabrik/ticket-7` onto `main` at 9999999 and resolved its conflicts");
+    expect(thread.comments.some((comment) => comment.includes("fabrik:conflict-run-ended") || comment.includes("fabrik:hand-back"))).toBe(false);
+    expect(thread.labels).not.toContain("ready-for-human");
+  });
+
   it("uses no retry itself, but a flaw on its push calls for one from the Ticket's pool of two, like any other (#415)", () => {
     const thread = new Thread();
     thread.mainMovesAndConflicts(MAIN);
@@ -206,7 +221,7 @@ describe("A conflict-only run", () => {
   describe("that can't push", () => {
     it.each<[string, BranchChanges, RegExp]>([
       ["changes nothing", { net: [], commits: [], updatedFromMain: false }, /committed no change/],
-      ["doesn't bring main in", { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }], updatedFromMain: false }, /didn't rebase onto `main`/],
+      ["doesn't bring main in", UNREBASED, /holds `main` neither as the run started nor as it is now/],
       ["finds the branch moved under it", { net: [], commits: [], rebase: { onto: B, conflicted: true } }, /moved to bbbbbbb while it ran/],
       [
         "resolves a conflict inside a Trust-root file",
@@ -227,6 +242,28 @@ describe("A conflict-only run", () => {
       // It ends the run's time in flight, and uses no retry: the PR's history holds no new Verdict.
       expect(thread.pullRequest().conflictRunInFlight).toBeNull();
       expect(thread.pullRequest().verdicts).toHaveLength(1);
+    });
+
+    it("when its branch holds main neither as it started nor as it is now, says what the push job found, in the same hand-back notice (#861)", () => {
+      const thread = new Thread();
+      thread.mainMovesAndConflicts(MAIN);
+
+      thread.conflictRunFinishes(UNREBASED, B);
+
+      const notice = thread.comments.at(-1) ?? "";
+      expect(notice).toBe(
+        [
+          "<!-- fabrik:conflict-run-ended -->",
+          "@operator The conflict-only run on #50 didn't bring it up to date with `main` at 9999999: `fabrik/ticket-7` holds `main` neither as the run started nor as it is now.",
+          "",
+          `The PR still conflicts with \`main\`, so it's yours to resolve. ${STANDS} No retry was used.`,
+          "",
+          `[The run](${RUN})`,
+          '<!-- fabrik:hand-back {"kind":"conflict-run-unlanded","role":"implement"} -->',
+        ].join("\n"),
+      );
+      expect(notice).not.toContain("didn't rebase");
+      expect(handBackMarkIn(notice)).toEqual({ kind: "conflict-run-unlanded", role: "implement" });
     });
 
     it("when its agent job fails, hands the PR to the Operator the same way", () => {
@@ -312,7 +349,6 @@ describe("A conflict-only run", () => {
 describe("A conflict-only run that finds main already holds the PR's work (#845)", () => {
   const COMPARED = "Compared #50's diff with #49's: #49 adds the same empty-cart guard to `src/cart.ts`, so nothing of #50's own is left.";
   const UNCHANGED: BranchChanges = { net: [], commits: [], updatedFromMain: false };
-  const STANDS = "#50 is yours while it carries `ready-for-human`: the Kit leaves its branch alone until then, and taking the label off gives it back.";
 
   /** The run finishes naming #49 in `supersededBy`, which the snapshot holds as `named`. */
   function supersededRun(thread: Thread, named: readonly NamedPullRequestSnapshot[] | null, supersededBy: number = 49, changes: BranchChanges = UNCHANGED): Plan {
