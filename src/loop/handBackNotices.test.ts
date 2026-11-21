@@ -91,6 +91,42 @@ describe("The hidden hand-back line", () => {
     });
   });
 
+  describe("on a notice that puts ready-for-human on a PR (#841)", () => {
+    const STANDS = "#50 is yours while it carries `ready-for-human`: the Kit leaves its branch alone until then, and taking the label off gives it back.";
+
+    it("a conflict-only run that didn't land says the PR is the Operator's while it carries the label, and promises nothing by a main sha", () => {
+      const [body] = commentsOf(conflictRunEnded(50, "d".repeat(40), "operator", "it changed nothing", RUN));
+
+      expect(body).toBe(
+        [
+          "<!-- fabrik:conflict-run-ended -->",
+          "@operator The conflict-only run on #50 didn't bring it up to date with `main` at ddddddd: it changed nothing.",
+          "",
+          `The PR still conflicts with \`main\`, so it's yours to resolve. ${STANDS} No retry was used.`,
+          "",
+          `[The run](${RUN})`,
+          '<!-- fabrik:hand-back {"kind":"conflict-run-unlanded","role":"implement"} -->',
+        ].join("\n"),
+      );
+    });
+
+    it("a Request-changes run that didn't land says so too, and that the Operator's Request changes goes first once the PR is back with the Kit", () => {
+      const [body] = commentsOf(requestChangesRunEnded(50, "d".repeat(40), "operator", "it still conflicts", RUN));
+
+      expect(body).toBe(
+        [
+          `<!-- fabrik:request-changes-run-ended ${"d".repeat(40)} -->`,
+          "@operator The Request-changes run on #50 didn't land: it still conflicts.",
+          "",
+          `The Kit judged the run against \`main\` at ddddddd, and your requested changes aren't built, so it's yours from here. ${STANDS} Once it's back with the Kit, your Request changes still goes first. No retry was used.`,
+          "",
+          `[The run](${RUN})`,
+          '<!-- fabrik:hand-back {"kind":"request-changes-unlanded","role":"implement"} -->',
+        ].join("\n"),
+      );
+    });
+  });
+
   it("names a Retry that never started on a Ticket no longer ready-for-agent", () => {
     const flaw = { verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "a".repeat(40) } as const;
     const pullRequest = aPullRequest({ number: 50, ticket: 7, ticketLabels: ["enhancement"], verdicts: [flaw], verdictPostedAt: "2026-11-07T05:00:00Z", headSha: "a".repeat(40) });

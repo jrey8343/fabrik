@@ -14,8 +14,12 @@
 // exception to "a PR only behind main is left alone" is a PR a check holds at
 // the Merge gate by an Unrelated failure once that check's issue closes as
 // completed (#784): the fix is on main, so the Kit brings it in by this path.
+// None of this touches a PR carrying ready-for-human (#841, ADR-0036): its
+// Hand-back stands, and the Operator may be pushing to its branch, until they
+// take the label off.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
+import { handBackStandsLine } from "./handBacks.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { flakyOnPassedHead, passedHeadAtGate } from "./flakyChecks.ts";
 import { checkFixMarker, type CheckFixMark, conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
@@ -88,10 +92,11 @@ interface Grace {
 
 /**
  * Which of whyNotRebased's rules keeps a PR as it is: a Request changes no run
- * has started for, a run in flight, an attempt already made against this main
+ * has started for, a run in flight, a Hand-back that stands while the PR
+ * carries ready-for-human (#841), an attempt already made against this main
  * head, a mergeable state GitHub hadn't worked out, no conflict, or any other.
  */
-type NotRebasedRule = "undelivered" | "in-flight" | "tried" | "unknown" | "clean" | "other";
+type NotRebasedRule = "undelivered" | "in-flight" | "handed-back" | "tried" | "unknown" | "clean" | "other";
 
 /** Why the Kit doesn't bring a PR up to date with main now: the rule, and the reason the conflict check gives. */
 interface NotRebased {
@@ -125,6 +130,10 @@ function whyNotRebased(
   }
   const run = runInFlight(pullRequest);
   if (run !== null) return { rule: "in-flight", reason: `${runName(run)} on #${number} is still in flight, so main isn't brought in now: its push is rebased when it lands` };
+  // A Hand-back stands while the label is on, whoever put it there (#841, ADR-0036): the Operator may be pushing to this branch.
+  if (pullRequest.labels.includes(READY_FOR_HUMAN)) {
+    return { rule: "handed-back", reason: `#${number} carries \`${READY_FOR_HUMAN}\`, so it's the Operator's until they take the label off` };
+  }
   if (pullRequest.conflictAttempts.includes(main)) {
     return { rule: "tried", reason: `#${number} was already tried against main at ${main.slice(0, 7)}, so it waits for main to move or for the Operator` };
   }
@@ -383,6 +392,9 @@ export function afterConflictedReview(
       return noActionNote(
         `**You don't need to do anything yet.** GitHub hadn't worked out whether #${number} still conflicts with \`main\`, so the Kit left it for a later conflict check, which brings it up to date if it does. If it merges cleanly, GitHub won't start the checks on \`${pullRequest.headSha.slice(0, 7)}\` until something is pushed to \`${branch}\`. ${sooner}`,
       );
+    // The Operator's to move on, in the notices' own words (#841).
+    case "handed-back":
+      return handedBack(opening, `${handBackStandsLine(number)} ${mergeYourself}`);
     // A later conflict check tries again once main moves past this head.
     case "tried":
       return noActionNote(`**You don't need to do anything.** The Kit already tried to bring #${number} up to date with \`main\`${at}, so it tries again once \`main\` moves. ${sooner}`);
@@ -579,8 +591,9 @@ export function owedConflictRun(pullRequest: PullRequestSnapshot, config: KitCon
  * didn't bring main in, or was refused. The Kit says why on the PR, ends the
  * run's time in flight, adds ready-for-human to the PR, and brings it back
  * out of draft to the Merge gate, where the Operator takes it from here. It
- * never closes the PR, and it doesn't try again until main moves to a new
- * head. The comment's @-mention is its one notification. `failure` is how it
+ * never closes the PR, and leaves its branch alone while the label is on
+ * (#841); once it's off, it tries again only once main moves to a new head.
+ * The comment's @-mention is its one notification. `failure` is how it
  * failed, when it did: the notice's hand-back names it, as a failed run's
  * does, so a reader of the thread can tell a run that failed from one that
  * ended with nothing to push (src/loop/digestFacts.ts).
@@ -602,13 +615,13 @@ export function conflictRunEnded(
         CONFLICT_RUN_ENDED_MARKER,
         `@${operator} The conflict-only run on #${pullRequest} didn't bring it up to date with \`main\` at ${main.slice(0, 7)}: ${why}.`,
         "",
-        `The PR still conflicts with \`main\`, so it's yours to resolve: the Kit won't try again until \`main\` moves past ${main.slice(0, 7)}. No retry was used.`,
+        `The PR still conflicts with \`main\`, so it's yours to resolve. ${handBackStandsLine(pullRequest)} No retry was used.`,
         ...(runUrl === null ? [] : ["", `[The run](${runUrl})`]),
         handBackMarker({ kind: "conflict-run-unlanded", role: "implement", ...(failure === null ? {} : { failure }) }),
       ].join("\n"),
     },
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },
-    // Out of draft, the next conflict check weighs it again once main moves.
+    // Out of draft, a conflict check weighs it again once the label is off and main has moved.
     ...(draft ? [{ kind: "mark-ready-for-review" as const, pullRequest }] : []),
   ];
 }
@@ -619,10 +632,10 @@ export function conflictRunEnded(
  * refused it. As for a conflict-only run, the Kit says why on the PR, ends the
  * run's time in flight, adds ready-for-human to the PR, and brings it back out
  * of draft to the Merge gate. It never closes the PR, and the note counts as
- * main's conflict attempt, so the conflict check doesn't try again until main
- * moves. The run settles nothing: once main moves and the PR is brought up to
- * date, an Execution flaw on it still gives way to the Operator's Request
- * changes, which no run has built yet.
+ * main's conflict attempt, so once the label is off (#841) the conflict check
+ * doesn't try again until main moves. The run settles nothing: once main
+ * moves and the PR is brought up to date, an Execution flaw on it still gives
+ * way to the Operator's Request changes, which no run has built yet.
  */
 export function requestChangesRunEnded(pullRequest: number, main: string, operator: string, why: string, runUrl: string): Action[] {
   const head = main.slice(0, 7);
@@ -634,7 +647,7 @@ export function requestChangesRunEnded(pullRequest: number, main: string, operat
         requestChangesRunEndedMarker(main),
         `@${operator} The Request-changes run on #${pullRequest} didn't land: ${why}.`,
         "",
-        `The Kit judged the run against \`main\` at ${head}, and your requested changes aren't built, so it's yours from here. The Kit won't bring it up to date until \`main\` moves past ${head}; when it does, your Request changes still goes first. No retry was used.`,
+        `The Kit judged the run against \`main\` at ${head}, and your requested changes aren't built, so it's yours from here. ${handBackStandsLine(pullRequest)} Once it's back with the Kit, your Request changes still goes first. No retry was used.`,
         "",
         `[The run](${runUrl})`,
         handBackMarker({ kind: "request-changes-unlanded", role: "implement" }),

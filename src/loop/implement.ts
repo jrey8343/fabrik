@@ -14,6 +14,7 @@ import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { mergedReason } from "./mergedTickets.ts";
 import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
+import { handBackStandsLine } from "./handBacks.ts";
 import {
   CONFLICT_RUN_MARKER,
   EMPTY_DIFF_MARKER,
@@ -575,7 +576,8 @@ function bodyOnlyTouchUpLanded(
  * through agent:review, and its Verdict, marked as from a Request-changes
  * run, decides what's next. A head that didn't move goes to the Operator, as
  * a Request-changes run that couldn't bring main in does, but its note counts
- * as no conflict attempt. The PR is never closed.
+ * as no conflict attempt, and the Kit leaves its branch alone while it carries
+ * ready-for-human (#841). The PR is never closed.
  */
 function requestChangesRunEmpty(
   pullRequest: PullRequestSnapshot,
@@ -594,7 +596,7 @@ function requestChangesRunEmpty(
     ...(recorded === null ? [] : [recorded.marker]),
     moved
       ? `The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, the head it started on, which moved to ${head} while it worked. Review runs on ${head}, and its Verdict decides what's next. No retry was used.`
-      : `@${operator} The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, so your requested changes aren't built, and it's yours from here. No retry was used.`,
+      : `@${operator} The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, so your requested changes aren't built, and it's yours from here. ${handBackStandsLine(number)} No retry was used.`,
     "",
     ...(recorded === null ? [] : [...recorded.lines, ""]),
     // Why it built nothing, if it said, so an Operator handed the PR back knows (#429).

@@ -121,6 +121,11 @@ class Thread {
     this.history.splice(index, 1);
   }
 
+  /** The Operator gives a handed-back PR back to the Kit, taking `ready-for-human` off it (#841). */
+  giveBack(): void {
+    this.labels = this.labels.filter((label) => label !== "ready-for-human");
+  }
+
   /** The Operator takes the PR out of draft at `minutes`. */
   markReady(minutes: number): void {
     this.now = at(minutes);
@@ -723,13 +728,14 @@ describe("An undelivered Request changes while a run is in flight on the PR", ()
     expect(commentsOn(thread.reviewed("execution-flaw", 140), 50)[0]).toContain("Retry 1 of 2 starts now");
   });
 
-  it("once the Operator dismisses it after its Request-changes run handed the PR over, no Retry is left in flight to hold the PR", () => {
+  it("once the Operator dismisses it after its Request-changes run handed the PR over, and gives the PR back, no Retry is left in flight to hold the PR", () => {
     const thread = reviewInFlight();
     thread.mergeable = false;
     thread.reviewed("execution-flaw", 70);
     thread.implement();
     thread.requestChangesRunFinishes({ net: [], commits: [], updatedFromMain: false, mainMerge: { main: MAIN, resolved: false } }, D, 90);
     thread.dismiss(5810278044);
+    thread.giveBack();
 
     const push = thread.mainPushed(120, MAIN_2);
 
@@ -1138,9 +1144,20 @@ describe("A Request-changes run told to merge main in", () => {
     expect(startsOn(thread.implement())).toBeUndefined();
   });
 
-  it("that handed off still has its Request changes go first once main moves: an Execution flaw on the rebased head uses no Retry", () => {
+  it("that handed off isn't brought up to date while it carries ready-for-human, however often main moves (#841)", () => {
     const thread = runStarted();
     thread.requestChangesRunFinishes({ net: [], commits: [], updatedFromMain: false, mainMerge: { main: MAIN, resolved: false } }, B, 120);
+
+    const check = thread.mainPushed(200, MAIN_2);
+
+    expect(actionsOf(check).some((action) => action.kind === "rebase-onto-main") || addsImplement(check)).toBe(false);
+    expect(commentsOn(check, 50)).toEqual([]);
+  });
+
+  it("that handed off still has its Request changes go first once given back and main moves: an Execution flaw on the rebased head uses no Retry", () => {
+    const thread = runStarted();
+    thread.requestChangesRunFinishes({ net: [], commits: [], updatedFromMain: false, mainMerge: { main: MAIN, resolved: false } }, B, 120);
+    thread.giveBack();
 
     const check = thread.mainPushed(200, MAIN_2);
     expect(actionsOf(check).some((action) => action.kind === "rebase-onto-main")).toBe(true);

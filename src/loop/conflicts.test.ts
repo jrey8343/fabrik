@@ -196,6 +196,45 @@ describe("main moving under a conflicting agent PR at the Merge gate", () => {
   });
 });
 
+describe("an agent PR carrying ready-for-human, whose Hand-back stands (#841)", () => {
+  /** PR #50 at the Merge gate, handed back to the Operator, last tried against an older main head. */
+  const handedBack = (overrides: Partial<PullRequestSnapshot> = {}) => atMergeGate({ labels: ["ready-for-human"], conflictAttempts: [OLDER_MAIN], ...overrides });
+
+  it("plans nothing on a push to main that leaves it conflicting: no rebase, no draft, no run, no comment, and says why", () => {
+    const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: handedBack(), mergeable: false }]), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: "#50 carries `ready-for-human`, so it's the Operator's until they take the label off" });
+  });
+
+  it("plans nothing for it on the scheduled tick either", () => {
+    const plan = planFor(TICK, tickSnapshot({ conflicts: { main: MAIN, now: "2026-01-01T00:00:00Z", implementJobUnderWay: null, pullRequests: [{ pullRequest: handedBack(), mergeable: false }] } }), kitConfig());
+
+    expect(rebasesIn(plan)).toEqual([]);
+    expect(plan.kind === "act" ? plan.notes : [plan.reason]).toContainEqual(expect.stringContaining("#50 carries `ready-for-human`"));
+  });
+
+  it("leaves a draft carrying the label alone too, as one the conflict-only run left in draft", () => {
+    const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: handedBack({ draft: true, verdicts: [], headPushedAt: "2025-12-31T22:00:00Z" }), mergeable: false }]), kitConfig());
+
+    expect(plan).toEqual({ kind: "nothing", reason: expect.stringContaining("#50 carries `ready-for-human`") });
+  });
+
+  it("weighs the other open agent PRs as before", () => {
+    const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: handedBack(), mergeable: false }, { pullRequest: atMergeGate({ number: 51, ticket: 8 }), mergeable: false }]), kitConfig());
+
+    expect(rebasesIn(plan).map(({ pullRequest }) => pullRequest)).toEqual([51]);
+  });
+
+  it("still starts the Request-changes run for the Operator's Request changes the undelivered-review recovery finds on it", () => {
+    const unbuilt = handedBack({ unbuiltChangesRequests: [{ review: 9, reviewer: "operator", reviewerIsBot: false, submittedAt: "2025-12-31T00:00:00Z" }] });
+
+    const plan = planFor(MAIN_PUSHED, conflictsSnapshot([{ pullRequest: unbuilt, mergeable: false }]), kitConfig());
+
+    expect(rebasesIn(plan)).toEqual([]);
+    expect(plan.kind === "act" ? plan.actions : []).toContainEqual({ kind: "add-labels", issue: 7, labels: ["agent:implement"] });
+  });
+});
+
 describe("a draft agent PR whose push GitHub never reviewed, because it conflicts with main (#389)", () => {
   const NOW = "2026-01-01T00:00:00Z";
   /** Pushed 70 minutes before the check: past the Review's two jobs, each with a 30-minute timeout. */
