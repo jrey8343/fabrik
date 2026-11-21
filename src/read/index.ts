@@ -205,3 +205,8 @@ export type { DigestRead, PlaceShown } from "./digestRead.ts";
 export { aRollInComment } from "./builders.ts";
 export { owedRollInsOf } from "./owedRollIn.ts";
 export type { OwedRollIn } from "./owedRollIn.ts";
+
+// Kept Standings and rows read back
+
+export { newerStandingSchemaOf, readStanding } from "../kit/keptStanding.ts";
+export { readRow } from "./keptRow.ts";
