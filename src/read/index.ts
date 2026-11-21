@@ -142,6 +142,13 @@ export { MERGED_STANDS_HOURS, NO_DEPLOY_SEEN_MINUTES } from "../kit/standingProd
 export { joinDeployments, mergesToRead } from "./joinDeployments.ts";
 export type { MergedLastDayFacts } from "../kit/standingProduction.ts";
 
+// The Standing at Staging
+
+export { commitsToCheck, joinStaging, stagingMergesToRead } from "./joinStaging.ts";
+export { readMainChecks } from "./mainChecks.ts";
+export type { CommitToCheck, MainCheckOf, MainChecksRead } from "./mainChecks.ts";
+export type { StagingRead } from "./rows.ts";
+
 // The Round read
 
 export { readRound } from "./roundRead.ts";

@@ -92,6 +92,49 @@ describe("the read library's Standing", () => {
   });
 });
 
+describe("the read library's Standing at Staging (#855)", () => {
+  it("names a merged agent pull request on staging on-staging, at the place staging, the Operator's without stopping work, with its staging pages and what to try on its row", async () => {
+    const { STANDING_NAMES, STANDING_SCHEMA, wordStanding } = await import("./index.ts");
+    const rows = (await EXPORT_CALLS["joinStaging"]!()) as Awaited<ReturnType<(typeof import("./index.ts"))["joinStaging"]>>;
+
+    // A new place and a new name remove nothing and change no meaning, so the schema stays where it was.
+    expect(STANDING_SCHEMA).toBe(2);
+    expect(STANDING_NAMES).toContain("on-staging");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.standing).toMatchObject({ schema: 2, issue: 7, pullRequest: 50, place: "staging", name: "on-staging", move: "operator", yours: true, stopsWork: false, since: "2026-11-09T11:36:00Z", stuckAt: null });
+    expect(rows[0]?.standing.detail).toEqual({
+      mergeCommit: "m".repeat(40),
+      mergedAt: "2026-11-09T11:30:00Z",
+      environment: "staging",
+      noDeployAt: null,
+      deployment: 905,
+      log: null,
+      deploysUnread: false,
+      staging: { environment: "staging", production: "production", trial: { needed: true, why: "ui-evidence" }, mainChecks: ["e2e"], check: null, checksUnread: false },
+    });
+    expect(rows[0]?.staging).toEqual({
+      site: "https://staging.shop.example",
+      pages: [
+        { route: "/book", url: "https://staging.shop.example/book" },
+        { route: "/patients/[patientId]/notes", url: "https://staging.shop.example" },
+      ],
+      shots: [],
+      toTry: ["/book", "/patients/[patientId]/notes"],
+    });
+    expect(wordStanding(rows[0]!.standing, "2026-11-09T12:36:00Z", "UTC")).toEqual({
+      pill: "On staging",
+      sentence: "On `staging` since 1 hour ago. It carries UI evidence, so it needs a Staging trial.",
+      remedy: null,
+    });
+  });
+
+  it("asks a staging Deployments read about that merge, and a Main checks read about the commit its newest staging deploy deployed", async () => {
+    expect(await EXPORT_CALLS["stagingMergesToRead"]!()).toEqual([{ mergeCommit: "m".repeat(40), mergedAt: "2026-11-09T11:30:00Z" }]);
+    expect(await EXPORT_CALLS["commitsToCheck"]!()).toEqual([{ commit: "d".repeat(40), checks: ["e2e"] }]);
+    expect(await EXPORT_CALLS["readMainChecks"]!()).toEqual({ repo: "owner/product", readAt: "2026-11-09T12:00:00Z", commits: { ["d".repeat(40)]: "unread" } });
+  });
+});
+
 /** A value as a reader gets it back after writing it as JSON and reading it again. */
 function roundTripped(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value)) as unknown;

@@ -49,6 +49,7 @@ import {
   storeFactsOf,
   CAPTURE_RESULT_FILE,
   checkCallerWorkflow,
+  commitsToCheck,
   costOf,
   costPerMergedPullRequestOf,
   DEFAULT_KIT_CONFIG,
@@ -68,6 +69,7 @@ import {
   joinChecks,
   joinDeployments,
   joinRuns,
+  joinStaging,
   KIT_SAID_VERSION,
   kitSaidIn,
   MERGED_STANDS_HOURS,
@@ -85,6 +87,7 @@ import {
   readOutcomes,
   readIssuesToRollIn,
   readKitConfigSources,
+  readMainChecks,
   readRunRecord,
   readRequiredChecks,
   readRound,
@@ -112,6 +115,7 @@ import {
   shotsMarkerIn,
   STANDING_NAMES,
   STANDING_SCHEMA,
+  stagingMergesToRead,
   standingAt,
   standingsOf,
   stuckBarMinutes,
@@ -129,6 +133,7 @@ import type {
   CallerRead,
   CaptureResult,
   CaptureResultRead,
+  CommitToCheck,
   CostFigure,
   DeploymentsRead,
   DeployOf,
@@ -148,6 +153,8 @@ import type {
   KitConfigResult,
   KitConfigSources,
   KitSaid,
+  MainCheckOf,
+  MainChecksRead,
   MergedInWeek,
   MergedLastDayFacts,
   MergeToRead,
@@ -178,6 +185,7 @@ import type {
   ShotsManifestRead,
   ShotsMarker,
   SpendRead,
+  StagingRead,
   Standing,
   StandingFacts,
   StandingName,
@@ -330,6 +338,55 @@ const A_MERGE_AT_PRODUCTION = homeFactsOf({
 
 /** `owner/product`'s Deployments in `production` read at NOW: merge `m…` deploying since 11:40. */
 const A_DEPLOYMENTS_READ = aDeploymentsRead({ ["m".repeat(40)]: aDeployOf({ is: "running", deployment: 901, commit: "m".repeat(40), at: "2026-11-09T11:40:00Z" }) }, NOW) satisfies DeploymentsRead;
+
+/**
+ * Agent pull request 50 for Ticket 7, merged at 11:30 with merge commit `m…`
+ * and carrying UI evidence of two routes, in a repo declaring production in
+ * environment `production` and staging in `staging`, and naming the Main
+ * check `e2e`.
+ */
+const A_MERGE_AT_STAGING = homeFactsOf({
+  kit: {
+    repo: "owner/product",
+    branch: "main",
+    config: {
+      ok: true,
+      config: {
+        ...DEFAULT_KIT_CONFIG,
+        production: { url: "https://shop.example", environment: "production" },
+        staging: { url: "https://staging.shop.example", environment: "staging" },
+        monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e"] },
+      },
+    },
+    dispatch: null,
+  },
+  mergedLastDay: [aMergedLastDay("2026-11-09T11:30:00Z")],
+  evidenceMarkers: [{ pullRequest: 50, marker: { run: 4410, artifact: 901, failure: null, routes: ["/book", "/patients/[patientId]/notes"] } }],
+});
+
+/** `owner/product`'s Deployments in `staging` read at NOW, asked for the newest success: merge `m…` deployed at 11:36, and the newest deploy that contains it, of commit `d…`, at 11:50. */
+const A_STAGING_DEPLOYMENTS_READ = {
+  repo: "owner/product",
+  environment: "staging",
+  readAt: NOW,
+  merges: {
+    ["m".repeat(40)]: {
+      is: "succeeded",
+      deployment: 900,
+      commit: "m".repeat(40),
+      at: "2026-11-09T11:36:00Z",
+      log: null,
+      newest: { deployment: 905, commit: "d".repeat(40), at: "2026-11-09T11:50:00Z" },
+    },
+  },
+} as const satisfies DeploymentsRead;
+
+/** `owner/product`'s Main checks read at NOW: `e2e` green on commit `d…`. */
+const A_MAIN_CHECKS_READ = {
+  repo: "owner/product",
+  readAt: NOW,
+  commits: { ["d".repeat(40)]: [{ name: "e2e", is: "green", url: "https://github.com/owner/product/actions/runs/7/job/901", at: "2026-11-09T11:55:00Z" }] },
+} as const satisfies MainChecksRead;
 
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
@@ -1052,6 +1109,31 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   MERGED_STANDS_HOURS: () => MERGED_STANDS_HOURS,
   NO_DEPLOY_SEEN_MINUTES: () => NO_DEPLOY_SEEN_MINUTES,
 
+  // The Standing at Staging
+
+  commitsToCheck: () =>
+    commitsToCheck(
+      rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
+      A_STAGING_DEPLOYMENTS_READ,
+    ),
+  joinStaging: () =>
+    joinStaging(
+      rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
+      { deployments: A_STAGING_DEPLOYMENTS_READ, mainChecks: A_MAIN_CHECKS_READ },
+      NOW,
+    ),
+  readMainChecks: () =>
+    readMainChecks(
+      REFUSING_CLIENT,
+      "owner/product",
+      [{ commit: "d".repeat(40), checks: ["e2e"] }],
+      NOW,
+    ),
+  stagingMergesToRead: () =>
+    stagingMergesToRead(
+      rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
+    ),
+
   // The Round read
 
   readRound: () =>
@@ -1418,6 +1500,23 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The Standing at Production
 
   MergedLastDayFacts: { number: 50, title: "Build the thing", ticket: 7, mergeCommit: "m".repeat(40), mergedAt: "2026-11-09T11:30:00Z" } satisfies MergedLastDayFacts,
+
+  // The Standing at Staging
+
+  CommitToCheck: { commit: "d".repeat(40), checks: ["e2e", "smoke"] } satisfies CommitToCheck,
+  MainCheckOf: { name: "smoke", is: "red", url: "https://github.com/owner/product/actions/runs/7/job/903", at: "2026-11-09T11:58:00Z" } satisfies MainCheckOf,
+  MainChecksRead: {
+    repo: "owner/product",
+    readAt: NOW,
+    commits: {
+      ["d".repeat(40)]: [
+        { name: "e2e", is: "green", url: "https://github.com/owner/product/actions/runs/7/job/901", at: "2026-11-09T11:55:00Z" },
+        { name: "smoke", is: "undecided", url: null, at: null },
+      ],
+      ["e".repeat(40)]: "unread",
+    },
+  } satisfies MainChecksRead,
+  StagingRead: { deployments: A_STAGING_DEPLOYMENTS_READ, mainChecks: A_MAIN_CHECKS_READ } satisfies StagingRead,
 
   // The Round read
 
