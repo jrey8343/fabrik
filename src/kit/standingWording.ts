@@ -12,6 +12,7 @@ import type { AgentRole } from "../loop/types.ts";
 import { readable, spelled } from "../loop/readable.ts";
 import type { Standing, StandingNamed } from "./standing.ts";
 import type { RunningRun } from "./standingInFlight.ts";
+import type { StagingDetail } from "./standingStaging.ts";
 
 /** What a Standing says when shown. */
 export interface StandingWords {
@@ -221,12 +222,25 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       return { pill: "Blocked", sentence: `Blocked by ${blockersPhrase(standing.detail.blockers, standing.detail.hiddenBlockers, standing.repo)}.`, remedy: null };
     case "waiting-on-author":
       return { pill: "Waiting on its author", sentence: `Triage asked its author, ${standing.detail.author}, a question ${age} ago.`, remedy: null };
-    case "deploying":
-      return { pill: "Deploying", sentence: `A deploy to \`${standing.detail.environment}\` has been running for ${age}.`, remedy: null };
+    case "deploying": {
+      const { environment } = standing.detail;
+      const staging = atStaging(standing);
+      // At Staging, a deploy that succeeded reads as deploying until its commit's Main checks are green (#855).
+      if (staging !== null && (staging.check !== null || staging.checksUnread)) {
+        const waits = staging.check === null ? "the Main checks on its commit could not be read" : `\`${staging.check}\` has not passed on its commit yet`;
+        return { pill: "Deploying", sentence: `The deploy to \`${environment}\` succeeded ${age} ago, and ${waits}.`, remedy: null };
+      }
+      return { pill: "Deploying", sentence: `A deploy to \`${environment}\` has been running for ${age}.`, remedy: null };
+    }
     case "live":
       return { pill: "Live", sentence: `Live in \`${standing.detail.environment}\` since ${age} ago.`, remedy: null };
-    case "deploy-failed":
-      return { pill: "Deploy failed", sentence: `The deploy to \`${standing.detail.environment}\` failed ${age} ago.`, remedy: null };
+    case "deploy-failed": {
+      const { environment } = standing.detail;
+      const check = atStaging(standing)?.check ?? null;
+      // At Staging, a Main check red on the deployed commit reads as a failed deploy (#855).
+      if (check !== null) return { pill: "Deploy failed", sentence: `\`${check}\` failed ${age} ago on the commit deployed to \`${environment}\`.`, remedy: null };
+      return { pill: "Deploy failed", sentence: `The deploy to \`${environment}\` failed ${age} ago.`, remedy: null };
+    }
     case "no-deploy-seen":
       return {
         pill: "No deploy seen",
@@ -235,10 +249,22 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       };
     case "merged": {
       const { environment, deploysUnread } = standing.detail;
-      const then = environment === null ? "Deploys are not tracked in this repo." : deploysUnread ? "Deployments could not be read." : "No deploy has started yet.";
+      // At Staging the sentence names the environment (#855): the repo has production's deploys too.
+      const to = atStaging(standing) === null ? "" : ` to \`${environment}\``;
+      const then = environment === null ? "Deploys are not tracked in this repo." : deploysUnread ? `Deployments${to} could not be read.` : `No deploy${to} has started yet.`;
       return { pill: "Merged", sentence: `Merged ${age} ago. ${then}`, remedy: null };
     }
+    case "on-staging": {
+      const { environment, staging } = standing.detail;
+      const trial = staging.trial.needed ? "It carries UI evidence, so it needs a Staging trial." : "It changes no screen, so it needs no Staging trial.";
+      return { pill: "On staging", sentence: `On \`${environment}\` since ${age} ago. ${trial}`, remedy: null };
+    }
   }
+}
+
+/** What a merged agent pull request's Standing at Staging carries of it (#855), or null at any other place. */
+function atStaging(standing: StandingNamed<"deploying" | "deploy-failed" | "merged">): StagingDetail | null {
+  return standing.place === "staging" ? (standing.detail.staging ?? null) : null;
 }
 
 /** The run each trigger label asks for, as a not-started Standing's sentence names it: every one but `agent:digest`, whose wording is its own. */

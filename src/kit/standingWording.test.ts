@@ -630,6 +630,125 @@ describe("the wording of a merged agent pull request at Production (#634)", () =
   });
 });
 
+describe("the wording of a merged agent pull request at Staging (#855)", () => {
+  const MERGE = "m".repeat(40);
+  const DEPLOYED = "d".repeat(40);
+  const KIT = {
+    repo: "owner/product",
+    branch: "main",
+    config: {
+      ok: true,
+      config: {
+        ...DEFAULT_KIT_CONFIG,
+        production: { url: "https://shop.example", environment: "production" },
+        staging: { url: "https://staging.shop.example", environment: "staging" },
+        monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e", "smoke"] },
+      },
+    },
+    dispatch: null,
+    runsInFlight: [],
+    headChecks: {},
+  } as const;
+  type Deploy = Parameters<typeof aDeployOf>[0] | "unread" | null;
+  type Check = { readonly name: string; readonly is: "green" | "red" | "undecided"; readonly url: string | null; readonly at: string | null };
+  const read = (deploy: Deploy) => (deploy === null ? null : aDeploymentsRead({ [MERGE]: deploy === "unread" ? "unread" : aDeployOf(deploy) }));
+  /** The one Standing of pull request 50, merged at SINCE, read at `now`: its staging deploy, the Main checks on DEPLOYED, whether it needs a trial, and its production deploy. */
+  const standing = (staging: Deploy, now: string, { checks = null as readonly Check[] | null, needsTrial = false, production = null as Deploy } = {}): Standing => {
+    const stagingDeployments = read(staging);
+    const [one, ...rest] = standingsOf(
+      standingFactsOf({
+        kit: KIT,
+        mergedLastDay: [aMergedLastDay(SINCE)],
+        stagingDeployments: stagingDeployments === null ? null : { ...stagingDeployments, environment: "staging" },
+        mainChecks: checks === null ? null : { repo: "owner/product", readAt: now, commits: { [DEPLOYED]: checks } },
+        needTrial: needsTrial ? [50] : [],
+        deployments: read(production),
+      }),
+      now,
+    );
+    if (one === undefined || rest.length > 0) throw new Error("expected one Standing");
+    return one;
+  };
+  /** A staging deploy of DEPLOYED, which contains the merge, that succeeded 10 minutes after it. */
+  const SUCCEEDED = { is: "succeeded", deployment: 900, commit: DEPLOYED, at: minutesAfter(10) } as const;
+  const green = (name: string): Check => ({ name, is: "green", url: `https://github.com/owner/product/actions/runs/7/job/${name}`, at: minutesAfter(15) });
+
+  it("says a merge no staging deploy has started for yet, and one whose staging Deployments could not be read, is merged, naming the environment", () => {
+    expect(wordStanding(standing({ is: "none" }, minutesAfter(40)), minutesAfter(40), ZONE)).toEqual({
+      pill: "Merged",
+      sentence: "Merged 40 minutes ago. No deploy to `staging` has started yet.",
+      remedy: null,
+    });
+    for (const unread of ["unread", null] as const) {
+      expect(wordStanding(standing(unread, minutesAfter(40)), minutesAfter(3 * 60), ZONE)).toEqual({
+        pill: "Merged",
+        sentence: "Merged 3 hours ago. Deployments to `staging` could not be read.",
+        remedy: null,
+      });
+    }
+  });
+
+  it("says a staging deploy is running, failed, or was never seen, as at Production but of the staging environment", () => {
+    expect(wordStanding(standing({ is: "running", deployment: 901, commit: MERGE, at: minutesAfter(5) }, minutesAfter(10)), minutesAfter(25), ZONE)).toEqual({
+      pill: "Deploying",
+      sentence: "A deploy to `staging` has been running for 20 minutes.",
+      remedy: null,
+    });
+    expect(wordStanding(standing({ is: "failed", deployment: 902, commit: MERGE, at: minutesAfter(10), log: "https://github.com/owner/product/actions/runs/40/job/41" }, minutesAfter(10)), minutesAfter(50), ZONE)).toEqual({
+      pill: "Deploy failed",
+      sentence: "The deploy to `staging` failed 40 minutes ago.",
+      remedy: null,
+    });
+    expect(wordStanding(standing({ is: "none" }, minutesAfter(2 * 60)), minutesAfter(2 * 60), ZONE)).toEqual({
+      pill: "No deploy seen",
+      sentence: "No deploy to `staging` has started since the merge 2 hours ago.",
+      remedy: null,
+    });
+  });
+
+  it("says a deploy that succeeded is still deploying while a Main check has not passed on its commit, naming the check, or while its Main checks could not be read", () => {
+    const waiting = standing(SUCCEEDED, minutesAfter(20), { checks: [green("e2e"), { name: "smoke", is: "undecided", url: null, at: null }] });
+    expect(wordStanding(waiting, minutesAfter(30), ZONE)).toEqual({
+      pill: "Deploying",
+      sentence: "The deploy to `staging` succeeded 20 minutes ago, and `smoke` has not passed on its commit yet.",
+      remedy: null,
+    });
+    expect(wordStanding(standing(SUCCEEDED, minutesAfter(20)), minutesAfter(30), ZONE)).toEqual({
+      pill: "Deploying",
+      sentence: "The deploy to `staging` succeeded 20 minutes ago, and the Main checks on its commit could not be read.",
+      remedy: null,
+    });
+  });
+
+  it("says the deploy failed when a Main check is red on its commit, naming the check, since its run ended", () => {
+    const red = standing(SUCCEEDED, minutesAfter(20), { checks: [green("e2e"), { name: "smoke", is: "red", url: "https://github.com/owner/product/actions/runs/7/job/903", at: minutesAfter(18) }] });
+    expect(wordStanding(red, minutesAfter(58), ZONE)).toEqual({
+      pill: "Deploy failed",
+      sentence: "`smoke` failed 40 minutes ago on the commit deployed to `staging`.",
+      remedy: null,
+    });
+  });
+
+  it("says it is on staging, since the deploy, and whether it needs a Staging trial and why", () => {
+    const checks = [green("e2e"), green("smoke")];
+    expect(wordStanding(standing(SUCCEEDED, minutesAfter(20), { checks, needsTrial: true }), minutesAfter(70), ZONE)).toEqual({
+      pill: "On staging",
+      sentence: "On `staging` since 1 hour ago. It carries UI evidence, so it needs a Staging trial.",
+      remedy: null,
+    });
+    expect(wordStanding(standing(SUCCEEDED, minutesAfter(20), { checks }), minutesAfter(70), ZONE)).toEqual({
+      pill: "On staging",
+      sentence: "On `staging` since 1 hour ago. It changes no screen, so it needs no Staging trial.",
+      remedy: null,
+    });
+  });
+
+  it("says what production's deploy says, as in any repo, once a production Deployment has started", () => {
+    const promoted = standing(SUCCEEDED, minutesAfter(60), { checks: [green("e2e"), green("smoke")], needsTrial: true, production: { is: "running", deployment: 950, commit: MERGE, at: minutesAfter(50) } });
+    expect(wordStanding(promoted, minutesAfter(60), ZONE)).toEqual({ pill: "Deploying", sentence: "A deploy to `production` has been running for 10 minutes.", remedy: null });
+  });
+});
+
 describe("an age", () => {
   it.each([
     [0, "under a minute"],

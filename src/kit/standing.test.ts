@@ -1287,6 +1287,282 @@ describe("a merged agent pull request at Production (#634)", () => {
   });
 });
 
+describe("a merged agent pull request at Staging (#855)", () => {
+  const MERGED = "2026-11-08T19:30:00Z";
+  const MERGE = "m".repeat(40);
+  const kit = (overrides: Partial<KitConfig> = {}) =>
+    ({
+      repo: "owner/product",
+      branch: "main",
+      config: {
+        ok: true,
+        config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" }, staging: { url: "https://staging.shop.example", environment: "staging" }, ...overrides },
+      },
+      dispatch: null,
+      runsInFlight: [],
+      headChecks: {},
+    }) as const;
+  /** A Deployments read of the `staging` environment, saying this of agent pull request 50's merge. */
+  const staged = (deploy: Parameters<typeof aDeployOf>[0] | "unread") => ({ ...aDeploymentsRead({ [MERGE]: deploy === "unread" ? "unread" : aDeployOf(deploy) }), environment: "staging" });
+  /** The Standings of agent pull request 50, merged at MERGED, in a repo declaring production and staging, with these facts. */
+  const atStaging = (facts: Partial<Omit<StandingFacts, "kind" | "github">>, now = NOW) => standingsIn({}, { kit: kit(), mergedLastDay: [aMergedLastDay(MERGED)], ...facts }, now);
+
+  it("is merged at Staging in the first hour with no staging deploy started, nobody's move, since the merge; and no deploy seen a minute after the hour, since its end", () => {
+    const merged = atStaging({ stagingDeployments: staged({ is: "none" }) }, "2026-11-08T20:29:00Z");
+    expect(merged).toEqual([
+      {
+        schema: 2,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "staging",
+        name: "merged",
+        move: "nobody",
+        yours: false,
+        stopsWork: false,
+        since: MERGED,
+        stuckAt: null,
+        awaits: null,
+        subscription: null,
+        detail: {
+          mergeCommit: MERGE,
+          mergedAt: MERGED,
+          environment: "staging",
+          noDeployAt: "2026-11-08T20:30:00.000Z",
+          deployment: null,
+          log: null,
+          deploysUnread: false,
+          staging: { environment: "staging", production: "production", trial: { needed: false, why: "no-screen" }, mainChecks: [], check: null, checksUnread: false },
+        },
+      },
+    ]);
+    const unseen = atStaging({ stagingDeployments: staged({ is: "none" }) }, "2026-11-08T20:31:00Z");
+    expect(unseen).toMatchObject([{ place: "staging", name: "no-deploy-seen", move: "nobody", since: "2026-11-08T20:30:00.000Z", detail: { environment: "staging", noDeployAt: null, deploysUnread: false } }]);
+    expect(merged.map((standing) => standingAt(standing, "2026-11-08T20:31:00Z"))).toStrictEqual(unseen);
+  });
+
+  it("is merged with its deploys unread, and never no deploy seen, when the staging Deployments read is missing, unread for this merge, or of another environment", () => {
+    const unread = { place: "staging", name: "merged", since: MERGED, detail: { environment: "staging", noDeployAt: null, deploysUnread: true } };
+    const later = "2026-11-08T23:00:00Z";
+    expect(atStaging({}, later)).toMatchObject([unread]);
+    expect(atStaging({ stagingDeployments: null }, later)).toMatchObject([unread]);
+    expect(atStaging({ stagingDeployments: staged("unread") }, later)).toMatchObject([unread]);
+    expect(atStaging({ stagingDeployments: { ...staged({ is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }), environment: "preview" } }, later)).toMatchObject([unread]);
+  });
+
+  it("is deploying while a staging deploy that contains it is running, nobody's move, since the Deployment's creation; not merged", () => {
+    expect(atStaging({ stagingDeployments: staged({ is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }) })).toMatchObject([
+      { issue: 7, pullRequest: 50, place: "staging", name: "deploying", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T19:35:00Z", detail: { environment: "staging", deployment: 901, noDeployAt: null, deploysUnread: false, staging: { check: null } } },
+    ]);
+  });
+
+  it("is deploy failed when the staging deploy failed, nobody's move, since the failed report, with its log; not deploying", () => {
+    const log = "https://github.com/owner/product/actions/runs/40/job/41";
+    expect(atStaging({ stagingDeployments: staged({ is: "failed", deployment: 902, commit: MERGE, at: "2026-11-08T19:45:00Z", log }) })).toMatchObject([
+      { place: "staging", name: "deploy-failed", move: "nobody", yours: false, since: "2026-11-08T19:45:00Z", detail: { environment: "staging", deployment: 902, log, staging: { check: null } } },
+    ]);
+  });
+
+  it("is on staging once a staging deploy that contains it succeeded, in a repo that names no Main checks: nobody's move when it changes no screen, since the deploy; not deploying", () => {
+    expect(atStaging({ stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) })).toEqual([
+      {
+        schema: 2,
+        repo: "owner/product",
+        issue: 7,
+        pullRequest: 50,
+        work: "ticket",
+        place: "staging",
+        name: "on-staging",
+        move: "nobody",
+        yours: false,
+        stopsWork: false,
+        since: "2026-11-08T19:40:00Z",
+        stuckAt: null,
+        awaits: null,
+        subscription: null,
+        detail: {
+          mergeCommit: MERGE,
+          mergedAt: MERGED,
+          environment: "staging",
+          noDeployAt: null,
+          deployment: 900,
+          log: null,
+          deploysUnread: false,
+          staging: { environment: "staging", production: "production", trial: { needed: false, why: "no-screen" }, mainChecks: [], check: null, checksUnread: false },
+        },
+      },
+    ]);
+  });
+
+  it("is the Operator's move on staging when it needs a Staging trial, yours and never stopping work, saying why; and nobody's on its way there", () => {
+    const trial = { needTrial: [50] };
+    const needed = { staging: { trial: { needed: true, why: "ui-evidence" } } };
+    expect(atStaging({ ...trial, stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) })).toMatchObject([
+      { place: "staging", name: "on-staging", move: "operator", yours: true, stopsWork: false, stuckAt: null, awaits: null, detail: needed },
+    ]);
+    expect(atStaging({ needTrial: [51], stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) })).toMatchObject([
+      { name: "on-staging", move: "nobody", yours: false, stopsWork: false, detail: { staging: { trial: { needed: false, why: "no-screen" } } } },
+    ]);
+    for (const deploy of [{ is: "none" }, { is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }, { is: "failed", deployment: 902, commit: MERGE, at: "2026-11-08T19:45:00Z" }] as const) {
+      expect(atStaging({ ...trial, stagingDeployments: staged(deploy) })).toMatchObject([{ place: "staging", move: "nobody", yours: false, stopsWork: false, detail: needed }]);
+    }
+  });
+
+  describe("and Production, which share the one pull request", () => {
+    const ON_STAGING = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
+    /** A Deployments read of the `production` environment, saying this of the merge. */
+    const promoted = (deploy: Parameters<typeof aDeployOf>[0] | "unread") => aDeploymentsRead({ [MERGE]: deploy === "unread" ? "unread" : aDeployOf(deploy) });
+
+    it("moves to Production, as deploying, once a production Deployment that contains it has started, the Kit's move as it is there, keeping what it carried at Staging", () => {
+      expect(atStaging({ needTrial: [50], stagingDeployments: ON_STAGING, deployments: promoted({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" }) })).toEqual([
+        {
+          schema: 2,
+          repo: "owner/product",
+          issue: 7,
+          pullRequest: 50,
+          work: "ticket",
+          place: "production",
+          name: "deploying",
+          move: "kit",
+          yours: false,
+          stopsWork: false,
+          since: "2026-11-08T19:55:00Z",
+          stuckAt: null,
+          awaits: null,
+          subscription: null,
+          detail: {
+            mergeCommit: MERGE,
+            mergedAt: MERGED,
+            environment: "production",
+            noDeployAt: null,
+            deployment: 950,
+            log: null,
+            deploysUnread: false,
+            staging: { environment: "staging", production: "production", trial: { needed: true, why: "ui-evidence" }, mainChecks: [], check: null, checksUnread: false },
+          },
+        },
+      ]);
+    });
+
+    it("has production's names from then on, whatever staging says: live once that deploy succeeded, deploy failed with its log when it failed", () => {
+      const log = "https://github.com/owner/product/actions/runs/60/job/61";
+      for (const stagingDeployments of [ON_STAGING, staged({ is: "none" }), undefined]) {
+        expect(atStaging({ stagingDeployments, deployments: promoted({ is: "succeeded", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z" }) })).toMatchObject([
+          { place: "production", name: "live", move: "nobody", since: "2026-11-08T19:58:00Z", detail: { environment: "production", deployment: 950 } },
+        ]);
+        expect(atStaging({ stagingDeployments, deployments: promoted({ is: "failed", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z", log }) })).toMatchObject([
+          { place: "production", name: "deploy-failed", move: "nobody", detail: { environment: "production", log } },
+        ]);
+      }
+    });
+
+    it("stays at Staging while no production Deployment has started, or production's could not be read: merged and no deploy seen are never said at Production", () => {
+      const later = "2026-11-08T23:00:00Z";
+      for (const deployments of [promoted({ is: "none" }), promoted("unread"), null, undefined, staged({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" })]) {
+        expect(atStaging({ stagingDeployments: ON_STAGING, deployments }, later)).toMatchObject([{ place: "staging", name: "on-staging" }]);
+        expect(atStaging({ stagingDeployments: staged({ is: "none" }), deployments }, later)).toMatchObject([{ place: "staging", name: "no-deploy-seen", detail: { environment: "staging" } }]);
+        expect(atStaging({ deployments }, later)).toMatchObject([{ place: "staging", name: "merged", detail: { environment: "staging", deploysUnread: true } }]);
+      }
+    });
+
+    it("never moves to Production in a repo that tracks no production deploys: one with no production block, or one that declares an address and no environment", () => {
+      const started = promoted({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" });
+      for (const production of [null, { url: "https://shop.example", environment: null }]) {
+        expect(atStaging({ kit: kit({ production }), stagingDeployments: ON_STAGING, deployments: started })).toMatchObject([
+          { place: "staging", name: "on-staging", detail: { environment: "staging", staging: { environment: "staging", production: null } } },
+        ]);
+      }
+    });
+  });
+
+  it("stands at 24 hours from the merge and is gone a minute after, at Staging or at Production", () => {
+    const onStaging = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
+    const live = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z" }) });
+    // Read straight from the rule: a minute later the rule drops it, which a kept Standing read later cannot.
+    const ruleAt = (now: string, facts: Partial<StandingFacts>) => standingsOf(standingFactsOf({ kit: kit(), mergedLastDay: [aMergedLastDay(MERGED)], needTrial: [50], ...facts }), now);
+    expect(ruleAt("2026-11-09T19:30:00Z", { stagingDeployments: onStaging })).toMatchObject([{ place: "staging", name: "on-staging", move: "operator" }]);
+    expect(ruleAt("2026-11-09T19:31:00Z", { stagingDeployments: onStaging })).toEqual([]);
+    expect(ruleAt("2026-11-09T19:30:00Z", { stagingDeployments: onStaging, deployments: live })).toMatchObject([{ place: "production", name: "live" }]);
+    expect(ruleAt("2026-11-09T19:31:00Z", { stagingDeployments: onStaging, deployments: live })).toEqual([]);
+  });
+
+  it("gives none with an invalid Kit config or with the merges unread, and none from the Weekly summary's facts", () => {
+    const reads = { stagingDeployments: staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) };
+    expect(standingsIn({}, { ...reads, mergedLastDay: [aMergedLastDay(MERGED)], kit: { ...kit(), config: { ok: false, errors: ["max_in_flight must be a whole number"] } } })).toEqual([]);
+    expect(standingsIn({}, { ...reads, kit: kit() })).toEqual([]);
+    expect(standingsIn({ pullRequests: [aMergedPullRequest("2026-11-08T19:00:00Z")] }, { kit: kit() })).toEqual([]);
+  });
+
+  describe("in a repo that names Main checks", () => {
+    const DEPLOYED = "d".repeat(40);
+    const NAMING = { kit: kit({ monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e", "smoke"] } }) };
+    /** A staging deploy of the merge commit that succeeded at 19:40, and a later one of DEPLOYED, which contains it, at 19:50. */
+    const SUCCEEDED = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z", newest: { deployment: 905, commit: DEPLOYED, at: "2026-11-08T19:50:00Z" } });
+    const green = (name: string) => ({ name, is: "green", url: `https://github.com/owner/product/actions/runs/7/job/${name}`, at: "2026-11-08T19:55:00Z" }) as const;
+    const checked = (commit: string, checks: NonNullable<StandingFacts["mainChecks"]>["commits"][string]) => ({ repo: "owner/product", readAt: NOW, commits: { [commit]: checks } });
+
+    it("is on staging once every Main check is green on the commit of the newest successful staging Deployment, since the first deploy that contained it", () => {
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, [green("e2e"), green("smoke")]) })).toMatchObject([
+        { place: "staging", name: "on-staging", move: "nobody", since: "2026-11-08T19:40:00Z", detail: { deployment: 905, log: null, staging: { mainChecks: ["e2e", "smoke"], check: null, checksUnread: false } } },
+      ]);
+    });
+
+    it("is deploying while a Main check on that commit is not green yet, naming the first such, nobody's move, since that deploy succeeded; not on staging", () => {
+      const running = { name: "smoke", is: "undecided", url: null, at: null } as const;
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, [green("e2e"), running]) })).toMatchObject([
+        { place: "staging", name: "deploying", move: "nobody", yours: false, since: "2026-11-08T19:50:00Z", detail: { deployment: 905, log: null, staging: { check: "smoke", checksUnread: false } } },
+      ]);
+    });
+
+    it("is deploy failed when a Main check on that commit is red, whatever the others say, since the run ended, with the check's link where a failed deploy has its log", () => {
+      const running = { name: "e2e", is: "undecided", url: null, at: null } as const;
+      const red = { name: "smoke", is: "red", url: "https://github.com/owner/product/actions/runs/7/job/903", at: "2026-11-08T19:58:00Z" } as const;
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, [running, red]) })).toMatchObject([
+        { place: "staging", name: "deploy-failed", move: "nobody", yours: false, since: "2026-11-08T19:58:00Z", detail: { deployment: 905, log: red.url, staging: { check: "smoke", checksUnread: false } } },
+      ]);
+    });
+
+    it("reads them on the deploy's own commit when the read gives no newer one", () => {
+      const first = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
+      expect(atStaging({ ...NAMING, stagingDeployments: first, mainChecks: checked(MERGE, [green("e2e"), green("smoke")]) })).toMatchObject([{ name: "on-staging", detail: { deployment: 900 } }]);
+      expect(atStaging({ ...NAMING, stagingDeployments: first, mainChecks: checked(DEPLOYED, [green("e2e"), green("smoke")]) })).toMatchObject([{ name: "deploying" }]);
+    });
+
+    it("is deploying with its Main checks unread, never on staging, when the read is missing, of another repo, unread for that commit or lacks a named check", () => {
+      const unread = { place: "staging", name: "deploying", move: "nobody", since: "2026-11-08T19:50:00Z", detail: { deployment: 905, staging: { check: null, checksUnread: true } } };
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED })).toMatchObject([unread]);
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: null })).toMatchObject([unread]);
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: { ...checked(DEPLOYED, [green("e2e"), green("smoke")]), repo: "owner/other" } })).toMatchObject([unread]);
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, "unread") })).toMatchObject([unread]);
+      expect(atStaging({ ...NAMING, stagingDeployments: SUCCEEDED, mainChecks: checked(DEPLOYED, [green("e2e")]) })).toMatchObject([unread]);
+    });
+
+    it("is on staging on the Deployment alone with Main checks off, whatever a read says", () => {
+      const off = { kit: kit({ monitor: { ...DEFAULT_KIT_CONFIG.monitor, redMain: false, mainChecks: ["e2e", "smoke"] } }) };
+      expect(atStaging({ ...off, stagingDeployments: SUCCEEDED })).toMatchObject([{ name: "on-staging", detail: { staging: { mainChecks: [], check: null, checksUnread: false } } }]);
+    });
+
+    it("waits on no Main check while its staging deploy is running or failed", () => {
+      expect(atStaging({ ...NAMING, stagingDeployments: staged({ is: "running", deployment: 901, commit: MERGE, at: "2026-11-08T19:35:00Z" }) })).toMatchObject([
+        { name: "deploying", since: "2026-11-08T19:35:00Z", detail: { staging: { check: null, checksUnread: false } } },
+      ]);
+    });
+  });
+
+  it("is never merged or no deploy seen at Production, never at no place, never stops work, and yours only on staging needing a trial, in every read above of a repo that declares staging", () => {
+    const declaring = produced.filter(({ facts }) => facts.kit?.config.ok === true && facts.kit.config.config.staging !== null).flatMap(({ standings }) => standings);
+    expect(new Set(declaring.map(({ place }) => place))).toEqual(new Set(["staging", "production"]));
+    expect(new Set(declaring.filter(({ place }) => place === "production").map(({ name }) => name))).toEqual(new Set(["deploying", "live", "deploy-failed"]));
+    expect(new Set(declaring.filter(({ place }) => place === "staging").map(({ name }) => name))).toEqual(new Set(["merged", "no-deploy-seen", "deploying", "deploy-failed", "on-staging"]));
+    for (const standing of declaring) {
+      expect(standing).toMatchObject({ stopsWork: false, stuckAt: null, awaits: null });
+      expect(standing.yours).toBe(standing.name === "on-staging" && standing.detail.staging.trial.needed);
+      expect(standing.move).toBe(standing.yours ? "operator" : standing.place === "production" && standing.name === "deploying" ? "kit" : "nobody");
+    }
+  });
+});
+
 describe("a passed draft waiting on its Digest (#654)", () => {
   const PASSED = "2026-11-08T19:20:00Z";
   const ASKED = "2026-11-08T19:21:00Z";
@@ -1468,12 +1744,13 @@ describe("a Standing, as plain data", () => {
     for (const standing of all()) expect(JSON.parse(JSON.stringify(standing))).toStrictEqual(standing);
   });
 
-  it("stops work only when the Operator's, never for reading matter or a parked draft, and always for any other move of theirs but a Plain pull request's or a failed Weekly summary run's", () => {
+  it("stops work only when the Operator's, never for reading matter, a parked draft or a merged change on staging, and always for any other move of theirs but a Plain pull request's or a failed Weekly summary run's", () => {
     for (const standing of all()) {
-      if (!standing.yours || standing.name === "yours-to-read" || standing.name === "parked") expect(standing).toMatchObject({ stopsWork: false });
+      if (!standing.yours || standing.name === "yours-to-read" || standing.name === "parked" || standing.name === "on-staging") expect(standing).toMatchObject({ stopsWork: false });
       else if (standing.work !== "plain" && standing.work !== "weekly-summary") expect(standing).toMatchObject({ stopsWork: true });
     }
     expect(all().some(({ name }) => name === "yours-to-read")).toBe(true);
+    expect(all().some(({ name, yours }) => name === "on-staging" && yours)).toBe(true);
   });
 
   it("is the same for the same facts read a minute later, but for a Standing that crossed its bar then", () => {

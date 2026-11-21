@@ -8,6 +8,7 @@
 // Kit job works out a Standing past the merge. Pure, no I/O.
 import type { DeploymentsRead, DeployOf } from "../read/deployments.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
+import type { StagingDetail } from "./standingStaging.ts";
 
 /** How long after its merge, in minutes, a merge no deploy has started for reads as no deploy seen. */
 export const NO_DEPLOY_SEEN_MINUTES = 60;
@@ -31,10 +32,14 @@ export interface MergedLastDayFacts {
 const PRODUCTION_NAMES = ["deploying", "live", "deploy-failed", "no-deploy-seen", "merged"] as const;
 export type ProductionName = (typeof PRODUCTION_NAMES)[number];
 
-/** A merged agent pull request's Standing: at Production, or with no place in a repo that tracks no deploys. */
+/**
+ * A merged agent pull request's Standing of one of these names: at
+ * Production, with no place in a repo that tracks no deploys, or, all but
+ * `live`, at Staging in a repo that declares `staging`.
+ */
 export type ProductionStanding = StandingNamed<ProductionName>;
 
-/** Whether a Standing is a merged agent pull request's. */
+/** Whether a Standing has one of these names: every merged agent pull request's but one on staging (isMergedStanding, ./standingStaging.ts). */
 export function isProductionStanding(standing: Standing): standing is ProductionStanding {
   return (PRODUCTION_NAMES as readonly string[]).includes(standing.name);
 }
@@ -55,12 +60,18 @@ export interface ProductionDetail {
   readonly log: string | null;
   /** Whether its Deployments could not be read: the read was missing, unread for this merge, or there is no merge commit to ask about. */
   readonly deploysUnread: boolean;
+  /**
+   * In a repo that declares `staging` alone (ADR-0038), at Staging and at
+   * Production alike: what it carries beside (./standingStaging.ts).
+   * `environment` is then the one its place names.
+   */
+  readonly staging?: StagingDetail;
 }
 
 const MINUTE = 60 * 1000;
 
 /** When a merge at `mergedAt` turns `no-deploy-seen`, ISO 8601, if none has started by then. */
-function noDeployAtOf(mergedAt: string): string {
+export function noDeployAtOf(mergedAt: string): string {
   return new Date(Date.parse(mergedAt) + NO_DEPLOY_SEEN_MINUTES * MINUTE).toISOString();
 }
 
@@ -95,12 +106,18 @@ export function deployIn(read: DeploymentsRead | null, repo: string, environment
   return read.merges[mergeCommit] ?? "unread";
 }
 
-/** One merge's Standing, for what its Deployments say, before it is read at a time (standingAt). */
+/**
+ * One merge's Standing, for what its Deployments say, before it is read at a
+ * time (standingAt). `staging` is what it carries in a repo that declares
+ * `staging`, where it is at Production only once a production Deployment has
+ * started (./standingStaging.ts); left out, its detail has no such key.
+ */
 export function productionStandingOf(
   repo: string,
   merge: Pick<MergedLastDayFacts, "number" | "ticket" | "mergeCommit" | "mergedAt">,
   environment: string | null,
   deploy: DeployOf | "unread",
+  staging?: StagingDetail,
 ): ProductionStanding {
   const base = {
     schema: STANDING_SCHEMA,
@@ -124,6 +141,7 @@ export function productionStandingOf(
     deployment: null,
     log: null,
     deploysUnread: false,
+    ...(staging === undefined ? {} : { staging }),
   };
   if (environment === null) return { ...base, name: "merged", since: merge.mergedAt, detail };
   if (deploy === "unread") return { ...base, name: "merged", since: merge.mergedAt, detail: { ...detail, deploysUnread: true } };

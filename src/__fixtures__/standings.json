@@ -507,6 +507,39 @@
       "deploysUnread": false
     }
   },
+  "on-staging": {
+    "schema": 2,
+    "repo": "owner/product",
+    "issue": 7,
+    "pullRequest": 50,
+    "work": "ticket",
+    "place": "staging",
+    "name": "on-staging",
+    "move": "operator",
+    "yours": true,
+    "stopsWork": false,
+    "since": "2026-11-08T19:40:00Z",
+    "stuckAt": null,
+    "awaits": null,
+    "subscription": null,
+    "detail": {
+      "mergeCommit": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+      "mergedAt": "2026-11-08T19:30:00Z",
+      "environment": "staging",
+      "noDeployAt": null,
+      "deployment": 900,
+      "log": null,
+      "deploysUnread": false,
+      "staging": {
+        "environment": "staging",
+        "production": "production",
+        "trial": { "needed": true, "why": "ui-evidence" },
+        "mainChecks": ["e2e"],
+        "check": null,
+        "checksUnread": false
+      }
+    }
+  },
   "running (digest)": {
     "schema": 2,
     "repo": "owner/product",
