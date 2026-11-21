@@ -361,7 +361,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (stale !== null) {
     return conflictEnds(`${stale}, so the Kit didn't push it`) ?? { kind: "nothing", reason: `${stale}, so the retry's branch isn't pushed` };
   }
-  if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config, held);
+  if (fixes.conflict !== undefined) return applyConflictRun(event, fixes.conflict, pullRequest, operator, parsed.output, config, held, snapshot.namedPullRequests);
   const requestChanges = fixes.review !== undefined;
   // A Request-changes run lands only while it's the one in flight (#341): one started twice for the same review,
   // whose run already had its outcome, or left over for a review a later run took over from, pushes nothing over it.
@@ -642,12 +642,60 @@ function applyConflictRun(
   output: ImplementOutput,
   config: KitConfig,
   held: HeldOn | null,
+  named: Snapshot["namedPullRequests"],
 ): Plan {
-  const { changes, branch, fixes } = event;
+  const { fixes } = event;
   if (fixes === undefined) throw new Error("A conflict-only run lands on the PR it fixes");
   if (pullRequest.conflictRunInFlight !== main) {
     return { kind: "nothing", reason: `#${pullRequest.number} has no conflict-only run in flight for main at ${main.slice(0, 7)}, so the run's branch isn't pushed` };
   }
+  const superseding = supersedingOf(output, pullRequest.number, named);
+  if (superseding.kind === "trusted") {
+    // Nothing of the PR's own is left, the run says, so whatever its branch holds isn't pushed (#845).
+    const { by, byTicket } = superseding;
+    const why = `it found that \`main\` already holds the whole of its change, merged in #${by}`;
+    return { kind: "act", actions: conflictRunEnded(pullRequest.number, main, operator, why, fixes.runUrl, true, null, { by, byTicket, ticket: event.issue, said: output.fix ?? "" }) };
+  }
+  const plan = landConflictRun(event, main, pullRequest, operator, output, config, held);
+  return superseding.kind === "ignored" && plan.kind === "act" ? { ...plan, notes: [...(plan.notes ?? []), superseding.note] } : plan;
+}
+
+/**
+ * Whether the Kit trusts the merged PR a conflict-only run's output names in
+ * `supersededBy` (#845): only one GitHub has as merged into `main` after the
+ * head the run started on last met `main`, and never the run's own PR. Any
+ * other is ignored, as if the run named none, with a note in the run's log
+ * saying why. The run judges the overlap from the two diffs; the Kit checks
+ * only that the PR it names is real and merged.
+ */
+function supersedingOf(
+  { supersededBy }: ImplementOutput,
+  own: number,
+  named: Snapshot["namedPullRequests"],
+): { readonly kind: "none" } | { readonly kind: "trusted"; readonly by: number; readonly byTicket: number | null } | { readonly kind: "ignored"; readonly note: string } {
+  if (supersededBy === undefined) return { kind: "none" };
+  const ignored = (why: string) => ({ kind: "ignored", note: `The conflict-only run on #${own} named #${supersededBy} in \`supersededBy\`, which the Kit ignored: ${why}` }) as const;
+  if (supersededBy === own) return ignored(`it names #${own} itself`);
+  const pull = named?.find(({ number }) => number === supersededBy);
+  if (pull?.superseding === undefined) return ignored(`#${supersededBy} is no pull request`);
+  if (!pull.merged) return ignored(`#${supersededBy} isn't merged`);
+  if (!pull.superseding.intoMain) return ignored(`#${supersededBy} didn't merge into \`main\``);
+  if (!pull.superseding.sinceMergeBase) return ignored(`#${supersededBy} merged into \`main\` before #${own}'s merge base with it`);
+  return { kind: "trusted", by: supersededBy, byTicket: pull.superseding.ticket };
+}
+
+/** applyConflictRun's landing of a run that names no superseding PR the Kit trusts: its push, or its hand-back. */
+function landConflictRun(
+  event: ImplementRunFinished,
+  main: string,
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+  output: ImplementOutput,
+  config: KitConfig,
+  held: HeldOn | null,
+): Plan {
+  const { changes, branch, fixes } = event;
+  if (fixes === undefined) throw new Error("A conflict-only run lands on the PR it fixes");
   const handOff = (why: string): Plan => ({ kind: "act", actions: conflictRunEnded(pullRequest.number, main, operator, why, fixes.runUrl) });
   if (changes.rebase?.conflicted === true) {
     return handOff(`\`${branch}\` moved to ${changes.rebase.onto.slice(0, 7)} while it ran, so the Kit discarded its work`);

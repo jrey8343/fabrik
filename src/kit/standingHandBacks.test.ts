@@ -225,6 +225,11 @@ describe("work the Kit hands back", () => {
 
     it.each([
       ["a conflict-only run that didn't land", conflictRunEnded(50, "d".repeat(40), "operator", "it changed nothing", "https://github.com/owner/product/actions/runs/42"), "conflict-run-unlanded"],
+      [
+        "a conflict-only run that found the PR superseded (#845)",
+        conflictRunEnded(50, "d".repeat(40), "operator", "it found main holds it", "https://github.com/owner/product/actions/runs/42", true, null, { by: 49, byTicket: 6, ticket: 7, said: "Compared the diffs." }),
+        "conflict-run-superseded",
+      ],
       ["a Request-changes run that didn't land", requestChangesRunEnded(50, "d".repeat(40), "operator", "it still conflicts", "https://github.com/owner/product/actions/runs/42"), "request-changes-unlanded"],
     ] as const)("an agent PR handed back by %s, at the Merge gate while it carries ready-for-human", (_what, actions, handBack) => {
       const pullRequest = anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [said(actions)], labelEvents: [readyForHuman] });
@@ -376,6 +381,7 @@ describe("the wording of work handed back", () => {
     ["a failed push or claim job", handedBack("landing-failed", "implement", "agent:implement"), "The Kit couldn't land a finished run 40 minutes ago. Open the run and re-run its failed jobs."],
     ["a Request-changes run that committed nothing", handedBack("request-changes-empty", "implement", null), "The Request-changes run committed nothing, so your changes aren't built. It's yours from here."],
     ["a conflict-only run that didn't land", handedBack("conflict-run-unlanded", "implement", null), "The conflict-only run didn't bring #50 up to date with `main`."],
+    ["a conflict-only run that found the PR superseded", handedBack("conflict-run-superseded", "implement", null), "The conflict-only run found `main` already holds #50's work, merged in another pull request, so #50 is probably superseded."],
     ["a Request-changes run that didn't land", handedBack("request-changes-unlanded", "implement", null), "The Request-changes run on #50 didn't land."],
     ["an agent PR closed by hand", handedBack("closed-by-hand", "implement", "ready-for-agent"), "Its agent pull request was closed by hand, so the Ticket stopped."],
     ["a Kept branch gone", handedBack("kept-branch-gone", "implement", "ready-for-agent"), "Marked for a Kept-branch start, but the Kept branch is gone."],

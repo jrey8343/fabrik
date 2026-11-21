@@ -1615,8 +1615,10 @@ export interface Snapshot {
    * Gathered for an Audit run finishing, whose Audit is `issue`: each PR its
    * reply names under "Introduced by" that GitHub has, in any order. And for a
    * Design-session turn finishing in a Roll-in: the pull request it names,
-   * if GitHub has it. A number naming no PR isn't here. Null for any other
-   * event, and for a Design-session turn that ends any other way.
+   * if GitHub has it. And for a conflict-only run finishing whose output
+   * names a PR in `supersededBy` (#845): that PR, with what the Kit checks
+   * of it, if GitHub has it. A number naming no PR isn't here. Null for any
+   * other event, and for a Design-session turn that ends any other way.
    */
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
   /**
@@ -1836,6 +1838,21 @@ export interface NamedPullRequestSnapshot {
   readonly headRef: string;
   /** Whether it's an agent PR: one the Fabrik App opened from an agent branch (src/loop/agentPullRequest.ts). */
   readonly isAgent: boolean;
+  /** For the PR a conflict-only run names in `supersededBy` (#845) alone: what the Kit checks of it before it trusts the run. */
+  readonly superseding?: SupersedingFacts;
+}
+
+/** What the Kit reads of the PR a conflict-only run says supersedes its own (#845), as GitHub has it. */
+export interface SupersedingFacts {
+  /** Whether it merged into the repo's default branch. */
+  readonly intoMain: boolean;
+  /**
+   * Whether its merge commit is one the head the run started on doesn't
+   * hold: it merged into `main` after that head's merge base with `main`.
+   */
+  readonly sinceMergeBase: boolean;
+  /** The Ticket it closed, or null when it closed none. */
+  readonly ticket: number | null;
 }
 
 /** What the audit gate weighs on a scheduled tick (src/loop/auditGate.ts). */

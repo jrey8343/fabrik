@@ -22,6 +22,7 @@ import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
 import { handBackStandsLine } from "./handBacks.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { flakyOnPassedHead, passedHeadAtGate } from "./flakyChecks.ts";
+import { withoutMentions } from "./mentions.ts";
 import { checkFixMarker, type CheckFixMark, conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
 import type { Recovery } from "./recoveryWaits.ts";
 import { checkNames } from "./checkNames.ts";
@@ -586,6 +587,18 @@ export function owedConflictRun(pullRequest: PullRequestSnapshot, config: KitCon
   };
 }
 
+/** The merged PR a conflict-only run found already makes the whole of its PR's change (#845), as the Kit checked it. */
+export interface Supersession {
+  /** The merged PR. */
+  readonly by: number;
+  /** The Ticket that PR closed, or null when it closed none. */
+  readonly byTicket: number | null;
+  /** The Ticket of the PR it supersedes. */
+  readonly ticket: number;
+  /** What the run said it compared: its `fix`. */
+  readonly said: string;
+}
+
 /**
  * A conflict-only run that ended without pushing: it failed, changed nothing,
  * didn't bring main in, or was refused. The Kit says why on the PR, ends the
@@ -596,7 +609,12 @@ export function owedConflictRun(pullRequest: PullRequestSnapshot, config: KitCon
  * The comment's @-mention is its one notification. `failure` is how it
  * failed, when it did: the notice's hand-back names it, as a failed run's
  * does, so a reader of the thread can tell a run that failed from one that
- * ended with nothing to push (src/loop/digestFacts.ts).
+ * ended with nothing to push (src/loop/digestFacts.ts). `superseded` is the
+ * merged PR the run found already makes the whole of this PR's change
+ * (#845), once the Kit has checked it: the notice then says the PR is
+ * probably superseded, and points to closing it and its Ticket rather than
+ * resolving the conflict, and its hand-back is its own. The Kit closes
+ * neither itself.
  */
 export function conflictRunEnded(
   pullRequest: number,
@@ -606,7 +624,9 @@ export function conflictRunEnded(
   runUrl: string | null = null,
   draft = true,
   failure: InfrastructureFailure | null = null,
+  superseded: Supersession | null = null,
 ): Action[] {
+  const stands = `${handBackStandsLine(pullRequest)} No retry was used.`;
   return [
     {
       kind: "comment",
@@ -615,9 +635,19 @@ export function conflictRunEnded(
         CONFLICT_RUN_ENDED_MARKER,
         `@${operator} The conflict-only run on #${pullRequest} didn't bring it up to date with \`main\` at ${main.slice(0, 7)}: ${why}.`,
         "",
-        `The PR still conflicts with \`main\`, so it's yours to resolve. ${handBackStandsLine(pullRequest)} No retry was used.`,
+        ...(superseded === null
+          ? [`The PR still conflicts with \`main\`, so it's yours to resolve. ${stands}`]
+          : [
+              `#${pullRequest} is probably superseded by #${superseded.by}${superseded.byTicket === null ? "" : `, which closed #${superseded.byTicket}`}. Check #${superseded.by} first; if it does hold this PR's work, close #${pullRequest} and its Ticket #${superseded.ticket} as duplicates. ${stands}`,
+              "",
+              "**What the Implementer said:**",
+              "",
+              withoutMentions(superseded.said).trim(),
+            ]),
         ...(runUrl === null ? [] : ["", `[The run](${runUrl})`]),
-        handBackMarker({ kind: "conflict-run-unlanded", role: "implement", ...(failure === null ? {} : { failure }) }),
+        superseded === null
+          ? handBackMarker({ kind: "conflict-run-unlanded", role: "implement", ...(failure === null ? {} : { failure }) })
+          : handBackMarker({ kind: "conflict-run-superseded", role: "implement" }),
       ].join("\n"),
     },
     { kind: "add-labels", issue: pullRequest, labels: [READY_FOR_HUMAN] },
