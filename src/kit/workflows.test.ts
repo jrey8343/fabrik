@@ -2144,7 +2144,8 @@ describe("The Kit's composite actions", () => {
   );
 
   it("can tell a program that imports a package at run time", () => {
-    expect(packagesReachedBy("src/kit/judge-main.ts")).toEqual(expect.arrayContaining(["src/kit/judge-main.ts imports @ai-hero/sandcastle"]));
+    // The judge reaches Sandcastle through the launch every agent starts through.
+    expect(packagesReachedBy("src/kit/judge-main.ts")).toEqual(expect.arrayContaining(["src/agent/launch.ts imports @ai-hero/sandcastle"]));
   });
 });
 

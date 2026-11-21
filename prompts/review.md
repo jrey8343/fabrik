@@ -147,6 +147,8 @@ When in doubt, leave the tag off. Prose outside the items carries no tag. A pass
 
 ## Your output
 
+The reply that holds your `<review>` tag ends the run, and the Kit then stops anything you left running. Write it only once nothing is running and nothing is waited on: every command you started in the background has finished, and you have read its result. Never schedule a wakeup or a later turn: the run has none.
+
 End your reply with exactly one `<review>` tag, and nothing after it. Its first line is exactly one Verdict line, `verdict: pass`, `verdict: execution-flaw` or `verdict: design-flaw`, in lower case with nothing else on the line. Then a blank line, then your findings in Markdown. On a pass, your findings are what you checked, and any Follow-ups come after them, as a block described below. If you weighed any of the Operator's comments, end with a blank line and one last line naming them by id:
 
 <review>

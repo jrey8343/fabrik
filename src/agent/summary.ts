@@ -1,6 +1,7 @@
 // The step summary every agent job writes: role, model, effort, duration,
 // turns, tokens and cost. Model and skills come from the `claude -p` init
-// message; duration, turns, tokens and cost from the final result message.
+// message; tokens and cost from the final result message, and duration and
+// turns from every result message, as the stream reader gives them (#860).
 // Effort is what the runner passed to the CLI, since the init message never
 // carries it. Pure, no I/O.
 import type { InstallRecord, InstalledSource } from "../skills/installRecord.ts";
@@ -102,8 +103,8 @@ export function runSummary({ role, effort, lines, installed }: RunSummaryInput):
     role,
     text(init?.["model"]),
     effort ?? "CLI default",
-    duration(result?.["duration_ms"]),
-    count(result?.["num_turns"]),
+    duration(stream.durationMs),
+    count(stream.turns),
     count(tokens.input),
     count(tokens.output),
     count(tokens.cacheWrite),

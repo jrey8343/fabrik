@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cleanLaunch } from "../__fixtures__/preflight.ts";
 import { checkMeteredBilling } from "../preflight/meteredBilling.ts";
-import { judgeAgent, judgeClaudeArgs, judgeOutput } from "./judgeLaunch.ts";
+import { judgeLaunch, judgeOutput } from "./judgeLaunch.ts";
 import type { Rubric } from "./rubrics.ts";
 import { JUDGE_OUTPUT_TAG } from "./scorerPrompt.ts";
 
@@ -46,7 +46,7 @@ describe("The judge's answer, read from its one reply", () => {
 });
 
 describe("The judge's launch", () => {
-  const judge = judgeAgent();
+  const { provider: judge, args } = judgeLaunch([]);
   /** A launch command's words, with Sandcastle's single quotes taken off. */
   const words = (command: string) => command.split(" ").map((word) => word.replace(/^'(.*)'$/, "$1"));
 
@@ -64,13 +64,18 @@ describe("The judge's launch", () => {
     expect(command).not.toContain("--bare");
   });
 
+  it("starts without the tools that schedule a later turn, as every agent does (#860)", () => {
+    const { command } = judge.buildPrintCommand({ prompt: "Score this run.", dangerouslySkipPermissions: true });
+
+    expect(command).toContain(" --disallowedTools ScheduleWakeup,CronCreate,CronDelete,CronList ");
+  });
+
   it("keeps the prompt on stdin, as the runner gives it", () => {
     expect(judge.buildPrintCommand({ prompt: "Score this run.", dangerouslySkipPermissions: true }).stdin).toBe("Score this run.");
   });
 
   it("gives the metered-billing preflight the arguments it launches with, which it lets through", () => {
     const { command } = judge.buildPrintCommand({ prompt: "Score this run.", dangerouslySkipPermissions: true });
-    const args = judgeClaudeArgs();
 
     expect(words(command)).toEqual(["claude", ...args]);
     expect(args).toEqual(expect.arrayContaining(["--model", "claude-sonnet-5-5", "--effort", "medium", "--tools", "", "--strict-mcp-config"]));

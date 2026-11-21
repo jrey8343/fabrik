@@ -51,7 +51,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Staging trials release notes, wh
     const releasing = await read("docs/releasing.md");
     const drafted = releasing.split("\n").find((line) => line.includes("Notes drafted ahead of a release are in `docs/release-notes/`"));
     expect(drafted).toContain(
-      "(release-notes/kept-standings.md), and the Staging trial minor's ([#814](https://github.com/jrey8343/fabrik/issues/814)) are [Staging trials](release-notes/staging-trials.md).",
+      "(release-notes/kept-standings.md), the Staging trial minor's ([#814](https://github.com/jrey8343/fabrik/issues/814)) are [Staging trials](release-notes/staging-trials.md)",
     );
   });
 

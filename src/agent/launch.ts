@@ -1,14 +1,20 @@
 // What every AFK agent run launches through, whichever program runs it: the
 // agent runner (src/agent/run.ts) and the judge (src/kit/judge-main.ts). The
-// `claude` arguments the metered-billing preflight checks and the
-// onSandboxReady hook that runs it, the Standard Schema a structured output is
-// checked with, the stream watch that keeps the transcript and stops a run
-// whose init message fails the backstop check, or, with rotation on or on a
-// Fable run, whose stream shows it spending usage credits, and the failure
-// report a failed run leaves. The step summary and outputs it writes are src/kit/stepFiles.ts's.
+// launch itself, with Sandcastle, which starts the agent without the tools
+// that schedule a later turn and ends its run on the reply that holds its
+// output block (#860), the `claude` arguments the metered-billing preflight
+// checks and the onSandboxReady hook that runs it, the Standard Schema a
+// structured output is checked with, the stream watch that keeps the
+// transcript and stops a run whose init message fails the backstop check, or,
+// with rotation on or on a Fable run, whose stream shows it spending usage
+// credits, and the failure report a failed run leaves. The step summary and
+// outputs it writes are src/kit/stepFiles.ts's; stopping what a settled run
+// left running is src/agent/stop.ts's.
+import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
-import type { AgentStreamEvent } from "@ai-hero/sandcastle";
+import { type AgentProvider, type AgentStreamEvent, type ClaudeCodeOptions, claudeCode, type OutputDefinition, run } from "@ai-hero/sandcastle";
+import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { isFableRun, type KitConfig } from "../kit/config.ts";
 import { KIT_DIR } from "../kit/kitFiles.ts";
@@ -16,7 +22,7 @@ import type { FailedRunCommits, FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { failureReportFor } from "./failure.ts";
-import { isObject, readStream, type StreamMessage, streamMessageOf } from "./stream.ts";
+import { isObject, parsedJson, readStream, type StreamMessage, streamMessageOf } from "./stream.ts";
 import { transcriptWriter } from "./transcript.ts";
 
 export type Checked<T> = { readonly ok: true; readonly output: T } | { readonly ok: false; readonly errors: readonly string[] };
@@ -82,9 +88,24 @@ export function settleReply<T>(contract: OutputContract<T>, reply: unknown): { r
 }
 
 /**
- * The arguments Sandcastle's claudeCode() passes to `claude` (its
- * buildPrintCommand), for the preflight, with any `flags` the run adds before
- * the prompt.
+ * The tools that give a `claude -p` session a later turn, which no agent the
+ * Kit launches starts with (#860): a pending wakeup keeps the agent's process
+ * open after the reply that ends its run. Background commands stay.
+ */
+export const SCHEDULING_TOOLS = ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList"] as const;
+
+/**
+ * What every launch adds to take them away. The pinned Claude Code's init
+ * message lists none of them with this flag; CLAUDE_CODE_DISABLE_CRON alone
+ * leaves `ScheduleWakeup`.
+ */
+const NO_SCHEDULED_TURNS = ["--disallowedTools", SCHEDULING_TOOLS.join(",")] as const;
+
+/**
+ * The arguments every agent's `claude` is launched with, for the preflight:
+ * the ones Sandcastle's claudeCode() passes (its buildPrintCommand), then the
+ * flag that takes away the scheduling tools, then any `flags` the run adds,
+ * all before the prompt.
  */
 export function claudeArgs(model: string, effort: string | null, flags: readonly string[] = []): string[] {
   return [
@@ -96,10 +117,119 @@ export function claudeArgs(model: string, effort: string | null, flags: readonly
     "--model",
     model,
     ...(effort === null ? [] : ["--effort", effort]),
+    ...NO_SCHEDULED_TURNS,
     ...flags,
     "-p",
     "-",
   ];
+}
+
+/** The end of every launch command Sandcastle's claudeCode() builds: the prompt on stdin. */
+const PROMPT_ON_STDIN = " -p -";
+
+/** A flag or its value as one word of a shell command. */
+const shellWord = (word: string): string => (/^[\w,.=:/-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
+
+/**
+ * How long a run whose reply held its output block waits, with no further
+ * line from its agent, before it is over (#860): Sandcastle's own grace for a
+ * finished agent whose process hangs, far under its 600-second idle limit.
+ */
+export const OUTPUT_BLOCK_GRACE_SECONDS = 60;
+
+/** What the last whole `<tag>` block of a reply holds, as Sandcastle finds it (its findLastTagContent), or null if the reply has none. */
+function lastBlockIn(reply: string, tag: string): string | null {
+  const [open, close] = [`<${tag}>`, `</${tag}>`];
+  let last: string | null = null;
+  for (let from = 0; ; ) {
+    const start = reply.indexOf(open, from);
+    const end = start === -1 ? -1 : reply.indexOf(close, start + open.length);
+    if (end === -1) return last;
+    last = reply.slice(start + open.length, end);
+    from = end + close.length;
+  }
+}
+
+/**
+ * Whether a reply holds the whole output block: the tag's two ends, and for a
+ * JSON output, JSON between them, in a code fence or not, as Sandcastle reads
+ * it. So a reply that only names the tag in prose holds none. Whether the
+ * JSON keeps the role's contract is Sandcastle's to check, which asks once
+ * for a block that breaks it again.
+ */
+function holdsBlock(reply: string, output: OutputDefinition): boolean {
+  const block = lastBlockIn(reply, output.tag)?.trim();
+  if (block === undefined || output._tag === "string") return block !== undefined;
+  const fenced = /^```(?:json)?\s*\n(?<body>[\s\S]*?)\n\s*```\s*$/u.exec(block)?.groups?.["body"];
+  return parsedJson(fenced ?? block) !== undefined;
+}
+
+/** An agent's launch: what it is started with, what the preflight is told of it, and what ends its run. */
+export interface AgentLaunch {
+  /** The `claude` arguments the provider launches with, for the metered-billing preflight. */
+  readonly args: readonly string[];
+  /** The structured output the agent's reply must end in, as Sandcastle reads it. */
+  readonly output: OutputDefinition;
+  /** The Sandcastle provider that launches the agent. */
+  readonly provider: AgentProvider;
+  /**
+   * Sandcastle's completion signal for the run: text the provider puts after
+   * a result that holds the output block, and nowhere else.
+   */
+  readonly endSignal: string;
+}
+
+/**
+ * The launch of an agent on `model` at `effort`, whose reply ends in the
+ * block `output` names, with any `flags` the run adds. Sandcastle's
+ * claudeCode() takes no extra flags, so the provider adds them to the command
+ * it builds, a resumed session's too.
+ *
+ * The provider also marks the end of the run (#860). An agent's process can
+ * stay open after the reply that holds its output block, and each turn of a
+ * `claude -p` session ends in a `result` of its own, so the last line is no
+ * sign of the end. Sandcastle ends a run once its completion signal has
+ * appeared and its grace period has passed with no further line, but it looks
+ * for the signal in everything the agent writes, where a role's tag can be
+ * named or quoted mid-run. So the signal is one the agent can't write, made
+ * afresh for each launch, and the provider puts it after a `result` that
+ * holds the block, where Sandcastle's reading of the tag never sees it. A
+ * later `result` that holds a block takes the earlier one's place. One that
+ * holds none, or reports an error, is left out, so the reply Sandcastle reads
+ * stays the block's whether the process then exits or stays open: a turn the
+ * agent is woken into after its reply can't undo a run that had finished.
+ */
+export function agentLaunch(model: string, effort: string | null, output: OutputDefinition, flags: readonly string[] = []): AgentLaunch {
+  const claude = claudeCode(model, effort === null ? {} : { effort: effort as NonNullable<ClaudeCodeOptions["effort"]> });
+  const added = [...NO_SCHEDULED_TURNS, ...flags].map(shellWord).join(" ");
+  const endSignal = `<fabrik-run-end-${randomUUID()}>`;
+  // Whether this process's stream has given a result that holds the block yet.
+  let blockSeen = false;
+  return {
+    args: claudeArgs(model, effort, flags),
+    output,
+    endSignal,
+    provider: {
+      ...claude,
+      buildPrintCommand(options) {
+        const built = claude.buildPrintCommand(options);
+        if (!built.command.endsWith(PROMPT_ON_STDIN)) throw new Error(`Can't add the launch flags to an unexpected launch command: ${built.command}`);
+        // A new process, whose stream starts with no block: Sandcastle's one retry of a malformed block is one.
+        blockSeen = false;
+        return { ...built, command: `${built.command.slice(0, -PROMPT_ON_STDIN.length)} ${added}${PROMPT_ON_STDIN}` };
+      },
+      parseStreamLine(line) {
+        return claude.parseStreamLine(line).flatMap((event): ReturnType<AgentProvider["parseStreamLine"]> => {
+          // Sandcastle's claudeCode() gives a result that reports an error as an `error`, and no other line as one.
+          if (event.type === "error") return blockSeen ? [] : [event];
+          if (event.type !== "result") return [event];
+          if (!holdsBlock(event.result, output)) return blockSeen ? [] : [event];
+          blockSeen = true;
+          return [{ ...event, result: `${event.result}\n${endSignal}` }];
+        });
+      },
+    },
+  };
 }
 
 /**
@@ -122,15 +252,83 @@ export function readyHook(readies: SandboxReadying, sandbox: Pick<KitConfig["san
   return [...commands.flatMap((command) => (command === null ? [] : [`(${command})`])), preflight].join(" && ");
 }
 
+/** The folder holding the Kit's pinned `claude`. */
+const KIT_BIN_DIR = join(KIT_DIR, "node_modules", ".bin");
+
 /**
  * Sets what the agent needs in this process's env, which it inherits
- * (noSandbox): the Kit's pinned `claude` first on PATH, no auto-update, and
+ * (noSandbox): the `claude` in `binDir` first on PATH, no auto-update, and
  * its launch arguments for the preflight.
  */
-export function setAgentEnv(args: readonly string[]): void {
-  process.env["PATH"] = [join(KIT_DIR, "node_modules", ".bin"), process.env["PATH"] ?? ""].join(delimiter);
+function setAgentEnv(args: readonly string[], binDir: string): void {
+  process.env["PATH"] = [binDir, process.env["PATH"] ?? ""].join(delimiter);
   process.env["DISABLE_AUTOUPDATER"] = "1";
   process.env[CLAUDE_ARGS_ENV] = JSON.stringify(args);
+}
+
+/** One agent run: what Sandcastle is given to launch it, watch it and read its reply. */
+export interface AgentRun {
+  /** The run's name in Sandcastle's log. */
+  readonly name: string;
+  readonly launch: AgentLaunch;
+  /** The git checkout the agent works in. */
+  readonly cwd: string;
+  readonly prompt: string;
+  /** The onSandboxReady hook (readyHook), which ends in the preflight. */
+  readonly ready: { readonly command: string; readonly timeoutMs: number };
+  /** Stops the run: the one `watch` was made with. */
+  readonly abort: AbortController;
+  readonly watch: StreamWatch;
+  /** Where Sandcastle writes the agent log. */
+  readonly logPath: string;
+  /** The grace period after a result that holds the output block, in seconds: OUTPUT_BLOCK_GRACE_SECONDS unless a test gives its own. */
+  readonly graceSeconds?: number;
+  /** The folder holding the `claude` to launch: the Kit's pinned one unless a test gives its own. */
+  readonly binDir?: string;
+}
+
+/**
+ * Runs one agent with Sandcastle on the runner VM (noSandbox), behind the
+ * metered-billing preflight and the init check, and gives what its output tag
+ * held. The agent inherits this process's env, so what it needs is set here.
+ *
+ * The run ends when the agent's process exits, or, with the process still
+ * open, once a result has held the output block and the grace period has
+ * passed with no further line (#860). Either way Sandcastle reads the block
+ * from the reply, and asks once for a malformed one again. A run that ends
+ * the second way leaves its agent's process running, as a failed one may:
+ * the caller ends through endAgentProgram (src/agent/stop.ts), which stops
+ * it, once the caller has written what it writes.
+ */
+export async function runAgent({
+  name,
+  launch,
+  cwd,
+  prompt,
+  ready,
+  abort,
+  watch,
+  logPath,
+  graceSeconds = OUTPUT_BLOCK_GRACE_SECONDS,
+  binDir = KIT_BIN_DIR,
+}: AgentRun): Promise<unknown> {
+  setAgentEnv(launch.args, binDir);
+  const result = await run({
+    name,
+    agent: launch.provider,
+    sandbox: noSandbox(),
+    cwd,
+    prompt,
+    maxIterations: 1,
+    output: launch.output,
+    hooks: { sandbox: { onSandboxReady: [ready] } },
+    completionSignal: launch.endSignal,
+    completionTimeoutSeconds: graceSeconds,
+    signal: abort.signal,
+    logging: { type: "file", path: logPath, onAgentStreamEvent: watch.onAgentStreamEvent },
+  });
+  watch.checkInit();
+  return (result as { output?: unknown }).output;
 }
 
 /** The agent's stream as a run watches it. */
@@ -168,12 +366,19 @@ function overageIn(message: StreamMessage): string | null {
   return null;
 }
 
+/** The scheduling tools an init message's `tools` still lists, in its order. */
+function schedulingToolsAt(init: StreamMessage): string[] {
+  const tools = init["tools"];
+  return Array.isArray(tools) ? tools.filter((tool): tool is string => (SCHEDULING_TOOLS as readonly unknown[]).includes(tool)) : [];
+}
+
 /**
  * Watches the agent's stream: keeps every line, checks the init message
  * against metered billing and stops the run through `abort` if it refuses,
- * and, with rotation on or on a Fable run, stops it on the first message
- * showing overage, so a Subscription with usage credits on spends no more.
- * Then it appends the line to the transcript at `transcriptPath`.
+ * warns when it still lists a tool that schedules a later turn, and, with
+ * rotation on or on a Fable run, stops the run on the first message showing
+ * overage, so a Subscription with usage credits on spends no more. Then it
+ * appends the line to the transcript at `transcriptPath`.
  */
 export function streamWatch(
   transcriptPath: string,
@@ -206,6 +411,9 @@ export function streamWatch(
         const check = checkInitMessage(initMessage);
         refused = check.kind === "refuse" ? check.routes : [];
         if (check.kind === "refuse") abort.abort(new Error(check.routes.join("; ")));
+        // The launch takes these tools away (claudeArgs); a `claude` that kept one is said, never stopped for it (#860).
+        const kept = schedulingToolsAt(initMessage);
+        if (kept.length > 0) console.log(`::warning title=Scheduling tools at init::${kept.join(", ")}`);
       }
       const message = stopsOnOverage && overage === null ? streamMessageOf(event.line) : null;
       const shown = message === null ? null : overageIn(message);

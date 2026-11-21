@@ -33,6 +33,8 @@ The findings file is Markdown, and the Kit links it from the Decision:
 
 ## Your output
 
+The reply that holds your `<research>` tag ends the run, and the Kit then stops anything you left running. Write it only once nothing is running and nothing is waited on: every command you started in the background has finished, and you have read its result. Never schedule a wakeup or a later turn: the run has none.
+
 End your reply with exactly one `<research>` tag holding a JSON object, and nothing after it:
 
 <research>

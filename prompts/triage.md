@@ -62,6 +62,8 @@ An issue filed by the Fabrik Monitor (its body holds a `fabrik:monitor` marker) 
 
 ## Your output
 
+The reply that holds your `<triage>` tag ends the run, and the Kit then stops anything you left running. Write it only once nothing is running and nothing is waited on: every command you started in the background has finished, and you have read its result. Never schedule a wakeup or a later turn: the run has none.
+
 When you have decided, end your reply with exactly one `<triage>` tag holding a JSON object, and nothing after it:
 
 <triage>

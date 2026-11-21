@@ -3,9 +3,9 @@
 // (src/agent/launch.ts), and with its one answer checked as the score file
 // will check it. The judge job runs it from src/kit/judge-main.ts. What the
 // job leaves for the score-record job is src/kit/judge.ts, which needs none of
-// this. Pure, no I/O.
-import { type AgentProvider, claudeCode, Output, type OutputObjectDefinition } from "@ai-hero/sandcastle";
-import { type Checked, claudeArgs, schemaOf } from "../agent/launch.ts";
+// this. No I/O.
+import { Output, type OutputObjectDefinition } from "@ai-hero/sandcastle";
+import { type AgentLaunch, agentLaunch, type Checked, schemaOf } from "../agent/launch.ts";
 import type { Rubric } from "./rubrics.ts";
 import { JUDGE_EFFORT, JUDGE_MODEL } from "./runStore.ts";
 import { type JudgeOutput, NOT_APPLICABLE, scoreEntries } from "./scorer.ts";
@@ -19,33 +19,14 @@ import { JUDGE_OUTPUT_TAG } from "./scorerPrompt.ts";
  */
 const NO_TOOLS = ["--tools", "", "--strict-mcp-config"] as const;
 
-/** The end of every launch command Sandcastle's claudeCode() builds: the prompt on stdin. */
-const PROMPT_ON_STDIN = " -p -";
-
-/** The judge's provider: the Kit's judge model at the Kit's judge effort, with no tools. */
-export function judgeAgent(): AgentProvider {
-  return withoutTools(claudeCode(JUDGE_MODEL, { effort: JUDGE_EFFORT }));
-}
-
 /**
- * The provider with no tools. Sandcastle 0.12.0's claudeCode() has no option
- * for it, so this adds the flags to the command it builds.
+ * The judge's launch: the Kit's judge model at the Kit's judge effort, with no
+ * tools, for its one answer on `rubrics`, on the launch every agent starts
+ * through (src/agent/launch.ts), so its arguments are the ones the
+ * metered-billing preflight checks.
  */
-function withoutTools(provider: AgentProvider): AgentProvider {
-  return {
-    ...provider,
-    buildPrintCommand(options) {
-      const built = provider.buildPrintCommand(options);
-      if (!built.command.endsWith(PROMPT_ON_STDIN)) throw new Error(`Can't take the tools away from an unexpected launch command: ${built.command}`);
-      const flags = NO_TOOLS.map((flag) => (flag === "" ? "''" : flag)).join(" ");
-      return { ...built, command: `${built.command.slice(0, -PROMPT_ON_STDIN.length)} ${flags}${PROMPT_ON_STDIN}` };
-    },
-  };
-}
-
-/** The judge's `claude` arguments, as the metered-billing preflight checks them: its model and effort, no tools. */
-export function judgeClaudeArgs(): string[] {
-  return claudeArgs(JUDGE_MODEL, JUDGE_EFFORT, NO_TOOLS);
+export function judgeLaunch(rubrics: readonly Rubric[]): AgentLaunch {
+  return agentLaunch(JUDGE_MODEL, JUDGE_EFFORT, judgeOutput(rubrics), NO_TOOLS);
 }
 
 /**

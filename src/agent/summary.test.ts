@@ -72,6 +72,26 @@ describe("the agent job's step summary", () => {
     expect(summary).toContain("| implement | claude-opus-5-5 | high | 2m 5s | 14 | 1,500 | 4,000 | 6,000 | 42,000 | $1.23 |");
   });
 
+  it("gives the whole run's duration and turns when a turn that ended with a background command running woke into more, with the last result's cost (#860)", () => {
+    const at = (timestamp: string) => ({ type: "assistant", timestamp, message: {} });
+    const summary = runSummary({
+      role: "implement",
+      effort: "high",
+      lines: lines(
+        init,
+        at("2026-11-21T01:23:16.000Z"),
+        { ...result, num_turns: 99, duration_ms: 1_080_647, total_cost_usd: 6.9 },
+        at("2026-11-21T01:30:25.000Z"),
+        { ...result, num_turns: 4, duration_ms: 6_403, total_cost_usd: 7.1 },
+        at("2026-11-21T01:34:41.000Z"),
+        { ...result, num_turns: 3, duration_ms: 37_555, total_cost_usd: 7.54 },
+      ),
+    });
+
+    // Never the last result's own 38s and 3 turns.
+    expect(summary).toContain("| implement | claude-opus-5-5 | high | 29m 26s | 106 | 1,200 | 3,400 | 5,000 | 40,000 | $7.54 |");
+  });
+
   it("says unknown for anything the stream never reported, as when a run dies before its result", () => {
     const summary = runSummary({ role: "triage", effort: null, lines: ["not json", ...lines(init)] });
 

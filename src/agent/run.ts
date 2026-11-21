@@ -2,6 +2,10 @@
 // on the runner VM (noSandbox), behind the metered-billing preflight and the
 // init check, writes the step summary, and passes the role's structured output
 // out as an artifact for the push job. It holds no GitHub write credential.
+// The run is over when the agent's process exits, or a grace period after a
+// reply that holds the role's output block, whichever comes first
+// (src/agent/launch.ts, #860). Once the runner has written everything it
+// writes, it stops whatever the agent left running and exits (src/agent/stop.ts).
 //   node <kit>/src/agent/run.ts <triage|design|prototype|implement|review|audit|retro|research|digest|replay-implement|replay-review>
 //
 // Run from the Product checkout. Env:
@@ -89,8 +93,7 @@
 // is a first run's Review, so always a Full Review.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { claudeCode, Output, run } from "@ai-hero/sandcastle";
-import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
+import { Output } from "@ai-hero/sandcastle";
 import { captureFailureOf } from "../evidence/uiEvidence.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
 import { type KitConfig, refuseRoleModel } from "../kit/config.ts";
@@ -131,13 +134,13 @@ import {
 } from "./design.ts";
 import { PROTOTYPE_AUTHOR, PROTOTYPE_REQUEST_ENV, prototypeTurnContext, startPrototypeBranch } from "./prototype.ts";
 import {
-  claudeArgs,
+  agentLaunch,
   leaveFailureReport,
   type OutputContract,
   readyHook,
   replySchemaOf,
+  runAgent,
   type SandboxReadying,
-  setAgentEnv,
   settleReply,
   streamWatch,
 } from "./launch.ts";
@@ -145,6 +148,7 @@ import { type LaterReviewGiven, readLaterReviewFile } from "./laterReview.ts";
 import { downloadedShotsOf, isFullReview, ranNothingOf, readRedChecks, reviewContext, reviewPromptFor } from "./review.ts";
 import { AGENT_RESULT_FILE, type AgentRunResult, type BuiltBranch } from "./result.ts";
 import { promptFor } from "./prompt.ts";
+import { endAgentProgram } from "./stop.ts";
 import { missingSkills, runSummary } from "./summary.ts";
 import { RUN_BRIEF_FILE, TRANSCRIPT_FILE } from "./transcript.ts";
 
@@ -602,9 +606,6 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
       ? Output.object({ tag: prompt, schema: replySchemaOf(contract.read), maxRetries: 1 })
       : Output.string({ tag: prompt });
 
-  // The agent inherits this process's env (noSandbox), so set what it needs here.
-  setAgentEnv(claudeArgs(role.model, role.effort));
-
   const abort = new AbortController();
   // With rotation on, or on a Fable run (ADR-0034), a run that shows overage is stopped, so no Subscription spends usage credits.
   const watch = streamWatch(join(outDir, TRANSCRIPT_FILE), abort, { rotation: rotationIsOn(config), model: role.model });
@@ -613,13 +614,10 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   let built: BuiltBranch | null = null;
 
   try {
-    const result = await run({
+    // Ends when the agent's process exits, or a grace period after a result that holds the output block (#860).
+    const reply = await runAgent({
       name: `${prompt}-${subject}`,
-      agent: claudeCode(
-        role.model,
-        role.effort === null ? {} : { effort: role.effort as "low" | "medium" | "high" | "xhigh" | "max" },
-      ),
-      sandbox: noSandbox(),
+      launch: agentLaunch(role.model, role.effort, output),
       cwd: productDir,
       prompt: promptFor({
         template: await promptTemplate(prompt, reviewKind),
@@ -630,18 +628,12 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         heading: spec.issueHeading ?? "The issue",
         extra,
       }),
-      maxIterations: 1,
-      output,
       // The role spec says which of the Product's Sandbox commands run before the agent starts (#703).
-      hooks: {
-        sandbox: {
-          onSandboxReady: [{ command: readyHook(spec.readies, config.sandbox), timeoutMs }],
-        },
-      },
-      signal: abort.signal,
-      logging: { type: "file", path: join(outDir, "agent.log"), onAgentStreamEvent: watch.onAgentStreamEvent },
+      ready: { command: readyHook(spec.readies, config.sandbox), timeoutMs },
+      abort,
+      watch,
+      logPath: join(outDir, "agent.log"),
     });
-    watch.checkInit();
 
     // The Researcher commits nothing itself: the Kit commits what it left, as the Fabrik Researcher.
     if (spec.researches === true) await commitResearch(productDir, issueNumber);
@@ -654,7 +646,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     }
     // Text output is checked here, so a reply that breaks its contract fails this job, never passes.
     // Either output kind puts what the tag held on the result; a JSON reply is saved as the agent wrote it.
-    const { output: parsed, saved } = settleReply(contract, (result as { output?: unknown }).output);
+    const { output: parsed, saved } = settleReply(contract, reply);
     const artifact: AgentRunResult = {
       role: name,
       issue: subject,
@@ -719,9 +711,7 @@ if (import.meta.main) {
     console.error(`Usage: node src/agent/run.ts <${Object.keys(RUNS).join("|")}>`);
     process.exitCode = 2;
   } else {
-    runner.start().catch((error: unknown) => {
-      console.log(`::error title=Agent run failed::${error instanceof Error ? error.message : String(error)}`);
-      process.exitCode = 1;
-    });
+    // Everything the run writes is written by the time it settles, so its agent's process is stopped and the step ends (#860).
+    await endAgentProgram(runner.start(), "Agent run failed");
   }
 }

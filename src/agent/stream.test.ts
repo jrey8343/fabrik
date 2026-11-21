@@ -143,3 +143,54 @@ describe("reading an agent's stream-json", () => {
     expect(readStream(lines(init, { type: "assistant" }, { type: "assistant", message: { content: "text" } })).steps).toEqual([]);
   });
 });
+
+describe("a run's figures, from every result of its stream (#860)", () => {
+  const at = (timestamp: string) => ({ type: "assistant", timestamp, message: { content: [{ type: "text", text: "Working" }] } });
+  // The three results of an Implement run that twice ended a turn with a background command running, each of which woke it into another.
+  const threeResults = lines(
+    init,
+    at("2026-11-21T01:23:16.000Z"),
+    { type: "result", subtype: "success", num_turns: 99, duration_ms: 1_080_647, duration_api_ms: 700_000, total_cost_usd: 6.9 },
+    at("2026-11-21T01:30:22.000Z"),
+    at("2026-11-21T01:30:25.000Z"),
+    { type: "result", subtype: "success", num_turns: 4, duration_ms: 6_403, duration_api_ms: 5_000, total_cost_usd: 7.1 },
+    at("2026-11-21T01:34:04.000Z"),
+    at("2026-11-21T01:34:41.000Z"),
+    { type: "result", subtype: "success", num_turns: 3, duration_ms: 37_555, duration_api_ms: 30_000, total_cost_usd: 7.54 },
+  );
+
+  it("sums the turns and the API time, and takes the duration from the agent's start to its last result, waits included", () => {
+    const stream = readStream(threeResults);
+
+    expect(stream.turns).toBe(106);
+    expect(stream.apiDurationMs).toBe(735_000);
+    // The first result's 18m 0.647s, then the 11m 25s from it to the last: about 29 minutes, where the three sum to 18m 45s.
+    expect(stream.durationMs).toBe(1_080_647 + 685_000);
+    expect(stream.result?.["total_cost_usd"]).toBe(7.54);
+  });
+
+  it("are the one result's own for a stream with one result", () => {
+    const stream = readStream(lines(init, at("2026-11-21T01:23:16.000Z"), { type: "result", num_turns: 14, duration_ms: 125_400, duration_api_ms: 80_000 }));
+
+    expect(stream).toMatchObject({ turns: 14, durationMs: 125_400, apiDurationMs: 80_000 });
+  });
+
+  it("are null for a run that never reached a result, or whose results gave no figure", () => {
+    expect(readStream(lines(init, at("2026-11-21T01:23:16.000Z")))).toMatchObject({ turns: null, durationMs: null, apiDurationMs: null });
+    expect(readStream(lines(init, { type: "result", subtype: "success" }))).toMatchObject({ turns: null, durationMs: null, apiDurationMs: null });
+  });
+
+  it("sums each result's duration when the messages between them carry no time", () => {
+    const stream = readStream(lines(init, { type: "result", num_turns: 2, duration_ms: 60_000 }, { type: "result", num_turns: 1, duration_ms: 5_000 }));
+
+    expect(stream.durationMs).toBe(65_000);
+  });
+
+  it("is never less than its turns took together, as when only the messages before the first result carry a time", () => {
+    const stream = readStream(
+      lines(init, at("2026-11-21T01:23:16.000Z"), { type: "result", duration_ms: 1_000_000 }, { type: "assistant", message: {} }, { type: "result", duration_ms: 43_000 }),
+    );
+
+    expect(stream.durationMs).toBe(1_043_000);
+  });
+});
