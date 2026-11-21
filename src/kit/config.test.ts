@@ -2,7 +2,18 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { claudeArgs } from "../agent/launch.ts";
 import { prototypeRole } from "../loop/design.ts";
-import { captureIdentityOf, previewUrl, productionPageUrl, REVIEWER_IMAGE_CAP, resolveKitConfig, timeZoneNote, type UiConfig, UI_VIEWPORTS, withRouteOn } from "./config.ts";
+import {
+  captureIdentityOf,
+  previewUrl,
+  productionPageUrl,
+  REVIEWER_IMAGE_CAP,
+  resolveKitConfig,
+  stagingPageUrl,
+  timeZoneNote,
+  type UiConfig,
+  UI_VIEWPORTS,
+  withRouteOn,
+} from "./config.ts";
 
 const root = new URL("../../", import.meta.url);
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
@@ -37,6 +48,7 @@ const DEFAULTS = {
   ui: null,
   preview: null,
   production: null,
+  staging: null,
   timeZone: null,
 };
 
@@ -1955,6 +1967,101 @@ describe("The production block, which says where a Product repo's production is"
   });
 });
 
+describe("The staging block, which says where a Product repo's staging environment is", () => {
+  it.each([`{}`, `{ "staging": null }`])("declares no staging for %s, and is valid", (text) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("resolves an address and an environment to both", () => {
+    const result = resolveKitConfig({ config: `{ "staging": { "url": "https://staging.shop.example", "environment": "staging" } }` });
+
+    expect(result).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, staging: { url: "https://staging.shop.example", environment: "staging" } },
+    });
+  });
+
+  it.each([
+    [{ environment: "staging" }, "staging.url is missing"],
+    [{ url: "https://staging.shop.example" }, "staging.environment is missing"],
+  ])("refuses a staging block with only one of the two, naming the one it lacks: %j", (block, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ staging: block }) })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([
+    [{ url: null, environment: "staging" }, "url must be a string"],
+    [{ url: "shop.example", environment: "staging" }, `url is "shop.example": a URL must start with http:// or https://`],
+    [{ url: "ftp://shop.example", environment: "staging" }, `url is "ftp://shop.example": a URL must start with http:// or https://`],
+    [{ url: "https://shop.example", environment: "" }, `environment is "": an environment can't be blank`],
+    [{ url: "https://shop.example", environment: "  " }, `environment is "  ": an environment can't be blank`],
+    [{ url: "https://shop.example", environment: "one\ntwo" }, `environment is "one\\ntwo": an environment is the one line GitHub's Deployments name it`],
+    [{ url: "https://shop.example", environment: 42 }, "environment must be a string"],
+    [{ url: "https://shop.example", environment: "staging", region: "syd1" }, "region is not a Kit config field"],
+  ])("refuses in a staging block what a production block is refused for, naming its own field: %j", (block, error) => {
+    expect(resolveKitConfig({ config: JSON.stringify({ production: block }) })).toEqual({ ok: false, errors: [`production.${error}`] });
+    expect(resolveKitConfig({ config: JSON.stringify({ staging: block }) })).toEqual({ ok: false, errors: [`staging.${error}`] });
+  });
+
+  it("refuses a null environment, which only production may leave out", () => {
+    const result = resolveKitConfig({ config: `{ "staging": { "url": "https://staging.shop.example", "environment": null } }` });
+
+    expect(result).toEqual({ ok: false, errors: ["staging.environment must be a string"] });
+  });
+
+  it.each([
+    [`{ "staging": "https://staging.shop.example" }`, "staging must be an object or null"],
+    [`{ "staging": ["https://staging.shop.example"] }`, "staging must be an object or null"],
+  ])("refuses a staging block that isn't an object, naming it: %s", (text, error) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: [error] });
+  });
+
+  it("refuses the environment production's deploys carry, since a deploy can't be told from a promotion then", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({
+        production: { url: "https://shop.example", environment: "live" },
+        staging: { url: "https://staging.shop.example", environment: "live" },
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`staging.environment is "live": production.environment names it, and staging's environment is never production's`],
+    });
+  });
+
+  it("takes an environment of its own beside production's, and one beside a production that names none", () => {
+    const staging = { url: "https://staging.shop.example", environment: "staging" };
+    const tracked = { url: "https://shop.example", environment: "production" };
+    const untracked = { url: "https://shop.example", environment: null };
+
+    expect(resolveKitConfig({ config: JSON.stringify({ production: tracked, staging }) })).toEqual({ ok: true, config: { ...DEFAULTS, production: tracked, staging } });
+    expect(resolveKitConfig({ config: JSON.stringify({ production: untracked, staging }) })).toEqual({ ok: true, config: { ...DEFAULTS, production: untracked, staging } });
+  });
+
+  it("names every problem in the staging block at once, after production's", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ staging: { url: "shop.example", environment: "", region: "syd1" }, production: { environment: "production" } }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        "production.url is missing",
+        `staging.url is "shop.example": a URL must start with http:// or https://`,
+        `staging.environment is "": an environment can't be blank`,
+        "staging.region is not a Kit config field",
+      ],
+    });
+  });
+
+  it("declares staging in a repo that declares no production", () => {
+    const result = resolveKitConfig({ config: `{ "production": null, "staging": { "url": "https://staging.shop.example", "environment": "staging" } }` });
+
+    expect(result.ok && result.config.production).toBeNull();
+    expect(result.ok && result.config.staging).toEqual({ url: "https://staging.shop.example", environment: "staging" });
+  });
+});
+
 describe("Visual evidence's Kit constants, which no Kit config can change", () => {
   it("captures at one mobile and one desktop viewport, mobile first", () => {
     expect(UI_VIEWPORTS).toEqual([
@@ -2025,6 +2132,15 @@ describe("A captured route's page on a site, as a reader links it (#639)", () =>
   it("builds a production page from the production block's address, whether or not it names an environment", () => {
     expect(productionPageUrl({ url: "https://shop.example/", environment: "production" }, "/book?when=today")).toBe("https://shop.example/book?when=today");
     expect(productionPageUrl({ url: "https://example.dev/shop", environment: null }, "/")).toBe("https://example.dev/shop/");
+  });
+
+  it.each([
+    ["https://staging.shop.example/", "/book?when=today", "https://staging.shop.example/book?when=today"],
+    ["https://example.dev/staging", "/", "https://example.dev/staging/"],
+    ["https://example.dev/staging/?branch=main", "/book?when=today", "https://example.dev/staging/book?branch=main&when=today"],
+  ])("builds a staging page from the staging block's address, %s, as a production page is built from production's", (base, route, page) => {
+    expect(stagingPageUrl({ url: base, environment: "staging" }, route)).toBe(page);
+    expect(productionPageUrl({ url: base, environment: "production" }, route)).toBe(page);
   });
 });
 
