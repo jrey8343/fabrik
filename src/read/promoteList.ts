@@ -16,12 +16,9 @@ import { type PlainKind, standingAt } from "../kit/standing.ts";
 import { plainKindOf } from "../kit/standingPlain.ts";
 import { type StagingStanding, stagingStandingsOf, type StagingTrial } from "../kit/standingStaging.ts";
 import type { TrialProblemFacts } from "../kit/trialResult.ts";
-import type { Facts, MergedPlainFacts } from "./gather.ts";
+import { type Facts, type MergedPlainFacts, MERGES_KEPT } from "./gather.ts";
 import { ANY_BOT, evidenceOf, type RowEvidence, type RowShots, type RowStaging, ruleFactsOf, shotsOf, type StagingRead, stagingOf } from "./rows.ts";
 import type { StoreFacts } from "./store.ts";
-
-/** How many merges a promote list holds: the most recent. */
-const PROMOTE_LIST_HOLDS = 100;
 
 /** What a production deployment of one Product repo would take, and which of it the Operator has not accepted. */
 export interface PromoteList {
@@ -39,7 +36,9 @@ export interface PromoteList {
   /**
    * Every pull request merged to the default branch that the start's
    * Deployment does not contain, agent or Plain, newest first: the 100 most
-   * recent at most.
+   * recent at most, which is what the gather keeps of them, by the one cap
+   * both hold to (MERGES_KEPT, ./gather.ts): so its entries, the rows of
+   * those production has not taken and both counts below are of one set.
    */
   readonly entries: readonly PromoteEntry[];
   /**
@@ -49,7 +48,7 @@ export interface PromoteList {
    * changes no screen are never counted.
    */
   readonly notAccepted: number;
-  /** How many pull requests merged since the start are not in `entries`, being older than its 100. */
+  /** How many pull requests merged since the start are not in `entries`, being older than the 100 the gather keeps. */
   readonly leftOut: number;
   /**
    * GitHub's page for dispatching the workflow `production.workflow` names
@@ -156,8 +155,8 @@ export type PromoteResult =
  *
  * It holds what the gather kept since its start (Facts' `staging`): the
  * agent pull requests production has not taken and the Plain ones merged to
- * the default branch, newest first, the 100 most recent, with the number
- * left out. An agent entry's trial result is its Standing at Staging's, for
+ * the default branch, newest first, which are the 100 most recent of either
+ * kind by the gather's own cap (MERGES_KEPT), with the number left out. An agent entry's trial result is its Standing at Staging's, for
  * these facts and this read, read at `now`: the one the rule gives a row,
  * whether or not that Standing still stands and whether or not a production
  * Deployment has started on it.
@@ -196,7 +195,8 @@ export function promoteListOf(facts: Facts | StoreFacts, staging: StagingRead | 
     ];
   });
   const plain = (facts.staging?.plain ?? []).map((merge) => plainEntryOf(merge, facts));
-  const entries = [...agent, ...plain].toSorted((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt) || b.pullRequest - a.pullRequest).slice(0, PROMOTE_LIST_HOLDS);
+  // The gather's own cap: all of what a gather kept, and no more of facts built any other way.
+  const entries = [...agent, ...plain].toSorted((a, b) => Date.parse(b.mergedAt) - Date.parse(a.mergedAt) || b.pullRequest - a.pullRequest).slice(0, MERGES_KEPT);
   return {
     repo,
     start: since === null ? null : { from: since.from, deployment: since.deployment, commit: since.commit, deployedAt: since.deployedAt },

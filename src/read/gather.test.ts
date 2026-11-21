@@ -921,8 +921,8 @@ describe("a gather shaped for Home", () => {
           production: [...production],
           staging: [
             aRawDeployment({ databaseId: 601, createdAt: "2026-11-04T08:00:00Z", commitOid: "6".repeat(40), commit: { committedDate: "2026-11-04T07:50:00Z" }, statuses: statuses("FAILURE") }),
-            // A success GitHub has since made inactive, its earlier statuses past the 90 days it keeps them.
-            aRawDeployment({ databaseId: 602, createdAt: "2026-11-04T09:10:00Z", commitOid: "7".repeat(40), commit: { committedDate: "2026-11-04T09:00:00Z" }, statuses: statuses("INACTIVE") }),
+            // A success GitHub has since made inactive, when the next one succeeded.
+            aRawDeployment({ databaseId: 602, createdAt: "2026-11-04T09:10:00Z", commitOid: "7".repeat(40), commit: { committedDate: "2026-11-04T09:00:00Z" }, statuses: { nodes: [{ state: "INACTIVE", createdAt: "2026-11-06T09:15:00Z" }, { state: "SUCCESS", createdAt: "2026-11-04T09:14:00Z" }] } }),
             aRawDeployment({ databaseId: 603, createdAt: "2026-11-06T09:10:00Z", commitOid: "8".repeat(40), commit: { committedDate: "2026-11-06T09:00:00Z" } }),
           ],
         },
@@ -934,10 +934,29 @@ describe("a gather shaped for Home", () => {
         ],
       });
 
-      expect(facts.staging?.since).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), at: "2026-11-04T09:00:00Z", deployedAt: "2026-11-04T09:10:00Z" });
+      expect(facts.staging?.since).toEqual({ from: "staging", deployment: 602, commit: "7".repeat(40), at: "2026-11-04T09:00:00Z", deployedAt: "2026-11-04T09:14:00Z" });
       expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55]);
       const environments = calls.queries.filter((query) => query.includes("deployments(")).map((query) => /direction: (ASC|DESC)/.exec(query)?.[1]);
       expect(environments).toEqual(config.production?.environment ? ["DESC", "ASC"] : ["ASC"]);
+    });
+
+    it.each([
+      // GitHub deletes a Deployment's statuses after 90 days, all but its current one: NOW is 2026-11-09 at 12:00.
+      ["created 91 days ago is taken for a success whose status GitHub deleted, and the start", "2026-08-10T09:10:00Z", 601],
+      ["created 89 days ago would still show its success, so it is passed over for the first that does", "2026-08-12T09:10:00Z", 603],
+      ["created five days ago is passed over too", "2026-11-04T09:10:00Z", 603],
+    ])("reads a staging Deployment that shows inactive alone by its age: one %s", async (_what, createdAt, start) => {
+      const facts = await factsOf({
+        files: declaring({ production: null }),
+        deployments: {
+          staging: [
+            aRawDeployment({ databaseId: 601, createdAt, commitOid: "6".repeat(40), commit: { committedDate: createdAt }, statuses: statuses("INACTIVE") }),
+            aRawDeployment({ databaseId: 603, createdAt: "2026-11-06T09:10:00Z", commitOid: "8".repeat(40), commit: { committedDate: "2026-11-06T09:00:00Z" } }),
+          ],
+        },
+      });
+
+      expect(facts.staging?.since).toMatchObject({ from: "staging", deployment: start });
     });
 
     it("keeps nothing past the last day where no staging Deployment has succeeded either, and still reads the last day's label events", async () => {
@@ -970,7 +989,7 @@ describe("a gather shaped for Home", () => {
       expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55]);
     });
 
-    it("keeps the 100 most recent past 100 merges, and reads no page older than they need", async () => {
+    it("keeps the 100 most recent past 100 merges, agent and Plain together, and reads no page older than they need", async () => {
       // 130 agent pull requests since the promotion, an hour apart, newest first, with a Plain one after every tenth.
       const hours = (back: number) => new Date(Date.parse("2026-11-09T11:00:00Z") - back * 60 * 60 * 1000).toISOString().replace(".000Z", "Z");
       const merged = Array.from({ length: 130 }, (_, at) => [
@@ -981,9 +1000,10 @@ describe("a gather shaped for Home", () => {
 
       const { facts, calls } = await gathered({ deployments: { production: [early] }, mergedPullRequests: merged });
 
-      expect(facts.staging?.unpromoted).toHaveLength(100);
-      expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual(Array.from({ length: 100 }, (_, at) => 1000 - at));
-      // 100 agent pull requests and the 10 Plain ones among them are on the first five pages of 25, the fifth of which shows nothing newer is left.
+      // The 100 most recent merges of either kind: 91 agent pull requests and the 9 Plain ones among them.
+      expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual(Array.from({ length: 91 }, (_, at) => 1000 - at));
+      expect(facts.staging?.plain.map(({ number }) => number)).toEqual(Array.from({ length: 9 }, (_, at) => 1991 - at * 10));
+      // They are the first four pages of 25, and the fifth shows nothing newer is left.
       expect(calls.queries.filter((query) => query.includes("pullRequests(states: MERGED") && query.includes("timelineItems"))).toHaveLength(5);
       expect(facts.mergedLastDay).toHaveLength(24);
     });
@@ -1237,6 +1257,21 @@ describe("a gather shaped for Home", () => {
         expect(facts.staging?.promoted.map(({ number }) => number)).toEqual([55]);
       });
 
+      it("passes over a production Deployment that went inactive without succeeding, too young for GitHub to have deleted a success of it: what merged before it is still today's to have taken, and Live", async () => {
+        // Production succeeded five days ago; a Deployment two days ago was made inactive with no success; and today's succeeded an hour ago.
+        const fiveDaysAgo = aRawDeployment({ databaseId: 810, createdAt: "2026-11-04T09:10:00Z", commitOid: "a".repeat(40), commit: { committedDate: "2026-11-04T09:00:00Z" }, statuses: succeededAt("2026-11-04T09:15:00Z", "INACTIVE") });
+        const passedOver = aRawDeployment({ databaseId: 820, createdAt: "2026-11-07T09:10:00Z", commitOid: "b".repeat(40), commit: { committedDate: "2026-11-07T09:00:00Z" }, statuses: statuses("INACTIVE") });
+
+        const facts = await factsOf({ deployments: { production: [fiveDaysAgo, passedOver, TODAY] }, mergedPullRequests: [agent(56, "2026-11-08T10:00:00Z"), agent(54, "2026-11-05T10:00:00Z"), agent(51, "2026-11-03T10:00:00Z")] });
+
+        const by = { deployment: 830, commit: TODAYS, at: "2026-11-09T11:00:00Z" };
+        expect(facts.staging?.promoted.map(({ number, by }) => [number, by])).toEqual([[56, by], [54, by]]);
+        expect(standing(facts, NOW)).toEqual([
+          [54, "production", "live", "2026-11-09T11:00:00Z"],
+          [56, "production", "live", "2026-11-09T11:00:00Z"],
+        ]);
+      });
+
       it("reaches back to the first successful staging Deployment where production first succeeded in the last 24 hours, and keeps none as taken where nothing says how far back that is", async () => {
         const merged = [agent(55, "2026-11-09T10:00:00Z"), agent(54, "2026-11-05T10:00:00Z"), agent(53, "2026-11-03T10:00:00Z")];
         const firstOnStaging = aRawDeployment({ databaseId: 603, createdAt: "2026-11-04T09:10:00Z", commitOid: "8".repeat(40), commit: { committedDate: "2026-11-04T09:00:00Z" }, statuses: succeededAt("2026-11-04T09:15:00Z", "INACTIVE") });
@@ -1249,6 +1284,18 @@ describe("a gather shaped for Home", () => {
         expect(calls.queries.filter((query) => query.includes("deployments(")).map((query) => /direction: (ASC|DESC)/.exec(query)?.[1])).toEqual(["DESC", "ASC"]);
         expect(unknown.staging).toMatchObject({ since: { deployment: 830 }, promoted: [], unpromoted: [] });
         expect(unknown.mergedLastDay.map(({ number }) => number)).toEqual([55]);
+      });
+
+      it("keeps as taken only as many, the most recent, as the merges since the start leave of the 100", async () => {
+        // 95 merges since the commit today's promotion deployed, a second apart, every fifth a Plain one; and six that promotion took, a day apart before it.
+        const seconds = (after: number) => new Date(Date.parse("2026-11-09T10:31:00Z") + after * 1000).toISOString().replace(".000Z", "Z");
+        const since = Array.from({ length: 95 }, (_, at) => (at % 5 === 4 ? plain(2000 + at, seconds(at)) : agent(2000 + at, seconds(at))));
+        const taken = Array.from({ length: 6 }, (_, at) => agent(1000 - at, `2026-11-0${8 - at}T10:00:00Z`));
+
+        const facts = await factsOf({ deployments: { production: [BEFORE, TODAY] }, mergedPullRequests: [...since, ...taken] });
+
+        expect((facts.staging?.unpromoted.length ?? 0) + (facts.staging?.plain.length ?? 0)).toBe(95);
+        expect(facts.staging?.promoted.map(({ number }) => number)).toEqual([1000, 999, 998, 997, 996]);
       });
 
       it("keeps none as taken where production's newest success is more than 24 hours old, and makes no more requests than before", async () => {
@@ -1315,8 +1362,9 @@ describe("a gather shaped for Home", () => {
         const few = await gathered({ deployments: { production: [early] }, mergedPullRequests: since.slice(0, 30) });
 
         expect(facts.staging?.mergedSince).toBe(150);
-        expect(facts.staging?.unpromoted).toHaveLength(100);
         // The 100 most recent merges of either kind hold 84 agent pull requests and these 16 Plain ones.
+        expect(facts.staging?.unpromoted).toHaveLength(84);
+        expect(facts.staging?.unpromoted.at(-1)).toMatchObject({ number: 901 });
         expect(facts.staging?.plain.map(({ number }) => number)).toEqual(Array.from({ length: 16 }, (_, at) => 1000 - (at * 6 + 5)));
         expect(counting(calls.queries)).toHaveLength(2);
         for (const query of counting(calls.queries)) {
@@ -1489,6 +1537,27 @@ describe("a gather shaped for Home", () => {
 
           expect(numbers(list)).toEqual(Array.from({ length: 100 }, (_, at) => 1000 - at));
           expect(list?.leftOut).toBe(leftOut);
+        });
+
+        it("keeps one set past the cap, the 100 most recent merges of either kind: its agent pull requests are the ones with a Standing, the list's entries are that set, and its counts are of it", async () => {
+          // 100 untried UI agent pull requests, an hour apart, then 20 newer Plain ones, a minute apart.
+          const back = (minutes: number) => new Date(Date.parse("2026-11-09T11:00:00Z") - minutes * 60 * 1000).toISOString().replace(".000Z", "Z");
+          const plains = Array.from({ length: 20 }, (_, at) => plain(2000 - at, back(at)));
+          const agents = Array.from({ length: 100 }, (_, at) => agent(1000 - at, back((at + 1) * 60), { body: marker(UI) }));
+          const early = aRawDeployment({ databaseId: 790, createdAt: "2026-10-01T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-10-01T09:00:00Z" } });
+
+          const facts = await factsOf({ deployments: { production: [early] }, mergedPullRequests: [...plains, ...agents] });
+          const list = promoteListOf(facts, null, NOW);
+          const waiting = rowsOf(facts, null, null, null, NOW).filter(({ standing }) => standing.place === "staging");
+
+          // The 20 Plain ones and the 80 agent ones that merged most recently.
+          const kept = Array.from({ length: 80 }, (_, at) => 1000 - at);
+          expect(facts.staging?.plain.map(({ number }) => number)).toEqual(Array.from({ length: 20 }, (_, at) => 2000 - at));
+          expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual(kept);
+          expect(facts.staging?.evidenceMarkers.map(({ pullRequest }) => pullRequest)).toEqual(kept);
+          expect(waiting.map(({ standing }) => standing.pullRequest).toSorted((a, b) => Number(b) - Number(a))).toEqual(kept);
+          expect(numbers(list)).toEqual([...Array.from({ length: 20 }, (_, at) => 2000 - at), ...kept]);
+          expect(list).toMatchObject({ notAccepted: 80, leftOut: 20 });
         });
       });
     });

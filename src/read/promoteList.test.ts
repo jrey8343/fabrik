@@ -232,6 +232,21 @@ describe("the promote list", () => {
       expect(promoting.find(({ standing }) => standing.pullRequest === 60)?.standing).toMatchObject({ place: "production", name: "deploying" });
       expect(entryOf(later, 60)?.result).toEqual({ is: "untried" });
     });
+
+    it("still counts an untried one two days after a production Deployment that contains it failed, or was left running, as its row still stands at Production: production has not taken it", () => {
+      const twoDaysOn = "2026-11-11T12:00:00Z";
+      const failed = aDeployOf({ is: "failed", deployment: 950, commit: commit(60), at: "2026-11-09T11:58:00Z", log: "https://github.com/owner/product/actions/runs/60/job/1" });
+      const running = aDeployOf({ is: "running", deployment: 951, commit: commit(60), at: "2026-11-09T11:58:00Z" });
+      for (const deploy of [failed, running]) {
+        const stalled = rowsOf(facts(), null, null, aDeploymentsRead({ [commit(60)]: deploy }, twoDaysOn), twoDaysOn, STAGING_READ);
+
+        const list = promoteListOf(facts(), STAGING_READ, twoDaysOn);
+
+        expect(stalled.find(({ standing }) => standing.pullRequest === 60)?.standing).toMatchObject({ place: "production", detail: { staging: { trial: { needed: true }, result: null } } });
+        expect(entryOf(list?.entries ?? [], 60)).toMatchObject({ trial: { needed: true }, result: { is: "untried" } });
+        expect(list?.notAccepted).toBe(6);
+      }
+    });
   });
 
   it("counts as not yet accepted every entry that needs a Staging trial and is not accepted: untried, a problem, and not yet on staging", () => {
@@ -288,23 +303,26 @@ describe("the promote list", () => {
     expect(promoteListOf(facts({ since: null, unpromoted: [], mergedSince: 0 }), STAGING_READ, NOW)).toEqual({ repo: "owner/product", start: null, entries: [], notAccepted: 0, leftOut: 0, dispatchPage: "https://github.com/owner/product/actions/workflows/deploy-production.yml" });
   });
 
-  it("holds the 100 most recent merges, agent and Plain together, and says how many it left out", () => {
-    // 120 merges since the start, an hour apart, newest first: every sixth a Plain one. The gather keeps the 100 agent ones and the Plain ones among the 100 most recent of either kind.
+  it("holds every merge the gather kept, agent and Plain together, which is the 100 most recent, and says how many that left out; so every agent entry is one with a row", () => {
+    // 120 merges since the start, an hour apart, newest first: every sixth a Plain one. The gather keeps the 100 most recent of either kind, and counts all 120.
     const hours = (back: number) => new Date(Date.parse("2026-11-09T11:00:00Z") - back * 60 * 60 * 1000).toISOString().replace(".000Z", "Z");
-    const all = Array.from({ length: 120 }, (_, at) => ({ number: 1000 - at, mergedAt: hours(at), plain: at % 6 === 5 }));
-    const many = facts({
-      unpromoted: all.filter(({ plain }) => !plain).map(({ number, mergedAt }) => merged(number, mergedAt)),
-      plain: all.slice(0, 100).filter(({ plain }) => plain).map(({ number, mergedAt }) => ({ number, title: "Fix a typo", mergedAt, author: "operator", headRef: "fix-typo", closes: [] })),
+    const kept = Array.from({ length: 100 }, (_, at) => ({ number: 1000 - at, mergedAt: hours(at), plain: at % 6 === 5 }));
+    const agent = kept.filter(({ plain }) => !plain);
+    const staging = {
+      unpromoted: agent.map(({ number, mergedAt }) => merged(number, mergedAt)),
+      plain: kept.filter(({ plain }) => plain).map(({ number, mergedAt }) => ({ number, title: "Fix a typo", mergedAt, author: "operator", headRef: "fix-typo", closes: [] })),
       mergedSince: 120,
-      evidenceMarkers: [],
+      evidenceMarkers: agent.map(({ number }) => ui(number)),
       trials: { pullRequests: [], problems: [] },
-    });
+    };
+    const many = { ...facts(staging), mergedLastDay: staging.unpromoted.slice(0, 20) };
 
     const list = promoteListOf(many, null, NOW);
+    const waiting = rowsOf(many, null, null, null, NOW).map(({ standing }) => standing.pullRequest);
 
-    expect(list?.entries).toHaveLength(100);
     expect(list?.entries.map((entry) => entry.pullRequest)).toEqual(Array.from({ length: 100 }, (_, at) => 1000 - at));
-    expect(list?.leftOut).toBe(20);
+    expect(list).toMatchObject({ leftOut: 20, notAccepted: 84 });
+    expect(agentEntries(list?.entries ?? []).map(({ pullRequest }) => pullRequest).toSorted()).toEqual(waiting.toSorted());
   });
 
   it("is plain data: written as JSON and read back it is equal", () => {
