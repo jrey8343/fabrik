@@ -31,7 +31,7 @@ Fabrik also uses these labels, which aren't triage roles. Skills don't set them;
 | `agent:research`     | a research Decision                   | a Researcher                                                    |
 | `agent:replay`       | a replay issue                        | the Replay's next Ticket                                        |
 
-**`fabrik:` labels** say what an issue is to Fabrik, and `fabrik:step-up` and `fabrik:kept-branch` mark a Ticket:
+**`fabrik:` labels** say what an issue is to Fabrik, `fabrik:step-up` and `fabrik:kept-branch` mark a Ticket, and `fabrik:trial-accepted` and `fabrik:trial-problem` mark a merged pull request:
 
 | Label                   | Meaning                                                                 |
 | ----------------------- | ----------------------------------------------------------------------- |
@@ -44,5 +44,7 @@ Fabrik also uses these labels, which aren't triage roles. Skills don't set them;
 | `fabrik:monitor`        | an issue the Monitor filed for a production error or a red `main`       |
 | `fabrik:step-up`        | on a Ticket: every Implement run that starts while it's on is a Step-up |
 | `fabrik:kept-branch`    | on a Ticket: its next Implement run with no open PR carries on its Kept branch, not `main`; every Back to design takes it off |
+| `fabrik:trial-accepted` | on a merged pull request: you tried it on staging, a Staging trial, and accept it; only a label you put on yourself counts |
+| `fabrik:trial-problem`  | on a merged pull request: your Staging trial found a problem, which you file as an issue naming the pull request |
 
 Edit the "Label in our tracker" column to match whatever vocabulary you actually use.

@@ -434,6 +434,14 @@ _Avoid_: gallery, screenshot page
 The Console's view of one Product repo's Prototypes and the UI evidence of its pull requests. It shows only what still has screenshots and keeps none itself.
 _Avoid_: evidence page (the Kit's own page), album, roll
 
+**Staging trial**:
+The Operator trying a merged change by hand on a Product repo's staging environment before they deploy it to production. Only the Operator does one, and nothing in the Loop waits on it.
+_Avoid_: QA, UAT, acceptance test, smoke test
+
+**Trial problem**:
+The issue the Operator files when a Staging trial finds a problem. The pull request it was found on is not accepted until the Trial problem's fix is on staging and accepted.
+_Avoid_: Follow-up (the Reviewer's), bug report, defect
+
 ## Measuring the factory
 
 **Run record**:

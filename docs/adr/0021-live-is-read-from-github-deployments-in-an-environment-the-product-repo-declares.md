@@ -26,4 +26,6 @@ The Operator wants to follow a pull request to the point where it is live and to
 - A failed deploy in a repo that doesn't name it in `monitor.main_checks`, or that has `monitor.red_main` off, which turns Main checks off too, is seen only where a reader shows it.
 - The Standing lasts 24 hours from the merge, so a deploy that lands later than that is never shown.
 
+A Product repo that also declares a staging environment is followed there first, and its Standing past the merge lasts as [ADR-0038](0038-a-staging-trials-result-is-a-label-the-operator-puts-on-the-merged-pull-request.md) has it.
+
 Decided in [How do a preview link and the live page after merge reach the Console?](https://github.com/jrey8343/fabrik/issues/520).
