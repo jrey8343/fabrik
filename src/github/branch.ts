@@ -444,7 +444,8 @@ async function fastForwardOnly(git: Git, url: string, branch: BuiltBranch, bundl
  * commit only the run names, nor one main's history holds but main never
  * was at. Bringing either in is having brought main in (`updatedFromMain`,
  * #861): the agent job can't fetch, so a run brings in main as its checkout
- * held it, and main moving while it worked doesn't undo that. A
+ * held it, and main moving on while it worked doesn't undo that, though a
+ * force-push that took that head out of main's history does. A
  * Request-changes run told to merge `mergeMain` in (#341) resolved its
  * conflict when the branch holds that head, or merges cleanly with it. Merges
  * follow the PR's .gitattributes as they were before the run.
@@ -459,7 +460,7 @@ async function onItsOwnBranch(
   const ref = `refs/heads/${branch.name}`;
   await git("fetch", "--quiet", url, branch.base.sha);
   await git("fetch", "--quiet", url, `+HEAD:${MAIN_REF}`);
-  // Main as the run started is in main's history already, unless a force-push took it out, when it's no head now.
+  // Main as the run started is in main's history already, unless a force-push took it out, when the remote may serve it no longer.
   const started =
     startedAt === null
       ? null
@@ -526,8 +527,9 @@ async function onItsOwnBranch(
       commits,
       // A test is already there when the head the run's commits land on holds it, or main does, for a run that brought main in.
       changedTests: await existingTests(git, commits, [head, main]),
-      // Either head counts, so main moving while the run worked doesn't discard a run that brought it in as it started (#861).
-      updatedFromMain: broughtIn !== null,
+      // Either head counts, so main moving while the run worked doesn't discard a run that brought it in as it started
+      // (#861). A head a force-push took out of main's history, which the remote may still serve, is no main to have brought in.
+      updatedFromMain: broughtIn !== null && (await isAncestor(git, broughtIn, main)),
       ...(moved ? { rebase: { onto: head, conflicted: false } } : {}),
       ...(told === null || resolved === null ? {} : { mainMerge: { main: told, resolved } }),
       // What the push lands, which the run's push note names (#420).

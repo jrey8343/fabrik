@@ -117,7 +117,7 @@ function conflictRunFinished(changes: BranchChanges, main = MAIN): Extract<LoopE
 
 const RESOLVED: BranchChanges = { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }], updatedFromMain: true };
 /** A change of the run's own on a branch that holds main neither as the run started nor as it is now. */
-const UNREBASED: BranchChanges = { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }], updatedFromMain: false };
+const MAIN_NOT_BROUGHT_IN: BranchChanges = { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }], updatedFromMain: false };
 const STANDS = "#50 is yours while it carries `ready-for-human`: the Kit leaves its branch alone until then, and taking the label off gives it back.";
 
 function actionsOf(plan: Plan): readonly Action[] {
@@ -177,7 +177,7 @@ describe("A conflict-only run", () => {
     expect(note).toContain("- `src/cart.ts`: kept both the empty-cart guard and main's new total.");
   });
 
-  it("lands when the push job found main brought in, as when main moved while it ran: its push, and a note naming the head it was started for, with no hand-back (#861)", () => {
+  it("whose changes say it brought main in lands with its push and a note naming the head it was started for, and no hand-back (#861)", () => {
     const thread = new Thread();
     thread.mainMovesAndConflicts(MAIN);
 
@@ -221,7 +221,7 @@ describe("A conflict-only run", () => {
   describe("that can't push", () => {
     it.each<[string, BranchChanges, RegExp]>([
       ["changes nothing", { net: [], commits: [], updatedFromMain: false }, /committed no change/],
-      ["doesn't bring main in", UNREBASED, /holds `main` neither as the run started nor as it is now/],
+      ["doesn't bring main in", MAIN_NOT_BROUGHT_IN,/holds `main` neither as the run started nor as it is now/],
       ["finds the branch moved under it", { net: [], commits: [], rebase: { onto: B, conflicted: true } }, /moved to bbbbbbb while it ran/],
       [
         "resolves a conflict inside a Trust-root file",
@@ -248,7 +248,7 @@ describe("A conflict-only run", () => {
       const thread = new Thread();
       thread.mainMovesAndConflicts(MAIN);
 
-      thread.conflictRunFinishes(UNREBASED, B);
+      thread.conflictRunFinishes(MAIN_NOT_BROUGHT_IN, B);
 
       const notice = thread.comments.at(-1) ?? "";
       expect(notice).toBe(

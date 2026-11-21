@@ -1020,6 +1020,21 @@ describe("A run on its PR's branch while main moves under it (#861)", () => {
     expect(branch.changes.updatedFromMain).toBe(false);
   });
 
+  it("a run that brought in main as it started hasn't brought main in once a force-push takes that head out of main's history", async () => {
+    const started = await git(clone, "rev-parse", "origin/main");
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    // Main is force-pushed back off the head the run brought in, and on to another. The remote still serves the old head.
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "main");
+    await git(seed, "reset", "--quiet", "--hard", "HEAD~1");
+    await commit(seed, { "src/other.ts": "other\n" }, "Main, rewritten");
+    await git(seed, "push", "--quiet", "--force", "origin", "main");
+
+    const branch = await rebuild(prHead, null, started);
+
+    expect(branch.changes.updatedFromMain).toBe(false);
+  });
+
   it("a conflict-only run's resolution inside a Trust-root file is still its own change, so the guard refuses it", async () => {
     // The Operator's commit on the PR touched a workflow, which main as the run started had changed too.
     const seed = join(root, "seed");
