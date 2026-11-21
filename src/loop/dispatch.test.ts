@@ -14,7 +14,7 @@ import {
   tickSnapshot,
   withoutNotes,
 } from "../__fixtures__/snapshots.ts";
-import { dispatch, mergeGateLoadOf, waitingForDispatch } from "./dispatch.ts";
+import { checksFixesOf, dispatch, mergeGateLoadOf, waitingForDispatch } from "./dispatch.ts";
 import { planFor } from "./rules.ts";
 import type { DispatchSnapshot, LoopEvent, TicketSnapshot } from "./types.ts";
 
@@ -427,6 +427,27 @@ describe("A check's fix: a ready-for-agent Ticket carrying fabrik:flaky-check (#
     expect({ load: gate.load, free: gate.free }).toEqual({ load: 4, free: 0 });
     expect(dispatched(planFor(check, dispatchSnapshotOf([released, aTicket({ number: 60 })], { openAgentDraftPullRequests: [42, 43] }), roomy))).toEqual([]);
     expect(dispatched(planFor(check, dispatchSnapshotOf([released, aTicket({ number: 60 })], { openAgentDraftPullRequests: [42] }), roomy))).toEqual([60]);
+  });
+
+  describe("of a Spec written from a Check's issue (#839), which carries fabrik:flaky-check and ready-for-agent", () => {
+    const spec = (overrides: Parameters<typeof aTicket>[0] = {}) => fix(60, { labels: ["bug", "ready-for-agent", "fabrik:flaky-check"], subIssues: 2, ...overrides });
+
+    it("releases its Ticket ahead of a lower-numbered Ticket and past a full Merge gate, and never the Spec", () => {
+      const tickets = [aTicket({ number: 30 }), spec(), fix(62, { labels: ["bug", "ready-for-agent", "fabrik:flaky-check"] })];
+
+      expect(dispatched(planFor(check, dispatchSnapshotOf(tickets, fullGate), roomy))).toEqual([62]);
+      expect(dispatched(planFor(check, dispatchSnapshotOf(tickets), kitConfig({ maxInFlight: 1 })))).toEqual([62]);
+    });
+
+    it.each([
+      ["while nothing works on it", {}],
+      ["though a pull request names it", { openLinkedPullRequests: [70] }],
+    ])("never names the Spec as a fix that goes first or is under way, %s", (_, overrides) => {
+      const plan = planFor(check, dispatchSnapshotOf([spec(overrides), aTicket({ number: 61 })], fullGate), roomy);
+
+      expect(plan).toEqual({ kind: "nothing", reason: "caps.merge_gate is 3 and #41 is at the Merge gate and #42, #43 are on their way, so #61 wait" });
+      expect(checksFixesOf({ tickets: [spec(overrides)], researchDecisions: [], implementRunTickets: [] }, { implement: [], research: [] })).toEqual({ first: [], underWay: [] });
+    });
   });
 
   it("gives an issue carrying fabrik:flaky-check that isn't ready-for-agent no place", () => {

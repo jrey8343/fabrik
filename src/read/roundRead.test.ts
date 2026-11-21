@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readMapOffer } from "../agent/inputs.ts";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "../kit/config.ts";
-import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, prototypeRequestMarker, SESSION_FINISHED } from "../loop/markers.ts";
+import { designRoundMarker, flakyCheckIssueMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, prototypeRequestMarker, SESSION_FINISHED } from "../loop/markers.ts";
 import { prototypeTurnRefused } from "../loop/failures.ts";
 import { type RoundLine, roundLineOf } from "../loop/roundLine.ts";
 import { aDesignTurnFailedNotice, aMapCapRefusal } from "./builders.ts";
@@ -20,6 +20,8 @@ interface RawIssue {
   readonly state?: "OPEN" | "CLOSED";
   readonly labels?: readonly string[];
   readonly parent?: number | null;
+  readonly body?: string;
+  readonly author?: Record<string, unknown> | null;
   readonly comments?: readonly Record<string, unknown>[];
 }
 
@@ -41,6 +43,8 @@ function repoWith(issue: RawIssue, openMaps: readonly number[] = []): { client: 
               state: issue.state ?? "OPEN",
               labels: { nodes: (issue.labels ?? ["needs-design"]).map((name) => ({ name })) },
               parent: issue.parent === undefined || issue.parent === null ? null : { number: issue.parent },
+              body: issue.body ?? "",
+              author: issue.author === undefined ? OPERATOR : issue.author,
               comments: { nodes: issue.comments ?? [] },
             },
           },
@@ -386,6 +390,19 @@ describe("The Round read", () => {
 
       expect(read.mapMayBeOffered).toBe(offered);
       expect(told?.kind === "may-offer").toBe(offered);
+    });
+
+    it.each([
+      ["the Fabrik App's Check's issue, which never becomes a Map (#839)", APP, false],
+      ["a person's issue quoting a Check's issue's marker", OPERATOR, true],
+    ] as const)("for %s, as a Design turn on the issue would be told", async (_case, author, offered) => {
+      const { client } = repoWith({ body: `${flakyCheckIssueMarker("e2e")}\nThe check.`, author, comments: [aRound(1, "2026-11-12T09:00:00Z")] });
+
+      const read = await readRound(client, "jrey8343/shop", 21, CONFIG, "jrey8343", "fabrik-app[bot]", NOW);
+      const told = await readMapOffer(client, { owner: "jrey8343", name: "shop" }, DEFAULT_KIT_CONFIG, null, author === APP ? "e2e" : null);
+
+      expect(read.mapMayBeOffered).toBe(offered);
+      expect(told.kind === "may-offer").toBe(offered);
     });
 
     it("never on a Kit config that does not read, which runs no Design turn", async () => {

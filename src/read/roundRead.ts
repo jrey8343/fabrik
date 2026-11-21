@@ -8,14 +8,14 @@
 // to a Round the session has moved past. Read only, with the reader's
 // credential.
 import type { ReadClient } from "../github/client.ts";
-import { gatherOpenMaps, loginOf } from "../github/snapshot.ts";
+import { byAppOf, gatherOpenMaps, loginOf } from "../github/snapshot.ts";
 import { currentDesignSessionIn } from "../github/threads.ts";
 import type { KitConfigResult } from "../kit/config.ts";
 import { stoppedDesignSessionStandingOf } from "../kit/standingOperator.ts";
 import { wordStanding } from "../kit/standingWording.ts";
 import { NEEDS_DESIGN } from "../loop/labels.ts";
 import { mapOfferOf } from "../loop/mapCap.ts";
-import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, handBackMarkIn, refusedByMapCap } from "../loop/markers.ts";
+import { DESIGN_ROUND_MARKER, DESIGN_TURN_FAILED_MARKER, flakyCheckIssueOf, handBackMarkIn, refusedByMapCap } from "../loop/markers.ts";
 import { type RoundLine, roundLineIn } from "../loop/roundLine.ts";
 import { COMMENTS_WITH_IDS, type RawHomeComment } from "./homeQueries.ts";
 
@@ -81,6 +81,8 @@ const ISSUE_QUERY = `
         state
         labels(first: 100) { nodes { name } }
         parent { number }
+        body
+        author { login __typename }
         ${COMMENTS_WITH_IDS}
       }
     }
@@ -92,6 +94,8 @@ interface RawIssue {
   state: "OPEN" | "CLOSED";
   labels: { nodes: { name: string }[] };
   parent: { number: number } | null;
+  body: string;
+  author: { login: string; __typename: string } | null;
   comments: { nodes: RawHomeComment[] };
 }
 
@@ -144,7 +148,9 @@ async function roundReadOf(
   const raw = read.repository.issue;
   if (raw === null) throw new Error(`#${issue} is not an issue of ${repo}`);
   // A Design turn on an invalid Kit config fails before its agent starts, so it would chart no Map.
-  const mapMayBeOffered = kitConfig.ok && mapOfferOf(raw.parent?.number ?? null, openMaps, kitConfig.config).kind === "may-offer";
+  // Only the Fabrik App's Check's issue is one (#839), as the Design turn's inputs read it.
+  const check = byAppOf(raw.author, appLogin) ? flakyCheckIssueOf(raw.body) : null;
+  const mapMayBeOffered = kitConfig.ok && mapOfferOf(raw.parent?.number ?? null, check, openMaps, kitConfig.config).kind === "may-offer";
   const base = { repo, issue, readAt: now, mapMayBeOffered };
   // A closed issue, or one that has left Design, has no session for a Round to wait in.
   const inSession = raw.state === "OPEN" && raw.labels.nodes.some(({ name: label }) => label === NEEDS_DESIGN);

@@ -491,6 +491,12 @@ describe("The Map question in the Design prompt", () => {
     expect(ticket).toContain(`"${MAP_CAP_HEADING}" says so`);
   });
 
+  it("asks no Map question on a Check's issue, and says why: a red check whose cause isn't known finishes as a Spec (#839)", async () => {
+    const checks = lineStarting(section(await prompt("design"), "Maps"), "- **Ask no Map question on a Check's issue**");
+    expect(checks).toContain("a red check whose cause isn't known finishes as a Spec whose first Ticket finds the cause");
+    expect(checks).toContain(`"${MAP_CAP_HEADING}" says so`);
+  });
+
   it("doesn't offer a Map while the cap is full, and says which open Map holds it", async () => {
     const full = lineStarting(section(await prompt("design"), "Maps"), "- **When the cap is full, don't offer a Map.**");
     expect(full).toContain("say in the next round's intro which open Map holds the cap");
@@ -521,10 +527,10 @@ describe("The Map question in the Design prompt", () => {
     expect(section(await prompt("design"), "Maps")).toContain(`"${MAP_CAP_HEADING}", which follows the issue at the end of this prompt`);
   });
 
-  it("finishes with a Map only on the Operator's yes, and only on an issue with no parent Spec", async () => {
+  it("finishes with a Map only on the Operator's yes, and only on an issue with no parent Spec that is no Check's issue", async () => {
     const finish = lineStarting(section(await prompt("design"), "Your turn"), "- **Finish with a Map**");
     expect(finish).toContain("once the Operator has said yes to charting the issue as a Map");
-    expect(finish).toContain("Only an issue with no parent Spec finishes this way.");
+    expect(finish).toContain("Only an issue with no parent Spec, and that is no Check's issue, finishes this way.");
   });
 
   it("keeps a map example the Kit reads, its Decisions of the four types", async () => {

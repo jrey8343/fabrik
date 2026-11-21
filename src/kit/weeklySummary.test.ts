@@ -4050,6 +4050,19 @@ describe("the Weekly summary", () => {
           expect(result.summary.repos[0]?.held?.mergeGate).toMatchObject({ checksFixes: { first: [50], underWay: [] }, waiting: [{ number: 14 }] });
         });
 
+        it("names a Ticket of a Check's issue's Spec as the fix, never the Spec, which carries the label too (#839)", () => {
+          const fix = ["bug", "ready-for-agent", "fabrik:flaky-check"];
+          const result = summaryWith(
+            factsOf({ openPullRequests: [atGate(21, 1), atGate(22, 2), anOpenPullRequest({ number: 23, ticket: 11 })], openIssues: [ready(14, 80), ready(55, 7), ready(56, 7)] }),
+            aRepoKit({
+              config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, maxInFlight: 4 } },
+              dispatch: { candidates: { tickets: [aTicket({ number: 14 }), aTicket({ number: 55, labels: fix, subIssues: 1, openLinkedPullRequests: [70] }), aTicket({ number: 56, labels: fix })], researchDecisions: [] } },
+            }),
+          );
+          expect(result.body).toContain(`; ${issue(56)} fixes a red check and goes first · ${issue(14)} (3 days)`);
+          expect(result.summary.repos[0]?.held?.mergeGate).toMatchObject({ checksFixes: { first: [56], underWay: [] }, waiting: [{ number: 14 }] });
+        });
+
         it("says what a caps.merge_gate of 0 holds", () => {
           const result = summaryWith(
             factsOf({ openPullRequests: [atGate(21, 1)], openIssues: [ready(14, 80)] }),

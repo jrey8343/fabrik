@@ -53,7 +53,7 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { fromAuditIn, fromPullRequestIn } from "../loop/markers.ts";
+import { flakyCheckIssueOf, fromAuditIn, fromPullRequestIn } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -70,7 +70,7 @@ const ISSUE_QUERY = `
         number
         title
         body
-        author { login }
+        author { login __typename }
         labels(first: 100) { nodes { name } }
         parent {
           number
@@ -101,7 +101,7 @@ interface IssueQueryResult {
       number: number;
       title: string;
       body: string;
-      author: { login: string } | null;
+      author: { login: string; __typename: string } | null;
       labels: { nodes: { name: string }[] };
       parent: {
         number: number;
@@ -164,14 +164,16 @@ function specTicketOf(ticket: SubIssue): SpecTicket {
  * the Kit's note that the Ticket came back from an agent PR, the issue also
  * carries `sentBack`: what that closed PR was judged on and what it built
  * (see readSentBack). `body` is the issue's body once more, as GitHub has it,
- * for the step's own reads of its lines (readFiledFrom).
+ * for the step's own reads of its lines (readFiledFrom), and `check` the
+ * Required check it is the Check's issue for (#839), read only on an issue a
+ * bot opened, as this job takes any bot for the App (byAppOf), else null.
  */
 export async function readIssue(
   github: Reader,
   repo: Repo,
   number: number,
   operator: string,
-): Promise<{ issue: unknown; body: string; spec: { number: number; title: string; body: string } | null; otherTickets: SpecTicket[] }> {
+): Promise<{ issue: unknown; body: string; check: string | null; spec: { number: number; title: string; body: string } | null; otherTickets: SpecTicket[] }> {
   const comments: IssueComment[] = [];
   let after: string | null = null;
   let issue: NonNullable<IssueQueryResult["repository"]["issue"]>;
@@ -209,6 +211,7 @@ export async function readIssue(
       ...(sentBack === null ? {} : { sentBack: await readSentBack(github, repo, sentBack, operator) }),
     },
     body: issue.body,
+    check: byAppOf(issue.author, null) ? flakyCheckIssueOf(issue.body) : null,
     spec: issue.parent === null ? null : { number: issue.parent.number, title: issue.parent.title, body: issue.parent.body },
     otherTickets: (issue.parent?.subIssues.nodes ?? []).filter((ticket) => ticket.number !== issue.number).map(specTicketOf),
   };
@@ -588,17 +591,20 @@ export type MapOffer = MapOfferOf<OpenMap>;
 /**
  * Whether this turn may offer a Map, by the Map cap's own predicate
  * (mapOfferOf), which refuses as the push job's landing does
- * (src/loop/design.ts): never on a Ticket under `spec`, its parent, whose
- * open Maps it then doesn't read; otherwise while the open Maps leave the cap
- * room. So the turn isn't asked a question the Operator can't say yes to.
+ * (src/loop/design.ts): never on a Ticket under `spec`, its parent, nor on
+ * the Check's issue for `check` (#839), for both of which it reads no open
+ * Maps; otherwise while the open Maps leave the cap room. So the turn isn't
+ * asked a question the Operator can't say yes to.
  */
 export async function readMapOffer(
   github: Pick<Reader, "graphql">,
   repo: Repo,
   config: Pick<KitConfig, "caps">,
   spec: { readonly number: number } | null,
+  check: string | null = null,
 ): Promise<MapOffer> {
-  return mapOfferOf(spec?.number ?? null, spec === null ? await gatherOpenMaps(github, repo) : [], config);
+  const readsMaps = spec === null && check === null;
+  return mapOfferOf(spec?.number ?? null, check, readsMaps ? await gatherOpenMaps(github, repo) : [], config);
 }
 
 // --- A Design-session turn's Spec Tickets (#475) ---------------------------
@@ -1051,7 +1057,7 @@ async function main(outDir: string): Promise<void> {
   // its `operator`, as the Loop's snapshot names them, or else the repo's owner.
   const resolved = await readKitConfigFromCheckout(PRODUCT_DIR);
   const operator = (resolved.ok ? resolved.config.operator : null) ?? owner;
-  const { issue, body, spec, otherTickets } = await readIssue(github, repo, issueNumber, operator);
+  const { issue, body, check, spec, otherTickets } = await readIssue(github, repo, issueNumber, operator);
   await writeFile(join(outDir, "issue.json"), JSON.stringify(issue));
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
   if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, SPEC_TICKETS_FILE), JSON.stringify(otherTickets));
@@ -1060,7 +1066,7 @@ async function main(outDir: string): Promise<void> {
   if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, FILED_FROM_FILE), JSON.stringify(await readFiledFrom(github, repo, body)));
   // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
   if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
-    await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec)));
+    await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec, check)));
   }
   if (process.env["FABRIK_ROLE"] === "triage") {
     await writeFile(join(outDir, RECENT_ISSUES_FILE), JSON.stringify(await readRecentIssues(github, repo, issueNumber, Date.now())));
