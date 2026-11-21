@@ -400,6 +400,7 @@ describe("A Design session taken live is told to carry every line an async sessi
     ["`From retro #<n>` or `From retro <owner>/<repo>#<n>` line", "From retro #52"],
     ["`From retro #<n>` or `From retro <owner>/<repo>#<n>` line", "From retro acme/shop#52"],
     ["`From PR #<n>` line", "From PR #88"],
+    ["`From Staging trial of PR #<n>` line", trialProblemLine(88)],
   ])("names the %s among the lines to carry, as the Kit's rewrite carries one", (named, line) => {
     const plan = planFor(turnFinished(agentBrief), inSession(`Work it out once.\n\n${line}`), kitConfig());
 
