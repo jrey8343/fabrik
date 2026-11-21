@@ -215,6 +215,11 @@ export function rerunChecksOnLabel(pullRequest: PullRequestSnapshot): Plan {
   };
 }
 
+/** Whether a line of the Kit's asks one more re-run of `check` at the Merge gate on this head (#783), whatever came of it since. */
+export function gateRerunAsked(pullRequest: Pick<PullRequestSnapshot, "gateReruns">, headSha: string, check: string): boolean {
+  return pullRequest.gateReruns.some((mark: GateRerunMark) => mark.kind === "asked" && mark.headSha === headSha && mark.checks.some(({ name }) => name === check));
+}
+
 /** Whether one more re-run of `check` at the Merge gate is done on this head without it reading green, skipped included (#783). */
 export function gateRerunSpent(pullRequest: Pick<PullRequestSnapshot, "gateReruns">, headSha: string, check: string): boolean {
   return pullRequest.gateReruns.some((mark: GateRerunMark) => mark.kind === "done" && mark.headSha === headSha && mark.checks.includes(check));

@@ -5,7 +5,7 @@
 // filed it, each later comment its own. The Kit files nothing else for a
 // check: never a Ticket or a Design issue. Pure.
 import { checkCode, type FailureExcerpt, renderFailureExcerpts } from "../review/failureExcerpt.ts";
-import { FLAKY_CHECK_LABEL, NEEDS_TRIAGE } from "./labels.ts";
+import { FLAKY_CHECK_LABEL, NEEDS_TRIAGE, READY_FOR_AGENT } from "./labels.ts";
 import { flakyCheckIssueMarker, flakyCheckIssueOf } from "./markers.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
 import type { Action, CreatedIssue, KitIssueSnapshot } from "./types.ts";
@@ -47,8 +47,20 @@ function withExcerpt(text: string, { name, red, excerpt }: CheckReport): string 
 }
 
 /** The open check's issue for `name`, by its marker, whatever its title. */
-export function openCheckIssue(issues: readonly KitIssueSnapshot[], name: string): KitIssueSnapshot | undefined {
+export function openCheckIssue<Issue extends Pick<KitIssueSnapshot, "body">>(issues: readonly Issue[], name: string): Issue | undefined {
   return issues.find((issue) => flakyCheckIssueOf(issue.body) === name);
+}
+
+/**
+ * Whether a check's fix is under way (ADR-0031): its open issue is
+ * `ready-for-agent`, or is among `inFlight`, the Tickets an open agent PR is
+ * for. That work has a run or a pull request of its own to watch. While it
+ * is, the Operator's mention stays quiet (src/loop/operatorMention.ts) and a
+ * Standing healing the check can't turn Stuck (src/kit/standingHealing.ts,
+ * #795): both read it here, so they can't disagree.
+ */
+export function fixUnderWay(issue: Pick<KitIssueSnapshot, "number" | "labels"> | undefined, inFlight: ReadonlySet<number>): boolean {
+  return issue !== undefined && (issue.labels.includes(READY_FOR_AGENT) || inFlight.has(issue.number));
 }
 
 /**

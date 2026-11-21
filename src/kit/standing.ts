@@ -73,6 +73,7 @@ export const STANDING_NAMES = [
   "yours-to-read",
   "parked",
   "check-failing",
+  "check-healing",
   "conflicts",
   "draft",
   "blocked",
@@ -103,6 +104,50 @@ type NotStartedDetail =
  */
 type WaitingOnKitDetail = { readonly silence: WaitingOnKitSilence; readonly round: number | null };
 
+/**
+ * One Unrelated failure the Kit is healing on an agent pull request at the
+ * Merge gate (#795, ADR-0031): a check the pass on its head names so, which
+ * the Kit has not mentioned the Operator over. While it fails there it is the
+ * Kit's.
+ */
+export interface HealingCheck {
+  readonly check: string;
+  /** The Kit's one more re-run of it at the gate on this head, as the pull request's own lines have it: still to come, asked for, or done, skipped included. */
+  readonly rerun: "to-come" | "asked" | "done";
+  /** The Check's issue, where it is open; null where the facts hold none. */
+  readonly issue: number | null;
+  /** When a Standing naming it turns Stuck, ISO 8601, or null while its fix is under way. */
+  readonly stuckAt: string | null;
+}
+
+/**
+ * What an agent pull request at the Merge gate keeps of the Unrelated failures
+ * the pass on its head names (#795), whatever its checks say now, so a later
+ * checks read settles it with no gather (src/read/joinChecks.ts): `healing`,
+ * those the Kit is still healing, in the order the pass names them, and
+ * `mentioned`, those the Kit has mentioned the Operator over, its own moves
+ * spent. Each is left out when empty, as on a pull request whose head moved
+ * since its pass.
+ */
+interface UnrelatedDetail {
+  readonly healing?: readonly HealingCheck[];
+  readonly mentioned?: readonly string[];
+}
+
+/**
+ * What a `check-healing` Standing's wording is made of (#795): the first
+ * failing Required check the Kit is healing, with its own entry's `rerun` and
+ * `issue`; when the Reviewer passed and on which head, which is the pull
+ * request's own; and every check it is healing, `check` among them.
+ */
+type CheckHealingDetail = Pick<HealingCheck, "check" | "rerun" | "issue"> & {
+  readonly plain: null;
+  readonly passedAt: string;
+  readonly passedHead: string;
+  readonly healing: readonly HealingCheck[];
+  readonly mentioned?: readonly string[];
+};
+
 /** What each name's wording is made of: numbers, labels, check names and logins, never a repo's text. */
 export interface StandingDetails {
   /**
@@ -117,9 +162,9 @@ export interface StandingDetails {
    * waits on its checks, or one at the Merge gate whose Required check is
    * running (#564), which alone carries `passedAt`, when the Reviewer passed,
    * and `passedHead`, the head it passed: `head`, or an older one when the
-   * head moved since (#692).
+   * head moved since (#692), and what it keeps of its Unrelated failures (#795).
    */
-  readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean; readonly passedAt?: string; readonly passedHead?: string };
+  readonly "waiting-on-checks": { readonly plain: PlainKind | null; readonly check: string | null; readonly checksUnread: boolean; readonly passedAt?: string; readonly passedHead?: string } & UnrelatedDetail;
   /**
    * A Held run's role and the Carrier its newest held marker is on; or, for an
    * Audit or Retro week given up, its failed runs, oldest first, and when the
@@ -142,13 +187,14 @@ export interface StandingDetails {
   readonly "not-started": NotStartedDetail;
   readonly "waiting-on-kit": WaitingOnKitDetail;
   /** The name it had before its `stuckAt` passed, with that name's detail. */
-  readonly stuck: ({ readonly was: "not-started" } & NotStartedDetail) | ({ readonly was: "waiting-on-kit" } & WaitingOnKitDetail);
+  readonly stuck: ({ readonly was: "not-started" } & NotStartedDetail) | ({ readonly was: "waiting-on-kit" } & WaitingOnKitDetail) | ({ readonly was: "check-healing" } & CheckHealingDetail);
   /**
    * `plain` is null for an agent pull request, which alone carries
    * `passedHead`, the head the Reviewer passed: `head`, or an older one when
-   * the head moved since (#692).
+   * the head moved since (#692), and what it keeps of its Unrelated failures
+   * (#795).
    */
-  readonly "yours-to-merge": { readonly plain: PlainKind | null; readonly passedHead?: string };
+  readonly "yours-to-merge": { readonly plain: PlainKind | null; readonly passedHead?: string } & UnrelatedDetail;
   /** `prototype` says whether the Round is a prototype round (`ready`) or a prototype's failure round (`failed`). */
   readonly "design-round": { readonly round: number; readonly prototype: "ready" | "failed" | null };
   /** `author` is a login, with no `@`. */
@@ -165,9 +211,13 @@ export interface StandingDetails {
    * `plain` is null for an agent pull request at the Merge gate (#564), which
    * alone carries `passedAt`, when the Reviewer passed: the time it goes back
    * to once its checks pass again; and `passedHead`, the head it passed:
-   * `head`, or an older one when the head moved since (#692).
+   * `head`, or an older one when the head moved since (#692), and what it
+   * keeps of its Unrelated failures (#795): a failing `check` among
+   * `mentioned` is one the Reviewer judged an Unrelated failure and the Kit
+   * has nothing left to try on.
    */
-  readonly "check-failing": { readonly plain: PlainKind | null; readonly check: string; readonly checkIs: "failing" | "never-reported"; readonly passedAt?: string; readonly passedHead?: string };
+  readonly "check-failing": { readonly plain: PlainKind | null; readonly check: string; readonly checkIs: "failing" | "never-reported"; readonly passedAt?: string; readonly passedHead?: string } & UnrelatedDetail;
+  readonly "check-healing": CheckHealingDetail;
   readonly conflicts: { readonly plain: PlainKind };
   readonly draft: { readonly plain: PlainKind };
   /**
@@ -293,6 +343,8 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
   "yours-to-read": "operator",
   parked: "operator",
   "check-failing": "operator",
+  // As an agent pull request waiting on a running check at the Merge gate is read.
+  "check-healing": "running",
   conflicts: "operator",
   draft: "silence",
   blocked: "silence",
@@ -352,20 +404,28 @@ export function standingOrder(a: Standing, b: Standing): number {
 }
 
 /**
- * A kept Standing as it reads at `now`, ISO 8601, with no facts: a silence
- * whose `stuckAt` has passed is `stuck`, the Kit's move still but the
- * Operator's to act on and stopping work, carrying the name it had in
- * `detail.was`, its `since` kept; a `merged` Standing whose `noDeployAt` has
- * passed is `no-deploy-seen`, since then. Everything else is returned as it is. The
- * rule reads each Standing through this, so a reader that kept one gets the
- * answer the rule would give.
+ * A kept Standing as it reads at `now`, ISO 8601, with no facts: a silence,
+ * or an Unrelated failure the Kit is healing (#795), whose `stuckAt` has
+ * passed is `stuck`, the Kit's move still but the Operator's to act on and
+ * stopping work, carrying the name it had in `detail.was`, its `since` kept;
+ * a `merged` Standing whose `noDeployAt` has passed is `no-deploy-seen`,
+ * since then. Everything else is returned as it is. The rule reads each
+ * Standing through this, so a reader that kept one gets the answer the rule
+ * would give.
  */
 export function standingAt(standing: Standing, now: string): Standing {
   if (standing.name === "merged") return productionAt(standing, now);
-  if ((standing.name !== "not-started" && standing.name !== "waiting-on-kit") || standing.stuckAt === null) return standing;
+  if ((standing.name !== "not-started" && standing.name !== "waiting-on-kit" && standing.name !== "check-healing") || standing.stuckAt === null) return standing;
   if (Date.parse(now) < Date.parse(standing.stuckAt)) return standing;
-  const detail = standing.name === "not-started" ? { was: standing.name, ...standing.detail } : { was: standing.name, ...standing.detail };
-  return { ...standing, name: "stuck", yours: true, stopsWork: true, detail };
+  // One branch for each name, so each `was` keeps its own detail's type.
+  switch (standing.name) {
+    case "not-started":
+      return { ...standing, name: "stuck", yours: true, stopsWork: true, detail: { was: standing.name, ...standing.detail } };
+    case "waiting-on-kit":
+      return { ...standing, name: "stuck", yours: true, stopsWork: true, detail: { was: standing.name, ...standing.detail } };
+    case "check-healing":
+      return { ...standing, name: "stuck", yours: true, stopsWork: true, detail: { was: standing.name, ...standing.detail } };
+  }
 }
 
 /**

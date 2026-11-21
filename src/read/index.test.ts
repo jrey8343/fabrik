@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isUi } from "../evidence/uiEvidence.ts";
-import type { UiConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
+import { aCheckIssue, aGateRerunDone, anOpenPullRequest, aPassNaming, factsOf, standingFactsOf } from "./builders.ts";
 import { A_BLOCKED_ISSUE, EXPORT_CALLS, EXPORT_SHAPES, NOT_DATA } from "./exports.fixture.ts";
 
 const ENTRY = new URL("./index.ts", import.meta.url);
@@ -59,6 +60,35 @@ describe("the read library's Standing", () => {
     expect(STANDING_SCHEMA).toBe(2);
     expect(blocked).toMatchObject({ schema: 2, name: "blocked", detail: { blockers: [{ repo: "a/b", number: 3 }], hiddenBlockers: 1 } });
     expect(wordStanding(blocked!, "2026-11-09T00:00:00Z", "UTC").sentence).toBe("Blocked by a/b#3 and 1 issue the Fabrik App can't read.");
+  });
+
+  it("names an Unrelated failure the Kit is healing at the Merge gate check-healing, the Kit's, with its own detail, and Stuck past its bar (#795)", async () => {
+    const { STANDING_NAMES, STANDING_SCHEMA, standingAt, standingsOf, wordStanding } = await import("./index.ts");
+    const head = "h".repeat(40);
+    const passed = "2026-11-08T18:00:00Z";
+    const healing = [{ check: "test", rerun: "done", issue: 91, stuckAt: "2026-11-08T22:30:00.000Z" }];
+    const facts = standingFactsOf({
+      github: factsOf({
+        openIssues: [aCheckIssue("test")],
+        openPullRequests: [anOpenPullRequest({ draft: false, headSha: head, comments: [aPassNaming(["test"], head, passed), aGateRerunDone(["test"], head, "2026-11-08T19:00:00Z")] })],
+      }),
+      kit: { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks: { [head]: [{ name: "test", is: "failing", at: "2026-11-08T17:50:00Z" }] } },
+    });
+
+    const held = standingsOf(facts, "2026-11-08T20:00:00Z").find(({ pullRequest }) => pullRequest === 50);
+
+    // No field was removed or changed meaning, so the schema stays where it was.
+    expect(STANDING_SCHEMA).toBe(2);
+    expect(STANDING_NAMES).toContain("check-healing");
+    expect(held).toMatchObject({ schema: 2, name: "check-healing", place: "merge-gate", move: "kit", yours: false, stopsWork: false, since: "2026-11-08T17:50:00Z", stuckAt: "2026-11-08T22:30:00.000Z" });
+    expect(held?.detail).toEqual({ plain: null, check: "test", rerun: "done", issue: 91, passedAt: passed, passedHead: head, healing, head });
+    expect(wordStanding(held!, "2026-11-08T20:00:00Z", "UTC")).toEqual({
+      pill: "Healing",
+      sentence:
+        "`test` is failing on the head the Reviewer passed 2 hours ago. The Reviewer judged it an Unrelated failure, and the Kit's one more re-run of it is done or skipped, so #50 waits for the check's fix on #91.",
+      remedy: null,
+    });
+    expect(standingAt(held!, "2026-11-08T22:31:00Z")).toMatchObject({ name: "stuck", move: "kit", yours: true, stopsWork: true, detail: { was: "check-healing", check: "test", healing } });
   });
 });
 

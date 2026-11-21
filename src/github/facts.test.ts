@@ -103,6 +103,8 @@ interface RawRepo {
   kitIssues?: unknown[];
   /** The weekly-limit, usage-credits and token-rotation issues, open or closed, updated since the `since` the read asks for. */
   weekCarriers?: unknown[];
+  /** The closed issues labelled as a Check's issue, updated in the week before the read. */
+  closedCheckIssues?: unknown[];
 }
 
 /** A read-only GraphQL API over `raw`, answering each facts query with one page. */
@@ -136,6 +138,10 @@ function repoWith(raw: RawRepo) {
         expect(variables["labels"]).toEqual(["fabrik:weekly-limit", "fabrik:usage-credits", "fabrik:token-rotation"]);
         expect(variables["since"]).toBe("2026-10-25T20:00:00.000Z");
         return answer({ repository: { issues: page(raw.weekCarriers) } });
+      }
+      if (query.includes("issues(states: CLOSED, labels: $labels, filterBy: { since: $since }")) {
+        expect(variables["labels"]).toEqual(["fabrik:flaky-check"]);
+        return answer({ repository: { issues: { nodes: raw.closedCheckIssues ?? [] } } });
       }
       if (query.includes("labels: $labels")) {
         expect(variables["labels"]).toContain("fabrik:weekly-limit");
@@ -758,6 +764,26 @@ describe("Gathering a Product repo's GitHub facts", () => {
     const { weekCarriers } = await gatherGitHubFacts(github, repo, NOW, OPERATOR.login);
 
     expect(weekCarriers).toEqual([{ number: 41, labels: ["fabrik:weekly-limit"], body: "The weekly usage limit is reached.", comments: [waiting] }]);
+  });
+
+  it("holds what the Standing rule reads of a check's fix (#795): each open issue's body, and a bot's Check's issues that closed in the last week, as the tick reads them", async () => {
+    const marker = (check: string) => `<!-- fabrik:flaky-check-issue {"check":"${check}"} -->\nIts red runs.`;
+    const queries: string[] = [];
+    const github = repoWith({
+      openIssues: [{ ...aRawIssue({ number: 91, author: APP, labels: { nodes: [{ name: "fabrik:flaky-check" }] } }), body: marker("test") }],
+      closedCheckIssues: [
+        { number: 88, body: marker("lint"), closedAt: "2026-11-08T09:00:00Z", stateReason: "COMPLETED", author: APP },
+        { number: 87, body: marker("e2e"), closedAt: "2026-11-08T08:00:00Z", stateReason: "COMPLETED", author: OPERATOR },
+      ],
+    });
+
+    const { openIssues, closedCheckIssues } = await gatherGitHubFacts({ graphql: (query, variables) => (queries.push(query), github.graphql(query, variables)) }, repo, NOW, OPERATOR.login);
+
+    expect(openIssues.map(({ number, body }) => ({ number, body }))).toEqual([{ number: 91, body: marker("test") }]);
+    expect(closedCheckIssues).toEqual([{ number: 88, check: "lint", closedAt: "2026-11-08T09:00:00Z", stateReason: "completed" }]);
+    // The body is asked of the open issues alone, not of every issue that moved in the window.
+    expect(queries.find((query) => query.includes("issues(states: OPEN, first: 25"))).toMatch(/subIssues\(first: 100\) \{ nodes \{ number \} \}\s+body \}/);
+    expect(queries.find((query) => query.includes("issues(first: 25, after: $after, filterBy: { since: $since }"))).toMatch(/subIssues\(first: 100\) \{ nodes \{ number \} \}\s+\}/);
   });
 
   it("holds the open needs-design issues as the Design queue check reads them, so Held tells waiting from slot-holding", async () => {

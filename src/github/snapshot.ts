@@ -859,9 +859,12 @@ interface ClosedCheckIssuesQueryResult {
  * days before `now`, newest close first, with why each closed (#784). GitHub
  * can't filter by close, so it reads those updated in the window, which every
  * one closed in it is, the most recently updated page at most: one it misses
- * only leaves a PR held, as it was.
+ * only leaves a PR held, as it was. The Weekly summary and the read library
+ * read them too (src/github/facts.ts, src/read/gather.ts), so the Standing
+ * of a pull request a check holds dates that check's fix as the tick does
+ * (#795).
  */
-async function gatherClosedCheckIssues(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string | null, now: string): Promise<ClosedCheckIssue[]> {
+export async function gatherClosedCheckIssues(github: Pick<ReadClient, "graphql">, repo: Repo, appLogin: string | null, now: string): Promise<ClosedCheckIssue[]> {
   const since = new Date(Date.parse(now) - CLOSED_CHECK_ISSUES_WINDOW_MS).toISOString();
   const data = await github.graphql<ClosedCheckIssuesQueryResult>(CLOSED_CHECK_ISSUES_QUERY, { owner: repo.owner, name: repo.name, labels: [FLAKY_CHECK_LABEL], since });
   return data.repository.issues.nodes
