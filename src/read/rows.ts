@@ -389,7 +389,7 @@ function mergedOf({ mergedLastDay, staging }: Facts): Facts["mergedLastDay"] {
  * The routes are the marker's own, as a row's production pages are, whatever
  * came of the capture.
  */
-function stagingOf(facts: Facts, pullRequest: number): RowStaging | null {
+export function stagingOf(facts: Facts, pullRequest: number): RowStaging | null {
   const staging = facts.kit.config.ok ? facts.kit.config.config.staging : null;
   if (staging === null) return null;
   const routes = evidenceMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker.routes ?? [];
@@ -448,7 +448,7 @@ function productionOf(facts: Facts, pullRequest: number): RowProduction | null {
 }
 
 /** Agent pull request `pullRequest`'s UI evidence, from its evidence marker; null when the facts hold none for it. */
-function evidenceOf(facts: Facts, pullRequest: number): RowEvidence | null {
+export function evidenceOf(facts: Facts, pullRequest: number): RowEvidence | null {
   const marker = evidenceMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker;
   if (marker === undefined) return null;
   const { run, artifact, failure, routes, preview, missed } = marker;
@@ -470,7 +470,7 @@ function evidenceOf(facts: Facts, pullRequest: number): RowEvidence | null {
  * request's row (`merged`); null when the facts hold none for it, as facts
  * cached by an earlier release, with no `shotsMarkers` at all, never do.
  */
-function shotsOf(facts: Facts, pullRequest: number, merged: boolean): RowShots | null {
+export function shotsOf(facts: Facts, pullRequest: number, merged: boolean): RowShots | null {
   const { kit } = facts;
   const marker = shotsMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker;
   if (marker === undefined) return null;
@@ -537,10 +537,10 @@ function ticketClosedOf({ github, ticketStates }: Facts, pullRequest: number): R
  * none: every bot's login in the facts reads as it, so any bot's text is
  * taken for the App's, as the Kit job does.
  */
-const ANY_BOT = "[bot]";
+export const ANY_BOT = "[bot]";
 
 /** What the Standing rule reads of the repo: the gather's facts, with these runs, checks and Deployments. */
-function ruleFactsOf(
+export function ruleFactsOf(
   facts: Facts,
   runs: readonly RunInFlightFact[] | "unread",
   checks: Readonly<Record<string, RequiredChecksFact>>,
