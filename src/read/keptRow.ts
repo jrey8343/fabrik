@@ -3,8 +3,8 @@
 // holds no step of its own for what a row has gained since (ADR-0020). Each
 // Standing a row holds is read through readStanding (src/kit/keptStanding.ts),
 // and a release that adds a field to `Row` writes what a row kept before it
-// reads as here (docs/releasing.md). The joins refuse rows that didn't come
-// back this way (refuseRowsOfOtherSchema). Pure, no I/O.
+// reads as here (docs/releasing.md). Everything that takes kept rows refuses
+// ones that didn't come back this way (refuseRowsOfOtherSchema). Pure, no I/O.
 import { readStanding } from "../kit/keptStanding.ts";
 import { refuseOtherSchema } from "../kit/standing.ts";
 import type { Row } from "./rows.ts";
@@ -49,8 +49,9 @@ export function readRow(kept: unknown): Row | null {
 /**
  * Refuses kept rows holding a Standing of another schema (refuseOtherSchema),
  * a row's own or the issue's own a Pairing session's row carries, before
- * anything else of the rows is read: what every join does first, so a kept
- * row reaches one only through readRow.
+ * anything else of the rows is read: what everything that takes kept rows
+ * does first, the joins, headsToCheck, mergesToRead and owedRollInsOf, so a
+ * kept row reaches one only through readRow.
  */
 export function refuseRowsOfOtherSchema(rows: readonly Row[]): void {
   for (const { standing, plainPullRequest } of rows) {

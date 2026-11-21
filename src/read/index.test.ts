@@ -123,7 +123,7 @@ describe("the read library's kept Standings and rows (#793)", () => {
   });
 
   it("refuses a kept Standing, or a row holding one, that didn't come back through them, naming both schemas and readStanding", async () => {
-    const { joinChecks, joinDeployments, joinRuns, standingAt, wordStanding } = await import("./index.ts");
+    const { headsToCheck, joinChecks, joinDeployments, joinRuns, mergesToRead, owedRollInsOf, standingAt, wordStanding } = await import("./index.ts");
     const kept = A_STANDING_KEPT_AT_SCHEMA_1 as unknown as Standing;
     const rows = [A_ROW_KEPT_AT_V3_4_1 as unknown as Row];
     const refusal = /schema 1 .*schema 2.*readStanding/;
@@ -133,6 +133,9 @@ describe("the read library's kept Standings and rows (#793)", () => {
     expect(() => joinRuns(rows, { repo: "acme/shop", readAt: NOW, runs: [], tick: { lastStartedAt: NOW } }, NOW)).toThrow(refusal);
     expect(() => joinChecks(rows, { repo: "acme/shop", branch: "main", readAt: NOW, required: [], holdsAdmins: "yes", heads: {} }, NOW)).toThrow(refusal);
     expect(() => joinDeployments(rows, { repo: "acme/shop", environment: "production", readAt: NOW, merges: {} }, NOW)).toThrow(refusal);
+    expect(() => headsToCheck(rows)).toThrow(refusal);
+    expect(() => mergesToRead(rows)).toThrow(refusal);
+    expect(() => owedRollInsOf(rows)).toThrow(refusal);
   });
 });
 

@@ -15,9 +15,12 @@ import { type Row, withOwnSettled } from "./rows.ts";
  * Which merges want a Deployments read: the merge commit and merge time of
  * every row at Production that is not Live, in the rows' order. A Live row is
  * settled and is never asked about again; a row in a repo that declares no
- * environment is at no place, and nothing is read for it.
+ * environment is at no place, and nothing is read for it. Rows holding a
+ * Standing of another schema are refused: a kept row comes back through
+ * readRow (./keptRow.ts).
  */
 export function mergesToRead(rows: readonly Row[]): MergeToRead[] {
+  refuseRowsOfOtherSchema(rows);
   return rows.flatMap(({ standing }) =>
     isProductionStanding(standing) && standing.place === "production" && standing.name !== "live" && standing.detail.mergeCommit !== null
       ? [{ mergeCommit: standing.detail.mergeCommit, mergedAt: standing.detail.mergedAt }]

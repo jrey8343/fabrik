@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { A_SCHEMA_1_BLOCKED, THAT_BLOCKED_AT_SCHEMA_2, THE_SAME_AT_SCHEMAS_1_AND_2 } from "../kit/keptStandings.fixture.ts";
 import { aDeploymentsRead, aDeployOf, aRunsRead } from "./builders.ts";
 import { joinChecks } from "./joinChecks.ts";
-import { joinDeployments } from "./joinDeployments.ts";
+import { joinDeployments, mergesToRead } from "./joinDeployments.ts";
 import { joinRuns } from "./joinRuns.ts";
 import { readRow } from "./keptRow.ts";
-import type { RequiredChecksRead } from "./requiredChecks.ts";
+import { owedRollInsOf } from "./owedRollIn.ts";
+import { headsToCheck, type RequiredChecksRead } from "./requiredChecks.ts";
 import type { Row } from "./rows.ts";
 
 /** A Standing of the kept Standings, by its name. */
@@ -88,13 +89,16 @@ describe("a kept row read back", () => {
   });
 });
 
-describe("kept rows holding a Standing of another schema, given to a join", () => {
+describe("kept rows holding a Standing of another schema, given to a join or to anything else that takes kept rows", () => {
   const NOW = "2026-11-08T20:00:00Z";
   const A_CHECKS_READ: RequiredChecksRead = { repo: "acme/shop", branch: "main", readAt: NOW, required: ["test"], holdsAdmins: "yes", heads: {} };
-  const JOINS: readonly (readonly [string, (rows: readonly Row[]) => Row[]])[] = [
+  const JOINS: readonly (readonly [string, (rows: readonly Row[]) => unknown])[] = [
     ["joinRuns", (rows) => joinRuns(rows, aRunsRead([]), NOW)],
     ["joinChecks", (rows) => joinChecks(rows, A_CHECKS_READ, NOW)],
     ["joinDeployments", (rows) => joinDeployments(rows, aDeploymentsRead({}), NOW)],
+    ["headsToCheck", (rows) => headsToCheck(rows)],
+    ["mergesToRead", (rows) => mergesToRead(rows)],
+    ["owedRollInsOf", (rows) => owedRollInsOf(rows)],
   ];
   const aPairingRowWhoseOwnIs = (own: unknown) => ({ ...A_CURRENT_ROW, plainPullRequest: { since: "2026-11-08T11:30:00Z", own } });
 
@@ -112,10 +116,10 @@ describe("kept rows holding a Standing of another schema, given to a join", () =
       expect(joining).not.toThrow(TypeError);
     });
 
-    it("joins rows kept at v3.4.1 once readRow has read them", () => {
+    it("takes rows kept at v3.4.1 once readRow has read them", () => {
       const read = [A_ROW_KEPT_AT_V3_4_1, A_PAIRING_ROW_KEPT_AT_V3_4_1].map((kept) => readRow(kept)!);
 
-      expect(join(read).map(({ standing }) => standing.schema)).toEqual([2, 2]);
+      expect(() => join(read)).not.toThrow();
     });
   });
 });
