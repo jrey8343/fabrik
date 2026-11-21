@@ -12,7 +12,9 @@ import type { Row } from "./rows.ts";
 /**
  * Each field `Row` has gained since the read library first shipped (v3.1.0),
  * as a row kept before it reads, with none of it: `shots` (v4.1.0), no
- * Evidence shots.
+ * Evidence shots. `staging` (#855) is not here: it is an optional key, on a
+ * row only in a repo that declares `staging`, so a row kept before it is
+ * already a row with none of it and reads as it was kept.
  */
 const NOT_ON_AN_EARLIER_ROW = { shots: null } as const satisfies Partial<Row>;
 
@@ -50,7 +52,8 @@ export function readRow(kept: unknown): Row | null {
  * Refuses kept rows holding a Standing of another schema (refuseOtherSchema),
  * a row's own or the issue's own a Pairing session's row carries, before
  * anything else of the rows is read: what everything that takes kept rows
- * does first, the joins, headsToCheck, mergesToRead and owedRollInsOf, so a
+ * does first, the joins, the join with staging among them, headsToCheck,
+ * mergesToRead, stagingMergesToRead, commitsToCheck and owedRollInsOf, so a
  * kept row reaches one only through readRow.
  */
 export function refuseRowsOfOtherSchema(rows: readonly Row[]): void {

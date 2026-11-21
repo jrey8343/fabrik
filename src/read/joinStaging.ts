@@ -13,6 +13,7 @@ import { standingAt, standingOrder } from "../kit/standing.ts";
 import { deployIn } from "../kit/standingProduction.ts";
 import { isMergedStanding, isTried, type MergedStanding, mergedStillStands, stagingStandingOf } from "../kit/standingStaging.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
+import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import type { CommitToCheck } from "./mainChecks.ts";
 import { type Row, type StagingRead, withOwnSettled } from "./rows.ts";
 
@@ -24,9 +25,11 @@ import { type Row, type StagingRead, withOwnSettled } from "./rows.ts";
  * and never asked about again. One on staging that needs a trial and has no
  * result is asked about on every read, so a later deploy whose Main check
  * goes red moves it back to deploy failed. A repo that declares no `staging`
- * has no such row.
+ * has no such row. Rows holding a Standing of another schema are refused: a
+ * kept row comes back through readRow (./keptRow.ts).
  */
 export function stagingMergesToRead(rows: readonly Row[]): MergeToRead[] {
+  refuseRowsOfOtherSchema(rows);
   return rows.flatMap(({ standing }) => {
     if (!isMergedStanding(standing) || standing.place !== "staging" || standing.detail.mergeCommit === null) return [];
     if (isTried(standing) || (standing.name === "on-staging" && !standing.detail.staging.trial.needed)) return [];
@@ -42,9 +45,12 @@ export function stagingMergesToRead(rows: readonly Row[]): MergeToRead[] {
  * deciding one's where the read was not asked for the newest; each commit
  * once, in the rows' order. None where the repo names no Main checks or has
  * them off: a merge is then on staging on its Deployment alone. None for a
- * row whose Staging trial has a result (#856), which no check moves.
+ * row whose Staging trial has a result (#856), which no check moves. Rows
+ * holding a Standing of another schema are refused: a kept row comes back
+ * through readRow (./keptRow.ts).
  */
 export function commitsToCheck(rows: readonly Row[], read: DeploymentsRead): CommitToCheck[] {
+  refuseRowsOfOtherSchema(rows);
   const asked = new Map<string, readonly string[]>();
   for (const { standing } of rows) {
     if (!isMergedStanding(standing) || standing.place !== "staging" || isTried(standing)) continue;
@@ -70,9 +76,12 @@ export function commitsToCheck(rows: readonly Row[], read: DeploymentsRead): Com
  * that waits on the Operator has none of; anywhere else, one whose 24 hours
  * from the merge have passed. Every row is read at `now` as the rule reads a
  * kept Standing (standingAt). In a repo that declares no `staging` no row
- * hangs on the read.
+ * hangs on the read. Rows holding a Standing of another schema are refused,
+ * one that would be left out among them: a kept row comes back through
+ * readRow (./keptRow.ts).
  */
 export function joinStaging(rows: readonly Row[], read: StagingRead, now: string): Row[] {
+  refuseRowsOfOtherSchema(rows);
   const joined = rows.flatMap((row) => {
     const settled = isMergedStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
     if (settled === null) return [];
