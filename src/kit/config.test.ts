@@ -2054,6 +2054,20 @@ describe("The staging block, which says where a Product repo's staging environme
     });
   });
 
+  it("is documented in the README's Kit config section, after production: null accepted, both fields required, and production's environment refused", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
+    const nulls = /`null` is accepted only where the default is `null` \(([^)]*)\)/.exec(section)?.[1] ?? "";
+    const block = /^- `staging` \(default `null`\).*\n(?: {2,}.*\n)*/m.exec(section)?.[0] ?? "";
+
+    expect(nulls).toContain("`staging`");
+    expect(nulls).not.toContain("`staging.environment`");
+    expect(section.indexOf("- `staging` (default `null`)")).toBeGreaterThan(section.indexOf("- `production` (default `null`)"));
+    expect(block).toMatch(/^ {2}- `url` \(required\)/m);
+    expect(block).toMatch(/^ {2}- `environment` \(required\)/m);
+    expect(block).toContain("`production.environment`");
+    expect(block).toContain("ADR-0038");
+  });
+
   it("declares staging in a repo that declares no production", () => {
     const result = resolveKitConfig({ config: `{ "production": null, "staging": { "url": "https://staging.shop.example", "environment": "staging" } }` });
 

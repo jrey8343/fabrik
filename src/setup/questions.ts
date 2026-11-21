@@ -1,20 +1,23 @@
 // Setup's questions: the Operator's time zone, a second Subscription, whether
-// to install with Dispatch paused, and where production is. Each has a flag,
-// and setup asks only what the flags left out, and only on a terminal. Without
-// one, a missing answer means no, but for pausing the starter setup wrote on
-// its branch, which keeps what it holds.
-import { KIT_CONFIG_PATH, type ProductionConfig } from "../kit/config.ts";
+// to install with Dispatch paused, where production is, and where staging is.
+// Each has a flag, and setup asks only what the flags left out, and only on a
+// terminal. Without one, a missing answer means no, but for pausing the starter
+// setup wrote on its branch, which keeps what it holds.
+import { KIT_CONFIG_PATH, type ProductionConfig, type StagingConfig } from "../kit/config.ts";
 import { isTimeZone, knownTimeZone } from "../loop/readable.ts";
 import type { FlagAnswers } from "./args.ts";
 import {
   declaresProduction,
+  declaresStaging,
   type DeploymentsSeen,
   jsonObject,
   pausesDispatch,
+  productionEnvironmentIn,
   productionRefusal,
   type ProductState,
   SECOND_SUBSCRIPTION,
   type SetupAnswers,
+  stagingRefusal,
   subscriptionsTheKitReads,
   takesSecondSubscription,
 } from "./plan.ts";
@@ -31,22 +34,45 @@ export interface QuestionInputs {
   /** Null without a terminal. */
   readonly prompt: Prompt | null;
   readonly say: (line: string) => void;
-  /** Reads the repo's Deployments with the Operator's gh, only when production's question needs them to offer an environment or an address. */
+  /** Reads the repo's Deployments with the Operator's gh, only when production's or staging's question needs them to offer an environment or an address. */
   readonly deployments: () => Promise<DeploymentsSeen>;
 }
 
-export type QuestionAnswers = Pick<SetupAnswers, "timeZone" | "secondSubscription" | "paused" | "production">;
+export type QuestionAnswers = Pick<SetupAnswers, "timeZone" | "secondSubscription" | "paused" | "production" | "staging">;
 
 export async function askQuestions({ flags, state, wroteStarter, machineTimeZone, prompt, say, deployments }: QuestionInputs): Promise<QuestionAnswers> {
   const timeZone = flags.timeZone !== undefined ? flags.timeZone : await askTimeZone(state, machineTimeZone, prompt, say);
   const secondSubscription = await askSecondSubscription(flags.secondSubscription, state, prompt, say);
   const paused = flags.paused ?? (await askPaused(state, wroteStarter, prompt, say));
-  const production = await askProduction(flags, state, prompt, say, deployments);
+  const seen = sharedDeployments(deployments, say);
+  const production = await askProduction(flags, state, prompt, say, seen);
+  const staging = await askStaging(flags, state, production, prompt, say, seen);
   return {
     ...(timeZone === null ? {} : { timeZone }),
     ...(secondSubscription ? { secondSubscription } : {}),
     ...(paused ? { paused } : {}),
     ...(production === null ? {} : { production }),
+    ...(staging === null ? {} : { staging }),
+  };
+}
+
+/** The repo's Deployments as production's and staging's questions share them. */
+interface SharedDeployments {
+  /** Reads them once, for whichever question first needs them. */
+  readonly read: () => Promise<DeploymentsSeen>;
+  /** Says why they couldn't be read, once for both questions. */
+  readonly sayUnread: (why: string) => void;
+}
+
+function sharedDeployments(deployments: () => Promise<DeploymentsSeen>, say: (line: string) => void): SharedDeployments {
+  let seen: Promise<DeploymentsSeen> | undefined;
+  let said = false;
+  return {
+    read: () => (seen ??= deployments()),
+    sayUnread: (why) => {
+      if (!said) say(`Setup couldn't read this repo's Deployments (${why}), so it offers no environment.`);
+      said = true;
+    },
   };
 }
 
@@ -63,7 +89,7 @@ async function askProduction(
   state: ProductState,
   prompt: Prompt | null,
   say: (line: string) => void,
-  deployments: () => Promise<DeploymentsSeen>,
+  deployments: SharedDeployments,
 ): Promise<ProductionConfig | null> {
   const config = state.files[KIT_CONFIG_PATH] ?? null;
   const flagged = typeof flags.productionUrl === "string" || typeof flags.productionEnvironment === "string";
@@ -90,8 +116,8 @@ async function askProduction(
   say(
     "Kit config can say where this repo's site is live, and the environment its deploys carry in GitHub's Deployments, so a merged pull request is followed to production.",
   );
-  const seen = await deployments();
-  const environment = flags.productionEnvironment !== undefined ? flags.productionEnvironment : await askEnvironment(seen, prompt, say);
+  const seen = await deployments.read();
+  const environment = flags.productionEnvironment !== undefined ? flags.productionEnvironment : await askEnvironment(seen, prompt, say, deployments.sayUnread);
   if (url !== undefined) return { url, environment };
   const deployed = seen.read ? (seen.environments.find((candidate) => candidate.name === environment)?.url ?? null) : null;
   const offered = beforeUrlIn(config) ?? deployed;
@@ -112,9 +138,9 @@ async function askProduction(
  * Operator picks from the list. None when the repo reports no Deployments, or
  * they couldn't be read.
  */
-async function askEnvironment(seen: DeploymentsSeen, prompt: Prompt, say: (line: string) => void): Promise<string | null> {
+async function askEnvironment(seen: DeploymentsSeen, prompt: Prompt, say: (line: string) => void, sayUnread: (why: string) => void): Promise<string | null> {
   if (!seen.read) {
-    say(`Setup couldn't read this repo's Deployments (${seen.why}), so it offers no environment.`);
+    sayUnread(seen.why);
     return null;
   }
   const names = seen.environments.map((environment) => environment.name);
@@ -142,6 +168,107 @@ async function askEnvironment(seen: DeploymentsSeen, prompt: Prompt, say: (line:
     const chosen = /^\d+$/.test(answer.trim()) ? names[Number(answer.trim()) - 1] : names.find((name) => name === answer.trim());
     if (chosen !== undefined) return chosen;
     say(`Give the number of one of the ${names.length}, its name, or none.`);
+  }
+}
+
+/**
+ * Where staging is, asked beside production's question on any run whose Kit
+ * config declares none. It offers an environment from the repo's Deployments,
+ * production's left out, then the address on that environment's newest
+ * successful Deployment. Staging needs both, so no environment, like no
+ * address, writes no block. An answer Kit config would refuse is asked again,
+ * and stops the run when a flag gave it.
+ */
+async function askStaging(
+  flags: FlagAnswers,
+  state: ProductState,
+  production: ProductionConfig | null,
+  prompt: Prompt | null,
+  say: (line: string) => void,
+  deployments: SharedDeployments,
+): Promise<StagingConfig | null> {
+  const config = state.files[KIT_CONFIG_PATH] ?? null;
+  const { stagingUrl: url, stagingEnvironment: environment } = flags;
+  const flagged = typeof url === "string" || typeof environment === "string";
+  if (config !== null && declaresStaging(config)) {
+    if (flagged) say(`${KIT_CONFIG_PATH} already declares staging, which Setup leaves as it is, so staging's flags have no effect.`);
+    return null;
+  }
+  if (url === null || environment === null) return null;
+  // The one environment staging's can't be: production's, as just answered, or as the Kit config declares it.
+  const productionEnvironment = production?.environment ?? productionEnvironmentIn(config);
+  if (flagged) {
+    // A value no flag gave is stood in for by one Kit config takes, so only what a flag gave is refused.
+    const given = { url: url ?? "https://example.com", environment: environment ?? "an environment" };
+    const refused = stagingRefusal(given, environment === undefined ? null : productionEnvironment);
+    if (refused !== null) throw new Error(`Kit config would refuse staging's flags: ${refused}`);
+  }
+  if (url !== undefined && environment !== undefined) return { url, environment };
+  if (prompt === null || (config !== null && jsonObject(config) === null)) {
+    if (prompt === null && url !== undefined) say("--staging-url= has no effect without an environment, which staging needs: give --staging-environment= too.");
+    if (prompt === null && environment !== undefined) say("--staging-environment= has no effect without an address: give --staging-url= too.");
+    if (prompt !== null) say(`${KIT_CONFIG_PATH} isn't a JSON object, so Setup doesn't ask about staging: fix it, then run setup again.`);
+    return null;
+  }
+
+  say(
+    "Kit config can also say where this repo's staging site is, and the environment its deploys carry in GitHub's Deployments, so a merged pull request is followed to staging, where you try it before you deploy production.",
+  );
+  const seen = await deployments.read();
+  const named = environment ?? (await askStagingEnvironment(seen, productionEnvironment, prompt, say, deployments.sayUnread));
+  if (named === null) return null;
+  if (url !== undefined) return { url, environment: named };
+  const offered = seen.read ? (seen.environments.find((candidate) => candidate.name === named)?.url ?? null) : null;
+  for (;;) {
+    const answer = (await prompt.ask(`Staging's address, or no to leave staging out${offered === null ? "" : ` [${offered}]`}: `))?.trim() ?? null;
+    if (answer === null || /^no?$/i.test(answer)) return null;
+    const address = answer === "" ? offered : answer;
+    if (address === null) return null;
+    const refused = stagingRefusal({ url: address, environment: named }, productionEnvironment);
+    if (refused === null) return { url: address, environment: named };
+    say(`Kit config would refuse that: ${refused}.`);
+  }
+}
+
+/**
+ * The environment staging's deploys carry: staging when the repo has
+ * Deployments by that name, else the Operator's pick from the others it has,
+ * production's never among them, or a name they type. Unlike production's
+ * question, it offers no other environment for an Enter, since a repo's only
+ * other environment is as likely its previews'. None, or an Enter with
+ * nothing offered, leaves staging out.
+ */
+async function askStagingEnvironment(
+  seen: DeploymentsSeen,
+  productionEnvironment: string | null,
+  prompt: Prompt,
+  say: (line: string) => void,
+  sayUnread: (why: string) => void,
+): Promise<string | null> {
+  if (!seen.read) sayUnread(seen.why);
+  const all = seen.read ? seen.environments.map((environment) => environment.name) : [];
+  const names = all.filter((name) => name !== productionEnvironment);
+  const offered = names.includes("staging") ? "staging" : null;
+  const listed = offered === null && names.length > 0;
+  if (listed) {
+    const count = names.length === 1 ? "one environment" : `${names.length} environments`;
+    say(`This repo's Deployments carry ${count}${names.length < all.length ? " besides production's" : ""}: ${names.map((name, i) => `${i + 1}. ${name}`).join(", ")}.`);
+  }
+  const question = listed
+    ? "Which one do staging's deploys carry? Its number or name, or none to leave staging out: "
+    : `The environment staging's deploys carry in GitHub's Deployments, or none to leave staging out${offered === null ? "" : ` [${offered}]`}: `;
+  for (;;) {
+    const answer = (await prompt.ask(question))?.trim() ?? null;
+    if (answer === null || /^(none|no?)$/i.test(answer)) return null;
+    const name = answer === "" ? offered : listed && /^\d+$/.test(answer) ? names[Number(answer) - 1] : answer;
+    if (name === null) return null;
+    if (name === undefined) {
+      say(`Give ${names.length === 1 ? "1" : `the number of one of the ${names.length}`}, a name, or none.`);
+      continue;
+    }
+    const refused = stagingRefusal({ url: "https://example.com", environment: name }, productionEnvironment);
+    if (refused === null) return name;
+    say(`Kit config would refuse that: ${refused}.`);
   }
 }
 

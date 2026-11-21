@@ -1,7 +1,7 @@
 // Setup's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
 import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import { isTimeZone } from "../loop/readable.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
@@ -100,6 +100,12 @@ export interface SetupAnswers {
    * Kit config that declares none, and never changes one it declares.
    */
   readonly production?: ProductionConfig;
+  /**
+   * The staging block the Operator confirmed: the staging site's address and
+   * the environment its deploys carry in GitHub's Deployments. Setup adds it to
+   * a Kit config that declares none, and never changes one it declares.
+   */
+  readonly staging?: StagingConfig;
 }
 
 /**
@@ -288,11 +294,12 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
 /**
  * The Kit config is the Product's: setup writes the starter once, when the repo
  * lacks one, and after that changes only its subscriptions list, on the
- * Operator's yes to a second Subscription, its production block, while it
- * declares none, and its time_zone, to the Operator's answer (ADR-0023). Until
- * the setup PR merges, the starter on setup's branch is still setup's own, so a
- * later run's answer on pausing sets its max_in_flight. Visual evidence, the
- * one block that needs judgment, is /fabrik-visual-evidence's to write (Spec #330).
+ * Operator's yes to a second Subscription, its production block and its
+ * staging block, each while it declares none, and its time_zone, to the
+ * Operator's answer (ADR-0023). Until the setup PR merges, the starter on
+ * setup's branch is still setup's own, so a later run's answer on pausing sets
+ * its max_in_flight. Visual evidence, the one block that needs judgment, is
+ * /fabrik-visual-evidence's to write (Spec #330).
  */
 function kitConfig(state: ProductState, kit: SetupKit, answers: SetupAnswers, notes: string[], { wroteStarter = false }: PlanContext): SetupAction[] {
   const existing = state.files[KIT_CONFIG_PATH] ?? null;
@@ -326,16 +333,18 @@ interface AnsweredEdits {
   readonly also: readonly string[];
 }
 
-/** The second Subscription listed, the production block added and time_zone set, each on the text the one before left. */
+/** The second Subscription listed, the production block and the staging block added and time_zone set, each on the text the one before left. */
 function answeredEdits(text: string, state: ProductState, answers: SetupAnswers, notes: string[]): AnsweredEdits {
   const listed = withSecondSubscription(text, state, answers);
   const live = withProduction(listed ?? text, answers, notes);
-  const zoned = withTimeZone(live ?? listed ?? text, answers, notes);
+  const trialled = withStaging(live ?? listed ?? text, answers, notes);
+  const zoned = withTimeZone(trialled ?? live ?? listed ?? text, answers, notes);
   const made: (readonly [change: string, also: string])[] = [];
   if (listed !== null) made.push([LIST_SECOND_SUBSCRIPTION, "the second Subscription listed"]);
   if (live !== null) made.push([`add ${productionWords(answers)}`, productionWords(answers)]);
+  if (trialled !== null) made.push([`add ${stagingWords(answers)}`, stagingWords(answers)]);
   if (zoned !== null) made.push([`set ${timeZoneWords(answers)}`, timeZoneWords(answers)]);
-  return { text: zoned ?? live ?? listed, changes: made.map(([change]) => change), also: made.map(([, also]) => also) };
+  return { text: zoned ?? trialled ?? live ?? listed, changes: made.map(([change]) => change), also: made.map(([, also]) => also) };
 }
 
 /** The one write of a Kit config whose only changes are the Operator's answers, or none. */
@@ -407,6 +416,58 @@ export function declaresProduction(text: string): boolean {
 export function productionRefusal(production: ProductionConfig): string | null {
   const resolved = resolveKitConfig({ config: JSON.stringify({ production }) });
   return resolved.ok ? null : resolved.errors.join("; ");
+}
+
+/** The staging block the plan writes, named with both its values. */
+function stagingWords({ staging }: SetupAnswers): string {
+  return `the staging block: url ${JSON.stringify(staging?.url)}, environment ${JSON.stringify(staging?.environment)}`;
+}
+
+/**
+ * The Kit config's text with the staging block the Operator answered added,
+ * every other byte kept, or null when there's nothing to write: no answer, a
+ * Kit config that declares staging already, which is the Product's to change,
+ * one setup can't add a member to, or a block Kit config would refuse beside
+ * the production this text declares, each of which it says.
+ */
+function withStaging(text: string, { staging }: SetupAnswers, notes: string[]): string | null {
+  if (staging === undefined) return null;
+  const config = jsonObject(text);
+  if (config === null) {
+    notes.push(`${KIT_CONFIG_PATH} isn't a JSON object, so setup didn't add the staging block to it: fix it, then run setup again.`);
+    return null;
+  }
+  if (declaresStaging(text)) return null;
+  const refused = stagingRefusal(staging, productionEnvironmentIn(text));
+  if (refused !== null) {
+    notes.push(`Setup didn't write the staging block: ${refused}.`);
+    return null;
+  }
+  return withMember(text, ["staging"], { url: staging.url, environment: staging.environment });
+}
+
+/** Whether the Kit config's text declares staging: a staging member that isn't null. */
+export function declaresStaging(text: string): boolean {
+  const staging = jsonObject(text)?.["staging"];
+  return staging !== undefined && staging !== null;
+}
+
+/**
+ * Why Kit config would refuse this staging block, in its own words, or null
+ * when it takes it. It is judged beside a production whose deploys carry
+ * `productionEnvironment`, which staging's may not, when one is given.
+ */
+export function stagingRefusal(staging: StagingConfig, productionEnvironment: string | null): string | null {
+  const production = productionEnvironment === null ? null : { url: "https://example.com", environment: productionEnvironment };
+  const resolved = resolveKitConfig({ config: JSON.stringify({ production, staging }) });
+  return resolved.ok ? null : resolved.errors.join("; ");
+}
+
+/** The environment the production block in a Kit config's text names, when Kit config takes it, or null. */
+export function productionEnvironmentIn(text: string | null): string | null {
+  const production = text === null ? null : jsonObject(text)?.["production"];
+  const environment = typeof production === "object" && production !== null ? (production as Record<string, unknown>)["environment"] : null;
+  return typeof environment === "string" && productionRefusal({ url: "https://example.com", environment }) === null ? environment : null;
 }
 
 /** The warning that an unpaused install puts the tracker's ready-for-agent issues straight into Dispatch's queue. */

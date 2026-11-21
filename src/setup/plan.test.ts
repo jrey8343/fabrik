@@ -1258,6 +1258,114 @@ describe("The production block, which Setup proposes", () => {
   });
 });
 
+describe("The staging block, which Setup proposes beside production's", () => {
+  const trial = { url: "https://staging.clinic.example.com", environment: "staging" };
+  const live = { url: "https://clinic.example.com", environment: "production" };
+  const NAMED = 'the staging block: url "https://staging.clinic.example.com", environment "staging"';
+  const why = (actions: readonly SetupAction[]) => {
+    const action = actions.find((a) => a.kind === "write-file" && a.path === ".fabrik/config.json");
+    return action === undefined ? undefined : describeAction(action);
+  };
+  const withConfig = (config: string) => aCleanProduct({ files: { ".fabrik/config.json": config } });
+  const declared = (config: string | undefined) => {
+    const resolved = resolveKitConfig({ config: config ?? null });
+    return resolved.ok ? resolved.config.staging : resolved.errors;
+  };
+
+  it("writes the starter with a staging block Kit config accepts, and names the block and both values in the plan", () => {
+    const { actions } = planSetup(aCleanProduct(), kit, { staging: trial });
+
+    const config = written(actions, ".fabrik/config.json");
+    expect(declared(config)).toEqual(trial);
+    expect(config).toBe(
+      kit.templates.kitConfig.replace(
+        '  "time_zone": null\n',
+        '  "time_zone": null,\n  "staging": {\n    "url": "https://staging.clinic.example.com",\n    "environment": "staging"\n  }\n',
+      ),
+    );
+    expect(why(actions)).toBe(`write .fabrik/config.json (a starter Kit config with every v1 default, and ${NAMED})`);
+  });
+
+  it("writes no staging member when the Operator declined, in a starter or in an existing Kit config", () => {
+    const own = '{\n  "max_in_flight": 1\n}\n';
+
+    expect(written(planSetup(aCleanProduct(), kit, {}).actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
+    expect(kit.templates.kitConfig).not.toContain("staging");
+    expect(written(planSetup(withConfig(own), kit, {}).actions, ".fabrik/config.json")).toBeUndefined();
+  });
+
+  it("adds the block as one member of an existing Kit config, every other byte kept", () => {
+    const own = '{\n  "operator": "jrey8343",\n  "production": { "url": "https://clinic.example.com", "environment": "production" }\n}\n';
+
+    const { actions } = planSetup(withConfig(own), kit, { staging: trial });
+
+    expect(written(actions, ".fabrik/config.json")).toBe(
+      '{\n  "operator": "jrey8343",\n  "production": { "url": "https://clinic.example.com", "environment": "production" },\n  "staging": {\n    "url": "https://staging.clinic.example.com",\n    "environment": "staging"\n  }\n}\n',
+    );
+    expect(why(actions)).toBe(`write .fabrik/config.json (add ${NAMED})`);
+  });
+
+  it("sets a staging member that is null where it stands", () => {
+    const config = '{\n  "staging": null,\n  "max_in_flight": 1\n}\n';
+
+    expect(written(planSetup(withConfig(config), kit, { staging: trial }).actions, ".fabrik/config.json")).toBe(
+      '{\n  "staging": {\n    "url": "https://staging.clinic.example.com",\n    "environment": "staging"\n  },\n  "max_in_flight": 1\n}\n',
+    );
+  });
+
+  it("writes it in the same one write as the production block and the time zone, production's first", () => {
+    const { actions } = planSetup(withConfig('{\n  "max_in_flight": 1\n}\n'), kit, { production: live, staging: trial, timeZone: "Australia/Sydney" });
+
+    const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
+    expect(config.ok && [config.config.production, config.config.staging, config.config.timeZone]).toEqual([live, trial, "Australia/Sydney"]);
+    expect(why(actions)).toBe(
+      `write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production", and add ${NAMED}, and set time_zone "Australia/Sydney")`,
+    );
+    expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
+  });
+
+  it("writes nothing when setup runs again with the same answers", () => {
+    for (const state of [aCleanProduct(), withConfig('{\n  "max_in_flight": 1\n}\n')]) {
+      const setUp = afterApplying(state, planSetup(state, kit, { staging: trial }));
+
+      expect(written(planSetup(setUp, kit, { staging: trial }).actions, ".fabrik/config.json")).toBeUndefined();
+    }
+  });
+
+  it("leaves a Kit config that already declares staging byte for byte, whatever the answer, and says nothing of it", () => {
+    const config = '{\n  "staging": { "url": "https://next.clinic.example.com", "environment": "next" }\n}\n';
+
+    const { actions, notes } = planSetup(withConfig(config), kit, { staging: trial });
+
+    expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+    expect(notes.join("\n")).not.toContain("staging");
+  });
+
+  it("leaves a Kit config that is not a JSON object byte for byte, with one line saying why", () => {
+    for (const config of ["[]\n", "{ not json\n"]) {
+      const { actions, notes } = planSetup(withConfig(config), kit, { staging: trial });
+
+      expect(written(actions, ".fabrik/config.json")).toBeUndefined();
+      expect(notes).toContainEqual(".fabrik/config.json isn't a JSON object, so setup didn't add the staging block to it: fix it, then run setup again.");
+    }
+  });
+
+  it("never writes a block Kit config would refuse, its own or beside the production the same plan writes, and says why", () => {
+    const badAddress = planSetup(aCleanProduct(), kit, { staging: { ...trial, url: "ftp://staging.clinic.example.com" } });
+    const sameEnvironment = planSetup(aCleanProduct(), kit, { production: live, staging: { ...trial, environment: "production" } });
+    const besideDeclared = planSetup(withConfig('{\n  "production": { "url": "https://clinic.example.com", "environment": "staging" }\n}\n'), kit, { staging: trial });
+
+    expect(written(badAddress.actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
+    expect(badAddress.notes.find((note) => note.includes("staging"))).toMatch(/^Setup didn't write the staging block: staging\.url is .*http:\/\/ or https:\/\/\.$/);
+    expect(declared(written(sameEnvironment.actions, ".fabrik/config.json"))).toBeNull();
+    expect(sameEnvironment.notes).toContainEqual(
+      `Setup didn't write the staging block: staging.environment is "production": production.environment names it, and staging's environment is never production's.`,
+    );
+    expect(written(besideDeclared.actions, ".fabrik/config.json")).toBeUndefined();
+    expect(besideDeclared.notes.find((note) => note.includes("staging block"))).toMatch(/^Setup didn't write the staging block: staging\.environment is "staging"/);
+  });
+});
+
 describe("The Operator's time zone in the Kit config, which Setup keeps in step with the store's caller (ADR-0023)", () => {
   const sydney = { timeZone: "Australia/Sydney" };
   const why = (actions: readonly SetupAction[]) => {

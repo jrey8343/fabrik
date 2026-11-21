@@ -1,5 +1,5 @@
-// Setup's questions: time zone, a second Subscription, Dispatch paused and
-// production. The flags answer them, and the program asks only what they left
+// Setup's questions: time zone, a second Subscription, Dispatch paused,
+// production and staging. The flags answer them, and the program asks only what they left
 // out, and only on a terminal. Without one, a missing answer means no.
 import { describe, expect, it } from "vitest";
 import { aCleanProduct } from "../__fixtures__/productState.ts";
@@ -28,11 +28,11 @@ const neverAsked: Prompt = {
   },
 };
 
-/** The first three questions' tests: production's question is answered no by its flag unless a test gives it. */
+/** The first three questions' tests: production's and staging's questions are each answered no by its flag unless a test gives it. */
 async function ask(flags: FlagAnswers, prompt: Prompt | null, state: ProductState = aCleanProduct(), wroteStarter = false) {
   const said: string[] = [];
   const answers = await askQuestions({
-    flags: { productionUrl: null, ...flags },
+    flags: { productionUrl: null, stagingUrl: null, ...flags },
     state,
     wroteStarter,
     machineTimeZone: "Australia/Sydney",
@@ -47,13 +47,13 @@ async function ask(flags: FlagAnswers, prompt: Prompt | null, state: ProductStat
 
 const DEPLOYMENTS = "gh api repos/acme/clinic/deployments?per_page=100&page=1";
 
-/** Production's question, the other three answered by flag, with the repo's Deployments from a canned gh. */
+/** Production's question, the other four answered by flag, with the repo's Deployments from a canned gh. */
 async function askProduction(flags: FlagAnswers, prompt: Prompt | null, { config, script = deploymentsOf("acme/clinic", []) }: { config?: string; script?: Script } = {}) {
   const said: string[] = [];
   const commands = fakeCommands(script);
   const state = aCleanProduct(config === undefined ? {} : { files: { ".fabrik/config.json": config } });
   const answers = await askQuestions({
-    flags: { timeZone: null, secondSubscription: false, paused: false, ...flags },
+    flags: { timeZone: null, secondSubscription: false, paused: false, stagingUrl: null, ...flags },
     state,
     wroteStarter: false,
     machineTimeZone: "Australia/Sydney",
@@ -62,6 +62,23 @@ async function askProduction(flags: FlagAnswers, prompt: Prompt | null, { config
     deployments: () => gatherDeployments(commands.run, "/clinic", state.repo),
   });
   return { production: answers.production, said, reads: commands.calls.filter((call) => call.line === DEPLOYMENTS).length };
+}
+
+/** Staging's question, the first three answered by flag and production's too unless a test gives it, with the repo's Deployments from a canned gh. */
+async function askStaging(flags: FlagAnswers, prompt: Prompt | null, { config, script = deploymentsOf("acme/clinic", []) }: { config?: string; script?: Script } = {}) {
+  const said: string[] = [];
+  const commands = fakeCommands(script);
+  const state = aCleanProduct(config === undefined ? {} : { files: { ".fabrik/config.json": config } });
+  const answers = await askQuestions({
+    flags: { timeZone: null, secondSubscription: false, paused: false, productionUrl: null, ...flags },
+    state,
+    wroteStarter: false,
+    machineTimeZone: "Australia/Sydney",
+    prompt,
+    say: (line) => said.push(line),
+    deployments: () => gatherDeployments(commands.run, "/clinic", state.repo),
+  });
+  return { staging: answers.staging, production: answers.production, said, reads: commands.calls.filter((call) => call.line === DEPLOYMENTS).length };
 }
 
 const storeIn = (timeZone: string): ProductState["store"] => ({
@@ -79,6 +96,8 @@ describe("Setup's questions", () => {
       paused: false,
       productionUrl: "https://clinic.example.com",
       productionEnvironment: "production",
+      stagingUrl: "https://staging.clinic.example.com",
+      stagingEnvironment: "staging",
     };
     const { answers } = await ask(flags, neverAsked);
 
@@ -86,6 +105,7 @@ describe("Setup's questions", () => {
       timeZone: "Europe/London",
       secondSubscription: true,
       production: { url: "https://clinic.example.com", environment: "production" },
+      staging: { url: "https://staging.clinic.example.com", environment: "staging" },
     });
   });
 
@@ -493,6 +513,248 @@ describe("Setup's production question", () => {
 
       expect([production, reads]).toEqual([undefined, 0]);
       expect(said).toEqual([".fabrik/config.json isn't a JSON object, so Setup doesn't ask about production: fix it, then run setup again."]);
+    });
+  });
+});
+
+describe("Setup's staging question", () => {
+  const ADDRESS = "Staging's address, or no to leave staging out: ";
+  const address = (offered: string) => `Staging's address, or no to leave staging out [${offered}]: `;
+  const ENVIRONMENT = "The environment staging's deploys carry in GitHub's Deployments, or none to leave staging out: ";
+  const environment = (offered: string) => `The environment staging's deploys carry in GitHub's Deployments, or none to leave staging out [${offered}]: `;
+  const WHICH = "Which one do staging's deploys carry? Its number or name, or none to leave staging out: ";
+  const trial = (url: string, environment = "staging") => ({ url, environment });
+
+  it("offers staging when the repo has Deployments by that name, and the address on its newest successful one", async () => {
+    const script = deploymentsOf("acme/clinic", [
+      { environment: "staging", state: "failure" },
+      { environment: "production", url: "https://clinic.example.com" },
+      { environment: "staging", url: "https://staging.clinic.example.com" },
+    ]);
+    const prompt = scripted("", "");
+
+    const { staging, reads } = await askStaging({}, prompt, { script });
+
+    expect(prompt.questions).toEqual([environment("staging"), address("https://staging.clinic.example.com")]);
+    expect(staging).toEqual(trial("https://staging.clinic.example.com"));
+    expect(reads).toBe(1);
+  });
+
+  it("says what the block is for before it asks", async () => {
+    const { said } = await askStaging({}, scripted("none"));
+
+    expect(said).toEqual([
+      "Kit config can also say where this repo's staging site is, and the environment its deploys carry in GitHub's Deployments, so a merged pull request is followed to staging, where you try it before you deploy production.",
+    ]);
+  });
+
+  it("lists the repo's other environments when none is named staging, and takes one by its number or its name", async () => {
+    const script = deploymentsOf("acme/clinic", [
+      { environment: "preview", url: "https://pr-4.clinic.example.dev" },
+      { environment: "qa", url: "https://qa.clinic.example.com" },
+    ]);
+
+    for (const pick of ["2", "qa"]) {
+      const prompt = scripted(pick, "");
+      const { staging, said } = await askStaging({}, prompt, { script });
+
+      expect(said).toContain("This repo's Deployments carry 2 environments: 1. preview, 2. qa.");
+      expect(prompt.questions).toEqual([WHICH, address("https://qa.clinic.example.com")]);
+      expect(staging).toEqual(trial("https://qa.clinic.example.com", "qa"));
+    }
+  });
+
+  it("offers a repo's only other environment as a pick, never for an Enter, which leaves staging out", async () => {
+    const script = deploymentsOf("acme/clinic", [{ environment: "preview", url: "https://pr-4.clinic.example.dev" }]);
+    const prompt = scripted("");
+
+    const { staging, said } = await askStaging({}, prompt, { script });
+
+    expect(said).toContain("This repo's Deployments carry one environment: 1. preview.");
+    expect(prompt.questions).toEqual([WHICH]);
+    expect(staging).toBeUndefined();
+  });
+
+  it("asks which again for a number that is none of them, and takes a name the Deployments don't carry yet", async () => {
+    const script = deploymentsOf("acme/clinic", [{ environment: "preview" }, { environment: "qa" }]);
+    const prompt = scripted("3", "uat", "https://uat.clinic.example.com");
+
+    const { staging, said } = await askStaging({}, prompt, { script });
+
+    expect(said).toContain("Give the number of one of the 2, a name, or none.");
+    expect(prompt.questions).toEqual([WHICH, WHICH, ADDRESS]);
+    expect(staging).toEqual(trial("https://uat.clinic.example.com", "uat"));
+  });
+
+  it("leaves the environment production's deploys carry out of what it offers, as the Operator just answered it", async () => {
+    const script = deploymentsOf("acme/clinic", [
+      { environment: "staging", url: "https://clinic.example.com" },
+      { environment: "next", url: "https://next.clinic.example.com" },
+    ]);
+    const prompt = scripted("staging", "", "1", "");
+
+    const { production, staging, said, reads } = await askStaging({ productionUrl: undefined }, prompt, { script });
+
+    expect(production).toEqual({ url: "https://clinic.example.com", environment: "staging" });
+    expect(said).toContain("This repo's Deployments carry one environment besides production's: 1. next.");
+    expect(prompt.questions.slice(2)).toEqual([WHICH, address("https://next.clinic.example.com")]);
+    expect(staging).toEqual(trial("https://next.clinic.example.com", "next"));
+    expect(reads).toBe(1);
+  });
+
+  it("leaves out the environment a declared production block names, and asks again when the Operator types it", async () => {
+    const config = '{\n  "production": { "url": "https://clinic.example.com", "environment": "live" }\n}\n';
+    const script = deploymentsOf("acme/clinic", [{ environment: "live", url: "https://clinic.example.com" }]);
+    const prompt = scripted("live", "staging", "https://staging.clinic.example.com");
+
+    const { staging, said } = await askStaging({ productionUrl: undefined }, prompt, { config, script });
+
+    expect(prompt.questions).toEqual([ENVIRONMENT, ENVIRONMENT, ADDRESS]);
+    expect(said).toContain(`Kit config would refuse that: staging.environment is "live": production.environment names it, and staging's environment is never production's.`);
+    expect(staging).toEqual(trial("https://staging.clinic.example.com"));
+  });
+
+  it("writes no block on none or no for the environment, on no for the address, on an Enter with nothing offered, and when the input ends", async () => {
+    const script = deploymentsOf("acme/clinic", [{ environment: "staging" }]);
+
+    for (const answers of [["none"], ["no"], ["N"], ["", "no"], ["", ""], [null], ["", null]]) {
+      expect((await askStaging({}, scripted(...answers), { script })).staging, JSON.stringify(answers)).toBeUndefined();
+    }
+    expect((await askStaging({}, scripted(""))).staging).toBeUndefined();
+  });
+
+  it("asks the address again when Kit config would refuse it, and never takes it", async () => {
+    const script = deploymentsOf("acme/clinic", [{ environment: "staging" }]);
+    const prompt = scripted("", "ftp://staging.clinic.example.com", "https://staging.clinic.example.com");
+
+    const { staging, said } = await askStaging({}, prompt, { script });
+
+    expect(prompt.questions).toEqual([environment("staging"), ADDRESS, ADDRESS]);
+    expect(said).toContain('Kit config would refuse that: staging.url is "ftp://staging.clinic.example.com": a URL must start with http:// or https://.');
+    expect(staging).toEqual(trial("https://staging.clinic.example.com"));
+  });
+
+  it("says once, for production's question and its own, that the Deployments read was refused, and still takes a name", async () => {
+    const script = { [DEPLOYMENTS]: { code: 1, stderr: "gh: Resource not accessible by integration (HTTP 403)" } };
+    const prompt = scripted("https://clinic.example.com", "staging", "https://staging.clinic.example.com");
+
+    const { production, staging, said, reads } = await askStaging({ productionUrl: undefined }, prompt, { script });
+
+    expect(said.filter((line) => line.includes("403"))).toEqual([
+      "Setup couldn't read this repo's Deployments (gh: Resource not accessible by integration (HTTP 403)), so it offers no environment.",
+    ]);
+    expect(prompt.questions.slice(1)).toEqual([ENVIRONMENT, ADDRESS]);
+    expect([production, staging]).toEqual([{ url: "https://clinic.example.com", environment: null }, trial("https://staging.clinic.example.com")]);
+    expect(reads).toBe(1);
+  });
+
+  it("says a refused Deployments read itself when production's question never did", async () => {
+    const script = { [DEPLOYMENTS]: { code: 1, stderr: "gh: Not Found (HTTP 404)" } };
+
+    const { said } = await askStaging({}, scripted("none"), { script });
+
+    expect(said.filter((line) => line.includes("404"))).toEqual(["Setup couldn't read this repo's Deployments (gh: Not Found (HTTP 404)), so it offers no environment."]);
+  });
+
+  describe("with flags", () => {
+    it("asks nothing, and reads nothing, when the flags give both", async () => {
+      const flags = { stagingUrl: "https://staging.clinic.example.com", stagingEnvironment: "staging" };
+
+      for (const prompt of [neverAsked, null]) {
+        const { staging, said, reads } = await askStaging(flags, prompt);
+
+        expect([staging, said, reads]).toEqual([trial("https://staging.clinic.example.com"), [], 0]);
+      }
+    });
+
+    it("asks nothing with --no-staging, an empty --staging-url= or an empty --staging-environment=, which each answer no", async () => {
+      for (const flags of [{ stagingUrl: null }, { stagingEnvironment: null }, { stagingUrl: "https://staging.clinic.example.com", stagingEnvironment: null }]) {
+        const { staging, said, reads } = await askStaging(flags, neverAsked);
+
+        expect([staging, said, reads], JSON.stringify(flags)).toEqual([undefined, [], 0]);
+      }
+    });
+
+    it("asks only the environment when --staging-url= gives the address", async () => {
+      const script = deploymentsOf("acme/clinic", [{ environment: "staging", url: "https://pr.clinic.example.dev" }]);
+      const prompt = scripted("");
+
+      const { staging } = await askStaging({ stagingUrl: "https://staging.clinic.example.com" }, prompt, { script });
+
+      expect(prompt.questions).toEqual([environment("staging")]);
+      expect(staging).toEqual(trial("https://staging.clinic.example.com"));
+    });
+
+    it("asks only the address when --staging-environment= names the environment, offering that environment's", async () => {
+      const script = deploymentsOf("acme/clinic", [
+        { environment: "staging", url: "https://staging.clinic.example.com" },
+        { environment: "qa", url: "https://qa.clinic.example.com" },
+      ]);
+      const prompt = scripted("");
+
+      const { staging } = await askStaging({ stagingEnvironment: "qa" }, prompt, { script });
+
+      expect(prompt.questions).toEqual([address("https://qa.clinic.example.com")]);
+      expect(staging).toEqual(trial("https://qa.clinic.example.com", "qa"));
+    });
+
+    it("without a terminal, writes no block from one flag alone, and says which it lacks", async () => {
+      const url = await askStaging({ stagingUrl: "https://staging.clinic.example.com" }, null);
+      const named = await askStaging({ stagingEnvironment: "staging" }, null);
+
+      expect([url.staging, url.reads, named.staging, named.reads]).toEqual([undefined, 0, undefined, 0]);
+      expect(url.said).toEqual(["--staging-url= has no effect without an environment, which staging needs: give --staging-environment= too."]);
+      expect(named.said).toEqual(["--staging-environment= has no effect without an address: give --staging-url= too."]);
+    });
+
+    it("without a terminal or a flag, writes no block and reads nothing", async () => {
+      const { staging, said, reads } = await askStaging({}, null);
+
+      expect([staging, said, reads]).toEqual([undefined, [], 0]);
+    });
+
+    it.each([
+      [{ stagingUrl: "ftp://staging.clinic.example.com" }, 'staging.url is "ftp://staging.clinic.example.com": a URL must start with http:// or https://'],
+      [{ stagingUrl: "ftp://staging.clinic.example.com", stagingEnvironment: "staging" }, 'staging.url is "ftp://staging.clinic.example.com": a URL must start with http:// or https://'],
+      [
+        { productionUrl: "https://clinic.example.com", productionEnvironment: "live", stagingUrl: "https://staging.clinic.example.com", stagingEnvironment: "live" },
+        `staging.environment is "live": production.environment names it, and staging's environment is never production's`,
+      ],
+    ])("stops the run, with Kit config's reason, when a flag gives what it would refuse: %j", async (flags, reason) => {
+      await expect(askStaging(flags, null)).rejects.toThrow(`Kit config would refuse staging's flags: ${reason}`);
+      await expect(askStaging(flags, neverAsked)).rejects.toThrow(`Kit config would refuse staging's flags: ${reason}`);
+    });
+  });
+
+  describe("on a re-run", () => {
+    const declared = '{\n  "staging": { "url": "https://staging.clinic.example.com", "environment": "staging" }\n}\n';
+
+    it("doesn't ask a repo that already declares staging, or read its Deployments", async () => {
+      const { staging, said, reads } = await askStaging({}, neverAsked, { config: declared });
+
+      expect([staging, said, reads]).toEqual([undefined, [], 0]);
+    });
+
+    it("says its flags have no effect on a repo that already declares staging", async () => {
+      const { staging, said } = await askStaging({ stagingUrl: "https://next.clinic.example.com", stagingEnvironment: "next" }, null, { config: declared });
+
+      expect(staging).toBeUndefined();
+      expect(said).toEqual([".fabrik/config.json already declares staging, which Setup leaves as it is, so staging's flags have no effect."]);
+    });
+
+    it("asks a repo whose Kit config has no staging member, or a null one, as a starter from before it does", async () => {
+      for (const config of ['{\n  "production": null\n}\n', '{\n  "staging": null\n}\n']) {
+        const prompt = scripted("staging", "https://staging.clinic.example.com");
+
+        expect((await askStaging({}, prompt, { config })).staging).toEqual(trial("https://staging.clinic.example.com"));
+      }
+    });
+
+    it("doesn't ask when the Kit config isn't a JSON object, and says why", async () => {
+      const { staging, said, reads } = await askStaging({}, neverAsked, { config: "[]\n" });
+
+      expect([staging, reads]).toEqual([undefined, 0]);
+      expect(said).toEqual([".fabrik/config.json isn't a JSON object, so Setup doesn't ask about staging: fix it, then run setup again."]);
     });
   });
 });
