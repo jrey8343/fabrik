@@ -278,6 +278,16 @@ export interface ProductionConfig {
   readonly url: string;
   /** The environment the repo's production deploys carry in GitHub's Deployments; null when its host reports none. */
   readonly environment: string | null;
+  /**
+   * The file name of the workflow the Operator dispatches to deploy
+   * production (#857), such as `deploy.yml`; null when the block names none.
+   * It is read only to build the address of that workflow's page
+   * (productionDispatchPage): nothing dispatches it. A resolved Kit config
+   * always carries it. A block built by hand, as Setup's answers are, or one
+   * a reader kept from an earlier release may leave it out, which reads as
+   * null.
+   */
+  readonly workflow?: string | null;
 }
 
 /**
@@ -372,6 +382,18 @@ export function withRouteOn(base: string, route: string): string {
 /** The page at `route` on the production site the `production` block declares, as a reader links it once a pull request is merged. */
 export function productionPageUrl(production: ProductionConfig, route: string): string {
   return withRouteOn(production.url, route);
+}
+
+/**
+ * GitHub's page for dispatching the workflow `production.workflow` names in
+ * `repo`, `owner/name`: that workflow's page under the repo's Actions, where
+ * GitHub offers "Run workflow" for one that can be dispatched. Null when the
+ * block is null or names no workflow. The Kit builds the address and nothing
+ * more: it never dispatches the workflow, nor checks that the repo has it.
+ */
+export function productionDispatchPage(repo: string, production: ProductionConfig | null): string | null {
+  const workflow = production?.workflow ?? null;
+  return workflow === null ? null : `https://github.com/${repo}/actions/workflows/${encodeURIComponent(workflow)}`;
 }
 
 /** The page at `route` on the staging site the `staging` block declares, built as a production page is, where the Operator tries a merged change. */
@@ -1054,8 +1076,23 @@ function readProduction(production: Reader | null | undefined): ProductionConfig
   if (production === undefined || production === null) return null;
   const url = production.requiredString("url", checkHttpOrHttpsUrl);
   const environment = production.nullableString("environment", checkEnvironment);
+  const workflow = production.nullableString("workflow", checkWorkflowFile);
   if (url === undefined) return null;
-  return { url, environment: environment ?? null };
+  return { url, environment: environment ?? null, workflow: workflow ?? null };
+}
+
+/**
+ * Why `production.workflow` isn't one workflow file's name, or null when it
+ * is: non-blank, one line, no path, and ending as a workflow's file does. It
+ * only ever becomes the last part of an address, so a path is refused rather
+ * than read as one.
+ */
+function checkWorkflowFile(file: string): string | null {
+  if (file.trim() === "") return "a workflow's file name can't be blank";
+  if (/[\r\n]/.test(file)) return "a workflow's file name is one line";
+  if (/[/\\]/.test(file)) return "a workflow is named by its file's name alone, such as deploy.yml, not by a path";
+  // A name before the extension: `.yml` alone names no workflow.
+  return /.\.ya?ml$/i.test(file) ? null : "a workflow's file name ends in .yml or .yaml";
 }
 
 /**

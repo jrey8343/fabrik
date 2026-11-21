@@ -1174,7 +1174,7 @@ describe("The production block, which Setup proposes", () => {
         '  "production": {\n    "url": "https://clinic.example.com",\n    "environment": "production"\n  },\n',
       ),
     );
-    expect(declared(config)).toEqual(live);
+    expect(declared(config)).toEqual({ ...live, workflow: null });
     expect(why(actions)).toBe(
       'write .fabrik/config.json (a starter Kit config with every v1 default, and the production block: url "https://clinic.example.com", environment "production")',
     );
@@ -1183,7 +1183,7 @@ describe("The production block, which Setup proposes", () => {
   it("writes an address with no environment as environment null, and names that", () => {
     const { actions } = planSetup(aCleanProduct(), kit, { production: { url: "https://clinic.example.com", environment: null } });
 
-    expect(declared(written(actions, ".fabrik/config.json"))).toEqual({ url: "https://clinic.example.com", environment: null });
+    expect(declared(written(actions, ".fabrik/config.json"))).toEqual({ url: "https://clinic.example.com", environment: null, workflow: null });
     expect(why(actions)).toContain('the production block: url "https://clinic.example.com", environment null');
   });
 
@@ -1245,7 +1245,7 @@ describe("The production block, which Setup proposes", () => {
     const { actions } = planSetup(starter, kit, { production: live, paused: true, secondSubscription: true }, { wroteStarter: true });
 
     const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
-    expect(config.ok && [config.config.production, config.config.maxInFlight, config.config.subscriptions]).toEqual([live, 0, ["Claude token", "Claude token 2"]]);
+    expect(config.ok && [config.config.production, config.config.maxInFlight, config.config.subscriptions]).toEqual([{ ...live, workflow: null }, 0, ["Claude token", "Claude token 2"]]);
     expect(why(actions)).toContain('the production block: url "https://clinic.example.com", environment "production"');
     expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
   });
@@ -1253,7 +1253,7 @@ describe("The production block, which Setup proposes", () => {
   it("adds it to the starter on setup's branch with nothing else to change", () => {
     const { actions } = planSetup(withConfig(kit.templates.kitConfig), kit, { production: live }, { wroteStarter: true });
 
-    expect(declared(written(actions, ".fabrik/config.json"))).toEqual(live);
+    expect(declared(written(actions, ".fabrik/config.json"))).toEqual({ ...live, workflow: null });
     expect(why(actions)).toBe('write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production")');
   });
 });
@@ -1317,7 +1317,7 @@ describe("The staging block, which Setup proposes beside production's", () => {
     const { actions } = planSetup(withConfig('{\n  "max_in_flight": 1\n}\n'), kit, { production: live, staging: trial, timeZone: "Australia/Sydney" });
 
     const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
-    expect(config.ok && [config.config.production, config.config.staging, config.config.timeZone]).toEqual([live, trial, "Australia/Sydney"]);
+    expect(config.ok && [config.config.production, config.config.staging, config.config.timeZone]).toEqual([{ ...live, workflow: null }, trial, "Australia/Sydney"]);
     expect(why(actions)).toBe(
       `write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production", and add ${NAMED}, and set time_zone "Australia/Sydney")`,
     );
@@ -1420,7 +1420,7 @@ describe("The Operator's time zone in the Kit config, which Setup keeps in step 
     const { actions } = planSetup(withConfig('{\n  "max_in_flight": 1\n}\n'), kit, { ...sydney, production: live });
 
     const config = resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null });
-    expect(config.ok && [config.config.production, config.config.timeZone]).toEqual([live, "Australia/Sydney"]);
+    expect(config.ok && [config.config.production, config.config.timeZone]).toEqual([{ ...live, workflow: null }, "Australia/Sydney"]);
     expect(why(actions)).toBe('write .fabrik/config.json (add the production block: url "https://clinic.example.com", environment "production", and set time_zone "Australia/Sydney")');
     expect(actions.filter((a) => a.kind === "write-file" && a.path === ".fabrik/config.json")).toHaveLength(1);
   });
