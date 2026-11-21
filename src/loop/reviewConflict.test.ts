@@ -143,6 +143,20 @@ describe("A Review that stopped because its PR conflicts with main (#704)", () =
       );
     });
 
+    it("a draft carrying ready-for-human: starts no rebase, and hands it to the Operator with the reason (#841)", () => {
+      const actions = actionsOf(plan(draft({ labels: ["ready-for-human"] })));
+
+      expect(actions.some((action) => action.kind === "rebase-onto-main")).toBe(false);
+      expect(commentOn(actions)).toBe(
+        [
+          `@operator ${OPENING}`,
+          "",
+          "**This needs you.** The Kit isn't bringing it up to date from here: #50 carries `ready-for-human`, so it's the Operator's until they take the label off. Merge `main` into `fabrik/ticket-7` and push, and Review starts on the push.",
+          '<!-- fabrik:hand-back {"kind":"conflicted-review","role":"review"} -->',
+        ].join("\n"),
+      );
+    });
+
     it("GitHub hadn't worked out whether it still conflicts: starts no rebase, leaves it to a later conflict check, and mentions nobody", () => {
       const body = commentOn(actionsOf(plan(draft(), { main: MAIN, mergeable: null })));
 

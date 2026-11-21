@@ -5,7 +5,7 @@
 // replay the PR's thread: each plan's comments are posted, and the next
 // snapshot reads them back as the adapter does.
 import { describe, expect, it } from "vitest";
-import { aCausedRedCheckReview, anIssue, aPullRequest, kitConfig, NO_TAGS, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
+import { aCausedRedCheckReview, anIssue, aPullRequest, kitConfig, NO_TAGS, snapshotOf, snapshotOfPullRequest, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import {
   conflictAttemptsIn,
   conflictRunIn,
@@ -268,13 +268,36 @@ describe("A conflict-only run", () => {
       expect(thread.pullRequest().conflictRunInFlight).toBeNull();
     });
 
-    it("isn't tried again against the same main head, but is once main moves", () => {
+    it("isn't tried again while it carries ready-for-human, however often main moves (#841)", () => {
       const thread = new Thread();
       thread.mainMovesAndConflicts(MAIN);
       thread.conflictRunFinishes({ net: [], commits: [], updatedFromMain: false }, B);
 
-      expect(planFor({ kind: "main-pushed", head: MAIN }, thread.conflictsSnapshot(MAIN), kitConfig())).toMatchObject({ kind: "nothing" });
+      expect(thread.labels).toContain("ready-for-human");
+      expect(thread.mainMovesAndConflicts(NEXT_MAIN)).toEqual({ kind: "nothing", reason: expect.stringContaining("#50 carries `ready-for-human`") });
+      expect(thread.draft).toBe(false);
+    });
+
+    it("once the Operator takes the label off, waits for main to move from the head it was tried against", () => {
+      const thread = new Thread();
+      thread.mainMovesAndConflicts(MAIN);
+      thread.conflictRunFinishes({ net: [], commits: [], updatedFromMain: false }, B);
+      thread.labels = [];
+
+      expect(planFor({ kind: "main-pushed", head: MAIN }, thread.conflictsSnapshot(MAIN), kitConfig())).toEqual({ kind: "nothing", reason: expect.stringContaining("already tried against main") });
       expect(thread.mainMovesAndConflicts(NEXT_MAIN)).toMatchObject({ kind: "act" });
+    });
+
+    it("once the label is off after main moved while it stood, is tried at the next conflict check", () => {
+      const thread = new Thread();
+      thread.mainMovesAndConflicts(MAIN);
+      thread.conflictRunFinishes({ net: [], commits: [], updatedFromMain: false }, B);
+      thread.mainMovesAndConflicts(NEXT_MAIN);
+      thread.labels = [];
+
+      const tick = planFor({ kind: "scheduled-tick", now: "2026-01-01T01:17:00Z" }, tickSnapshot({ conflicts: thread.conflictsSnapshot(NEXT_MAIN).conflicts }), kitConfig());
+
+      expect(actionsOf(tick)).toContainEqual(expect.objectContaining({ kind: "rebase-onto-main", pullRequest: 50, onto: NEXT_MAIN }));
     });
   });
 });

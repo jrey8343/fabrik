@@ -154,6 +154,45 @@ describe("what a check's issue closing leaves alone", () => {
   });
 });
 
+describe("a PR the check holds that carries ready-for-human, whose Hand-back stands (#841)", () => {
+  const handedBack: ConflictCandidate = { pullRequest: heldAtGate({ labels: ["ready-for-human"] }), mergeable: true };
+  const other: ConflictCandidate = { pullRequest: heldAtGate({ number: 51, ticket: 8 }), mergeable: true };
+  const CLOSED_SINCE: ClosedCheckIssue = { number: 12, check: "e2e", closedAt: "2026-11-18T09:00:00Z", stateReason: "completed" };
+  const TICK: LoopEvent = { kind: "scheduled-tick", now: "2026-11-18T11:17:00Z" };
+  const ticking = (candidates: readonly ConflictCandidate[]) =>
+    tickSnapshot({ conflicts: { main: MAIN, now: "2026-11-18T11:17:00Z", implementJobUnderWay: false, pullRequests: candidates }, closedCheckIssues: [CLOSED_SINCE] });
+  /** Every check-fix record a plan would write, on whichever outcome. */
+  const checkFixRecords = (plan: Plan) =>
+    rebasesIn(plan)
+      .flatMap((rebase) => [...rebase.pushed, ...rebase.conflicted, ...(rebase.upToDate ?? [])])
+      .filter((action) => action.kind === "comment" && action.body.includes("fabrik:check-fix"));
+
+  it("brings it no fix when the check's issue closes, writes no check-fix record, and says why", () => {
+    const plan = planFor(COMPLETED, closing([handedBack]), kitConfig());
+
+    expect(rebasesIn(plan)).toEqual([]);
+    expect(checkFixRecords(plan)).toEqual([]);
+    expect(plan.kind === "act" ? plan.notes : []).toEqual([expect.stringContaining("#50 carries `ready-for-human`")]);
+  });
+
+  it("still brings up to date the other PRs the check holds", () => {
+    const plan = planFor(COMPLETED, closing([handedBack, other]), kitConfig());
+
+    expect(rebasesIn(plan).map(({ pullRequest }) => pullRequest)).toEqual([51]);
+    expect(checkFixRecords(plan).map((action) => action.kind === "comment" && action.issue)).toEqual([51, 51, 51]);
+  });
+
+  it("brings it no fix on the tick's catch-up either", () => {
+    expect(rebasesIn(planFor(TICK, ticking([handedBack]), kitConfig()))).toEqual([]);
+  });
+
+  it("brings the fix in on the tick once the label is off", () => {
+    const [rebase] = rebasesIn(planFor(TICK, ticking([BEHIND]), kitConfig()));
+
+    expect(commentOn(rebase?.pushed ?? [], 50)).toContain("The fix for `e2e` landed: #12 closed as completed.");
+  });
+});
+
 describe("a second close, or a later one, on the same main head", () => {
   it("tries nothing more once the PR was tried against main's head", () => {
     const tried = heldAtGate({ conflictAttempts: [MAIN] });

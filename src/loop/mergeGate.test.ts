@@ -420,6 +420,17 @@ describe("A Request-changes run's branch", () => {
     expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "close-pull-request" }));
   });
 
+  it("that changes nothing, on a head that didn't move, says the PR is the Operator's while it carries ready-for-human (#841)", () => {
+    const [outcome] = commentsOf(planFor(requestChangesPushed({ net: [], commits: [] }), pushSnapshot(), kitConfig()));
+
+    const lines = outcome?.split("\n") ?? [];
+    expect(lines[0]).toBe("<!-- fabrik:request-changes-run-empty -->");
+    expect(lines).toContain(
+      "@operator The Request-changes run on #50 committed nothing to `fabrik/ticket-7` on top of aaaaaaa, so your requested changes aren't built, and it's yours from here. #50 is yours while it carries `ready-for-human`: the Kit leaves its branch alone until then, and taking the label off gives it back. No retry was used.",
+    );
+    expect(outcome?.split("\n").at(-1)).toBe('<!-- fabrik:hand-back {"kind":"request-changes-empty","role":"implement"} -->');
+  });
+
   it("that changes nothing, on a head that moved while it worked, posts no Verdict and starts no Retry: Review runs on the new head (#388)", () => {
     const moved = "b".repeat(40);
     const plan = planFor(

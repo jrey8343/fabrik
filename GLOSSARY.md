@@ -130,6 +130,10 @@ _Avoid_: status, state, stage
 A Standing in which the next move is the Kit's, nothing is running or held, and the Kit has made no sign for longer than its own recoveries take. Work the Kit has handed to the Operator is waiting on the Operator, never Stuck.
 _Avoid_: stalled, hung, idle, stale
 
+**Hand-back**:
+The Kit giving a piece of work to the Operator by a notice that says so, once a run it started ended without landing or it cannot go on by itself. A Hand-back on a pull request stands until the Operator gives the pull request back or a Verdict lands on it, and while it stands the Kit makes no move of its own on its branch.
+_Avoid_: hold, held (a Held run waits on a Subscription), escalation
+
 **AFK**:
 Work an agent drives alone, with no human in the exchange.
 _Avoid_: autonomous, background
@@ -379,7 +383,7 @@ The Operator's Request changes that carries another issue's work onto an agent p
 _Avoid_: fold in, absorb, merge into
 
 **Conflict-only run**:
-An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, a draft one whose push GitHub never reviewed because it conflicts with main, or a draft one whose Review passed while it conflicts with main, which stays in draft until the pass on its up-to-date head opens the Merge gate. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head. An Execution flaw on its push calls for a Retry and counts like any other.
+An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, a draft one whose push GitHub never reviewed because it conflicts with main, or a draft one whose Review passed while it conflicts with main, which stays in draft until the pass on its up-to-date head opens the Merge gate. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head, and none while a Hand-back stands on it. An Execution flaw on its push calls for a Retry and counts like any other.
 _Avoid_: rebase run, conflict retry
 
 **Send it back**:
