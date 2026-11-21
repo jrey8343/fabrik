@@ -3,7 +3,7 @@ import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { aCheckIssue, aComment, aGateRerunAsk, aGateRerunDone, aLabelAdded, anOpenIssue, anOpenPullRequest, anOperatorMention, aPassNaming, aPlainPullRequest, aRunInFlight, aVerdictComment, factsOf, standingFactsOf } from "../read/builders.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingAt, standingsOf, type StandingFacts } from "./standing.ts";
-import type { GitHubFacts, RepoKitFacts, RequiredChecksFact } from "./weeklySummary.ts";
+import type { CommentFacts, GitHubFacts, RepoKitFacts, RequiredChecksFact } from "./weeklySummary.ts";
 
 const NOW = "2026-11-08T20:00:00Z";
 const HEAD = "h".repeat(40);
@@ -21,13 +21,16 @@ function aKit(checks: RequiredChecksFact): RepoKitFacts {
   return { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks: { [HEAD]: checks } };
 }
 
+/** A Required check failing since FAILED, before the pass, unless a test says when. */
 const failing = (name: string, at = FAILED) => ({ name, is: "failing", at }) as const;
+/** A Required check that passed before the pass. */
 const passing = (name: string) => ({ name, is: "passed", at: "2026-11-08T17:40:00Z" }) as const;
 
 /** Agent PR 50 for Ticket 7 at the Merge gate on HEAD, passed at PASSED by a Verdict naming `test` an Unrelated failure, with these later comments. */
-const held = (comments: Parameters<typeof aComment>[] | ReturnType<typeof aComment>[] = [], overrides: Parameters<typeof anOpenPullRequest>[0] = {}) =>
-  anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: HEAD, comments: [aPassNaming(["test"], HEAD, PASSED), ...(comments as ReturnType<typeof aComment>[])], ...overrides });
+const held = (comments: readonly CommentFacts[] = [], overrides: Parameters<typeof anOpenPullRequest>[0] = {}) =>
+  anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: HEAD, comments: [aPassNaming(["test"], HEAD, PASSED), ...comments], ...overrides });
 
+/** The Standings of `owner/product` with these GitHub facts and these Required checks on HEAD: `test` failing and `lint` passed, unless a test says otherwise. */
 function standingsIn(github: Partial<GitHubFacts>, checks: RequiredChecksFact = [failing("test"), passing("lint")], overrides: Partial<Omit<StandingFacts, "kind" | "github">> = {}, now = NOW): Standing[] {
   return standingsOf(standingFactsOf({ github: factsOf(github), kit: aKit(checks), ...overrides }), now);
 }
@@ -129,6 +132,13 @@ describe("an agent pull request at the Merge gate held by an Unrelated failure (
       expect(unreported).toMatchObject([{ detail: { checkIs: "never-reported" } }]);
       expect(running.map(whose)).toEqual([theKits("test")]);
     });
+
+    it("is the Operator's for a check never reported beside a healing one even while a third is running: a failing check never waits on a running one", () => {
+      const mixed = standingsIn({ openPullRequests: [held()] }, [failing("test"), { name: "lint", is: "running", at: "2026-11-08T19:00:00Z" }, { name: "e2e", is: "never-reported" }]);
+
+      expect(mixed.map(whose)).toEqual([theOperators("e2e")]);
+      expect(mixed).toMatchObject([{ since: PASSED, detail: { checkIs: "never-reported", healing: [{ check: "test" }] } }]);
+    });
   });
 
   describe("reads as before", () => {
@@ -173,7 +183,7 @@ describe("an agent pull request at the Merge gate held by an Unrelated failure (
   });
 
   describe("says what the Kit does next, from the pull request's own lines", () => {
-    const next = (comments: ReturnType<typeof aComment>[], github: Partial<GitHubFacts> = {}) => {
+    const next = (comments: readonly CommentFacts[], github: Partial<GitHubFacts> = {}) => {
       const standing = standingsIn({ openPullRequests: [held(comments)], ...github }).find(({ pullRequest }) => pullRequest === 50);
       return standing?.name === "check-healing" ? { rerun: standing.detail.rerun, issue: standing.detail.issue } : null;
     };
@@ -198,7 +208,7 @@ describe("an agent pull request at the Merge gate held by an Unrelated failure (
   });
 
   describe("runs on the clock every row waiting on the Kit runs on", () => {
-    const stuckAtOf = (comments: ReturnType<typeof aComment>[], github: Partial<GitHubFacts> = {}, overrides: Parameters<typeof standingsIn>[2] = {}) =>
+    const stuckAtOf = (comments: readonly CommentFacts[], github: Partial<GitHubFacts> = {}, overrides: Parameters<typeof standingsIn>[2] = {}) =>
       standingsIn({ openPullRequests: [held(comments)], ...github }, undefined, overrides)
         .filter(({ pullRequest }) => pullRequest === 50)
         .map(({ name, stuckAt }) => ({ name, stuckAt }));
@@ -290,6 +300,14 @@ describe("an agent pull request at the Merge gate held by an Unrelated failure (
 
         expect(at({ openIssues: [handedBack] }, LATER)).toMatchObject([{ name: "check-healing", stuckAt: plus(stopped, BAR) }]);
         expect(at({ openIssues: [handedBack] }, plus(stopped, BAR + 1))).toMatchObject([{ name: "stuck" }]);
+      });
+
+      it("dates no close in facts an earlier release gathered, which hold no closed Check's issues", () => {
+        const { closedCheckIssues: _, ...earlier } = factsOf({ openPullRequests: [held()] });
+
+        const standings = standingsOf(standingFactsOf({ github: earlier, kit: aKit([failing("test")]) }), NOW);
+
+        expect(standings).toMatchObject([{ name: "check-healing", stuckAt: plus(PASSED, BAR) }]);
       });
 
       it("reads another check's issue closing as nothing to this one", () => {

@@ -5,6 +5,12 @@
 // whether it merges cleanly and its Required checks. None stops work and none
 // turns Stuck: it leaves at its merge or close. The Kit never acts on a
 // Request changes, `needs-design` or a comment on one, so none is read.
+//
+// With them, the name an agent pull request at the Merge gate takes for the
+// Required checks on its head (mergeGateNameForChecks), read in the same
+// order, which the join with checks (src/read/joinChecks.ts) settles a kept
+// row by too. Unlike a Plain one's it can stop work, and one whose failing
+// check the Kit is healing can turn Stuck (#795).
 import { setupBranch } from "../setup/setupBranchName.ts";
 import { SKILLS_BUMP_BRANCH } from "../skills/bump.ts";
 import { type HealingCheck, type PlainKind, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
@@ -197,10 +203,11 @@ export interface MergeGatePass {
  * checks were read.
  *
  * A failing check the Kit is healing (#795) is not the Operator's: the other
- * checks are read first, and when they name none failing or unreported, it is
- * `check-healing`, the Kit's and stopping nothing, naming the first healing
- * check that fails, since its report, and turning Stuck when that check's
- * entry says.
+ * checks are read first, and when none of them is failing or never reported,
+ * it is `check-healing`, the Kit's and stopping nothing, naming the first
+ * healing check that fails, since its report, and turning Stuck when that
+ * check's entry says. A running check beside it puts nothing off, as it puts
+ * off no failing check today.
  *
  * A red or running name keeps `passedAt`, the time it goes back to once they
  * pass again. Every name carries `passedHead` and what the pass keeps of its
@@ -209,16 +216,18 @@ export interface MergeGatePass {
 export function mergeGateNameForChecks(checks: RequiredChecksFact, pass: MergeGatePass): MergeGateChecksName {
   const { passedAt, passedHead, healing, mentioned } = pass;
   const kept = { passedHead, ...(healing.length === 0 ? {} : { healing }), ...(mentioned.length === 0 ? {} : { mentioned }) };
-  const theOperators = { stopsWork: true, stuckAt: null } as const;
-  const ready = { name: "yours-to-merge", move: "operator", yours: true, ...theOperators, since: passedAt, detail: { plain: null, ...kept } } as const;
+  const stopping = { stopsWork: true, stuckAt: null } as const;
+  const ready = { name: "yours-to-merge", move: "operator", yours: true, ...stopping, since: passedAt, detail: { plain: null, ...kept } } as const;
   if (checks === "unread") return ready;
   const isHealing = ({ name, is }: RequiredCheckFact) => is === "failing" && healing.some(({ check }) => check === name);
-  const { name, decidedAt } = nameForChecks(null, checks.filter((check) => !isHealing(check)));
-  if (name.name === "check-failing") {
-    return { ...name, ...theOperators, since: name.detail.checkIs === "failing" ? (decidedAt ?? passedAt) : passedAt, detail: { ...name.detail, passedAt, ...kept } };
-  }
   const failing = checks.find(isHealing);
   const entry = healing.find(({ check }) => check === failing?.name);
+  // Beside a failing check the Kit is healing, the rest are read for what is the Operator's alone.
+  const rest = failing === undefined ? checks : checks.filter((check) => !isHealing(check) && check.is !== "running");
+  const { name, decidedAt } = nameForChecks(null, rest);
+  if (name.name === "check-failing") {
+    return { ...name, ...stopping, since: name.detail.checkIs === "failing" ? (decidedAt ?? passedAt) : passedAt, detail: { ...name.detail, passedAt, ...kept } };
+  }
   if (failing !== undefined && entry !== undefined) {
     const { check, rerun, issue, stuckAt } = entry;
     return { name: "check-healing", move: "kit", yours: false, stopsWork: false, since: failing.at ?? passedAt, stuckAt, detail: { plain: null, check, rerun, issue, passedAt, ...kept, healing } };

@@ -28,7 +28,7 @@ import { freeSubscriptions, kitIssueSubscriptionOf, makesUnusable } from "../loo
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import { handBackOfNotice } from "./standingHandBacks.ts";
-import { mergeGatePassOf } from "./standingHealing.ts";
+import { passAtTheGateOf } from "./standingHealing.ts";
 import { mergeGateNameForChecks } from "./standingPlain.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { type LabelEvent, verdictsOn } from "./retroEvidence.ts";
@@ -300,7 +300,7 @@ function blockedStandingOf(issue: OpenIssueFacts, repo: string, work: "ready-for
  * facts hold none for it, carrying the head the Reviewer passed, which its
  * head may have moved from since (#692), and what that pass keeps of its
  * Unrelated failures: one the Kit is still healing leaves the Standing the
- * Kit's (mergeGatePassOf, #795).
+ * Kit's (passAtTheGateOf, #795).
  */
 function pullRequestStandingsOf(pullRequest: OpenPullRequestFacts, facts: StandingFacts): Standing[] {
   const { github, kit, operator } = facts;
@@ -308,7 +308,7 @@ function pullRequestStandingsOf(pullRequest: OpenPullRequestFacts, facts: Standi
   const base = { ...theOperators(github.repo, pullRequest.ticket, pullRequest.number, move?.since ?? pullRequest.createdAt), work: "ticket", place: "merge-gate" } as const;
   switch (move?.kind) {
     case "merge-gate":
-      return [{ ...base, ...mergeGateNameForChecks(kit?.headChecks[pullRequest.headSha] ?? "unread", mergeGatePassOf(pullRequest, move.since, move.passedHead, facts)) }];
+      return [{ ...base, ...mergeGateNameForChecks(kit?.headChecks[pullRequest.headSha] ?? "unread", passAtTheGateOf(pullRequest, move, facts)) }];
     case "handed-back":
       return [{ ...base, name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null } }];
     default:

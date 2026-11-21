@@ -227,9 +227,10 @@ export interface GitHubFacts extends MetricFacts {
   /**
    * The Check's issues the Fabrik App filed that closed in the week before
    * the read, read as the Tick reads them (#784): the clock of a pull request
-   * its check holds at the Merge gate restarts when one closes (#795).
+   * its check holds at the Merge gate restarts when one closes (#795). Left
+   * out, as in facts an earlier release gathered, no close is dated.
    */
-  readonly closedCheckIssues: readonly ClosedCheckIssue[];
+  readonly closedCheckIssues?: readonly ClosedCheckIssue[];
 }
 
 /** An open Plain pull request (GLOSSARY.md): one that is no agent PR, whoever opened it. */
