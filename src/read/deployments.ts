@@ -6,13 +6,15 @@
 // with the reader's own credential, which needs Deployments read; no Kit job
 // makes it, and the Fabrik App gains no permission. It never throws: what
 // GitHub refused or failed leaves "unread" only the merges that turn on it.
+// In a repo that declares `staging`, the same read is made of the environment
+// its staging block names (#855, ADR-0038), asked for the newest success too.
 import { allPages, type ReadClient } from "../github/client.ts";
 
 /** What a Deployments read of one repo says about the merges it was asked about. */
 export interface DeploymentsRead {
   /** The repo read, `owner/name`. */
   readonly repo: string;
-  /** The environment read, the name Kit config's production block gives. */
+  /** The environment read, the name Kit config's production block gives, or its staging block's. */
   readonly environment: string;
   /** When it was read, ISO 8601. */
   readonly readAt: string;
@@ -34,6 +36,14 @@ export interface DeployOf {
   readonly at: string | null;
   /** A failed deploy's log, when it is an `https` address; else null. */
   readonly log: string | null;
+  /**
+   * On a success, where the read was asked for it (readDeployments'
+   * `newest`): the newest successful Deployment whose commit contains the
+   * merge, by creation, and when it succeeded: the one above where no later
+   * one succeeded. Its commit is the one a merge's Main checks are read on
+   * at Staging (ADR-0038). Left out otherwise.
+   */
+  readonly newest?: { readonly deployment: number; readonly commit: string; readonly at: string };
 }
 
 /** One merge a Deployments read is asked about. */
@@ -59,6 +69,11 @@ const PAGE = 100;
  * answer turns on, asked once, and none where the two are the same commit: a
  * merge its own commit's deploy has settled asks none. Asked about no merges,
  * it makes no request.
+ *
+ * With `newest`, as a read of `staging.environment` is made (ADR-0038), each
+ * success also carries the newest successful Deployment that contains the
+ * merge (`DeployOf.newest`), at the cost of a comparison for each later
+ * success until one counts. Without it, a read is as it ever was.
  */
 export async function readDeployments(
   client: Pick<ReadClient, "rest">,
@@ -66,6 +81,7 @@ export async function readDeployments(
   environment: string,
   merges: readonly MergeToRead[],
   now: string,
+  options: { readonly newest?: boolean } = {},
 ): Promise<DeploymentsRead> {
   const asked = mergesOnce(merges);
   if (asked.length === 0) return { repo, environment, readAt: now, merges: {} };
@@ -88,7 +104,7 @@ export async function readDeployments(
   const decided = await Promise.all(
     asked.map(async (merge) => {
       const candidates = kept.filter(({ deployment }) => Date.parse(deployment.created_at) >= Date.parse(merge.mergedAt));
-      return [merge.mergeCommit, await deployOf(candidates, (deployed) => contains(merge.mergeCommit, deployed))] as const;
+      return [merge.mergeCommit, await deployOf(candidates, (deployed) => contains(merge.mergeCommit, deployed), options.newest === true)] as const;
     }),
   );
   const byMerge = new Map(decided);
@@ -214,9 +230,11 @@ interface Candidate {
  * none. It asks whether one counts only as far as the answer turns on it, so
  * a merge its own commit's deploy has settled asks nothing. Unread when one
  * the answer turns on could not be read: its comparison, or its reports where
- * it might have succeeded sooner or be the one that decides.
+ * it might have succeeded sooner or be the one that decides. Asked for the
+ * `newest`, a success also carries the newest successful Deployment that
+ * counts, and is unread when one that might be it could not be read.
  */
-async function deployOf(candidates: readonly Candidate[], counts: (deployed: string) => Promise<boolean | "unread">): Promise<DeployOf | "unread"> {
+async function deployOf(candidates: readonly Candidate[], counts: (deployed: string) => Promise<boolean | "unread">, newest: boolean): Promise<DeployOf | "unread"> {
   // Newest first, by creation, then by GitHub's numbering where that ties.
   const newestFirst = candidates.toSorted((a, b) => Date.parse(b.deployment.created_at) - Date.parse(a.deployment.created_at) || b.deployment.id - a.deployment.id);
   const unreadable = newestFirst.filter(({ state }) => state === "unread");
@@ -234,7 +252,23 @@ async function deployOf(candidates: readonly Candidate[], counts: (deployed: str
     if (await unreadableCounts(Date.parse(at))) return "unread";
     const counted = await counts(deployment.sha);
     if (counted === "unread") return "unread";
-    if (counted) return { is: "succeeded", deployment: deployment.id, commit: deployment.sha, at, log: null };
+    if (!counted) continue;
+    const succeeded = { is: "succeeded", deployment: deployment.id, commit: deployment.sha, at, log: null } as const;
+    if (!newest) return succeeded;
+    // The newest success that counts, by creation: this one, unless a later one counts too.
+    for (const later of newestFirst) {
+      if (later.deployment === deployment) return { ...succeeded, newest: { deployment: deployment.id, commit: deployment.sha, at } };
+      // One whose reports could not be read might be a newer success.
+      if (later.state === "unread") {
+        if ((await counts(later.deployment.sha)) !== false) return "unread";
+        continue;
+      }
+      if (later.state.is !== "succeeded") continue;
+      const laterCounted = await counts(later.deployment.sha);
+      if (laterCounted === "unread") return "unread";
+      if (laterCounted) return { ...succeeded, newest: { deployment: later.deployment.id, commit: later.deployment.sha, at: later.state.at } };
+    }
+    return succeeded;
   }
   if (await unreadableCounts(Infinity)) return "unread";
   for (const { deployment, state } of newestFirst) {
