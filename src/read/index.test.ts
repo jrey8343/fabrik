@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isUi } from "../evidence/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
-import { aCheckIssue, aGateRerunDone, anOpenPullRequest, aPassNaming, factsOf, standingFactsOf } from "./builders.ts";
+import { aCheckIssue, aGateRerunDone, aLabelAdded, aMergedLastDay, anOpenPullRequest, aPassNaming, factsOf, homeFactsOf, standingFactsOf } from "./builders.ts";
 import { A_BLOCKED_ISSUE, EXPORT_CALLS, EXPORT_SHAPES, NOT_DATA } from "./exports.fixture.ts";
 
 const ENTRY = new URL("./index.ts", import.meta.url);
@@ -132,6 +132,53 @@ describe("the read library's Standing at Staging (#855)", () => {
     expect(await EXPORT_CALLS["stagingMergesToRead"]!()).toEqual([{ mergeCommit: "m".repeat(40), mergedAt: "2026-11-09T11:30:00Z" }]);
     expect(await EXPORT_CALLS["commitsToCheck"]!()).toEqual([{ commit: "d".repeat(40), checks: ["e2e"] }]);
     expect(await EXPORT_CALLS["readMainChecks"]!()).toEqual({ repo: "owner/product", readAt: "2026-11-09T12:00:00Z", commits: { ["d".repeat(40)]: "unread" } });
+  });
+});
+
+describe("the read library's Staging trial (#856)", () => {
+  it("gives a reader the two label names and the Trial problem's line, its writer and its reader, so a reader holds no format", async () => {
+    const { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL, trialProblemIn, trialProblemLine } = await import("./index.ts");
+
+    expect([TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL]).toEqual(["fabrik:trial-accepted", "fabrik:trial-problem"]);
+    expect(await EXPORT_CALLS["trialProblemLine"]!()).toBe("From Staging trial of PR #50");
+    expect(await EXPORT_CALLS["trialProblemIn"]!()).toBe(50);
+    expect(trialProblemIn(`It broke.\n\n${trialProblemLine(812)}`)).toBe(812);
+    expect(trialProblemIn("It broke after #812.")).toBeNull();
+  });
+
+  it("names a merged agent pull request by the Operator's own label, trial-problem then trial-accepted through its fix, nobody's move, in rows from facts a gather of a repo that declares staging gives", async () => {
+    const { rowsOf, STANDING_NAMES, STANDING_SCHEMA, TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL, wordStanding } = await import("./index.ts");
+    const kit = { ...homeFactsOf().kit, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, staging: { url: "https://staging.shop.example", environment: "staging" } } } } as const;
+    const facts = (fixLabels: readonly ReturnType<typeof aLabelAdded>[]) =>
+      homeFactsOf({
+        kit,
+        staging: {
+          since: { from: "staging", deployment: 600, commit: "s".repeat(40), at: "2026-11-01T09:00:00Z" },
+          unpromoted: [aMergedLastDay("2026-11-05T10:00:00Z")],
+          trials: {
+            pullRequests: [
+              { pullRequest: 50, labelEvents: [aLabelAdded(TRIAL_PROBLEM_LABEL, "2026-11-09T08:00:00Z", { actor: "operator" })], closes: [7] },
+              { pullRequest: 61, labelEvents: fixLabels, closes: [70] },
+            ],
+            problems: [{ issue: 70, pullRequest: 50, title: "The cart total reads 0", open: false, closedAs: "completed" }],
+          },
+          evidenceMarkers: [],
+          shotsMarkers: [],
+        },
+      });
+
+    const [found] = rowsOf(facts([]), null, null, null, "2026-11-09T12:00:00Z");
+    const [accepted] = rowsOf(facts([aLabelAdded(TRIAL_ACCEPTED_LABEL, "2026-11-09T11:00:00Z", { actor: "operator" })]), null, null, null, "2026-11-09T12:00:00Z");
+
+    // Two new names remove nothing and change no meaning, so the schema stays where it was.
+    expect(STANDING_SCHEMA).toBe(2);
+    expect(STANDING_NAMES).toEqual(expect.arrayContaining(["trial-accepted", "trial-problem"]));
+    expect(found?.standing).toMatchObject({ schema: 2, pullRequest: 50, place: "staging", name: "trial-problem", move: "nobody", yours: false, stopsWork: false, since: "2026-11-09T08:00:00Z" });
+    expect(found?.standing.detail).toMatchObject({ staging: { result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 70, open: false }] }, standsUntil: "2026-11-10T08:00:00.000Z" } });
+    expect(wordStanding(found!.standing, "2026-11-09T12:00:00Z", "UTC")).toEqual({ pill: "Problem found", sentence: "Its Staging trial found a problem 4 hours ago: #70 (closed).", remedy: null });
+    expect(accepted?.standing).toMatchObject({ place: "staging", name: "trial-accepted", move: "nobody", yours: false, since: "2026-11-09T11:00:00Z" });
+    expect(accepted?.standing.detail).toMatchObject({ staging: { result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61] }, standsUntil: "2026-11-10T11:00:00.000Z" } });
+    expect(wordStanding(accepted!.standing, "2026-11-09T12:00:00Z", "UTC")).toEqual({ pill: "Accepted", sentence: "Accepted through its fix, #61, 1 hour ago.", remedy: null });
   });
 });
 

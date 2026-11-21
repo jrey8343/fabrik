@@ -122,6 +122,10 @@ import {
   subscriptionReadingsOf,
   TICK_DEAD_MINUTES,
   TICK_MINUTES,
+  TRIAL_ACCEPTED_LABEL,
+  TRIAL_PROBLEM_LABEL,
+  trialProblemIn,
+  trialProblemLine,
   weeksEndingAt,
   wordStanding,
 } from "./index.ts";
@@ -1132,6 +1136,19 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   stagingMergesToRead: () =>
     stagingMergesToRead(
       rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
+    ),
+
+  // The Staging trial
+
+  TRIAL_ACCEPTED_LABEL: () => TRIAL_ACCEPTED_LABEL,
+  TRIAL_PROBLEM_LABEL: () => TRIAL_PROBLEM_LABEL,
+  trialProblemIn: () =>
+    trialProblemIn(
+      "The cart total reads 0 on staging.\n\nFrom Staging trial of PR #50",
+    ),
+  trialProblemLine: () =>
+    trialProblemLine(
+      50,
     ),
 
   // The Round read

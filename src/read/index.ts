@@ -149,6 +149,11 @@ export { readMainChecks } from "./mainChecks.ts";
 export type { CommitToCheck, MainCheckOf, MainChecksRead } from "./mainChecks.ts";
 export type { StagingRead } from "./rows.ts";
 
+// The Staging trial
+
+export { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
+export { trialProblemIn, trialProblemLine } from "../loop/markers.ts";
+
 // The Round read
 
 export { readRound } from "./roundRead.ts";
