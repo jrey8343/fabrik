@@ -376,10 +376,11 @@ function evidenceMarkersOf({ evidenceMarkers, staging }: Facts): Facts["evidence
   return staging === undefined ? evidenceMarkers : [...evidenceMarkers, ...staging.evidenceMarkers];
 }
 
-/** The merged agent pull requests the facts hold, each once: those of the last 24 hours, then those production has not taken (#856). */
+/** The merged agent pull requests the facts hold, each once: those of the last 24 hours, then those production has not taken (#856), then those a production Deployment took in the last 24 hours (#857). */
 function mergedOf({ mergedLastDay, staging }: Facts): Facts["mergedLastDay"] {
   if (staging === undefined) return mergedLastDay;
-  return [...mergedLastDay, ...staging.unpromoted.filter(({ number }) => !mergedLastDay.some((held) => held.number === number))];
+  const past = [...staging.unpromoted, ...staging.promoted];
+  return [...mergedLastDay, ...past.filter(({ number }, at) => !mergedLastDay.some((held) => held.number === number) && past.findIndex((held) => held.number === number) === at)];
 }
 
 /**
@@ -565,7 +566,7 @@ function ruleFactsOf(
     mainChecks: staging?.mainChecks ?? null,
     needTrial: mergedOf(facts).flatMap(({ number }) => (asksAStagingTrial(...markersOf(number)) ? [number] : [])),
     // What a gather reads past the last day in a repo that declares `staging` (#856): no such key from any other.
-    ...(facts.staging === undefined ? {} : { unpromoted: facts.staging.unpromoted, trials: facts.staging.trials }),
+    ...(facts.staging === undefined ? {} : { unpromoted: facts.staging.unpromoted, promoted: facts.staging.promoted, trials: facts.staging.trials }),
   };
 }
 

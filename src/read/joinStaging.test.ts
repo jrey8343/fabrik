@@ -396,7 +396,7 @@ describe("the joins and a Staging trial's result (#856)", () => {
   /** The facts above, with what a gather reads past the last day in a repo that declares staging: these label events on pull request 50, and no pull request production has not taken, unless a test says otherwise. */
   const tried = (labelEvents: readonly ReturnType<typeof aLabelAdded>[], staging: Partial<NonNullable<Facts["staging"]>> = {}): Facts => ({
     ...facts(),
-    staging: { since: null, unpromoted: [], trials: { pullRequests: [{ pullRequest: 50, labelEvents, closes: [] }], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...staging },
+    staging: { since: null, unpromoted: [], promoted: [], plain: [], mergedSince: 0, trials: { pullRequests: [{ pullRequest: 50, labelEvents, closes: [] }], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...staging },
   });
   const ACCEPTED = tried([added(TRIAL_ACCEPTED_LABEL, "2026-11-12T09:58:00Z")]);
   /** A later read: 50's newest deploy is of REDEPLOYED, where `e2e` is red. */

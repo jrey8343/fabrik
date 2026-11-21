@@ -409,7 +409,7 @@ describe("a Product repo's rows", () => {
       const waiting = (staging: Partial<NonNullable<Facts["staging"]>> = {}) =>
         homeFactsOf({
           kit: STAGED,
-          staging: { since: null, unpromoted: [aMergedLastDay(WEEK_OLD, { title: "Show the cart total" })], trials: { pullRequests: [], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...staging },
+          staging: { since: null, unpromoted: [aMergedLastDay(WEEK_OLD, { title: "Show the cart total" })], promoted: [], plain: [], mergedSince: 1, trials: { pullRequests: [], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...staging },
         });
       const read = { deployments: ON_STAGING, mainChecks: null };
 

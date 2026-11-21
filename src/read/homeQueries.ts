@@ -228,8 +228,10 @@ const CROSS_REFERENCES_WITH_BODIES = `
  * MERGED_PULL_REQUESTS_QUERY reads of each, with when it was last updated,
  * by which the gather knows when to stop; its label events, a Staging
  * trial's result among them; the issues cross-referenced to it, with their
- * bodies; and the body and state of each issue it closes. Made in place of
- * MERGED_PULL_REQUESTS_QUERY, and only in such a repo.
+ * bodies; the body and state of each issue it closes; and the branch it
+ * merged into, by which a Plain one is told to be the default branch's
+ * (#857). Made in place of MERGED_PULL_REQUESTS_QUERY, and only in such a
+ * repo.
  */
 export const UNPROMOTED_PULL_REQUESTS_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
@@ -237,7 +239,7 @@ export const UNPROMOTED_PULL_REQUESTS_QUERY = `
       pullRequests(states: MERGED, first: 25, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
         ${PAGE_INFO}
         nodes {
-          number title body mergedAt updatedAt headRefName
+          number title body mergedAt updatedAt headRefName baseRefName
           author ${ACTOR}
           mergeCommit { oid }
           closingIssuesReferences(first: 10) { nodes { ${TRIAL_ISSUE} } }
@@ -263,10 +265,38 @@ export interface RawTrialIssue {
 /** A merged pull request as UNPROMOTED_PULL_REQUESTS_QUERY reads it. */
 export interface RawUnpromotedPullRequest extends Omit<RawMergedPullRequest, "closingIssuesReferences"> {
   updatedAt: string;
+  /** The branch it merged into. */
+  baseRefName: string;
   closingIssuesReferences: { nodes: RawTrialIssue[] };
   timelineItems: { nodes: RawLabelEvent[] };
   crossReferences: { nodes: { __typename: string; source?: RawTrialIssue | null }[] };
 }
+
+/**
+ * The merged pull requests of a repo that declares `staging`, newest-updated
+ * first, a hundred at a time, with only what says whether one merged since
+ * the promote list's start (#857): when it merged and was last updated, the
+ * branch it merged into, its merge commit, and whose it is. Made only where
+ * the pages of UNPROMOTED_PULL_REQUESTS_QUERY stopped at the 100 they keep,
+ * short of the start, to count the merges left out.
+ */
+export const MERGED_SINCE_COUNT_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequests(states: MERGED, first: 100, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
+        ${PAGE_INFO}
+        nodes {
+          mergedAt updatedAt headRefName baseRefName
+          author ${ACTOR}
+          mergeCommit { oid }
+        }
+      }
+    }
+  }
+`;
+
+/** A merged pull request as MERGED_SINCE_COUNT_QUERY reads it. */
+export type RawCountedPullRequest = Pick<RawUnpromotedPullRequest, "mergedAt" | "updatedAt" | "headRefName" | "baseRefName" | "author" | "mergeCommit">;
 
 /**
  * An environment's Deployments by creation, a page at a time, newest first

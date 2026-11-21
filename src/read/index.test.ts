@@ -153,8 +153,11 @@ describe("the read library's Staging trial (#856)", () => {
       homeFactsOf({
         kit,
         staging: {
-          since: { from: "staging", deployment: 600, commit: "s".repeat(40), at: "2026-11-01T09:00:00Z" },
+          since: { from: "staging", deployment: 600, commit: "s".repeat(40), at: "2026-11-01T09:00:00Z", deployedAt: "2026-11-01T09:10:00Z" },
           unpromoted: [aMergedLastDay("2026-11-05T10:00:00Z")],
+          promoted: [],
+          plain: [],
+          mergedSince: 1,
           trials: {
             pullRequests: [
               { pullRequest: 50, labelEvents: [aLabelAdded(TRIAL_PROBLEM_LABEL, "2026-11-09T08:00:00Z", { actor: "operator" })], closes: [7] },
